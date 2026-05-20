@@ -28,12 +28,25 @@ jobs:
           submodules: recursive
 
       - name: Setup Rust (nightly for rustfmt)
-        uses: dtolnay/rust-toolchain@nightly
+        # Pin to the same nightly the project's `rust-toolchain.toml`
+        # uses so cargo-fmt's enumeration logic (which can change
+        # between nightly builds) and rustfmt itself stay
+        # bit-for-bit identical to local.
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: nightly-2026-04-01
           components: rustfmt
 
       - name: cargo fmt --check
-        run: cargo fmt --all -- --check
+        # Restrict to first-party crates so we don't accidentally fmt
+        # the path-dep tree (deps/uni-stream, deps/kanal, etc.).
+        run: |
+          cargo fmt --check \
+            -p pocket-codex-core \
+            -p pocket-codex-codex \
+            -p pocket-codex-pb \
+            -p pocket-codex-cli \
+            -p pocket_codex_bridge
 
   clippy:
     name: rust clippy
