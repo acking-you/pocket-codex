@@ -1,0 +1,22 @@
+# Pocket-Codex Rust toolchain pin.
+#
+# We follow the same approach as our reference project (`static_flow`):
+# nightly is used purely so we can take advantage of advanced `rustfmt`
+# options. The actual production code is kept compatible with stable Rust;
+# you can swap the channel locally to verify that.
+
+[toolchain]
+# A recent nightly that supports every rustfmt option in `rustfmt.toml`.
+channel = "nightly-2026-04-01"
+
+# Targets we want available out of the box. `wasm32-unknown-unknown` is
+# kept here in anticipation of the Flutter / Dart FFI layer eventually
+# producing a wasm artifact for browser testing.
+targets = ["wasm32-unknown-unknown"]
+
+# Components every contributor should have installed.
+components = [
+    "rustfmt",
+    "clippy",
+    "rust-src",
+]

@@ -1,0 +1,123 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/pocket-codex-core",
+    "crates/pocket-codex-codex",
+    "crates/pocket-codex-pb",
+    "crates/pocket-codex-cli",
+    "crates/pocket-codex-bridge",
+]
+# `deps/codex` and `deps/pb-mapper` are vendored upstream sources kept
+# as git submodules. They are intentionally excluded from this
+# workspace so their own build settings/lints/profiles are not
+# entangled with ours; we import the bits we need via path or git deps
+# from individual crates. `deps/kanal` and `deps/uni-stream` are
+# pinned forks pulled in transitively by pb-mapper — they live here
+# only to make the `[patch]` table below stable.
+exclude = [
+    "deps/codex",
+    "deps/pb-mapper",
+    "deps/kanal",
+    "deps/uni-stream",
+    "apps/flutter",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.83"
+authors = ["Pocket-Codex Contributors"]
+license = "Apache-2.0"
+repository = "https://github.com/acking-you/pocket-codex"
+homepage = "https://github.com/acking-you/pocket-codex"
+readme = "README.md"
+
+# Workspace-wide dependency version pins. Individual crates should pull
+# from here via `dep = { workspace = true }` so we have a single source
+# of truth for upgrades.
+[workspace.dependencies]
+# Internal crates
+pocket-codex-core = { path = "crates/pocket-codex-core" }
+pocket-codex-codex = { path = "crates/pocket-codex-codex" }
+pocket-codex-pb = { path = "crates/pocket-codex-pb" }
+
+# Async runtime
+tokio = { version = "1.40", features = ["full"] }
+tokio-util = { version = "0.7", features = ["io"] }
+tokio-stream = "0.1"
+futures = "0.3"
+async-trait = "0.1"
+
+# Serde / config
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+
+# CLI / errors / logging
+clap = { version = "4.5", features = ["derive", "wrap_help", "env"] }
+anyhow = "1.0"
+thiserror = "2.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+# Misc
+once_cell = "1"
+bytes = "1"
+url = "2.5"
+directories = "5"
+which = "6"
+nix = { version = "0.29", features = ["signal", "process"] }
+sysinfo = "0.32"
+
+[workspace.lints.rust]
+# Doc coverage is part of the contract — every public item has a comment.
+missing_docs = "deny"
+
+[workspace.lints.clippy]
+allow_attributes_without_reason = "deny"
+dbg_macro = "deny"
+empty_docs = "deny"
+tabs_in_doc_comments = "deny"
+todo = "deny"
+undocumented_unsafe_blocks = "deny"
+unimplemented = "deny"
+unwrap_used = "warn"
+
+[workspace.lints.rustdoc]
+bare_urls = "deny"
+broken_intra_doc_links = "deny"
+invalid_codeblock_attributes = "deny"
+invalid_html_tags = "deny"
+invalid_rust_codeblocks = "deny"
+missing_crate_level_docs = "deny"
+private_intra_doc_links = "deny"
+unescaped_backticks = "deny"
+
+# Build profiles. Tuned for a CLI / native binary, not a wasm/web app.
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+
+[profile.dev]
+opt-level = 0
+debug = true
+
+# Speed up dev builds: optimise dependencies even in dev profile.
+[profile.dev.package."*"]
+opt-level = 2
+
+# `deps/pb-mapper` declares `kanal` and `uni-stream` as git deps from
+# the `acking-you/*` forks. Cargo resolves those by branch HEAD in our
+# workspace, but the fork's HEAD has since renamed `kanal` to
+# `kanal-plus`, breaking our build. We add both forks as submodules
+# under `deps/` (pinned to known-good commits) and re-route the git
+# source via `[patch]` to those local paths. This keeps the build
+# reproducible across CI and contributor checkouts.
+[patch."https://github.com/acking-you/kanal.git"]
+kanal = { path = "deps/kanal" }
+
+[patch."https://github.com/acking-you/uni-stream.git"]
+uni-stream = { path = "deps/uni-stream" }

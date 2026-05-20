@@ -1,0 +1,52 @@
+# Rust build artefacts
+target/
+**/target/
+
+# Cargo lock for the workspace is intentionally checked in (binary crate).
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+Desktop.ini
+
+# Logs
+*.log
+
+# Local environment overrides
+.env
+.env.local
+.env.*.local
+
+# Backup / temp files
+*.bak
+*.tmp
+tmp/
+.local/
+
+# Coverage reports
+coverage/
+*.profdata
+*.profraw
+
+# Flutter / Dart build output (kept under apps/flutter)
+apps/flutter/**/build/
+apps/flutter/**/.dart_tool/
+apps/flutter/**/.flutter-plugins
+apps/flutter/**/.flutter-plugins-dependencies
+apps/flutter/**/.packages
+apps/flutter/**/pubspec.lock
+
+# Worktrees
+.worktrees/
+
+# Local note files (never committed)
+pocket-codex-codex-raw-dialogue.md

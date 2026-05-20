@@ -1,0 +1,31 @@
+[package]
+name = "pocket-codex-pb"
+description = "Pb-mapper register/subscribe glue used by Pocket-Codex to expose codex app-server remotely."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+pocket-codex-core = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+url = { workspace = true }
+
+# Vendored upstream pb-mapper (git submodule under deps/). We depend on
+# it via `path` so contributors don't have to publish it to crates.io.
+pb-mapper = { path = "../../deps/pb-mapper" }
+# pb-mapper exposes type-parameter slots that require concrete TCP
+# providers from `uni-stream`. We import the same path-pinned fork the
+# workspace [patch] table redirects to.
+uni-stream = { path = "../../deps/uni-stream" }

@@ -1,0 +1,14 @@
+[submodule "deps/codex"]
+	path = deps/codex
+	url = git@github.com:acking-you/codex.git
+[submodule "deps/pb-mapper"]
+	path = deps/pb-mapper
+	url = git@github.com:acking-you/pb-mapper.git
+[submodule "deps/kanal"]
+	path = deps/kanal
+	url = https://github.com/acking-you/kanal.git
+	branch = dev/pb-mapper
+[submodule "deps/uni-stream"]
+	path = deps/uni-stream
+	url = https://github.com/acking-you/uni-stream.git
+	branch = master

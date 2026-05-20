@@ -1,0 +1,32 @@
+[package]
+name = "pocket_codex_bridge"
+description = "Rust ↔ Dart bridge crate consumed by the Pocket-Codex Flutter app via flutter_rust_bridge."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+
+[lib]
+# `cdylib` is required so Flutter (via cargokit) can link the bridge
+# at runtime; `staticlib` lets us also build a static archive for iOS
+# / desktop targets that prefer it.
+crate-type = ["cdylib", "staticlib"]
+
+[lints.rust]
+# `cfg(frb_expand)` is set during macro expansion only; silence the
+# "unexpected_cfgs" warning so we don't have to add it to the
+# workspace-wide allow list.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }
+
+# NOTE: we intentionally do NOT inherit workspace lints (no
+# `[lints.clippy]` / `[lints.rustdoc]` here). The auto-generated
+# `frb_generated.rs` uses `unwrap()`, `unimplemented!`, etc., so the
+# strict workspace clippy/rustdoc levels would fail through no fault
+# of our own. Style for the hand-written `api/` modules is still
+# enforced via `cargo fmt`.
+
+[dependencies]
+flutter_rust_bridge = "=2.12.0"

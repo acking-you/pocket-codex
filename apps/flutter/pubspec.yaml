@@ -1,0 +1,34 @@
+name: pocket_codex
+description: "Pocket-Codex Flutter front-end. Drives codex app-server through flutter_rust_bridge."
+publish_to: 'none'
+
+version: 0.1.0+1
+
+# Flutter SDK is locked at the project level via FVM (`.fvmrc`) and at
+# the language level via `environment.flutter`. CI uses
+# `subosito/flutter-action@v2` with the same version pin. Whenever
+# you bump Flutter, update all three sites in lockstep.
+environment:
+  sdk: ^3.12.0
+  flutter: "3.44.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  # flutter_rust_bridge is wired up by `flutter_rust_bridge_codegen
+  # integrate`. The version constraint here is what `pub get` checks
+  # against; the codegen tool picks a matching binary.
+  flutter_rust_bridge: 2.12.0
+  pocket_codex_bridge:
+    path: rust_builder
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  integration_test:
+    sdk: flutter
+
+flutter:
+  uses-material-design: true

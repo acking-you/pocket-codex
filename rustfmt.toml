@@ -1,0 +1,55 @@
+# Pocket-Codex rustfmt configuration.
+#
+# Mirrors the `static_flow` style so contributors who have worked on
+# either project see the same formatting rules. Run `cargo fmt --all`
+# (the project pins a nightly toolchain in `rust-toolchain.toml`).
+
+# === Basics ===
+edition = "2021"
+max_width = 100
+hard_tabs = false
+tab_spaces = 4
+
+# === Imports ===
+imports_granularity = "Crate"
+group_imports = "StdExternalCrate"
+reorder_imports = true
+
+# === Style ===
+use_small_heuristics = "Max"
+fn_single_line = false
+where_single_line = false
+struct_lit_single_line = false
+
+# === Punctuation ===
+trailing_comma = "Vertical"
+match_block_trailing_comma = true
+
+# === Comments / docs ===
+normalize_comments = true
+normalize_doc_attributes = true
+wrap_comments = true
+comment_width = 80
+
+# === Whitespace ===
+spaces_around_ranges = false
+space_before_colon = false
+space_after_colon = true
+blank_lines_upper_bound = 2
+blank_lines_lower_bound = 0
+
+# === Chains ===
+chain_width = 60
+overflow_delimited_expr = true
+
+# === Macros / strings ===
+format_macro_matchers = true
+format_macro_bodies = true
+format_strings = true
+
+# === Misc ===
+merge_derives = true
+use_try_shorthand = true
+use_field_init_shorthand = true
+force_explicit_abi = true
+newline_style = "Unix"

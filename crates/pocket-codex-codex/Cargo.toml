@@ -1,0 +1,27 @@
+[package]
+name = "pocket-codex-codex"
+description = "Process management and protocol bridge for the upstream codex app-server."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+pocket-codex-core = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+which = { workspace = true }
+sysinfo = { workspace = true }
+nix = { workspace = true }
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }

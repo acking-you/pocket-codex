@@ -1,0 +1,15 @@
+# Pocket-Codex Cargo configuration.
+#
+# Keep this file minimal. Only put settings here that every contributor
+# benefits from; per-developer tweaks belong in `~/.cargo/config.toml`.
+
+[build]
+# Workspace-wide default target dir keeps incremental builds fast even
+# when individual crates are built from their own sub-directory.
+# (Cargo defaults to `<workspace>/target`; left explicit for clarity.)
+# target-dir = "target"
+
+[net]
+# Use git CLI for transports so `git@github.com:...` submodules work
+# without extra ssh-agent gymnastics in CI.
+git-fetch-with-cli = true

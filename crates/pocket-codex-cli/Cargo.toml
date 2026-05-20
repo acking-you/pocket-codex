@@ -1,0 +1,31 @@
+[package]
+name = "pocket-codex-cli"
+description = "User-facing CLI for managing codex app-server + pb-mapper from Pocket-Codex."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+
+# The binary is intentionally short so it reads nicely in shell
+# completions, command palettes and Flutter UI labels.
+[[bin]]
+name = "pocket-codex"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+pocket-codex-core = { workspace = true }
+pocket-codex-codex = { workspace = true }
+pocket-codex-pb = { workspace = true }
+anyhow = { workspace = true }
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
