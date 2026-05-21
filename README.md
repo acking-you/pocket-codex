@@ -45,18 +45,19 @@ Codex set up; the UI runs wherever you are.**
 | Area                           | State                                  |
 | ------------------------------ | -------------------------------------- |
 | Workspace / lints / CI         | bootstrapped                           |
-| `pocket-codex` CLI             | `codex {start,stop,status}`, `pb {register,subscribe,status}`, `remote-hint`, `version` |
+| `pocket-codex` CLI             | `serve`, `connect`, top-level `status`/`stop`, `codex {start,stop,status}`, `pb {register,subscribe,status}`, `remote-hint`, `version` |
 | `pb-mapper` register/subscribe | wired through `deps/pb-mapper`         |
 | `codex app-server` supervision | spawn/stop/status via PID + state.toml |
 | Flutter UI (`apps/flutter`)    | placeholder screen + FRB sample bridge |
 
-The first usable milestone is a single CLI command that:
+The first usable milestone is now the high-level CLI pair:
 
-1. registers the local `codex app-server` with a `pb-mapper` relay (or
-   subscribes to a remote one),
-2. starts and supervises the `codex` process in the background,
-3. prints the exact `codex --remote ...` invocation the user can paste
-   into another terminal or device.
+- `pocket-codex serve --relay <host:port>` starts or reuses the local
+  `codex app-server`, registers it with the relay and prints the
+  matching client-side command.
+- `pocket-codex connect --relay <host:port>` subscribes to the remote
+  app-server, exposes it locally and prints the exact
+  `codex --remote ...` invocation to start Codex against that listener.
 
 See [`AGENTS.md`](AGENTS.md) for the detailed roadmap and contributor
 conventions.
@@ -110,10 +111,27 @@ A working `codex` binary is expected to exist on `$PATH`; Pocket-Codex
 does **not** vendor a model runtime. The CLI exposes:
 
 ```text
+pocket-codex serve
+pocket-codex connect
+pocket-codex status
+pocket-codex stop
 pocket-codex codex   start | stop | status
 pocket-codex pb      register | subscribe | status
 pocket-codex remote-hint
 pocket-codex version
+```
+
+Typical host-side flow:
+
+```bash
+pocket-codex serve --relay relay.example.com:7666
+```
+
+Typical client-side flow:
+
+```bash
+pocket-codex connect --relay relay.example.com:7666
+codex --remote ws://127.0.0.1:28080
 ```
 
 ### Flutter front-end

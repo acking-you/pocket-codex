@@ -8,7 +8,10 @@ use std::path::PathBuf;
 
 use directories::ProjectDirs;
 
-use crate::error::{Error, Result};
+use crate::{
+    error::{Error, Result},
+    state::PbRole,
+};
 
 const QUALIFIER: &str = "io.github";
 const ORG: &str = "acking-you";
@@ -48,7 +51,57 @@ pub fn codex_log_file() -> Result<PathBuf> {
     Ok(state_dir()?.join("logs").join("codex-app-server.log"))
 }
 
+/// Path to the default pb-mapper worker log file for a role/key pair.
+pub fn pb_log_file(role: PbRole, key: &str) -> Result<PathBuf> {
+    let role_name = match role {
+        PbRole::Register => "register",
+        PbRole::Subscribe => "subscribe",
+    };
+    Ok(state_dir()?
+        .join("logs")
+        .join(format!("pb-{role_name}-{}.log", safe_file_component(key))))
+}
+
 /// Default config file location (`config.toml` next to the state dir).
 pub fn config_file() -> Result<PathBuf> {
     Ok(config_dir()?.join("config.toml"))
+}
+
+fn safe_file_component(raw: &str) -> String {
+    let sanitized: String = raw
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '.' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if sanitized.is_empty() {
+        "default".into()
+    } else {
+        sanitized
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pb_log_file_sanitizes_service_key() -> Result<()> {
+        let path = pb_log_file(PbRole::Register, "team/codex:main")?;
+
+        assert!(path.ends_with("logs/pb-register-team_codex_main.log"));
+        Ok(())
+    }
+
+    #[test]
+    fn empty_pb_log_file_key_uses_default_component() -> Result<()> {
+        let path = pb_log_file(PbRole::Subscribe, "")?;
+
+        assert!(path.ends_with("logs/pb-subscribe-default.log"));
+        Ok(())
+    }
 }

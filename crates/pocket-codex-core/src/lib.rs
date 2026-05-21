@@ -19,6 +19,9 @@ pub mod config;
 /// Well-known filesystem paths used by the CLI / daemon.
 pub mod paths;
 
+/// Shared process inspection and signalling helpers.
+pub mod process;
+
 /// Persistent runtime state (PID, listen URL, pb-mapper sessions).
 pub mod state;
 

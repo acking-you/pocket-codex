@@ -64,7 +64,7 @@ contributor checkouts and CI even after the upstream forks evolve.
 | `pocket-codex-core`    | configuration schema, on-disk `state.toml`, well-known paths, error types — small, dependency-light |
 | `pocket-codex-codex`   | spawning / supervising / inspecting the `codex app-server` child process, JSON-RPC envelope types  |
 | `pocket-codex-pb`      | thin async wrappers around `pb_mapper::local::{server,client}` for register / subscribe / status   |
-| `pocket-codex-cli`     | user-facing `pocket-codex` binary; `codex {start,stop,status}`, `pb {register,subscribe,status}`, `remote-hint`, `version` |
+| `pocket-codex-cli`     | user-facing `pocket-codex` binary; high-level `serve` / `connect` / `status` / `stop`, low-level `codex {start,stop,status}`, `pb {register,subscribe,status}`, `remote-hint`, `version` |
 | `pocket_codex_bridge`  | `cdylib + staticlib` consumed by Flutter via `flutter_rust_bridge`; auto-generated bindings live in `lib/src/rust` of the Flutter app |
 
 When in doubt, prefer adding a new module to an existing crate over
@@ -129,10 +129,16 @@ Use this as the default loop for any non-trivial change:
 ## 7. Verification commands
 
 Run these before claiming a task is done. CI runs the same set.
+The upstream/submodule code under `deps/` is deliberately outside this
+workspace's formatting and linting contract: do not run rustfmt,
+clippy or other rewrite/lint commands against `deps/` unless the task is
+an intentional submodule bump or upstream contribution. In particular,
+do **not** run `cargo fmt --all`; use the explicit first-party package
+list below so path/patch dependencies under `deps/` are never rewritten.
 
 ```bash
 # Rust workspace
-cargo fmt --all -- --check
+cargo fmt -p pocket-codex-core -p pocket-codex-codex -p pocket-codex-pb -p pocket-codex-cli -p pocket_codex_bridge -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace --locked
 
@@ -181,10 +187,11 @@ The order below is our current best guess; it is not a contract.
    register` and `pocket-codex pb subscribe` re-using the upstream
    `local::server::run_server_side_cli` /
    `local::client::run_client_side_cli` helpers.
-4. **Combined `serve` flow (next).** A single command that does the
-   right thing on the host machine and prints the matching
-   `pocket-codex pb subscribe` hint for the client side; daemonised
-   pb-mapper sessions tracked in `state.toml`.
+4. **Combined `serve` / `connect` flow (done).** `pocket-codex serve`
+   starts or reuses the local app-server, registers it with a relay and
+   tracks the daemonised pb-mapper worker in `state.toml`;
+   `pocket-codex connect` subscribes on the client side and prints the
+   matching `codex --remote ...` command.
 5. **Strongly-typed JSON-RPC client (next).** Replace the
    `serde_json::Value` surface in `pocket-codex-codex::protocol` with
    the upstream `codex-app-server-protocol` types so the Flutter UI

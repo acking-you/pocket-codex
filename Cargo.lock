@@ -1263,6 +1263,7 @@ name = "pocket-codex-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "clap",
  "pocket-codex-codex",
  "pocket-codex-core",
@@ -1298,8 +1299,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "directories",
+ "nix",
  "serde",
  "serde_json",
+ "sysinfo",
  "thiserror 2.0.18",
  "tokio",
  "toml",

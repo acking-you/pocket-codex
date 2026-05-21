@@ -21,9 +21,9 @@ use std::{
 use chrono::Utc;
 use pocket_codex_core::{
     paths,
+    process::{pid_alive, send_sigterm},
     state::{CodexProcessInfo, RuntimeState},
 };
-use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 use tracing::{debug, info, warn};
 
 use crate::protocol::Message as _ProtocolMessage;
@@ -244,30 +244,6 @@ pub fn stop() -> pocket_codex_core::Result<StopOutcome> {
 
     state.save()?;
     Ok(outcome)
-}
-
-/// Check whether the given pid is still alive.
-fn pid_alive(pid: u32) -> bool {
-    let mut sys = System::new();
-    sys.refresh_processes_specifics(
-        ProcessesToUpdate::Some(&[Pid::from_u32(pid)]),
-        true,
-        ProcessRefreshKind::new(),
-    );
-    sys.process(Pid::from_u32(pid)).is_some()
-}
-
-/// Best-effort SIGTERM. Errors are logged but not surfaced because the
-/// caller's recorded state is wiped in either case.
-fn send_sigterm(pid: u32) {
-    use nix::{
-        sys::signal::{kill, Signal},
-        unistd::Pid as NixPid,
-    };
-    let nix_pid = NixPid::from_raw(pid as i32);
-    if let Err(e) = kill(nix_pid, Signal::SIGTERM) {
-        warn!(pid, error = %e, "failed to SIGTERM codex process");
-    }
 }
 
 // Compile-time assurance the protocol module is reachable from this

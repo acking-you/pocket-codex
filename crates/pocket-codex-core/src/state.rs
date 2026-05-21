@@ -84,6 +84,11 @@ pub struct PbSessionInfo {
     /// Path to the captured stdout/stderr log.
     pub log_file: PathBuf,
 
+    /// Whether this registration requested pb-mapper's encrypted
+    /// forwarding mode. Subscriber sessions always record `false`.
+    #[serde(default)]
+    pub codec: bool,
+
     /// Wall-clock time when the session was started (RFC 3339).
     pub started_at: String,
 }
@@ -173,6 +178,7 @@ mod tests {
                 relay_addr: "relay.example.com:7666".into(),
                 pid: 4243,
                 log_file: PathBuf::from("/tmp/pb-register-codex.log"),
+                codec: false,
                 started_at: "2026-05-20T12:00:01Z".into(),
             }],
         };
@@ -186,5 +192,23 @@ mod tests {
                 .pid,
             4243
         );
+    }
+
+    #[test]
+    fn pb_session_codec_defaults_false_for_existing_state_files() {
+        let raw = r#"
+[[pb]]
+role = "register"
+key = "codex"
+local_addr = "127.0.0.1:18080"
+relay_addr = "relay.example.com:7666"
+pid = 4243
+log_file = "/tmp/pb-register-codex.log"
+started_at = "2026-05-20T12:00:01Z"
+"#;
+
+        let parsed: RuntimeState = toml::from_str(raw).expect("deserialize old state");
+
+        assert!(!parsed.pb[0].codec);
     }
 }

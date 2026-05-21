@@ -68,6 +68,7 @@ directories = "5"
 which = "6"
 nix = { version = "0.29", features = ["signal", "process"] }
 sysinfo = "0.32"
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 
 [workspace.lints.rust]
 # Doc coverage is part of the contract — every public item has a comment.

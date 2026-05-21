@@ -22,3 +22,5 @@ toml = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
 directories = { workspace = true }
+sysinfo = { workspace = true }
+nix = { workspace = true }

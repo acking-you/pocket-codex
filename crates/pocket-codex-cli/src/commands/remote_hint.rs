@@ -4,29 +4,51 @@
 
 use anyhow::Result;
 
-use crate::cli::RemoteHintArgs;
+use crate::{cli::RemoteHintArgs, commands::connect::codex_remote_command};
 
 /// Print a copy-pasteable hint.
 pub fn run(args: RemoteHintArgs) -> Result<()> {
-    println!("# On the client device, run one of the following:");
-    println!();
-    println!("# 1. Using pocket-codex (recommended):");
-    println!(
-        "pocket-codex pb subscribe --key {key} --local-addr {local} --relay {relay}",
-        key = args.key,
-        local = args.local_addr,
-        relay = args.relay.relay,
-    );
-    println!();
-    println!("# 2. Using pb-mapper-client-cli directly:");
-    println!(
-        "pb-mapper-client-cli tcp-server --key {key} --addr {local} --pb-mapper-server {relay}",
-        key = args.key,
-        local = args.local_addr,
-        relay = args.relay.relay,
-    );
-    println!();
-    println!("# Then point your codex client (IDE plugin, custom UI, etc.) at:");
-    println!("ws://{}", args.local_addr);
+    for line in remote_hint_lines(&args) {
+        println!("{line}");
+    }
     Ok(())
+}
+
+fn remote_hint_lines(args: &RemoteHintArgs) -> Vec<String> {
+    vec![
+        "# On the client device, run:".into(),
+        format!(
+            "pocket-codex connect --key {key} --local-addr {local} --relay {relay}",
+            key = args.key,
+            local = args.local_addr,
+            relay = args.relay.relay,
+        ),
+        String::new(),
+        "# Then start Codex against the local subscriber listener:".into(),
+        codex_remote_command(&args.local_addr),
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cli::PbRelayArgs;
+
+    #[test]
+    fn remote_hint_lines_prefer_connect_and_codex_remote() {
+        let lines = remote_hint_lines(&RemoteHintArgs {
+            key: "codex".into(),
+            local_addr: "127.0.0.1:28080".into(),
+            relay: PbRelayArgs {
+                relay: "relay.example:7666".into(),
+            },
+        });
+
+        assert!(lines.iter().any(|line| line
+            == "pocket-codex connect --key codex --local-addr 127.0.0.1:28080 --relay \
+                relay.example:7666"));
+        assert!(lines
+            .iter()
+            .any(|line| line == "codex --remote ws://127.0.0.1:28080"));
+    }
 }
