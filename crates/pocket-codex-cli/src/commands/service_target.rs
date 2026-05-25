@@ -36,7 +36,7 @@
 use anyhow::{bail, Result};
 use pocket_codex_core::{
     config::Config,
-    service::{default_device_id, ServiceId, ServiceKind},
+    service::{default_device_id, ServiceId, ServiceKind, DEFAULT_SERVICE_NAME},
     state::RuntimeState,
 };
 use tokio::net::lookup_host;
@@ -45,7 +45,7 @@ use tokio::net::lookup_host;
 pub(crate) struct TargetRequest {
     pub key: Option<String>,
     pub device: Option<String>,
-    pub name: String,
+    pub name: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,15 +54,18 @@ pub(crate) struct ResolvedTarget {
     pub service_id: Option<ServiceId>,
 }
 
-pub(crate) fn explicit_target(kind: ServiceKind, request: TargetRequest) -> Option<ResolvedTarget> {
-    if let Some(key) = request.key {
+pub(crate) fn explicit_target(
+    kind: ServiceKind,
+    request: &TargetRequest,
+) -> Option<ResolvedTarget> {
+    if let Some(key) = request.key.clone() {
         return Some(ResolvedTarget {
             service_id: ServiceId::parse_key(&key),
             key,
         });
     }
-    request.device.map(|device| {
-        let service_id = ServiceId::new(device, kind, request.name);
+    request.device.as_ref().map(|device| {
+        let service_id = ServiceId::new(device, kind, resolved_name(request.name.as_deref(), None));
         ResolvedTarget {
             key: service_id.key(),
             service_id: Some(service_id),
@@ -73,9 +76,9 @@ pub(crate) fn explicit_target(kind: ServiceKind, request: TargetRequest) -> Opti
 pub(crate) fn generated_target(
     kind: ServiceKind,
     device: Option<String>,
-    name: String,
+    name: impl Into<String>,
 ) -> ResolvedTarget {
-    let service_id = ServiceId::new(device.unwrap_or_else(default_device_id), kind, name);
+    let service_id = ServiceId::new(device.unwrap_or_else(default_device_id), kind, name.into());
     ResolvedTarget {
         key: service_id.key(),
         service_id: Some(service_id),
@@ -89,21 +92,31 @@ pub(crate) fn choose_target(
     state: &RuntimeState,
     discovered: &[ServiceId],
 ) -> Result<ResolvedTarget> {
-    if let Some(target) = explicit_target(kind, request) {
+    if let Some(target) = explicit_target(kind, &request) {
         return Ok(target);
     }
 
+    let requested_name = request.name.as_deref();
     if let Some(default) = config.default_service(kind) {
-        return Ok(generated_target(kind, Some(default.device.clone()), default.name.clone()));
+        return Ok(generated_target(
+            kind,
+            Some(default.device.clone()),
+            resolved_name(requested_name, Some(default.name.as_str())),
+        ));
     }
 
     if let Some(selected) = state.selected_service(kind) {
-        return Ok(generated_target(kind, Some(selected.device.clone()), selected.name.clone()));
+        return Ok(generated_target(
+            kind,
+            Some(selected.device.clone()),
+            resolved_name(requested_name, Some(selected.name.as_str())),
+        ));
     }
 
     let candidates: Vec<ServiceId> = discovered
         .iter()
         .filter(|id| id.kind == kind)
+        .filter(|id| requested_name.is_none_or(|name| id.name == name))
         .cloned()
         .collect();
     match candidates.as_slice() {
@@ -111,16 +124,39 @@ pub(crate) fn choose_target(
             key: only.key(),
             service_id: Some(only.clone()),
         }),
-        [] => bail!("no {kind} services found on the relay; pass --device or --key"),
+        [] => match requested_name {
+            Some(name) => bail!(
+                "no {kind} services named `{name}` found on the relay; pass --device or --key"
+            ),
+            None => bail!("no {kind} services found on the relay; pass --device or --key"),
+        },
         many => {
             let list = many
                 .iter()
                 .map(|id| format!("{} ({})", id.key(), id.device))
                 .collect::<Vec<_>>()
                 .join(", ");
-            bail!("multiple {kind} services found; pass --device or --key. candidates: {list}")
+            match requested_name {
+                Some(name) => bail!(
+                    "multiple {kind} services named `{name}` found; pass --device or --key. \
+                     candidates: {list}"
+                ),
+                None => {
+                    bail!(
+                        "multiple {kind} services found; pass --device or --key. candidates: \
+                         {list}"
+                    )
+                },
+            }
         },
     }
+}
+
+fn resolved_name(requested_name: Option<&str>, fallback_name: Option<&str>) -> String {
+    requested_name
+        .or(fallback_name)
+        .unwrap_or(DEFAULT_SERVICE_NAME)
+        .to_string()
 }
 
 pub(crate) async fn discover_services(relay: &str) -> Result<Vec<ServiceId>> {
@@ -153,7 +189,7 @@ mod tests {
         let request = TargetRequest {
             key: Some("custom".to_string()),
             device: Some("ignored".to_string()),
-            name: "ignored".to_string(),
+            name: Some("ignored".to_string()),
         };
 
         let resolved = choose_target(
@@ -181,6 +217,46 @@ mod tests {
                 .expect("target");
 
         assert_eq!(resolved.key, "pcx:studio:app:work");
+    }
+
+    #[test]
+    fn requested_name_overrides_configured_default_name_on_same_device() {
+        let mut config = Config::default();
+        config.set_default_service(ServiceKind::App, "studio", "default");
+
+        let resolved = choose_target(
+            ServiceKind::App,
+            TargetRequest {
+                name: Some("work".to_string()),
+                ..TargetRequest::default()
+            },
+            &config,
+            &RuntimeState::default(),
+            &[],
+        )
+        .expect("target");
+
+        assert_eq!(resolved.key, "pcx:studio:app:work");
+    }
+
+    #[test]
+    fn requested_name_filters_discovered_targets() {
+        let resolved = choose_target(
+            ServiceKind::Api,
+            TargetRequest {
+                name: Some("work".to_string()),
+                ..TargetRequest::default()
+            },
+            &Config::default(),
+            &RuntimeState::default(),
+            &[
+                ServiceId::new("studio", ServiceKind::Api, "default"),
+                ServiceId::new("studio", ServiceKind::Api, "work"),
+            ],
+        )
+        .expect("target");
+
+        assert_eq!(resolved.key, "pcx:studio:api:work");
     }
 
     #[test]

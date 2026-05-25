@@ -120,9 +120,10 @@ pub struct ConnectArgs {
     #[arg(long)]
     pub device: Option<String>,
 
-    /// Service instance name to connect to.
-    #[arg(long, default_value = "default")]
-    pub name: String,
+    /// Service instance name to connect to. When omitted, Pocket-Codex
+    /// uses the stored default target name or falls back to `default`.
+    #[arg(long)]
+    pub name: Option<String>,
 
     /// `host:port` to bind the local subscriber listener on.
     #[arg(long, default_value = "127.0.0.1:28080")]
@@ -185,9 +186,10 @@ pub struct ApiConnectArgs {
     #[arg(long)]
     pub device: Option<String>,
 
-    /// Service instance name to connect to.
-    #[arg(long, default_value = "default")]
-    pub name: String,
+    /// Service instance name to connect to. When omitted, Pocket-Codex
+    /// uses the stored default target name or falls back to `default`.
+    #[arg(long)]
+    pub name: Option<String>,
 
     /// `host:port` to bind the local subscriber listener on.
     #[arg(long, default_value = "127.0.0.1:28180")]
@@ -467,7 +469,7 @@ mod tests {
 
         assert!(args.key.is_none());
         assert!(args.device.is_none());
-        assert_eq!(args.name, "default");
+        assert!(args.name.is_none());
         assert_eq!(args.local_addr, "127.0.0.1:28080");
         assert_eq!(args.relay.relay, "relay.example:7666");
     }

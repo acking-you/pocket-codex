@@ -103,7 +103,8 @@ async fn load_auth_headers() -> Result<HeaderMap> {
     }
 
     let auth_path = codex_home().join("auth.json");
-    let raw = std::fs::read_to_string(&auth_path)
+    let raw = tokio::fs::read_to_string(&auth_path)
+        .await
         .with_context(|| format!("reading Codex auth file {}", auth_path.display()))?;
     let auth: AuthFile = serde_json::from_str(&raw)
         .with_context(|| format!("parsing Codex auth file {}", auth_path.display()))?;
@@ -234,15 +235,10 @@ async fn forward_http_inner(
     let status = upstream.status();
     let headers = response_headers(upstream.headers());
     let body = Body::from_stream(upstream.bytes_stream());
-    let mut response = Response::builder().status(status);
-    if let Some(response_headers) = response.headers_mut() {
-        *response_headers = headers;
-    } else {
-        anyhow::bail!("response builder missing mutable headers");
-    }
-    response
-        .body(body)
-        .context("building API proxy HTTP response")
+    let mut response = Response::new(body);
+    *response.status_mut() = status;
+    *response.headers_mut() = headers;
+    Ok(response)
 }
 
 async fn forward_ws(
@@ -269,11 +265,7 @@ async fn proxy_websocket(
         .context("building upstream websocket request")?;
     {
         let request_headers = request.headers_mut();
-        for (name, value) in forwarded_headers(&headers) {
-            if let Some(name) = name {
-                request_headers.insert(name, value);
-            }
-        }
+        request_headers.extend(forwarded_headers(&headers));
         merge_auth_headers(request_headers, &state.auth_headers);
     }
     let (upstream, _) = connect_async(request)
@@ -282,21 +274,37 @@ async fn proxy_websocket(
     let (mut downstream_tx, mut downstream_rx) = downstream.split();
     let (mut upstream_tx, mut upstream_rx) = upstream.split();
 
-    loop {
-        tokio::select! {
-            local = downstream_rx.next() => {
-                let Some(local) = local else { break; };
-                let local = local.context("reading local websocket message")?;
-                let Some(message) = axum_to_tungstenite(local) else { break; };
-                upstream_tx.send(message).await.context("sending upstream websocket message")?;
-            }
-            remote = upstream_rx.next() => {
-                let Some(remote) = remote else { break; };
-                let remote = remote.context("reading upstream websocket message")?;
-                let Some(message) = tungstenite_to_axum(remote) else { break; };
-                downstream_tx.send(message).await.context("sending local websocket message")?;
-            }
+    let downstream_to_upstream = async {
+        while let Some(message) = downstream_rx.next().await {
+            let message = message.context("reading local websocket message")?;
+            let Some(message) = axum_to_tungstenite(message) else {
+                break;
+            };
+            upstream_tx
+                .send(message)
+                .await
+                .context("sending upstream websocket message")?;
         }
+        Result::<()>::Ok(())
+    };
+    let upstream_to_downstream = async {
+        while let Some(message) = upstream_rx.next().await {
+            let message = message.context("reading upstream websocket message")?;
+            let Some(message) = tungstenite_to_axum(message) else {
+                break;
+            };
+            downstream_tx
+                .send(message)
+                .await
+                .context("sending local websocket message")?;
+        }
+        Result::<()>::Ok(())
+    };
+    tokio::pin!(downstream_to_upstream);
+    tokio::pin!(upstream_to_downstream);
+    tokio::select! {
+        res = &mut downstream_to_upstream => res?,
+        res = &mut upstream_to_downstream => res?,
     }
 
     Ok(())
@@ -373,5 +381,48 @@ fn tungstenite_to_axum(message: TungsteniteMessage) -> Option<AxumMessage> {
             })))
         },
         TungsteniteMessage::Frame(_) => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use http::header::SET_COOKIE;
+
+    use super::*;
+
+    #[test]
+    fn forwarded_headers_drop_hop_by_hop_headers() {
+        let mut headers = HeaderMap::new();
+        headers.insert(HeaderName::from_static("connection"), HeaderValue::from_static("close"));
+        headers.insert(
+            HeaderName::from_static("authorization"),
+            HeaderValue::from_static("Bearer local"),
+        );
+        headers.append(SET_COOKIE, HeaderValue::from_static("a=1"));
+        headers.append(SET_COOKIE, HeaderValue::from_static("b=2"));
+
+        let forwarded = forwarded_headers(&headers);
+
+        assert!(!forwarded.contains_key("connection"));
+        assert!(!forwarded.contains_key("authorization"));
+        assert_eq!(forwarded.get_all(SET_COOKIE).iter().count(), 2);
+    }
+
+    #[test]
+    fn extending_request_headers_preserves_multi_value_headers() {
+        let mut incoming = HeaderMap::new();
+        incoming.append(SET_COOKIE, HeaderValue::from_static("a=1"));
+        incoming.append(SET_COOKIE, HeaderValue::from_static("b=2"));
+
+        let mut request_headers = HeaderMap::new();
+        request_headers.extend(forwarded_headers(&incoming));
+
+        let cookies = request_headers
+            .get_all(SET_COOKIE)
+            .iter()
+            .map(|value| value.to_str().expect("ascii"))
+            .collect::<Vec<_>>();
+
+        assert_eq!(cookies, vec!["a=1", "b=2"]);
     }
 }
