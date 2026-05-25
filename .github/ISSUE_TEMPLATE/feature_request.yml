@@ -1,0 +1,91 @@
+name: Feature request
+description: Propose a new capability, flow or surface area for Pocket-Codex.
+title: "feat: <short description>"
+labels: ["enhancement", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to propose something. A few notes before
+        you start:
+
+        - **Lead with the problem, not the solution.** What are you trying
+          to do that Pocket-Codex makes hard or impossible today?
+        - **KISS / YAGNI.** Per [`AGENTS.md` §4](https://github.com/acking-you/pocket-codex/blob/main/AGENTS.md#4-engineering-principles)
+          we add traits when there are at least two real implementations
+          and config knobs when there's at least one real user who needs
+          them. Concrete use cases beat hypothetical flexibility.
+        - **Faithful upstream behaviour > local heuristics.** If the
+          feature concerns `codex` or `pb-mapper`, mirroring upstream is
+          usually preferred over a Pocket-Codex-only shim.
+
+  - type: checkboxes
+    id: prechecks
+    attributes:
+      label: Pre-flight checks
+      options:
+        - label: I searched [open and closed issues](https://github.com/acking-you/pocket-codex/issues?q=is%3Aissue) and didn't find a duplicate.
+          required: true
+        - label: I checked the [roadmap in `AGENTS.md` §9](https://github.com/acking-you/pocket-codex/blob/main/AGENTS.md#9-roadmap-rough) and this isn't already planned.
+          required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you trying to do, and where does Pocket-Codex get in the way today? Concrete scenarios beat abstract goals.
+      placeholder: "I want to drive Codex from a tablet that doesn't have `codex` installed, but …"
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Optional. A sketch is fine — CLI shape, on-disk fields, protocol changes. Cite files as `path:line` if you've already poked around.
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What else did you try, or what workarounds exist today?
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Scope
+      description: Which area(s) of the project would this touch?
+      multiple: true
+      options:
+        - "`pocket-codex` CLI surface"
+        - "`pocket-codex codex …` (app-server supervision)"
+        - "`pocket-codex api …` (Responses API proxy)"
+        - "`pocket-codex pb …` (pb-mapper integration)"
+        - "`pocket-codex services …` (discovery / default device)"
+        - "On-disk layout (`state.toml`, paths)"
+        - "Flutter UI (`apps/flutter`)"
+        - "`flutter_rust_bridge` API surface"
+        - "Documentation / contributor experience"
+        - "Other (describe in problem)"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: userspace
+    attributes:
+      label: Userspace impact
+      description: Per `AGENTS.md` §4.1, documented CLI flags / on-disk layout / wire-protocol fields are part of the contract.
+      options:
+        - "Additive only (new flag / field / endpoint, no behaviour change for existing users)"
+        - "Changes existing behaviour (needs a migration note)"
+        - "I'm not sure — happy to discuss"
+    validations:
+      required: true
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
+      description: Prior art, links, related issues, sketches.

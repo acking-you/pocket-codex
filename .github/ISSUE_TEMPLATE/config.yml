@@ -1,0 +1,14 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Contributor & agent guide (AGENTS.md)
+    url: https://github.com/acking-you/pocket-codex/blob/main/AGENTS.md
+    about: Engineering principles, crate boundaries, verification commands and roadmap. Read this before opening a non-trivial issue or PR.
+  - name: Contribution guide (CONTRIBUTING.md)
+    url: https://github.com/acking-you/pocket-codex/blob/main/CONTRIBUTING.md
+    about: Toolchain setup, branching / commit conventions and the verification commands CI runs.
+  - name: Upstream codex
+    url: https://github.com/openai/codex
+    about: Bugs in the `codex` binary itself (login, app-server protocol semantics) belong upstream, not here.
+  - name: pb-mapper
+    url: https://github.com/acking-you/pb-mapper
+    about: Bugs in the relay protocol or `pb_mapper::local::{server,client}` belong in the pb-mapper repo.

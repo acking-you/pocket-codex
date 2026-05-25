@@ -1,0 +1,124 @@
+name: Bug report
+description: Something in Pocket-Codex isn't behaving the way the docs / CLI help say it should.
+title: "bug: <short description>"
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug. A few things that help us land the fix faster:
+
+        - **Pocket-Codex is pre-1.0.** APIs, on-disk layout and the protocol
+          mapping are all expected to change. Please include the exact
+          commit / version you saw the bug on.
+        - **Logs help.** `pocket-codex` uses `tracing`; running with
+          `RUST_LOG=pocket_codex=debug` (or `trace`) usually surfaces what
+          went wrong.
+        - **Don't paste secrets.** Scrub `CODEX_ACCESS_TOKEN`, ChatGPT
+          session cookies, relay credentials and any contents of
+          `state.toml` that look sensitive before pasting.
+
+  - type: checkboxes
+    id: prechecks
+    attributes:
+      label: Pre-flight checks
+      options:
+        - label: I searched [open and closed issues](https://github.com/acking-you/pocket-codex/issues?q=is%3Aissue) and didn't find a duplicate.
+          required: true
+        - label: I read the relevant section of [`AGENTS.md`](https://github.com/acking-you/pocket-codex/blob/main/AGENTS.md) / [`README.md`](https://github.com/acking-you/pocket-codex/blob/main/README.md) and the bug isn't documented as known / expected.
+          required: true
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: One-sentence description of the bug.
+      placeholder: "`pocket-codex serve --relay …` exits 0 but pb-mapper never sees the registration."
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: The exact commands you ran, in order. A minimal repro is gold.
+      placeholder: |
+        1. `git clone --recurse-submodules … && cargo build --workspace`
+        2. `pocket-codex codex start`
+        3. `pocket-codex serve --relay relay.example.com:7666`
+        4. On another machine: `pocket-codex services list --relay relay.example.com:7666`
+      render: markdown
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+      description: Include the relevant `tracing` / stderr output, with secrets scrubbed.
+      render: shell
+    validations:
+      required: true
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Affected surface
+      description: Which part of the system did the bug show up in?
+      multiple: true
+      options:
+        - "`pocket-codex` CLI (serve / connect / status / stop)"
+        - "`pocket-codex codex …` (app-server supervision)"
+        - "`pocket-codex api …` (Responses API proxy)"
+        - "`pocket-codex pb …` (pb-mapper register / subscribe)"
+        - "`pocket-codex services …` (discovery / default device)"
+        - "Flutter UI (`apps/flutter`)"
+        - "`flutter_rust_bridge` codegen / cdylib"
+        - "Build / CI / docs"
+        - "Other (describe in summary)"
+    validations:
+      required: true
+
+  - type: input
+    id: pcx-version
+    attributes:
+      label: Pocket-Codex version
+      description: Output of `pocket-codex version` (or the commit SHA you built from).
+      placeholder: "pocket-codex 0.1.0 (commit abcdef0)"
+    validations:
+      required: true
+
+  - type: input
+    id: codex-version
+    attributes:
+      label: Upstream `codex` version
+      description: Output of `codex --version`. Leave blank if the bug doesn't involve the codex binary.
+      placeholder: "codex 0.x.y"
+
+  - type: input
+    id: flutter-version
+    attributes:
+      label: Flutter version
+      description: Output of `fvm flutter --version`. Leave blank if the bug doesn't involve `apps/flutter`.
+      placeholder: "Flutter 3.44.0 • channel stable"
+
+  - type: input
+    id: os
+    attributes:
+      label: OS / platform
+      placeholder: "macOS 14.5 (arm64) / Ubuntu 24.04 / Windows 11 / WSL2 …"
+    validations:
+      required: true
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
+      description: Workarounds tried, related issues, screenshots — anything that helps triage.
