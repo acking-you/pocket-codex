@@ -8,22 +8,29 @@
 
 Pocket-Codex turns the upstream
 [`codex app-server`](https://github.com/openai/codex) protocol into a
-portable, multi-device experience:
+portable, multi-device experience, and additionally exposes the host's
+Codex login as a relay-reachable Responses API endpoint for any device:
 
 - A **pure-Rust CLI** (`pocket-codex`) supervises a local
   `codex app-server` process on the machine that already has Codex
   installed.
-- The same CLI uses [`pb-mapper`](https://github.com/acking-you/pb-mapper)
-  to either **register** local app-server / direct Responses API services
-  with a relay or **subscribe** to remote ones, materialising them as
-  local TCP endpoints.
+- The same CLI ships an in-process **Responses API proxy** that reuses
+  the host's `codex login` (ChatGPT account or `CODEX_ACCESS_TOKEN`)
+  to serve OpenAI-compatible `/v1/responses` HTTP + WebSocket traffic,
+  letting devices *without* Codex installed drive the same model
+  through the relay.
+- The CLI uses [`pb-mapper`](https://github.com/acking-you/pb-mapper)
+  to **register** either service on a relay under
+  `pcx:<device>:<kind>:<name>` keys, or to **subscribe** to remote
+  ones, materialising them as local TCP endpoints.
 - A **Flutter front-end** (under `apps/flutter`, driven through
   `flutter_rust_bridge`) consumes the app-server JSON-RPC protocol
   directly to give every platform a native UI without re-implementing
   the model runtime.
 
 The repository deliberately does **not** vendor a model runtime; the
-user-supplied `codex` binary is the source of truth.
+user-supplied `codex` binary (and its login state) is the source of
+truth.
 
 ## 2. Repository layout
 
@@ -61,7 +68,7 @@ contributor checkouts and CI even after the upstream forks evolve.
 
 | Crate                  | Owns                                                                                           |
 | ---------------------- | ---------------------------------------------------------------------------------------------- |
-| `pocket-codex-core`    | configuration schema, on-disk `state.toml`, well-known paths, error types — small, dependency-light |
+| `pocket-codex-core`    | configuration schema, on-disk `state.toml`, well-known paths, error types, `service::{ServiceId, ServiceKind, sanitize_component, default_device_id}` for `pcx:<device>:<kind>:<name>` relay keys — small, dependency-light |
 | `pocket-codex-codex`   | spawning / supervising / inspecting the `codex app-server` child process, JSON-RPC envelope types  |
 | `pocket-codex-pb`      | thin async wrappers around `pb_mapper::local::{server,client}` for register / subscribe / status   |
 | `pocket-codex-cli`     | user-facing `pocket-codex` binary; high-level `serve` / `connect` / `api {serve,connect}` / `services {list,default set}` / `status` / `stop`, low-level `codex {start,stop,status}`, `pb {register,subscribe,status}`, `remote-hint`, `version` |
