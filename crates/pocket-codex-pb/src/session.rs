@@ -9,13 +9,18 @@
 
 use std::{net::SocketAddr, sync::Arc};
 
+use anyhow::{anyhow, Context, Result};
 use pb_mapper::{
-    common::config::StatusOp,
+    common::{
+        config::StatusOp,
+        message::command::{PbConnStatusReq, PbConnStatusResp, PbServiceConnStatus},
+    },
     local::{
-        client::{handle_status_cli, run_client_side_cli},
+        client::{handle_status_cli, run_client_side_cli, status::get_status},
         server::run_server_side_cli,
     },
 };
+use tokio::net::TcpStream;
 use uni_stream::stream::{TcpListenerProvider, TcpStreamProvider};
 
 /// Options for registering a local TCP service with a remote relay.
@@ -98,4 +103,39 @@ pub async fn status(relay_addr: SocketAddr, kind: StatusKind) {
         StatusKind::Keys => StatusOp::Keys,
     };
     handle_status_cli(op, relay_addr).await;
+}
+
+/// Query registered service keys from a relay.
+pub async fn keys(relay_addr: SocketAddr) -> Result<Vec<String>> {
+    match query_status(relay_addr, PbConnStatusReq::Keys).await? {
+        PbConnStatusResp::Keys(keys) => Ok(keys),
+        other => Err(anyhow!("relay returned unexpected keys status: {other:?}")),
+    }
+}
+
+/// Query connection health for one registered service key.
+pub async fn service_connections(
+    relay_addr: SocketAddr,
+    key: impl Into<String>,
+) -> Result<Vec<PbServiceConnStatus>> {
+    let key = key.into();
+    match query_status(relay_addr, PbConnStatusReq::Service {
+        key: key.clone(),
+    })
+    .await?
+    {
+        PbConnStatusResp::Service {
+            connections, ..
+        } => Ok(connections),
+        other => Err(anyhow!("relay returned unexpected service status for `{key}`: {other:?}")),
+    }
+}
+
+async fn query_status(relay_addr: SocketAddr, req: PbConnStatusReq) -> Result<PbConnStatusResp> {
+    let mut stream = TcpStream::connect(relay_addr)
+        .await
+        .with_context(|| format!("connecting to pb-mapper relay {relay_addr}"))?;
+    get_status(&mut stream, req)
+        .await
+        .map_err(|err| anyhow!("querying pb-mapper relay status: {err}"))
 }

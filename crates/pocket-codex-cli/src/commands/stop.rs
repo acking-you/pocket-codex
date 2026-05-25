@@ -5,7 +5,10 @@ use pocket_codex_codex::{stop as stop_codex, StopOutcome as CodexStopOutcome};
 
 use crate::{
     cli::StopArgs,
-    commands::managed_pb::{self, StopFilter, StopOutcome as PbStopOutcome},
+    commands::{
+        managed_api::{self, StopOutcome as ApiStopOutcome},
+        managed_pb::{self, StopFilter, StopOutcome as PbStopOutcome},
+    },
 };
 
 /// Stop Pocket-Codex managed sessions.
@@ -13,6 +16,7 @@ pub fn run(args: StopArgs) -> Result<()> {
     let filtering_pb = args.key.is_some() || args.role.is_some();
     if !filtering_pb {
         print_codex_stop(stop_codex()?);
+        print_api_stops(managed_api::stop_all()?);
     }
 
     let outcomes = managed_pb::stop_matching(StopFilter {
@@ -21,6 +25,23 @@ pub fn run(args: StopArgs) -> Result<()> {
     })?;
     print_pb_stops(outcomes, filtering_pb);
     Ok(())
+}
+
+fn print_api_stops(outcomes: Vec<ApiStopOutcome>) {
+    if outcomes.is_empty() {
+        println!("api: no managed sessions");
+        return;
+    }
+    for outcome in outcomes {
+        match outcome {
+            ApiStopOutcome::Stopped(session) => {
+                println!("api proxy: sent SIGTERM to pid {} key={}", session.pid, session.key)
+            },
+            ApiStopOutcome::Stale(session) => {
+                println!("api proxy: stale pid {} cleared key={}", session.pid, session.key)
+            },
+        }
+    }
 }
 
 fn print_codex_stop(outcome: CodexStopOutcome) {

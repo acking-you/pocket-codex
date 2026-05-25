@@ -25,4 +25,7 @@ pub mod process;
 /// Persistent runtime state (PID, listen URL, pb-mapper sessions).
 pub mod state;
 
+/// Pocket-Codex service identifiers and relay key helpers.
+pub mod service;
+
 pub use error::{Error, Result};

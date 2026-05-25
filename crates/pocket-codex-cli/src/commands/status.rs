@@ -26,6 +26,23 @@ pub fn run() -> Result<()> {
     }
 
     let state = RuntimeState::load()?;
+    if state.api.is_empty() {
+        println!("api: no managed sessions");
+    } else {
+        for session in &state.api {
+            let state = if pid_alive(session.pid) { "alive" } else { "stale" };
+            println!(
+                "api proxy: {} pid={} key={} local={} log={} since {}",
+                state,
+                session.pid,
+                session.key,
+                session.local_addr,
+                session.log_file.display(),
+                session.started_at
+            );
+        }
+    }
+
     if state.pb.is_empty() {
         println!("pb: no managed sessions");
     } else {

@@ -13,7 +13,11 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{error::Result, paths};
+use crate::{
+    error::Result,
+    paths,
+    service::{sanitize_component, ServiceKind},
+};
 
 /// Top-level on-disk state.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -28,6 +32,14 @@ pub struct RuntimeState {
     /// services in parallel.
     #[serde(default)]
     pub pb: Vec<PbSessionInfo>,
+
+    /// Direct Responses API proxy workers Pocket-Codex spawned.
+    #[serde(default)]
+    pub api: Vec<ApiProxyInfo>,
+
+    /// Last selected service targets by kind, used as a client-local default.
+    #[serde(default)]
+    pub selected_services: Vec<SelectedServiceInfo>,
 }
 
 /// Recorded metadata for a supervised `codex app-server` child
@@ -93,6 +105,43 @@ pub struct PbSessionInfo {
     pub started_at: String,
 }
 
+/// Recorded metadata for a direct Responses API proxy worker.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApiProxyInfo {
+    /// Service key this proxy backs.
+    pub key: String,
+
+    /// Local `host:port` the proxy listens on.
+    pub local_addr: String,
+
+    /// pid of the worker process that owns this proxy.
+    pub pid: u32,
+
+    /// Path to the captured stdout/stderr log.
+    pub log_file: PathBuf,
+
+    /// Wall-clock time when the worker was started (RFC 3339).
+    pub started_at: String,
+}
+
+/// Client-local remembered target for a service kind.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SelectedServiceInfo {
+    /// Service kind this selection applies to.
+    pub kind: ServiceKind,
+
+    /// Selected device id.
+    pub device: String,
+
+    /// Selected service instance name.
+    pub name: String,
+
+    /// Wall-clock time when the selection was recorded (RFC 3339).
+    pub selected_at: String,
+}
+
 impl RuntimeState {
     /// Load runtime state from the default location.
     ///
@@ -154,6 +203,51 @@ impl RuntimeState {
             .position(|s| s.role == role && s.key == key)?;
         Some(self.pb.swap_remove(idx))
     }
+
+    /// Look up an API proxy worker by service key.
+    pub fn find_api(&self, key: &str) -> Option<&ApiProxyInfo> {
+        self.api.iter().find(|s| s.key == key)
+    }
+
+    /// Replace (or append) the API proxy worker identified by service key.
+    pub fn upsert_api(&mut self, session: ApiProxyInfo) {
+        if let Some(slot) = self.api.iter_mut().find(|s| s.key == session.key) {
+            *slot = session;
+        } else {
+            self.api.push(session);
+        }
+    }
+
+    /// Remove the API proxy worker identified by service key.
+    pub fn remove_api(&mut self, key: &str) -> Option<ApiProxyInfo> {
+        let idx = self.api.iter().position(|s| s.key == key)?;
+        Some(self.api.swap_remove(idx))
+    }
+
+    /// Return the last selected target for a service kind.
+    pub fn selected_service(&self, kind: ServiceKind) -> Option<&SelectedServiceInfo> {
+        self.selected_services.iter().find(|s| s.kind == kind)
+    }
+
+    /// Record the last selected target for a service kind.
+    pub fn record_selected_service(
+        &mut self,
+        kind: ServiceKind,
+        device: impl AsRef<str>,
+        name: impl AsRef<str>,
+    ) {
+        let selected = SelectedServiceInfo {
+            kind,
+            device: sanitize_component(device.as_ref()),
+            name: sanitize_component(name.as_ref()),
+            selected_at: chrono::Utc::now().to_rfc3339(),
+        };
+        if let Some(slot) = self.selected_services.iter_mut().find(|s| s.kind == kind) {
+            *slot = selected;
+        } else {
+            self.selected_services.push(selected);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -181,6 +275,8 @@ mod tests {
                 codec: false,
                 started_at: "2026-05-20T12:00:01Z".into(),
             }],
+            api: Vec::new(),
+            selected_services: Vec::new(),
         };
         let raw = toml::to_string_pretty(&state).expect("serialize");
         let parsed: RuntimeState = toml::from_str(&raw).expect("deserialize");
@@ -210,5 +306,21 @@ started_at = "2026-05-20T12:00:01Z"
         let parsed: RuntimeState = toml::from_str(raw).expect("deserialize old state");
 
         assert!(!parsed.pb[0].codec);
+    }
+
+    #[test]
+    fn selected_service_roundtrips_by_kind() {
+        let mut state = RuntimeState::default();
+        state.record_selected_service(crate::service::ServiceKind::App, "studio", "work");
+
+        let selected = state
+            .selected_service(crate::service::ServiceKind::App)
+            .expect("selected app service");
+
+        assert_eq!(selected.device, "studio");
+        assert_eq!(selected.name, "work");
+        assert!(state
+            .selected_service(crate::service::ServiceKind::Api)
+            .is_none());
     }
 }

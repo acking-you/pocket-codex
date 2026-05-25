@@ -5,7 +5,7 @@ use pocket_codex_pb::{
     register as pb_register, subscribe as pb_subscribe, RegisterOptions, SubscribeOptions,
 };
 
-use crate::cli::WorkerCmd;
+use crate::{cli::WorkerCmd, commands::api_proxy};
 
 /// Run an internal worker command.
 pub async fn run(cmd: WorkerCmd) -> Result<()> {
@@ -27,6 +27,7 @@ pub async fn run(cmd: WorkerCmd) -> Result<()> {
             })
             .await;
         },
+        WorkerCmd::ApiProxy(args) => api_proxy::run(args.listen).await?,
     }
     Ok(())
 }

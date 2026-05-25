@@ -2,7 +2,10 @@
 
 use anyhow::{Context, Result};
 use pocket_codex_codex::{spawn, ListenSpec, SpawnOptions};
-use pocket_codex_core::state::PbRole;
+use pocket_codex_core::{
+    service::{default_device_id, ServiceId, ServiceKind},
+    state::PbRole,
+};
 
 use crate::{
     cli::ServeArgs,
@@ -11,6 +14,14 @@ use crate::{
 
 /// Run the host-side one-shot setup flow.
 pub async fn run(args: ServeArgs) -> Result<()> {
+    let key = args.key.clone().unwrap_or_else(|| {
+        ServiceId::new(
+            args.device.clone().unwrap_or_else(default_device_id),
+            ServiceKind::App,
+            &args.name,
+        )
+        .key()
+    });
     let requested_listen = ListenSpec::WebSocket {
         host: args.host,
         port: args.port,
@@ -27,12 +38,12 @@ pub async fn run(args: ServeArgs) -> Result<()> {
 
     let outcome = managed_pb::ensure(PbWorkerSpec {
         role: PbRole::Register,
-        key: args.key.clone(),
+        key: key.clone(),
         local_addr,
         relay_addr: args.relay.relay.clone(),
         codec: args.codec,
     })?;
-    print_serve_summary(&report.info, &outcome, &args.key, &args.relay.relay);
+    print_serve_summary(&report.info, &outcome, &key, &args.relay.relay);
     Ok(())
 }
 

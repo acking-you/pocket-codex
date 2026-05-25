@@ -62,6 +62,13 @@ pub fn pb_log_file(role: PbRole, key: &str) -> Result<PathBuf> {
         .join(format!("pb-{role_name}-{}.log", safe_file_component(key))))
 }
 
+/// Path to the default direct API proxy worker log file for a service key.
+pub fn api_proxy_log_file(key: &str) -> Result<PathBuf> {
+    Ok(state_dir()?
+        .join("logs")
+        .join(format!("api-proxy-{}.log", safe_file_component(key))))
+}
+
 /// Default config file location (`config.toml` next to the state dir).
 pub fn config_file() -> Result<PathBuf> {
     Ok(config_dir()?.join("config.toml"))
