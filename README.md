@@ -26,19 +26,27 @@
 
 Pocket-Codex is an experiment in turning the upstream
 [`codex app-server`](https://github.com/openai/codex) protocol into a
-portable, multi-device experience:
+portable, multi-device experience, and additionally exposing the host's
+Codex login as a relay-reachable Responses API endpoint for any device:
 
 - A pure-Rust CLI manages a local `codex app-server` process on the
   machine where Codex is installed.
-- The same CLI uses [`pb-mapper`](https://github.com/acking-you/pb-mapper)
-  to register app-server and direct Responses API services with a relay,
-  so any other device can subscribe and reach the selected host.
+- The same CLI ships an in-process **Responses API proxy** that reuses
+  the host's `codex login` (ChatGPT account or `CODEX_ACCESS_TOKEN`) to
+  serve OpenAI-compatible `/v1/responses` HTTP + WebSocket traffic, so
+  devices *without* Codex installed can drive the same model through
+  the relay.
+- The CLI uses [`pb-mapper`](https://github.com/acking-you/pb-mapper) to
+  register either service under `pcx:<device>:<kind>:<name>` keys, or
+  to subscribe to remote ones, materialising them as local TCP
+  endpoints.
 - A Flutter front-end (driven through `flutter_rust_bridge`) consumes
   the app-server JSON-RPC protocol directly, giving every platform a
   native UI for Codex without re-implementing model logic.
 
-In short: **the heavy lifting stays on the machine that already has
-Codex set up; the UI runs wherever you are.**
+In short: **one machine stays logged in to Codex; every other device —
+the Flutter UI, a remote `codex` CLI, or any OpenAI-compatible tool —
+reaches it through the relay.**
 
 ## Status
 
@@ -133,20 +141,21 @@ pocket-codex remote-hint
 pocket-codex version
 ```
 
-Typical host-side flow:
+Typical host-side flow (expose the local `codex app-server` to the relay):
 
 ```bash
 pocket-codex serve --relay relay.example.com:7666
 ```
 
-Typical client-side flow:
+Typical client-side flow (drive a remote app-server from another device):
 
 ```bash
 pocket-codex connect --relay relay.example.com:7666
 codex --remote ws://127.0.0.1:28080
 ```
 
-Typical direct API proxy flow:
+Typical direct API proxy flow (reach the host's Codex login as an
+OpenAI-compatible Responses API from any device):
 
 ```bash
 pocket-codex api serve --relay relay.example.com:7666
