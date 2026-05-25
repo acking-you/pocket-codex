@@ -1,6 +1,6 @@
 //! `pocket-codex services …` subcommand handlers.
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use pocket_codex_core::{config::Config, service::ServiceKind};
 
 use crate::{
@@ -45,7 +45,7 @@ fn default_set(args: ServicesDefaultSetArgs) -> Result<()> {
     config.save()?;
     let target = config
         .default_service(kind)
-        .expect("default target was just set");
+        .ok_or_else(|| anyhow!("default target missing after setting {kind} service"))?;
     println!("default {kind} service: pcx:{}:{}:{}", target.device, kind, target.name);
     Ok(())
 }
