@@ -235,7 +235,11 @@ async fn forward_http_inner(
     let headers = response_headers(upstream.headers());
     let body = Body::from_stream(upstream.bytes_stream());
     let mut response = Response::builder().status(status);
-    *response.headers_mut().expect("response builder headers") = headers;
+    if let Some(response_headers) = response.headers_mut() {
+        *response_headers = headers;
+    } else {
+        anyhow::bail!("response builder missing mutable headers");
+    }
     response
         .body(body)
         .context("building API proxy HTTP response")
