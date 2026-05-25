@@ -1,8 +1,44 @@
 //! `pocket-codex serve` high-level host-side orchestration.
+//!
+//! ```text
+//!                       pocket-codex serve …
+//!                                │
+//!                                ▼
+//!                ServiceId::new(device, App, name).key()
+//!                          (or args.key)
+//!                                │
+//!                                ▼
+//!              pocket_codex_codex::spawn(SpawnOptions)
+//!                                │
+//!                                ▼
+//!              websocket_listen_addr("ws://host:port")
+//!                                │
+//!                                ▼
+//!              managed_pb::ensure(PbWorkerSpec {
+//!                role:  PbRole::Register,
+//!                key,
+//!                local_addr,
+//!                relay_addr,
+//!                codec,
+//!              })
+//!                                │
+//!                                ▼
+//!              print_serve_summary + "client setup: pocket-codex
+//!              connect --key <key> --relay <relay>"
+//! ```
+//!
+//! `serve` is the host side of an app-server pairing: it owns the
+//! `codex app-server` child and the pb-mapper register worker that
+//! exposes its WebSocket. Non-WebSocket listen URLs (for example unix
+//! sockets) are rejected because pb-mapper needs a relayable TCP
+//! endpoint.
 
 use anyhow::{Context, Result};
 use pocket_codex_codex::{spawn, ListenSpec, SpawnOptions};
-use pocket_codex_core::state::PbRole;
+use pocket_codex_core::{
+    service::{default_device_id, ServiceId, ServiceKind},
+    state::PbRole,
+};
 
 use crate::{
     cli::ServeArgs,
@@ -11,6 +47,14 @@ use crate::{
 
 /// Run the host-side one-shot setup flow.
 pub async fn run(args: ServeArgs) -> Result<()> {
+    let key = args.key.clone().unwrap_or_else(|| {
+        ServiceId::new(
+            args.device.clone().unwrap_or_else(default_device_id),
+            ServiceKind::App,
+            &args.name,
+        )
+        .key()
+    });
     let requested_listen = ListenSpec::WebSocket {
         host: args.host,
         port: args.port,
@@ -27,12 +71,12 @@ pub async fn run(args: ServeArgs) -> Result<()> {
 
     let outcome = managed_pb::ensure(PbWorkerSpec {
         role: PbRole::Register,
-        key: args.key.clone(),
+        key: key.clone(),
         local_addr,
         relay_addr: args.relay.relay.clone(),
         codec: args.codec,
     })?;
-    print_serve_summary(&report.info, &outcome, &args.key, &args.relay.relay);
+    print_serve_summary(&report.info, &outcome, &key, &args.relay.relay);
     Ok(())
 }
 

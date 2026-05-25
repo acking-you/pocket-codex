@@ -20,4 +20,7 @@
 /// Register / subscribe primitives.
 pub mod session;
 
-pub use session::{register, status, subscribe, RegisterOptions, StatusKind, SubscribeOptions};
+pub use session::{
+    keys, register, service_connections, status, subscribe, RegisterOptions, StatusKind,
+    SubscribeOptions,
+};

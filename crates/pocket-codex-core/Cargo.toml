@@ -24,3 +24,4 @@ url = { workspace = true }
 directories = { workspace = true }
 sysinfo = { workspace = true }
 nix = { workspace = true }
+chrono = { workspace = true }

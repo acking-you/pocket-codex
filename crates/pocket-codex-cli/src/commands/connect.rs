@@ -1,22 +1,84 @@
 //! `pocket-codex connect` high-level client-side orchestration.
+//!
+//! ```text
+//!                       pocket-codex connect …
+//!                                  │
+//!                                  ▼
+//!                       TargetRequest { key?, device?, name }
+//!                                  │
+//!                  ┌── key/device given? ──┐
+//!                  │                        │ no  ── any local default? ─┐
+//!                  │ yes                                                  │
+//!                  │                                                       no
+//!                  ▼                                                       ▼
+//!           skip discovery                                  discover_services(relay)
+//!                  │                                                       │
+//!                  └─────────────┬─────────────────────────────────────────┘
+//!                                ▼
+//!                  choose_target(App, request, config, state, discovered)
+//!                                │
+//!                                ▼
+//!                  managed_pb::ensure(PbWorkerSpec {
+//!                    role: PbRole::Subscribe, key, local_addr,
+//!                    relay_addr, codec: false,
+//!                  })
+//!                                │
+//!                                ▼
+//!                  state.record_selected_service(App, device, name)
+//!                                │
+//!                                ▼
+//!                  print "codex remote: codex --remote ws://<local_addr>"
+//! ```
+//!
+//! The discovery guard avoids an unnecessary relay round-trip when the
+//! user has already pinned a default through `services default set`
+//! or implicitly via a successful prior `connect`.
 
 use anyhow::Result;
-use pocket_codex_core::state::PbRole;
+use pocket_codex_core::{
+    config::Config,
+    service::ServiceKind,
+    state::{PbRole, RuntimeState},
+};
 
 use crate::{
     cli::ConnectArgs,
-    commands::managed_pb::{self, EnsureOutcome, PbWorkerSpec},
+    commands::{
+        managed_pb::{self, EnsureOutcome, PbWorkerSpec},
+        service_target::{choose_target, discover_services, TargetRequest},
+    },
 };
 
 /// Run the client-side setup flow.
-pub fn run(args: ConnectArgs) -> Result<()> {
+pub async fn run(args: ConnectArgs) -> Result<()> {
+    let request = TargetRequest {
+        key: args.key,
+        device: args.device,
+        name: args.name,
+    };
+    let needs_discovery = request.key.is_none() && request.device.is_none();
+    let config = Config::load()?;
+    let state = RuntimeState::load()?;
+    let has_local_default = config.default_service(ServiceKind::App).is_some()
+        || state.selected_service(ServiceKind::App).is_some();
+    let discovered = if needs_discovery && !has_local_default {
+        discover_services(&args.relay.relay).await?
+    } else {
+        Vec::new()
+    };
+    let target = choose_target(ServiceKind::App, request, &config, &state, &discovered)?;
     let outcome = managed_pb::ensure(PbWorkerSpec {
         role: PbRole::Subscribe,
-        key: args.key,
+        key: target.key,
         local_addr: args.local_addr,
         relay_addr: args.relay.relay,
         codec: false,
     })?;
+    if let Some(service_id) = target.service_id {
+        let mut state = RuntimeState::load()?;
+        state.record_selected_service(ServiceKind::App, service_id.device, service_id.name);
+        state.save()?;
+    }
     print_connect_summary(&outcome);
     Ok(())
 }

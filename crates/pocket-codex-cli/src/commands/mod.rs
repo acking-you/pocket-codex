@@ -8,12 +8,17 @@ use anyhow::Result;
 
 use crate::cli::{Cli, Command};
 
+mod api;
+mod api_proxy;
 mod codex;
 mod connect;
+mod managed_api;
 mod managed_pb;
 mod pb;
 mod remote_hint;
 mod serve;
+mod service_target;
+mod services;
 mod status;
 mod stop;
 mod version;
@@ -23,7 +28,9 @@ mod worker;
 pub async fn dispatch(cli: Cli) -> Result<()> {
     match cli.command {
         Command::Serve(args) => serve::run(args).await,
-        Command::Connect(args) => connect::run(args),
+        Command::Connect(args) => connect::run(args).await,
+        Command::Api(cmd) => api::run(cmd).await,
+        Command::Services(cmd) => services::run(cmd).await,
         Command::Status => status::run(),
         Command::Stop(args) => stop::run(args),
         Command::Version => version::run(),

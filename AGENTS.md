@@ -14,9 +14,9 @@ portable, multi-device experience:
   `codex app-server` process on the machine that already has Codex
   installed.
 - The same CLI uses [`pb-mapper`](https://github.com/acking-you/pb-mapper)
-  to either **register** the local app-server with a relay or
-  **subscribe** to a remote one, materialising it as a local TCP/UDS
-  endpoint.
+  to either **register** local app-server / direct Responses API services
+  with a relay or **subscribe** to remote ones, materialising them as
+  local TCP endpoints.
 - A **Flutter front-end** (under `apps/flutter`, driven through
   `flutter_rust_bridge`) consumes the app-server JSON-RPC protocol
   directly to give every platform a native UI without re-implementing
@@ -64,7 +64,7 @@ contributor checkouts and CI even after the upstream forks evolve.
 | `pocket-codex-core`    | configuration schema, on-disk `state.toml`, well-known paths, error types — small, dependency-light |
 | `pocket-codex-codex`   | spawning / supervising / inspecting the `codex app-server` child process, JSON-RPC envelope types  |
 | `pocket-codex-pb`      | thin async wrappers around `pb_mapper::local::{server,client}` for register / subscribe / status   |
-| `pocket-codex-cli`     | user-facing `pocket-codex` binary; high-level `serve` / `connect` / `status` / `stop`, low-level `codex {start,stop,status}`, `pb {register,subscribe,status}`, `remote-hint`, `version` |
+| `pocket-codex-cli`     | user-facing `pocket-codex` binary; high-level `serve` / `connect` / `api {serve,connect}` / `services {list,default set}` / `status` / `stop`, low-level `codex {start,stop,status}`, `pb {register,subscribe,status}`, `remote-hint`, `version` |
 | `pocket_codex_bridge`  | `cdylib + staticlib` consumed by Flutter via `flutter_rust_bridge`; auto-generated bindings live in `lib/src/rust` of the Flutter app |
 
 When in doubt, prefer adding a new module to an existing crate over
@@ -192,11 +192,15 @@ The order below is our current best guess; it is not a contract.
    tracks the daemonised pb-mapper worker in `state.toml`;
    `pocket-codex connect` subscribes on the client side and prints the
    matching `codex --remote ...` command.
-5. **Strongly-typed JSON-RPC client (next).** Replace the
+5. **Multi-device service selection + direct API proxy (done).**
+   Pocket-Codex service keys use `pcx:<device>:<service>:<name>`;
+   clients can discover services, set a local default target and choose
+   app-server or direct Responses API proxy flows independently.
+6. **Strongly-typed JSON-RPC client (next).** Replace the
    `serde_json::Value` surface in `pocket-codex-codex::protocol` with
    the upstream `codex-app-server-protocol` types so the Flutter UI
    gets compile-time-checked methods.
-6. **Flutter UI evolution (in progress).** `apps/flutter` consuming
+7. **Flutter UI evolution (in progress).** `apps/flutter` consuming
    the protocol via `flutter_rust_bridge`; today it only ships a
    sample bridge round-trip.
 

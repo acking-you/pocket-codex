@@ -1,4 +1,35 @@
 //! Background pb-mapper worker supervision used by high-level commands.
+//!
+//! ```text
+//!                    managed_pb::ensure(spec)
+//!                              │
+//!                              ▼
+//!                  state.find_pb(role, key)
+//!                              │
+//!              ┌───────────────┼───────────────┐
+//!              ▼               ▼               ▼
+//!       Some + alive    Some + dead          None
+//!              │               │               │
+//!              ▼               ▼               ▼
+//!       EnsureOutcome   remove_pb +      spawn_worker
+//!       ::Reused        spawn_worker     ::Spawned
+//!                       ::Replaced
+//!                       (stale_pid kept)
+//!
+//!   spawn_worker:
+//!     argv = [self_exe, "__worker", subcommand,
+//!             "--key", key, "--local-addr", addr, "--relay", relay,
+//!             ("--codec" if Register && codec)]
+//!     subcommand ∈ { pb-register, pb-subscribe }
+//!     stdout/stderr → paths::pb_log_file(role, key)
+//!     state.upsert_pb(PbSessionInfo { role, key, local_addr, relay_addr,
+//!                                     pid, log_file, codec, started_at })
+//! ```
+//!
+//! Sessions are keyed by `(role, key)`, so a single device can register
+//! one service and subscribe to a different one through the same relay
+//! without record collisions. [`stop_matching`] takes a [`StopFilter`]
+//! that narrows by `role`/`key`; an empty filter sweeps every entry.
 
 use std::{
     path::PathBuf,

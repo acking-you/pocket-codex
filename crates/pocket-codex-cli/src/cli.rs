@@ -8,7 +8,7 @@
 use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
-use pocket_codex_core::state::PbRole;
+use pocket_codex_core::{service::ServiceKind, state::PbRole};
 
 /// `pocket-codex` orchestrates codex app-server + pb-mapper.
 #[derive(Debug, Parser)]
@@ -33,6 +33,14 @@ pub enum Command {
 
     /// Subscribe to a relay-exposed app-server and print `codex --remote`.
     Connect(ConnectArgs),
+
+    /// Manage the direct Responses API proxy service.
+    #[command(subcommand)]
+    Api(ApiCmd),
+
+    /// Discover and configure relay-exposed Pocket-Codex services.
+    #[command(subcommand)]
+    Services(ServicesCmd),
 
     /// Show all Pocket-Codex managed runtime sessions.
     Status,
@@ -63,9 +71,18 @@ pub enum Command {
 /// Args for `pocket-codex serve`.
 #[derive(Debug, Args)]
 pub struct ServeArgs {
-    /// Service key the relay will index this registration under.
-    #[arg(long, default_value = "codex")]
-    pub key: String,
+    /// Exact pb-mapper key to register. When omitted, Pocket-Codex builds
+    /// `pcx:<device>:app:<name>`.
+    #[arg(long)]
+    pub key: Option<String>,
+
+    /// Device id used in generated Pocket-Codex service keys.
+    #[arg(long)]
+    pub device: Option<String>,
+
+    /// Service instance name used in generated Pocket-Codex service keys.
+    #[arg(long, default_value = "default")]
+    pub name: String,
 
     /// Optional explicit path to the `codex` binary.
     #[arg(long = "codex-binary")]
@@ -94,9 +111,19 @@ pub struct ServeArgs {
 /// Args for `pocket-codex connect`.
 #[derive(Debug, Args)]
 pub struct ConnectArgs {
-    /// Service key to attach to.
-    #[arg(long, default_value = "codex")]
-    pub key: String,
+    /// Exact pb-mapper key to attach to. When omitted, Pocket-Codex resolves
+    /// the target from `--device`, local defaults, or relay discovery.
+    #[arg(long)]
+    pub key: Option<String>,
+
+    /// Device id to connect to.
+    #[arg(long)]
+    pub device: Option<String>,
+
+    /// Service instance name to connect to. When omitted, Pocket-Codex
+    /// uses the stored default target name or falls back to `default`.
+    #[arg(long)]
+    pub name: Option<String>,
 
     /// `host:port` to bind the local subscriber listener on.
     #[arg(long, default_value = "127.0.0.1:28080")]
@@ -104,6 +131,134 @@ pub struct ConnectArgs {
 
     #[command(flatten)]
     pub relay: PbRelayArgs,
+}
+
+/// Subcommands under `pocket-codex api …`.
+#[derive(Debug, Subcommand)]
+pub enum ApiCmd {
+    /// Start the local Responses API proxy and register it with a relay.
+    Serve(ApiServeArgs),
+    /// Subscribe to a relay-exposed Responses API proxy and print Codex config.
+    Connect(ApiConnectArgs),
+}
+
+/// Args for `pocket-codex api serve`.
+#[derive(Debug, Args)]
+pub struct ApiServeArgs {
+    /// Exact pb-mapper key to register. When omitted, Pocket-Codex builds
+    /// `pcx:<device>:api:<name>`.
+    #[arg(long)]
+    pub key: Option<String>,
+
+    /// Device id used in generated Pocket-Codex service keys.
+    #[arg(long)]
+    pub device: Option<String>,
+
+    /// Service instance name used in generated Pocket-Codex service keys.
+    #[arg(long, default_value = "default")]
+    pub name: String,
+
+    /// Bind host for the local Responses API proxy.
+    #[arg(long, default_value = "127.0.0.1")]
+    pub host: String,
+
+    /// Bind port for the local Responses API proxy.
+    #[arg(long, default_value_t = 18180)]
+    pub port: u16,
+
+    /// Enable AES-256-GCM end-to-end encryption in pb-mapper.
+    #[arg(long)]
+    pub codec: bool,
+
+    #[command(flatten)]
+    pub relay: PbRelayArgs,
+}
+
+/// Args for `pocket-codex api connect`.
+#[derive(Debug, Args)]
+pub struct ApiConnectArgs {
+    /// Exact pb-mapper key to attach to. When omitted, Pocket-Codex resolves
+    /// the target from `--device`, local defaults, or relay discovery.
+    #[arg(long)]
+    pub key: Option<String>,
+
+    /// Device id to connect to.
+    #[arg(long)]
+    pub device: Option<String>,
+
+    /// Service instance name to connect to. When omitted, Pocket-Codex
+    /// uses the stored default target name or falls back to `default`.
+    #[arg(long)]
+    pub name: Option<String>,
+
+    /// `host:port` to bind the local subscriber listener on.
+    #[arg(long, default_value = "127.0.0.1:28180")]
+    pub local_addr: String,
+
+    #[command(flatten)]
+    pub relay: PbRelayArgs,
+}
+
+/// Subcommands under `pocket-codex services …`.
+#[derive(Debug, Subcommand)]
+pub enum ServicesCmd {
+    /// List relay-exposed Pocket-Codex service keys.
+    List(ServicesListArgs),
+    /// Manage local default service targets.
+    #[command(subcommand)]
+    Default(ServicesDefaultCmd),
+}
+
+/// Args for `pocket-codex services list`.
+#[derive(Debug, Args)]
+pub struct ServicesListArgs {
+    /// Limit output to one service kind.
+    #[arg(long)]
+    pub kind: Option<ServiceKindArg>,
+
+    #[command(flatten)]
+    pub relay: PbRelayArgs,
+}
+
+/// Subcommands under `pocket-codex services default …`.
+#[derive(Debug, Subcommand)]
+pub enum ServicesDefaultCmd {
+    /// Set the local default target for a service kind.
+    Set(ServicesDefaultSetArgs),
+}
+
+/// Args for `pocket-codex services default set`.
+#[derive(Debug, Args)]
+pub struct ServicesDefaultSetArgs {
+    /// Service kind to configure.
+    #[arg(long)]
+    pub kind: ServiceKindArg,
+
+    /// Device id to use by default.
+    #[arg(long)]
+    pub device: String,
+
+    /// Service instance name to use by default.
+    #[arg(long, default_value = "default")]
+    pub name: String,
+}
+
+/// Service kind selector used by user-facing CLI commands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum ServiceKindArg {
+    /// Codex app-server remote-control service.
+    App,
+    /// Responses API proxy service.
+    Api,
+}
+
+impl From<ServiceKindArg> for ServiceKind {
+    fn from(value: ServiceKindArg) -> Self {
+        match value {
+            ServiceKindArg::App => Self::App,
+            ServiceKindArg::Api => Self::Api,
+        }
+    }
 }
 
 /// Args for `pocket-codex stop`.
@@ -144,6 +299,16 @@ pub enum WorkerCmd {
     PbRegister(PbRegisterArgs),
     /// Run a foreground pb-mapper subscribe worker.
     PbSubscribe(PbSubscribeArgs),
+    /// Run a foreground Responses API proxy worker.
+    ApiProxy(ApiProxyArgs),
+}
+
+/// Args for the hidden Responses API proxy worker.
+#[derive(Debug, Args)]
+pub struct ApiProxyArgs {
+    /// `host:port` to bind the proxy listener on.
+    #[arg(long)]
+    pub listen: String,
 }
 
 /// Subcommands under `pocket-codex codex …`.
@@ -283,7 +448,9 @@ mod tests {
             panic!("expected serve command");
         };
 
-        assert_eq!(args.key, "codex");
+        assert!(args.key.is_none());
+        assert!(args.device.is_none());
+        assert_eq!(args.name, "default");
         assert_eq!(args.host, "127.0.0.1");
         assert_eq!(args.port, 18080);
         assert_eq!(args.relay.relay, "relay.example:7666");
@@ -300,9 +467,53 @@ mod tests {
             panic!("expected connect command");
         };
 
-        assert_eq!(args.key, "codex");
+        assert!(args.key.is_none());
+        assert!(args.device.is_none());
+        assert!(args.name.is_none());
         assert_eq!(args.local_addr, "127.0.0.1:28080");
         assert_eq!(args.relay.relay, "relay.example:7666");
+    }
+
+    #[test]
+    fn api_serve_parses_device_service_defaults() {
+        let cli =
+            Cli::parse_from(["pocket-codex", "api", "serve", "--relay", "relay.example:7666"]);
+
+        let Command::Api(ApiCmd::Serve(args)) = cli.command else {
+            panic!("expected api serve command");
+        };
+
+        assert!(args.key.is_none());
+        assert!(args.device.is_none());
+        assert_eq!(args.name, "default");
+        assert_eq!(args.host, "127.0.0.1");
+        assert_eq!(args.port, 18180);
+        assert_eq!(args.relay.relay, "relay.example:7666");
+    }
+
+    #[test]
+    fn services_default_set_parses_target() {
+        let cli = Cli::parse_from([
+            "pocket-codex",
+            "services",
+            "default",
+            "set",
+            "--kind",
+            "app",
+            "--device",
+            "studio",
+            "--name",
+            "work",
+        ]);
+
+        let Command::Services(ServicesCmd::Default(ServicesDefaultCmd::Set(args))) = cli.command
+        else {
+            panic!("expected services default set command");
+        };
+
+        assert_eq!(args.kind, ServiceKindArg::App);
+        assert_eq!(args.device, "studio");
+        assert_eq!(args.name, "work");
     }
 
     #[test]

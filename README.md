@@ -31,8 +31,8 @@ portable, multi-device experience:
 - A pure-Rust CLI manages a local `codex app-server` process on the
   machine where Codex is installed.
 - The same CLI uses [`pb-mapper`](https://github.com/acking-you/pb-mapper)
-  to register that local app-server with a relay, so any other device
-  can subscribe and reach it.
+  to register app-server and direct Responses API services with a relay,
+  so any other device can subscribe and reach the selected host.
 - A Flutter front-end (driven through `flutter_rust_bridge`) consumes
   the app-server JSON-RPC protocol directly, giving every platform a
   native UI for Codex without re-implementing model logic.
@@ -45,19 +45,29 @@ Codex set up; the UI runs wherever you are.**
 | Area                           | State                                  |
 | ------------------------------ | -------------------------------------- |
 | Workspace / lints / CI         | bootstrapped                           |
-| `pocket-codex` CLI             | `serve`, `connect`, top-level `status`/`stop`, `codex {start,stop,status}`, `pb {register,subscribe,status}`, `remote-hint`, `version` |
+| `pocket-codex` CLI             | `serve`, `connect`, `api {serve,connect}`, `services {list,default set}`, top-level `status`/`stop`, `codex {start,stop,status}`, `pb {register,subscribe,status}`, `remote-hint`, `version` |
 | `pb-mapper` register/subscribe | wired through `deps/pb-mapper`         |
 | `codex app-server` supervision | spawn/stop/status via PID + state.toml |
+| Direct Responses API proxy     | local HTTP/WS proxy registered through pb-mapper |
 | Flutter UI (`apps/flutter`)    | placeholder screen + FRB sample bridge |
 
-The first usable milestone is now the high-level CLI pair:
+The first usable milestone now covers multi-device CLI flows:
 
 - `pocket-codex serve --relay <host:port>` starts or reuses the local
-  `codex app-server`, registers it with the relay and prints the
-  matching client-side command.
+  `codex app-server`, registers it as `pcx:<device>:app:<name>` and
+  prints the matching client-side command.
 - `pocket-codex connect --relay <host:port>` subscribes to the remote
-  app-server, exposes it locally and prints the exact
-  `codex --remote ...` invocation to start Codex against that listener.
+  app-server selected by `--device` / local default / relay discovery,
+  exposes it locally and prints the exact `codex --remote ...`
+  invocation to start Codex against that listener.
+- `pocket-codex api serve --relay <host:port>` exposes the host Codex
+  login as a loopback Responses API proxy and registers
+  `pcx:<device>:api:<name>`.
+- `pocket-codex api connect --relay <host:port>` subscribes to that API
+  proxy and prints a local `model_providers` config snippet for Codex.
+- `pocket-codex services list --relay <host:port>` discovers available
+  `pcx:*` services; `pocket-codex services default set ...` records the
+  local default device when a command does not specify one.
 
 See [`AGENTS.md`](AGENTS.md) for the detailed roadmap and contributor
 conventions.
@@ -113,6 +123,8 @@ does **not** vendor a model runtime. The CLI exposes:
 ```text
 pocket-codex serve
 pocket-codex connect
+pocket-codex api      serve | connect
+pocket-codex services list | default set
 pocket-codex status
 pocket-codex stop
 pocket-codex codex   start | stop | status
@@ -132,6 +144,13 @@ Typical client-side flow:
 ```bash
 pocket-codex connect --relay relay.example.com:7666
 codex --remote ws://127.0.0.1:28080
+```
+
+Typical direct API proxy flow:
+
+```bash
+pocket-codex api serve --relay relay.example.com:7666
+pocket-codex api connect --device my-host --relay relay.example.com:7666
 ```
 
 ### Flutter front-end
