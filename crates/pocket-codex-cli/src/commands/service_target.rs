@@ -1,4 +1,37 @@
 //! Service target resolution shared by app-server and API connect flows.
+//!
+//! ```text
+//!   choose_target(kind, request, config, state, discovered)
+//!                              │
+//!                              ▼
+//!         ┌─── request.key set? ────────────────────┐
+//!         │                                          │ yes
+//!         │ no                                       ▼
+//!         │                                ResolvedTarget {
+//!         │                                  key: <verbatim>,
+//!         │                                  service_id: parse_key(key)
+//!         │                                }
+//!         ▼
+//!   ┌─ request.device set? ─┐
+//!   │                        │ yes ─▶ ServiceId::new(device, kind, name)
+//!   │ no                                        │
+//!   ▼                                           ▼
+//!   config.default_service(kind) ─▶ ServiceId from device + name
+//!         │ none
+//!         ▼
+//!   state.selected_service(kind) ─▶ ServiceId from device + name
+//!         │ none
+//!         ▼
+//!   discovered.filter(kind):
+//!         ├─ exactly one ─▶ ResolvedTarget(only)
+//!         ├─ zero        ─▶ bail!("no {kind} services found …")
+//!         └─ many        ─▶ bail!("multiple {kind} services found …")
+//! ```
+//!
+//! Discovery hits the relay through [`pocket_codex_pb::keys`] and is
+//! gated by the call sites: `connect` only queries the relay when the
+//! caller passed neither `--key` nor `--device` *and* no local default
+//! exists, so the common reuse path stays offline.
 
 use anyhow::{bail, Result};
 use pocket_codex_core::{

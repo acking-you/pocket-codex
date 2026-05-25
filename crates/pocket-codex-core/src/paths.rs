@@ -1,8 +1,29 @@
 //! Well-known filesystem paths used by Pocket-Codex.
 //!
-//! These helpers centralise the lookups so the rest of the codebase
-//! never spells out a path literal. We use [`directories`] to follow
-//! the conventional XDG / macOS layouts.
+//! ```text
+//!     ProjectDirs("io.github", "acking-you", "pocket-codex")
+//!                            │
+//!         ┌──────────────────┴──────────────────────┐
+//!         ▼                                          ▼
+//!      config_dir()                              state_dir()
+//!  $XDG_CONFIG_HOME/pocket-codex             $XDG_STATE_HOME/pocket-codex
+//!  ~/Library/Application Support/…           (macOS: falls back to data_dir)
+//!         │                                          │
+//!         ▼                                          ▼
+//!      config.toml                       ┌───────────┴────────────┐
+//!                                        ▼                        ▼
+//!                                    state.toml                 logs/
+//!                                                                  │
+//!                                  ┌───────────────────────────────┼──────────────┐
+//!                                  ▼                               ▼              ▼
+//!                          codex-app-server.log     pb-{role}-{key}.log    api-proxy-{key}.log
+//! ```
+//!
+//! Service keys reach the filesystem via `safe_file_component`,
+//! which substitutes `_` for any character outside `[a-z0-9._-]`, so
+//! a colon-bearing key like `pcx:studio:api:default` becomes
+//! `pcx_studio_api_default` in the log filename. Empty inputs fall
+//! back to `default` so the path stays well-formed.
 
 use std::path::PathBuf;
 

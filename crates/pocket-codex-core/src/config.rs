@@ -1,10 +1,31 @@
 //! Configuration schema for Pocket-Codex.
 //!
-//! The CLI loads a TOML file (default location:
-//! `$XDG_CONFIG_HOME/pocket-codex/config.toml`) and merges it with
-//! command-line flags. This module only defines the *shape* of that
-//! configuration; loading helpers will be added once the CLI grows
-//! beyond the bootstrap skeleton.
+//! ```text
+//!                          Config (config.toml)
+//!                                   │
+//!         ┌─────────────────────────┼─────────────────────────┐
+//!         ▼                         ▼                         ▼
+//!       codex                   pb_mapper                 services
+//!     CodexConfig              PbMapperConfig            ServicesConfig
+//!         │                         │                         │
+//!         ▼                         ▼                ┌────────┴────────┐
+//!     binary?                   relay?               ▼                 ▼
+//!     (path to                  (relay URL,        app               api
+//!      `codex` binary)           e.g. tcp://…)  ServicePreference  ServicePreference
+//!                                                   │                 │
+//!                                                   ▼                 ▼
+//!                                                default?          default?
+//!                                                  │                 │
+//!                                                  ▼                 ▼
+//!                                          ServiceTargetConfig {device, name}
+//! ```
+//!
+//! The CLI loads this TOML file from
+//! `$XDG_CONFIG_HOME/pocket-codex/config.toml` (resolved through
+//! [`crate::paths::config_file`]) and merges it with command-line
+//! flags. `services.{app,api}.default` is the per-kind preferred
+//! target consulted by `choose_target` before falling back to
+//! `state.selected_service` or relay discovery.
 
 use serde::{Deserialize, Serialize};
 

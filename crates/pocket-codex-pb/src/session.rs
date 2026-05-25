@@ -1,5 +1,25 @@
 //! Thin async wrappers around the upstream `pb-mapper` library.
 //!
+//! ```text
+//!     Pocket-Codex helper          Upstream pb-mapper entrypoint
+//!     ─────────────────────────    ────────────────────────────────────────
+//!     register(RegisterOptions)  → local::server::run_server_side_cli
+//!                                    <TcpStreamProvider, _> (is_datagram=false)
+//!     subscribe(SubscribeOptions)→ local::client::run_client_side_cli
+//!                                    <TcpListenerProvider, _>
+//!     status(addr, kind)         → local::client::handle_status_cli(StatusOp, addr)
+//!     keys(addr)                 → local::client::status::get_status(
+//!                                    PbConnStatusReq::Keys)
+//!     service_connections(addr,  → local::client::status::get_status(
+//!         key)                       PbConnStatusReq::Service { key })
+//!
+//!         caller TCP socket  ── (relay_addr) ──▶  pb-mapper relay
+//!                                                  │
+//!                                                  ▼
+//!                                         registered service keys /
+//!                                         per-key connection list
+//! ```
+//!
 //! The upstream API takes generic `LocalStream`/`LocalListener` type
 //! parameters and `ToSocketAddrs` for both sides; we lock those down to
 //! TCP and `String` addresses because that's the only combination

@@ -1,4 +1,37 @@
 //! `pocket-codex serve` high-level host-side orchestration.
+//!
+//! ```text
+//!                       pocket-codex serve …
+//!                                │
+//!                                ▼
+//!                ServiceId::new(device, App, name).key()
+//!                          (or args.key)
+//!                                │
+//!                                ▼
+//!              pocket_codex_codex::spawn(SpawnOptions)
+//!                                │
+//!                                ▼
+//!              websocket_listen_addr("ws://host:port")
+//!                                │
+//!                                ▼
+//!              managed_pb::ensure(PbWorkerSpec {
+//!                role:  PbRole::Register,
+//!                key,
+//!                local_addr,
+//!                relay_addr,
+//!                codec,
+//!              })
+//!                                │
+//!                                ▼
+//!              print_serve_summary + "client setup: pocket-codex
+//!              connect --key <key> --relay <relay>"
+//! ```
+//!
+//! `serve` is the host side of an app-server pairing: it owns the
+//! `codex app-server` child and the pb-mapper register worker that
+//! exposes its WebSocket. Non-WebSocket listen URLs (for example unix
+//! sockets) are rejected because pb-mapper needs a relayable TCP
+//! endpoint.
 
 use anyhow::{Context, Result};
 use pocket_codex_codex::{spawn, ListenSpec, SpawnOptions};

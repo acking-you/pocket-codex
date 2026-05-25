@@ -1,4 +1,33 @@
 //! Local Responses API proxy used by `pocket-codex api serve`.
+//!
+//! ```text
+//!                       (Codex client / Flutter app)
+//!                                 │
+//!                          POST /v1/responses
+//!                          GET  /v1/responses (WS upgrade)
+//!                                 │
+//!                                 ▼
+//!     ┌────────────────── axum Router ──────────────────┐
+//!     │  forward_http  ◀── HTTP POST                    │
+//!     │  forward_ws    ◀── WebSocket upgrade            │
+//!     │       │             │                           │
+//!     │       │   forwarded_headers (drops hop-by-hop)  │
+//!     │       │   merge_auth_headers (Bearer + account) │
+//!     │       ▼             ▼                           │
+//!     └─────────┬───────────┬───────────────────────────┘
+//!               │           │
+//!               │           └──── tokio_tungstenite ──┐
+//!               │                                     │
+//!               └─── reqwest ────────────────────────┐│
+//!                                                    ▼▼
+//!                              https://chatgpt.com/backend-api/codex
+//!                                       /responses (HTTP + WSS)
+//! ```
+//!
+//! Auth headers are loaded once per worker. The lookup order is:
+//! 1. `CODEX_ACCESS_TOKEN` env var (used as a Bearer token).
+//! 2. `~/.codex/auth.json` (written by `codex login`), parsed for the ChatGPT
+//!    access token, account id, and FedRAMP claim from the embedded id_token.
 
 use std::{env, net::SocketAddr, path::PathBuf, sync::Arc};
 

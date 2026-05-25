@@ -1,4 +1,38 @@
 //! `pocket-codex connect` high-level client-side orchestration.
+//!
+//! ```text
+//!                       pocket-codex connect …
+//!                                  │
+//!                                  ▼
+//!                       TargetRequest { key?, device?, name }
+//!                                  │
+//!                  ┌── key/device given? ──┐
+//!                  │                        │ no  ── any local default? ─┐
+//!                  │ yes                                                  │
+//!                  │                                                       no
+//!                  ▼                                                       ▼
+//!           skip discovery                                  discover_services(relay)
+//!                  │                                                       │
+//!                  └─────────────┬─────────────────────────────────────────┘
+//!                                ▼
+//!                  choose_target(App, request, config, state, discovered)
+//!                                │
+//!                                ▼
+//!                  managed_pb::ensure(PbWorkerSpec {
+//!                    role: PbRole::Subscribe, key, local_addr,
+//!                    relay_addr, codec: false,
+//!                  })
+//!                                │
+//!                                ▼
+//!                  state.record_selected_service(App, device, name)
+//!                                │
+//!                                ▼
+//!                  print "codex remote: codex --remote ws://<local_addr>"
+//! ```
+//!
+//! The discovery guard avoids an unnecessary relay round-trip when the
+//! user has already pinned a default through `services default set`
+//! or implicitly via a successful prior `connect`.
 
 use anyhow::Result;
 use pocket_codex_core::{

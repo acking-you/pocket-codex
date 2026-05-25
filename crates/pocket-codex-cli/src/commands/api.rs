@@ -1,4 +1,27 @@
 //! `pocket-codex api …` subcommand handlers.
+//!
+//! ```text
+//!                       pocket-codex api …
+//!                     ┌─────────┴─────────┐
+//!                   serve               connect
+//!                     │                   │
+//!         ┌───────────┴────┐    ┌─────────┴──────────────┐
+//!         ▼                ▼    ▼                        ▼
+//!   managed_api      managed_pb  discover_services   managed_pb
+//!   ::ensure         ::ensure    + choose_target     ::ensure
+//!   (api-proxy)      (Register)  (priority cascade)  (Subscribe)
+//!         │                │              │                │
+//!         └ ApiProxyInfo   └ PbSessionInfo  ResolvedTarget │
+//!                                                          ▼
+//!                                                  record_selected
+//!                                                  _service +
+//!                                                  codex_provider_config
+//! ```
+//!
+//! `serve` wires the local Responses API proxy onto a relay key; the
+//! matching `connect` resolves a target service and prints the
+//! `[model_providers.pocket-codex-api]` snippet a remote `codex` should
+//! use.
 
 use anyhow::Result;
 use pocket_codex_core::{

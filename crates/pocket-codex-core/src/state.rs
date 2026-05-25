@@ -1,13 +1,35 @@
 //! Persistent runtime state for Pocket-Codex.
 //!
+//! ```text
+//!                         RuntimeState (state.toml)
+//!                                   │
+//!         ┌──────────────┬──────────┴──────────┬─────────────────────┐
+//!         ▼              ▼                     ▼                     ▼
+//!       codex          pb[ ]                 api[ ]         selected_services[ ]
+//!  CodexProcessInfo  PbSessionInfo[]      ApiProxyInfo[]    SelectedServiceInfo[]
+//!  (singleton)       indexed by           indexed by        indexed by
+//!                    (role, key)          key               kind
+//!
+//!     pid             role                key               kind  (App | Api)
+//!     listen          key                 local_addr        device
+//!     log_file        local_addr          pid               name
+//!     started_at      relay_addr          log_file          selected_at
+//!                     pid                 started_at
+//!                     log_file
+//!                     codec
+//!                     started_at
+//! ```
+//!
 //! The CLI writes a single `state.toml` file (located via
 //! [`crate::paths::state_file`]) so that subsequent invocations can
-//! attach to a running `codex app-server` and pb-mapper session
-//! instead of spawning duplicates.
+//! attach to a running `codex app-server`, pb-mapper session or API
+//! proxy instead of spawning duplicates.
 //!
 //! All fields are optional: a fresh install starts with an empty
 //! [`RuntimeState`] and individual subcommands populate the parts they
-//! own.
+//! own. `selected_services` is the client-local fallback used by
+//! `connect` / `api connect` when no explicit target and no
+//! `config.toml` default is set.
 
 use std::path::{Path, PathBuf};
 

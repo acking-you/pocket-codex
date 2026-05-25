@@ -1,4 +1,26 @@
 //! Service identifiers used to map Pocket-Codex devices onto pb-mapper keys.
+//!
+//! ```text
+//!                     pcx : <device> : <kind> : <name>
+//!                      │      │          │        │
+//!                      │      │          │        └── instance name
+//!                      │      │          │            (e.g. "default", "work")
+//!                      │      │          └─────────── ServiceKind::as_key_segment
+//!                      │      │                       ("app" | "api")
+//!                      │      └────────────────────── sanitised host id
+//!                      │                              (default: hostname)
+//!                      └───────────────────────────── SERVICE_KEY_PREFIX
+//!
+//!   examples:
+//!     pcx:macbook:app:default       ← codex app-server on the laptop
+//!     pcx:studio:api:work           ← Responses API proxy on the desktop
+//! ```
+//!
+//! `sanitize_component` lower-cases the input and replaces any run of
+//! non-`[a-z0-9_.]` characters with a single `-`, so user-facing names
+//! like `"Bo's MacBook Pro"` collapse into `bo-s-macbook-pro`. Empty
+//! results fall back to `DEFAULT_SERVICE_NAME` so the resulting key
+//! is always well-formed.
 
 use std::{fmt, str::FromStr};
 

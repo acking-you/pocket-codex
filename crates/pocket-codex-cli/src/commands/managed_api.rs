@@ -1,4 +1,32 @@
 //! Background Responses API proxy worker supervision.
+//!
+//! ```text
+//!                       managed_api::ensure(spec)
+//!                                  │
+//!                                  ▼
+//!                       state.find_api(&spec.key)
+//!                                  │
+//!                ┌─────────────────┼─────────────────┐
+//!                ▼                 ▼                 ▼
+//!         Some + alive      Some + dead          None
+//!                │                 │                 │
+//!                ▼                 ▼                 ▼
+//!         EnsureOutcome      remove_api +      spawn_worker
+//!         ::Reused           spawn_worker      ::Spawned
+//!                            ::Replaced
+//!                            (stale_pid kept)
+//!
+//!   spawn_worker:
+//!     argv = [self_exe, "__worker", "api-proxy", "--listen", local_addr]
+//!     stdout/stderr → paths::api_proxy_log_file(key)
+//!     state.upsert_api(ApiProxyInfo { key, local_addr, pid, log_file, started_at })
+//! ```
+//!
+//! Workers are detached children of the CLI invocation; the parent
+//! drops the [`std::process::Child`] handle and the OS keeps the worker
+//! running until [`stop_all`] sends `SIGTERM`. Liveness is decided by
+//! [`pocket_codex_core::process::pid_alive`], so a worker that crashed
+//! between invocations is transparently replaced.
 
 use std::{
     path::PathBuf,
