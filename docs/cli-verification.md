@@ -150,7 +150,11 @@ codex --remote ws://127.0.0.1:28080
 > - **WebSocket**（codex 优先走这条）：之前完全不认代理，现已修复，会走同一个代理
 >
 > 代理来源优先级：`--proxy` 显式参数 > `HTTPS_PROXY` > `ALL_PROXY` > `HTTP_PROXY`
-> 环境变量。支持 `http://`、`https://`、`socks5://`。未配置时启动会打 warning。
+> 环境变量。支持 `http://`、`socks5://`（`https://` 代理会被拒绝——WS 隧道走的是
+> 明文 CONNECT，无法对接自带 TLS 的代理）。未配置时启动会打 warning。
+>
+> 已存活的 worker 若用 `--proxy`/env 换了代理再跑 `api serve`，会自动重启 worker
+> 让新代理生效（无需先手动 `stop`）。
 
 ```bash
 # 方式一：显式指定（推荐，最不易错）

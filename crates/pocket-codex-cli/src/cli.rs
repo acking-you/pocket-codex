@@ -166,9 +166,10 @@ pub struct ApiServeArgs {
     #[arg(long, default_value_t = 18180)]
     pub port: u16,
 
-    /// Upstream proxy used to reach chatgpt.com (`http://`, `https://`,
-    /// `socks5://`). When unset, Pocket-Codex falls back to the standard
-    /// `$HTTPS_PROXY` / `$ALL_PROXY` / `$HTTP_PROXY` environment variables.
+    /// Upstream proxy used to reach chatgpt.com (`http://` or
+    /// `socks5://`; `https://` proxies are rejected). When unset,
+    /// Pocket-Codex falls back to the standard `$HTTPS_PROXY` /
+    /// `$ALL_PROXY` / `$HTTP_PROXY` environment variables.
     #[arg(long)]
     pub proxy: Option<String>,
 
@@ -316,7 +317,7 @@ pub struct ApiProxyArgs {
     #[arg(long)]
     pub listen: String,
 
-    /// Upstream proxy used to reach chatgpt.com (`http`/`https`/`socks5`).
+    /// Upstream proxy used to reach chatgpt.com (`http`/`socks5`).
     /// Falls back to `$HTTPS_PROXY` / `$ALL_PROXY` / `$HTTP_PROXY` when unset.
     #[arg(long)]
     pub proxy: Option<String>,

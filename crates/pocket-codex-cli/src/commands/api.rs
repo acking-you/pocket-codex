@@ -56,10 +56,21 @@ fn serve(args: ApiServeArgs) -> Result<()> {
     );
     let key = args.key.clone().unwrap_or_else(|| service_id.key());
     let local_addr = format!("{}:{}", args.host, args.port);
+
+    // Resolve the effective upstream proxy once (explicit flag or env) so we
+    // can fail fast on a bad scheme, surface it to the user, and record a
+    // signature that lets a rerun with a changed proxy restart the worker.
+    let effective_proxy = api_proxy::resolve_proxy(args.proxy.as_deref());
+    if let Some(raw) = effective_proxy.as_deref() {
+        api_proxy::validate_proxy(raw)?;
+    }
+    let proxy_signature = effective_proxy.as_deref().map(api_proxy::redact_proxy);
+
     let api_outcome = managed_api::ensure(ApiWorkerSpec {
         key: key.clone(),
         local_addr: local_addr.clone(),
         proxy: args.proxy.clone(),
+        proxy_signature,
     })?;
     let pb_outcome = managed_pb::ensure(PbWorkerSpec {
         role: PbRole::Register,
@@ -69,7 +80,7 @@ fn serve(args: ApiServeArgs) -> Result<()> {
         codec: args.codec,
     })?;
     print_serve_summary(&api_outcome, &pb_outcome, &key, &args.relay.relay);
-    print_proxy_status(args.proxy.as_deref());
+    print_proxy_status(effective_proxy.as_deref());
     Ok(())
 }
 
@@ -106,9 +117,9 @@ async fn connect(args: ApiConnectArgs) -> Result<()> {
     Ok(())
 }
 
-fn print_proxy_status(explicit: Option<&str>) {
-    match api_proxy::resolve_proxy(explicit) {
-        Some(raw) => println!("api upstream proxy: {}", api_proxy::redact_proxy(&raw)),
+fn print_proxy_status(effective: Option<&str>) {
+    match effective {
+        Some(raw) => println!("api upstream proxy: {}", api_proxy::redact_proxy(raw)),
         None => eprintln!(
             "warning: no upstream proxy configured. The API proxy reaches chatgpt.com directly \
              and will fail on networks that block it. Pass `--proxy http://host:port` (or \

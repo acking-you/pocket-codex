@@ -468,27 +468,39 @@ pub(crate) fn resolve_proxy(explicit: Option<&str>) -> Option<String> {
 }
 
 /// Redact userinfo (credentials) from a proxy URL before logging it.
+/// Uses `Url`'s in-place setters so path/query/other components survive.
 pub(crate) fn redact_proxy(raw: &str) -> String {
-    match Url::parse(raw) {
-        Ok(url) if !url.username().is_empty() || url.password().is_some() => {
-            let scheme = url.scheme();
-            let host = url.host_str().unwrap_or_default();
-            match url.port() {
-                Some(port) => format!("{scheme}://***@{host}:{port}"),
-                None => format!("{scheme}://***@{host}"),
-            }
-        },
-        _ => raw.to_string(),
+    let Ok(mut url) = Url::parse(raw) else {
+        return raw.to_string();
+    };
+    if url.username().is_empty() && url.password().is_none() {
+        return raw.to_string();
     }
+    let _ = url.set_username("***");
+    let _ = url.set_password(None);
+    url.to_string()
+}
+
+/// Validate a proxy URL without exposing the internal [`UpstreamProxy`]
+/// type, so `serve` can fail fast on a bad `--proxy` before spawning.
+pub(crate) fn validate_proxy(raw: &str) -> Result<()> {
+    parse_proxy(raw).map(|_| ())
 }
 
 /// Parse a proxy URL into an [`UpstreamProxy`] for the WebSocket tunnel.
 fn parse_proxy(raw: &str) -> Result<UpstreamProxy> {
     let url = Url::parse(raw).with_context(|| format!("parsing proxy URL `{raw}`"))?;
     let kind = match url.scheme() {
-        "http" | "https" => ProxyKind::HttpConnect,
+        "http" => ProxyKind::HttpConnect,
         "socks5" | "socks5h" => ProxyKind::Socks5,
-        other => bail!("unsupported proxy scheme `{other}` (use http, https or socks5)"),
+        // An `https://` proxy speaks TLS itself; our WS tunnel writes a
+        // plaintext CONNECT, so accepting it would silently break the
+        // WebSocket path. Reject it rather than advertise broken support.
+        "https" => bail!(
+            "`https://` proxies are not supported (the WebSocket tunnel needs a plaintext \
+             CONNECT); use an `http://` or `socks5://` proxy"
+        ),
+        other => bail!("unsupported proxy scheme `{other}` (use http or socks5)"),
     };
     let host = url
         .host_str()
@@ -518,7 +530,9 @@ async fn open_upstream_ws(
     proxy: Option<&UpstreamProxy>,
 ) -> Result<WebSocketStream<MaybeTlsStream<TcpStream>>> {
     let Some(proxy) = proxy else {
-        let (stream, _) = connect_async(request).await.context("direct websocket connect")?;
+        let (stream, _) = connect_async(request)
+            .await
+            .context("direct websocket connect")?;
         return Ok(stream);
     };
 
@@ -547,7 +561,10 @@ async fn http_connect_tunnel(proxy: &UpstreamProxy, host: &str, port: u16) -> Re
         .with_context(|| format!("connecting to HTTP proxy {}:{}", proxy.host, proxy.port))?;
 
     let mut request = format!("CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n");
-    if let (Some(user), Some(pass)) = (proxy.username.as_deref(), proxy.password.as_deref()) {
+    // HTTP Basic permits an empty password, so authenticate whenever a
+    // username is present and default the password to "".
+    if let Some(user) = proxy.username.as_deref() {
+        let pass = proxy.password.as_deref().unwrap_or("");
         let token = base64::engine::general_purpose::STANDARD.encode(format!("{user}:{pass}"));
         request.push_str(&format!("Proxy-Authorization: Basic {token}\r\n"));
     }
@@ -562,7 +579,10 @@ async fn http_connect_tunnel(proxy: &UpstreamProxy, host: &str, port: u16) -> Re
     let mut buf = Vec::with_capacity(256);
     let mut byte = [0u8; 1];
     loop {
-        let n = stream.read(&mut byte).await.context("reading CONNECT response")?;
+        let n = stream
+            .read(&mut byte)
+            .await
+            .context("reading CONNECT response")?;
         if n == 0 {
             bail!("proxy closed connection during CONNECT handshake");
         }
@@ -592,13 +612,16 @@ async fn http_connect_tunnel(proxy: &UpstreamProxy, host: &str, port: u16) -> Re
 /// to the upstream is blocked.
 async fn socks5_tunnel(proxy: &UpstreamProxy, host: &str, port: u16) -> Result<TcpStream> {
     let proxy_addr = format!("{}:{}", proxy.host, proxy.port);
-    let stream = match (proxy.username.as_deref(), proxy.password.as_deref()) {
-        (Some(user), Some(pass)) => {
+    // SOCKS5 permits an empty password, so authenticate whenever a username
+    // is present and default the password to "".
+    let stream = match proxy.username.as_deref() {
+        Some(user) => {
+            let pass = proxy.password.as_deref().unwrap_or("");
             Socks5Stream::connect_with_password(proxy_addr.as_str(), (host, port), user, pass)
                 .await
                 .with_context(|| format!("SOCKS5 (auth) connect via {proxy_addr}"))?
         },
-        _ => Socks5Stream::connect(proxy_addr.as_str(), (host, port))
+        None => Socks5Stream::connect(proxy_addr.as_str(), (host, port))
             .await
             .with_context(|| format!("SOCKS5 connect via {proxy_addr}"))?,
     };

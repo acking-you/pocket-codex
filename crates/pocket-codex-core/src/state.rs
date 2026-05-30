@@ -137,6 +137,12 @@ pub struct ApiProxyInfo {
     /// Local `host:port` the proxy listens on.
     pub local_addr: String,
 
+    /// Redacted signature of the upstream proxy this worker was started
+    /// with, used to detect `--proxy` / env-proxy changes across reruns.
+    /// `None` means "no upstream proxy". Defaults for older state files.
+    #[serde(default)]
+    pub proxy: Option<String>,
+
     /// pid of the worker process that owns this proxy.
     pub pid: u32,
 
