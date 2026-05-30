@@ -166,6 +166,12 @@ pub struct ApiServeArgs {
     #[arg(long, default_value_t = 18180)]
     pub port: u16,
 
+    /// Upstream proxy used to reach chatgpt.com (`http://`, `https://`,
+    /// `socks5://`). When unset, Pocket-Codex falls back to the standard
+    /// `$HTTPS_PROXY` / `$ALL_PROXY` / `$HTTP_PROXY` environment variables.
+    #[arg(long)]
+    pub proxy: Option<String>,
+
     /// Enable AES-256-GCM end-to-end encryption in pb-mapper.
     #[arg(long)]
     pub codec: bool,
@@ -309,6 +315,11 @@ pub struct ApiProxyArgs {
     /// `host:port` to bind the proxy listener on.
     #[arg(long)]
     pub listen: String,
+
+    /// Upstream proxy used to reach chatgpt.com (`http`/`https`/`socks5`).
+    /// Falls back to `$HTTPS_PROXY` / `$ALL_PROXY` / `$HTTP_PROXY` when unset.
+    #[arg(long)]
+    pub proxy: Option<String>,
 }
 
 /// Subcommands under `pocket-codex codex …`.

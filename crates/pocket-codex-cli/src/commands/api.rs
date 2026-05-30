@@ -33,6 +33,7 @@ use pocket_codex_core::{
 use crate::{
     cli::{ApiCmd, ApiConnectArgs, ApiServeArgs},
     commands::{
+        api_proxy,
         managed_api::{self, ApiWorkerSpec, EnsureOutcome as ApiEnsureOutcome},
         managed_pb::{self, EnsureOutcome as PbEnsureOutcome, PbWorkerSpec},
         service_target::{choose_target, discover_services, TargetRequest},
@@ -58,6 +59,7 @@ fn serve(args: ApiServeArgs) -> Result<()> {
     let api_outcome = managed_api::ensure(ApiWorkerSpec {
         key: key.clone(),
         local_addr: local_addr.clone(),
+        proxy: args.proxy.clone(),
     })?;
     let pb_outcome = managed_pb::ensure(PbWorkerSpec {
         role: PbRole::Register,
@@ -67,6 +69,7 @@ fn serve(args: ApiServeArgs) -> Result<()> {
         codec: args.codec,
     })?;
     print_serve_summary(&api_outcome, &pb_outcome, &key, &args.relay.relay);
+    print_proxy_status(args.proxy.as_deref());
     Ok(())
 }
 
@@ -101,6 +104,18 @@ async fn connect(args: ApiConnectArgs) -> Result<()> {
     }
     print_connect_summary(&outcome);
     Ok(())
+}
+
+fn print_proxy_status(explicit: Option<&str>) {
+    match api_proxy::resolve_proxy(explicit) {
+        Some(raw) => println!("api upstream proxy: {}", api_proxy::redact_proxy(&raw)),
+        None => eprintln!(
+            "warning: no upstream proxy configured. The API proxy reaches chatgpt.com directly \
+             and will fail on networks that block it. Pass `--proxy http://host:port` (or \
+             `socks5://host:port`), or export HTTPS_PROXY / ALL_PROXY / HTTP_PROXY before running \
+             `pocket-codex api serve`."
+        ),
+    }
 }
 
 fn print_serve_summary(api: &ApiEnsureOutcome, pb: &PbEnsureOutcome, key: &str, relay: &str) {

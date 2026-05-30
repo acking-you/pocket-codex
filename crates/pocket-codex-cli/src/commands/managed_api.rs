@@ -45,6 +45,9 @@ use pocket_codex_core::{
 pub(crate) struct ApiWorkerSpec {
     pub key: String,
     pub local_addr: String,
+    /// Explicit upstream proxy forwarded to the worker. `None` lets the
+    /// worker fall back to proxy environment variables.
+    pub proxy: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -117,12 +120,17 @@ fn spawn_worker(spec: &ApiWorkerSpec, exe: PathBuf) -> Result<ApiProxyInfo> {
 }
 
 pub(crate) fn api_worker_args(spec: &ApiWorkerSpec) -> Vec<String> {
-    vec![
+    let mut args = vec![
         "__worker".to_string(),
         "api-proxy".to_string(),
         "--listen".to_string(),
         spec.local_addr.clone(),
-    ]
+    ];
+    if let Some(proxy) = &spec.proxy {
+        args.push("--proxy".to_string());
+        args.push(proxy.clone());
+    }
+    args
 }
 
 pub(crate) fn stop_all() -> Result<Vec<StopOutcome>> {

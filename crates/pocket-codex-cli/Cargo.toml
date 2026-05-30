@@ -37,4 +37,6 @@ futures = { workspace = true }
 http = { workspace = true }
 reqwest = { workspace = true }
 tokio-tungstenite = { workspace = true }
+tokio-socks = { workspace = true }
+rustls = { workspace = true }
 url = { workspace = true }
