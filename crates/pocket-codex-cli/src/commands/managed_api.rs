@@ -45,6 +45,13 @@ use pocket_codex_core::{
 pub(crate) struct ApiWorkerSpec {
     pub key: String,
     pub local_addr: String,
+    /// Explicit upstream proxy forwarded to the worker via argv. `None`
+    /// lets the worker fall back to proxy environment variables.
+    pub proxy: Option<String>,
+    /// Redacted signature of the *effective* upstream proxy (explicit flag
+    /// or resolved env). Persisted in state so a rerun with a changed proxy
+    /// restarts the live worker instead of silently reusing the old one.
+    pub proxy_signature: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -67,8 +74,16 @@ pub(crate) fn ensure(spec: ApiWorkerSpec) -> Result<EnsureOutcome> {
 fn ensure_with_exe(spec: ApiWorkerSpec, exe: PathBuf) -> Result<EnsureOutcome> {
     let mut state = RuntimeState::load()?;
     if let Some(existing) = state.find_api(&spec.key).cloned() {
-        if pid_alive(existing.pid) {
+        let alive = pid_alive(existing.pid);
+        // Reuse only when the live worker's upstream proxy still matches the
+        // requested one; otherwise the new --proxy / env value would be
+        // silently ignored (the worker keeps its original proxy).
+        if alive && existing.proxy == spec.proxy_signature {
             return Ok(EnsureOutcome::Reused(existing));
+        }
+        if alive {
+            send_sigterm(existing.pid);
+            wait_for_exit(existing.pid);
         }
         state.remove_api(&spec.key);
         let session = spawn_worker(&spec, exe)?;
@@ -84,6 +99,17 @@ fn ensure_with_exe(spec: ApiWorkerSpec, exe: PathBuf) -> Result<EnsureOutcome> {
     state.upsert_api(session.clone());
     state.save()?;
     Ok(EnsureOutcome::Spawned(session))
+}
+
+/// Wait briefly for a signalled worker to exit so its replacement can rebind
+/// the same listen port. Polls up to ~3s; returns early once the pid is gone.
+fn wait_for_exit(pid: u32) {
+    for _ in 0..30 {
+        if !pid_alive(pid) {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
 }
 
 fn spawn_worker(spec: &ApiWorkerSpec, exe: PathBuf) -> Result<ApiProxyInfo> {
@@ -110,6 +136,7 @@ fn spawn_worker(spec: &ApiWorkerSpec, exe: PathBuf) -> Result<ApiProxyInfo> {
     Ok(ApiProxyInfo {
         key: spec.key.clone(),
         local_addr: spec.local_addr.clone(),
+        proxy: spec.proxy_signature.clone(),
         pid,
         log_file,
         started_at: Utc::now().to_rfc3339(),
@@ -117,12 +144,17 @@ fn spawn_worker(spec: &ApiWorkerSpec, exe: PathBuf) -> Result<ApiProxyInfo> {
 }
 
 pub(crate) fn api_worker_args(spec: &ApiWorkerSpec) -> Vec<String> {
-    vec![
+    let mut args = vec![
         "__worker".to_string(),
         "api-proxy".to_string(),
         "--listen".to_string(),
         spec.local_addr.clone(),
-    ]
+    ];
+    if let Some(proxy) = &spec.proxy {
+        args.push("--proxy".to_string());
+        args.push(proxy.clone());
+    }
+    args
 }
 
 pub(crate) fn stop_all() -> Result<Vec<StopOutcome>> {

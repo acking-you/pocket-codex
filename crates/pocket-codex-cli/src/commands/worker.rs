@@ -27,7 +27,7 @@ pub async fn run(cmd: WorkerCmd) -> Result<()> {
             })
             .await;
         },
-        WorkerCmd::ApiProxy(args) => api_proxy::run(args.listen).await?,
+        WorkerCmd::ApiProxy(args) => api_proxy::run(args.listen, args.proxy).await?,
     }
     Ok(())
 }
