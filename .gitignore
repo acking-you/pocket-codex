@@ -50,3 +50,9 @@ apps/flutter/**/pubspec.lock
 
 # Local note files (never committed)
 pocket-codex-codex-raw-dialogue.md
+
+# Visual-companion brainstorm scratch (not source)
+.superpowers/
+
+# Python bytecode cache (local script runs)
+__pycache__/
