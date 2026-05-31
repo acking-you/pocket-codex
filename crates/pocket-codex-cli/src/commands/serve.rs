@@ -36,6 +36,7 @@
 use anyhow::{Context, Result};
 use pocket_codex_codex::{spawn, ListenSpec, SpawnOptions};
 use pocket_codex_core::{
+    config::Config,
     service::{default_device_id, ServiceId, ServiceKind},
     state::PbRole,
 };
@@ -67,6 +68,9 @@ pub async fn run(args: ServeArgs) -> Result<()> {
     let proxy_requested = args.proxy.is_some();
     let effective_proxy = api_proxy::resolve_app_server_proxy(args.proxy.as_deref())?;
 
+    let config = Config::load()?;
+    let relay = crate::commands::relay::resolve_relay(args.relay.relay.as_deref(), &config)?;
+
     let requested_listen = ListenSpec::WebSocket {
         host: args.host,
         port: args.port,
@@ -86,14 +90,14 @@ pub async fn run(args: ServeArgs) -> Result<()> {
         role: PbRole::Register,
         key: key.clone(),
         local_addr,
-        relay_addr: args.relay.relay.clone(),
+        relay_addr: relay.clone(),
         codec: args.codec,
     })?;
     print_serve_summary(
         &report.info,
         &outcome,
         &key,
-        &args.relay.relay,
+        &relay,
         effective_proxy.as_deref(),
         proxy_requested,
         report.reused,

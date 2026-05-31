@@ -389,10 +389,11 @@ pub enum PbCmd {
 /// Common pb-mapper relay locator.
 #[derive(Debug, Args, Clone)]
 pub struct PbRelayArgs {
-    /// `host:port` of the upstream pb-mapper relay. Falls back to
-    /// `$PB_MAPPER_SERVER` when unset (matches the pb-mapper CLIs).
-    #[arg(long, env = "PB_MAPPER_SERVER")]
-    pub relay: String,
+    /// `host:port` of the upstream pb-mapper relay. When omitted, falls
+    /// back to the configured relay (`pocket-codex init`) and then
+    /// `$PB_MAPPER_SERVER`.
+    #[arg(long)]
+    pub relay: Option<String>,
 }
 
 /// Args for `pocket-codex pb register`.
@@ -485,7 +486,7 @@ mod tests {
         assert_eq!(args.name, "default");
         assert_eq!(args.host, "127.0.0.1");
         assert_eq!(args.port, 18080);
-        assert_eq!(args.relay.relay, "relay.example:7666");
+        assert_eq!(args.relay.relay.as_deref(), Some("relay.example:7666"));
         assert!(!args.codec);
         assert!(args.codex_binary.is_none());
         assert!(args.extra.is_empty());
@@ -503,7 +504,7 @@ mod tests {
         assert!(args.device.is_none());
         assert!(args.name.is_none());
         assert_eq!(args.local_addr, "127.0.0.1:28080");
-        assert_eq!(args.relay.relay, "relay.example:7666");
+        assert_eq!(args.relay.relay.as_deref(), Some("relay.example:7666"));
     }
 
     #[test]
@@ -520,7 +521,7 @@ mod tests {
         assert_eq!(args.name, "default");
         assert_eq!(args.host, "127.0.0.1");
         assert_eq!(args.port, 18180);
-        assert_eq!(args.relay.relay, "relay.example:7666");
+        assert_eq!(args.relay.relay.as_deref(), Some("relay.example:7666"));
     }
 
     #[test]
@@ -569,7 +570,7 @@ mod tests {
 
         assert_eq!(args.key, "demo");
         assert_eq!(args.local_addr, "127.0.0.1:18080");
-        assert_eq!(args.relay.relay, "relay.example:7666");
+        assert_eq!(args.relay.relay.as_deref(), Some("relay.example:7666"));
         assert!(args.codec);
     }
 

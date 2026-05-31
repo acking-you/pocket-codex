@@ -59,11 +59,12 @@ pub async fn run(args: ConnectArgs) -> Result<()> {
     };
     let needs_discovery = request.key.is_none() && request.device.is_none();
     let config = Config::load()?;
+    let relay = crate::commands::relay::resolve_relay(args.relay.relay.as_deref(), &config)?;
     let state = RuntimeState::load()?;
     let has_local_default = config.default_service(ServiceKind::App).is_some()
         || state.selected_service(ServiceKind::App).is_some();
     let discovered = if needs_discovery && !has_local_default {
-        discover_services(&args.relay.relay).await?
+        discover_services(&relay).await?
     } else {
         Vec::new()
     };
@@ -72,7 +73,7 @@ pub async fn run(args: ConnectArgs) -> Result<()> {
         role: PbRole::Subscribe,
         key: target.key,
         local_addr: args.local_addr,
-        relay_addr: args.relay.relay,
+        relay_addr: relay,
         codec: false,
     })?;
     if let Some(service_id) = target.service_id {

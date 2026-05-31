@@ -10,6 +10,7 @@
 use std::net::SocketAddr;
 
 use anyhow::{Context, Result};
+use pocket_codex_core::config::Config;
 use pocket_codex_pb::{
     register as pb_register, status as pb_status, subscribe as pb_subscribe, RegisterOptions,
     StatusKind, SubscribeOptions,
@@ -31,10 +32,12 @@ pub async fn run(cmd: PbCmd) -> Result<()> {
 }
 
 async fn register(args: PbRegisterArgs) -> Result<()> {
+    let config = Config::load()?;
+    let relay = crate::commands::relay::resolve_relay(args.relay.relay.as_deref(), &config)?;
     let opts = RegisterOptions {
         key: args.key.clone(),
         local_addr: args.local_addr.clone(),
-        relay_addr: args.relay.relay.clone(),
+        relay_addr: relay,
         codec: args.codec,
     };
     ui::headline(ui::Tone::Action, "pb register");
@@ -48,10 +51,12 @@ async fn register(args: PbRegisterArgs) -> Result<()> {
 }
 
 async fn subscribe(args: PbSubscribeArgs) -> Result<()> {
+    let config = Config::load()?;
+    let relay = crate::commands::relay::resolve_relay(args.relay.relay.as_deref(), &config)?;
     let opts = SubscribeOptions {
         key: args.key.clone(),
         local_addr: args.local_addr.clone(),
-        relay_addr: args.relay.relay.clone(),
+        relay_addr: relay,
     };
     ui::headline(ui::Tone::Action, "pb subscribe");
     ui::field("key", &opts.key);
@@ -67,7 +72,9 @@ async fn status(args: PbStatusArgs) -> Result<()> {
         PbStatusKind::Keys => StatusKind::Keys,
         PbStatusKind::RemoteId => StatusKind::RemoteId,
     };
-    let addr = resolve_one(&args.relay.relay).await?;
+    let config = Config::load()?;
+    let relay = crate::commands::relay::resolve_relay(args.relay.relay.as_deref(), &config)?;
+    let addr = resolve_one(&relay).await?;
     pb_status(addr, kind).await;
     Ok(())
 }
