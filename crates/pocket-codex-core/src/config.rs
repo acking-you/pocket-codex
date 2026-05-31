@@ -123,8 +123,9 @@ impl Config {
     }
 
     /// Persist configuration to the default location. On unix the file is
-    /// created with `0o600` from the start (and any pre-existing file is
-    /// tightened to `0o600`) because it may hold the relay `MSG_HEADER_KEY`.
+    /// created with `0o600` and any pre-existing file is tightened to
+    /// `0o600` *before* the bytes are written, because it may hold the
+    /// relay `MSG_HEADER_KEY`.
     pub fn save(&self) -> Result<()> {
         let path = paths::config_file()?;
         if let Some(parent) = path.parent() {
@@ -138,18 +139,18 @@ impl Config {
                 io::Write as _,
                 os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _},
             };
-            // `mode(0o600)` applies only when this call creates the file, so a
-            // fresh config is never briefly world/group-readable. The explicit
-            // `set_permissions` then also tightens a file that already existed
-            // (e.g. a 0644 config written by an older build).
+            // `mode(0o600)` covers the create case. For a pre-existing file
+            // `open` keeps its old (possibly world-readable) mode, so tighten
+            // the open handle to 0o600 *before* writing — the secret is never
+            // on disk while the file is group/world-readable.
             let mut file = std::fs::OpenOptions::new()
                 .write(true)
                 .create(true)
                 .truncate(true)
                 .mode(0o600)
                 .open(&path)?;
+            file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
             file.write_all(raw.as_bytes())?;
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
         }
         #[cfg(not(unix))]
         {
