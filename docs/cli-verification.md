@@ -72,9 +72,17 @@ $PCX serve --relay lb7666.top:7666
 预期输出（`pcx:<本机hostname>:app:default`，下例 hostname=`lb7666`）：
 
 ```text
-codex app-server: pid=... listen=ws://127.0.0.1:18080 log=.../codex-app-server.log
-pb register started: pid=... key=pcx:lb7666:app:default relay=lb7666.top:7666 log=...
-client setup: pocket-codex connect --key pcx:lb7666:app:default --relay lb7666.top:7666
+✓ codex app-server
+    pid       ...
+    listen    ws://127.0.0.1:18080
+    log       .../codex-app-server.log
+✓ pb register started
+    pid       ...
+    key       pcx:lb7666:app:default
+    relay     lb7666.top:7666
+    log       ...
+→ client setup
+    pocket-codex connect --key pcx:lb7666:app:default --relay lb7666.top:7666
 ```
 
 ### 4.2 确认注册真的落到 relay 上
@@ -99,8 +107,13 @@ $PCX connect --relay lb7666.top:7666
 会被唯一选中。预期：
 
 ```text
-pb subscribe started: pid=... key=pcx:lb7666:app:default relay=lb7666.top:7666 log=...
-codex remote: codex --remote ws://127.0.0.1:28080
+✓ pb subscribe started
+    pid       ...
+    key       pcx:lb7666:app:default
+    relay     lb7666.top:7666
+    log       ...
+→ codex remote
+    codex --remote ws://127.0.0.1:28080
 ```
 
 此时 `127.0.0.1:28080` 是「穿 relay 回到本地 app-server」的入口。
@@ -111,7 +124,22 @@ codex remote: codex --remote ws://127.0.0.1:28080
 $PCX status
 ```
 
-应有 3 条 alive：`codex` + `pb Register` + `pb Subscribe`。
+应有 3 条 alive：`codex` + `pb register` + `pb subscribe`，以表格形式输出：
+
+```text
+Pocket-Codex runtime status · lb7666.top:7666
+
+┌──────────────┬───────┬───────┬──────────────────────┬────────────────────────┬────────┐
+│ COMPONENT    ┆ STATE ┆ PID   ┆ ENDPOINT             ┆ KEY                    ┆ UPTIME │
+╞══════════════╪═══════╪═══════╪══════════════════════╪════════════════════════╪════════╡
+│ codex        ┆ alive ┆ ...   ┆ ws://127.0.0.1:18080 ┆ —                      ┆ ...    │
+│ pb register  ┆ alive ┆ ...   ┆ 127.0.0.1:18080      ┆ pcx:lb7666:app:default ┆ ...    │
+│ pb subscribe ┆ alive ┆ ...   ┆ 127.0.0.1:28080      ┆ pcx:lb7666:app:default ┆ ...    │
+└──────────────┴───────┴───────┴──────────────────────┴────────────────────────┴────────┘
+logs  ~/.local/state/pocket-codex/logs
+```
+
+`STATE` 列 alive 为绿、stale 为红；管道重定向或设了 `NO_COLOR` 时自动退化成无边框纯文本，方便脚本解析。
 
 ### 4.5 （可选）验证隧道数据面真的通
 
@@ -169,14 +197,23 @@ $PCX api serve --relay lb7666.top:7666
 预期：
 
 ```text
-api proxy started: pid=... listen=127.0.0.1:18180 log=.../api-proxy-pcx_lb7666_api_default.log
-pb register started: pid=... key=pcx:lb7666:api:default relay=lb7666.top:7666 log=...
-client setup: pocket-codex api connect --key pcx:lb7666:api:default --relay lb7666.top:7666
-api upstream proxy: http://127.0.0.1:11111
+✓ api proxy started
+    pid       ...
+    listen    127.0.0.1:18180
+    log       .../api-proxy-pcx_lb7666_api_default.log
+    proxy     http://127.0.0.1:11111
+✓ pb register started
+    pid       ...
+    key       pcx:lb7666:api:default
+    relay     lb7666.top:7666
+    log       ...
+→ client setup
+    pocket-codex api connect --key pcx:lb7666:api:default --relay lb7666.top:7666
 ```
 
-最后一行确认代理已生效；若打印的是 `warning: no upstream proxy configured ...`，
-说明既没传 `--proxy` 也没有 env 代理，上游会直连 chatgpt.com 而失败。
+`api proxy` 块里的 `proxy` 字段确认代理已生效；若没传 `--proxy` 也没有 env 代理，
+该字段不出现，转而向 stderr 打 `⚠ no upstream proxy configured ...`，上游会直连
+chatgpt.com 而失败。
 
 > 代理鉴权来源：先看 `CODEX_ACCESS_TOKEN` 环境变量，否则读 `~/.codex/auth.json`
 > （`codex login` 写入的 ChatGPT token）。本机已登录，无需额外配置。
@@ -190,7 +227,13 @@ $PCX api connect --relay lb7666.top:7666
 预期会打印一段可直接粘进 `~/.codex/config.toml` 的配置：
 
 ```text
-pb subscribe started: pid=... key=pcx:lb7666:api:default ...
+✓ pb subscribe started
+    pid       ...
+    key       pcx:lb7666:api:default
+    relay     lb7666.top:7666
+    log       ...
+→ codex provider config
+    paste into ~/.codex/config.toml:
 model_provider = "pocket-codex-api"
 
 [model_providers.pocket-codex-api]

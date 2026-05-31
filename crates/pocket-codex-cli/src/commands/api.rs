@@ -37,6 +37,7 @@ use crate::{
         managed_api::{self, ApiWorkerSpec, EnsureOutcome as ApiEnsureOutcome},
         managed_pb::{self, EnsureOutcome as PbEnsureOutcome, PbWorkerSpec},
         service_target::{choose_target, discover_services, TargetRequest},
+        ui,
     },
 };
 
@@ -79,8 +80,13 @@ fn serve(args: ApiServeArgs) -> Result<()> {
         relay_addr: args.relay.relay.clone(),
         codec: args.codec,
     })?;
-    print_serve_summary(&api_outcome, &pb_outcome, &key, &args.relay.relay);
-    print_proxy_status(effective_proxy.as_deref());
+    print_serve_summary(
+        &api_outcome,
+        &pb_outcome,
+        &key,
+        &args.relay.relay,
+        effective_proxy.as_deref(),
+    );
     Ok(())
 }
 
@@ -119,115 +125,40 @@ async fn connect(args: ApiConnectArgs) -> Result<()> {
 
 fn print_proxy_status(effective: Option<&str>) {
     match effective {
-        Some(raw) => println!("api upstream proxy: {}", api_proxy::redact_proxy(raw)),
-        None => eprintln!(
-            "warning: no upstream proxy configured. The API proxy reaches chatgpt.com directly \
-             and will fail on networks that block it. Pass `--proxy http://host:port` (or \
+        Some(raw) => ui::field("proxy", &api_proxy::redact_proxy(raw)),
+        None => ui::warn(
+            "no upstream proxy configured. The API proxy reaches chatgpt.com directly and will \
+             fail on networks that block it. Pass `--proxy http://host:port` (or \
              `socks5://host:port`), or export HTTPS_PROXY / ALL_PROXY / HTTP_PROXY before running \
-             `pocket-codex api serve`."
+             `pocket-codex api serve`.",
         ),
     }
 }
 
-fn print_serve_summary(api: &ApiEnsureOutcome, pb: &PbEnsureOutcome, key: &str, relay: &str) {
-    match api {
-        ApiEnsureOutcome::Reused(session) => println!(
-            "api proxy reused: pid={} listen={} log={}",
-            session.pid,
-            session.local_addr,
-            session.log_file.display()
-        ),
-        ApiEnsureOutcome::Replaced {
-            stale_pid,
-            session,
-        } => println!(
-            "api proxy replaced stale pid {} with pid={} listen={} log={}",
-            stale_pid,
-            session.pid,
-            session.local_addr,
-            session.log_file.display()
-        ),
-        ApiEnsureOutcome::Spawned(session) => println!(
-            "api proxy started: pid={} listen={} log={}",
-            session.pid,
-            session.local_addr,
-            session.log_file.display()
-        ),
-    }
-    match pb {
-        PbEnsureOutcome::Reused(session) => println!(
-            "pb register reused: pid={} key={} relay={} log={}",
-            session.pid,
-            session.key,
-            session.relay_addr,
-            session.log_file.display()
-        ),
-        PbEnsureOutcome::Replaced {
-            stale_pid,
-            session,
-        } => println!(
-            "pb register replaced stale pid {} with pid={} key={} relay={} log={}",
-            stale_pid,
-            session.pid,
-            session.key,
-            session.relay_addr,
-            session.log_file.display()
-        ),
-        PbEnsureOutcome::Spawned(session) => println!(
-            "pb register started: pid={} key={} relay={} log={}",
-            session.pid,
-            session.key,
-            session.relay_addr,
-            session.log_file.display()
-        ),
-    }
-    println!("client setup: pocket-codex api connect --key {key} --relay {relay}");
+fn print_serve_summary(
+    api: &ApiEnsureOutcome,
+    pb: &PbEnsureOutcome,
+    key: &str,
+    relay: &str,
+    effective_proxy: Option<&str>,
+) {
+    api.render();
+    print_proxy_status(effective_proxy);
+    pb.render("pb register");
+    ui::headline(ui::Tone::Action, "client setup");
+    ui::code(&format!("pocket-codex api connect --key {key} --relay {relay}"));
 }
 
 fn print_connect_summary(outcome: &PbEnsureOutcome) {
-    let session = match outcome {
-        PbEnsureOutcome::Reused(session) => {
-            println!(
-                "pb subscribe reused: pid={} key={} relay={} log={}",
-                session.pid,
-                session.key,
-                session.relay_addr,
-                session.log_file.display()
-            );
-            session
-        },
-        PbEnsureOutcome::Replaced {
-            stale_pid,
-            session,
-        } => {
-            println!(
-                "pb subscribe replaced stale pid {} with pid={} key={} relay={} log={}",
-                stale_pid,
-                session.pid,
-                session.key,
-                session.relay_addr,
-                session.log_file.display()
-            );
-            session
-        },
-        PbEnsureOutcome::Spawned(session) => {
-            println!(
-                "pb subscribe started: pid={} key={} relay={} log={}",
-                session.pid,
-                session.key,
-                session.relay_addr,
-                session.log_file.display()
-            );
-            session
-        },
-    };
+    let session = outcome.render("pb subscribe");
+    ui::headline(ui::Tone::Action, "codex provider config");
+    ui::muted("    paste into ~/.codex/config.toml:");
     println!("{}", codex_provider_config(&session.local_addr));
 }
 
 pub(crate) fn codex_provider_config(local_addr: &str) -> String {
     format!(
-        r#"Codex config:
-model_provider = "pocket-codex-api"
+        r#"model_provider = "pocket-codex-api"
 
 [model_providers.pocket-codex-api]
 name = "Pocket-Codex API"

@@ -3,7 +3,10 @@
 use anyhow::Result;
 use pocket_codex_codex::{spawn, status, stop, ListenSpec, SpawnOptions, StopOutcome};
 
-use crate::cli::{CodexCmd, CodexStartArgs};
+use crate::{
+    cli::{CodexCmd, CodexStartArgs},
+    commands::ui,
+};
 
 /// Dispatch the `codex` subcommand group.
 pub async fn run(cmd: CodexCmd) -> Result<()> {
@@ -15,45 +18,45 @@ pub async fn run(cmd: CodexCmd) -> Result<()> {
 }
 
 fn start(args: CodexStartArgs) -> Result<()> {
+    let host = args.host.clone();
+    let port = args.port;
     let opts = SpawnOptions {
         binary: args.binary,
         listen: ListenSpec::WebSocket {
-            host: args.host.clone(),
+            host: args.host,
             port: args.port,
         },
         extra_args: args.extra,
         log_file: None,
     };
     let report = spawn(opts)?;
-    println!(
-        "codex app-server running: pid={} listen={} log={}",
-        report.info.pid,
-        report.info.listen,
-        report.info.log_file.display(),
-    );
-    println!(
-        "next steps: `pocket-codex pb register --key codex --local-addr {host}:{port} --relay \
-         <relay-host:7666>`",
-        host = args.host,
-        port = args.port,
-    );
+    ui::headline(ui::Tone::Ok, "codex app-server running");
+    ui::field("pid", &report.info.pid.to_string());
+    ui::field("listen", &report.info.listen);
+    ui::field("log", &report.info.log_file.display().to_string());
+    ui::headline(ui::Tone::Action, "next step");
+    ui::code(&format!(
+        "pocket-codex pb register --key codex --local-addr {host}:{port} --relay <relay-host:7666>"
+    ));
     Ok(())
 }
 
 fn stop_cmd() -> Result<()> {
     match stop()? {
         StopOutcome::NoRecord => {
-            println!("no codex app-server is currently supervised by pocket-codex");
+            ui::muted("no codex app-server is currently supervised by pocket-codex");
         },
         StopOutcome::StaleRecord {
             pid,
         } => {
-            println!("recorded pid {pid} was already gone; cleared state");
+            ui::headline(ui::Tone::Muted, "codex stale cleared");
+            ui::field("pid", &pid.to_string());
         },
         StopOutcome::Stopped {
             pid,
         } => {
-            println!("sent SIGTERM to pid {pid}");
+            ui::headline(ui::Tone::Ok, "codex stopped");
+            ui::field("pid", &pid.to_string());
         },
     }
     Ok(())
@@ -63,21 +66,19 @@ fn status_cmd() -> Result<()> {
     let report = status()?;
     match report.recorded {
         Some(info) if report.alive => {
-            println!(
-                "alive: pid={} listen={} log={} since {}",
-                info.pid,
-                info.listen,
-                info.log_file.display(),
-                info.started_at,
-            );
+            ui::headline(ui::Tone::Ok, "codex app-server alive");
+            ui::field("pid", &info.pid.to_string());
+            ui::field("listen", &info.listen);
+            ui::field("log", &info.log_file.display().to_string());
+            ui::field("uptime", &ui::relative_time(&info.started_at));
         },
         Some(info) => {
-            println!(
-                "stale: recorded pid={} listen={} is gone (started at {})",
-                info.pid, info.listen, info.started_at,
-            );
+            ui::headline(ui::Tone::Muted, "codex app-server stale");
+            ui::field("pid", &info.pid.to_string());
+            ui::field("listen", &info.listen);
+            ui::field("started", &info.started_at);
         },
-        None => println!("no codex app-server is currently supervised by pocket-codex"),
+        None => ui::muted("no codex app-server is currently supervised by pocket-codex"),
     }
     Ok(())
 }

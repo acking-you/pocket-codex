@@ -42,7 +42,10 @@ use pocket_codex_core::{
 
 use crate::{
     cli::ServeArgs,
-    commands::managed_pb::{self, EnsureOutcome, PbWorkerSpec},
+    commands::{
+        managed_pb::{self, EnsureOutcome, PbWorkerSpec},
+        ui,
+    },
 };
 
 /// Run the host-side one-shot setup flow.
@@ -86,40 +89,13 @@ fn print_serve_summary(
     key: &str,
     relay: &str,
 ) {
-    println!(
-        "codex app-server: pid={} listen={} log={}",
-        codex.pid,
-        codex.listen,
-        codex.log_file.display()
-    );
-    match pb {
-        EnsureOutcome::Reused(session) => println!(
-            "pb register reused: pid={} key={} relay={} log={}",
-            session.pid,
-            session.key,
-            session.relay_addr,
-            session.log_file.display()
-        ),
-        EnsureOutcome::Replaced {
-            stale_pid,
-            session,
-        } => println!(
-            "pb register replaced stale pid {} with pid={} key={} relay={} log={}",
-            stale_pid,
-            session.pid,
-            session.key,
-            session.relay_addr,
-            session.log_file.display()
-        ),
-        EnsureOutcome::Spawned(session) => println!(
-            "pb register started: pid={} key={} relay={} log={}",
-            session.pid,
-            session.key,
-            session.relay_addr,
-            session.log_file.display()
-        ),
-    }
-    println!("client setup: pocket-codex connect --key {key} --relay {relay}");
+    ui::headline(ui::Tone::Ok, "codex app-server");
+    ui::field("pid", &codex.pid.to_string());
+    ui::field("listen", &codex.listen);
+    ui::field("log", &codex.log_file.display().to_string());
+    pb.render("pb register");
+    ui::headline(ui::Tone::Action, "client setup");
+    ui::code(&format!("pocket-codex connect --key {key} --relay {relay}"));
 }
 
 fn websocket_listen_addr(listen: &str) -> Option<String> {

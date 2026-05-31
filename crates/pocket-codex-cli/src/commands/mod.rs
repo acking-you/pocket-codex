@@ -21,6 +21,7 @@ mod service_target;
 mod services;
 mod status;
 mod stop;
+mod ui;
 mod version;
 mod worker;
 

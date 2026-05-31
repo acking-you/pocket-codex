@@ -61,6 +61,18 @@ anyhow = "1.0"
 thiserror = "2.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+# Terminal output presentation. `comfy-table` is tilde-pinned to the 7.1
+# line: 7.2 bumped its MSRV to 1.85 while this workspace declares
+# `rust-version = "1.83"`, and a bare "7.1" is caret (<8.0.0) which would
+# still resolve to 7.2. owo-colors stays feature-light (no
+# `supports-colors`) so inline styling shares one `use_color()` gate with
+# the table path.
+comfy-table = "~7.1"
+owo-colors = "4"
+# Terminal width detection for the boxed-grid fallback. Pinned to the
+# 0.28 line so it unifies with the crossterm that comfy-table already
+# pulls in transitively (one build, no version split).
+crossterm = { version = "0.28", default-features = false }
 
 # Misc
 once_cell = "1"

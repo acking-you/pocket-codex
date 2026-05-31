@@ -4,12 +4,21 @@
 
 use anyhow::Result;
 
-use crate::{cli::RemoteHintArgs, commands::connect::codex_remote_command};
+use crate::{
+    cli::RemoteHintArgs,
+    commands::{connect::codex_remote_command, ui},
+};
 
 /// Print a copy-pasteable hint.
 pub fn run(args: RemoteHintArgs) -> Result<()> {
     for line in remote_hint_lines(&args) {
-        println!("{line}");
+        if let Some(comment) = line.strip_prefix('#') {
+            ui::muted(&format!("#{comment}"));
+        } else if line.is_empty() {
+            println!();
+        } else {
+            ui::code(&line);
+        }
     }
     Ok(())
 }

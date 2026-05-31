@@ -16,7 +16,10 @@ use pocket_codex_pb::{
 };
 use tokio::net::lookup_host;
 
-use crate::cli::{PbCmd, PbRegisterArgs, PbStatusArgs, PbStatusKind, PbSubscribeArgs};
+use crate::{
+    cli::{PbCmd, PbRegisterArgs, PbStatusArgs, PbStatusKind, PbSubscribeArgs},
+    commands::ui,
+};
 
 /// Dispatch the `pb` subcommand group.
 pub async fn run(cmd: PbCmd) -> Result<()> {
@@ -34,11 +37,12 @@ async fn register(args: PbRegisterArgs) -> Result<()> {
         relay_addr: args.relay.relay.clone(),
         codec: args.codec,
     };
-    println!(
-        "registering local {} as `{}` with relay {} (codec={})",
-        opts.local_addr, opts.key, opts.relay_addr, opts.codec,
-    );
-    println!("press Ctrl-C to stop");
+    ui::headline(ui::Tone::Action, "pb register");
+    ui::field("local", &opts.local_addr);
+    ui::field("key", &opts.key);
+    ui::field("relay", &opts.relay_addr);
+    ui::field("codec", &opts.codec.to_string());
+    ui::muted("press Ctrl-C to stop");
     pb_register(opts).await;
     Ok(())
 }
@@ -49,11 +53,11 @@ async fn subscribe(args: PbSubscribeArgs) -> Result<()> {
         local_addr: args.local_addr.clone(),
         relay_addr: args.relay.relay.clone(),
     };
-    println!(
-        "subscribing to `{}` via relay {}; exposing it locally on {}",
-        opts.key, opts.relay_addr, opts.local_addr,
-    );
-    println!("press Ctrl-C to stop");
+    ui::headline(ui::Tone::Action, "pb subscribe");
+    ui::field("key", &opts.key);
+    ui::field("relay", &opts.relay_addr);
+    ui::field("local", &opts.local_addr);
+    ui::muted("press Ctrl-C to stop");
     pb_subscribe(opts).await;
     Ok(())
 }
