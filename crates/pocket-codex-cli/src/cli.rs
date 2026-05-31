@@ -28,6 +28,9 @@ pub struct Cli {
 /// Top-level subcommands.
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Interactively configure the default relay URL and shared key.
+    Init(InitArgs),
+
     /// Start local codex app-server and register it with a relay.
     Serve(ServeArgs),
 
@@ -66,6 +69,23 @@ pub enum Command {
     /// Internal worker entrypoints spawned by high-level commands.
     #[command(name = "__worker", hide = true, subcommand)]
     Worker(WorkerCmd),
+}
+
+/// Args for `pocket-codex init`.
+#[derive(Debug, Args)]
+pub struct InitArgs {
+    /// Relay `host:port` (or `tcp://host:port`). Prompted when omitted
+    /// on a TTY.
+    #[arg(long)]
+    pub relay: Option<String>,
+
+    /// Shared 32-byte `MSG_HEADER_KEY`. Prompted when omitted on a TTY.
+    #[arg(long)]
+    pub key: Option<String>,
+
+    /// Skip the post-save reachability check against the relay.
+    #[arg(long)]
+    pub no_verify: bool,
 }
 
 /// Args for `pocket-codex serve`.
@@ -585,6 +605,25 @@ mod tests {
 
         assert_eq!(args.key.as_deref(), Some("codex"));
         assert_eq!(args.role.map(PbRole::from), Some(PbRole::Subscribe));
+    }
+
+    #[test]
+    fn init_parses_relay_key_and_no_verify() {
+        let cli = Cli::parse_from([
+            "pocket-codex",
+            "init",
+            "--relay",
+            "lb7666.top:7666",
+            "--key",
+            "0123456789abcdef0123456789abcdef",
+            "--no-verify",
+        ]);
+        let Command::Init(args) = cli.command else {
+            panic!("expected init command");
+        };
+        assert_eq!(args.relay.as_deref(), Some("lb7666.top:7666"));
+        assert_eq!(args.key.as_deref(), Some("0123456789abcdef0123456789abcdef"));
+        assert!(args.no_verify);
     }
 
     #[test]

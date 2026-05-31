@@ -12,6 +12,7 @@ mod api;
 mod api_proxy;
 mod codex;
 mod connect;
+mod init;
 mod managed_api;
 mod managed_pb;
 mod pb;
@@ -33,6 +34,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
     relay::apply_configured_key();
 
     match cli.command {
+        Command::Init(args) => init::run(args).await,
         Command::Serve(args) => serve::run(args).await,
         Command::Connect(args) => connect::run(args).await,
         Command::Api(cmd) => api::run(cmd).await,
