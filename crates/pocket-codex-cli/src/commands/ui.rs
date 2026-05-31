@@ -149,16 +149,20 @@ pub(crate) fn new_table(headers: &[&str]) -> Table {
     let mut table = Table::new();
     if colored {
         table.load_preset(presets::UTF8_FULL).enforce_styling();
+        // `Dynamic` sizes columns to the terminal width. A tty that reports a
+        // zero/unknown winsize (CI runners, detached `script` sessions) would
+        // otherwise collapse every column to one character, so pin a readable
+        // fallback width in that case and let real terminals self-report.
+        table.set_content_arrangement(ContentArrangement::Dynamic);
+        if terminal_width().is_none() {
+            table.set_width(FALLBACK_TABLE_WIDTH);
+        }
     } else {
+        // Plain, script-safe mode: keep the default `Disabled` arrangement so
+        // every row stays on one line for `awk`/`cut`. `Dynamic` here would
+        // still wrap to a width `crossterm` can probe via /dev/tty even when
+        // stdout is piped, splitting a record across lines.
         table.load_preset(presets::NOTHING);
-    }
-    table.set_content_arrangement(ContentArrangement::Dynamic);
-    // `Dynamic` sizes columns to the terminal width. A tty that reports a
-    // zero/unknown winsize (CI runners, detached `script` sessions) would
-    // otherwise collapse every column to one character, so pin a readable
-    // fallback width in that case and let real terminals self-report.
-    if colored && terminal_width().is_none() {
-        table.set_width(FALLBACK_TABLE_WIDTH);
     }
     let header: Vec<Cell> = headers
         .iter()
@@ -217,7 +221,12 @@ pub(crate) fn relative_time(rfc3339: &str) -> String {
     let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(rfc3339) else {
         return rfc3339.to_string();
     };
-    let secs = (chrono::Utc::now() - parsed.with_timezone(&chrono::Utc)).num_seconds();
+    // Clamp to non-negative: a future timestamp (clock drift between hosts,
+    // or a hand-edited state.toml) then degrades to "just now" by intent
+    // rather than relying on the `< 60` branch swallowing a negative value.
+    let secs = (chrono::Utc::now() - parsed.with_timezone(&chrono::Utc))
+        .num_seconds()
+        .max(0);
     if secs < 60 {
         "just now".to_string()
     } else if secs < 3_600 {
@@ -249,5 +258,11 @@ mod tests {
         assert_eq!(relative_time(&five_min), "5m ago");
         assert_eq!(relative_time(&three_hours), "3h ago");
         assert_eq!(relative_time(&two_days), "2d ago");
+    }
+
+    #[test]
+    fn relative_time_treats_future_timestamps_as_just_now() {
+        let future = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+        assert_eq!(relative_time(&future), "just now");
     }
 }
