@@ -5,7 +5,7 @@ use pocket_codex_codex::{spawn, status, stop, ListenSpec, SpawnOptions, StopOutc
 
 use crate::{
     cli::{CodexCmd, CodexStartArgs},
-    commands::ui,
+    commands::{api_proxy, ui},
 };
 
 /// Dispatch the `codex` subcommand group.
@@ -20,6 +20,14 @@ pub async fn run(cmd: CodexCmd) -> Result<()> {
 fn start(args: CodexStartArgs) -> Result<()> {
     let host = args.host.clone();
     let port = args.port;
+
+    // The spawned app-server reads proxy settings only from its environment,
+    // never from codex's config.toml, so resolve the effective proxy (explicit
+    // flag or env) and inject it via SpawnOptions. Only an explicit `--proxy`
+    // is validated eagerly (see resolve_app_server_proxy).
+    let proxy_requested = args.proxy.is_some();
+    let effective_proxy = api_proxy::resolve_app_server_proxy(args.proxy.as_deref())?;
+
     let opts = SpawnOptions {
         binary: args.binary,
         listen: ListenSpec::WebSocket {
@@ -28,12 +36,19 @@ fn start(args: CodexStartArgs) -> Result<()> {
         },
         extra_args: args.extra,
         log_file: None,
+        proxy: effective_proxy.clone(),
     };
     let report = spawn(opts)?;
     ui::headline(ui::Tone::Ok, "codex app-server running");
     ui::field("pid", &report.info.pid.to_string());
     ui::field("listen", &report.info.listen);
     ui::field("log", &report.info.log_file.display().to_string());
+    api_proxy::print_proxy_status(
+        effective_proxy.as_deref(),
+        proxy_requested,
+        report.reused,
+        api_proxy::SpawnCommand::CodexStart,
+    );
     ui::headline(ui::Tone::Action, "next step");
     ui::code(&format!(
         "pocket-codex pb register --key codex --local-addr {host}:{port} --relay <relay-host:7666>"

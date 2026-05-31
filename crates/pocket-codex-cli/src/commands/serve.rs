@@ -43,6 +43,7 @@ use pocket_codex_core::{
 use crate::{
     cli::ServeArgs,
     commands::{
+        api_proxy,
         managed_pb::{self, EnsureOutcome, PbWorkerSpec},
         ui,
     },
@@ -58,6 +59,14 @@ pub async fn run(args: ServeArgs) -> Result<()> {
         )
         .key()
     });
+
+    // Resolve the effective upstream proxy once (explicit flag or env). The
+    // spawned app-server reads proxy settings only from its environment, never
+    // from codex's config.toml, so we inject it there via SpawnOptions. Only an
+    // explicit `--proxy` is validated eagerly (see resolve_app_server_proxy).
+    let proxy_requested = args.proxy.is_some();
+    let effective_proxy = api_proxy::resolve_app_server_proxy(args.proxy.as_deref())?;
+
     let requested_listen = ListenSpec::WebSocket {
         host: args.host,
         port: args.port,
@@ -67,6 +76,7 @@ pub async fn run(args: ServeArgs) -> Result<()> {
         listen: requested_listen,
         extra_args: args.extra,
         log_file: None,
+        proxy: effective_proxy.clone(),
     })?;
     let local_addr = websocket_listen_addr(&report.info.listen).with_context(|| {
         format!("codex listen URL `{}` is not relayable TCP", report.info.listen)
@@ -79,7 +89,15 @@ pub async fn run(args: ServeArgs) -> Result<()> {
         relay_addr: args.relay.relay.clone(),
         codec: args.codec,
     })?;
-    print_serve_summary(&report.info, &outcome, &key, &args.relay.relay);
+    print_serve_summary(
+        &report.info,
+        &outcome,
+        &key,
+        &args.relay.relay,
+        effective_proxy.as_deref(),
+        proxy_requested,
+        report.reused,
+    );
     Ok(())
 }
 
@@ -88,11 +106,20 @@ fn print_serve_summary(
     pb: &EnsureOutcome,
     key: &str,
     relay: &str,
+    effective_proxy: Option<&str>,
+    proxy_requested: bool,
+    reused: bool,
 ) {
     ui::headline(ui::Tone::Ok, "codex app-server");
     ui::field("pid", &codex.pid.to_string());
     ui::field("listen", &codex.listen);
     ui::field("log", &codex.log_file.display().to_string());
+    api_proxy::print_proxy_status(
+        effective_proxy,
+        proxy_requested,
+        reused,
+        api_proxy::SpawnCommand::Serve,
+    );
     pb.render("pb register");
     ui::headline(ui::Tone::Action, "client setup");
     ui::code(&format!("pocket-codex connect --key {key} --relay {relay}"));

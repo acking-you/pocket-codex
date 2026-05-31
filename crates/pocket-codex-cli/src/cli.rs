@@ -100,6 +100,16 @@ pub struct ServeArgs {
     #[arg(long)]
     pub codec: bool,
 
+    /// Upstream proxy the spawned `codex app-server` should use to reach
+    /// chatgpt.com (`http://` or `socks5://`; `https://` proxies are
+    /// rejected). When unset, Pocket-Codex falls back to the standard
+    /// `$HTTPS_PROXY` / `$ALL_PROXY` / `$HTTP_PROXY` environment
+    /// variables. Note: codex_apps and plugin sync are HTTP traffic that
+    /// only an `http://` proxy can carry; a `socks5://` proxy reaches the
+    /// model WebSocket only.
+    #[arg(long)]
+    pub proxy: Option<String>,
+
     #[command(flatten)]
     pub relay: PbRelayArgs,
 
@@ -348,6 +358,16 @@ pub struct CodexStartArgs {
     /// Bind port (websocket transport).
     #[arg(long, default_value_t = 18080)]
     pub port: u16,
+
+    /// Upstream proxy the spawned `codex app-server` should use to reach
+    /// chatgpt.com (`http://` or `socks5://`; `https://` proxies are
+    /// rejected). When unset, Pocket-Codex falls back to the standard
+    /// `$HTTPS_PROXY` / `$ALL_PROXY` / `$HTTP_PROXY` environment
+    /// variables. Note: codex_apps and plugin sync are HTTP traffic that
+    /// only an `http://` proxy can carry; a `socks5://` proxy reaches the
+    /// model WebSocket only.
+    #[arg(long)]
+    pub proxy: Option<String>,
 
     /// Extra arguments forwarded to `codex app-server`.
     #[arg(last = true)]
