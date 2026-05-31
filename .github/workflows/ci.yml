@@ -18,8 +18,34 @@ env:
   FLUTTER_VERSION: 3.44.0
 
 jobs:
+  # Lightweight gate: decide which surfaces the change touches. Pure stdlib
+  # (tomllib + git diff) -- no cargo, no submodules, no compilation -- so the
+  # Rust/Flutter jobs below are skipped entirely when nothing relevant changed.
+  changes:
+    name: detect affected surfaces
+    runs-on: ubuntu-latest
+    outputs:
+      rust_mode: ${{ steps.detect.outputs.rust_mode }}
+      test_crates: ${{ steps.detect.outputs.test_crates }}
+      clippy_crates: ${{ steps.detect.outputs.clippy_crates }}
+      flutter: ${{ steps.detect.outputs.flutter }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect affected surfaces
+        id: detect
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python3 scripts/ci_affected.py detect
+
   fmt:
     name: rust fmt
+    needs: changes
+    if: needs.changes.outputs.rust_mode != 'none'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -39,7 +65,9 @@ jobs:
 
       - name: cargo fmt --check
         # Restrict to first-party crates so we don't accidentally fmt
-        # the path-dep tree (deps/uni-stream, deps/kanal, etc.).
+        # the path-dep tree (deps/uni-stream, deps/kanal, etc.). fmt is
+        # cheap and whole-crate, so we lint all five whenever any Rust
+        # surface changed rather than subsetting.
         run: |
           cargo fmt --check \
             -p pocket-codex-core \
@@ -50,6 +78,8 @@ jobs:
 
   clippy:
     name: rust clippy
+    needs: changes
+    if: needs.changes.outputs.rust_mode != 'none'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -65,11 +95,18 @@ jobs:
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
 
-      - name: Run clippy on the workspace
-        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Run clippy for affected crates
+        # subset -> clippy only the changed crates; all -> the whole
+        # workspace. See scripts/ci_affected.py.
+        env:
+          MODE: ${{ needs.changes.outputs.rust_mode }}
+          CRATES: ${{ needs.changes.outputs.clippy_crates }}
+        run: python3 scripts/ci_affected.py run-clippy
 
   test:
     name: rust test
+    needs: changes
+    if: needs.changes.outputs.rust_mode != 'none'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -83,11 +120,18 @@ jobs:
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
 
-      - name: Run workspace tests
-        run: cargo test --workspace --locked
+      - name: Run tests for affected crates
+        # subset -> the changed crates + their dependents; all -> the full
+        # workspace. See scripts/ci_affected.py.
+        env:
+          MODE: ${{ needs.changes.outputs.rust_mode }}
+          CRATES: ${{ needs.changes.outputs.test_crates }}
+        run: python3 scripts/ci_affected.py run-test
 
   flutter:
     name: flutter analyze + test
+    needs: changes
+    if: needs.changes.outputs.flutter == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -119,3 +163,24 @@ jobs:
       - name: flutter test
         working-directory: apps/flutter
         run: flutter test
+
+  # Single required status that reflects the whole run. Always runs, so a
+  # skipped Rust/Flutter job (path-filtered out) keeps the gate green, while
+  # any real failure or cancellation fails it.
+  ci-result:
+    name: CI result
+    needs: [changes, fmt, clippy, test, flutter]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify no required job failed
+        run: |
+          results="${{ needs.changes.result }} ${{ needs.fmt.result }} ${{ needs.clippy.result }} ${{ needs.test.result }} ${{ needs.flutter.result }}"
+          echo "job results: $results"
+          for r in $results; do
+            if [ "$r" = "failure" ] || [ "$r" = "cancelled" ]; then
+              echo "::error::a required job did not pass ($r)"
+              exit 1
+            fi
+          done
+          echo "all jobs passed or were skipped"
