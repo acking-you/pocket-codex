@@ -29,10 +29,6 @@ mod worker;
 
 /// Dispatch a parsed [`Cli`] invocation to the matching subcommand.
 pub async fn dispatch(cli: Cli) -> Result<()> {
-    // Apply the configured MSG_HEADER_KEY once, before any relay traffic or
-    // worker spawn, so this process and its children agree on it.
-    relay::apply_configured_key();
-
     match cli.command {
         Command::Init(args) => init::run(args).await,
         Command::Serve(args) => serve::run(args).await,

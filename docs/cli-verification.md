@@ -74,9 +74,13 @@ $PCX init --relay lb7666.top:7666 --key <32B> [--no-verify]
 `--relay` 时默认走这份配置，且会自动应用其中的 key——无需再 `export
 MSG_HEADER_KEY`。
 
-**解析优先级**：`--relay` flag > config > `$PB_MAPPER_SERVER` env。key 同理
-`config > $MSG_HEADER_KEY`。所以 init 后即便 shell 里残留旧的
-`PB_MAPPER_SERVER`，也以 config 为准。
+**解析优先级**：`--relay` flag > config > `$PB_MAPPER_SERVER` env。所以 init 后
+即便 shell 里残留旧的 `PB_MAPPER_SERVER`，也以 config 为准。
+
+**key 绑定到 config relay**：config 里的 `MSG_HEADER_KEY` 只在「实际使用的 relay
+就是 config relay」时才自动套用——即不传 `--relay`（或传的正是 config relay）。
+显式 `--relay <别的 relay>` 时不会套 config key，本次仍用你导出的
+`$MSG_HEADER_KEY`，从而保留「按次切换 relay+key」的用法。
 
 **连接超时**：发现/状态查询现在对 relay 连接有 5s 上限——指向不可达 relay 时
 ~5s 内报错，不再卡满内核 TCP 超时（~123s）。
