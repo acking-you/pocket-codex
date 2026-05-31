@@ -21,6 +21,6 @@
 pub mod session;
 
 pub use session::{
-    keys, register, service_connections, status, subscribe, RegisterOptions, StatusKind,
-    SubscribeOptions,
+    keys, register, service_connections, set_msg_header_key, status, subscribe, RegisterOptions,
+    StatusKind, SubscribeOptions,
 };

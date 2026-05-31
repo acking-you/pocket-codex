@@ -103,6 +103,21 @@ pub async fn subscribe(opts: SubscribeOptions) {
     .await;
 }
 
+/// Apply the shared `MSG_HEADER_KEY` to this process and the environment
+/// child workers inherit.
+///
+/// Thin wrapper over the upstream
+/// [`pb_mapper::common::checksum::set_process_msg_header_key`]: it both
+/// sets the `MSG_HEADER_KEY` env var (so spawned `__worker` children pick
+/// it up) and updates pb-mapper's in-process key (so calls made from this
+/// process validate too). `Some(non-empty)` must be exactly 32 bytes;
+/// `None`/empty resets to the upstream default. Errors are surfaced as
+/// `anyhow` so callers stay decoupled from pb-mapper's error type.
+pub fn set_msg_header_key(key: Option<&str>) -> Result<()> {
+    pb_mapper::common::checksum::set_process_msg_header_key(key)
+        .map_err(|err| anyhow!("applying MSG_HEADER_KEY: {err}"))
+}
+
 /// What kind of relay status query to issue.
 #[derive(Debug, Clone, Copy)]
 pub enum StatusKind {
@@ -179,6 +194,13 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+
+    #[test]
+    fn set_msg_header_key_rejects_wrong_length() {
+        // Validation happens before any global mutation, so this is safe to
+        // run in parallel: a 5-byte key can never be accepted.
+        assert!(set_msg_header_key(Some("short")).is_err());
+    }
 
     #[tokio::test]
     async fn connect_relay_errors_fast_on_unreachable_addr() {
