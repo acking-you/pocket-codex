@@ -14,6 +14,10 @@ use crate::{
 };
 
 /// Strip an optional `tcp://` scheme and validate `host:port`.
+///
+/// Splits on the last `:`, so DNS names, IPv4, and bracketed IPv6
+/// (`[::1]:7666`) work. Bare IPv6 (`::1`) is not supported — wrap it in
+/// brackets. Relay addresses in practice are DNS/IPv4.
 pub(crate) fn normalize_relay(input: &str) -> Result<String> {
     let trimmed = input.trim();
     let bare = trimmed
