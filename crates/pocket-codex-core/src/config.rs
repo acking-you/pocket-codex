@@ -8,10 +8,11 @@
 //!       codex                   pb_mapper                 services
 //!     CodexConfig              PbMapperConfig            ServicesConfig
 //!         │                         │                         │
-//!         ▼                         ▼                ┌────────┴────────┐
-//!     binary?                   relay?               ▼                 ▼
-//!     (path to                  (relay URL,        app               api
-//!      `codex` binary)           e.g. tcp://…)  ServicePreference  ServicePreference
+//!         ▼                    ┌────┴────┐          ┌────────┴────────┐
+//!     binary?               relay?     key?         ▼                 ▼
+//!     (path to           (host:port  (shared      app               api
+//!      `codex` binary)   of relay)  MSG_HEADER  ServicePreference  ServicePreference
+//!                                    _KEY)
 //!                                                   │                 │
 //!                                                   ▼                 ▼
 //!                                                default?          default?
@@ -71,7 +72,8 @@ pub struct PbMapperConfig {
 
     /// Shared 32-byte `MSG_HEADER_KEY` the relay validates every control
     /// message against. Stored here so commands default to it without an
-    /// exported environment variable.
+    /// exported environment variable. Length validation (32 bytes) lives in
+    /// the CLI layer; this field stores the value verbatim.
     pub key: Option<String>,
 }
 
@@ -121,18 +123,37 @@ impl Config {
     }
 
     /// Persist configuration to the default location. On unix the file is
-    /// written with `0o600` because it may hold the relay `MSG_HEADER_KEY`.
+    /// created with `0o600` from the start (and any pre-existing file is
+    /// tightened to `0o600`) because it may hold the relay `MSG_HEADER_KEY`.
     pub fn save(&self) -> Result<()> {
         let path = paths::config_file()?;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
         let raw = toml::to_string_pretty(self)?;
-        std::fs::write(&path, raw)?;
+
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt;
+            use std::{
+                io::Write as _,
+                os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _},
+            };
+            // `mode(0o600)` applies only when this call creates the file, so a
+            // fresh config is never briefly world/group-readable. The explicit
+            // `set_permissions` then also tightens a file that already existed
+            // (e.g. a 0644 config written by an older build).
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&path)?;
+            file.write_all(raw.as_bytes())?;
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+        }
+        #[cfg(not(unix))]
+        {
+            std::fs::write(&path, raw)?;
         }
         Ok(())
     }
@@ -237,5 +258,15 @@ mod tests {
         config.set_relay_key("");
         assert_eq!(config.relay(), None);
         assert_eq!(config.relay_key(), None);
+    }
+
+    #[test]
+    fn accessors_trim_values_loaded_from_toml() {
+        // A hand-edited config with surrounding whitespace must still resolve
+        // to the trimmed value through the read-side accessors.
+        let raw = "[pb_mapper]\nrelay = \"  lb7666.top:7666  \"\nkey = \"  abc  \"\n";
+        let config: Config = toml::from_str(raw).expect("deserialize");
+        assert_eq!(config.relay(), Some("lb7666.top:7666"));
+        assert_eq!(config.relay_key(), Some("abc"));
     }
 }
