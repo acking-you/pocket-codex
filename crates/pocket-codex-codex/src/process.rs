@@ -85,6 +85,15 @@ pub struct SpawnOptions {
     /// Log file path. When `None` the default location from
     /// [`paths::codex_log_file`] is used.
     pub log_file: Option<PathBuf>,
+
+    /// Upstream proxy injected into the child's environment so codex's
+    /// outbound HTTP (codex_apps MCP, model calls, plugin sync) and the
+    /// model WebSocket can reach chatgpt.com. When `Some`, the proxy is
+    /// written to `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` (and their
+    /// lowercase variants) for the child only. When `None`, the child
+    /// inherits the parent's environment untouched. The value is taken
+    /// verbatim; validation is the caller's responsibility.
+    pub proxy: Option<String>,
 }
 
 impl Default for SpawnOptions {
@@ -97,6 +106,7 @@ impl Default for SpawnOptions {
             },
             extra_args: Vec::new(),
             log_file: None,
+            proxy: None,
         }
     }
 }
@@ -106,6 +116,11 @@ impl Default for SpawnOptions {
 pub struct SpawnReport {
     /// Process info recorded in [`RuntimeState::codex`].
     pub info: CodexProcessInfo,
+
+    /// Whether [`spawn`] reused an already-running process instead of
+    /// starting a new one. When `true`, any spawn-time options (such as
+    /// [`SpawnOptions::proxy`]) had no effect on the live process.
+    pub reused: bool,
 }
 
 /// Spawn `codex app-server`, persist the resulting state and return a
@@ -121,6 +136,7 @@ pub fn spawn(opts: SpawnOptions) -> pocket_codex_core::Result<SpawnReport> {
             info!(pid = existing.pid, listen = %existing.listen, "codex already running");
             return Ok(SpawnReport {
                 info: existing,
+                reused: true,
             });
         } else {
             warn!(stale_pid = existing.pid, "previous codex process is gone, restarting");
@@ -153,11 +169,7 @@ pub fn spawn(opts: SpawnOptions) -> pocket_codex_core::Result<SpawnReport> {
     let listen_url = opts.listen.to_listen_url();
     debug!(?binary, %listen_url, ?log_file, "spawning codex app-server");
 
-    let child = Command::new(&binary)
-        .arg("app-server")
-        .arg("--listen")
-        .arg(&listen_url)
-        .args(&opts.extra_args)
+    let child = build_command(&binary, &listen_url, &opts.extra_args, opts.proxy.as_deref())
         .stdin(Stdio::null())
         .stdout(Stdio::from(log_handle))
         .stderr(Stdio::from(log_handle_dup))
@@ -183,7 +195,54 @@ pub fn spawn(opts: SpawnOptions) -> pocket_codex_core::Result<SpawnReport> {
     info!(pid, listen = %info.listen, "codex app-server spawned");
     Ok(SpawnReport {
         info,
+        reused: false,
     })
+}
+
+/// Build the `codex app-server` [`Command`] without spawning it or
+/// touching stdio / on-disk state.
+///
+/// When `proxy` is `Some`, the proxy URL is injected into the child's
+/// environment under `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` (and
+/// their lowercase variants) so codex's reqwest client and WebSocket
+/// tunnel both pick it up — neither reads codex's own `config.toml` for
+/// proxy settings, they only honour the process environment. As a
+/// defensive default we also seed `NO_PROXY` with the loopback hosts so
+/// the proxy never swallows codex's local app-server traffic, but only
+/// when the parent did not already provide one (we never override an
+/// inherited value). When `proxy` is `None` the child inherits the
+/// parent environment unchanged.
+fn build_command(
+    binary: &std::path::Path,
+    listen_url: &str,
+    extra_args: &[String],
+    proxy: Option<&str>,
+) -> Command {
+    let mut command = Command::new(binary);
+    command
+        .arg("app-server")
+        .arg("--listen")
+        .arg(listen_url)
+        .args(extra_args);
+
+    if let Some(raw) = proxy {
+        // Set both cases so platforms/libraries that read either form agree.
+        // On Windows env keys are case-insensitive, so the two writes simply
+        // collapse to one entry with the same value — harmless.
+        for key in
+            ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"]
+        {
+            command.env(key, raw);
+        }
+        let inherits_no_proxy =
+            std::env::var_os("NO_PROXY").is_some() || std::env::var_os("no_proxy").is_some();
+        if !inherits_no_proxy {
+            command.env("NO_PROXY", "localhost,127.0.0.1,::1");
+            command.env("no_proxy", "localhost,127.0.0.1,::1");
+        }
+    }
+
+    command
 }
 
 /// Snapshot of the current supervised process.
@@ -253,3 +312,51 @@ pub fn stop() -> pocket_codex_core::Result<StopOutcome> {
     reason = "anchors the protocol module so future refactors don't quietly drop it"
 )]
 fn _proto_anchor(_msg: _ProtocolMessage) {}
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::HashMap, ffi::OsString, path::Path};
+
+    use super::*;
+
+    /// Collect the explicitly-set environment overrides on a `Command`.
+    /// `get_envs` yields only what we set via `.env(..)`, not the
+    /// inherited parent environment, so this isolates our injection.
+    fn explicit_envs(command: &Command) -> HashMap<OsString, Option<OsString>> {
+        command
+            .get_envs()
+            .map(|(k, v)| (k.to_owned(), v.map(ToOwned::to_owned)))
+            .collect()
+    }
+
+    #[test]
+    fn build_command_injects_proxy_env_when_set() {
+        let command = build_command(
+            Path::new("codex"),
+            "ws://127.0.0.1:18080",
+            &[],
+            Some("http://127.0.0.1:11111"),
+        );
+        let envs = explicit_envs(&command);
+
+        for key in
+            ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"]
+        {
+            assert_eq!(
+                envs.get(OsString::from(key).as_os_str()),
+                Some(&Some(OsString::from("http://127.0.0.1:11111"))),
+                "expected {key} to carry the proxy value"
+            );
+        }
+    }
+
+    #[test]
+    fn build_command_leaves_env_untouched_without_proxy() {
+        let command = build_command(Path::new("codex"), "ws://127.0.0.1:18080", &[], None);
+
+        assert!(
+            explicit_envs(&command).is_empty(),
+            "no env should be set when proxy is None; child inherits the parent's"
+        );
+    }
+}

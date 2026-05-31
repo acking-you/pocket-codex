@@ -65,7 +65,30 @@ echo "len=${#MSG_HEADER_KEY}"   # 必须是 32
 
 ### 4.1 serve —— 起 codex app-server 并注册到 relay
 
+> **⚠️ 国内必读：app-server 链路同样要走代理才能到 chatgpt.com。**
+> spawn 出来的 `codex app-server` 本身就是 codex，它的**模型推理调用**、
+> **codex_apps MCP**（连 `chatgpt.com/backend-api/wham/apps`）、插件 / 分析同步
+> 都直打 chatgpt.com。这些请求只认**进程环境变量**里的代理，**不读 codex 的
+> config.toml**；被墙网络下若没代理，codex_apps bootstrap 会超时
+> （`MCP client for codex_apps timed out after 30 seconds`），模型调用一并卡死。
+>
+> 因此 `serve`（及 `codex start`）支持 `--proxy`，把解析后的代理注入子进程环境
+> （`HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` 及其小写变体）。代理来源优先级：
+> `--proxy` 显式参数 > `HTTPS_PROXY` > `ALL_PROXY` > `HTTP_PROXY` 环境变量。
+>
+> **务必用 `http://` 代理。** codex 的 reqwest 不支持 socks——`socks5://` 只能带
+> 模型 WebSocket 一条路，codex_apps / 插件等 HTTP 流量仍直连、仍会超时。`https://`
+> 代理会被拒绝。未配置任何代理时启动会打 warning。
+>
+> app-server 已在运行时再传 `--proxy` **不会自动重启**（只打 warning）：换代理需
+> 先 `pocket-codex stop`（或 `pocket-codex codex stop`）再 `serve --proxy …`。
+
 ```bash
+# 方式一：显式指定（推荐，最不易错）
+$PCX serve --relay lb7666.top:7666 --proxy http://127.0.0.1:11111
+
+# 方式二：继承环境变量（不传 --proxy）
+export https_proxy=http://127.0.0.1:11111
 $PCX serve --relay lb7666.top:7666
 ```
 
@@ -76,6 +99,7 @@ $PCX serve --relay lb7666.top:7666
     pid       ...
     listen    ws://127.0.0.1:18080
     log       .../codex-app-server.log
+    proxy     http://127.0.0.1:11111
 ✓ pb register started
     pid       ...
     key       pcx:lb7666:app:default
@@ -84,6 +108,10 @@ $PCX serve --relay lb7666.top:7666
 → client setup
     pocket-codex connect --key pcx:lb7666:app:default --relay lb7666.top:7666
 ```
+
+`codex app-server` 块里的 `proxy` 字段确认代理已注入子进程；若没传 `--proxy` 也没有
+env 代理，该字段不出现，转而向 stderr 打 `⚠ no upstream proxy configured ...`，
+子进程会直连 chatgpt.com 而失败。
 
 ### 4.2 确认注册真的落到 relay 上
 
@@ -172,8 +200,9 @@ codex --remote ws://127.0.0.1:28080
 ### 5.1 api serve —— 起本地代理并注册
 
 > **⚠️ 国内必读：API 代理必须走代理才能到 chatgpt.com。**
-> `app server` 流程不碰 `chatgpt.com`，所以无需代理；但 `api serve` 的上游是
-> `chatgpt.com/backend-api/codex`，国内直连必失败。两条上游链路都已支持代理：
+> `api serve` 的上游是 `chatgpt.com/backend-api/codex`，国内直连必失败。
+> （app-server 链路同样直打 chatgpt.com、同样需要代理，见 §4.1 的 `--proxy`，
+> 别再以为「app server 不碰 chatgpt.com」。）两条上游链路都已支持代理：
 > - **HTTP**（`reqwest`）：默认读 env 代理
 > - **WebSocket**（codex 优先走这条）：之前完全不认代理，现已修复，会走同一个代理
 >

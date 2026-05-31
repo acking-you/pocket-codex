@@ -487,6 +487,15 @@ pub(crate) fn validate_proxy(raw: &str) -> Result<()> {
     parse_proxy(raw).map(|_| ())
 }
 
+/// Report whether `raw` is a SOCKS proxy (`socks5://` / `socks5h://`).
+/// codex's reqwest client has no SOCKS support, so a SOCKS proxy only
+/// carries the model WebSocket — HTTP traffic (codex_apps, plugin sync)
+/// still goes direct. Callers use this to warn the user. Returns `false`
+/// for unparseable input; `validate_proxy` already rejects those.
+pub(crate) fn proxy_is_socks(raw: &str) -> bool {
+    Url::parse(raw).is_ok_and(|url| matches!(url.scheme(), "socks5" | "socks5h"))
+}
+
 /// Parse a proxy URL into an [`UpstreamProxy`] for the WebSocket tunnel.
 fn parse_proxy(raw: &str) -> Result<UpstreamProxy> {
     let url = Url::parse(raw).with_context(|| format!("parsing proxy URL `{raw}`"))?;

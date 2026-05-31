@@ -43,6 +43,7 @@ use pocket_codex_core::{
 use crate::{
     cli::ServeArgs,
     commands::{
+        api_proxy,
         managed_pb::{self, EnsureOutcome, PbWorkerSpec},
         ui,
     },
@@ -58,6 +59,17 @@ pub async fn run(args: ServeArgs) -> Result<()> {
         )
         .key()
     });
+
+    // Resolve the effective upstream proxy once (explicit flag or env) so we
+    // fail fast on a bad scheme and can surface it. The spawned app-server
+    // reads proxy settings only from its environment, never from codex's
+    // config.toml, so we inject it there via SpawnOptions.
+    let proxy_requested = args.proxy.is_some();
+    let effective_proxy = api_proxy::resolve_proxy(args.proxy.as_deref());
+    if let Some(raw) = effective_proxy.as_deref() {
+        api_proxy::validate_proxy(raw)?;
+    }
+
     let requested_listen = ListenSpec::WebSocket {
         host: args.host,
         port: args.port,
@@ -67,6 +79,7 @@ pub async fn run(args: ServeArgs) -> Result<()> {
         listen: requested_listen,
         extra_args: args.extra,
         log_file: None,
+        proxy: effective_proxy.clone(),
     })?;
     let local_addr = websocket_listen_addr(&report.info.listen).with_context(|| {
         format!("codex listen URL `{}` is not relayable TCP", report.info.listen)
@@ -79,7 +92,15 @@ pub async fn run(args: ServeArgs) -> Result<()> {
         relay_addr: args.relay.relay.clone(),
         codec: args.codec,
     })?;
-    print_serve_summary(&report.info, &outcome, &key, &args.relay.relay);
+    print_serve_summary(
+        &report.info,
+        &outcome,
+        &key,
+        &args.relay.relay,
+        effective_proxy.as_deref(),
+        proxy_requested,
+        report.reused,
+    );
     Ok(())
 }
 
@@ -88,14 +109,49 @@ fn print_serve_summary(
     pb: &EnsureOutcome,
     key: &str,
     relay: &str,
+    effective_proxy: Option<&str>,
+    proxy_requested: bool,
+    reused: bool,
 ) {
     ui::headline(ui::Tone::Ok, "codex app-server");
     ui::field("pid", &codex.pid.to_string());
     ui::field("listen", &codex.listen);
     ui::field("log", &codex.log_file.display().to_string());
+    print_proxy_status(effective_proxy, proxy_requested, reused);
     pb.render("pb register");
     ui::headline(ui::Tone::Action, "client setup");
     ui::code(&format!("pocket-codex connect --key {key} --relay {relay}"));
+}
+
+/// Surface the spawned app-server's proxy posture: confirm an injected
+/// proxy, warn when none is set, flag SOCKS' HTTP blind spot, and note
+/// when a `--proxy` could not take effect because the process was reused.
+fn print_proxy_status(effective: Option<&str>, proxy_requested: bool, reused: bool) {
+    match effective {
+        Some(raw) => {
+            ui::field("proxy", &api_proxy::redact_proxy(raw));
+            if api_proxy::proxy_is_socks(raw) {
+                ui::warn(
+                    "socks5 proxy carries only the model WebSocket. codex's reqwest client has \
+                     no SOCKS support, so codex_apps and plugin sync stay direct and will time \
+                     out on a blocked network. Use an `http://` proxy to fix codex_apps.",
+                );
+            }
+        },
+        None => ui::warn(
+            "no upstream proxy configured. The codex app-server reaches chatgpt.com directly and \
+             will fail on networks that block it (codex_apps bootstrap times out, model calls \
+             stall). Pass `--proxy http://host:port`, or export HTTPS_PROXY / ALL_PROXY / \
+             HTTP_PROXY before running `pocket-codex serve`.",
+        ),
+    }
+    if reused && proxy_requested {
+        ui::warn(
+            "the codex app-server was already running, so this `--proxy` did not take effect. To \
+             apply a new proxy, run `pocket-codex stop` (or `pocket-codex codex stop`) first, \
+             then `pocket-codex serve --proxy …`.",
+        );
+    }
 }
 
 fn websocket_listen_addr(listen: &str) -> Option<String> {
