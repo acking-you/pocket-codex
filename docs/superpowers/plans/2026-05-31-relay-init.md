@@ -345,25 +345,28 @@ mod tests {
 
     #[test]
     fn flag_wins_over_config_and_env() {
-        let r = resolve_relay_from(Some("flag:1"), Some("cfg:2"), Some("env:3")).unwrap();
+        let r = resolve_relay_from(Some("flag:1"), Some("cfg:2"), Some("env:3")).expect("resolves");
         assert_eq!(r, "flag:1");
     }
 
     #[test]
     fn config_wins_over_env_when_no_flag() {
-        let r = resolve_relay_from(None, Some("cfg:2"), Some("env:3")).unwrap();
+        let r = resolve_relay_from(None, Some("cfg:2"), Some("env:3")).expect("resolves");
         assert_eq!(r, "cfg:2");
     }
 
     #[test]
     fn env_used_when_no_flag_or_config() {
-        let r = resolve_relay_from(None, None, Some("env:3")).unwrap();
+        let r = resolve_relay_from(None, None, Some("env:3")).expect("resolves");
         assert_eq!(r, "env:3");
     }
 
     #[test]
     fn blank_candidates_are_skipped_then_error() {
-        assert_eq!(resolve_relay_from(Some("  "), None, Some("env:3")).unwrap(), "env:3");
+        assert_eq!(
+            resolve_relay_from(Some("  "), None, Some("env:3")).expect("falls back to env"),
+            "env:3"
+        );
         assert!(resolve_relay_from(None, None, None).is_err());
         assert!(resolve_relay_from(Some(""), Some("  "), Some("")).is_err());
     }
@@ -794,9 +797,9 @@ mod tests {
 
     #[test]
     fn normalize_relay_strips_scheme_and_keeps_host_port() {
-        assert_eq!(normalize_relay("tcp://lb7666.top:7666").unwrap(), "lb7666.top:7666");
-        assert_eq!(normalize_relay("  lb7666.top:7666  ").unwrap(), "lb7666.top:7666");
-        assert_eq!(normalize_relay("tcp://1.2.3.4:7666/").unwrap(), "1.2.3.4:7666");
+        assert_eq!(normalize_relay("tcp://lb7666.top:7666").expect("ok"), "lb7666.top:7666");
+        assert_eq!(normalize_relay("  lb7666.top:7666  ").expect("ok"), "lb7666.top:7666");
+        assert_eq!(normalize_relay("tcp://1.2.3.4:7666/").expect("ok"), "1.2.3.4:7666");
     }
 
     #[test]
@@ -810,7 +813,7 @@ mod tests {
     fn validate_key_requires_32_bytes() {
         assert!(validate_key("short").is_err());
         let ok = "0123456789abcdef0123456789abcdef";
-        assert_eq!(validate_key(ok).unwrap(), ok);
+        assert_eq!(validate_key(ok).expect("32 bytes"), ok);
         assert_eq!(ok.len(), 32);
     }
 }
