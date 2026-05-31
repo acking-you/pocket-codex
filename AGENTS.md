@@ -135,7 +135,17 @@ Use this as the default loop for any non-trivial change:
 
 ## 7. Verification commands
 
-Run these before claiming a task is done. CI runs the same set.
+Run these (the full set) before claiming a task is done. CI runs the
+same commands but **scopes them to the surfaces your change touches**: a
+gate (`scripts/ci_affected.py`, stdlib-only) computes which crates are
+affected from the diff and runs fmt/clippy/test only when a first-party
+crate changed (clippy on the changed crates, test on them plus their
+workspace dependents; a cross-cutting change — root manifest, lockfile,
+`rustfmt.toml`, `.cargo/`, `deps/`, toolchain — falls back to the whole
+workspace), and the Flutter job only when `apps/flutter/` changed. A
+change under `.github/` or `scripts/` forces the full Rust suite plus
+Flutter. So locally you always run everything below; CI may legitimately
+skip jobs your change does not touch.
 The upstream/submodule code under `deps/` is deliberately outside this
 workspace's formatting and linting contract: do not run rustfmt,
 clippy or other rewrite/lint commands against `deps/` unless the task is
