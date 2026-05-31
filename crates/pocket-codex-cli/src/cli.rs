@@ -28,6 +28,9 @@ pub struct Cli {
 /// Top-level subcommands.
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Interactively configure the default relay URL and shared key.
+    Init(InitArgs),
+
     /// Start local codex app-server and register it with a relay.
     Serve(ServeArgs),
 
@@ -66,6 +69,23 @@ pub enum Command {
     /// Internal worker entrypoints spawned by high-level commands.
     #[command(name = "__worker", hide = true, subcommand)]
     Worker(WorkerCmd),
+}
+
+/// Args for `pocket-codex init`.
+#[derive(Debug, Args)]
+pub struct InitArgs {
+    /// Relay `host:port` (or `tcp://host:port`). Prompted when omitted
+    /// on a TTY.
+    #[arg(long)]
+    pub relay: Option<String>,
+
+    /// Shared 32-byte `MSG_HEADER_KEY`. Prompted when omitted on a TTY.
+    #[arg(long)]
+    pub key: Option<String>,
+
+    /// Skip the post-save reachability check against the relay.
+    #[arg(long)]
+    pub no_verify: bool,
 }
 
 /// Args for `pocket-codex serve`.
@@ -389,10 +409,11 @@ pub enum PbCmd {
 /// Common pb-mapper relay locator.
 #[derive(Debug, Args, Clone)]
 pub struct PbRelayArgs {
-    /// `host:port` of the upstream pb-mapper relay. Falls back to
-    /// `$PB_MAPPER_SERVER` when unset (matches the pb-mapper CLIs).
-    #[arg(long, env = "PB_MAPPER_SERVER")]
-    pub relay: String,
+    /// `host:port` of the upstream pb-mapper relay. When omitted, falls
+    /// back to the configured relay (`pocket-codex init`) and then
+    /// `$PB_MAPPER_SERVER`.
+    #[arg(long)]
+    pub relay: Option<String>,
 }
 
 /// Args for `pocket-codex pb register`.
@@ -485,7 +506,7 @@ mod tests {
         assert_eq!(args.name, "default");
         assert_eq!(args.host, "127.0.0.1");
         assert_eq!(args.port, 18080);
-        assert_eq!(args.relay.relay, "relay.example:7666");
+        assert_eq!(args.relay.relay.as_deref(), Some("relay.example:7666"));
         assert!(!args.codec);
         assert!(args.codex_binary.is_none());
         assert!(args.extra.is_empty());
@@ -503,7 +524,7 @@ mod tests {
         assert!(args.device.is_none());
         assert!(args.name.is_none());
         assert_eq!(args.local_addr, "127.0.0.1:28080");
-        assert_eq!(args.relay.relay, "relay.example:7666");
+        assert_eq!(args.relay.relay.as_deref(), Some("relay.example:7666"));
     }
 
     #[test]
@@ -520,7 +541,7 @@ mod tests {
         assert_eq!(args.name, "default");
         assert_eq!(args.host, "127.0.0.1");
         assert_eq!(args.port, 18180);
-        assert_eq!(args.relay.relay, "relay.example:7666");
+        assert_eq!(args.relay.relay.as_deref(), Some("relay.example:7666"));
     }
 
     #[test]
@@ -569,7 +590,7 @@ mod tests {
 
         assert_eq!(args.key, "demo");
         assert_eq!(args.local_addr, "127.0.0.1:18080");
-        assert_eq!(args.relay.relay, "relay.example:7666");
+        assert_eq!(args.relay.relay.as_deref(), Some("relay.example:7666"));
         assert!(args.codec);
     }
 
@@ -584,6 +605,25 @@ mod tests {
 
         assert_eq!(args.key.as_deref(), Some("codex"));
         assert_eq!(args.role.map(PbRole::from), Some(PbRole::Subscribe));
+    }
+
+    #[test]
+    fn init_parses_relay_key_and_no_verify() {
+        let cli = Cli::parse_from([
+            "pocket-codex",
+            "init",
+            "--relay",
+            "lb7666.top:7666",
+            "--key",
+            "0123456789abcdef0123456789abcdef",
+            "--no-verify",
+        ]);
+        let Command::Init(args) = cli.command else {
+            panic!("expected init command");
+        };
+        assert_eq!(args.relay.as_deref(), Some("lb7666.top:7666"));
+        assert_eq!(args.key.as_deref(), Some("0123456789abcdef0123456789abcdef"));
+        assert!(args.no_verify);
     }
 
     #[test]

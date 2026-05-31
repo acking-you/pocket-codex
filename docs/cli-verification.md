@@ -58,6 +58,36 @@ echo "len=${#MSG_HEADER_KEY}"   # 必须是 32
 > 这是排查失败的第一嫌疑。忘记 export，或 key 不是 32 字节，是最常见的"命令成功但
 > 隧道不通"原因。
 
+（已 `init` 配好 relay 和 key 的话，本节的手动 export 可跳过——`init` 会把 key 写入
+config，之后所有命令自动读取，无需每次 export。）
+
+## 3.1. 一次性初始化 relay（推荐先做）
+
+```bash
+$PCX init
+# 交互填入：relay host:port、32 字节 MSG_HEADER_KEY
+# 或非交互：
+$PCX init --relay lb7666.top:7666 --key <32B> [--no-verify]
+```
+
+写入 `~/.config/pocket-codex/config.toml`（unix 下 0600）。之后所有命令在不带
+`--relay` 时默认走这份配置，且会自动应用其中的 key——无需再 `export
+MSG_HEADER_KEY`。
+
+**解析优先级**：`--relay` flag > config > `$PB_MAPPER_SERVER` env。所以 init 后
+即便 shell 里残留旧的 `PB_MAPPER_SERVER`，也以 config 为准。
+
+**key 绑定到 config relay**：config 里的 `MSG_HEADER_KEY` 只在「实际使用的 relay
+就是 config relay」时才自动套用——即不传 `--relay`（或传的正是 config relay）。
+显式 `--relay <别的 relay>` 时不会套 config key，本次仍用你导出的
+`$MSG_HEADER_KEY`，从而保留「按次切换 relay+key」的用法。
+
+**连接超时**：发现/状态查询现在对 relay 连接有 5s 上限——指向不可达 relay 时
+~5s 内报错，不再卡满内核 TCP 超时（~123s）。
+
+`init` 默认存盘前会连一次 relay 校验（✓ 列出服务数 / ✗ 报错不存盘）；relay
+临时不可达时可加 `--no-verify` 跳过。
+
 ## 4. app-server 流程（serve → connect → codex --remote）
 
 单机演双角色：`serve` 注册本地 app-server 到 relay，`connect` 再从 relay 订阅回来，

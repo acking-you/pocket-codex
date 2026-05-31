@@ -27,7 +27,7 @@
 //! TCP, never UDP). Should we ever need UDP we can extend this module
 //! with a parallel set of helpers.
 
-use std::{net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::{anyhow, Context, Result};
 use pb_mapper::{
@@ -40,7 +40,7 @@ use pb_mapper::{
         server::run_server_side_cli,
     },
 };
-use tokio::net::TcpStream;
+use tokio::{net::TcpStream, time::timeout};
 use uni_stream::stream::{TcpListenerProvider, TcpStreamProvider};
 
 /// Options for registering a local TCP service with a remote relay.
@@ -103,6 +103,21 @@ pub async fn subscribe(opts: SubscribeOptions) {
     .await;
 }
 
+/// Apply the shared `MSG_HEADER_KEY` to this process and the environment
+/// child workers inherit.
+///
+/// Thin wrapper over the upstream
+/// [`pb_mapper::common::checksum::set_process_msg_header_key`]: it both
+/// sets the `MSG_HEADER_KEY` env var (so spawned `__worker` children pick
+/// it up) and updates pb-mapper's in-process key (so calls made from this
+/// process validate too). `Some(non-empty)` must be exactly 32 bytes;
+/// `None`/empty resets to the upstream default. Errors are surfaced as
+/// `anyhow` so callers stay decoupled from pb-mapper's error type.
+pub fn set_msg_header_key(key: Option<&str>) -> Result<()> {
+    pb_mapper::common::checksum::set_process_msg_header_key(key)
+        .map_err(|err| anyhow!("applying MSG_HEADER_KEY: {err}"))
+}
+
 /// What kind of relay status query to issue.
 #[derive(Debug, Clone, Copy)]
 pub enum StatusKind {
@@ -151,11 +166,54 @@ pub async fn service_connections(
     }
 }
 
+/// Default bound for establishing the relay control connection. Without
+/// it, a dead/black-holed relay makes `TcpStream::connect` hang on the
+/// kernel SYN retry budget (~123s) and the CLI looks frozen.
+const RELAY_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Connect to the relay, bounding the attempt by `dur`. Split out so the
+/// timeout behaviour is unit-testable without a real dead relay.
+async fn connect_relay(relay_addr: SocketAddr, dur: Duration) -> Result<TcpStream> {
+    match timeout(dur, TcpStream::connect(relay_addr)).await {
+        Ok(result) => result.with_context(|| format!("connecting to pb-mapper relay {relay_addr}")),
+        Err(_) => {
+            Err(anyhow!("connecting to pb-mapper relay {relay_addr} timed out after {dur:?}"))
+        },
+    }
+}
+
 async fn query_status(relay_addr: SocketAddr, req: PbConnStatusReq) -> Result<PbConnStatusResp> {
-    let mut stream = TcpStream::connect(relay_addr)
-        .await
-        .with_context(|| format!("connecting to pb-mapper relay {relay_addr}"))?;
+    let mut stream = connect_relay(relay_addr, RELAY_CONNECT_TIMEOUT).await?;
     get_status(&mut stream, req)
         .await
         .map_err(|err| anyhow!("querying pb-mapper relay status: {err}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+
+    #[test]
+    fn set_msg_header_key_rejects_wrong_length() {
+        // Validation happens before any global mutation, so this is safe to
+        // run in parallel: a 5-byte key can never be accepted.
+        assert!(set_msg_header_key(Some("short")).is_err());
+    }
+
+    #[tokio::test]
+    async fn connect_relay_errors_fast_on_unreachable_addr() {
+        // 192.0.2.1 is RFC 5737 TEST-NET-1: routable-looking but black-holed,
+        // so connect() neither succeeds nor RSTs quickly. Bound it ourselves.
+        let addr: SocketAddr = "192.0.2.1:7666".parse().expect("addr");
+        let result = tokio::time::timeout(
+            Duration::from_secs(3),
+            connect_relay(addr, Duration::from_millis(200)),
+        )
+        .await;
+        // Outer timeout must NOT fire: connect_relay's own bound returns first.
+        let inner = result.expect("connect_relay hung past its own timeout");
+        assert!(inner.is_err(), "expected a connect error/timeout, got Ok");
+    }
 }

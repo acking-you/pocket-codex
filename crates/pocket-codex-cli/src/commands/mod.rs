@@ -12,9 +12,11 @@ mod api;
 mod api_proxy;
 mod codex;
 mod connect;
+mod init;
 mod managed_api;
 mod managed_pb;
 mod pb;
+mod relay;
 mod remote_hint;
 mod serve;
 mod service_target;
@@ -28,6 +30,7 @@ mod worker;
 /// Dispatch a parsed [`Cli`] invocation to the matching subcommand.
 pub async fn dispatch(cli: Cli) -> Result<()> {
     match cli.command {
+        Command::Init(args) => init::run(args).await,
         Command::Serve(args) => serve::run(args).await,
         Command::Connect(args) => connect::run(args).await,
         Command::Api(cmd) => api::run(cmd).await,

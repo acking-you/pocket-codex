@@ -67,6 +67,9 @@ fn serve(args: ApiServeArgs) -> Result<()> {
     }
     let proxy_signature = effective_proxy.as_deref().map(api_proxy::redact_proxy);
 
+    let config = Config::load()?;
+    let relay = crate::commands::relay::resolve_relay(args.relay.relay.as_deref(), &config)?;
+
     let api_outcome = managed_api::ensure(ApiWorkerSpec {
         key: key.clone(),
         local_addr: local_addr.clone(),
@@ -77,16 +80,10 @@ fn serve(args: ApiServeArgs) -> Result<()> {
         role: PbRole::Register,
         key: key.clone(),
         local_addr,
-        relay_addr: args.relay.relay.clone(),
+        relay_addr: relay.clone(),
         codec: args.codec,
     })?;
-    print_serve_summary(
-        &api_outcome,
-        &pb_outcome,
-        &key,
-        &args.relay.relay,
-        effective_proxy.as_deref(),
-    );
+    print_serve_summary(&api_outcome, &pb_outcome, &key, &relay, effective_proxy.as_deref());
     Ok(())
 }
 
@@ -98,11 +95,12 @@ async fn connect(args: ApiConnectArgs) -> Result<()> {
     };
     let needs_discovery = request.key.is_none() && request.device.is_none();
     let config = Config::load()?;
+    let relay = crate::commands::relay::resolve_relay(args.relay.relay.as_deref(), &config)?;
     let state = RuntimeState::load()?;
     let has_local_default = config.default_service(ServiceKind::Api).is_some()
         || state.selected_service(ServiceKind::Api).is_some();
     let discovered = if needs_discovery && !has_local_default {
-        discover_services(&args.relay.relay).await?
+        discover_services(&relay).await?
     } else {
         Vec::new()
     };
@@ -111,7 +109,7 @@ async fn connect(args: ApiConnectArgs) -> Result<()> {
         role: PbRole::Subscribe,
         key: target.key,
         local_addr: args.local_addr,
-        relay_addr: args.relay.relay,
+        relay_addr: relay,
         codec: false,
     })?;
     if let Some(service_id) = target.service_id {

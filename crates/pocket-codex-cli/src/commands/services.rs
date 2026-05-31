@@ -19,7 +19,9 @@ pub async fn run(cmd: ServicesCmd) -> Result<()> {
 
 async fn list(args: ServicesListArgs) -> Result<()> {
     let kind = args.kind.map(ServiceKind::from);
-    let mut services = discover_services(&args.relay.relay).await?;
+    let config = pocket_codex_core::config::Config::load()?;
+    let relay = crate::commands::relay::resolve_relay(args.relay.relay.as_deref(), &config)?;
+    let mut services = discover_services(&relay).await?;
     services.retain(|id| kind.is_none_or(|kind| id.kind == kind));
     services.sort_by_key(|id| id.key());
 

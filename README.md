@@ -53,7 +53,7 @@ reaches it through the relay.**
 | Area                           | State                                  |
 | ------------------------------ | -------------------------------------- |
 | Workspace / lints / CI         | bootstrapped                           |
-| `pocket-codex` CLI             | `serve`, `connect`, `api {serve,connect}`, `services {list,default set}`, top-level `status`/`stop`, `codex {start,stop,status}`, `pb {register,subscribe,status}`, `remote-hint`, `version` |
+| `pocket-codex` CLI             | `init`, `serve`, `connect`, `api {serve,connect}`, `services {list,default set}`, top-level `status`/`stop`, `codex {start,stop,status}`, `pb {register,subscribe,status}`, `remote-hint`, `version` |
 | `pb-mapper` register/subscribe | wired through `deps/pb-mapper`         |
 | `codex app-server` supervision | spawn/stop/status via PID + state.toml |
 | Direct Responses API proxy     | local HTTP/WS proxy registered through pb-mapper |
@@ -61,6 +61,11 @@ reaches it through the relay.**
 
 The first usable milestone now covers multi-device CLI flows:
 
+- `pocket-codex init [--relay <host:port>] [--key <32B>]` persists the
+  default relay address and shared `MSG_HEADER_KEY` to
+  `~/.config/pocket-codex/config.toml` (0600 on Unix). All subsequent
+  commands default to this config (precedence: `--relay` flag > config >
+  `$PB_MAPPER_SERVER`); `--relay` still overrides per-invocation.
 - `pocket-codex serve --relay <host:port>` starts or reuses the local
   `codex app-server`, registers it as `pcx:<device>:app:<name>` and
   prints the matching client-side command.
@@ -129,6 +134,7 @@ A working `codex` binary is expected to exist on `$PATH`; Pocket-Codex
 does **not** vendor a model runtime. The CLI exposes:
 
 ```text
+pocket-codex init
 pocket-codex serve
 pocket-codex connect
 pocket-codex api      serve | connect
