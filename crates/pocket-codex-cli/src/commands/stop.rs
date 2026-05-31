@@ -8,6 +8,7 @@ use crate::{
     commands::{
         managed_api::{self, StopOutcome as ApiStopOutcome},
         managed_pb::{self, StopFilter, StopOutcome as PbStopOutcome},
+        ui,
     },
 };
 
@@ -29,16 +30,20 @@ pub fn run(args: StopArgs) -> Result<()> {
 
 fn print_api_stops(outcomes: Vec<ApiStopOutcome>) {
     if outcomes.is_empty() {
-        println!("api: no managed sessions");
+        ui::muted("api: no managed sessions");
         return;
     }
     for outcome in outcomes {
         match outcome {
             ApiStopOutcome::Stopped(session) => {
-                println!("api proxy: sent SIGTERM to pid {} key={}", session.pid, session.key)
+                ui::headline(ui::Tone::Ok, "api proxy stopped");
+                ui::field("pid", &session.pid.to_string());
+                ui::field("key", &session.key);
             },
             ApiStopOutcome::Stale(session) => {
-                println!("api proxy: stale pid {} cleared key={}", session.pid, session.key)
+                ui::headline(ui::Tone::Muted, "api proxy stale cleared");
+                ui::field("pid", &session.pid.to_string());
+                ui::field("key", &session.key);
             },
         }
     }
@@ -46,36 +51,44 @@ fn print_api_stops(outcomes: Vec<ApiStopOutcome>) {
 
 fn print_codex_stop(outcome: CodexStopOutcome) {
     match outcome {
-        CodexStopOutcome::NoRecord => println!("codex: not managed"),
+        CodexStopOutcome::NoRecord => ui::muted("codex: not managed"),
         CodexStopOutcome::StaleRecord {
             pid,
-        } => println!("codex: stale pid {pid} cleared"),
+        } => {
+            ui::headline(ui::Tone::Muted, "codex stale cleared");
+            ui::field("pid", &pid.to_string());
+        },
         CodexStopOutcome::Stopped {
             pid,
-        } => println!("codex: sent SIGTERM to pid {pid}"),
+        } => {
+            ui::headline(ui::Tone::Ok, "codex stopped");
+            ui::field("pid", &pid.to_string());
+        },
     }
 }
 
 fn print_pb_stops(outcomes: Vec<PbStopOutcome>, filtered: bool) {
     if outcomes.is_empty() {
         if filtered {
-            println!("pb: no matching managed sessions");
+            ui::muted("pb: no matching managed sessions");
         } else {
-            println!("pb: no managed sessions");
+            ui::muted("pb: no managed sessions");
         }
         return;
     }
 
     for outcome in outcomes {
         match outcome {
-            PbStopOutcome::Stopped(session) => println!(
-                "pb {:?}: sent SIGTERM to pid {} key={}",
-                session.role, session.pid, session.key
-            ),
-            PbStopOutcome::Stale(session) => println!(
-                "pb {:?}: stale pid {} cleared key={}",
-                session.role, session.pid, session.key
-            ),
+            PbStopOutcome::Stopped(session) => {
+                ui::headline(ui::Tone::Ok, &format!("pb {} stopped", session.role));
+                ui::field("pid", &session.pid.to_string());
+                ui::field("key", &session.key);
+            },
+            PbStopOutcome::Stale(session) => {
+                ui::headline(ui::Tone::Muted, &format!("pb {} stale cleared", session.role));
+                ui::field("pid", &session.pid.to_string());
+                ui::field("key", &session.key);
+            },
         }
     }
 }

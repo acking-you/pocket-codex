@@ -44,6 +44,8 @@ use pocket_codex_core::{
     state::{PbRole, PbSessionInfo, RuntimeState},
 };
 
+use crate::commands::ui;
+
 /// A pb-mapper worker process Pocket-Codex should supervise.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PbWorkerSpec {
@@ -73,6 +75,39 @@ pub(crate) enum EnsureOutcome {
     },
     /// A new worker was spawned.
     Spawned(PbSessionInfo),
+}
+
+impl EnsureOutcome {
+    /// Render this outcome as a styled headline plus key/relay/log
+    /// fields and return the underlying session, so the four pb call
+    /// sites (`serve` / `connect` / `api serve` / `api connect`) share
+    /// one presentation. `verb` is the worker role phrase, e.g.
+    /// `"pb register"` or `"pb subscribe"`.
+    pub(crate) fn render(&self, verb: &str) -> &PbSessionInfo {
+        let session = match self {
+            EnsureOutcome::Reused(session) => {
+                ui::headline(ui::Tone::Ok, &format!("{verb} reused"));
+                session
+            },
+            EnsureOutcome::Replaced {
+                stale_pid,
+                session,
+            } => {
+                ui::headline(ui::Tone::Change, &format!("{verb} replaced"));
+                ui::field("stale pid", &stale_pid.to_string());
+                session
+            },
+            EnsureOutcome::Spawned(session) => {
+                ui::headline(ui::Tone::Ok, &format!("{verb} started"));
+                session
+            },
+        };
+        ui::field("pid", &session.pid.to_string());
+        ui::field("key", &session.key);
+        ui::field("relay", &session.relay_addr);
+        ui::field("log", &session.log_file.display().to_string());
+        session
+    }
 }
 
 /// Outcome of stopping one recorded worker.

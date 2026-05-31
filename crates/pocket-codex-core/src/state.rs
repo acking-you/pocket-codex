@@ -31,7 +31,10 @@
 //! `connect` / `api connect` when no explicit target and no
 //! `config.toml` default is set.
 
-use std::path::{Path, PathBuf};
+use std::{
+    fmt,
+    path::{Path, PathBuf},
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -92,6 +95,24 @@ pub enum PbRole {
 
     /// Remote service is exposed locally (subscriber side).
     Subscribe,
+}
+
+impl PbRole {
+    /// Lowercase word for this role, matching the serde wire form. Used
+    /// both as the on-disk key segment and in user-facing CLI output so
+    /// `status` and `stop` print the role identically.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Register => "register",
+            Self::Subscribe => "subscribe",
+        }
+    }
+}
+
+impl fmt::Display for PbRole {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 /// Recorded metadata for a single pb-mapper session.

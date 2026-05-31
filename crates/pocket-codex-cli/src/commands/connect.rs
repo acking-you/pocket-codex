@@ -46,6 +46,7 @@ use crate::{
     commands::{
         managed_pb::{self, EnsureOutcome, PbWorkerSpec},
         service_target::{choose_target, discover_services, TargetRequest},
+        ui,
     },
 };
 
@@ -84,43 +85,9 @@ pub async fn run(args: ConnectArgs) -> Result<()> {
 }
 
 fn print_connect_summary(outcome: &EnsureOutcome) {
-    let session = match outcome {
-        EnsureOutcome::Reused(session) => {
-            println!(
-                "pb subscribe reused: pid={} key={} relay={} log={}",
-                session.pid,
-                session.key,
-                session.relay_addr,
-                session.log_file.display()
-            );
-            session
-        },
-        EnsureOutcome::Replaced {
-            stale_pid,
-            session,
-        } => {
-            println!(
-                "pb subscribe replaced stale pid {} with pid={} key={} relay={} log={}",
-                stale_pid,
-                session.pid,
-                session.key,
-                session.relay_addr,
-                session.log_file.display()
-            );
-            session
-        },
-        EnsureOutcome::Spawned(session) => {
-            println!(
-                "pb subscribe started: pid={} key={} relay={} log={}",
-                session.pid,
-                session.key,
-                session.relay_addr,
-                session.log_file.display()
-            );
-            session
-        },
-    };
-    println!("codex remote: {}", codex_remote_command(&session.local_addr));
+    let session = outcome.render("pb subscribe");
+    ui::headline(ui::Tone::Action, "codex remote");
+    ui::code(&codex_remote_command(&session.local_addr));
 }
 
 pub(crate) fn remote_ws_url(local_addr: &str) -> String {

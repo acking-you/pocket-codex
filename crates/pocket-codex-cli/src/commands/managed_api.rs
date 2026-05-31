@@ -41,6 +41,8 @@ use pocket_codex_core::{
     state::{ApiProxyInfo, RuntimeState},
 };
 
+use crate::commands::ui;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ApiWorkerSpec {
     pub key: String,
@@ -59,6 +61,36 @@ pub(crate) enum EnsureOutcome {
     Reused(ApiProxyInfo),
     Replaced { stale_pid: u32, session: ApiProxyInfo },
     Spawned(ApiProxyInfo),
+}
+
+impl EnsureOutcome {
+    /// Render this outcome as a styled headline plus pid/listen/log
+    /// fields and return the underlying session, mirroring the pb-mapper
+    /// presentation so `api serve` reads consistently.
+    pub(crate) fn render(&self) -> &ApiProxyInfo {
+        let session = match self {
+            EnsureOutcome::Reused(session) => {
+                ui::headline(ui::Tone::Ok, "api proxy reused");
+                session
+            },
+            EnsureOutcome::Replaced {
+                stale_pid,
+                session,
+            } => {
+                ui::headline(ui::Tone::Change, "api proxy replaced");
+                ui::field("stale pid", &stale_pid.to_string());
+                session
+            },
+            EnsureOutcome::Spawned(session) => {
+                ui::headline(ui::Tone::Ok, "api proxy started");
+                session
+            },
+        };
+        ui::field("pid", &session.pid.to_string());
+        ui::field("listen", &session.local_addr);
+        ui::field("log", &session.log_file.display().to_string());
+        session
+    }
 }
 
 #[derive(Debug, Clone)]

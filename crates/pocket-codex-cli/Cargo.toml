@@ -40,3 +40,6 @@ tokio-tungstenite = { workspace = true }
 tokio-socks = { workspace = true }
 rustls = { workspace = true }
 url = { workspace = true }
+comfy-table = { workspace = true }
+owo-colors = { workspace = true }
+crossterm = { workspace = true }
