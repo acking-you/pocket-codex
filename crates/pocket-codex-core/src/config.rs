@@ -65,9 +65,14 @@ pub struct CodexConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PbMapperConfig {
-    /// URL of the upstream `pb-mapper` relay (e.g.
-    /// `tcp://relay.example.com:7800`).
+    /// Bare `host:port` of the upstream `pb-mapper` relay
+    /// (e.g. `relay.example.com:7666`).
     pub relay: Option<String>,
+
+    /// Shared 32-byte `MSG_HEADER_KEY` the relay validates every control
+    /// message against. Stored here so commands default to it without an
+    /// exported environment variable.
+    pub key: Option<String>,
 }
 
 /// User-configured service preferences.
@@ -115,14 +120,20 @@ impl Config {
         }
     }
 
-    /// Persist configuration to the default location.
+    /// Persist configuration to the default location. On unix the file is
+    /// written with `0o600` because it may hold the relay `MSG_HEADER_KEY`.
     pub fn save(&self) -> Result<()> {
         let path = paths::config_file()?;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
         let raw = toml::to_string_pretty(self)?;
-        std::fs::write(path, raw)?;
+        std::fs::write(&path, raw)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+        }
         Ok(())
     }
 
@@ -150,6 +161,36 @@ impl Config {
             ServiceKind::Api => self.services.api.default = Some(target),
         }
     }
+
+    /// Configured relay `host:port`, or `None` when unset/blank.
+    pub fn relay(&self) -> Option<&str> {
+        self.pb_mapper
+            .relay
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+    }
+
+    /// Configured `MSG_HEADER_KEY`, or `None` when unset/blank.
+    pub fn relay_key(&self) -> Option<&str> {
+        self.pb_mapper
+            .key
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+    }
+
+    /// Set the relay `host:port`. A blank value clears it.
+    pub fn set_relay(&mut self, relay: impl AsRef<str>) {
+        let trimmed = relay.as_ref().trim();
+        self.pb_mapper.relay = (!trimmed.is_empty()).then(|| trimmed.to_string());
+    }
+
+    /// Set the shared `MSG_HEADER_KEY`. A blank value clears it.
+    pub fn set_relay_key(&mut self, key: impl AsRef<str>) {
+        let trimmed = key.as_ref().trim();
+        self.pb_mapper.key = (!trimmed.is_empty()).then(|| trimmed.to_string());
+    }
 }
 
 #[cfg(test)]
@@ -169,5 +210,32 @@ mod tests {
         assert_eq!(target.device, "studio");
         assert_eq!(target.name, "work");
         assert!(config.default_service(ServiceKind::Api).is_none());
+    }
+
+    #[test]
+    fn relay_and_key_roundtrip_in_config() {
+        let mut config = Config::default();
+        assert_eq!(config.relay(), None);
+        assert_eq!(config.relay_key(), None);
+
+        config.set_relay("lb7666.top:7666");
+        config.set_relay_key("0123456789abcdef0123456789abcdef");
+
+        assert_eq!(config.relay(), Some("lb7666.top:7666"));
+        assert_eq!(config.relay_key(), Some("0123456789abcdef0123456789abcdef"));
+
+        let raw = toml::to_string_pretty(&config).expect("serialize");
+        let reloaded: Config = toml::from_str(&raw).expect("deserialize");
+        assert_eq!(reloaded.relay(), Some("lb7666.top:7666"));
+        assert_eq!(reloaded.relay_key(), Some("0123456789abcdef0123456789abcdef"));
+    }
+
+    #[test]
+    fn empty_relay_or_key_is_treated_as_unset() {
+        let mut config = Config::default();
+        config.set_relay("   ");
+        config.set_relay_key("");
+        assert_eq!(config.relay(), None);
+        assert_eq!(config.relay_key(), None);
     }
 }
