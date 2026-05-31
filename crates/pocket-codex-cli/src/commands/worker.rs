@@ -12,7 +12,10 @@ use crate::{cli::WorkerCmd, commands::api_proxy};
 pub async fn run(cmd: WorkerCmd) -> Result<()> {
     match cmd {
         WorkerCmd::PbRegister(args) => {
-            let config = Config::load()?;
+            // The parent always passes `--relay`, so config is only consulted
+            // for parity with other commands; load it best-effort so a broken
+            // config.toml can't fail a worker that never needs it.
+            let config = Config::load().unwrap_or_default();
             let relay =
                 crate::commands::relay::resolve_relay(args.relay.relay.as_deref(), &config)?;
             pb_register(RegisterOptions {
@@ -24,7 +27,10 @@ pub async fn run(cmd: WorkerCmd) -> Result<()> {
             .await;
         },
         WorkerCmd::PbSubscribe(args) => {
-            let config = Config::load()?;
+            // The parent always passes `--relay`, so config is only consulted
+            // for parity with other commands; load it best-effort so a broken
+            // config.toml can't fail a worker that never needs it.
+            let config = Config::load().unwrap_or_default();
             let relay =
                 crate::commands::relay::resolve_relay(args.relay.relay.as_deref(), &config)?;
             pb_subscribe(SubscribeOptions {
