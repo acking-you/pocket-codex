@@ -61,6 +61,8 @@ use tokio_tungstenite::{
 };
 use url::Url;
 
+use super::ui;
+
 const CHATGPT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
 
 #[derive(Clone)]
@@ -492,8 +494,96 @@ pub(crate) fn validate_proxy(raw: &str) -> Result<()> {
 /// carries the model WebSocket — HTTP traffic (codex_apps, plugin sync)
 /// still goes direct. Callers use this to warn the user. Returns `false`
 /// for unparseable input; `validate_proxy` already rejects those.
-pub(crate) fn proxy_is_socks(raw: &str) -> bool {
+fn proxy_is_socks(raw: &str) -> bool {
     Url::parse(raw).is_ok_and(|url| matches!(url.scheme(), "socks5" | "socks5h"))
+}
+
+/// Which spawn command surfaced an app-server proxy, used to tailor the
+/// no-proxy / reuse warnings with the right command names.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum SpawnCommand {
+    /// `pocket-codex serve`.
+    Serve,
+    /// `pocket-codex codex start`.
+    CodexStart,
+}
+
+impl SpawnCommand {
+    /// Invocation a user would rerun with `--proxy`.
+    fn invocation(self) -> &'static str {
+        match self {
+            Self::Serve => "pocket-codex serve",
+            Self::CodexStart => "pocket-codex codex start",
+        }
+    }
+
+    /// Stop command(s) that clear the supervised app-server before a
+    /// proxy change can take effect on the next spawn.
+    fn stop_hint(self) -> &'static str {
+        match self {
+            Self::Serve => "`pocket-codex stop` (or `pocket-codex codex stop`)",
+            Self::CodexStart => "`pocket-codex codex stop`",
+        }
+    }
+}
+
+/// Resolve the effective upstream proxy for a spawned `codex app-server`
+/// (explicit `--proxy` wins, then the standard proxy env vars) and
+/// validate **only** an explicit `--proxy`.
+///
+/// Env-derived proxies are intentionally not validated here: when an
+/// app-server is already alive, [`pocket_codex_codex::spawn`] reuses it
+/// and never consumes the proxy, so failing fast on an inherited (and
+/// possibly unsupported, e.g. `https://`) env value would needlessly
+/// break the reuse path. An explicit `--proxy` is the user asking us to
+/// use it now, so a bad scheme there is still a hard error.
+pub(crate) fn resolve_app_server_proxy(explicit: Option<&str>) -> Result<Option<String>> {
+    let effective = resolve_proxy(explicit);
+    let explicit_nonempty = explicit.map(str::trim).is_some_and(|v| !v.is_empty());
+    if explicit_nonempty {
+        if let Some(raw) = effective.as_deref() {
+            validate_proxy(raw)?;
+        }
+    }
+    Ok(effective)
+}
+
+/// Surface a spawned app-server's proxy posture: confirm an injected
+/// proxy, warn when none is set, flag SOCKS' HTTP blind spot, and note
+/// when a `--proxy` could not take effect because the process was reused.
+pub(crate) fn print_proxy_status(
+    effective: Option<&str>,
+    proxy_requested: bool,
+    reused: bool,
+    command: SpawnCommand,
+) {
+    match effective {
+        Some(raw) => {
+            ui::field("proxy", &redact_proxy(raw));
+            if proxy_is_socks(raw) {
+                ui::warn(
+                    "socks5 proxy carries only the model WebSocket. codex's reqwest client has \
+                     no SOCKS support, so codex_apps and plugin sync stay direct and will time \
+                     out on a blocked network. Use an `http://` proxy to fix codex_apps.",
+                );
+            }
+        },
+        None => ui::warn(&format!(
+            "no upstream proxy configured. The codex app-server reaches chatgpt.com directly and \
+             will fail on networks that block it (codex_apps bootstrap times out, model calls \
+             stall). Pass `--proxy http://host:port`, or export HTTPS_PROXY / ALL_PROXY / \
+             HTTP_PROXY before running `{}`.",
+            command.invocation()
+        )),
+    }
+    if reused && proxy_requested {
+        ui::warn(&format!(
+            "the codex app-server was already running, so this `--proxy` did not take effect. To \
+             apply a new proxy, run {} first, then `{} --proxy …`.",
+            command.stop_hint(),
+            command.invocation()
+        ));
+    }
 }
 
 /// Parse a proxy URL into an [`UpstreamProxy`] for the WebSocket tunnel.
@@ -677,5 +767,33 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(cookies, vec!["a=1", "b=2"]);
+    }
+
+    #[test]
+    fn resolve_app_server_proxy_validates_explicit_bad_scheme() {
+        // An explicit `--proxy` with an unsupported scheme is a hard error:
+        // the user asked us to use it now.
+        assert!(resolve_app_server_proxy(Some("https://proxy.example:8443")).is_err());
+        assert!(resolve_app_server_proxy(Some("ftp://nope")).is_err());
+    }
+
+    #[test]
+    fn resolve_app_server_proxy_accepts_explicit_supported_schemes() {
+        assert_eq!(
+            resolve_app_server_proxy(Some("http://127.0.0.1:11111")).expect("http ok"),
+            Some("http://127.0.0.1:11111".to_string())
+        );
+        assert_eq!(
+            resolve_app_server_proxy(Some("socks5://127.0.0.1:1080")).expect("socks ok"),
+            Some("socks5://127.0.0.1:1080".to_string())
+        );
+    }
+
+    #[test]
+    fn proxy_is_socks_detects_socks_schemes() {
+        assert!(proxy_is_socks("socks5://127.0.0.1:1080"));
+        assert!(proxy_is_socks("socks5h://127.0.0.1:1080"));
+        assert!(!proxy_is_socks("http://127.0.0.1:11111"));
+        assert!(!proxy_is_socks("not a url"));
     }
 }

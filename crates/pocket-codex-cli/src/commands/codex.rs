@@ -23,12 +23,10 @@ fn start(args: CodexStartArgs) -> Result<()> {
 
     // The spawned app-server reads proxy settings only from its environment,
     // never from codex's config.toml, so resolve the effective proxy (explicit
-    // flag or env), fail fast on a bad scheme, and inject it via SpawnOptions.
+    // flag or env) and inject it via SpawnOptions. Only an explicit `--proxy`
+    // is validated eagerly (see resolve_app_server_proxy).
     let proxy_requested = args.proxy.is_some();
-    let effective_proxy = api_proxy::resolve_proxy(args.proxy.as_deref());
-    if let Some(raw) = effective_proxy.as_deref() {
-        api_proxy::validate_proxy(raw)?;
-    }
+    let effective_proxy = api_proxy::resolve_app_server_proxy(args.proxy.as_deref())?;
 
     let opts = SpawnOptions {
         binary: args.binary,
@@ -45,43 +43,17 @@ fn start(args: CodexStartArgs) -> Result<()> {
     ui::field("pid", &report.info.pid.to_string());
     ui::field("listen", &report.info.listen);
     ui::field("log", &report.info.log_file.display().to_string());
-    print_proxy_status(effective_proxy.as_deref(), proxy_requested, report.reused);
+    api_proxy::print_proxy_status(
+        effective_proxy.as_deref(),
+        proxy_requested,
+        report.reused,
+        api_proxy::SpawnCommand::CodexStart,
+    );
     ui::headline(ui::Tone::Action, "next step");
     ui::code(&format!(
         "pocket-codex pb register --key codex --local-addr {host}:{port} --relay <relay-host:7666>"
     ));
     Ok(())
-}
-
-/// Surface the spawned app-server's proxy posture: confirm an injected
-/// proxy, warn when none is set, flag SOCKS' HTTP blind spot, and note
-/// when a `--proxy` could not take effect because the process was reused.
-fn print_proxy_status(effective: Option<&str>, proxy_requested: bool, reused: bool) {
-    match effective {
-        Some(raw) => {
-            ui::field("proxy", &api_proxy::redact_proxy(raw));
-            if api_proxy::proxy_is_socks(raw) {
-                ui::warn(
-                    "socks5 proxy carries only the model WebSocket. codex's reqwest client has \
-                     no SOCKS support, so codex_apps and plugin sync stay direct and will time \
-                     out on a blocked network. Use an `http://` proxy to fix codex_apps.",
-                );
-            }
-        },
-        None => ui::warn(
-            "no upstream proxy configured. The codex app-server reaches chatgpt.com directly and \
-             will fail on networks that block it (codex_apps bootstrap times out, model calls \
-             stall). Pass `--proxy http://host:port`, or export HTTPS_PROXY / ALL_PROXY / \
-             HTTP_PROXY before running `pocket-codex codex start`.",
-        ),
-    }
-    if reused && proxy_requested {
-        ui::warn(
-            "the codex app-server was already running, so this `--proxy` did not take effect. To \
-             apply a new proxy, run `pocket-codex codex stop` first, then `pocket-codex codex \
-             start --proxy …`.",
-        );
-    }
 }
 
 fn stop_cmd() -> Result<()> {
