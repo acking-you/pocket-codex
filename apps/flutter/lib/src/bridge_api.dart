@@ -28,7 +28,11 @@ class ServiceEntry {
 /// Status of one active local subscription.
 class SubInfo {
   /// Creates a subscription status.
-  const SubInfo({required this.key, required this.localAddr, required this.alive});
+  const SubInfo({
+    required this.key,
+    required this.localAddr,
+    required this.alive,
+  });
 
   /// Service key being subscribed to.
   final String key;

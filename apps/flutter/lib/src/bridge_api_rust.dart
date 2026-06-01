@@ -28,22 +28,35 @@ class RustBridgeApi implements BridgeApi {
   Future<List<ServiceEntry>> discoverServices() async {
     final list = await frb.discoverServices();
     return list
-        .map((s) => ServiceEntry(device: s.device, kind: s.kind, name: s.name, key: s.key))
+        .map(
+          (s) => ServiceEntry(
+            device: s.device,
+            kind: s.kind,
+            name: s.name,
+            key: s.key,
+          ),
+        )
         .toList();
   }
 
   @override
   Future<SubInfo> apiSubscribe(String serviceKey, int localPort) async {
-    final s = await frb.apiSubscribe(serviceKey: serviceKey, localPort: localPort);
+    final s = await frb.apiSubscribe(
+      serviceKey: serviceKey,
+      localPort: localPort,
+    );
     return SubInfo(key: s.key, localAddr: s.localAddr, alive: s.alive);
   }
 
   @override
-  Future<void> apiUnsubscribe(String serviceKey) => frb.apiUnsubscribe(serviceKey: serviceKey);
+  Future<void> apiUnsubscribe(String serviceKey) =>
+      frb.apiUnsubscribe(serviceKey: serviceKey);
 
   @override
   Future<List<SubInfo>> subscriptions() async {
     final list = await frb.subscriptions();
-    return list.map((s) => SubInfo(key: s.key, localAddr: s.localAddr, alive: s.alive)).toList();
+    return list
+        .map((s) => SubInfo(key: s.key, localAddr: s.localAddr, alive: s.alive))
+        .toList();
   }
 }
