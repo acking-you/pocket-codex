@@ -25,6 +25,11 @@ Future<void> setRelay({required String relay}) =>
 Future<void> setKey({required String key}) =>
     RustLib.instance.api.crateApiBridgeSetKey(key: key);
 
+/// Set the UI locale (BCP-47, e.g. `en`/`zh`) and persist. An empty string
+/// clears it, meaning the app follows the system locale.
+Future<void> setLocale({required String locale}) =>
+    RustLib.instance.api.crateApiBridgeSetLocale(locale: locale);
+
 /// Import a `pcx1:` share string: decode, persist relay + key, return relay.
 Future<String> importConfig({required String text}) =>
     RustLib.instance.api.crateApiBridgeImportConfig(text: text);
@@ -62,10 +67,14 @@ class ConfigView {
   /// Whether a 32-byte key is stored (value withheld).
   final bool hasKey;
 
-  const ConfigView({this.relay, required this.hasKey});
+  /// Configured UI locale (BCP-47, e.g. `en`/`zh`), or `None` to follow
+  /// the system locale.
+  final String? locale;
+
+  const ConfigView({this.relay, required this.hasKey, this.locale});
 
   @override
-  int get hashCode => relay.hashCode ^ hasKey.hashCode;
+  int get hashCode => relay.hashCode ^ hasKey.hashCode ^ locale.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -73,7 +82,8 @@ class ConfigView {
       other is ConfigView &&
           runtimeType == other.runtimeType &&
           relay == other.relay &&
-          hasKey == other.hasKey;
+          hasKey == other.hasKey &&
+          locale == other.locale;
 }
 
 /// A discovered service, mirrored for Dart.

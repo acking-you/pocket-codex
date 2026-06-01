@@ -12,6 +12,9 @@ pub struct ConfigView {
     pub relay: Option<String>,
     /// Whether a 32-byte key is stored (value withheld).
     pub has_key: bool,
+    /// Configured UI locale (BCP-47, e.g. `en`/`zh`), or `None` to follow
+    /// the system locale.
+    pub locale: Option<String>,
 }
 
 /// A discovered service, mirrored for Dart.
@@ -69,6 +72,7 @@ pub fn get_config() -> Result<ConfigView> {
     Ok(ConfigView {
         relay: cfg.relay().map(str::to_string),
         has_key: cfg.relay_key().is_some(),
+        locale: cfg.locale().map(str::to_string),
     })
 }
 
@@ -88,6 +92,15 @@ pub fn set_key(key: String) -> Result<()> {
     let dir = runtime::support_dir()?;
     let mut cfg = config::load_config(&dir)?;
     cfg.set_relay_key(&key);
+    config::save_config(&dir, &cfg)
+}
+
+/// Set the UI locale (BCP-47, e.g. `en`/`zh`) and persist. An empty string
+/// clears it, meaning the app follows the system locale.
+pub fn set_locale(locale: String) -> Result<()> {
+    let dir = runtime::support_dir()?;
+    let mut cfg = config::load_config(&dir)?;
+    cfg.set_locale(&locale);
     config::save_config(&dir, &cfg)
 }
 

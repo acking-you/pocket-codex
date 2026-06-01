@@ -51,6 +51,20 @@ pub struct Config {
     /// Local service selection preferences.
     #[serde(default)]
     pub services: ServicesConfig,
+
+    /// UI preferences (front-end only).
+    #[serde(default)]
+    pub ui: UiConfig,
+}
+
+/// Front-end UI preferences. Engine code ignores these; they exist so the
+/// Flutter app can persist user choices through the one config channel.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UiConfig {
+    /// BCP-47 language code the app should use (e.g. `en`, `zh`). `None`
+    /// means follow the system locale.
+    pub locale: Option<String>,
 }
 
 /// Configuration for managing the local `codex app-server` process.
@@ -213,6 +227,22 @@ impl Config {
         let trimmed = key.as_ref().trim();
         self.pb_mapper.key = (!trimmed.is_empty()).then(|| trimmed.to_string());
     }
+
+    /// Configured UI locale (BCP-47, e.g. `en`/`zh`), or `None` to follow
+    /// the system locale.
+    pub fn locale(&self) -> Option<&str> {
+        self.ui
+            .locale
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+    }
+
+    /// Set the UI locale. A blank value clears it (= follow system).
+    pub fn set_locale(&mut self, locale: impl AsRef<str>) {
+        let trimmed = locale.as_ref().trim();
+        self.ui.locale = (!trimmed.is_empty()).then(|| trimmed.to_string());
+    }
 }
 
 #[cfg(test)]
@@ -269,5 +299,23 @@ mod tests {
         let config: Config = toml::from_str(raw).expect("deserialize");
         assert_eq!(config.relay(), Some("lb7666.top:7666"));
         assert_eq!(config.relay_key(), Some("abc"));
+    }
+
+    #[test]
+    fn locale_roundtrips_and_old_config_defaults_to_none() {
+        // A config with no [ui] section (older builds) loads with locale None.
+        let old: Config = toml::from_str("[pb_mapper]\nrelay = \"r:1\"\n").expect("deserialize");
+        assert_eq!(old.locale(), None);
+
+        let mut config = Config::default();
+        config.set_locale("en");
+        assert_eq!(config.locale(), Some("en"));
+        let raw = toml::to_string_pretty(&config).expect("serialize");
+        let reloaded: Config = toml::from_str(&raw).expect("deserialize");
+        assert_eq!(reloaded.locale(), Some("en"));
+
+        // Blank clears it (= follow system).
+        config.set_locale("  ");
+        assert_eq!(config.locale(), None);
     }
 }

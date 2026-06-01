@@ -67,7 +67,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.12.0';
 
   @override
-  int get rustContentHash => -1753018250;
+  int get rustContentHash => 1524204286;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -103,6 +103,8 @@ abstract class RustLibApi extends BaseApi {
   Future<void> crateApiBridgeInitBridge({required String supportDir});
 
   Future<void> crateApiBridgeSetKey({required String key});
+
+  Future<void> crateApiBridgeSetLocale({required String locale});
 
   Future<void> crateApiBridgeSetRelay({required String relay});
 
@@ -420,6 +422,34 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       const TaskConstMeta(debugName: "set_key", argNames: ["key"]);
 
   @override
+  Future<void> crateApiBridgeSetLocale({required String locale}) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(locale, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 12,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiBridgeSetLocaleConstMeta,
+        argValues: [locale],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiBridgeSetLocaleConstMeta =>
+      const TaskConstMeta(debugName: "set_locale", argNames: ["locale"]);
+
+  @override
   Future<void> crateApiBridgeSetRelay({required String relay}) {
     return handler.executeNormal(
       NormalTask(
@@ -429,7 +459,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 12,
+            funcId: 13,
             port: port_,
           );
         },
@@ -456,7 +486,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 13,
+            funcId: 14,
             port: port_,
           );
         },
@@ -496,11 +526,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ConfigView dco_decode_config_view(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 2)
-      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    if (arr.length != 3)
+      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
     return ConfigView(
       relay: dco_decode_opt_String(arr[0]),
       hasKey: dco_decode_bool(arr[1]),
+      locale: dco_decode_opt_String(arr[2]),
     );
   }
 
@@ -598,7 +629,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_relay = sse_decode_opt_String(deserializer);
     var var_hasKey = sse_decode_bool(deserializer);
-    return ConfigView(relay: var_relay, hasKey: var_hasKey);
+    var var_locale = sse_decode_opt_String(deserializer);
+    return ConfigView(relay: var_relay, hasKey: var_hasKey, locale: var_locale);
   }
 
   @protected
@@ -724,6 +756,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_opt_String(self.relay, serializer);
     sse_encode_bool(self.hasKey, serializer);
+    sse_encode_opt_String(self.locale, serializer);
   }
 
   @protected
