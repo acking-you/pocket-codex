@@ -1,0 +1,183 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:pocket_codex/l10n/gen/app_localizations.dart';
+import 'package:pocket_codex/src/bridge_api.dart';
+import 'package:pocket_codex/src/providers.dart';
+import 'package:pocket_codex/src/screens/api_service_screen.dart';
+import 'package:pocket_codex/src/screens/services_screen.dart';
+import 'package:pocket_codex/src/screens/settings_screen.dart';
+import 'fake_bridge_api.dart';
+
+/// Mount [child] with a fake bridge and localizations. Defaults to the
+/// Chinese locale so the existing zh assertions hold; pass [locale] to test
+/// other languages.
+Widget _host(
+  Widget child,
+  BridgeApi api, {
+  Locale locale = const Locale('zh'),
+}) => ProviderScope(
+  overrides: [bridgeApiProvider.overrideWithValue(api)],
+  child: MaterialApp(
+    locale: locale,
+    localizationsDelegates: AppLocalizations.localizationsDelegates,
+    supportedLocales: AppLocalizations.supportedLocales,
+    home: child,
+  ),
+);
+
+void main() {
+  testWidgets('Services groups api + app and shows relay', (t) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+      services: const [
+        ServiceEntry(
+          device: 'lb7666',
+          kind: 'api',
+          name: 'default',
+          key: 'pcx:lb7666:api:default',
+        ),
+        ServiceEntry(
+          device: 'lb7666',
+          kind: 'app',
+          name: 'default',
+          key: 'pcx:lb7666:app:default',
+        ),
+      ],
+    );
+    await t.pumpWidget(_host(const ServicesScreen(), api));
+    await t.pumpAndSettle();
+    expect(find.text('API 服务'), findsOneWidget);
+    expect(find.text('App-server 服务'), findsOneWidget);
+    expect(find.byKey(const Key('svc-pcx:lb7666:api:default')), findsOneWidget);
+    expect(find.text('lb7666.top:7666'), findsOneWidget);
+  });
+
+  testWidgets('Services shows error state with retry', (t) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'r:1', hasKey: true),
+    )..discoverError = Exception('relay down');
+    await t.pumpWidget(_host(const ServicesScreen(), api));
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('services-error')), findsOneWidget);
+    expect(find.text('重试'), findsOneWidget);
+  });
+
+  testWidgets('Settings shows masked key and relay', (t) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await t.pumpWidget(_host(const SettingsScreen(), api));
+    await t.pumpAndSettle();
+    expect(find.text('lb7666.top:7666'), findsOneWidget);
+    expect(find.text('•••••••• (已设置)'), findsOneWidget);
+    expect(find.byKey(const Key('export-btn')), findsOneWidget);
+  });
+
+  testWidgets('Services switches to master-detail at >=600 width', (t) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+      services: const [
+        ServiceEntry(
+          device: 'lb7666',
+          kind: 'api',
+          name: 'default',
+          key: 'pcx:lb7666:api:default',
+        ),
+      ],
+    );
+    t.view.devicePixelRatio = 1.0;
+    addTearDown(t.view.reset);
+
+    // Narrow (<600): single column, no inline detail pane.
+    t.view.physicalSize = const Size(400, 900);
+    await t.pumpWidget(_host(const ServicesScreen(), api));
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('subscribe-btn')), findsNothing);
+
+    // Wide (>=600): list + embedded ApiServiceScreen detail (subscribe button).
+    t.view.physicalSize = const Size(1000, 900);
+    await t.pumpWidget(_host(const ServicesScreen(), api));
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('subscribe-btn')), findsOneWidget);
+  });
+
+  testWidgets('Wide layout switches the detail pane when another API is tapped', (
+    t,
+  ) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+      services: const [
+        ServiceEntry(
+          device: 'lb7666',
+          kind: 'api',
+          name: 'first',
+          key: 'pcx:lb7666:api:first',
+        ),
+        ServiceEntry(
+          device: 'lb7666',
+          kind: 'api',
+          name: 'second',
+          key: 'pcx:lb7666:api:second',
+        ),
+      ],
+    );
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(1000, 900);
+    addTearDown(t.view.reset);
+
+    await t.pumpWidget(_host(const ServicesScreen(), api));
+    await t.pumpAndSettle();
+    // Default selection = first API; its full key shows only in the detail pane.
+    expect(find.text('pcx:lb7666:api:first'), findsOneWidget);
+    expect(find.text('pcx:lb7666:api:second'), findsNothing);
+
+    // Tap the second service's list tile → detail pane switches to it.
+    await t.tap(find.byKey(const Key('svc-pcx:lb7666:api:second')));
+    await t.pumpAndSettle();
+    expect(find.text('pcx:lb7666:api:second'), findsOneWidget);
+    expect(find.text('pcx:lb7666:api:first'), findsNothing);
+  });
+
+  testWidgets('ApiService rejects an out-of-range port before subscribing', (
+    t,
+  ) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await t.pumpWidget(
+      _host(const ApiServiceScreen(serviceKey: 'pcx:lb7666:api:default'), api),
+    );
+    await t.pumpAndSettle();
+
+    // 70000 parses as an int but exceeds u16; must be rejected client-side.
+    await t.enterText(find.byType(TextField), '70000');
+    await t.tap(find.byKey(const Key('subscribe-btn')));
+    await t.pumpAndSettle();
+
+    expect(find.byKey(const Key('api-error')), findsOneWidget);
+    // Still on the subscribe form (no base-url shown) — nothing was subscribed.
+    expect(find.byKey(const Key('base-url')), findsNothing);
+  });
+
+  testWidgets('Services renders English strings under Locale(en)', (t) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+      services: const [
+        ServiceEntry(
+          device: 'lb7666',
+          kind: 'api',
+          name: 'default',
+          key: 'pcx:lb7666:api:default',
+        ),
+      ],
+    );
+    await t.pumpWidget(
+      _host(const ServicesScreen(), api, locale: const Locale('en')),
+    );
+    await t.pumpAndSettle();
+    // English ARB values, proving the locale switch changes strings.
+    expect(find.text('API services'), findsOneWidget);
+    expect(find.text('API 服务'), findsNothing);
+  });
+}

@@ -217,9 +217,12 @@ The order below is our current best guess; it is not a contract.
    `serde_json::Value` surface in `pocket-codex-codex::protocol` with
    the upstream `codex-app-server-protocol` types so the Flutter UI
    gets compile-time-checked methods.
-7. **Flutter UI evolution (in progress).** `apps/flutter` consuming
-   the protocol via `flutter_rust_bridge`; today it only ships a
-   sample bridge round-trip.
+7. **Flutter UI evolution (P1 done).** `apps/flutter` consumes the
+   bridge via `flutter_rust_bridge`. P1 shipped: onboarding (relay+key,
+   `pcx1:` import/export, persisted to `config.toml` 0600), service
+   discovery, API-service subscribe (local OpenAI-compatible endpoint),
+   settings, responsive Material 3 (light/dark). P2 (next): app-server
+   session monitoring (`thread/list`/`read` + live event stream).
 
 When you ship a milestone, update `README.md` (Status table) **and**
 this file's roadmap so the source of truth stays in sync.

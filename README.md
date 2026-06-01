@@ -57,7 +57,7 @@ reaches it through the relay.**
 | `pb-mapper` register/subscribe | wired through `deps/pb-mapper`         |
 | `codex app-server` supervision | spawn/stop/status via PID + state.toml |
 | Direct Responses API proxy     | local HTTP/WS proxy registered through pb-mapper |
-| Flutter UI (`apps/flutter`)    | placeholder screen + FRB sample bridge |
+| Flutter UI (`apps/flutter`)    | P1: onboarding (relay+key, `pcx1:` import/export), service discovery, API-service subscribe, settings; responsive Material 3 (light/dark). P2: app-server sessions |
 
 The first usable milestone now covers multi-device CLI flows:
 

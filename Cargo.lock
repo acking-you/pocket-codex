@@ -1741,7 +1741,16 @@ dependencies = [
 name = "pocket_codex_bridge"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "base64",
  "flutter_rust_bridge",
+ "once_cell",
+ "pocket-codex-core",
+ "pocket-codex-pb",
+ "serde",
+ "serde_json",
+ "tokio",
+ "toml",
 ]
 
 [[package]]

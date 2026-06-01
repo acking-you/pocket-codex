@@ -15,6 +15,11 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  # gen-l10n localization (ARB-driven). intl's version is pinned by the
+  # Flutter SDK; leave it unconstrained so `pub get` resolves the match.
+  flutter_localizations:
+    sdk: flutter
+  intl: any
   cupertino_icons: ^1.0.8
   # flutter_rust_bridge is wired up by `flutter_rust_bridge_codegen
   # integrate`. The version constraint here is what `pub get` checks
@@ -22,6 +27,9 @@ dependencies:
   flutter_rust_bridge: 2.12.0
   pocket_codex_bridge:
     path: rust_builder
+  flutter_riverpod: ^2.6.1
+  go_router: ^14.6.2
+  path_provider: ^2.1.5
 
 dev_dependencies:
   flutter_test:
@@ -29,6 +37,51 @@ dev_dependencies:
   flutter_lints: ^6.0.0
   integration_test:
     sdk: flutter
+  flutter_launcher_icons: ^0.14.2
+  flutter_native_splash: ^2.4.3
 
 flutter:
   uses-material-design: true
+  generate: true
+  assets:
+    - assets/logo/
+
+flutter_launcher_icons:
+  image_path: "assets/logo/logo.png"
+  # iOS: Apple rejects alpha, so icons stay opaque (logo.png already is).
+  ios: true
+  remove_alpha_ios: true
+  # Android: legacy square mipmaps from image_path (pre-API-26) PLUS an
+  # adaptive icon (API 26+) = lavender plate background + transparent
+  # glyph foreground, so it integrates with the launcher's round/squircle
+  # mask instead of showing a white-plate "sticker". The foreground PNG
+  # already bakes a 62% safe-zone margin, so inset is 0 (no double-pad).
+  android: true
+  min_sdk_android: 21
+  adaptive_icon_background: "#F5F3FE"
+  adaptive_icon_foreground: "icon/adaptive_foreground.png"
+  adaptive_icon_foreground_inset: 0
+  # Web: PWA icons + manifest colours (replaces the stock Flutter favicon).
+  web:
+    generate: true
+    image_path: "assets/logo/logo.png"
+    background_color: "#F5F3FE"
+    theme_color: "#4C8DF6"
+  # Windows: emits runner/resources/app_icon.ico — the .ico Windows needs.
+  windows:
+    generate: true
+    image_path: "assets/logo/logo.png"
+    icon_size: 256
+  # macOS: generates the Runner AppIcon.appiconset.
+  macos:
+    generate: true
+    image_path: "assets/logo/logo.png"
+
+flutter_native_splash:
+  image: assets/logo/logo.png
+  color: "#FFFFFF"
+  color_dark: "#101316"
+  android_12:
+    image: assets/logo/logo.png
+    color: "#FFFFFF"
+    color_dark: "#101316"
