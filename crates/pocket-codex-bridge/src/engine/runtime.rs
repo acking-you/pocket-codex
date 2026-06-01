@@ -62,6 +62,12 @@ pub struct SubStatus {
 /// Start (or no-op if already live) an in-process subscription exposing
 /// `key` on `127.0.0.1:<local_port>`. `pb::subscribe` runs forever, so we
 /// spawn it and keep the handle for [`unsubscribe_service`] to abort.
+///
+/// Before spawning we probe-bind the local port synchronously so the common
+/// failure (port already in use) is reported here instead of being swallowed
+/// by the detached task while the UI shows a "live" endpoint. A tiny TOCTOU
+/// window remains between the probe drop and `pb::subscribe`'s own bind; fully
+/// closing it needs a bind-readiness signal from pb-mapper (not yet exposed).
 pub fn subscribe_service(key: String, local_port: u16, relay: String) -> Result<SubStatus> {
     let local_addr = format!("127.0.0.1:{local_port}");
     let mut reg = registry().lock().expect("registry poisoned");
@@ -73,6 +79,12 @@ pub fn subscribe_service(key: String, local_port: u16, relay: String) -> Result<
                 alive: true,
             });
         }
+    }
+    // Probe-bind: fail fast if the port can't be claimed, then release it for
+    // pb::subscribe to bind for real.
+    match std::net::TcpListener::bind(&local_addr) {
+        Ok(probe) => drop(probe),
+        Err(e) => return Err(anyhow!("cannot bind {local_addr}: {e}")),
     }
     let opts = SubscribeOptions {
         key: key.clone(),
@@ -110,4 +122,23 @@ pub fn list_subscriptions() -> Vec<SubStatus> {
             alive: !e.handle.is_finished(),
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn subscribe_fails_fast_when_port_in_use() {
+        init(std::env::temp_dir()).expect("init");
+        // Hold a port so the probe-bind inside subscribe_service must fail.
+        let occupied = std::net::TcpListener::bind("127.0.0.1:0").expect("bind probe holder");
+        let port = occupied.local_addr().expect("addr").port();
+
+        let err = subscribe_service("pcx:t:api:t".to_string(), port, "relay:7666".to_string())
+            .expect_err("port is occupied; subscribe must error, not report alive");
+        assert!(err.to_string().contains("cannot bind"), "got: {err}");
+        // Nothing should have been registered for the failed attempt.
+        assert!(!list_subscriptions().iter().any(|s| s.key == "pcx:t:api:t"));
+    }
 }

@@ -101,11 +101,16 @@ class _OnboardingState extends ConsumerState<OnboardingScreen> {
                   onPressed: _busy
                       ? null
                       : () => _run(() async {
+                          final key = _key.text.trim();
+                          final relay = _relay.text.trim();
+                          if (relay.isEmpty) {
+                            throw const FormatException('relay 地址不能为空');
+                          }
                           // Set key first: it validates 32 bytes and throws on
                           // bad input, so a relay is never persisted without a
                           // valid key (which would wrongly skip onboarding).
-                          await api.setKey(_key.text);
-                          await api.setRelay(_relay.text);
+                          await api.setKey(key);
+                          await api.setRelay(relay);
                         }),
                   child: const Text('保存'),
                 ),

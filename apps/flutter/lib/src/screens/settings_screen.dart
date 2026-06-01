@@ -84,7 +84,12 @@ class _SettingsState extends ConsumerState<SettingsScreen> {
     );
     final ok = await _prompt(context, 'relay host:port', ctrl);
     if (ok == true) {
-      await api.setRelay(ctrl.text);
+      final relay = ctrl.text.trim();
+      if (relay.isEmpty) {
+        setState(() => _msg = 'relay 地址不能为空');
+        return;
+      }
+      await api.setRelay(relay);
       ref.invalidate(configProvider);
       ref.invalidate(servicesProvider);
     }

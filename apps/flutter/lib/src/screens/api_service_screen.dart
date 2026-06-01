@@ -42,7 +42,9 @@ class _ApiServiceState extends ConsumerState<ApiServiceScreen> {
     });
     try {
       final port = int.tryParse(_port.text);
-      if (port == null) throw const FormatException('端口必须是数字');
+      if (port == null || port < 1 || port > 65535) {
+        throw const FormatException('端口必须是 1 到 65535 之间的整数');
+      }
       _sub = await ref
           .read(bridgeApiProvider)
           .apiSubscribe(widget.serviceKey, port);

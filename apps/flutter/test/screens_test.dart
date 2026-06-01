@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
 import 'package:pocket_codex/src/providers.dart';
+import 'package:pocket_codex/src/screens/api_service_screen.dart';
 import 'package:pocket_codex/src/screens/services_screen.dart';
 import 'package:pocket_codex/src/screens/settings_screen.dart';
 import 'fake_bridge_api.dart';
@@ -123,5 +124,26 @@ void main() {
     await t.pumpAndSettle();
     expect(find.text('pcx:lb7666:api:second'), findsOneWidget);
     expect(find.text('pcx:lb7666:api:first'), findsNothing);
+  });
+
+  testWidgets('ApiService rejects an out-of-range port before subscribing', (
+    t,
+  ) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await t.pumpWidget(
+      _host(const ApiServiceScreen(serviceKey: 'pcx:lb7666:api:default'), api),
+    );
+    await t.pumpAndSettle();
+
+    // 70000 parses as an int but exceeds u16; must be rejected client-side.
+    await t.enterText(find.byType(TextField), '70000');
+    await t.tap(find.byKey(const Key('subscribe-btn')));
+    await t.pumpAndSettle();
+
+    expect(find.byKey(const Key('api-error')), findsOneWidget);
+    // Still on the subscribe form (no base-url shown) — nothing was subscribed.
+    expect(find.byKey(const Key('base-url')), findsNothing);
   });
 }
