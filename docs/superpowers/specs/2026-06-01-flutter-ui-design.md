@@ -35,7 +35,9 @@ pb-mapper 订阅、Responses API 代理)接到前端。
 - P1 不做 app-server 会话;P2 只做**只读监看**(发 prompt / 打断 / 转向留作
   P3,但导航与布局预留输入框位置)。
 - 不做 Android 后台前台服务(订阅仅前台存活,见「平台现实」)。
-- 不自造控件;不引入第三方设计系统。
+- 不引入会取代 Material 3 的整套替代 UI 框架——Material 3 始终是骨架与设计
+  语言。但**聚焦、维护良好的第三方功能型包是欢迎的**(如 markdown 渲染、代码
+  高亮),用于 stock 控件做不好/做起来不划算的具体能力,详见 §8。
 
 ## 已确认的设计决策
 
@@ -49,6 +51,7 @@ pb-mapper 订阅、Responses API 代理)接到前端。
 | 6 | 状态/路由 | Riverpod + go_router(默认,标准选型) |
 | 7 | 导入/导出格式 | `pcx1:` + base64url(JSON `{relay,key}`) |
 | 8 | logo | launcher icon / splash / 引导页 hero |
+| 9 | 第三方控件 | 允许聚焦的功能型包(markdown 渲染等);M3 仍是骨架,见 §8 |
 
 <!--APPEND-->
 
@@ -124,8 +127,8 @@ Rust bridge (pocket_codex_bridge) ── 全局 tokio runtime + 订阅注册表
 - `SessionListScreen` — `thread/list` 最近会话(相对时间 + 状态),下拉刷新,
   流式更新;布局对齐 img1。
 - `SessionDetailScreen` — `thread/read` 渲染 + 实时事件追加;agent 消息走
-  markdown,命令/输出走等宽块;active 时头部转圈;**底部输入框占位但 disabled**
-  (P3 预留);布局对齐 img2。
+  第三方 markdown 渲染包(候选见 §8,含代码块高亮),命令/输出走等宽块;
+  active 时头部转圈;**底部输入框占位但 disabled**(P3 预留);布局对齐 img2。
 
 ### 4. Logo 使用
 
@@ -158,6 +161,31 @@ Rust bridge (pocket_codex_bridge) ── 全局 tokio runtime + 订阅注册表
 - **Dart**:FRB 调用包一层 `BridgeApi` Dart 接口,Riverpod provider 依赖该接口
   → widget/provider 测试用 fake,不依赖原生库。覆盖 onboarding 校验、服务
   分组、设置页、(P2)会话列表/详情渲染与事件追加。
+
+### 8. 第三方依赖策略
+
+Material 3 是骨架与设计语言;第三方包只用在 stock 控件做不好或不划算的**具体
+能力**上,且必须:活跃维护、pub.dev 评分/likes 健康、与 Flutter 3.44 / M3
+兼容、纯 Dart 或主流插件(避免冷门原生通道)。版本在 `pubspec.yaml` **精确
+锁定**(脱字号收窄到次版本),并在 `pubspec.lock` 提交。最终选型与当时的维护
+状态在 writing-plans 阶段核实后定稿。
+
+**P1 已确定要引入的**(均为标准、广泛使用):
+- `flutter_riverpod`(状态)、`go_router`(路由)——§决策 #6。
+- `path_provider`(取 app-support 目录传给 `init_bridge`)。
+- `flutter_launcher_icons`(dev_dependency,生成 launcher icon ← `logo.png`)。
+- `flutter_native_splash`(dev_dependency,生成 splash ← logo)。
+- `flutter_rust_bridge`(运行时;codegen 为 dev 工具)。
+
+**P2 markdown / 代码高亮(候选,planning 阶段定一个)**:
+- `gpt_markdown` — 面向 LLM 输出、流式友好、内置代码块/LaTeX;最贴 img2 场景。
+- `markdown_widget` — 功能全(代码高亮、目录),通用。
+- (`flutter_markdown` 曾是官方包,近期维护状态有变动,planning 时确认后再决定
+  是否纳入候选。)
+  选型准则:优先「流式追加 + 代码高亮」开箱即用、依赖树浅的那个。
+
+**明确不引入**:整套替代 UI 框架(GetX UI、自绘设计系统等);仅为省几行就拉进
+来的微依赖(自己写更可控的小工具函数不外包)。
 
 ## 分阶段交付
 
