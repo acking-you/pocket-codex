@@ -22,6 +22,9 @@ dependencies:
   flutter_rust_bridge: 2.12.0
   pocket_codex_bridge:
     path: rust_builder
+  flutter_riverpod: ^2.6.1
+  go_router: ^14.6.2
+  path_provider: ^2.1.5
 
 dev_dependencies:
   flutter_test:
@@ -29,6 +32,25 @@ dev_dependencies:
   flutter_lints: ^6.0.0
   integration_test:
     sdk: flutter
+  flutter_launcher_icons: ^0.14.2
+  flutter_native_splash: ^2.4.3
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/logo/
+
+flutter_launcher_icons:
+  image_path: "assets/logo/logo.png"
+  android: true
+  ios: true
+  remove_alpha_ios: true
+
+flutter_native_splash:
+  image: assets/logo/logo.png
+  color: "#FFFFFF"
+  color_dark: "#101316"
+  android_12:
+    image: assets/logo/logo.png
+    color: "#FFFFFF"
+    color_dark: "#101316"
