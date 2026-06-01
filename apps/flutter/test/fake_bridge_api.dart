@@ -19,13 +19,20 @@ class FakeBridgeApi implements BridgeApi {
   Future<ConfigInfo> getConfig() async => _config;
 
   @override
-  Future<void> setRelay(String relay) async =>
-      _config = ConfigInfo(relay: relay, hasKey: _config.hasKey);
+  Future<void> setRelay(String relay) async => _config = ConfigInfo(
+    relay: relay,
+    hasKey: _config.hasKey,
+    locale: _config.locale,
+  );
 
   @override
   Future<void> setKey(String key) async {
     if (key.length != 32) throw ArgumentError('key must be 32 bytes');
-    _config = ConfigInfo(relay: _config.relay, hasKey: true);
+    _config = ConfigInfo(
+      relay: _config.relay,
+      hasKey: true,
+      locale: _config.locale,
+    );
   }
 
   @override
@@ -63,4 +70,11 @@ class FakeBridgeApi implements BridgeApi {
 
   @override
   Future<List<SubInfo>> subscriptions() async => _subs.values.toList();
+
+  @override
+  Future<void> setLocale(String locale) async => _config = ConfigInfo(
+    relay: _config.relay,
+    hasKey: _config.hasKey,
+    locale: locale.isEmpty ? null : locale,
+  );
 }

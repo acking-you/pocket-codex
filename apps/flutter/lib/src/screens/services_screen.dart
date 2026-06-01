@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
 import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/screens/api_service_screen.dart';
@@ -12,12 +13,13 @@ class ServicesScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final l10n = AppLocalizations.of(context);
     final servicesAsync = ref.watch(servicesProvider);
     final config = ref.watch(configProvider).valueOrNull;
     final selectedKey = ref.watch(selectedApiKeyProvider);
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Pocket-Codex'),
+        title: Text(l10n.appTitle),
         actions: [
           IconButton(
             key: const Key('settings-btn'),
@@ -29,7 +31,7 @@ class ServicesScreen extends ConsumerWidget {
       body: servicesAsync.when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (e, _) => _ErrorState(
-          message: '$e',
+          detail: '$e',
           onRetry: () => ref.invalidate(servicesProvider),
         ),
         data: (services) => RefreshIndicator(
@@ -61,7 +63,7 @@ class ServicesScreen extends ConsumerWidget {
                   const VerticalDivider(width: 1),
                   Expanded(
                     child: selected == null
-                        ? const Center(child: Text('选择一个 API 服务'))
+                        ? Center(child: Text(l10n.selectApiService))
                         : ApiServiceScreen(
                             key: ValueKey(selected.key),
                             serviceKey: selected.key,
@@ -90,16 +92,17 @@ class _ServiceList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     final api = services.where((s) => s.kind == 'api').toList();
     final app = services.where((s) => s.kind == 'app').toList();
     return ListView(
       children: [
         ListTile(
           leading: const Icon(Icons.dns, color: Colors.green),
-          title: Text(relay ?? '(未配置 relay)'),
-          subtitle: const Text('relay'),
+          title: Text(relay ?? l10n.relayNotConfigured),
+          subtitle: Text(l10n.relayRow),
         ),
-        if (api.isNotEmpty) const _SectionHeader('API 服务'),
+        if (api.isNotEmpty) _SectionHeader(l10n.apiServicesSection),
         ...api.map(
           (s) => ListTile(
             key: Key('svc-${s.key}'),
@@ -109,20 +112,20 @@ class _ServiceList extends StatelessWidget {
             onTap: () => onTapApi(s.key),
           ),
         ),
-        if (app.isNotEmpty) const _SectionHeader('App-server 服务'),
+        if (app.isNotEmpty) _SectionHeader(l10n.appServerServices),
         ...app.map(
           (s) => ListTile(
             key: Key('svc-${s.key}'),
             leading: const Icon(Icons.computer),
             title: Text(s.name),
-            subtitle: Text('${s.device} · 会话功能见 P2'),
+            subtitle: Text(l10n.appServerSubtitle(s.device)),
             enabled: false,
           ),
         ),
         if (services.isEmpty)
-          const Padding(
-            padding: EdgeInsets.all(32),
-            child: Center(child: Text('该 relay 上没有发现服务')),
+          Padding(
+            padding: const EdgeInsets.all(32),
+            child: Center(child: Text(l10n.noServicesFound)),
           ),
       ],
     );
@@ -145,22 +148,37 @@ class _SectionHeader extends StatelessWidget {
 }
 
 class _ErrorState extends StatelessWidget {
-  const _ErrorState({required this.message, required this.onRetry});
-  final String message;
+  const _ErrorState({required this.detail, required this.onRetry});
+
+  /// Raw engine error string, shown as secondary diagnostic detail.
+  final String detail;
   final VoidCallback onRetry;
+
   @override
-  Widget build(BuildContext context) => Center(
-    child: Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text(
-          message,
-          key: const Key('services-error'),
-          textAlign: TextAlign.center,
-        ),
-        const SizedBox(height: 12),
-        FilledButton(onPressed: onRetry, child: const Text('重试')),
-      ],
-    ),
-  );
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            l10n.discoverFailed,
+            key: const Key('services-error'),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 4),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24),
+            child: Text(
+              detail,
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ),
+          const SizedBox(height: 12),
+          FilledButton(onPressed: onRetry, child: Text(l10n.retry)),
+        ],
+      ),
+    );
+  }
 }

@@ -9,7 +9,7 @@ class RustBridgeApi implements BridgeApi {
   @override
   Future<ConfigInfo> getConfig() async {
     final c = await frb.getConfig();
-    return ConfigInfo(relay: c.relay, hasKey: c.hasKey);
+    return ConfigInfo(relay: c.relay, hasKey: c.hasKey, locale: c.locale);
   }
 
   @override
@@ -59,4 +59,7 @@ class RustBridgeApi implements BridgeApi {
         .map((s) => SubInfo(key: s.key, localAddr: s.localAddr, alive: s.alive))
         .toList();
   }
+
+  @override
+  Future<void> setLocale(String locale) => frb.setLocale(locale: locale);
 }

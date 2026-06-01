@@ -47,13 +47,17 @@ class SubInfo {
 /// View of persisted config (relay + whether a key is set).
 class ConfigInfo {
   /// Creates a config view.
-  const ConfigInfo({required this.relay, required this.hasKey});
+  const ConfigInfo({required this.relay, required this.hasKey, this.locale});
 
   /// Configured relay `host:port`, if any.
   final String? relay;
 
   /// Whether a 32-byte key is stored.
   final bool hasKey;
+
+  /// Configured UI locale (BCP-47, e.g. `en`/`zh`), or `null` to follow the
+  /// system locale.
+  final String? locale;
 }
 
 /// The whole engine surface the UI is allowed to touch. One real impl wraps
@@ -85,4 +89,8 @@ abstract interface class BridgeApi {
 
   /// List all active subscriptions.
   Future<List<SubInfo>> subscriptions();
+
+  /// Persist the UI locale (BCP-47, e.g. `en`/`zh`). An empty string clears
+  /// it, meaning follow the system locale.
+  Future<void> setLocale(String locale);
 }

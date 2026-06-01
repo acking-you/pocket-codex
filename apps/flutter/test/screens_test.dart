@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
 import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/screens/api_service_screen.dart';
@@ -8,9 +9,21 @@ import 'package:pocket_codex/src/screens/services_screen.dart';
 import 'package:pocket_codex/src/screens/settings_screen.dart';
 import 'fake_bridge_api.dart';
 
-Widget _host(Widget child, BridgeApi api) => ProviderScope(
+/// Mount [child] with a fake bridge and localizations. Defaults to the
+/// Chinese locale so the existing zh assertions hold; pass [locale] to test
+/// other languages.
+Widget _host(
+  Widget child,
+  BridgeApi api, {
+  Locale locale = const Locale('zh'),
+}) => ProviderScope(
   overrides: [bridgeApiProvider.overrideWithValue(api)],
-  child: MaterialApp(home: child),
+  child: MaterialApp(
+    locale: locale,
+    localizationsDelegates: AppLocalizations.localizationsDelegates,
+    supportedLocales: AppLocalizations.supportedLocales,
+    home: child,
+  ),
 );
 
 void main() {
@@ -145,5 +158,26 @@ void main() {
     expect(find.byKey(const Key('api-error')), findsOneWidget);
     // Still on the subscribe form (no base-url shown) — nothing was subscribed.
     expect(find.byKey(const Key('base-url')), findsNothing);
+  });
+
+  testWidgets('Services renders English strings under Locale(en)', (t) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+      services: const [
+        ServiceEntry(
+          device: 'lb7666',
+          kind: 'api',
+          name: 'default',
+          key: 'pcx:lb7666:api:default',
+        ),
+      ],
+    );
+    await t.pumpWidget(
+      _host(const ServicesScreen(), api, locale: const Locale('en')),
+    );
+    await t.pumpAndSettle();
+    // English ARB values, proving the locale switch changes strings.
+    expect(find.text('API services'), findsOneWidget);
+    expect(find.text('API 服务'), findsNothing);
   });
 }

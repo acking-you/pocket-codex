@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
 import 'package:pocket_codex/src/providers.dart';
 
@@ -36,21 +37,23 @@ class _ApiServiceState extends ConsumerState<ApiServiceScreen> {
   }
 
   Future<void> _subscribe() async {
+    final l10n = AppLocalizations.of(context);
+    final port = int.tryParse(_port.text);
+    if (port == null || port < 1 || port > 65535) {
+      setState(() => _error = l10n.portRangeError);
+      return;
+    }
     setState(() {
       _busy = true;
       _error = null;
     });
     try {
-      final port = int.tryParse(_port.text);
-      if (port == null || port < 1 || port > 65535) {
-        throw const FormatException('端口必须是 1 到 65535 之间的整数');
-      }
       _sub = await ref
           .read(bridgeApiProvider)
           .apiSubscribe(widget.serviceKey, port);
       ref.invalidate(subscriptionsProvider);
     } catch (e) {
-      _error = '$e';
+      _error = '${l10n.subscribeFailed}\n$e';
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -64,6 +67,7 @@ class _ApiServiceState extends ConsumerState<ApiServiceScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     final body = ListView(
       padding: const EdgeInsets.all(16),
       children: [
@@ -73,16 +77,16 @@ class _ApiServiceState extends ConsumerState<ApiServiceScreen> {
           TextField(
             controller: _port,
             keyboardType: TextInputType.number,
-            decoration: const InputDecoration(
-              labelText: '本地端口',
-              border: OutlineInputBorder(),
+            decoration: InputDecoration(
+              labelText: l10n.localPortLabel,
+              border: const OutlineInputBorder(),
             ),
           ),
           const SizedBox(height: 12),
           FilledButton(
             key: const Key('subscribe-btn'),
             onPressed: _busy ? null : _subscribe,
-            child: const Text('启动订阅'),
+            child: Text(l10n.startSubscription),
           ),
         ] else ...[
           Card(
@@ -105,16 +109,16 @@ class _ApiServiceState extends ConsumerState<ApiServiceScreen> {
           const SizedBox(height: 8),
           Card(
             color: Theme.of(context).colorScheme.errorContainer,
-            child: const Padding(
-              padding: EdgeInsets.all(12),
-              child: Text('⚠ 本地端点无鉴权,仅监听 127.0.0.1。仅在 App 前台存活。'),
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Text(l10n.noAuthWarning),
             ),
           ),
           const SizedBox(height: 12),
           OutlinedButton(
             key: const Key('stop-btn'),
             onPressed: _stop,
-            child: const Text('停止'),
+            child: Text(l10n.stop),
           ),
         ],
         if (_error != null)
@@ -130,7 +134,7 @@ class _ApiServiceState extends ConsumerState<ApiServiceScreen> {
     );
     if (widget.embedded) return body;
     return Scaffold(
-      appBar: AppBar(title: const Text('API 服务')),
+      appBar: AppBar(title: Text(l10n.apiServiceTitle)),
       body: body,
     );
   }

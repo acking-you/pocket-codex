@@ -2,6 +2,8 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:pocket_codex/l10n/gen/app_localizations.dart';
+import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/router.dart';
 import 'package:pocket_codex/src/theme.dart';
 import 'package:pocket_codex/src/rust/api/bridge.dart' as frb;
@@ -25,28 +27,40 @@ Future<void> main() async {
   final cfg = await frb.getConfig();
   final relay = cfg.relay?.trim();
   final start = (relay == null || relay.isEmpty) ? '/onboarding' : '/';
-  runApp(ProviderScope(child: PocketCodexApp(initialLocation: start)));
+  // Seed the locale provider from the persisted config (read in this same
+  // bridge call — no extra latency, no language flash). null = follow system.
+  final locale = cfg.locale == null ? null : Locale(cfg.locale!);
+  runApp(
+    ProviderScope(
+      overrides: [localeProvider.overrideWith((ref) => locale)],
+      child: PocketCodexApp(initialLocation: start),
+    ),
+  );
 }
 
-/// Shown on the web target, which the engine does not support.
+/// Shown on the web target, which the engine does not support. Localized so
+/// the notice respects the system language.
 class _UnsupportedPlatformApp extends StatelessWidget {
   const _UnsupportedPlatformApp();
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Pocket-Codex',
+      onGenerateTitle: (context) => AppLocalizations.of(context).appTitle,
       theme: lightTheme(),
       darkTheme: darkTheme(),
       themeMode: ThemeMode.system,
-      home: const Scaffold(
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      supportedLocales: AppLocalizations.supportedLocales,
+      home: Scaffold(
         body: Center(
-          child: Padding(
-            padding: EdgeInsets.all(24),
-            child: Text(
-              'Pocket-Codex 需要本地网络与文件访问,暂不支持 Web。\n'
-              '请使用 Android / iOS / 桌面版。',
-              textAlign: TextAlign.center,
+          child: Builder(
+            builder: (context) => Padding(
+              padding: const EdgeInsets.all(24),
+              child: Text(
+                AppLocalizations.of(context).webUnsupported,
+                textAlign: TextAlign.center,
+              ),
             ),
           ),
         ),
@@ -55,8 +69,9 @@ class _UnsupportedPlatformApp extends StatelessWidget {
   }
 }
 
-/// Root app: Material 3 light/dark following the system, go_router nav.
-class PocketCodexApp extends StatelessWidget {
+/// Root app: Material 3 light/dark following the system, go_router nav,
+/// locale driven by [localeProvider].
+class PocketCodexApp extends ConsumerStatefulWidget {
   /// [initialLocation] decides onboarding vs services on cold start.
   const PocketCodexApp({super.key, required this.initialLocation});
 
@@ -64,13 +79,26 @@ class PocketCodexApp extends StatelessWidget {
   final String initialLocation;
 
   @override
+  ConsumerState<PocketCodexApp> createState() => _PocketCodexAppState();
+}
+
+class _PocketCodexAppState extends ConsumerState<PocketCodexApp> {
+  // Built once so a locale change (which rebuilds this widget) does not
+  // recreate the router and reset the navigation stack.
+  late final _router = buildRouter(initialLocation: widget.initialLocation);
+
+  @override
   Widget build(BuildContext context) {
+    final locale = ref.watch(localeProvider);
     return MaterialApp.router(
-      title: 'Pocket-Codex',
+      onGenerateTitle: (context) => AppLocalizations.of(context).appTitle,
       theme: lightTheme(),
       darkTheme: darkTheme(),
       themeMode: ThemeMode.system,
-      routerConfig: buildRouter(initialLocation: initialLocation),
+      locale: locale,
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      supportedLocales: AppLocalizations.supportedLocales,
+      routerConfig: _router,
     );
   }
 }
