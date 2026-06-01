@@ -42,9 +42,34 @@ flutter:
 
 flutter_launcher_icons:
   image_path: "assets/logo/logo.png"
-  android: true
+  # iOS: Apple rejects alpha, so icons stay opaque (logo.png already is).
   ios: true
   remove_alpha_ios: true
+  # Android: legacy square mipmaps from image_path (pre-API-26) PLUS an
+  # adaptive icon (API 26+) = lavender plate background + transparent
+  # glyph foreground, so it integrates with the launcher's round/squircle
+  # mask instead of showing a white-plate "sticker". The foreground PNG
+  # already bakes a 62% safe-zone margin, so inset is 0 (no double-pad).
+  android: true
+  min_sdk_android: 21
+  adaptive_icon_background: "#F5F3FE"
+  adaptive_icon_foreground: "icon/adaptive_foreground.png"
+  adaptive_icon_foreground_inset: 0
+  # Web: PWA icons + manifest colours (replaces the stock Flutter favicon).
+  web:
+    generate: true
+    image_path: "assets/logo/logo.png"
+    background_color: "#F5F3FE"
+    theme_color: "#4C8DF6"
+  # Windows: emits runner/resources/app_icon.ico — the .ico Windows needs.
+  windows:
+    generate: true
+    image_path: "assets/logo/logo.png"
+    icon_size: 256
+  # macOS: generates the Runner AppIcon.appiconset.
+  macos:
+    generate: true
+    image_path: "assets/logo/logo.png"
 
 flutter_native_splash:
   image: assets/logo/logo.png
