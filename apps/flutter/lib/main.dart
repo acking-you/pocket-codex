@@ -1,76 +1,37 @@
-// Pocket-Codex Flutter front-end.
-//
-// This entry point is intentionally minimal during the bootstrap
-// phase: it loads the `flutter_rust_bridge`-generated Rust library
-// and renders a single screen that demonstrates a successful
-// Dart ↔ Rust round-trip. Real UI flows (codex thread management,
-// pb-mapper session control, etc.) will land in subsequent
-// milestones.
-
 import 'package:flutter/material.dart';
-import 'package:pocket_codex/src/rust/api/simple.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:pocket_codex/src/router.dart';
+import 'package:pocket_codex/src/theme.dart';
+import 'package:pocket_codex/src/rust/api/bridge.dart' as frb;
 import 'package:pocket_codex/src/rust/frb_generated.dart';
 
 Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
   await RustLib.init();
-  runApp(const PocketCodexApp());
+  final dir = await getApplicationSupportDirectory();
+  await frb.initBridge(supportDir: dir.path);
+  final cfg = await frb.getConfig();
+  final start = cfg.relay == null ? '/onboarding' : '/';
+  runApp(ProviderScope(child: PocketCodexApp(initialLocation: start)));
 }
 
-/// Root widget for the Pocket-Codex Flutter front-end.
-///
-/// `home` is overridable so unit tests can mount the app without
-/// initialising the Rust bridge.
+/// Root app: Material 3 light/dark following the system, go_router nav.
 class PocketCodexApp extends StatelessWidget {
-  /// Default constructor — uses [HomeScreen] which calls into the
-  /// FRB-generated bindings.
-  const PocketCodexApp({super.key, this.home = const HomeScreen()});
+  /// [initialLocation] decides onboarding vs services on cold start.
+  const PocketCodexApp({super.key, required this.initialLocation});
 
-  /// Page rendered as the app's home; substitutable for tests.
-  final Widget home;
+  /// Route to open on launch.
+  final String initialLocation;
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
+    return MaterialApp.router(
       title: 'Pocket-Codex',
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
-        useMaterial3: true,
-      ),
-      home: home,
-    );
-  }
-}
-
-/// Default home screen which exercises the Rust↔Dart bridge.
-class HomeScreen extends StatelessWidget {
-  /// Default constructor.
-  const HomeScreen({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    final greeting = greet(name: 'Pocket-Codex');
-    final version = bridgeVersion();
-    return Scaffold(
-      appBar: AppBar(title: const Text('Pocket-Codex (WIP)')),
-      body: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(greeting, style: Theme.of(context).textTheme.headlineSmall),
-              const SizedBox(height: 8),
-              Text('bridge version: $version'),
-              const SizedBox(height: 24),
-              const Text(
-                'This is a placeholder UI. The real app will manage '
-                'codex app-server sessions and pb-mapper relays from here.',
-              ),
-            ],
-          ),
-        ),
-      ),
+      theme: lightTheme(),
+      darkTheme: darkTheme(),
+      themeMode: ThemeMode.system,
+      routerConfig: buildRouter(initialLocation: initialLocation),
     );
   }
 }
