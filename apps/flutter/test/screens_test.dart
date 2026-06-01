@@ -59,4 +59,32 @@ void main() {
     expect(find.text('•••••••• (已设置)'), findsOneWidget);
     expect(find.byKey(const Key('export-btn')), findsOneWidget);
   });
+
+  testWidgets('Services switches to master-detail at >=600 width', (t) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+      services: const [
+        ServiceEntry(
+          device: 'lb7666',
+          kind: 'api',
+          name: 'default',
+          key: 'pcx:lb7666:api:default',
+        ),
+      ],
+    );
+    t.view.devicePixelRatio = 1.0;
+    addTearDown(t.view.reset);
+
+    // Narrow (<600): single column, no inline detail pane.
+    t.view.physicalSize = const Size(400, 900);
+    await t.pumpWidget(_host(const ServicesScreen(), api));
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('subscribe-btn')), findsNothing);
+
+    // Wide (>=600): list + embedded ApiServiceScreen detail (subscribe button).
+    t.view.physicalSize = const Size(1000, 900);
+    await t.pumpWidget(_host(const ServicesScreen(), api));
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('subscribe-btn')), findsOneWidget);
+  });
 }

@@ -30,8 +30,9 @@ class FakeBridgeApi implements BridgeApi {
 
   @override
   Future<String> importConfig(String text) async {
-    if (!text.startsWith('pcx1:'))
+    if (!text.startsWith('pcx1:')) {
       throw const FormatException('not a pcx1 string');
+    }
     _config = const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true);
     return 'lb7666.top:7666';
   }
