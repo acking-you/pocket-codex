@@ -117,6 +117,15 @@ mod tests {
         let back = load_config(&dir).expect("load");
         assert_eq!(back.relay(), Some("lb7666.top:7666"));
         assert_eq!(back.relay_key(), Some("0123456789abcdef0123456789abcdef"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mode = std::fs::metadata(config_path(&dir))
+                .expect("stat")
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600, "config holds the key; must be 0600");
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

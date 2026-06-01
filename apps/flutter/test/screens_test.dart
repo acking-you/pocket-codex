@@ -87,4 +87,41 @@ void main() {
     await t.pumpAndSettle();
     expect(find.byKey(const Key('subscribe-btn')), findsOneWidget);
   });
+
+  testWidgets('Wide layout switches the detail pane when another API is tapped', (
+    t,
+  ) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+      services: const [
+        ServiceEntry(
+          device: 'lb7666',
+          kind: 'api',
+          name: 'first',
+          key: 'pcx:lb7666:api:first',
+        ),
+        ServiceEntry(
+          device: 'lb7666',
+          kind: 'api',
+          name: 'second',
+          key: 'pcx:lb7666:api:second',
+        ),
+      ],
+    );
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(1000, 900);
+    addTearDown(t.view.reset);
+
+    await t.pumpWidget(_host(const ServicesScreen(), api));
+    await t.pumpAndSettle();
+    // Default selection = first API; its full key shows only in the detail pane.
+    expect(find.text('pcx:lb7666:api:first'), findsOneWidget);
+    expect(find.text('pcx:lb7666:api:second'), findsNothing);
+
+    // Tap the second service's list tile → detail pane switches to it.
+    await t.tap(find.byKey(const Key('svc-pcx:lb7666:api:second')));
+    await t.pumpAndSettle();
+    expect(find.text('pcx:lb7666:api:second'), findsOneWidget);
+    expect(find.text('pcx:lb7666:api:first'), findsNothing);
+  });
 }

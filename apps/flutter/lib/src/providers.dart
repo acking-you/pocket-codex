@@ -19,3 +19,8 @@ final servicesProvider = FutureProvider<List<ServiceEntry>>((ref) async {
 final subscriptionsProvider = FutureProvider<List<SubInfo>>((ref) async {
   return ref.watch(bridgeApiProvider).subscriptions();
 });
+
+/// Service key selected in the wide-layout master-detail pane (null = none,
+/// falls back to the first API service). Unused on narrow layouts, which push
+/// a detail route instead.
+final selectedApiKeyProvider = StateProvider<String?>((ref) => null);

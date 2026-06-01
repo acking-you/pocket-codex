@@ -53,6 +53,11 @@ fn current_relay() -> Result<String> {
 fn apply_key() -> Result<()> {
     let cfg = config::load_config(&runtime::support_dir()?)?;
     if let Some(k) = cfg.relay_key() {
+        // Guard length here so a hand-edited config.toml can't reach the
+        // upstream length error (which echoes the raw key into its message).
+        if k.len() != 32 {
+            return Err(anyhow!("stored MSG_HEADER_KEY is not 32 bytes; re-run setup"));
+        }
         pocket_codex_pb::set_msg_header_key(Some(k)).map_err(|e| anyhow!("{e}"))?;
     }
     Ok(())

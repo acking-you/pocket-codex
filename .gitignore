@@ -44,6 +44,9 @@ apps/flutter/**/.flutter-plugins
 apps/flutter/**/.flutter-plugins-dependencies
 apps/flutter/**/.packages
 apps/flutter/**/pubspec.lock
+# ...but the app's own lock IS committed for reproducible builds (spec §8);
+# only nested package locks (e.g. rust_builder/) stay ignored.
+!apps/flutter/pubspec.lock
 
 # Worktrees
 .worktrees/

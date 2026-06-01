@@ -14,6 +14,7 @@ class ServicesScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final servicesAsync = ref.watch(servicesProvider);
     final config = ref.watch(configProvider).valueOrNull;
+    final selectedKey = ref.watch(selectedApiKeyProvider);
     return Scaffold(
       appBar: AppBar(
         title: const Text('Pocket-Codex'),
@@ -35,26 +36,35 @@ class ServicesScreen extends ConsumerWidget {
           onRefresh: () async => ref.invalidate(servicesProvider),
           child: LayoutBuilder(
             builder: (context, c) {
+              final wide = c.maxWidth >= 600;
               final list = _ServiceList(
                 relay: config?.relay,
                 services: services,
                 onTapApi: (key) {
-                  if (c.maxWidth < 600) context.push('/api/$key');
+                  if (wide) {
+                    ref.read(selectedApiKeyProvider.notifier).state = key;
+                  } else {
+                    context.push('/api/$key');
+                  }
                 },
               );
-              if (c.maxWidth < 600) return list;
-              final firstApi = services
+              if (!wide) return list;
+              final apiServices = services
                   .where((s) => s.kind == 'api')
-                  .firstOrNull;
+                  .toList();
+              final selected =
+                  apiServices.where((s) => s.key == selectedKey).firstOrNull ??
+                  apiServices.firstOrNull;
               return Row(
                 children: [
                   SizedBox(width: 360, child: list),
                   const VerticalDivider(width: 1),
                   Expanded(
-                    child: firstApi == null
+                    child: selected == null
                         ? const Center(child: Text('选择一个 API 服务'))
                         : ApiServiceScreen(
-                            serviceKey: firstApi.key,
+                            key: ValueKey(selected.key),
+                            serviceKey: selected.key,
                             embedded: true,
                           ),
                   ),
