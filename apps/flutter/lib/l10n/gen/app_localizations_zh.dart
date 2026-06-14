@@ -50,8 +50,294 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String appServerSubtitle(String device) {
-    return '$device · 会话功能见 P2';
+    return '$device · 远程控制';
   }
+
+  @override
+  String get appServiceTitle => 'App-server';
+
+  @override
+  String get connecting => '连接中…';
+
+  @override
+  String get connectFailed => '无法连接到 app-server';
+
+  @override
+  String get conversationsSection => '会话';
+
+  @override
+  String get newConversation => '新建对话';
+
+  @override
+  String get noThreads => '暂无会话';
+
+  @override
+  String get untitledThread => '(未命名)';
+
+  @override
+  String get messageHint => '输入消息…';
+
+  @override
+  String get send => '发送';
+
+  @override
+  String get interrupt => '打断';
+
+  @override
+  String get thinking => '思考中…';
+
+  @override
+  String get emptyConversation => '发送消息开始对话';
+
+  @override
+  String get turnFailed => '本轮对话失败';
+
+  @override
+  String get disconnect => '断开连接';
+
+  @override
+  String get connectionLost => '连接已断开';
+
+  @override
+  String get reconnect => '重新连接';
+
+  @override
+  String get projectsSection => '项目';
+
+  @override
+  String get newProject => '新建项目';
+
+  @override
+  String get currentProject => '项目';
+
+  @override
+  String get remotePathLabel => '远端项目文件夹路径（主机上）';
+
+  @override
+  String get remotePathHint => '如 /home/ubuntu/myproject — 留空用主机默认目录';
+
+  @override
+  String get model => '模型';
+
+  @override
+  String get modelDefault => '默认模型';
+
+  @override
+  String get defaultFolder => '默认目录';
+
+  @override
+  String get permissionMode => '权限';
+
+  @override
+  String get modeReadOnly => '只读';
+
+  @override
+  String get modeReadOnlyDesc => '执行前询问；不写文件';
+
+  @override
+  String get modeAuto => '自动';
+
+  @override
+  String get modeAutoDesc => '工作区内可写；仅失败时询问';
+
+  @override
+  String get modeFull => '完全放行';
+
+  @override
+  String get modeFullDesc => '无沙箱、从不询问（谨慎使用）';
+
+  @override
+  String get approvalPrompt => '智能体请求执行命令';
+
+  @override
+  String get approvalFilePrompt => '智能体请求修改文件';
+
+  @override
+  String get approvalPermissionPrompt => '智能体请求额外权限';
+
+  @override
+  String get approve => '允许';
+
+  @override
+  String get approveForSession => '本会话内允许';
+
+  @override
+  String get deny => '拒绝';
+
+  @override
+  String get planMode => '计划';
+
+  @override
+  String get planReadyTitle => '计划已就绪';
+
+  @override
+  String get implementPlan => '实现此计划';
+
+  @override
+  String get keepPlanning => '继续规划';
+
+  @override
+  String get implementPlanPrompt => '请按上面的计划开始实现。';
+
+  @override
+  String get noModelForMode => '无法切换模式：没有可用的模型';
+
+  @override
+  String get effort => '思考强度';
+
+  @override
+  String get effortMinimal => '最低';
+
+  @override
+  String get effortMinimalDesc => '思考最少，最快';
+
+  @override
+  String get effortLow => '低';
+
+  @override
+  String get effortLowDesc => '少量思考';
+
+  @override
+  String get effortMedium => '中';
+
+  @override
+  String get effortMediumDesc => '均衡（通常默认）';
+
+  @override
+  String get effortHigh => '高';
+
+  @override
+  String get effortHighDesc => '较充分';
+
+  @override
+  String get effortXhigh => '极高';
+
+  @override
+  String get effortXhighDesc => '最充分，最慢';
+
+  @override
+  String get openLink => '打开链接';
+
+  @override
+  String get linkOpenFailed => '无法打开链接';
+
+  @override
+  String get contextLabel => '上下文';
+
+  @override
+  String get contextUsageTitle => '上下文与用量';
+
+  @override
+  String get quota5h => '5 小时额度';
+
+  @override
+  String get quotaWeekly => '每周额度';
+
+  @override
+  String get quotaUnavailable => '暂无额度信息。';
+
+  @override
+  String resetsIn(String span) {
+    return '$span 后重置';
+  }
+
+  @override
+  String get moreActions => '更多';
+
+  @override
+  String get backToProjects => '返回项目';
+
+  @override
+  String get stateReady => '就绪';
+
+  @override
+  String get stateWorking => '运行中…';
+
+  @override
+  String get statePlanning => '计划中…';
+
+  @override
+  String get statePlanMode => '计划模式';
+
+  @override
+  String get stateDisconnected => '已断开';
+
+  @override
+  String get stateReconnecting => '重连中…';
+
+  @override
+  String get compacted => '对话已压缩';
+
+  @override
+  String get turnStopped => '已停止';
+
+  @override
+  String get refreshStatus => '刷新状态';
+
+  @override
+  String get statusOnline => '在线';
+
+  @override
+  String get statusConnected => '已连接';
+
+  @override
+  String get subscribedAlive => '已订阅';
+
+  @override
+  String get subscribedDead => '已断开';
+
+  @override
+  String runningSessions(int count) {
+    return '$count 个运行中';
+  }
+
+  @override
+  String get compact => '压缩对话';
+
+  @override
+  String get compactConfirm => '总结并压缩当前对话以释放上下文？此操作不可撤销。';
+
+  @override
+  String get viewDiff => '查看变更';
+
+  @override
+  String get changesTitle => '变更';
+
+  @override
+  String get noChanges => '与主分支相比没有变更。';
+
+  @override
+  String get start => '开始';
+
+  @override
+  String get create => '创建';
+
+  @override
+  String get copy => '复制';
+
+  @override
+  String get copied => '已复制';
+
+  @override
+  String get toolSearched => '联网搜索';
+
+  @override
+  String get toolRan => '执行命令';
+
+  @override
+  String get toolEdited => '修改文件';
+
+  @override
+  String get toolCalled => '调用工具';
+
+  @override
+  String get toolThinking => '思考';
+
+  @override
+  String get toolPlan => '计划';
+
+  @override
+  String get toolActivity => '活动';
 
   @override
   String get selectApiService => '选择一个 API 服务';

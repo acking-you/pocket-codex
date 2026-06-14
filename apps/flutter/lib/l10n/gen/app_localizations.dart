@@ -179,8 +179,572 @@ abstract class AppLocalizations {
   /// No description provided for @appServerSubtitle.
   ///
   /// In en, this message translates to:
-  /// **'{device} · sessions in P2'**
+  /// **'{device} · remote control'**
   String appServerSubtitle(String device);
+
+  /// No description provided for @appServiceTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'App-server'**
+  String get appServiceTitle;
+
+  /// No description provided for @connecting.
+  ///
+  /// In en, this message translates to:
+  /// **'Connecting…'**
+  String get connecting;
+
+  /// No description provided for @connectFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Couldn\'t connect to the app-server'**
+  String get connectFailed;
+
+  /// No description provided for @conversationsSection.
+  ///
+  /// In en, this message translates to:
+  /// **'Conversations'**
+  String get conversationsSection;
+
+  /// No description provided for @newConversation.
+  ///
+  /// In en, this message translates to:
+  /// **'New conversation'**
+  String get newConversation;
+
+  /// No description provided for @noThreads.
+  ///
+  /// In en, this message translates to:
+  /// **'No conversations yet'**
+  String get noThreads;
+
+  /// No description provided for @untitledThread.
+  ///
+  /// In en, this message translates to:
+  /// **'(untitled)'**
+  String get untitledThread;
+
+  /// No description provided for @messageHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Message…'**
+  String get messageHint;
+
+  /// No description provided for @send.
+  ///
+  /// In en, this message translates to:
+  /// **'Send'**
+  String get send;
+
+  /// No description provided for @interrupt.
+  ///
+  /// In en, this message translates to:
+  /// **'Interrupt'**
+  String get interrupt;
+
+  /// No description provided for @thinking.
+  ///
+  /// In en, this message translates to:
+  /// **'Thinking…'**
+  String get thinking;
+
+  /// No description provided for @emptyConversation.
+  ///
+  /// In en, this message translates to:
+  /// **'Send a message to start the conversation'**
+  String get emptyConversation;
+
+  /// No description provided for @turnFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The turn failed'**
+  String get turnFailed;
+
+  /// No description provided for @disconnect.
+  ///
+  /// In en, this message translates to:
+  /// **'Disconnect'**
+  String get disconnect;
+
+  /// No description provided for @connectionLost.
+  ///
+  /// In en, this message translates to:
+  /// **'Connection lost'**
+  String get connectionLost;
+
+  /// No description provided for @reconnect.
+  ///
+  /// In en, this message translates to:
+  /// **'Reconnect'**
+  String get reconnect;
+
+  /// No description provided for @projectsSection.
+  ///
+  /// In en, this message translates to:
+  /// **'Projects'**
+  String get projectsSection;
+
+  /// No description provided for @newProject.
+  ///
+  /// In en, this message translates to:
+  /// **'New project'**
+  String get newProject;
+
+  /// No description provided for @currentProject.
+  ///
+  /// In en, this message translates to:
+  /// **'Project'**
+  String get currentProject;
+
+  /// No description provided for @remotePathLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Remote folder path (on the host)'**
+  String get remotePathLabel;
+
+  /// No description provided for @remotePathHint.
+  ///
+  /// In en, this message translates to:
+  /// **'e.g. /home/ubuntu/myproject — blank uses the host default'**
+  String get remotePathHint;
+
+  /// No description provided for @model.
+  ///
+  /// In en, this message translates to:
+  /// **'Model'**
+  String get model;
+
+  /// No description provided for @modelDefault.
+  ///
+  /// In en, this message translates to:
+  /// **'Default model'**
+  String get modelDefault;
+
+  /// No description provided for @defaultFolder.
+  ///
+  /// In en, this message translates to:
+  /// **'Default folder'**
+  String get defaultFolder;
+
+  /// No description provided for @permissionMode.
+  ///
+  /// In en, this message translates to:
+  /// **'Permission'**
+  String get permissionMode;
+
+  /// No description provided for @modeReadOnly.
+  ///
+  /// In en, this message translates to:
+  /// **'Read-only'**
+  String get modeReadOnly;
+
+  /// No description provided for @modeReadOnlyDesc.
+  ///
+  /// In en, this message translates to:
+  /// **'Ask before running; no file writes'**
+  String get modeReadOnlyDesc;
+
+  /// No description provided for @modeAuto.
+  ///
+  /// In en, this message translates to:
+  /// **'Auto'**
+  String get modeAuto;
+
+  /// No description provided for @modeAutoDesc.
+  ///
+  /// In en, this message translates to:
+  /// **'Write in workspace; ask only on failure'**
+  String get modeAutoDesc;
+
+  /// No description provided for @modeFull.
+  ///
+  /// In en, this message translates to:
+  /// **'Full access'**
+  String get modeFull;
+
+  /// No description provided for @modeFullDesc.
+  ///
+  /// In en, this message translates to:
+  /// **'No sandbox, never ask (use with care)'**
+  String get modeFullDesc;
+
+  /// No description provided for @approvalPrompt.
+  ///
+  /// In en, this message translates to:
+  /// **'The agent wants to run a command'**
+  String get approvalPrompt;
+
+  /// No description provided for @approvalFilePrompt.
+  ///
+  /// In en, this message translates to:
+  /// **'The agent wants to edit files'**
+  String get approvalFilePrompt;
+
+  /// No description provided for @approvalPermissionPrompt.
+  ///
+  /// In en, this message translates to:
+  /// **'The agent requests additional permission'**
+  String get approvalPermissionPrompt;
+
+  /// No description provided for @approve.
+  ///
+  /// In en, this message translates to:
+  /// **'Approve'**
+  String get approve;
+
+  /// No description provided for @approveForSession.
+  ///
+  /// In en, this message translates to:
+  /// **'Approve for session'**
+  String get approveForSession;
+
+  /// No description provided for @deny.
+  ///
+  /// In en, this message translates to:
+  /// **'Deny'**
+  String get deny;
+
+  /// No description provided for @planMode.
+  ///
+  /// In en, this message translates to:
+  /// **'Plan'**
+  String get planMode;
+
+  /// No description provided for @planReadyTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Plan ready'**
+  String get planReadyTitle;
+
+  /// No description provided for @implementPlan.
+  ///
+  /// In en, this message translates to:
+  /// **'Implement plan'**
+  String get implementPlan;
+
+  /// No description provided for @keepPlanning.
+  ///
+  /// In en, this message translates to:
+  /// **'Keep planning'**
+  String get keepPlanning;
+
+  /// No description provided for @implementPlanPrompt.
+  ///
+  /// In en, this message translates to:
+  /// **'Go ahead and implement the plan above.'**
+  String get implementPlanPrompt;
+
+  /// No description provided for @noModelForMode.
+  ///
+  /// In en, this message translates to:
+  /// **'Can\'t switch mode: no model is available'**
+  String get noModelForMode;
+
+  /// No description provided for @effort.
+  ///
+  /// In en, this message translates to:
+  /// **'Effort'**
+  String get effort;
+
+  /// No description provided for @effortMinimal.
+  ///
+  /// In en, this message translates to:
+  /// **'Minimal'**
+  String get effortMinimal;
+
+  /// No description provided for @effortMinimalDesc.
+  ///
+  /// In en, this message translates to:
+  /// **'Least thinking, fastest'**
+  String get effortMinimalDesc;
+
+  /// No description provided for @effortLow.
+  ///
+  /// In en, this message translates to:
+  /// **'Low'**
+  String get effortLow;
+
+  /// No description provided for @effortLowDesc.
+  ///
+  /// In en, this message translates to:
+  /// **'A little thinking'**
+  String get effortLowDesc;
+
+  /// No description provided for @effortMedium.
+  ///
+  /// In en, this message translates to:
+  /// **'Medium'**
+  String get effortMedium;
+
+  /// No description provided for @effortMediumDesc.
+  ///
+  /// In en, this message translates to:
+  /// **'Balanced (usual default)'**
+  String get effortMediumDesc;
+
+  /// No description provided for @effortHigh.
+  ///
+  /// In en, this message translates to:
+  /// **'High'**
+  String get effortHigh;
+
+  /// No description provided for @effortHighDesc.
+  ///
+  /// In en, this message translates to:
+  /// **'Thorough'**
+  String get effortHighDesc;
+
+  /// No description provided for @effortXhigh.
+  ///
+  /// In en, this message translates to:
+  /// **'Extra high'**
+  String get effortXhigh;
+
+  /// No description provided for @effortXhighDesc.
+  ///
+  /// In en, this message translates to:
+  /// **'Most thorough, slowest'**
+  String get effortXhighDesc;
+
+  /// No description provided for @openLink.
+  ///
+  /// In en, this message translates to:
+  /// **'Open link'**
+  String get openLink;
+
+  /// No description provided for @linkOpenFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Couldn\'t open the link'**
+  String get linkOpenFailed;
+
+  /// No description provided for @contextLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Context'**
+  String get contextLabel;
+
+  /// No description provided for @contextUsageTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Context & usage'**
+  String get contextUsageTitle;
+
+  /// No description provided for @quota5h.
+  ///
+  /// In en, this message translates to:
+  /// **'5-hour limit'**
+  String get quota5h;
+
+  /// No description provided for @quotaWeekly.
+  ///
+  /// In en, this message translates to:
+  /// **'Weekly limit'**
+  String get quotaWeekly;
+
+  /// No description provided for @quotaUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Quota information is unavailable.'**
+  String get quotaUnavailable;
+
+  /// No description provided for @resetsIn.
+  ///
+  /// In en, this message translates to:
+  /// **'resets in {span}'**
+  String resetsIn(String span);
+
+  /// No description provided for @moreActions.
+  ///
+  /// In en, this message translates to:
+  /// **'More'**
+  String get moreActions;
+
+  /// No description provided for @backToProjects.
+  ///
+  /// In en, this message translates to:
+  /// **'Back to projects'**
+  String get backToProjects;
+
+  /// No description provided for @stateReady.
+  ///
+  /// In en, this message translates to:
+  /// **'Ready'**
+  String get stateReady;
+
+  /// No description provided for @stateWorking.
+  ///
+  /// In en, this message translates to:
+  /// **'Working…'**
+  String get stateWorking;
+
+  /// No description provided for @statePlanning.
+  ///
+  /// In en, this message translates to:
+  /// **'Planning…'**
+  String get statePlanning;
+
+  /// No description provided for @statePlanMode.
+  ///
+  /// In en, this message translates to:
+  /// **'Plan mode'**
+  String get statePlanMode;
+
+  /// No description provided for @stateDisconnected.
+  ///
+  /// In en, this message translates to:
+  /// **'Disconnected'**
+  String get stateDisconnected;
+
+  /// No description provided for @stateReconnecting.
+  ///
+  /// In en, this message translates to:
+  /// **'Reconnecting…'**
+  String get stateReconnecting;
+
+  /// No description provided for @compacted.
+  ///
+  /// In en, this message translates to:
+  /// **'Conversation compacted'**
+  String get compacted;
+
+  /// No description provided for @turnStopped.
+  ///
+  /// In en, this message translates to:
+  /// **'Stopped'**
+  String get turnStopped;
+
+  /// No description provided for @refreshStatus.
+  ///
+  /// In en, this message translates to:
+  /// **'Refresh status'**
+  String get refreshStatus;
+
+  /// No description provided for @statusOnline.
+  ///
+  /// In en, this message translates to:
+  /// **'Online'**
+  String get statusOnline;
+
+  /// No description provided for @statusConnected.
+  ///
+  /// In en, this message translates to:
+  /// **'Connected'**
+  String get statusConnected;
+
+  /// No description provided for @subscribedAlive.
+  ///
+  /// In en, this message translates to:
+  /// **'Subscribed'**
+  String get subscribedAlive;
+
+  /// No description provided for @subscribedDead.
+  ///
+  /// In en, this message translates to:
+  /// **'Dropped'**
+  String get subscribedDead;
+
+  /// No description provided for @runningSessions.
+  ///
+  /// In en, this message translates to:
+  /// **'{count} running'**
+  String runningSessions(int count);
+
+  /// No description provided for @compact.
+  ///
+  /// In en, this message translates to:
+  /// **'Compact conversation'**
+  String get compact;
+
+  /// No description provided for @compactConfirm.
+  ///
+  /// In en, this message translates to:
+  /// **'Summarise and shrink this conversation to free up context? This can\'t be undone.'**
+  String get compactConfirm;
+
+  /// No description provided for @viewDiff.
+  ///
+  /// In en, this message translates to:
+  /// **'View changes'**
+  String get viewDiff;
+
+  /// No description provided for @changesTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Changes'**
+  String get changesTitle;
+
+  /// No description provided for @noChanges.
+  ///
+  /// In en, this message translates to:
+  /// **'No changes vs the main branch.'**
+  String get noChanges;
+
+  /// No description provided for @start.
+  ///
+  /// In en, this message translates to:
+  /// **'Start'**
+  String get start;
+
+  /// No description provided for @create.
+  ///
+  /// In en, this message translates to:
+  /// **'Create'**
+  String get create;
+
+  /// No description provided for @copy.
+  ///
+  /// In en, this message translates to:
+  /// **'Copy'**
+  String get copy;
+
+  /// No description provided for @copied.
+  ///
+  /// In en, this message translates to:
+  /// **'Copied'**
+  String get copied;
+
+  /// No description provided for @toolSearched.
+  ///
+  /// In en, this message translates to:
+  /// **'Searched the web'**
+  String get toolSearched;
+
+  /// No description provided for @toolRan.
+  ///
+  /// In en, this message translates to:
+  /// **'Ran command'**
+  String get toolRan;
+
+  /// No description provided for @toolEdited.
+  ///
+  /// In en, this message translates to:
+  /// **'Edited files'**
+  String get toolEdited;
+
+  /// No description provided for @toolCalled.
+  ///
+  /// In en, this message translates to:
+  /// **'Used a tool'**
+  String get toolCalled;
+
+  /// No description provided for @toolThinking.
+  ///
+  /// In en, this message translates to:
+  /// **'Thinking'**
+  String get toolThinking;
+
+  /// No description provided for @toolPlan.
+  ///
+  /// In en, this message translates to:
+  /// **'Plan'**
+  String get toolPlan;
+
+  /// No description provided for @toolActivity.
+  ///
+  /// In en, this message translates to:
+  /// **'Activity'**
+  String get toolActivity;
 
   /// No description provided for @selectApiService.
   ///

@@ -1,10 +1,15 @@
-//! FRB-exposed bridge surface: config, discovery, API-service subscribe.
+//! FRB-exposed bridge surface: config, discovery, API-service subscribe,
+//! and app-server remote control (sessions, threads, turns, event stream).
 //! Thin glue over `crate::engine`; DTOs are plain (FRB-friendly) structs.
 use std::path::PathBuf;
 
 use anyhow::{anyhow, Result};
+use flutter_rust_bridge::frb;
 
-use crate::engine::{config, discovery, runtime};
+use crate::{
+    engine::{app_session, config, discovery, runtime},
+    frb_generated::StreamSink,
+};
 
 /// View of persisted config for the UI; never exposes the raw key.
 pub struct ConfigView {
@@ -168,4 +173,286 @@ pub fn subscriptions() -> Vec<SubStatusDto> {
             alive: s.alive,
         })
         .collect()
+}
+
+// ---------------------------------------------------------------------------
+// App-server remote control
+// ---------------------------------------------------------------------------
+
+/// One app-server event mirrored for Dart. `kind` is the JSON-RPC method
+/// (e.g. `turn/started`, `item/agentMessage/delta`, `turn/completed`).
+pub struct AppEventDto {
+    /// JSON-RPC method name of the originating notification.
+    pub kind: String,
+    /// Thread id the event belongs to, when present.
+    pub thread_id: Option<String>,
+    /// Item id the event refers to, when present.
+    pub item_id: Option<String>,
+    /// Item type tag when this event carries an item (`agentMessage`,
+    /// `commandExecution`, `webSearch`, `mcpToolCall`, `fileChange`,
+    /// `reasoning`, …); `None` for turn-level events.
+    pub item_type: Option<String>,
+    /// One-line summary for tool/activity items (command, query, tool name…).
+    pub title: Option<String>,
+    /// Text payload (a streaming delta or an item's body/detail).
+    pub text: Option<String>,
+    /// Token to answer a server approval request via [`app_respond_approval`];
+    /// `None` for ordinary notifications.
+    pub request_id: Option<String>,
+    /// Full params JSON for fields not modelled above.
+    pub raw: String,
+}
+
+/// Thread summary mirrored for Dart.
+pub struct ThreadMetaDto {
+    /// Thread id.
+    pub id: String,
+    /// Preview (usually the first user message).
+    pub preview: String,
+    /// Working directory (the project the thread controls).
+    pub cwd: String,
+    /// Unix seconds of last update.
+    pub updated_at: i64,
+}
+
+/// One model offered by the app-server, mirrored for Dart.
+pub struct ModelInfoDto {
+    /// Model id (used as the `model` param).
+    pub id: String,
+    /// Human-readable name.
+    pub display_name: String,
+    /// Short description.
+    pub description: String,
+    /// Reasoning efforts this model supports (so the UI offers only valid levels).
+    pub supported_reasoning_efforts: Vec<String>,
+    /// The model's default reasoning effort, if any.
+    pub default_reasoning_effort: Option<String>,
+}
+
+/// One materialised conversation item mirrored for Dart.
+pub struct ThreadItemDto {
+    /// Item id.
+    pub id: String,
+    /// Item type tag (`userMessage` / `agentMessage` / `commandExecution` /
+    /// `webSearch` / `mcpToolCall` / `fileChange` / `reasoning` / …).
+    pub item_type: String,
+    /// One-line summary for tool/activity items.
+    pub title: String,
+    /// Body / detail text.
+    pub text: String,
+}
+
+/// A thread's recovered history + whether a turn is still running, plus the
+/// metadata the status bar / git chip seed from on open.
+pub struct ThreadHistoryDto {
+    /// Conversation items, oldest first.
+    pub items: Vec<ThreadItemDto>,
+    /// Whether the most recent turn is still in progress.
+    pub running: bool,
+    /// Current git branch of the thread's cwd, if it's a repo.
+    pub branch: Option<String>,
+    /// The thread's resolved working directory (for git diff / status).
+    pub cwd: Option<String>,
+    /// Tokens currently occupying the model context window.
+    pub tokens_used: Option<i64>,
+    /// The model's context-window size in tokens.
+    pub context_window: Option<i64>,
+    /// Sticky collaboration mode (`"plan"` / `"default"`) so the UI plan toggle
+    /// reflects the server's real state.
+    pub collaboration_mode: Option<String>,
+    /// Current reasoning effort (`"low"`/`"medium"`/`"high"`) so the UI can show
+    /// the "thinking level" the thread runs with (from the resume response).
+    pub reasoning_effort: Option<String>,
+}
+
+/// Connect to an app-server service: subscribe on `127.0.0.1:<local_port>`,
+/// open the JSON-RPC websocket and run the `initialize` handshake. Idempotent.
+pub fn app_connect(service_key: String, local_port: u16) -> Result<()> {
+    apply_key()?;
+    let relay = current_relay()?;
+    app_session::connect(service_key, local_port, relay)
+}
+
+/// Whether a live app-server session exists for `service_key`.
+#[frb(sync)]
+pub fn app_is_connected(service_key: String) -> bool {
+    app_session::is_connected(&service_key)
+}
+
+/// Disconnect the app-server session and its pb-mapper subscription.
+pub fn app_disconnect(service_key: String) {
+    app_session::disconnect(&service_key);
+}
+
+/// Stream live app-server events (turn/item notifications) for `service_key`.
+/// The Dart side receives one [`AppEventDto`] per notification until the
+/// session is disconnected.
+pub fn app_events(service_key: String, sink: StreamSink<AppEventDto>) -> Result<()> {
+    let mut rx = app_session::subscribe_events(&service_key)?;
+    runtime::runtime().spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(ev) => {
+                    let dto = AppEventDto {
+                        kind: ev.kind,
+                        thread_id: ev.thread_id,
+                        item_id: ev.item_id,
+                        item_type: ev.item_type,
+                        title: ev.title,
+                        text: ev.text,
+                        request_id: ev.request_id,
+                        raw: ev.raw,
+                    };
+                    // Dart dropped the stream: stop forwarding.
+                    if sink.add(dto).is_err() {
+                        break;
+                    }
+                },
+                // Slow consumer dropped some events; keep going.
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    });
+    Ok(())
+}
+
+/// List threads known to the app-server.
+pub fn app_thread_list(service_key: String) -> Result<Vec<ThreadMetaDto>> {
+    Ok(app_session::thread_list(&service_key)?
+        .into_iter()
+        .map(|t| ThreadMetaDto {
+            id: t.id,
+            preview: t.preview,
+            cwd: t.cwd,
+            updated_at: t.updated_at,
+        })
+        .collect())
+}
+
+/// List the models the app-server offers.
+pub fn app_model_list(service_key: String) -> Result<Vec<ModelInfoDto>> {
+    Ok(app_session::model_list(&service_key)?
+        .into_iter()
+        .map(|m| ModelInfoDto {
+            id: m.id,
+            display_name: m.display_name,
+            description: m.description,
+            supported_reasoning_efforts: m.supported_reasoning_efforts,
+            default_reasoning_effort: m.default_reasoning_effort,
+        })
+        .collect())
+}
+
+/// Start a new thread / project. `approval_policy` is one of
+/// `untrusted` / `on-failure` / `on-request` / `never`; `sandbox` is one of
+/// `read-only` / `workspace-write` / `danger-full-access`. Returns the id.
+pub fn app_thread_start(
+    service_key: String,
+    model: Option<String>,
+    cwd: Option<String>,
+    approval_policy: Option<String>,
+    sandbox: Option<String>,
+) -> Result<String> {
+    app_session::thread_start(&service_key, model, cwd, approval_policy, sandbox)
+}
+
+/// Answer a server approval request. `decision` is a ReviewDecision wire value
+/// (`approved` / `denied` / `abort` …).
+pub fn app_respond_approval(
+    service_key: String,
+    request_id: String,
+    decision: String,
+) -> Result<()> {
+    app_session::respond_approval(&service_key, &request_id, &decision)
+}
+
+/// Resume an existing thread (load it into the session) before reading it or
+/// sending turns; otherwise the server reports "thread not found".
+pub fn app_thread_resume(service_key: String, thread_id: String) -> Result<()> {
+    app_session::thread_resume(&service_key, &thread_id)
+}
+
+/// Read a thread's conversation items (oldest first) and whether a turn is
+/// still running, so re-opening an in-flight thread restores live state.
+pub fn app_thread_read(service_key: String, thread_id: String) -> Result<ThreadHistoryDto> {
+    let h = app_session::thread_read(&service_key, &thread_id)?;
+    Ok(ThreadHistoryDto {
+        items: h
+            .items
+            .into_iter()
+            .map(|i| ThreadItemDto {
+                id: i.id,
+                item_type: i.item_type,
+                title: i.title,
+                text: i.text,
+            })
+            .collect(),
+        running: h.running,
+        branch: h.branch,
+        cwd: h.cwd,
+        tokens_used: h.tokens_used,
+        context_window: h.context_window,
+        collaboration_mode: h.collaboration_mode,
+        reasoning_effort: h.reasoning_effort,
+    })
+}
+
+/// Read the account rate-limit / quota snapshot as raw JSON (5h + weekly
+/// windows). Parsed on the Dart side since the shape is nested and volatile.
+pub fn app_rate_limits(service_key: String) -> Result<String> {
+    app_session::rate_limits(&service_key)
+}
+
+/// Unified diff of the repo at `cwd` vs its remote default branch. Empty when
+/// the cwd isn't a git repo or there are no changes.
+pub fn app_git_diff(service_key: String, cwd: String) -> Result<String> {
+    app_session::git_diff(&service_key, &cwd)
+}
+
+/// Start a manual conversation compaction; the server emits `thread/compacted`
+/// when done.
+pub fn app_compact(service_key: String, thread_id: String) -> Result<()> {
+    app_session::compact(&service_key, &thread_id)
+}
+
+/// Send a user message, starting a model turn. `model` / `approval_policy` /
+/// `sandbox` are optional per-turn overrides (apply to this and subsequent
+/// turns) so model and permission can change mid-conversation.
+/// `collaboration_mode` ("plan" / "default", or null to leave unchanged) is
+/// sticky on the thread, so pass "default" to leave plan mode.
+/// `reasoning_effort` ("low"/"medium"/"high", or null for the model default) is
+/// the "thinking level" for this turn. The reply streams via [`app_events`];
+/// this returns once the turn is accepted.
+#[allow(clippy::too_many_arguments)]
+pub fn app_turn_start(
+    service_key: String,
+    thread_id: String,
+    text: String,
+    model: Option<String>,
+    approval_policy: Option<String>,
+    sandbox: Option<String>,
+    collaboration_mode: Option<String>,
+    reasoning_effort: Option<String>,
+) -> Result<()> {
+    app_session::turn_start(
+        &service_key,
+        &thread_id,
+        text,
+        model,
+        approval_policy,
+        sandbox,
+        collaboration_mode,
+        reasoning_effort,
+    )
+}
+
+/// Interrupt the running turn. `turn_id` (from the latest `turn/started`) is
+/// required by the server; pass null only if unknown.
+pub fn app_turn_interrupt(
+    service_key: String,
+    thread_id: String,
+    turn_id: Option<String>,
+) -> Result<()> {
+    app_session::turn_interrupt(&service_key, &thread_id, turn_id)
 }

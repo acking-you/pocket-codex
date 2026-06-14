@@ -3,7 +3,9 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
+import 'package:pocket_codex/src/error_format.dart';
 import 'package:pocket_codex/src/providers.dart';
+import 'package:pocket_codex/src/widgets/links.dart';
 
 /// API-service detail: subscribe and expose a local OpenAI-compatible port.
 class ApiServiceScreen extends ConsumerStatefulWidget {
@@ -25,7 +27,10 @@ class ApiServiceScreen extends ConsumerStatefulWidget {
 }
 
 class _ApiServiceState extends ConsumerState<ApiServiceScreen> {
-  final _port = TextEditingController(text: '18180');
+  // Subscriber listener default. Deliberately differs from the server-side
+  // `api serve` default (18180) so running both on one host does not collide;
+  // matches the CLI's `api connect` default.
+  final _port = TextEditingController(text: '28180');
   SubInfo? _sub;
   String? _error;
   bool _busy = false;
@@ -53,7 +58,7 @@ class _ApiServiceState extends ConsumerState<ApiServiceScreen> {
           .apiSubscribe(widget.serviceKey, port);
       ref.invalidate(subscriptionsProvider);
     } catch (e) {
-      _error = '${l10n.subscribeFailed}\n$e';
+      _error = '${l10n.subscribeFailed}\n${friendlyError(e)}';
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -91,9 +96,13 @@ class _ApiServiceState extends ConsumerState<ApiServiceScreen> {
         ] else ...[
           Card(
             child: ListTile(
-              title: SelectableText(
-                'http://${_sub!.localAddr}/v1',
+              title: KeyedSubtree(
                 key: const Key('base-url'),
+                child: linkifyText(
+                  context,
+                  'http://${_sub!.localAddr}/v1',
+                  selectable: true,
+                ),
               ),
               subtitle: const Text('base_url'),
               trailing: IconButton(
@@ -124,10 +133,13 @@ class _ApiServiceState extends ConsumerState<ApiServiceScreen> {
         if (_error != null)
           Padding(
             padding: const EdgeInsets.only(top: 16),
-            child: Text(
-              _error!,
+            child: KeyedSubtree(
               key: const Key('api-error'),
-              style: TextStyle(color: Theme.of(context).colorScheme.error),
+              child: linkifyText(
+                context,
+                _error!,
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
             ),
           ),
       ],
@@ -170,8 +182,10 @@ class _ProviderSnippet extends StatelessWidget {
                 ),
               ],
             ),
-            SelectableText(
+            linkifyText(
+              context,
               snippet,
+              selectable: true,
               style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
             ),
           ],

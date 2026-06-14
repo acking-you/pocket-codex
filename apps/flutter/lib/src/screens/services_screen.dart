@@ -3,8 +3,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
+import 'package:pocket_codex/src/error_format.dart';
 import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/screens/api_service_screen.dart';
+import 'package:pocket_codex/src/widgets/brand_logo.dart';
+import 'package:pocket_codex/src/widgets/loading.dart';
+import 'package:pocket_codex/src/widgets/status_dots.dart';
 
 /// Home screen: lists discovered services on the configured relay.
 class ServicesScreen extends ConsumerWidget {
@@ -19,8 +23,28 @@ class ServicesScreen extends ConsumerWidget {
     final selectedKey = ref.watch(selectedApiKeyProvider);
     return Scaffold(
       appBar: AppBar(
-        title: Text(l10n.appTitle),
+        title: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const BrandLogo(size: 26, plated: false),
+            const SizedBox(width: 10),
+            Flexible(
+              child: Text(l10n.appTitle, overflow: TextOverflow.ellipsis),
+            ),
+          ],
+        ),
         actions: [
+          IconButton(
+            key: const Key('refresh-btn'),
+            icon: const Icon(Icons.refresh),
+            tooltip: l10n.refreshStatus,
+            // Re-discover services + re-read subscription health, and rebuild so
+            // each app-server's connected/online dot re-evaluates.
+            onPressed: () {
+              ref.invalidate(servicesProvider);
+              ref.invalidate(subscriptionsProvider);
+            },
+          ),
           IconButton(
             key: const Key('settings-btn'),
             icon: const Icon(Icons.settings),
@@ -28,13 +52,19 @@ class ServicesScreen extends ConsumerWidget {
           ),
         ],
       ),
-      body: servicesAsync.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => _ErrorState(
-          detail: '$e',
-          onRetry: () => ref.invalidate(servicesProvider),
-        ),
-        data: (services) => RefreshIndicator(
+      body: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 250),
+        child: servicesAsync.when(
+          loading: () => const ListLoadingSkeleton(key: ValueKey('svc-loading')),
+          error: (e, _) => KeyedSubtree(
+            key: const ValueKey('svc-error'),
+            child: _ErrorState(
+              detail: friendlyError(e),
+              onRetry: () => ref.invalidate(servicesProvider),
+            ),
+          ),
+          data: (services) => RefreshIndicator(
+            key: const ValueKey('svc-data'),
           onRefresh: () async => ref.invalidate(servicesProvider),
           child: LayoutBuilder(
             builder: (context, c) {
@@ -49,6 +79,10 @@ class ServicesScreen extends ConsumerWidget {
                     context.push('/api/$key');
                   }
                 },
+                // App-server sessions are a full-screen chat; always push a
+                // route (no embedded pane) regardless of layout width.
+                onTapApp: (key) =>
+                    context.push('/app/${Uri.encodeComponent(key)}'),
               );
               if (!wide) return list;
               final apiServices = services
@@ -76,31 +110,58 @@ class ServicesScreen extends ConsumerWidget {
           ),
         ),
       ),
+      ),
     );
   }
 }
 
-class _ServiceList extends StatelessWidget {
+class _ServiceList extends ConsumerWidget {
   const _ServiceList({
     required this.relay,
     required this.services,
     required this.onTapApi,
+    required this.onTapApp,
   });
   final String? relay;
   final List<ServiceEntry> services;
   final void Function(String key) onTapApi;
+  final void Function(String key) onTapApp;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final l10n = AppLocalizations.of(context);
+    final scheme = Theme.of(context).colorScheme;
+    final online = Colors.green.shade600;
     final api = services.where((s) => s.kind == 'api').toList();
     final app = services.where((s) => s.kind == 'app').toList();
+    // Live subscription health, keyed by service key (alive/dead). A discovered
+    // service is by definition currently registered on the relay → "online".
+    final subs = {
+      for (final s in ref.watch(subscriptionsProvider).valueOrNull ?? const [])
+        s.key: s,
+    };
+    final bridge = ref.watch(bridgeApiProvider);
+
+    // Per-API status: subscribed+alive, subscribed+dropped, or just online.
+    Widget apiStatus(ServiceEntry s) {
+      final sub = subs[s.key];
+      if (sub != null) {
+        return sub.alive
+            ? StatusChip(color: online, label: l10n.subscribedAlive)
+            : StatusChip(color: scheme.error, label: l10n.subscribedDead);
+      }
+      return StatusChip(color: online, label: l10n.statusOnline);
+    }
+
     return ListView(
       children: [
         ListTile(
-          leading: const Icon(Icons.dns, color: Colors.green),
+          leading: const Icon(Icons.dns),
           title: Text(relay ?? l10n.relayNotConfigured),
           subtitle: Text(l10n.relayRow),
+          // The list only renders once discovery succeeded, so the relay is
+          // reachable here; the error/offline case is the screen's error state.
+          trailing: StatusChip(color: online, label: l10n.statusOnline),
         ),
         if (api.isNotEmpty) _SectionHeader(l10n.apiServicesSection),
         ...api.map(
@@ -109,19 +170,32 @@ class _ServiceList extends StatelessWidget {
             leading: const Icon(Icons.api),
             title: Text(s.name),
             subtitle: Text(s.device),
+            trailing: apiStatus(s),
             onTap: () => onTapApi(s.key),
           ),
         ),
         if (app.isNotEmpty) _SectionHeader(l10n.appServerServices),
-        ...app.map(
-          (s) => ListTile(
+        ...app.map((s) {
+          final connected = bridge.appIsConnected(s.key);
+          return ListTile(
             key: Key('svc-${s.key}'),
             leading: const Icon(Icons.computer),
             title: Text(s.name),
             subtitle: Text(l10n.appServerSubtitle(s.device)),
-            enabled: false,
-          ),
-        ),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                StatusChip(
+                  color: online,
+                  label: connected ? l10n.statusConnected : l10n.statusOnline,
+                ),
+                const SizedBox(width: 4),
+                const Icon(Icons.chevron_right),
+              ],
+            ),
+            onTap: () => onTapApp(s.key),
+          );
+        }),
         if (services.isEmpty)
           Padding(
             padding: const EdgeInsets.all(32),

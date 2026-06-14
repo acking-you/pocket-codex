@@ -19,6 +19,9 @@
 /// JSON-RPC 2.0 envelopes used by the codex app-server.
 pub mod protocol;
 
+/// Async WebSocket JSON-RPC client for a `codex app-server`.
+pub mod client;
+
 /// Spawn / inspect / stop the supervised `codex app-server` process.
 pub mod process;
 

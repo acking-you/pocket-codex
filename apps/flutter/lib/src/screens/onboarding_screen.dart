@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
+import 'package:pocket_codex/src/error_format.dart';
 import 'package:pocket_codex/src/providers.dart';
+import 'package:pocket_codex/src/widgets/brand_logo.dart';
 
 /// First-run setup: import a `pcx1:` string or type relay + key.
 class OnboardingScreen extends ConsumerStatefulWidget {
@@ -36,7 +38,7 @@ class _OnboardingState extends ConsumerState<OnboardingScreen> {
       await op();
       if (mounted) context.go('/');
     } catch (e) {
-      setState(() => _error = '$e');
+      setState(() => _error = friendlyError(e));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -55,10 +57,12 @@ class _OnboardingState extends ConsumerState<OnboardingScreen> {
               padding: const EdgeInsets.all(24),
               shrinkWrap: true,
               children: [
-                Image.asset(
-                  'assets/logo/poster.png',
-                  height: 120,
-                  key: const Key('onboarding-logo'),
+                const Center(child: BrandLogo(key: Key('onboarding-logo'))),
+                const SizedBox(height: 16),
+                Text(
+                  l10n.appTitle,
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.headlineSmall,
                 ),
                 const SizedBox(height: 24),
                 Text(

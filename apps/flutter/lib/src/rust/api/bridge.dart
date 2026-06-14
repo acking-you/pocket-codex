@@ -59,6 +59,215 @@ Future<void> apiUnsubscribe({required String serviceKey}) =>
 Future<List<SubStatusDto>> subscriptions() =>
     RustLib.instance.api.crateApiBridgeSubscriptions();
 
+/// Connect to an app-server service: subscribe on `127.0.0.1:<local_port>`,
+/// open the JSON-RPC websocket and run the `initialize` handshake. Idempotent.
+Future<void> appConnect({required String serviceKey, required int localPort}) =>
+    RustLib.instance.api.crateApiBridgeAppConnect(
+      serviceKey: serviceKey,
+      localPort: localPort,
+    );
+
+/// Whether a live app-server session exists for `service_key`.
+bool appIsConnected({required String serviceKey}) =>
+    RustLib.instance.api.crateApiBridgeAppIsConnected(serviceKey: serviceKey);
+
+/// Disconnect the app-server session and its pb-mapper subscription.
+Future<void> appDisconnect({required String serviceKey}) =>
+    RustLib.instance.api.crateApiBridgeAppDisconnect(serviceKey: serviceKey);
+
+/// Stream live app-server events (turn/item notifications) for `service_key`.
+/// The Dart side receives one [`AppEventDto`] per notification until the
+/// session is disconnected.
+Stream<AppEventDto> appEvents({required String serviceKey}) =>
+    RustLib.instance.api.crateApiBridgeAppEvents(serviceKey: serviceKey);
+
+/// List threads known to the app-server.
+Future<List<ThreadMetaDto>> appThreadList({required String serviceKey}) =>
+    RustLib.instance.api.crateApiBridgeAppThreadList(serviceKey: serviceKey);
+
+/// List the models the app-server offers.
+Future<List<ModelInfoDto>> appModelList({required String serviceKey}) =>
+    RustLib.instance.api.crateApiBridgeAppModelList(serviceKey: serviceKey);
+
+/// Start a new thread / project. `approval_policy` is one of
+/// `untrusted` / `on-failure` / `on-request` / `never`; `sandbox` is one of
+/// `read-only` / `workspace-write` / `danger-full-access`. Returns the id.
+Future<String> appThreadStart({
+  required String serviceKey,
+  String? model,
+  String? cwd,
+  String? approvalPolicy,
+  String? sandbox,
+}) => RustLib.instance.api.crateApiBridgeAppThreadStart(
+  serviceKey: serviceKey,
+  model: model,
+  cwd: cwd,
+  approvalPolicy: approvalPolicy,
+  sandbox: sandbox,
+);
+
+/// Answer a server approval request. `decision` is a ReviewDecision wire value
+/// (`approved` / `denied` / `abort` …).
+Future<void> appRespondApproval({
+  required String serviceKey,
+  required String requestId,
+  required String decision,
+}) => RustLib.instance.api.crateApiBridgeAppRespondApproval(
+  serviceKey: serviceKey,
+  requestId: requestId,
+  decision: decision,
+);
+
+/// Resume an existing thread (load it into the session) before reading it or
+/// sending turns; otherwise the server reports "thread not found".
+Future<void> appThreadResume({
+  required String serviceKey,
+  required String threadId,
+}) => RustLib.instance.api.crateApiBridgeAppThreadResume(
+  serviceKey: serviceKey,
+  threadId: threadId,
+);
+
+/// Read a thread's conversation items (oldest first) and whether a turn is
+/// still running, so re-opening an in-flight thread restores live state.
+Future<ThreadHistoryDto> appThreadRead({
+  required String serviceKey,
+  required String threadId,
+}) => RustLib.instance.api.crateApiBridgeAppThreadRead(
+  serviceKey: serviceKey,
+  threadId: threadId,
+);
+
+/// Read the account rate-limit / quota snapshot as raw JSON (5h + weekly
+/// windows). Parsed on the Dart side since the shape is nested and volatile.
+Future<String> appRateLimits({required String serviceKey}) =>
+    RustLib.instance.api.crateApiBridgeAppRateLimits(serviceKey: serviceKey);
+
+/// Unified diff of the repo at `cwd` vs its remote default branch. Empty when
+/// the cwd isn't a git repo or there are no changes.
+Future<String> appGitDiff({required String serviceKey, required String cwd}) =>
+    RustLib.instance.api.crateApiBridgeAppGitDiff(
+      serviceKey: serviceKey,
+      cwd: cwd,
+    );
+
+/// Start a manual conversation compaction; the server emits `thread/compacted`
+/// when done.
+Future<void> appCompact({
+  required String serviceKey,
+  required String threadId,
+}) => RustLib.instance.api.crateApiBridgeAppCompact(
+  serviceKey: serviceKey,
+  threadId: threadId,
+);
+
+/// Send a user message, starting a model turn. `model` / `approval_policy` /
+/// `sandbox` are optional per-turn overrides (apply to this and subsequent
+/// turns) so model and permission can change mid-conversation.
+/// `collaboration_mode` ("plan" / "default", or null to leave unchanged) is
+/// sticky on the thread, so pass "default" to leave plan mode.
+/// `reasoning_effort` ("low"/"medium"/"high", or null for the model default) is
+/// the "thinking level" for this turn. The reply streams via [`app_events`];
+/// this returns once the turn is accepted.
+Future<void> appTurnStart({
+  required String serviceKey,
+  required String threadId,
+  required String text,
+  String? model,
+  String? approvalPolicy,
+  String? sandbox,
+  String? collaborationMode,
+  String? reasoningEffort,
+}) => RustLib.instance.api.crateApiBridgeAppTurnStart(
+  serviceKey: serviceKey,
+  threadId: threadId,
+  text: text,
+  model: model,
+  approvalPolicy: approvalPolicy,
+  sandbox: sandbox,
+  collaborationMode: collaborationMode,
+  reasoningEffort: reasoningEffort,
+);
+
+/// Interrupt the running turn. `turn_id` (from the latest `turn/started`) is
+/// required by the server; pass null only if unknown.
+Future<void> appTurnInterrupt({
+  required String serviceKey,
+  required String threadId,
+  String? turnId,
+}) => RustLib.instance.api.crateApiBridgeAppTurnInterrupt(
+  serviceKey: serviceKey,
+  threadId: threadId,
+  turnId: turnId,
+);
+
+/// One app-server event mirrored for Dart. `kind` is the JSON-RPC method
+/// (e.g. `turn/started`, `item/agentMessage/delta`, `turn/completed`).
+class AppEventDto {
+  /// JSON-RPC method name of the originating notification.
+  final String kind;
+
+  /// Thread id the event belongs to, when present.
+  final String? threadId;
+
+  /// Item id the event refers to, when present.
+  final String? itemId;
+
+  /// Item type tag when this event carries an item (`agentMessage`,
+  /// `commandExecution`, `webSearch`, `mcpToolCall`, `fileChange`,
+  /// `reasoning`, …); `None` for turn-level events.
+  final String? itemType;
+
+  /// One-line summary for tool/activity items (command, query, tool name…).
+  final String? title;
+
+  /// Text payload (a streaming delta or an item's body/detail).
+  final String? text;
+
+  /// Token to answer a server approval request via [`app_respond_approval`];
+  /// `None` for ordinary notifications.
+  final String? requestId;
+
+  /// Full params JSON for fields not modelled above.
+  final String raw;
+
+  const AppEventDto({
+    required this.kind,
+    this.threadId,
+    this.itemId,
+    this.itemType,
+    this.title,
+    this.text,
+    this.requestId,
+    required this.raw,
+  });
+
+  @override
+  int get hashCode =>
+      kind.hashCode ^
+      threadId.hashCode ^
+      itemId.hashCode ^
+      itemType.hashCode ^
+      title.hashCode ^
+      text.hashCode ^
+      requestId.hashCode ^
+      raw.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AppEventDto &&
+          runtimeType == other.runtimeType &&
+          kind == other.kind &&
+          threadId == other.threadId &&
+          itemId == other.itemId &&
+          itemType == other.itemType &&
+          title == other.title &&
+          text == other.text &&
+          requestId == other.requestId &&
+          raw == other.raw;
+}
+
 /// View of persisted config for the UI; never exposes the raw key.
 class ConfigView {
   /// Configured relay `host:port`, if any.
@@ -84,6 +293,51 @@ class ConfigView {
           relay == other.relay &&
           hasKey == other.hasKey &&
           locale == other.locale;
+}
+
+/// One model offered by the app-server, mirrored for Dart.
+class ModelInfoDto {
+  /// Model id (used as the `model` param).
+  final String id;
+
+  /// Human-readable name.
+  final String displayName;
+
+  /// Short description.
+  final String description;
+
+  /// Reasoning efforts this model supports (so the UI offers only valid levels).
+  final List<String> supportedReasoningEfforts;
+
+  /// The model's default reasoning effort, if any.
+  final String? defaultReasoningEffort;
+
+  const ModelInfoDto({
+    required this.id,
+    required this.displayName,
+    required this.description,
+    required this.supportedReasoningEfforts,
+    this.defaultReasoningEffort,
+  });
+
+  @override
+  int get hashCode =>
+      id.hashCode ^
+      displayName.hashCode ^
+      description.hashCode ^
+      supportedReasoningEfforts.hashCode ^
+      defaultReasoningEffort.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ModelInfoDto &&
+          runtimeType == other.runtimeType &&
+          id == other.id &&
+          displayName == other.displayName &&
+          description == other.description &&
+          supportedReasoningEfforts == other.supportedReasoningEfforts &&
+          defaultReasoningEffort == other.defaultReasoningEffort;
 }
 
 /// A discovered service, mirrored for Dart.
@@ -150,4 +404,143 @@ class SubStatusDto {
           key == other.key &&
           localAddr == other.localAddr &&
           alive == other.alive;
+}
+
+/// A thread's recovered history + whether a turn is still running, plus the
+/// metadata the status bar / git chip seed from on open.
+class ThreadHistoryDto {
+  /// Conversation items, oldest first.
+  final List<ThreadItemDto> items;
+
+  /// Whether the most recent turn is still in progress.
+  final bool running;
+
+  /// Current git branch of the thread's cwd, if it's a repo.
+  final String? branch;
+
+  /// The thread's resolved working directory (for git diff / status).
+  final String? cwd;
+
+  /// Tokens currently occupying the model context window.
+  final PlatformInt64? tokensUsed;
+
+  /// The model's context-window size in tokens.
+  final PlatformInt64? contextWindow;
+
+  /// Sticky collaboration mode (`"plan"` / `"default"`) so the UI plan toggle
+  /// reflects the server's real state.
+  final String? collaborationMode;
+
+  /// Current reasoning effort (`"low"`/`"medium"`/`"high"`) so the UI can show
+  /// the "thinking level" the thread runs with (from the resume response).
+  final String? reasoningEffort;
+
+  const ThreadHistoryDto({
+    required this.items,
+    required this.running,
+    this.branch,
+    this.cwd,
+    this.tokensUsed,
+    this.contextWindow,
+    this.collaborationMode,
+    this.reasoningEffort,
+  });
+
+  @override
+  int get hashCode =>
+      items.hashCode ^
+      running.hashCode ^
+      branch.hashCode ^
+      cwd.hashCode ^
+      tokensUsed.hashCode ^
+      contextWindow.hashCode ^
+      collaborationMode.hashCode ^
+      reasoningEffort.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ThreadHistoryDto &&
+          runtimeType == other.runtimeType &&
+          items == other.items &&
+          running == other.running &&
+          branch == other.branch &&
+          cwd == other.cwd &&
+          tokensUsed == other.tokensUsed &&
+          contextWindow == other.contextWindow &&
+          collaborationMode == other.collaborationMode &&
+          reasoningEffort == other.reasoningEffort;
+}
+
+/// One materialised conversation item mirrored for Dart.
+class ThreadItemDto {
+  /// Item id.
+  final String id;
+
+  /// Item type tag (`userMessage` / `agentMessage` / `commandExecution` /
+  /// `webSearch` / `mcpToolCall` / `fileChange` / `reasoning` / …).
+  final String itemType;
+
+  /// One-line summary for tool/activity items.
+  final String title;
+
+  /// Body / detail text.
+  final String text;
+
+  const ThreadItemDto({
+    required this.id,
+    required this.itemType,
+    required this.title,
+    required this.text,
+  });
+
+  @override
+  int get hashCode =>
+      id.hashCode ^ itemType.hashCode ^ title.hashCode ^ text.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ThreadItemDto &&
+          runtimeType == other.runtimeType &&
+          id == other.id &&
+          itemType == other.itemType &&
+          title == other.title &&
+          text == other.text;
+}
+
+/// Thread summary mirrored for Dart.
+class ThreadMetaDto {
+  /// Thread id.
+  final String id;
+
+  /// Preview (usually the first user message).
+  final String preview;
+
+  /// Working directory (the project the thread controls).
+  final String cwd;
+
+  /// Unix seconds of last update.
+  final PlatformInt64 updatedAt;
+
+  const ThreadMetaDto({
+    required this.id,
+    required this.preview,
+    required this.cwd,
+    required this.updatedAt,
+  });
+
+  @override
+  int get hashCode =>
+      id.hashCode ^ preview.hashCode ^ cwd.hashCode ^ updatedAt.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ThreadMetaDto &&
+          runtimeType == other.runtimeType &&
+          id == other.id &&
+          preview == other.preview &&
+          cwd == other.cwd &&
+          updatedAt == other.updatedAt;
 }

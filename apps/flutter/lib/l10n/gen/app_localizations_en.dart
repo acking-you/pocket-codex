@@ -50,8 +50,297 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String appServerSubtitle(String device) {
-    return '$device · sessions in P2';
+    return '$device · remote control';
   }
+
+  @override
+  String get appServiceTitle => 'App-server';
+
+  @override
+  String get connecting => 'Connecting…';
+
+  @override
+  String get connectFailed => 'Couldn\'t connect to the app-server';
+
+  @override
+  String get conversationsSection => 'Conversations';
+
+  @override
+  String get newConversation => 'New conversation';
+
+  @override
+  String get noThreads => 'No conversations yet';
+
+  @override
+  String get untitledThread => '(untitled)';
+
+  @override
+  String get messageHint => 'Message…';
+
+  @override
+  String get send => 'Send';
+
+  @override
+  String get interrupt => 'Interrupt';
+
+  @override
+  String get thinking => 'Thinking…';
+
+  @override
+  String get emptyConversation => 'Send a message to start the conversation';
+
+  @override
+  String get turnFailed => 'The turn failed';
+
+  @override
+  String get disconnect => 'Disconnect';
+
+  @override
+  String get connectionLost => 'Connection lost';
+
+  @override
+  String get reconnect => 'Reconnect';
+
+  @override
+  String get projectsSection => 'Projects';
+
+  @override
+  String get newProject => 'New project';
+
+  @override
+  String get currentProject => 'Project';
+
+  @override
+  String get remotePathLabel => 'Remote folder path (on the host)';
+
+  @override
+  String get remotePathHint =>
+      'e.g. /home/ubuntu/myproject — blank uses the host default';
+
+  @override
+  String get model => 'Model';
+
+  @override
+  String get modelDefault => 'Default model';
+
+  @override
+  String get defaultFolder => 'Default folder';
+
+  @override
+  String get permissionMode => 'Permission';
+
+  @override
+  String get modeReadOnly => 'Read-only';
+
+  @override
+  String get modeReadOnlyDesc => 'Ask before running; no file writes';
+
+  @override
+  String get modeAuto => 'Auto';
+
+  @override
+  String get modeAutoDesc => 'Write in workspace; ask only on failure';
+
+  @override
+  String get modeFull => 'Full access';
+
+  @override
+  String get modeFullDesc => 'No sandbox, never ask (use with care)';
+
+  @override
+  String get approvalPrompt => 'The agent wants to run a command';
+
+  @override
+  String get approvalFilePrompt => 'The agent wants to edit files';
+
+  @override
+  String get approvalPermissionPrompt =>
+      'The agent requests additional permission';
+
+  @override
+  String get approve => 'Approve';
+
+  @override
+  String get approveForSession => 'Approve for session';
+
+  @override
+  String get deny => 'Deny';
+
+  @override
+  String get planMode => 'Plan';
+
+  @override
+  String get planReadyTitle => 'Plan ready';
+
+  @override
+  String get implementPlan => 'Implement plan';
+
+  @override
+  String get keepPlanning => 'Keep planning';
+
+  @override
+  String get implementPlanPrompt => 'Go ahead and implement the plan above.';
+
+  @override
+  String get noModelForMode => 'Can\'t switch mode: no model is available';
+
+  @override
+  String get effort => 'Effort';
+
+  @override
+  String get effortMinimal => 'Minimal';
+
+  @override
+  String get effortMinimalDesc => 'Least thinking, fastest';
+
+  @override
+  String get effortLow => 'Low';
+
+  @override
+  String get effortLowDesc => 'A little thinking';
+
+  @override
+  String get effortMedium => 'Medium';
+
+  @override
+  String get effortMediumDesc => 'Balanced (usual default)';
+
+  @override
+  String get effortHigh => 'High';
+
+  @override
+  String get effortHighDesc => 'Thorough';
+
+  @override
+  String get effortXhigh => 'Extra high';
+
+  @override
+  String get effortXhighDesc => 'Most thorough, slowest';
+
+  @override
+  String get openLink => 'Open link';
+
+  @override
+  String get linkOpenFailed => 'Couldn\'t open the link';
+
+  @override
+  String get contextLabel => 'Context';
+
+  @override
+  String get contextUsageTitle => 'Context & usage';
+
+  @override
+  String get quota5h => '5-hour limit';
+
+  @override
+  String get quotaWeekly => 'Weekly limit';
+
+  @override
+  String get quotaUnavailable => 'Quota information is unavailable.';
+
+  @override
+  String resetsIn(String span) {
+    return 'resets in $span';
+  }
+
+  @override
+  String get moreActions => 'More';
+
+  @override
+  String get backToProjects => 'Back to projects';
+
+  @override
+  String get stateReady => 'Ready';
+
+  @override
+  String get stateWorking => 'Working…';
+
+  @override
+  String get statePlanning => 'Planning…';
+
+  @override
+  String get statePlanMode => 'Plan mode';
+
+  @override
+  String get stateDisconnected => 'Disconnected';
+
+  @override
+  String get stateReconnecting => 'Reconnecting…';
+
+  @override
+  String get compacted => 'Conversation compacted';
+
+  @override
+  String get turnStopped => 'Stopped';
+
+  @override
+  String get refreshStatus => 'Refresh status';
+
+  @override
+  String get statusOnline => 'Online';
+
+  @override
+  String get statusConnected => 'Connected';
+
+  @override
+  String get subscribedAlive => 'Subscribed';
+
+  @override
+  String get subscribedDead => 'Dropped';
+
+  @override
+  String runningSessions(int count) {
+    return '$count running';
+  }
+
+  @override
+  String get compact => 'Compact conversation';
+
+  @override
+  String get compactConfirm =>
+      'Summarise and shrink this conversation to free up context? This can\'t be undone.';
+
+  @override
+  String get viewDiff => 'View changes';
+
+  @override
+  String get changesTitle => 'Changes';
+
+  @override
+  String get noChanges => 'No changes vs the main branch.';
+
+  @override
+  String get start => 'Start';
+
+  @override
+  String get create => 'Create';
+
+  @override
+  String get copy => 'Copy';
+
+  @override
+  String get copied => 'Copied';
+
+  @override
+  String get toolSearched => 'Searched the web';
+
+  @override
+  String get toolRan => 'Ran command';
+
+  @override
+  String get toolEdited => 'Edited files';
+
+  @override
+  String get toolCalled => 'Used a tool';
+
+  @override
+  String get toolThinking => 'Thinking';
+
+  @override
+  String get toolPlan => 'Plan';
+
+  @override
+  String get toolActivity => 'Activity';
 
   @override
   String get selectApiService => 'Select an API service';
