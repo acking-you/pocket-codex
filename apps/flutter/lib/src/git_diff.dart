@@ -82,7 +82,9 @@ class DiffModel {
       lines = <DiffLine>[];
     }
 
-    for (final line in raw.split('\n')) {
+    // Split on \r?\n so diffs produced with CRLF endings don't leave a trailing
+    // \r on each line (which would break the prefix checks below / rendering).
+    for (final line in raw.split(RegExp(r'\r?\n'))) {
       if (line.startsWith('diff --git')) {
         // Don't parse the path from this header — it splits on spaces and
         // would truncate paths containing spaces. The authoritative path comes

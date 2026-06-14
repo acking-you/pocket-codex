@@ -1351,7 +1351,8 @@ void main() {
       ),
     );
     await t.pump(); // run the resume future
-    await t.pump(); // build with _streaming=true (don't settle: typing animates)
+    await t
+        .pump(); // build with _streaming=true (don't settle: typing animates)
 
     expect(find.byKey(const Key('stop-btn')), findsOneWidget);
     await t.tap(find.byKey(const Key('stop-btn')));
@@ -1560,14 +1561,16 @@ void main() {
     );
     await api.appConnect('pcx:lb7666:app:default', 28080);
     api.appThreads.add(
-      const ThreadMeta(id: 't9', preview: 'busy chat', cwd: '/proj', updatedAt: 0),
+      const ThreadMeta(
+        id: 't9',
+        preview: 'busy chat',
+        cwd: '/proj',
+        updatedAt: 0,
+      ),
     );
 
     await t.pumpWidget(
-      _host(
-        const AppServiceScreen(serviceKey: 'pcx:lb7666:app:default'),
-        api,
-      ),
+      _host(const AppServiceScreen(serviceKey: 'pcx:lb7666:app:default'), api),
     );
     await t.pumpAndSettle();
     expect(find.text('busy chat'), findsOneWidget);
@@ -1655,10 +1658,7 @@ void main() {
       const ThreadMeta(id: 't1', preview: 'chat', cwd: '/p', updatedAt: 0),
     );
     await t.pumpWidget(
-      _host(
-        const AppServiceScreen(serviceKey: 'pcx:lb7666:app:default'),
-        api,
-      ),
+      _host(const AppServiceScreen(serviceKey: 'pcx:lb7666:app:default'), api),
     );
     await t.pumpAndSettle();
     final before = api.appConnectCount;
@@ -1685,10 +1685,7 @@ void main() {
     api.failNextThreadList = true;
 
     await t.pumpWidget(
-      _host(
-        const AppServiceScreen(serviceKey: 'pcx:lb7666:app:default'),
-        api,
-      ),
+      _host(const AppServiceScreen(serviceKey: 'pcx:lb7666:app:default'), api),
     );
     await t.pumpAndSettle();
 
@@ -1725,7 +1722,9 @@ void main() {
     expect(find.text('对话已压缩'), findsNWidgets(2));
   });
 
-  testWidgets('Services screen shows a loading skeleton before data', (t) async {
+  testWidgets('Services screen shows a loading skeleton before data', (
+    t,
+  ) async {
     final api = FakeBridgeApi(
       config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
       services: const [

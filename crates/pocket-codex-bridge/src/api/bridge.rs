@@ -223,7 +223,8 @@ pub struct ModelInfoDto {
     pub display_name: String,
     /// Short description.
     pub description: String,
-    /// Reasoning efforts this model supports (so the UI offers only valid levels).
+    /// Reasoning efforts this model supports (so the UI offers only valid
+    /// levels).
     pub supported_reasoning_efforts: Vec<String>,
     /// The model's default reasoning effort, if any.
     pub default_reasoning_effort: Option<String>,
@@ -260,8 +261,9 @@ pub struct ThreadHistoryDto {
     /// Sticky collaboration mode (`"plan"` / `"default"`) so the UI plan toggle
     /// reflects the server's real state.
     pub collaboration_mode: Option<String>,
-    /// Current reasoning effort (`"low"`/`"medium"`/`"high"`) so the UI can show
-    /// the "thinking level" the thread runs with (from the resume response).
+    /// Current reasoning effort (`"low"`/`"medium"`/`"high"`) so the UI can
+    /// show the "thinking level" the thread runs with (from the resume
+    /// response).
     pub reasoning_effort: Option<String>,
 }
 

@@ -2193,7 +2193,17 @@ class _MessageView extends StatefulWidget {
 }
 
 class _MessageViewState extends State<_MessageView> {
-  bool _hover = false;
+  // Hover drives only the copy-button fade. Held in a notifier (not setState)
+  // so a hover repaint doesn't rebuild the message content — Linkify /
+  // MarkdownBody allocate fresh TapGestureRecognizers per link on every build
+  // and never dispose the old ones, so rebuilding them on hover leaks.
+  final ValueNotifier<bool> _hover = ValueNotifier(false);
+
+  @override
+  void dispose() {
+    _hover.dispose();
+    super.dispose();
+  }
 
   void _copy() {
     final l10n = AppLocalizations.of(context);
@@ -2263,30 +2273,39 @@ class _MessageViewState extends State<_MessageView> {
           );
 
     final showActions = !item.streaming;
+    // Only this subtree rebuilds on hover; `content` above is built once.
     final actions = SizedBox(
       height: 30,
-      child: AnimatedOpacity(
-        opacity: _hover && showActions ? 1 : 0,
-        duration: const Duration(milliseconds: 120),
-        child: IgnorePointer(
-          ignoring: !(_hover && showActions),
-          child: Align(
-            alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
-            child: IconButton(
-              icon: const Icon(Icons.content_copy_outlined, size: 16),
-              visualDensity: VisualDensity.compact,
-              color: scheme.onSurfaceVariant,
-              tooltip: AppLocalizations.of(context).copy,
-              onPressed: _copy,
+      child: ValueListenableBuilder<bool>(
+        valueListenable: _hover,
+        builder: (context, hover, _) {
+          final visible = hover && showActions;
+          return AnimatedOpacity(
+            opacity: visible ? 1 : 0,
+            duration: const Duration(milliseconds: 120),
+            child: IgnorePointer(
+              ignoring: !visible,
+              child: Align(
+                alignment: isUser
+                    ? Alignment.centerRight
+                    : Alignment.centerLeft,
+                child: IconButton(
+                  icon: const Icon(Icons.content_copy_outlined, size: 16),
+                  visualDensity: VisualDensity.compact,
+                  color: scheme.onSurfaceVariant,
+                  tooltip: AppLocalizations.of(context).copy,
+                  onPressed: _copy,
+                ),
+              ),
             ),
-          ),
-        ),
+          );
+        },
       ),
     );
 
     return MouseRegion(
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
+      onEnter: (_) => _hover.value = true,
+      onExit: (_) => _hover.value = false,
       child: Padding(
         padding: const EdgeInsets.only(top: 8),
         child: Column(

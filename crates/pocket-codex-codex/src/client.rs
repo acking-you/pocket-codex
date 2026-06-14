@@ -89,9 +89,7 @@ impl Drop for AppClient {
 impl AppClient {
     /// Connect to `ws_url` (e.g. `ws://127.0.0.1:28080`) and start the reader
     /// task. Returns the client plus the receiver of inbound notifications.
-    pub async fn connect(
-        ws_url: &str,
-    ) -> Result<(Self, mpsc::UnboundedReceiver<Inbound>)> {
+    pub async fn connect(ws_url: &str) -> Result<(Self, mpsc::UnboundedReceiver<Inbound>)> {
         let (stream, _resp) = connect_async(ws_url)
             .await
             .with_context(|| format!("connecting app-server websocket {ws_url}"))?;

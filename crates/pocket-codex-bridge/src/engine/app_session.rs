@@ -103,9 +103,10 @@ struct Session {
     /// switching sessions), so the engine tracks it authoritatively here.
     active_turns: Arc<Mutex<HashMap<String, Value>>>,
     /// Latest reasoning effort ("thinking level") per `threadId`, captured from
-    /// the `thread/resume` response (which carries a top-level `reasoningEffort`;
-    /// `thread/read` does not expose it). Lets [`thread_read`] surface the effort
-    /// a re-opened thread will run with so the UI can display it.
+    /// the `thread/resume` response (which carries a top-level
+    /// `reasoningEffort`; `thread/read` does not expose it). Lets
+    /// [`thread_read`] surface the effort a re-opened thread will run with
+    /// so the UI can display it.
     reasoning_effort: Arc<Mutex<HashMap<String, String>>>,
 }
 
@@ -171,8 +172,7 @@ pub fn connect(service_key: String, local_port: u16, relay: String) -> Result<()
 
     let (events_tx, _) = broadcast::channel::<AppEvent>(512);
     let forward_tx = events_tx.clone();
-    let active_turns: Arc<Mutex<HashMap<String, Value>>> =
-        Arc::new(Mutex::new(HashMap::new()));
+    let active_turns: Arc<Mutex<HashMap<String, Value>>> = Arc::new(Mutex::new(HashMap::new()));
     let turns_for_forwarder = Arc::clone(&active_turns);
     let forwarder = runtime::runtime().spawn(async move {
         while let Some(inbound) = notify_rx.recv().await {
@@ -222,7 +222,11 @@ pub fn disconnect(service_key: &str) {
 /// Record the active `turnId` for `thread_id` on `service_key` (no-op if the
 /// session is gone). Lets [`thread_read`] seed the turn id on a cold open.
 fn record_active_turn(service_key: &str, thread_id: &str, turn_id: Value) {
-    if let Some(s) = sessions().lock().expect("sessions poisoned").get(service_key) {
+    if let Some(s) = sessions()
+        .lock()
+        .expect("sessions poisoned")
+        .get(service_key)
+    {
         s.active_turns
             .lock()
             .expect("active_turns poisoned")
@@ -230,13 +234,20 @@ fn record_active_turn(service_key: &str, thread_id: &str, turn_id: Value) {
     }
 }
 
-/// Cache the reasoning effort `thread/resume` reported for `thread_id` (no-op if
-/// the session is gone). Read back by [`thread_read`] to display current effort.
-/// `None` (or empty) clears the entry, so an effort cleared on the thread (e.g.
-/// by another client) isn't served stale from a previous resume.
+/// Cache the reasoning effort `thread/resume` reported for `thread_id` (no-op
+/// if the session is gone). Read back by [`thread_read`] to display current
+/// effort. `None` (or empty) clears the entry, so an effort cleared on the
+/// thread (e.g. by another client) isn't served stale from a previous resume.
 fn record_reasoning_effort(service_key: &str, thread_id: &str, effort: Option<&str>) {
-    if let Some(s) = sessions().lock().expect("sessions poisoned").get(service_key) {
-        let mut map = s.reasoning_effort.lock().expect("reasoning_effort poisoned");
+    if let Some(s) = sessions()
+        .lock()
+        .expect("sessions poisoned")
+        .get(service_key)
+    {
+        let mut map = s
+            .reasoning_effort
+            .lock()
+            .expect("reasoning_effort poisoned");
         match effort.filter(|e| !e.is_empty()) {
             Some(e) => {
                 map.insert(thread_id.to_string(), e.to_string());
@@ -248,7 +259,8 @@ fn record_reasoning_effort(service_key: &str, thread_id: &str, effort: Option<&s
     }
 }
 
-/// The reasoning effort last seen for `thread_id` (from a prior `thread/resume`).
+/// The reasoning effort last seen for `thread_id` (from a prior
+/// `thread/resume`).
 fn cached_reasoning_effort(service_key: &str, thread_id: &str) -> Option<String> {
     sessions()
         .lock()
@@ -444,7 +456,8 @@ pub struct ThreadHistory {
     pub collaboration_mode: Option<String>,
     /// The thread's current reasoning effort (`"low"`/`"medium"`/`"high"`), so
     /// the UI can display the "thinking level" a re-opened thread runs with.
-    /// Sourced from the cached `thread/resume` response (see [`thread_resume`]).
+    /// Sourced from the cached `thread/resume` response (see
+    /// [`thread_resume`]).
     pub reasoning_effort: Option<String>,
 }
 
@@ -714,10 +727,10 @@ fn track_active_turn(turns: &Mutex<HashMap<String, Value>>, inbound: &Inbound) {
 }
 
 /// Interrupt the running turn. `turn/interrupt` requires the `turnId`; the UI
-/// passes the one it captured from `turn/started` when it has it, but falls back
-/// to the engine-tracked turnId (see [`Session::active_turns`]) so stopping
-/// works for a thread that was already running when its screen opened, or after
-/// switching sessions. `threadId` alone is rejected by the server.
+/// passes the one it captured from `turn/started` when it has it, but falls
+/// back to the engine-tracked turnId (see [`Session::active_turns`]) so
+/// stopping works for a thread that was already running when its screen opened,
+/// or after switching sessions. `threadId` alone is rejected by the server.
 pub fn turn_interrupt(service_key: &str, thread_id: &str, turn_id: Option<String>) -> Result<()> {
     let (client, tracked) = {
         let map = sessions().lock().expect("sessions poisoned");
@@ -959,11 +972,7 @@ fn summarize_item(item: &Value) -> (String, String, String) {
                         .map(str::to_string)
                 })
                 .collect();
-            let detail = if diffs.is_empty() {
-                paths.join("\n")
-            } else {
-                diffs.join("\n")
-            };
+            let detail = if diffs.is_empty() { paths.join("\n") } else { diffs.join("\n") };
             (title, detail)
         },
         "mcpToolCall" => {
@@ -987,16 +996,14 @@ fn summarize_item(item: &Value) -> (String, String, String) {
                 .unwrap_or_default(),
         ),
         // Unknown / other item types: best-effort text grab.
-        _ => {
-            (
-                String::new(),
-                item.get("text")
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-                    .or_else(|| recursive_text(item))
-                    .unwrap_or_default(),
-            )
-        },
+        _ => (
+            String::new(),
+            item.get("text")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .or_else(|| recursive_text(item))
+                .unwrap_or_default(),
+        ),
     };
     (item_type, title, text)
 }
@@ -1096,9 +1103,15 @@ mod tests {
         };
         // turn/started records the turn id from any of the shapes the server
         // uses (turnId | id | turn.id), preserving its JSON type.
-        track_active_turn(&turns, &inbound("turn/started", json!({"threadId":"t1","turnId":"turn-9"})));
+        track_active_turn(
+            &turns,
+            &inbound("turn/started", json!({"threadId":"t1","turnId":"turn-9"})),
+        );
         track_active_turn(&turns, &inbound("turn/started", json!({"threadId":"t2","id":"turn-7"})));
-        track_active_turn(&turns, &inbound("turn/started", json!({"threadId":"t3","turn":{"id":"turn-3"}})));
+        track_active_turn(
+            &turns,
+            &inbound("turn/started", json!({"threadId":"t3","turn":{"id":"turn-3"}})),
+        );
         track_active_turn(&turns, &inbound("turn/started", json!({"threadId":"t4","turnId":42})));
         assert_eq!(turns.lock().unwrap().get("t1"), Some(&json!("turn-9")));
         assert_eq!(turns.lock().unwrap().get("t2"), Some(&json!("turn-7")));

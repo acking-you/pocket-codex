@@ -117,9 +117,13 @@ class _AppServiceState extends ConsumerState<AppServiceScreen> {
 
   Future<void> _open({String? threadId, String? cwd}) async {
     final key = Uri.encodeComponent(widget.serviceKey);
+    // Trim the folder path so a whitespace-only cwd isn't passed through as a
+    // real working directory.
+    final trimmedCwd = cwd?.trim();
     final q = <String>[
       if (threadId != null) 'tid=${Uri.encodeComponent(threadId)}',
-      if (cwd != null && cwd.isNotEmpty) 'cwd=${Uri.encodeComponent(cwd)}',
+      if (trimmedCwd != null && trimmedCwd.isNotEmpty)
+        'cwd=${Uri.encodeComponent(trimmedCwd)}',
     ];
     final uri = '/app/$key/session${q.isEmpty ? '' : '?${q.join('&')}'}';
     await context.push(uri);

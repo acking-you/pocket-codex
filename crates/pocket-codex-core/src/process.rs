@@ -50,7 +50,7 @@ pub fn send_sigterm(pid: u32) {
             if !process.kill() {
                 warn!(pid, "failed to terminate process");
             }
-        }
+        },
         None => warn!(pid, "process not found; nothing to terminate"),
     }
 }
