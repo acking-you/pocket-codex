@@ -17,9 +17,12 @@ import 'package:pocket_codex/src/widgets/links.dart';
 import 'package:pocket_codex/src/widgets/loading.dart';
 import 'package:pocket_codex/src/widgets/status_dots.dart';
 
-/// Subscriber port for the app-server ws tunnel (shared with the service
-/// screen). Distinct from the API proxy ports so all three coexist on a host.
-const appLocalPort = 28080;
+/// Local port for the app-server ws tunnel (shared with the service screen).
+/// `0` is a sentinel: the bridge assigns a free OS port *per service* so several
+/// app services can be connected at once. A fixed shared port would let only the
+/// first service bind; the rest would hit the probe-bind failure. See
+/// [BridgeApi.appConnect].
+const appLocalPort = 0;
 
 /// A live conversation with a remote codex app-server thread.
 ///
@@ -396,7 +399,13 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
   }
 
   void _onEvent(AppEvent e) {
-    if (_threadId != null && e.threadId != null && e.threadId != _threadId) {
+    // Ignore events belonging to another thread. Before this conversation has a
+    // thread id (a brand-new conversation, pre-`thread/start`), the app session
+    // is shared and another thread's turn may still be streaming, so drop any
+    // thread-scoped event rather than letting it pollute the blank conversation
+    // (append messages/approvals, flip `_streaming`/`_turnId`). Truly global
+    // events (no threadId — e.g. account/rate-limit updates) always pass.
+    if (e.threadId != null && e.threadId != _threadId) {
       return;
     }
     if (!mounted) return;
@@ -1115,7 +1124,11 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
       );
     }
     if (_connectionLost) {
-      return (color: scheme.error, label: l10n.stateDisconnected, icon: Icons.cloud_off);
+      return (
+        color: scheme.error,
+        label: l10n.stateDisconnected,
+        icon: Icons.cloud_off,
+      );
     }
     if (_streaming) {
       return (
@@ -1131,7 +1144,11 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
         icon: Icons.checklist_rtl,
       );
     }
-    return (color: Colors.green.shade600, label: l10n.stateReady, icon: Icons.check_circle);
+    return (
+      color: Colors.green.shade600,
+      label: l10n.stateReady,
+      icon: Icons.check_circle,
+    );
   }
 
   /// A thin, always-visible status bar: a colored state chip (plan / working /
@@ -1236,62 +1253,74 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
                 : KeyedSubtree(
                     key: const ValueKey('chat-content'),
                     child: _items.isEmpty && !_showTyping
-              ? Center(
-                  child: Text(
-                    l10n.emptyConversation,
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: Theme.of(context).colorScheme.outline,
-                    ),
-                  ),
-                )
-              // One SelectionArea over the whole conversation so text can be
-              // drag-selected and copied (desktop drag, mobile long-press) —
-              // per-message actions appear on hover instead of always-on. The
-              // list is centered with a max width so it reads well even when
-              // both side panes are collapsed on a wide screen.
-              : Stack(
-                  children: [
-                    Center(
-                      child: ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 820),
-                        child: SelectionArea(
-                          child: ListView.builder(
-                            controller: _scroll,
-                            padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-                            itemCount: _rows.length + (_showTyping ? 1 : 0),
-                            itemBuilder: (c, i) {
-                              if (i >= _rows.length) {
-                                return const _TypingIndicator();
-                              }
-                              final row = _rows[i];
-                              return row is _Group
-                                  ? _GroupedActivityCard(group: row)
-                                  : _MessageView(item: row as _Item);
-                            },
+                        ? Center(
+                            child: Text(
+                              l10n.emptyConversation,
+                              style: Theme.of(context).textTheme.bodyMedium
+                                  ?.copyWith(
+                                    color: Theme.of(
+                                      context,
+                                    ).colorScheme.outline,
+                                  ),
+                            ),
+                          )
+                        // One SelectionArea over the whole conversation so text can be
+                        // drag-selected and copied (desktop drag, mobile long-press) —
+                        // per-message actions appear on hover instead of always-on. The
+                        // list is centered with a max width so it reads well even when
+                        // both side panes are collapsed on a wide screen.
+                        : Stack(
+                            children: [
+                              Center(
+                                child: ConstrainedBox(
+                                  constraints: const BoxConstraints(
+                                    maxWidth: 820,
+                                  ),
+                                  child: SelectionArea(
+                                    child: ListView.builder(
+                                      controller: _scroll,
+                                      padding: const EdgeInsets.fromLTRB(
+                                        16,
+                                        12,
+                                        16,
+                                        12,
+                                      ),
+                                      itemCount:
+                                          _rows.length + (_showTyping ? 1 : 0),
+                                      itemBuilder: (c, i) {
+                                        if (i >= _rows.length) {
+                                          return const _TypingIndicator();
+                                        }
+                                        final row = _rows[i];
+                                        return row is _Group
+                                            ? _GroupedActivityCard(group: row)
+                                            : _MessageView(item: row as _Item);
+                                      },
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              // Jump-to-latest button when scrolled up.
+                              if (!_atBottom)
+                                Positioned(
+                                  right: 0,
+                                  left: 0,
+                                  bottom: 8,
+                                  child: Center(
+                                    child: FloatingActionButton.small(
+                                      heroTag: null,
+                                      elevation: 2,
+                                      onPressed: () =>
+                                          _scrollToEnd(force: true),
+                                      child: const Icon(Icons.arrow_downward),
+                                    ),
+                                  ),
+                                ),
+                            ],
                           ),
-                        ),
-                      ),
-                    ),
-                    // Jump-to-latest button when scrolled up.
-                    if (!_atBottom)
-                      Positioned(
-                        right: 0,
-                        left: 0,
-                        bottom: 8,
-                        child: Center(
-                          child: FloatingActionButton.small(
-                            heroTag: null,
-                            elevation: 2,
-                            onPressed: () => _scrollToEnd(force: true),
-                            child: const Icon(Icons.arrow_downward),
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
                   ),
-                ),
           ),
+        ),
         // Inline command-approval prompts (errors/prompts stay actionable).
         for (final a in _approvals) _ApprovalCard(prompt: a, onDecide: _decide),
         // After a plan-mode turn, offer to implement the plan (persists across
@@ -1643,7 +1672,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
   Future<List<ModelInfo>> _ensureModels() async {
     if (_models.isNotEmpty) return _models;
     try {
-      _models = await ref.read(bridgeApiProvider).appModelList(widget.serviceKey);
+      _models = await ref
+          .read(bridgeApiProvider)
+          .appModelList(widget.serviceKey);
     } catch (_) {
       // Leave empty; pickers fall back to defaults.
     }
@@ -2382,7 +2413,9 @@ class _FileChangeCardState extends State<_FileChangeCard> {
       children: [
         InkWell(
           borderRadius: BorderRadius.circular(6),
-          onTap: expandable ? () => setState(() => _expanded = !_expanded) : null,
+          onTap: expandable
+              ? () => setState(() => _expanded = !_expanded)
+              : null,
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 5),
             child: Row(
@@ -2411,7 +2444,10 @@ class _FileChangeCardState extends State<_FileChangeCard> {
                 if (hasDiff) ...[
                   Text(
                     '+${diff.added}',
-                    style: TextStyle(fontSize: 11.5, color: Colors.green.shade600),
+                    style: TextStyle(
+                      fontSize: 11.5,
+                      color: Colors.green.shade600,
+                    ),
                   ),
                   const SizedBox(width: 3),
                   Text(
@@ -2451,10 +2487,11 @@ class _FileChangeCardState extends State<_FileChangeCard> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          for (final p in widget.item.text
-                              .split('\n')
-                              .map((s) => s.trim())
-                              .where((s) => s.isNotEmpty))
+                          for (final p
+                              in widget.item.text
+                                  .split('\n')
+                                  .map((s) => s.trim())
+                                  .where((s) => s.isNotEmpty))
                             _CopyablePath(path: p),
                         ],
                       ),

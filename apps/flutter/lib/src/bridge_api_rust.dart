@@ -66,8 +66,16 @@ class RustBridgeApi implements BridgeApi {
   // --- App-server remote control ---
 
   @override
-  Future<void> appConnect(String serviceKey, int localPort) =>
-      frb.appConnect(serviceKey: serviceKey, localPort: localPort);
+  Future<void> appConnect(String serviceKey, int localPort) {
+    // The port crosses the bridge as a u16; reject anything that can't fit so a
+    // bad value fails here rather than as an opaque FRB codec error. `0` is the
+    // documented sentinel for "let the bridge pick a free port" (see
+    // [appLocalPort]), so it's allowed.
+    if (localPort < 0 || localPort > 65535) {
+      throw RangeError.range(localPort, 0, 65535, 'localPort');
+    }
+    return frb.appConnect(serviceKey: serviceKey, localPort: localPort);
+  }
 
   @override
   bool appIsConnected(String serviceKey) =>

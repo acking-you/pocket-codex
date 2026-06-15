@@ -108,6 +108,14 @@ struct Session {
     /// [`thread_read`] surface the effort a re-opened thread will run with
     /// so the UI can display it.
     reasoning_effort: Arc<Mutex<HashMap<String, String>>>,
+    /// Requested `permissions` of any in-flight
+    /// `item/permissions/requestApproval` request, keyed by its
+    /// `request_id`. A permissions approval answers with a
+    /// `PermissionsRequestApprovalResponse` (`{permissions, scope}`), not the
+    /// plain `{decision}` a command/file approval takes, so
+    /// [`respond_approval`] needs the original grant to echo back on
+    /// accept. See [`track_pending_approval`].
+    pending_approvals: Arc<Mutex<HashMap<String, Value>>>,
 }
 
 impl Drop for Session {
@@ -174,11 +182,17 @@ pub fn connect(service_key: String, local_port: u16, relay: String) -> Result<()
     let forward_tx = events_tx.clone();
     let active_turns: Arc<Mutex<HashMap<String, Value>>> = Arc::new(Mutex::new(HashMap::new()));
     let turns_for_forwarder = Arc::clone(&active_turns);
+    let pending_approvals: Arc<Mutex<HashMap<String, Value>>> =
+        Arc::new(Mutex::new(HashMap::new()));
+    let approvals_for_forwarder = Arc::clone(&pending_approvals);
     let forwarder = runtime::runtime().spawn(async move {
         while let Some(inbound) = notify_rx.recv().await {
             // Learn the active turnId per thread before mapping, so interrupt
             // works even when the UI never saw the turn/started event.
             track_active_turn(&turns_for_forwarder, &inbound);
+            // Remember a permissions request's grant so its protocol-specific
+            // response can be built when the user answers.
+            track_pending_approval(&approvals_for_forwarder, &inbound);
             // Ignore send errors: no current subscribers is fine, the event
             // is simply dropped (the UI re-reads thread state on attach).
             let _ = forward_tx.send(map_event(inbound));
@@ -194,6 +208,7 @@ pub fn connect(service_key: String, local_port: u16, relay: String) -> Result<()
             forwarder,
             active_turns,
             reasoning_effort: Arc::new(Mutex::new(HashMap::new())),
+            pending_approvals,
         });
     Ok(())
 }
@@ -291,35 +306,64 @@ fn client_for(service_key: &str) -> Result<Arc<AppClient>> {
         .ok_or_else(|| anyhow!("not connected to {service_key}"))
 }
 
-/// List threads known to the app-server.
+/// List threads known to the app-server, most-recently-updated first.
+///
+/// The server defaults (`limit = 25`, `sortKey = created_at`) would hide older
+/// threads once a user has more than 25 and would not float a recently-used but
+/// older thread to the top, so request a generous page sorted by `updated_at`
+/// and follow `nextCursor`. The page count and total are capped so a very large
+/// history can't loop unboundedly.
 pub fn thread_list(service_key: &str) -> Result<Vec<ThreadMeta>> {
+    const PAGE_LIMIT: u64 = 100;
+    const MAX_THREADS: usize = 500;
     let client = client_for(service_key)?;
-    let res = runtime::runtime().block_on(client.request("thread/list", json!({})))?;
-    let data = res
-        .get("data")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    Ok(data
-        .iter()
-        .filter_map(|t| {
-            let id = t.get("id")?.as_str()?.to_string();
-            Some(ThreadMeta {
-                id,
-                preview: t
-                    .get("preview")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_string(),
-                cwd: t
-                    .get("cwd")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_string(),
-                updated_at: t.get("updatedAt").and_then(Value::as_i64).unwrap_or(0),
-            })
-        })
-        .collect())
+    let mut out = Vec::new();
+    let mut cursor: Option<String> = None;
+    loop {
+        let mut params = serde_json::Map::new();
+        params.insert("limit".into(), json!(PAGE_LIMIT));
+        params.insert("sortKey".into(), json!("updated_at"));
+        if let Some(c) = &cursor {
+            params.insert("cursor".into(), json!(c));
+        }
+        let res =
+            runtime::runtime().block_on(client.request("thread/list", Value::Object(params)))?;
+        let data = res
+            .get("data")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let page_len = data.len();
+        out.extend(data.iter().filter_map(parse_thread_meta));
+        cursor = res
+            .get("nextCursor")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+        if cursor.is_none() || page_len == 0 || out.len() >= MAX_THREADS {
+            break;
+        }
+    }
+    Ok(out)
+}
+
+/// Parse one `thread/list` entry into [`ThreadMeta`]; skips entries with no id.
+fn parse_thread_meta(t: &Value) -> Option<ThreadMeta> {
+    let id = t.get("id")?.as_str()?.to_string();
+    Some(ThreadMeta {
+        id,
+        preview: t
+            .get("preview")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+        cwd: t
+            .get("cwd")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+        updated_at: t.get("updatedAt").and_then(Value::as_i64).unwrap_or(0),
+    })
 }
 
 /// List the models the app-server offers (hidden ones filtered out).
@@ -336,15 +380,7 @@ pub fn model_list(service_key: &str) -> Result<Vec<ModelInfo>> {
         .filter(|m| !m.get("hidden").and_then(Value::as_bool).unwrap_or(false))
         .filter_map(|m| {
             let id = m.get("id").and_then(Value::as_str)?.to_string();
-            let supported_reasoning_efforts = m
-                .get("supportedReasoningEfforts")
-                .and_then(Value::as_array)
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|v| v.as_str().map(str::to_string))
-                        .collect()
-                })
-                .unwrap_or_default();
+            let supported_reasoning_efforts = parse_supported_efforts(m);
             let default_reasoning_effort = m
                 .get("defaultReasoningEffort")
                 .and_then(Value::as_str)
@@ -367,6 +403,30 @@ pub fn model_list(service_key: &str) -> Result<Vec<ModelInfo>> {
             })
         })
         .collect())
+}
+
+/// Pull a model's supported reasoning-effort ids out of
+/// `supportedReasoningEfforts`.
+///
+/// Each entry is a `ReasoningEffortOption` object (`{reasoningEffort,
+/// description}`), so read the `reasoningEffort` field; a bare string is also
+/// accepted in case an older server sends the legacy shape. An empty / absent
+/// list yields `vec![]`, which the UI reads as "offer all known levels".
+fn parse_supported_efforts(model: &Value) -> Vec<String> {
+    model
+        .get("supportedReasoningEfforts")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| {
+                    v.get("reasoningEffort")
+                        .and_then(Value::as_str)
+                        .or_else(|| v.as_str())
+                        .map(str::to_string)
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Start a new thread with optional model / working dir / approval policy /
@@ -403,11 +463,74 @@ pub fn thread_start(
 }
 
 /// Answer a server approval request (token from an [`AppEvent::request_id`]).
-/// `decision` is a [`ReviewDecision`] wire value, e.g. `approved` / `denied`.
+///
+/// `decision` is the wire value the UI sends: `accept` / `acceptForSession` /
+/// `decline`. Command-execution and file-change approvals take a plain
+/// `{decision}` ([`CommandExecutionApprovalDecision`] / [`FileChangeApproval`-
+/// `Decision`]). A `item/permissions/requestApproval` is different: it expects
+/// a `PermissionsRequestApprovalResponse` (`{permissions, scope}`) — we echo
+/// the requested grant on accept (scope `turn`, or `session` for
+/// `acceptForSession`) and grant nothing on decline. Sending `{decision}` there
+/// fails upstream deserialization and silently grants no permissions, so branch
+/// on whether the request was a tracked permissions prompt.
 pub fn respond_approval(service_key: &str, request_id: &str, decision: &str) -> Result<()> {
-    let client = client_for(service_key)?;
-    runtime::runtime().block_on(client.respond(request_id, json!({ "decision": decision })))?;
+    let (client, pending) = {
+        let map = sessions().lock().expect("sessions poisoned");
+        let session = map
+            .get(service_key)
+            .ok_or_else(|| anyhow!("not connected to {service_key}"))?;
+        let pending = session
+            .pending_approvals
+            .lock()
+            .expect("pending_approvals poisoned")
+            .remove(request_id);
+        (Arc::clone(&session.client), pending)
+    };
+    let result = approval_result(pending, decision);
+    runtime::runtime().block_on(client.respond(request_id, result))?;
     Ok(())
+}
+
+/// Build the JSON-RPC result for an approval response. `pending` is the cached
+/// requested `permissions` when this was a `item/permissions/requestApproval`
+/// (`None` for command / file-change approvals, which just carry the decision).
+fn approval_result(pending: Option<Value>, decision: &str) -> Value {
+    match pending {
+        Some(permissions) => {
+            // Permissions prompt → PermissionsRequestApprovalResponse. Echo the
+            // requested grant on accept; an empty grant ({}) means "denied".
+            let (granted, scope) = match decision {
+                "accept" => (permissions, "turn"),
+                "acceptForSession" => (permissions, "session"),
+                _ => (json!({}), "turn"),
+            };
+            json!({ "permissions": granted, "scope": scope })
+        },
+        // Command / file-change approval → plain decision.
+        None => json!({ "decision": decision }),
+    }
+}
+
+/// Cache the requested `permissions` of a permissions approval request, keyed
+/// by its `request_id`, so [`respond_approval`] can answer with the protocol's
+/// `PermissionsRequestApprovalResponse` instead of a plain `{decision}`. Other
+/// inbound messages (notifications, command/file approvals) are ignored.
+fn track_pending_approval(pending: &Mutex<HashMap<String, Value>>, inbound: &Inbound) {
+    if inbound.method != "item/permissions/requestApproval" {
+        return;
+    }
+    let (Some(request_id), Some(params)) = (inbound.request_id.as_deref(), inbound.params.as_ref())
+    else {
+        return;
+    };
+    let permissions = params
+        .get("permissions")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    pending
+        .lock()
+        .expect("pending_approvals poisoned")
+        .insert(request_id.to_string(), permissions);
 }
 
 /// Resume an existing thread, loading it from disk into the live session.
@@ -576,7 +699,9 @@ pub fn parse_token_usage(usage: Option<&Value>) -> (Option<i64>, Option<i64>) {
 /// shape is nested and volatile, so the raw JSON is returned for Dart to parse.
 pub fn rate_limits(service_key: &str) -> Result<String> {
     let client = client_for(service_key)?;
-    let res = runtime::runtime().block_on(client.request("account/rateLimits/read", json!({})))?;
+    // No-params method: the server types `params` as `Option<()>` and rejects an
+    // empty `{}` body, so omit `params` entirely.
+    let res = runtime::runtime().block_on(client.request_no_params("account/rateLimits/read"))?;
     Ok(res.to_string())
 }
 
@@ -1146,6 +1271,80 @@ mod tests {
             request_id: Some("7".into()),
         });
         assert_eq!(approval.request_id.as_deref(), Some("7"));
+    }
+
+    #[test]
+    fn tracks_only_permissions_approval_requests() {
+        let pending = Mutex::new(HashMap::new());
+        // A permissions request caches its requested grant under the request id.
+        track_pending_approval(&pending, &Inbound {
+            method: "item/permissions/requestApproval".into(),
+            params: Some(json!({"permissions":{"network":{"enabled":true}}})),
+            request_id: Some("11".into()),
+        });
+        assert_eq!(pending.lock().unwrap().get("11"), Some(&json!({"network":{"enabled":true}})));
+        // Command / file-change approvals and plain notifications are ignored —
+        // they answer with a plain {decision}, no cached grant needed.
+        track_pending_approval(&pending, &Inbound {
+            method: "item/commandExecution/requestApproval".into(),
+            params: Some(json!({"command":"ls"})),
+            request_id: Some("12".into()),
+        });
+        assert!(!pending.lock().unwrap().contains_key("12"));
+    }
+
+    #[test]
+    fn permissions_response_echoes_grant_with_scope() {
+        let grant = json!({"network":{"enabled":true},"fileSystem":{"read":["/x"]}});
+        // Accept → echo the requested grant, turn scope.
+        assert_eq!(
+            approval_result(Some(grant.clone()), "accept"),
+            json!({"permissions": grant, "scope": "turn"})
+        );
+        // Accept for session → same grant, session scope.
+        assert_eq!(
+            approval_result(Some(grant.clone()), "acceptForSession"),
+            json!({"permissions": grant, "scope": "session"})
+        );
+        // Decline → grant nothing (empty profile), turn scope.
+        assert_eq!(
+            approval_result(Some(grant), "decline"),
+            json!({"permissions": {}, "scope": "turn"})
+        );
+    }
+
+    #[test]
+    fn non_permissions_response_is_a_plain_decision() {
+        // No cached grant ⇒ command / file-change approval ⇒ {decision}.
+        assert_eq!(approval_result(None, "accept"), json!({"decision": "accept"}));
+        assert_eq!(approval_result(None, "decline"), json!({"decision": "decline"}));
+    }
+
+    #[test]
+    fn parses_supported_reasoning_efforts() {
+        // Real protocol shape: array of {reasoningEffort, description} objects.
+        let model = json!({"supportedReasoningEfforts": [
+            {"reasoningEffort": "low", "description": "fast"},
+            {"reasoningEffort": "high", "description": "thorough"},
+        ]});
+        assert_eq!(parse_supported_efforts(&model), vec!["low", "high"]);
+        // Legacy bare-string shape still parses (backward compatibility).
+        let legacy = json!({"supportedReasoningEfforts": ["minimal", "xhigh"]});
+        assert_eq!(parse_supported_efforts(&legacy), vec!["minimal", "xhigh"]);
+        // Absent / empty → empty (the UI reads that as "offer all levels").
+        assert!(parse_supported_efforts(&json!({})).is_empty());
+    }
+
+    #[test]
+    fn parses_thread_meta_and_skips_idless_entries() {
+        let t = json!({"id":"t1","preview":"hi","cwd":"/repo","updatedAt":42});
+        let meta = parse_thread_meta(&t).expect("entry has an id");
+        assert_eq!(meta.id, "t1");
+        assert_eq!(meta.preview, "hi");
+        assert_eq!(meta.cwd, "/repo");
+        assert_eq!(meta.updated_at, 42);
+        // An entry with no id is skipped (filter_map drops it).
+        assert!(parse_thread_meta(&json!({"preview":"x"})).is_none());
     }
 
     #[test]

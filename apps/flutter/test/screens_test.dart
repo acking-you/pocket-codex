@@ -251,7 +251,13 @@ void main() {
     );
     await api.appConnect('pcx:lb7666:app:default', 28080);
     await t.pumpWidget(
-      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          threadId: 't1',
+        ),
+        api,
+      ),
     );
     await t.pumpAndSettle();
 
@@ -272,13 +278,49 @@ void main() {
     expect(find.textContaining('Title', findRichText: true), findsWidgets);
   });
 
+  testWidgets("A new conversation ignores another thread's events", (t) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    // A brand-new conversation: no thread id until the first turn starts.
+    await t.pumpWidget(
+      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+    );
+    await t.pumpAndSettle();
+
+    // The app session is shared and another thread's turn may still be
+    // streaming; its events must not be absorbed into the blank conversation.
+    api.pushEvent(
+      'pcx:lb7666:app:default',
+      const AppEvent(
+        kind: 'item/agentMessage/delta',
+        threadId: 'other-thread',
+        itemId: 'x1',
+        itemType: 'agentMessage',
+        text: 'not mine',
+        raw: '{}',
+      ),
+    );
+    await t.pumpAndSettle();
+    // Still empty (the foreign event was dropped, empty-state hint remains).
+    expect(find.text('发送消息开始对话'), findsOneWidget);
+    expect(find.textContaining('not mine', findRichText: true), findsNothing);
+  });
+
   testWidgets('Tool calls render as expandable activity cards', (t) async {
     final api = FakeBridgeApi(
       config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
     );
     await api.appConnect('pcx:lb7666:app:default', 28080);
     await t.pumpWidget(
-      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          threadId: 't1',
+        ),
+        api,
+      ),
     );
     await t.pumpAndSettle();
 
@@ -417,7 +459,13 @@ void main() {
     );
     await api.appConnect('pcx:lb7666:app:default', 28080);
     await t.pumpWidget(
-      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          threadId: 't1',
+        ),
+        api,
+      ),
     );
     await t.pumpAndSettle();
 
@@ -971,7 +1019,13 @@ void main() {
     );
     await api.appConnect('pcx:lb7666:app:default', 28080);
     await t.pumpWidget(
-      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          threadId: 't1',
+        ),
+        api,
+      ),
     );
     await t.pumpAndSettle();
 
@@ -1086,7 +1140,13 @@ void main() {
     );
     await api.appConnect('pcx:lb7666:app:default', 28080);
     await t.pumpWidget(
-      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          threadId: 't1',
+        ),
+        api,
+      ),
     );
     await t.pumpAndSettle();
 
@@ -1196,7 +1256,13 @@ void main() {
     );
     await api.appConnect('pcx:lb7666:app:default', 28080);
     await t.pumpWidget(
-      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          threadId: 't1',
+        ),
+        api,
+      ),
     );
     await t.pumpAndSettle();
     api.pushEvent(
@@ -1367,7 +1433,13 @@ void main() {
     );
     await api.appConnect('pcx:lb7666:app:default', 28080);
     await t.pumpWidget(
-      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          threadId: 't1',
+        ),
+        api,
+      ),
     );
     await t.pumpAndSettle();
 
@@ -1396,7 +1468,13 @@ void main() {
     );
     await api.appConnect('pcx:lb7666:app:default', 28080);
     await t.pumpWidget(
-      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          threadId: 't1',
+        ),
+        api,
+      ),
     );
     await t.pumpAndSettle();
 
@@ -1442,7 +1520,13 @@ void main() {
     );
     await api.appConnect('pcx:lb7666:app:default', 28080);
     await t.pumpWidget(
-      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          threadId: 't1',
+        ),
+        api,
+      ),
     );
     await t.pumpAndSettle();
 
@@ -1699,7 +1783,13 @@ void main() {
     );
     await api.appConnect('pcx:lb7666:app:default', 28080);
     await t.pumpWidget(
-      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          threadId: 't1',
+        ),
+        api,
+      ),
     );
     await t.pumpAndSettle();
 

@@ -216,12 +216,24 @@ impl AppClient {
     /// Send a JSON-RPC request and await its result, erroring on timeout, a
     /// JSON-RPC error response, or a dropped connection.
     pub async fn request(&self, method: &str, params: Value) -> Result<Value> {
+        self.request_inner(method, Some(params)).await
+    }
+
+    /// Like [`request`](Self::request) but omits the `params` field entirely.
+    /// A few methods (e.g. `account/rateLimits/read`) are typed no-params
+    /// upstream (`Option<()>`, skipped when absent) and reject an empty `{}`
+    /// body as invalid params, so they must be sent with no `params` key.
+    pub async fn request_no_params(&self, method: &str) -> Result<Value> {
+        self.request_inner(method, None).await
+    }
+
+    async fn request_inner(&self, method: &str, params: Option<Value>) -> Result<Value> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed).to_string();
         let req = Request {
             jsonrpc: None,
             id: RequestId::String(id.clone()),
             method: method.to_string(),
-            params: Some(params),
+            params,
         };
         let frame = serde_json::to_string(&req).context("serializing request")?;
 

@@ -257,7 +257,9 @@ abstract interface class BridgeApi {
   // --- App-server remote control ---
 
   /// Connect to an app-server service: subscribe on `127.0.0.1:<localPort>`,
-  /// open the JSON-RPC websocket and run the `initialize` handshake.
+  /// open the JSON-RPC websocket and run the `initialize` handshake. Pass
+  /// `localPort: 0` to let the bridge assign a free OS port per service (so
+  /// several services can coexist).
   Future<void> appConnect(String serviceKey, int localPort);
 
   /// Whether a live app-server session exists for [serviceKey].
