@@ -1,10 +1,48 @@
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:pocket_codex/src/app_modes.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
 import 'package:pocket_codex/src/bridge_api_rust.dart';
 
 /// The engine API. Overridden with a FakeBridgeApi in tests.
 final bridgeApiProvider = Provider<BridgeApi>((ref) => const RustBridgeApi());
+
+/// The model / permission mode / plan mode / reasoning effort the user last
+/// chose, so a brand-new conversation inherits them instead of resetting to
+/// hard defaults. Updated whenever the user picks a setting; read when a new
+/// conversation is started. Held in memory for the app's lifetime (not yet
+/// persisted to disk — survives navigating and the "new conversation" button,
+/// not a full app restart).
+class SessionDefaults {
+  /// Creates the defaults (all optional; sensible fallbacks).
+  const SessionDefaults({
+    this.model,
+    this.mode = PermissionMode.auto,
+    this.plan = false,
+    this.effort,
+  });
+
+  /// Last-chosen model (null = the server default).
+  final ModelInfo? model;
+
+  /// Last-chosen permission preset.
+  final PermissionMode mode;
+
+  /// Whether plan mode was last on.
+  final bool plan;
+
+  /// Last-chosen reasoning effort (null = model default).
+  final ReasoningEffort? effort;
+}
+
+/// Holds the [SessionDefaults] a new conversation inherits, keyed by app
+/// service. Per-service because a model is only valid on the service it was
+/// picked from (each exposes its own model list) — a global store would leak a
+/// foreign model id onto another service's first turn. Seeded on each user pick
+/// (model / mode / plan / effort) in the session screen.
+final sessionDefaultsProvider = StateProvider.family<SessionDefaults, String>(
+  (ref, serviceKey) => const SessionDefaults(),
+);
 
 /// Current persisted config (relay + whether a key is set).
 final configProvider = FutureProvider<ConfigInfo>((ref) async {

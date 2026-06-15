@@ -175,13 +175,18 @@ void main() {
       config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
     );
     await api.appConnect('pcx:lb7666:app:default', 28080);
+    // Narrow so the sessions pane is a hidden drawer — the new session's preview
+    // (also "hello") then can't collide with the transcript bubble below.
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(400, 800);
+    addTearDown(t.view.reset);
     await t.pumpWidget(
       _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
     );
     await t.pumpAndSettle();
 
-    // Empty state before any message.
-    expect(find.text('发送消息开始对话'), findsOneWidget);
+    // A brand-new conversation shows the guidance view (not a bare hint).
+    expect(find.text('想让远程 Codex 做点什么?'), findsOneWidget);
 
     await t.enterText(find.byType(TextField), 'hello');
     await t.pump(); // let the send button enable for the non-empty input
@@ -303,9 +308,94 @@ void main() {
       ),
     );
     await t.pumpAndSettle();
-    // Still empty (the foreign event was dropped, empty-state hint remains).
-    expect(find.text('发送消息开始对话'), findsOneWidget);
+    // Still the new-session guidance (the foreign event was dropped, no items).
+    expect(find.text('想让远程 Codex 做点什么?'), findsOneWidget);
     expect(find.textContaining('not mine', findRichText: true), findsNothing);
+  });
+
+  testWidgets('A new conversation inherits the last-picked permission mode', (
+    t,
+  ) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(1200, 900); // wide → left pane inline
+    addTearDown(t.view.reset);
+    await t.pumpWidget(
+      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+    );
+    await t.pumpAndSettle();
+
+    // The default permission mode is "自动" (auto). Switch it to "只读".
+    await t.tap(find.text('自动'));
+    await t.pumpAndSettle();
+    await t.tap(find.widgetWithText(ListTile, '只读'));
+    await t.pumpAndSettle();
+    expect(find.text('只读'), findsOneWidget); // the pill now reads read-only
+
+    // Start a brand-new conversation: it inherits the read-only mode the user
+    // last chose instead of resetting to the "自动" default.
+    await t.tap(find.byIcon(Icons.add));
+    await t.pumpAndSettle();
+    expect(find.text('只读'), findsOneWidget);
+    expect(find.text('自动'), findsNothing);
+  });
+
+  testWidgets('A new session appears in the sessions pane after first send', (
+    t,
+  ) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(1200, 900); // wide → left pane inline
+    addTearDown(t.view.reset);
+    await t.pumpWidget(
+      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+    );
+    await t.pumpAndSettle();
+
+    // No conversations in the pane yet.
+    expect(find.text('暂无会话'), findsOneWidget); // noThreads (zh)
+
+    // Sending the first message surfaces the new session in the left pane.
+    await t.enterText(find.byType(TextField), 'hello there');
+    await t.pump();
+    await t.tap(find.byKey(const Key('send-btn')));
+    await t.pumpAndSettle();
+
+    expect(find.text('暂无会话'), findsNothing);
+    // The tile shows the message (optimistic preview preserved, not "(未命名)"
+    // even though the server's preview for a just-started thread is still empty).
+    expect(find.widgetWithText(ListTile, 'hello there'), findsOneWidget);
+    expect(find.text('(未命名)'), findsNothing);
+  });
+
+  testWidgets('Tapping a guidance card prefills the composer', (t) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    await t.pumpWidget(
+      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+    );
+    await t.pumpAndSettle();
+
+    // The prompt shows once on the guidance card before a tap.
+    const prompt = '介绍一下这个项目的结构、主要模块和技术栈。';
+    expect(find.text(prompt), findsOneWidget);
+
+    // Tapping the "了解项目" card prefills the composer (review-then-send).
+    await t.tap(find.text('了解项目'));
+    await t.pumpAndSettle();
+    // The prompt now appears twice: the card subtitle + the composer field.
+    expect(find.text(prompt), findsNWidgets(2));
+    // The send button is enabled now that the composer is non-empty.
+    final sendBtn = t.widget<IconButton>(find.byKey(const Key('send-btn')));
+    expect(sendBtn.onPressed, isNotNull);
   });
 
   testWidgets('Tool calls render as expandable activity cards', (t) async {
@@ -1247,7 +1337,8 @@ void main() {
     await t.tap(find.byIcon(Icons.add));
     await t.pumpAndSettle();
     expect(t.takeException(), isNull);
-    expect(find.text('发送消息开始对话'), findsOneWidget); // emptyConversation (zh)
+    // Tapping "new conversation" shows the new-session guidance.
+    expect(find.text('想让远程 Codex 做点什么?'), findsOneWidget); // guidance (zh)
   });
 
   testWidgets('Plan renders as a status-iconed checklist', (t) async {

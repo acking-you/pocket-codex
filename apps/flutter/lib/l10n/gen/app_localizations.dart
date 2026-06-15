@@ -901,6 +901,66 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'English'**
   String get languageEnglish;
+
+  /// No description provided for @newSessionTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'What should the remote Codex work on?'**
+  String get newSessionTitle;
+
+  /// No description provided for @newSessionSubtitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Pick a starting point, or just type your task below.'**
+  String get newSessionSubtitle;
+
+  /// No description provided for @suggestExploreTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Explore the project'**
+  String get suggestExploreTitle;
+
+  /// No description provided for @suggestExplorePrompt.
+  ///
+  /// In en, this message translates to:
+  /// **'Give me an overview of this project — its structure, main modules, and tech stack.'**
+  String get suggestExplorePrompt;
+
+  /// No description provided for @suggestTestsTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Run & fix tests'**
+  String get suggestTestsTitle;
+
+  /// No description provided for @suggestTestsPrompt.
+  ///
+  /// In en, this message translates to:
+  /// **'Run the test suite and fix any failing tests.'**
+  String get suggestTestsPrompt;
+
+  /// No description provided for @suggestDiffTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Review changes'**
+  String get suggestDiffTitle;
+
+  /// No description provided for @suggestDiffPrompt.
+  ///
+  /// In en, this message translates to:
+  /// **'Summarize the current working-tree changes against the main branch.'**
+  String get suggestDiffPrompt;
+
+  /// No description provided for @suggestPlanTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Plan a feature'**
+  String get suggestPlanTitle;
+
+  /// No description provided for @suggestPlanPrompt.
+  ///
+  /// In en, this message translates to:
+  /// **'Help me plan out a new feature before writing any code.'**
+  String get suggestPlanPrompt;
 }
 
 class _AppLocalizationsDelegate

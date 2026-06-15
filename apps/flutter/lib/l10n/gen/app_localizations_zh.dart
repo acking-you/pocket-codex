@@ -416,4 +416,34 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get languageEnglish => 'English';
+
+  @override
+  String get newSessionTitle => '想让远程 Codex 做点什么?';
+
+  @override
+  String get newSessionSubtitle => '选一个起点,或直接在下方输入你的任务。';
+
+  @override
+  String get suggestExploreTitle => '了解项目';
+
+  @override
+  String get suggestExplorePrompt => '介绍一下这个项目的结构、主要模块和技术栈。';
+
+  @override
+  String get suggestTestsTitle => '运行并修复测试';
+
+  @override
+  String get suggestTestsPrompt => '运行测试套件,并修复所有失败的用例。';
+
+  @override
+  String get suggestDiffTitle => '审查改动';
+
+  @override
+  String get suggestDiffPrompt => '总结当前工作区相对主分支的改动。';
+
+  @override
+  String get suggestPlanTitle => '规划功能';
+
+  @override
+  String get suggestPlanPrompt => '在写代码之前,帮我规划一个新功能。';
 }

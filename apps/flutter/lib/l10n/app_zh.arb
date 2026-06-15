@@ -142,5 +142,15 @@
   "language": "语言",
   "languageSystem": "跟随系统",
   "languageChinese": "简体中文",
-  "languageEnglish": "English"
+  "languageEnglish": "English",
+  "newSessionTitle": "想让远程 Codex 做点什么?",
+  "newSessionSubtitle": "选一个起点,或直接在下方输入你的任务。",
+  "suggestExploreTitle": "了解项目",
+  "suggestExplorePrompt": "介绍一下这个项目的结构、主要模块和技术栈。",
+  "suggestTestsTitle": "运行并修复测试",
+  "suggestTestsPrompt": "运行测试套件,并修复所有失败的用例。",
+  "suggestDiffTitle": "审查改动",
+  "suggestDiffPrompt": "总结当前工作区相对主分支的改动。",
+  "suggestPlanTitle": "规划功能",
+  "suggestPlanPrompt": "在写代码之前,帮我规划一个新功能。"
 }

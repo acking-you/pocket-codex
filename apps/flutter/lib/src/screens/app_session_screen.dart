@@ -80,6 +80,7 @@ class _Item {
 
 class _AppSessionState extends ConsumerState<AppSessionScreen> {
   final _input = TextEditingController();
+  final _inputFocus = FocusNode();
   final _scroll = ScrollController();
   // Ordered timeline + an id→index map for upserting streamed/updated items.
   final List<_Item> _items = [];
@@ -220,6 +221,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
     super.initState();
     _threadId = widget.threadId;
     _cwd = widget.cwd;
+    // A brand-new conversation inherits the user's last-chosen model / mode /
+    // plan / effort instead of resetting to hard defaults.
+    if (_threadId == null) _seedDefaults();
     _scroll.addListener(_onScroll);
     _subscribe();
     if (_threadId != null) _resumeAndLoad();
@@ -243,13 +247,90 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
           .read(bridgeApiProvider)
           .appThreadList(widget.serviceKey);
       final cwd = _cwd?.trim();
-      final mine = (cwd == null || cwd.isEmpty)
+      var mine = (cwd == null || cwd.isEmpty)
           ? all
           : all.where((t) => t.cwd.trim() == cwd).toList();
+      // Keep the freshly-started conversation visible even if `thread/list`
+      // hasn't caught up with `thread/start` yet, so it doesn't flicker out of
+      // the pane after the optimistic insert in [_send].
+      final tid = _threadId;
+      if (tid != null && !mine.any((t) => t.id == tid)) {
+        ThreadMeta? local;
+        for (final t in _threads) {
+          if (t.id == tid) {
+            local = t;
+            break;
+          }
+        }
+        mine = [
+          local ??
+              ThreadMeta(
+                id: tid,
+                preview: _lastUserText ?? '',
+                cwd: cwd ?? '',
+                updatedAt: 0,
+              ),
+          ...mine,
+        ];
+      }
+      // Prefer a non-empty local/optimistic preview over an empty server one: a
+      // freshly-started thread's server preview stays empty until its first turn
+      // commits, and a blind replace would flip the tile to "(untitled)".
+      final localPreview = {for (final t in _threads) t.id: t.preview};
+      mine = [
+        for (final t in mine)
+          (t.preview.isEmpty && (localPreview[t.id]?.isNotEmpty ?? false))
+              ? ThreadMeta(
+                  id: t.id,
+                  preview: localPreview[t.id]!,
+                  cwd: t.cwd,
+                  updatedAt: t.updatedAt,
+                )
+              : t,
+      ];
       if (mounted) setState(() => _threads = mine);
     } catch (_) {
-      // Listing is best-effort; the pane just stays empty.
+      // Listing is best-effort; the pane just stays as it is.
     }
+  }
+
+  /// Seed a brand-new conversation's settings from the user's last choices
+  /// ([sessionDefaultsProvider]) so it inherits them instead of resetting to
+  /// hard defaults. Assigns fields directly; the caller handles setState/timing.
+  void _seedDefaults() {
+    final d = ref.read(sessionDefaultsProvider(widget.serviceKey));
+    _model = d.model;
+    _mode = d.mode;
+    _plan = d.plan;
+    _planActive = false; // a new thread hasn't been told a mode yet
+    // A fresh conversation hasn't toggled plan; clear any stale pending toggle
+    // (set on the previous thread without sending) so the first turn only sends
+    // a collaborationMode when the seeded plan actually differs from default.
+    _planToggledByUser = false;
+    // Drop a seeded effort the seeded model can't run (mirrors _pickModel's
+    // guard) so the first turn never asserts an unsupported level.
+    final m = _model;
+    _effort =
+        (m != null &&
+            d.effort != null &&
+            !m.supportedReasoningEfforts.contains(d.effort!.wire))
+        ? ReasoningEffort.fromWire(m.defaultReasoningEffort)
+        : d.effort; // pending pick → asserted on the first turn
+    _effortActive = null;
+  }
+
+  /// Remember the user's current settings as the default future new
+  /// conversations on this service inherit. Called after each explicit pick
+  /// (model / mode / plan / effort) — not on server-driven restoration.
+  void _rememberDefaults() {
+    ref
+        .read(sessionDefaultsProvider(widget.serviceKey).notifier)
+        .state = SessionDefaults(
+      model: _model,
+      mode: _mode,
+      plan: _plan,
+      effort: _effectiveEffort,
+    );
   }
 
   /// Switch the screen to another conversation (or a new one when [tid] is
@@ -284,6 +365,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
       _effortActive = null;
       _implementDismissed = false;
       _input.clear();
+      // A brand-new conversation inherits the user's last-chosen settings; an
+      // existing one is restored from the server by _resumeAndLoad below.
+      if (tid == null) _seedDefaults();
     });
     if (tid != null) _resumeAndLoad();
   }
@@ -293,6 +377,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
     _healthTimer?.cancel();
     _sub?.cancel();
     _input.dispose();
+    _inputFocus.dispose();
     _scroll.removeListener(_onScroll);
     _scroll.dispose();
     super.dispose();
@@ -597,7 +682,21 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
         approvalPolicy: _mode.approval,
         sandbox: _mode.sandbox,
       );
-      if (isNewThread) _loadThreads(); // surface the new session in the pane
+      if (isNewThread) {
+        // Surface the new session in the left pane immediately. `thread/list`
+        // can lag `thread/start`, so optimistically insert it now (newest
+        // first) and let _loadThreads reconcile once the server catches up.
+        final tid = _threadId!;
+        if (mounted && !_threads.any((t) => t.id == tid)) {
+          setState(() {
+            _threads = [
+              ThreadMeta(id: tid, preview: text, cwd: _cwd ?? '', updatedAt: 0),
+              ..._threads,
+            ];
+          });
+        }
+        _loadThreads();
+      }
       // Pass the current model + permission + collaboration mode every turn:
       // turn/start overrides apply to this and subsequent turns, so switching
       // works mid-conversation.
@@ -1253,17 +1352,24 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
                 : KeyedSubtree(
                     key: const ValueKey('chat-content'),
                     child: _items.isEmpty && !_showTyping
-                        ? Center(
-                            child: Text(
-                              l10n.emptyConversation,
-                              style: Theme.of(context).textTheme.bodyMedium
-                                  ?.copyWith(
-                                    color: Theme.of(
-                                      context,
-                                    ).colorScheme.outline,
+                        // A brand-new conversation (no thread yet) gets a richer
+                        // guidance view with tappable starter prompts; an empty
+                        // resumed thread keeps the plain hint.
+                        ? (_threadId == null
+                              ? _newSessionGuidance(l10n)
+                              : Center(
+                                  child: Text(
+                                    l10n.emptyConversation,
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .bodyMedium
+                                        ?.copyWith(
+                                          color: Theme.of(
+                                            context,
+                                          ).colorScheme.outline,
+                                        ),
                                   ),
-                            ),
-                          )
+                                ))
                         // One SelectionArea over the whole conversation so text can be
                         // drag-selected and copied (desktop drag, mobile long-press) —
                         // per-message actions appear on hover instead of always-on. The
@@ -1330,6 +1436,111 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
         _composer(l10n),
       ],
     );
+  }
+
+  /// Guidance shown for a brand-new, empty conversation: a short intro plus a
+  /// few tappable starter prompts tailored to remote-controlling a codex
+  /// workspace (explore the project, run/fix tests, review git changes, plan a
+  /// feature). Tapping a card prefills the composer — the user reviews and
+  /// sends — rather than firing a remote action immediately.
+  Widget _newSessionGuidance(AppLocalizations l10n) {
+    final scheme = Theme.of(context).colorScheme;
+    final suggestions = <(IconData, String, String)>[
+      (
+        Icons.account_tree_outlined,
+        l10n.suggestExploreTitle,
+        l10n.suggestExplorePrompt,
+      ),
+      (Icons.science_outlined, l10n.suggestTestsTitle, l10n.suggestTestsPrompt),
+      (
+        Icons.difference_outlined,
+        l10n.suggestDiffTitle,
+        l10n.suggestDiffPrompt,
+      ),
+      (Icons.checklist_rtl, l10n.suggestPlanTitle, l10n.suggestPlanPrompt),
+    ];
+    return Center(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 560),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.auto_awesome, size: 30, color: scheme.primary),
+              const SizedBox(height: 14),
+              Text(
+                l10n.newSessionTitle,
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
+              const SizedBox(height: 6),
+              Text(
+                l10n.newSessionSubtitle,
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  color: scheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 22),
+              for (final (icon, title, prompt) in suggestions) ...[
+                _suggestionCard(icon, title, prompt),
+                const SizedBox(height: 10),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// One tappable starter-prompt card; tapping prefills + focuses the composer.
+  Widget _suggestionCard(IconData icon, String title, String prompt) {
+    final scheme = Theme.of(context).colorScheme;
+    return Material(
+      color: scheme.surfaceContainerHighest,
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: () => _useSuggestion(prompt),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          child: Row(
+            children: [
+              Icon(icon, size: 20, color: scheme.primary),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title, style: Theme.of(context).textTheme.titleSmall),
+                    const SizedBox(height: 2),
+                    Text(
+                      prompt,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              Icon(Icons.north_east, size: 16, color: scheme.outline),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Prefill the composer with [prompt] and focus it so the user can review or
+  /// edit before sending.
+  void _useSuggestion(String prompt) {
+    _input.text = prompt;
+    _input.selection = TextSelection.collapsed(offset: prompt.length);
+    _inputFocus.requestFocus();
   }
 
   /// Left pane: this project's conversations + a "new session" button. Used
@@ -1522,6 +1733,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
             children: [
               TextField(
                 controller: _input,
+                focusNode: _inputFocus,
                 minLines: 1,
                 maxLines: 6,
                 textInputAction: TextInputAction.send,
@@ -1567,10 +1779,13 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
                             icon: Icons.checklist_rtl,
                             label: l10n.planMode,
                             active: _plan,
-                            onTap: () => setState(() {
-                              _plan = !_plan;
-                              _planToggledByUser = true;
-                            }),
+                            onTap: () {
+                              setState(() {
+                                _plan = !_plan;
+                                _planToggledByUser = true;
+                              });
+                              _rememberDefaults();
+                            },
                           ),
                           const SizedBox(width: 6),
                           // Reasoning effort ("thinking level"): shows the effort
@@ -1721,6 +1936,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
           _effortActive = null;
         }
       });
+      _rememberDefaults();
     }
   }
 
@@ -1750,7 +1966,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
         ),
       ),
     );
-    if (chosen != null) setState(() => _mode = chosen);
+    if (chosen != null) {
+      setState(() => _mode = chosen);
+      _rememberDefaults();
+    }
   }
 
   IconData _effortIcon(ReasoningEffort e) => switch (e) {
@@ -1794,7 +2013,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
         ),
       ),
     );
-    if (chosen != null) setState(() => _effort = chosen);
+    if (chosen != null) {
+      setState(() => _effort = chosen);
+      _rememberDefaults();
+    }
   }
 
   Future<void> _pickProject() async {
