@@ -78,6 +78,20 @@ class _Item {
   bool get isNotice => type == 'contextCompaction' || type == 'interrupted';
 }
 
+/// One entry in an option-picker bottom sheet (model / permission / effort).
+class _PickerOption<T> {
+  const _PickerOption({
+    required this.value,
+    required this.icon,
+    required this.label,
+    this.description,
+  });
+  final T value;
+  final IconData icon;
+  final String label;
+  final String? description;
+}
+
 class _AppSessionState extends ConsumerState<AppSessionScreen> {
   final _input = TextEditingController();
   final _inputFocus = FocusNode();
@@ -141,6 +155,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
   bool _leftOpen = true;
   bool _rightOpen = false;
   List<ThreadMeta> _threads = const [];
+  // Live filter text for the conversations pane search box.
+  String _convQuery = '';
 
   bool _streaming = false;
   // Current running turn's id, captured from turn/started — required to
@@ -1560,78 +1576,282 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
       if (Scaffold.maybeOf(ctx)?.isDrawerOpen ?? false) Navigator.pop(ctx);
     }
 
+    // Filter by the search query, then bucket by recency: running threads go to
+    // "Active", today's to "Today", and the rest to "Earlier".
+    final q = _convQuery.trim().toLowerCase();
+    final filtered = q.isEmpty
+        ? _threads
+        : _threads
+              .where((t) => t.preview.toLowerCase().contains(q))
+              .toList(growable: false);
+    final now = DateTime.now();
+    final active = <ThreadMeta>[];
+    final today = <ThreadMeta>[];
+    final earlier = <ThreadMeta>[];
+    for (final t in filtered) {
+      if (running.contains(t.id)) {
+        active.add(t);
+      } else if (_isSameDay(t.updatedAt, now)) {
+        today.add(t);
+      } else {
+        earlier.add(t);
+      }
+    }
+
     return Builder(
-      builder: (ctx) => Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 14, 8, 6),
+      builder: (ctx) {
+        Widget tile(ThreadMeta t) => _conversationTile(
+          thread: t,
+          running: running.contains(t.id),
+          selected: t.id == _threadId,
+          now: now,
+          l10n: l10n,
+          onTap: () {
+            closeDrawerIfOpen(ctx);
+            if (t.id != _threadId) _openThread(t.id, t.cwd);
+          },
+        );
+        final rows = <Widget>[];
+        void group(String label, List<ThreadMeta> items) {
+          if (items.isEmpty) return;
+          rows.add(_sectionLabel(label));
+          rows.addAll(items.map(tile));
+        }
+
+        group(l10n.groupActive, active);
+        group(l10n.groupToday, today);
+        group(l10n.groupEarlier, earlier);
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // Header: title + a circular "new conversation" button (echoes the
+            // composer's send button).
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 14, 12, 2),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      l10n.conversationsSection,
+                      style: Theme.of(context).textTheme.titleSmall,
+                    ),
+                  ),
+                  Material(
+                    color: scheme.primary,
+                    shape: const CircleBorder(),
+                    child: InkWell(
+                      customBorder: const CircleBorder(),
+                      onTap: () {
+                        closeDrawerIfOpen(ctx);
+                        _openThread(null, _cwd);
+                      },
+                      child: Tooltip(
+                        message: l10n.newConversation,
+                        child: Padding(
+                          padding: const EdgeInsets.all(6),
+                          child: Icon(
+                            Icons.add,
+                            size: 18,
+                            color: scheme.onPrimary,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            // Current project context.
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.folder_outlined,
+                    size: 13,
+                    color: scheme.onSurfaceVariant,
+                  ),
+                  const SizedBox(width: 5),
+                  Expanded(
+                    child: Text(
+                      _projectName(),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            // Quick filter — shown once there are enough conversations to scan.
+            if (_threads.length > 6)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+                child: TextField(
+                  key: const Key('conv-search'),
+                  onChanged: (v) => setState(() => _convQuery = v),
+                  style: const TextStyle(fontSize: 13),
+                  decoration: InputDecoration(
+                    isDense: true,
+                    prefixIcon: const Icon(Icons.search, size: 18),
+                    prefixIconConstraints: const BoxConstraints(
+                      minWidth: 34,
+                      minHeight: 34,
+                    ),
+                    hintText: l10n.searchConversations,
+                    hintStyle: TextStyle(
+                      fontSize: 13,
+                      color: scheme.onSurfaceVariant,
+                    ),
+                    filled: true,
+                    fillColor: scheme.surfaceContainerHighest,
+                    contentPadding: const EdgeInsets.symmetric(vertical: 9),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: BorderSide.none,
+                    ),
+                  ),
+                ),
+              ),
+            Expanded(
+              child: filtered.isEmpty
+                  ? Center(
+                      child: Text(
+                        q.isEmpty ? l10n.noThreads : l10n.noMatchingThreads,
+                        style: TextStyle(color: scheme.outline),
+                      ),
+                    )
+                  : ListView(
+                      padding: const EdgeInsets.fromLTRB(8, 2, 8, 8),
+                      children: rows,
+                    ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  /// A muted section header for the conversations pane (Active / Today / …).
+  Widget _sectionLabel(String text) => Padding(
+    padding: const EdgeInsets.fromLTRB(8, 10, 8, 4),
+    child: Text(
+      text,
+      style: TextStyle(
+        fontSize: 11.5,
+        color: Theme.of(context).colorScheme.onSurfaceVariant,
+      ),
+    ),
+  );
+
+  /// One conversation row: a soft rounded tile with a leading icon, the preview
+  /// as title, and a relative-time (or "running") subtitle — the same card
+  /// language used by the guidance/option cards across the app.
+  Widget _conversationTile({
+    required ThreadMeta thread,
+    required bool running,
+    required bool selected,
+    required DateTime now,
+    required AppLocalizations l10n,
+    required VoidCallback onTap,
+  }) {
+    final scheme = Theme.of(context).colorScheme;
+    final fg = selected ? scheme.onPrimaryContainer : scheme.onSurface;
+    final muted = selected
+        ? scheme.onPrimaryContainer.withValues(alpha: 0.75)
+        : scheme.onSurfaceVariant;
+    final subtitle = running
+        ? l10n.running
+        : _relativeTime(thread.updatedAt, now, l10n);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 1),
+      child: Material(
+        color: selected ? scheme.primaryContainer : Colors.transparent,
+        borderRadius: BorderRadius.circular(10),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(10),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
             child: Row(
               children: [
+                Icon(
+                  Icons.chat_bubble_outline,
+                  size: 17,
+                  color: selected ? scheme.onPrimaryContainer : muted,
+                ),
+                const SizedBox(width: 11),
                 Expanded(
-                  child: Text(
-                    l10n.conversationsSection,
-                    style: Theme.of(context).textTheme.titleSmall,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        thread.preview.isEmpty
+                            ? l10n.untitledThread
+                            : thread.preview,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w500,
+                          color: fg,
+                        ),
+                      ),
+                      if (subtitle.isNotEmpty) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                          subtitle,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 11.5,
+                            color: running ? scheme.primary : muted,
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
                 ),
-                if (running.isNotEmpty) ...[
-                  StatusChip(
-                    color: scheme.primary,
-                    label: l10n.runningSessions(running.length),
-                    pulsing: true,
-                  ),
-                  const SizedBox(width: 4),
+                if (running) ...[
+                  const SizedBox(width: 8),
+                  PulsingDot(color: scheme.primary, size: 7),
                 ],
-                IconButton(
-                  tooltip: l10n.newConversation,
-                  icon: const Icon(Icons.add),
-                  onPressed: () {
-                    closeDrawerIfOpen(ctx);
-                    _openThread(null, _cwd);
-                  },
-                ),
               ],
             ),
           ),
-          const Divider(height: 1),
-          Expanded(
-            child: _threads.isEmpty
-                ? Center(
-                    child: Text(
-                      l10n.noThreads,
-                      style: TextStyle(color: scheme.outline),
-                    ),
-                  )
-                : ListView.builder(
-                    itemCount: _threads.length,
-                    itemBuilder: (c, i) {
-                      final t = _threads[i];
-                      return ListTile(
-                        dense: true,
-                        selected: t.id == _threadId,
-                        leading: const Icon(
-                          Icons.chat_bubble_outline,
-                          size: 18,
-                        ),
-                        title: Text(
-                          t.preview.isEmpty ? l10n.untitledThread : t.preview,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        trailing: running.contains(t.id)
-                            ? PulsingDot(color: scheme.primary)
-                            : null,
-                        onTap: () {
-                          closeDrawerIfOpen(ctx);
-                          if (t.id != _threadId) _openThread(t.id, t.cwd);
-                        },
-                      );
-                    },
-                  ),
-          ),
-        ],
+        ),
       ),
     );
+  }
+
+  /// Whether [unixSeconds] falls on the same calendar day as [now]. A 0/absent
+  /// timestamp is treated as not-today (bucketed under "Earlier").
+  bool _isSameDay(int unixSeconds, DateTime now) {
+    if (unixSeconds <= 0) return false;
+    final d = DateTime.fromMillisecondsSinceEpoch(unixSeconds * 1000);
+    return d.year == now.year && d.month == now.month && d.day == now.day;
+  }
+
+  /// A short localized "time ago" for a thread's last-updated timestamp;
+  /// empty when the timestamp is missing (0).
+  String _relativeTime(int unixSeconds, DateTime now, AppLocalizations l10n) {
+    if (unixSeconds <= 0) return '';
+    final then = DateTime.fromMillisecondsSinceEpoch(unixSeconds * 1000);
+    final diff = now.difference(then);
+    if (diff.inMinutes < 1) return l10n.timeJustNow;
+    if (diff.inMinutes < 60) return l10n.timeMinutesAgo(diff.inMinutes);
+    if (_isSameDay(unixSeconds, now)) return l10n.timeHoursAgo(diff.inHours);
+    final yesterday = now.subtract(const Duration(days: 1));
+    if (then.year == yesterday.year &&
+        then.month == yesterday.month &&
+        then.day == yesterday.day) {
+      return l10n.timeYesterday;
+    }
+    return l10n.timeDaysAgo(diff.inDays);
   }
 
   /// Right pane: the diff viewer (desktop). Collapsible via its close button.
@@ -1646,10 +1866,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
   Widget _implementBar(AppLocalizations l10n) {
     final scheme = Theme.of(context).colorScheme;
     return Container(
-      width: double.infinity,
+      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       decoration: BoxDecoration(
         color: scheme.primaryContainer,
-        border: Border(top: BorderSide(color: scheme.outlineVariant)),
+        borderRadius: BorderRadius.circular(14),
       ),
       padding: const EdgeInsets.fromLTRB(16, 10, 12, 10),
       child: Row(
@@ -1683,9 +1903,12 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
   Widget _errorBanner(AppLocalizations l10n) {
     final scheme = Theme.of(context).colorScheme;
     return Container(
-      width: double.infinity,
-      color: scheme.errorContainer,
-      padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: scheme.errorContainer,
+        borderRadius: BorderRadius.circular(14),
+      ),
+      padding: const EdgeInsets.fromLTRB(16, 6, 8, 6),
       child: Row(
         children: [
           Expanded(
@@ -1814,7 +2037,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
     );
   }
 
-  IconData _modeIcon() => switch (_mode) {
+  IconData _modeIcon() => _modeIconFor(_mode);
+
+  IconData _modeIconFor(PermissionMode m) => switch (m) {
     PermissionMode.full => Icons.lock_open,
     PermissionMode.readOnly => Icons.lock_outline,
     PermissionMode.auto => Icons.shield_outlined,
@@ -1896,32 +2121,142 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
     return _models;
   }
 
+  /// Shared bottom-sheet picker: a titled list of soft option rows (icon +
+  /// label + description); the selected one is filled and checked. Returns the
+  /// chosen value, or null if dismissed. Used by the model/mode/effort pickers.
+  Future<T?> _optionSheet<T>({
+    required String title,
+    required List<_PickerOption<T>> options,
+    required bool Function(T value) isSelected,
+  }) {
+    final scheme = Theme.of(context).colorScheme;
+    return showModalBottomSheet<T>(
+      context: context,
+      builder: (c) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Center(
+              child: Container(
+                width: 36,
+                height: 4,
+                margin: const EdgeInsets.only(top: 10, bottom: 8),
+                decoration: BoxDecoration(
+                  color: scheme.outlineVariant,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
+              child: Text(title, style: Theme.of(context).textTheme.titleSmall),
+            ),
+            Flexible(
+              child: ListView(
+                shrinkWrap: true,
+                padding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
+                children: [
+                  for (final o in options)
+                    _optionRow(
+                      o,
+                      isSelected(o.value),
+                      () => Navigator.pop(c, o.value),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// One soft option row inside [_optionSheet].
+  Widget _optionRow<T>(_PickerOption<T> o, bool selected, VoidCallback onTap) {
+    final scheme = Theme.of(context).colorScheme;
+    final fg = selected ? scheme.onPrimaryContainer : scheme.onSurface;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Material(
+        color: selected ? scheme.primaryContainer : Colors.transparent,
+        borderRadius: BorderRadius.circular(12),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+            child: Row(
+              children: [
+                Icon(
+                  o.icon,
+                  size: 20,
+                  color: selected ? scheme.onPrimaryContainer : scheme.primary,
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        o.label,
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w500,
+                          color: fg,
+                        ),
+                      ),
+                      if (o.description != null &&
+                          o.description!.isNotEmpty) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                          o.description!,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: selected
+                                ? scheme.onPrimaryContainer.withValues(
+                                    alpha: 0.75,
+                                  )
+                                : scheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                if (selected) ...[
+                  const SizedBox(width: 8),
+                  Icon(Icons.check, size: 18, color: scheme.onPrimaryContainer),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Future<void> _pickModel() async {
     final l10n = AppLocalizations.of(context);
     final models = await _ensureModels();
     if (!mounted) return;
-    final chosen = await showModalBottomSheet<ModelInfo?>(
-      context: context,
-      builder: (c) => SafeArea(
-        child: ListView(
-          shrinkWrap: true,
-          children: [
-            ListTile(
-              title: Text(l10n.modelDefault),
-              leading: const Icon(Icons.star_outline),
-              onTap: () => Navigator.pop(c, null),
-            ),
-            const Divider(height: 1),
-            for (final m in models)
-              ListTile(
-                title: Text(m.displayName),
-                subtitle: m.description.isEmpty ? null : Text(m.description),
-                selected: _model?.id == m.id,
-                onTap: () => Navigator.pop(c, m),
-              ),
-          ],
+    final chosen = await _optionSheet<ModelInfo?>(
+      title: l10n.modelLabel,
+      isSelected: (v) => v?.id == _model?.id,
+      options: [
+        _PickerOption(
+          value: null,
+          icon: Icons.star_outline,
+          label: l10n.modelDefault,
         ),
-      ),
+        for (final m in models)
+          _PickerOption(
+            value: m,
+            icon: Icons.auto_awesome,
+            label: m.displayName,
+            description: m.description.isEmpty ? null : m.description,
+          ),
+      ],
     );
     if (chosen != null || models.isNotEmpty) {
       setState(() {
@@ -1942,29 +2277,18 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
 
   Future<void> _pickMode() async {
     final l10n = AppLocalizations.of(context);
-    final chosen = await showModalBottomSheet<PermissionMode>(
-      context: context,
-      builder: (c) => SafeArea(
-        child: ListView(
-          shrinkWrap: true,
-          children: [
-            for (final m in PermissionMode.values)
-              ListTile(
-                leading: Icon(
-                  m == PermissionMode.full
-                      ? Icons.lock_open
-                      : m == PermissionMode.readOnly
-                      ? Icons.lock_outline
-                      : Icons.shield_outlined,
-                ),
-                title: Text(m.label(l10n)),
-                subtitle: Text(m.describe(l10n)),
-                selected: _mode == m,
-                onTap: () => Navigator.pop(c, m),
-              ),
-          ],
-        ),
-      ),
+    final chosen = await _optionSheet<PermissionMode>(
+      title: l10n.permissionLabel,
+      isSelected: (v) => v == _mode,
+      options: [
+        for (final m in PermissionMode.values)
+          _PickerOption(
+            value: m,
+            icon: _modeIconFor(m),
+            label: m.label(l10n),
+            description: m.describe(l10n),
+          ),
+      ],
     );
     if (chosen != null) {
       setState(() => _mode = chosen);
@@ -1991,27 +2315,22 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
     if (!mounted) return;
     final model = _model ?? (models.isNotEmpty ? models.first : null);
     final supported = model?.supportedReasoningEfforts ?? const [];
-    final options = [
+    final efforts = [
       for (final e in ReasoningEffort.values)
         if (supported.isEmpty || supported.contains(e.wire)) e,
     ];
-    final chosen = await showModalBottomSheet<ReasoningEffort>(
-      context: context,
-      builder: (c) => SafeArea(
-        child: ListView(
-          shrinkWrap: true,
-          children: [
-            for (final e in options)
-              ListTile(
-                leading: Icon(_effortIcon(e)),
-                title: Text(e.label(l10n)),
-                subtitle: Text(e.describe(l10n)),
-                selected: _effectiveEffort == e,
-                onTap: () => Navigator.pop(c, e),
-              ),
-          ],
-        ),
-      ),
+    final chosen = await _optionSheet<ReasoningEffort>(
+      title: l10n.effort,
+      isSelected: (v) => v == _effectiveEffort,
+      options: [
+        for (final e in efforts)
+          _PickerOption(
+            value: e,
+            icon: _effortIcon(e),
+            label: e.label(l10n),
+            description: e.describe(l10n),
+          ),
+      ],
     );
     if (chosen != null) {
       setState(() => _effort = chosen);
@@ -2098,37 +2417,42 @@ class _ApprovalCard extends StatelessWidget {
     final l10n = AppLocalizations.of(context);
     final scheme = Theme.of(context).colorScheme;
     final meta = _meta(l10n);
-    return Card(
+    return Container(
       key: const Key('approval-card'),
       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      color: scheme.tertiaryContainer,
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHigh,
+        border: Border.all(color: scheme.outlineVariant, width: 0.5),
+        borderRadius: BorderRadius.circular(14),
+      ),
       child: Padding(
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.all(14),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
               children: [
-                Icon(meta.icon, size: 18, color: scheme.onTertiaryContainer),
-                const SizedBox(width: 8),
+                Icon(meta.icon, size: 18, color: scheme.primary),
+                const SizedBox(width: 9),
                 Expanded(
                   child: Text(
                     meta.title,
                     style: TextStyle(
-                      color: scheme.onTertiaryContainer,
-                      fontWeight: FontWeight.w600,
+                      color: scheme.onSurface,
+                      fontWeight: FontWeight.w500,
+                      fontSize: 14,
                     ),
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 10),
             Container(
               width: double.infinity,
               constraints: const BoxConstraints(maxHeight: 160),
-              padding: const EdgeInsets.all(8),
+              padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
-                color: scheme.surface.withValues(alpha: 0.4),
+                color: scheme.surface.withValues(alpha: 0.6),
                 borderRadius: BorderRadius.circular(8),
               ),
               child: SingleChildScrollView(
@@ -2630,97 +2954,107 @@ class _FileChangeCardState extends State<_FileChangeCard> {
     final hasDiff = !diff.isEmpty;
     final title = widget.item.title.trim();
     final expandable = hasDiff || widget.item.text.trim().isNotEmpty;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        InkWell(
-          borderRadius: BorderRadius.circular(6),
-          onTap: expandable
-              ? () => setState(() => _expanded = !_expanded)
-              : null,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 5),
-            child: Row(
-              children: [
-                Icon(Icons.edit_document, size: 15, color: muted),
-                const SizedBox(width: 8),
-                Text(
-                  l10n.toolEdited,
-                  style: Theme.of(
-                    context,
-                  ).textTheme.bodySmall?.copyWith(color: muted),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontFamily: 'monospace',
-                      fontSize: 12,
-                      color: muted,
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 2),
+      decoration: BoxDecoration(
+        border: Border.all(color: scheme.outlineVariant, width: 0.5),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          InkWell(
+            onTap: expandable
+                ? () => setState(() => _expanded = !_expanded)
+                : null,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              child: Row(
+                children: [
+                  Icon(Icons.edit_document, size: 17, color: scheme.primary),
+                  const SizedBox(width: 10),
+                  Text(
+                    l10n.toolEdited,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: scheme.onSurface,
+                      fontWeight: FontWeight.w500,
                     ),
                   ),
-                ),
-                if (hasDiff) ...[
-                  Text(
-                    '+${diff.added}',
-                    style: TextStyle(
-                      fontSize: 11.5,
-                      color: Colors.green.shade600,
-                    ),
-                  ),
-                  const SizedBox(width: 3),
-                  Text(
-                    '−${diff.removed}',
-                    style: TextStyle(fontSize: 11.5, color: scheme.error),
-                  ),
-                  const SizedBox(width: 4),
-                ],
-                if (expandable)
-                  Icon(
-                    _expanded ? Icons.expand_less : Icons.expand_more,
-                    size: 16,
-                    color: muted.withValues(alpha: 0.7),
-                  ),
-              ],
-            ),
-          ),
-        ),
-        if (_expanded)
-          Container(
-            margin: const EdgeInsets.only(left: 18, top: 2, bottom: 6),
-            clipBehavior: Clip.antiAlias,
-            decoration: BoxDecoration(borderRadius: BorderRadius.circular(8)),
-            // Color goes on a Material (not the Container) so the diff's
-            // ListTile-based tiles paint their ink/background correctly.
-            child: Material(
-              color: scheme.surfaceContainerHighest.withValues(alpha: 0.4),
-              child: hasDiff
-                  ? Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        for (final f in diff.files) _DiffFileTile(file: f),
-                      ],
-                    )
-                  : Padding(
-                      padding: const EdgeInsets.all(10),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          for (final p
-                              in widget.item.text
-                                  .split('\n')
-                                  .map((s) => s.trim())
-                                  .where((s) => s.isNotEmpty))
-                            _CopyablePath(path: p),
-                        ],
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: 12,
+                        color: muted,
                       ),
                     ),
+                  ),
+                  if (hasDiff) ...[
+                    Text(
+                      '+${diff.added}',
+                      style: TextStyle(
+                        fontSize: 11.5,
+                        color: Colors.green.shade600,
+                      ),
+                    ),
+                    const SizedBox(width: 3),
+                    Text(
+                      '−${diff.removed}',
+                      style: TextStyle(fontSize: 11.5, color: scheme.error),
+                    ),
+                    const SizedBox(width: 4),
+                  ],
+                  if (expandable)
+                    Icon(
+                      _expanded ? Icons.expand_less : Icons.expand_more,
+                      size: 18,
+                      color: muted.withValues(alpha: 0.7),
+                    ),
+                ],
+              ),
             ),
           ),
-      ],
+          if (_expanded)
+            DecoratedBox(
+              decoration: BoxDecoration(
+                border: Border(
+                  top: BorderSide(color: scheme.outlineVariant, width: 0.5),
+                ),
+              ),
+              // Color goes on a Material (not the box) so the diff's
+              // ListTile-based tiles paint their ink/background correctly.
+              child: Material(
+                color: scheme.surfaceContainerHighest.withValues(alpha: 0.4),
+                child: hasDiff
+                    ? Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          for (final f in diff.files) _DiffFileTile(file: f),
+                        ],
+                      )
+                    : Padding(
+                        padding: const EdgeInsets.all(10),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            for (final p
+                                in widget.item.text
+                                    .split('\n')
+                                    .map((s) => s.trim())
+                                    .where((s) => s.isNotEmpty))
+                              _CopyablePath(path: p),
+                          ],
+                        ),
+                      ),
+              ),
+            ),
+        ],
+      ),
     );
   }
 }
@@ -2959,51 +3293,60 @@ class _GroupedActivityCardState extends State<_GroupedActivityCard> {
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
-    final muted = Theme.of(context).colorScheme.onSurfaceVariant;
+    final scheme = Theme.of(context).colorScheme;
+    final muted = scheme.onSurfaceVariant;
     final meta = _meta(l10n);
     final n = widget.group.items.length;
     final anyStreaming = widget.group.items.any((i) => i.streaming);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        InkWell(
-          borderRadius: BorderRadius.circular(6),
-          onTap: () => setState(() => _expanded = !_expanded),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 5),
-            child: Row(
-              children: [
-                Icon(meta.icon, size: 15, color: muted),
-                const SizedBox(width: 8),
-                Text(
-                  '${meta.label} ×$n',
-                  style: Theme.of(
-                    context,
-                  ).textTheme.bodySmall?.copyWith(color: muted),
-                ),
-                const Spacer(),
-                if (anyStreaming)
-                  SizedBox(
-                    width: 12,
-                    height: 12,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 1.8,
-                      color: muted,
+        Container(
+          margin: const EdgeInsets.symmetric(vertical: 2),
+          decoration: BoxDecoration(
+            border: Border.all(color: scheme.outlineVariant, width: 0.5),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(12),
+            onTap: () => setState(() => _expanded = !_expanded),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              child: Row(
+                children: [
+                  Icon(meta.icon, size: 17, color: scheme.primary),
+                  const SizedBox(width: 10),
+                  Text(
+                    '${meta.label} ×$n',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: scheme.onSurface,
+                      fontWeight: FontWeight.w500,
                     ),
-                  )
-                else
-                  Icon(
-                    _expanded ? Icons.expand_less : Icons.expand_more,
-                    size: 16,
-                    color: muted.withValues(alpha: 0.7),
                   ),
-              ],
+                  const Spacer(),
+                  if (anyStreaming)
+                    SizedBox(
+                      width: 12,
+                      height: 12,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 1.8,
+                        color: muted,
+                      ),
+                    )
+                  else
+                    Icon(
+                      _expanded ? Icons.expand_less : Icons.expand_more,
+                      size: 18,
+                      color: muted.withValues(alpha: 0.7),
+                    ),
+                ],
+              ),
             ),
           ),
         ),
         if (_expanded)
           Padding(
-            padding: const EdgeInsets.only(left: 16),
+            padding: const EdgeInsets.only(left: 16, top: 2),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -3075,82 +3418,92 @@ class _ActivityCardState extends State<_ActivityCard> {
       if (detail.isNotEmpty) detail,
     ].join('\n\n');
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        // Subtle single-line row — no card chrome, low contrast (Codex-style).
-        InkWell(
-          borderRadius: BorderRadius.circular(6),
-          onTap: expandable
-              ? () => setState(() => _expanded = !_expanded)
-              : null,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 5),
-            child: Row(
-              children: [
-                Icon(meta.icon, size: 15, color: muted),
-                const SizedBox(width: 8),
-                Text(
-                  meta.label,
-                  style: Theme.of(
-                    context,
-                  ).textTheme.bodySmall?.copyWith(color: muted),
-                ),
-                if (value.isNotEmpty) ...[
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      value,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontFamily: 'monospace',
-                        fontSize: 12,
-                        color: muted,
+    // A soft bordered card matching the guidance/option cards: an accent icon,
+    // the tool label, a one-line value, and a chevron that expands the detail.
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 2),
+      decoration: BoxDecoration(
+        border: Border.all(color: scheme.outlineVariant, width: 0.5),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          InkWell(
+            onTap: expandable
+                ? () => setState(() => _expanded = !_expanded)
+                : null,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              child: Row(
+                children: [
+                  Icon(meta.icon, size: 17, color: scheme.primary),
+                  const SizedBox(width: 10),
+                  Text(
+                    meta.label,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: scheme.onSurface,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  if (value.isNotEmpty) ...[
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        value,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontFamily: 'monospace',
+                          fontSize: 12,
+                          color: muted,
+                        ),
                       ),
                     ),
-                  ),
-                ] else
-                  const Spacer(),
-                if (item.streaming)
-                  SizedBox(
-                    width: 12,
-                    height: 12,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 1.8,
-                      color: muted,
+                  ] else
+                    const Spacer(),
+                  if (item.streaming)
+                    SizedBox(
+                      width: 12,
+                      height: 12,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 1.8,
+                        color: muted,
+                      ),
+                    )
+                  else if (expandable)
+                    Icon(
+                      _expanded ? Icons.expand_less : Icons.expand_more,
+                      size: 18,
+                      color: muted.withValues(alpha: 0.7),
                     ),
-                  )
-                else if (expandable)
-                  Icon(
-                    _expanded ? Icons.expand_less : Icons.expand_more,
-                    size: 16,
-                    color: muted.withValues(alpha: 0.7),
-                  ),
-              ],
-            ),
-          ),
-        ),
-        if (_expanded && body.isNotEmpty)
-          Container(
-            width: double.infinity,
-            margin: const EdgeInsets.only(left: 23, top: 2, bottom: 6),
-            padding: const EdgeInsets.all(10),
-            constraints: const BoxConstraints(maxHeight: 320),
-            decoration: BoxDecoration(
-              color: scheme.surfaceContainerHighest.withValues(alpha: 0.5),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: SingleChildScrollView(
-              child: linkifyText(
-                context,
-                body,
-                selectable: true,
-                style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+                ],
               ),
             ),
           ),
-      ],
+          if (_expanded && body.isNotEmpty)
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(11),
+              constraints: const BoxConstraints(maxHeight: 320),
+              decoration: BoxDecoration(
+                border: Border(
+                  top: BorderSide(color: scheme.outlineVariant, width: 0.5),
+                ),
+                color: scheme.surfaceContainerHighest.withValues(alpha: 0.4),
+              ),
+              child: SingleChildScrollView(
+                child: linkifyText(
+                  context,
+                  body,
+                  selectable: true,
+                  style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+                ),
+              ),
+            ),
+        ],
+      ),
     );
   }
 }

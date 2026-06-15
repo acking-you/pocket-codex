@@ -152,5 +152,27 @@
   "suggestDiffTitle": "审查改动",
   "suggestDiffPrompt": "总结当前工作区相对主分支的改动。",
   "suggestPlanTitle": "规划功能",
-  "suggestPlanPrompt": "在写代码之前,帮我规划一个新功能。"
+  "suggestPlanPrompt": "在写代码之前,帮我规划一个新功能。",
+  "searchConversations": "搜索会话",
+  "noMatchingThreads": "没有匹配的会话",
+  "groupActive": "进行中",
+  "groupToday": "今天",
+  "groupEarlier": "更早",
+  "running": "运行中…",
+  "timeJustNow": "刚刚",
+  "timeMinutesAgo": "{n} 分钟前",
+  "@timeMinutesAgo": {
+    "placeholders": { "n": { "type": "int" } }
+  },
+  "timeHoursAgo": "{n} 小时前",
+  "@timeHoursAgo": {
+    "placeholders": { "n": { "type": "int" } }
+  },
+  "timeYesterday": "昨天",
+  "timeDaysAgo": "{n} 天前",
+  "@timeDaysAgo": {
+    "placeholders": { "n": { "type": "int" } }
+  },
+  "modelLabel": "模型",
+  "permissionLabel": "权限"
 }

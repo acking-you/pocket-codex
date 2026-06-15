@@ -455,4 +455,49 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get suggestPlanPrompt =>
       'Help me plan out a new feature before writing any code.';
+
+  @override
+  String get searchConversations => 'Search conversations';
+
+  @override
+  String get noMatchingThreads => 'No matching conversations';
+
+  @override
+  String get groupActive => 'Active';
+
+  @override
+  String get groupToday => 'Today';
+
+  @override
+  String get groupEarlier => 'Earlier';
+
+  @override
+  String get running => 'Running…';
+
+  @override
+  String get timeJustNow => 'just now';
+
+  @override
+  String timeMinutesAgo(int n) {
+    return '${n}m ago';
+  }
+
+  @override
+  String timeHoursAgo(int n) {
+    return '${n}h ago';
+  }
+
+  @override
+  String get timeYesterday => 'yesterday';
+
+  @override
+  String timeDaysAgo(int n) {
+    return '${n}d ago';
+  }
+
+  @override
+  String get modelLabel => 'Model';
+
+  @override
+  String get permissionLabel => 'Permission';
 }

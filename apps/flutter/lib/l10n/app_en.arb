@@ -152,5 +152,27 @@
   "suggestDiffTitle": "Review changes",
   "suggestDiffPrompt": "Summarize the current working-tree changes against the main branch.",
   "suggestPlanTitle": "Plan a feature",
-  "suggestPlanPrompt": "Help me plan out a new feature before writing any code."
+  "suggestPlanPrompt": "Help me plan out a new feature before writing any code.",
+  "searchConversations": "Search conversations",
+  "noMatchingThreads": "No matching conversations",
+  "groupActive": "Active",
+  "groupToday": "Today",
+  "groupEarlier": "Earlier",
+  "running": "Running…",
+  "timeJustNow": "just now",
+  "timeMinutesAgo": "{n}m ago",
+  "@timeMinutesAgo": {
+    "placeholders": { "n": { "type": "int" } }
+  },
+  "timeHoursAgo": "{n}h ago",
+  "@timeHoursAgo": {
+    "placeholders": { "n": { "type": "int" } }
+  },
+  "timeYesterday": "yesterday",
+  "timeDaysAgo": "{n}d ago",
+  "@timeDaysAgo": {
+    "placeholders": { "n": { "type": "int" } }
+  },
+  "modelLabel": "Model",
+  "permissionLabel": "Permission"
 }

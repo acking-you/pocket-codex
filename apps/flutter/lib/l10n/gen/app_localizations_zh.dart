@@ -446,4 +446,49 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get suggestPlanPrompt => '在写代码之前,帮我规划一个新功能。';
+
+  @override
+  String get searchConversations => '搜索会话';
+
+  @override
+  String get noMatchingThreads => '没有匹配的会话';
+
+  @override
+  String get groupActive => '进行中';
+
+  @override
+  String get groupToday => '今天';
+
+  @override
+  String get groupEarlier => '更早';
+
+  @override
+  String get running => '运行中…';
+
+  @override
+  String get timeJustNow => '刚刚';
+
+  @override
+  String timeMinutesAgo(int n) {
+    return '$n 分钟前';
+  }
+
+  @override
+  String timeHoursAgo(int n) {
+    return '$n 小时前';
+  }
+
+  @override
+  String get timeYesterday => '昨天';
+
+  @override
+  String timeDaysAgo(int n) {
+    return '$n 天前';
+  }
+
+  @override
+  String get modelLabel => '模型';
+
+  @override
+  String get permissionLabel => '权限';
 }

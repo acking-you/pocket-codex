@@ -331,7 +331,7 @@ void main() {
     // The default permission mode is "自动" (auto). Switch it to "只读".
     await t.tap(find.text('自动'));
     await t.pumpAndSettle();
-    await t.tap(find.widgetWithText(ListTile, '只读'));
+    await t.tap(find.text('只读'));
     await t.pumpAndSettle();
     expect(find.text('只读'), findsOneWidget); // the pill now reads read-only
 
@@ -368,10 +368,89 @@ void main() {
     await t.pumpAndSettle();
 
     expect(find.text('暂无会话'), findsNothing);
-    // The tile shows the message (optimistic preview preserved, not "(未命名)"
-    // even though the server's preview for a just-started thread is still empty).
-    expect(find.widgetWithText(ListTile, 'hello there'), findsOneWidget);
+    // The new session shows in the pane as a conversation tile, with its message
+    // preserved as the preview (not "(未命名)" — the server preview is still
+    // empty for a just-started thread, so the optimistic one must win).
+    expect(find.byIcon(Icons.chat_bubble_outline), findsOneWidget);
     expect(find.text('(未命名)'), findsNothing);
+  });
+
+  testWidgets(
+    'Conversations pane groups by time with relative-time subtitles',
+    (t) async {
+      final nowS = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      final api = FakeBridgeApi(
+        config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+      );
+      await api.appConnect('pcx:lb7666:app:default', 28080);
+      api.appThreads.addAll([
+        ThreadMeta(
+          id: 'tRecent',
+          preview: 'recent chat',
+          cwd: '',
+          updatedAt: nowS - 120,
+        ),
+        ThreadMeta(
+          id: 'tOld',
+          preview: 'ancient chat',
+          cwd: '',
+          updatedAt: nowS - 5 * 86400,
+        ),
+      ]);
+      t.view.devicePixelRatio = 1.0;
+      t.view.physicalSize = const Size(1200, 900); // wide → left pane inline
+      addTearDown(t.view.reset);
+      await t.pumpWidget(
+        _host(
+          const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'),
+          api,
+        ),
+      );
+      await t.pumpAndSettle();
+
+      // Each conversation shows its preview + a relative-time subtitle, and the
+      // older one is bucketed under "Earlier".
+      expect(find.text('recent chat'), findsOneWidget);
+      expect(find.text('ancient chat'), findsOneWidget);
+      expect(find.text('2 分钟前'), findsOneWidget); // timeMinutesAgo (zh)
+      expect(find.text('5 天前'), findsOneWidget); // timeDaysAgo (zh)
+      expect(find.text('更早'), findsOneWidget); // groupEarlier (zh)
+    },
+  );
+
+  testWidgets('Conversations search box filters the list', (t) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    // The search box only appears once there are enough conversations (>6).
+    api.appThreads.addAll(const [
+      ThreadMeta(id: 't1', preview: 'alpha', cwd: '', updatedAt: 0),
+      ThreadMeta(id: 't2', preview: 'beta', cwd: '', updatedAt: 0),
+      ThreadMeta(id: 't3', preview: 'gamma', cwd: '', updatedAt: 0),
+      ThreadMeta(id: 't4', preview: 'delta', cwd: '', updatedAt: 0),
+      ThreadMeta(id: 't5', preview: 'epsilon', cwd: '', updatedAt: 0),
+      ThreadMeta(id: 't6', preview: 'zeta', cwd: '', updatedAt: 0),
+      ThreadMeta(id: 't7', preview: 'needle', cwd: '', updatedAt: 0),
+    ]);
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(1200, 900); // wide → left pane inline
+    addTearDown(t.view.reset);
+    await t.pumpWidget(
+      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+    );
+    await t.pumpAndSettle();
+
+    expect(find.text('alpha'), findsOneWidget);
+    expect(find.text('needle'), findsOneWidget);
+
+    // Typing a query filters the list to matching previews only — non-matches
+    // disappear and exactly one conversation tile remains.
+    await t.enterText(find.byKey(const Key('conv-search')), 'needle');
+    await t.pumpAndSettle();
+    expect(find.text('alpha'), findsNothing);
+    expect(find.text('beta'), findsNothing);
+    expect(find.byIcon(Icons.chat_bubble_outline), findsOneWidget);
   });
 
   testWidgets('Tapping a guidance card prefills the composer', (t) async {
@@ -1523,6 +1602,11 @@ void main() {
       config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
     );
     await api.appConnect('pcx:lb7666:app:default', 28080);
+    // Narrow so the sessions pane is a hidden drawer — the open thread's sidebar
+    // "running" subtitle then can't collide with the status bar's working text.
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(400, 800);
+    addTearDown(t.view.reset);
     await t.pumpWidget(
       _host(
         const AppSessionScreen(
@@ -1715,7 +1799,8 @@ void main() {
     );
     await t.pump(); // deliver the broadcast event
     await t.pump(); // build the resulting frame
-    expect(find.text('1 个运行中'), findsOneWidget); // runningSessions(1) (zh)
+    // The running thread moves into the "Active" group with a pulsing dot.
+    expect(find.text('进行中'), findsOneWidget); // groupActive (zh)
     expect(find.byType(PulsingDot), findsAtLeastNWidgets(1));
 
     // Turn completes → the badge clears.
