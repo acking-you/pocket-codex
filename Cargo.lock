@@ -1691,6 +1691,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "futures",
  "nix",
  "pocket-codex-core",
  "serde",
@@ -1698,6 +1699,7 @@ dependencies = [
  "sysinfo",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-tungstenite",
  "tokio-util",
  "tracing",
  "which",
@@ -1745,6 +1747,7 @@ dependencies = [
  "base64",
  "flutter_rust_bridge",
  "once_cell",
+ "pocket-codex-codex",
  "pocket-codex-core",
  "pocket-codex-pb",
  "serde",

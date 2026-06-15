@@ -23,13 +23,33 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   AnyhowException dco_decode_AnyhowException(dynamic raw);
 
   @protected
+  RustStreamSink<AppEventDto> dco_decode_StreamSink_app_event_dto_Sse(
+    dynamic raw,
+  );
+
+  @protected
   String dco_decode_String(dynamic raw);
+
+  @protected
+  AppEventDto dco_decode_app_event_dto(dynamic raw);
 
   @protected
   bool dco_decode_bool(dynamic raw);
 
   @protected
+  PlatformInt64 dco_decode_box_autoadd_i_64(dynamic raw);
+
+  @protected
   ConfigView dco_decode_config_view(dynamic raw);
+
+  @protected
+  PlatformInt64 dco_decode_i_64(dynamic raw);
+
+  @protected
+  List<String> dco_decode_list_String(dynamic raw);
+
+  @protected
+  List<ModelInfoDto> dco_decode_list_model_info_dto(dynamic raw);
 
   @protected
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw);
@@ -41,13 +61,34 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<SubStatusDto> dco_decode_list_sub_status_dto(dynamic raw);
 
   @protected
+  List<ThreadItemDto> dco_decode_list_thread_item_dto(dynamic raw);
+
+  @protected
+  List<ThreadMetaDto> dco_decode_list_thread_meta_dto(dynamic raw);
+
+  @protected
+  ModelInfoDto dco_decode_model_info_dto(dynamic raw);
+
+  @protected
   String? dco_decode_opt_String(dynamic raw);
+
+  @protected
+  PlatformInt64? dco_decode_opt_box_autoadd_i_64(dynamic raw);
 
   @protected
   ServiceIdDto dco_decode_service_id_dto(dynamic raw);
 
   @protected
   SubStatusDto dco_decode_sub_status_dto(dynamic raw);
+
+  @protected
+  ThreadHistoryDto dco_decode_thread_history_dto(dynamic raw);
+
+  @protected
+  ThreadItemDto dco_decode_thread_item_dto(dynamic raw);
+
+  @protected
+  ThreadMetaDto dco_decode_thread_meta_dto(dynamic raw);
 
   @protected
   int dco_decode_u_16(dynamic raw);
@@ -62,13 +103,35 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   AnyhowException sse_decode_AnyhowException(SseDeserializer deserializer);
 
   @protected
+  RustStreamSink<AppEventDto> sse_decode_StreamSink_app_event_dto_Sse(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   String sse_decode_String(SseDeserializer deserializer);
+
+  @protected
+  AppEventDto sse_decode_app_event_dto(SseDeserializer deserializer);
 
   @protected
   bool sse_decode_bool(SseDeserializer deserializer);
 
   @protected
+  PlatformInt64 sse_decode_box_autoadd_i_64(SseDeserializer deserializer);
+
+  @protected
   ConfigView sse_decode_config_view(SseDeserializer deserializer);
+
+  @protected
+  PlatformInt64 sse_decode_i_64(SseDeserializer deserializer);
+
+  @protected
+  List<String> sse_decode_list_String(SseDeserializer deserializer);
+
+  @protected
+  List<ModelInfoDto> sse_decode_list_model_info_dto(
+    SseDeserializer deserializer,
+  );
 
   @protected
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer);
@@ -84,13 +147,38 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  List<ThreadItemDto> sse_decode_list_thread_item_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<ThreadMetaDto> sse_decode_list_thread_meta_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  ModelInfoDto sse_decode_model_info_dto(SseDeserializer deserializer);
+
+  @protected
   String? sse_decode_opt_String(SseDeserializer deserializer);
+
+  @protected
+  PlatformInt64? sse_decode_opt_box_autoadd_i_64(SseDeserializer deserializer);
 
   @protected
   ServiceIdDto sse_decode_service_id_dto(SseDeserializer deserializer);
 
   @protected
   SubStatusDto sse_decode_sub_status_dto(SseDeserializer deserializer);
+
+  @protected
+  ThreadHistoryDto sse_decode_thread_history_dto(SseDeserializer deserializer);
+
+  @protected
+  ThreadItemDto sse_decode_thread_item_dto(SseDeserializer deserializer);
+
+  @protected
+  ThreadMetaDto sse_decode_thread_meta_dto(SseDeserializer deserializer);
 
   @protected
   int sse_decode_u_16(SseDeserializer deserializer);
@@ -111,13 +199,40 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_StreamSink_app_event_dto_Sse(
+    RustStreamSink<AppEventDto> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_String(String self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_app_event_dto(AppEventDto self, SseSerializer serializer);
 
   @protected
   void sse_encode_bool(bool self, SseSerializer serializer);
 
   @protected
+  void sse_encode_box_autoadd_i_64(
+    PlatformInt64 self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_config_view(ConfigView self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_i_64(PlatformInt64 self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_list_String(List<String> self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_list_model_info_dto(
+    List<ModelInfoDto> self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_list_prim_u_8_strict(
@@ -138,13 +253,46 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_thread_item_dto(
+    List<ThreadItemDto> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_thread_meta_dto(
+    List<ThreadMetaDto> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_model_info_dto(ModelInfoDto self, SseSerializer serializer);
+
+  @protected
   void sse_encode_opt_String(String? self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_opt_box_autoadd_i_64(
+    PlatformInt64? self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_service_id_dto(ServiceIdDto self, SseSerializer serializer);
 
   @protected
   void sse_encode_sub_status_dto(SubStatusDto self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_thread_history_dto(
+    ThreadHistoryDto self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_thread_item_dto(ThreadItemDto self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_thread_meta_dto(ThreadMetaDto self, SseSerializer serializer);
 
   @protected
   void sse_encode_u_16(int self, SseSerializer serializer);

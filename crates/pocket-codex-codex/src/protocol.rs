@@ -143,4 +143,19 @@ mod tests {
         let msg: Message = serde_json::from_str(raw).expect("parse");
         assert!(matches!(msg, Message::Notification(_)));
     }
+
+    #[test]
+    fn request_omits_params_when_none() {
+        // No-params methods (e.g. `account/rateLimits/read`) must serialize with
+        // no `params` key at all — an empty `{}` is rejected as invalid params.
+        let req = Request {
+            jsonrpc: None,
+            id: RequestId::String("1".into()),
+            method: "account/rateLimits/read".into(),
+            params: None,
+        };
+        let v = serde_json::to_value(&req).expect("serialize");
+        assert!(v.get("params").is_none(), "must omit params: {v}");
+        assert_eq!(v["method"], "account/rateLimits/read");
+    }
 }

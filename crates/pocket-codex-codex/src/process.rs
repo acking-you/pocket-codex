@@ -339,12 +339,20 @@ mod tests {
         );
         let envs = explicit_envs(&command);
 
-        for key in
-            ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"]
-        {
+        // Look up case-insensitively: Windows env keys are case-insensitive,
+        // so the upper/lowercase writes collapse to one entry there, while on
+        // unix both survive. Either way each logical var must carry the value.
+        let lookup = |name: &str| -> Option<Option<OsString>> {
+            envs.iter().find_map(|(k, v)| {
+                k.to_str()
+                    .is_some_and(|k| k.eq_ignore_ascii_case(name))
+                    .then(|| v.clone())
+            })
+        };
+        for key in ["HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY"] {
             assert_eq!(
-                envs.get(OsString::from(key).as_os_str()),
-                Some(&Some(OsString::from("http://127.0.0.1:11111"))),
+                lookup(key),
+                Some(Some(OsString::from("http://127.0.0.1:11111"))),
                 "expected {key} to carry the proxy value"
             );
         }

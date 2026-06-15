@@ -63,13 +63,19 @@ pub struct SubStatus {
 /// `key` on `127.0.0.1:<local_port>`. `pb::subscribe` runs forever, so we
 /// spawn it and keep the handle for [`unsubscribe_service`] to abort.
 ///
+/// `local_port` may be `0` to let the OS assign a free port — needed so each
+/// subscribed service gets its own port and they can coexist (a fixed shared
+/// port lets only the first service bind; the rest hit the probe-bind failure
+/// below). The concrete assigned port is read back from the probe and reported
+/// in [`SubStatus::local_addr`]. A live subscription for `key` keeps its port.
+///
 /// Before spawning we probe-bind the local port synchronously so the common
 /// failure (port already in use) is reported here instead of being swallowed
 /// by the detached task while the UI shows a "live" endpoint. A tiny TOCTOU
 /// window remains between the probe drop and `pb::subscribe`'s own bind; fully
 /// closing it needs a bind-readiness signal from pb-mapper (not yet exposed).
 pub fn subscribe_service(key: String, local_port: u16, relay: String) -> Result<SubStatus> {
-    let local_addr = format!("127.0.0.1:{local_port}");
+    let requested = format!("127.0.0.1:{local_port}");
     let mut reg = registry().lock().expect("registry poisoned");
     if let Some(e) = reg.get(&key) {
         if !e.handle.is_finished() {
@@ -81,11 +87,15 @@ pub fn subscribe_service(key: String, local_port: u16, relay: String) -> Result<
         }
     }
     // Probe-bind: fail fast if the port can't be claimed, then release it for
-    // pb::subscribe to bind for real.
-    match std::net::TcpListener::bind(&local_addr) {
-        Ok(probe) => drop(probe),
-        Err(e) => return Err(anyhow!("cannot bind {local_addr}: {e}")),
-    }
+    // pb::subscribe to bind for real. With local_port == 0 the OS picks a free
+    // port; read the concrete addr back so we bind and report the real port.
+    let local_addr = match std::net::TcpListener::bind(&requested) {
+        Ok(probe) => probe
+            .local_addr()
+            .map(|a| a.to_string())
+            .map_err(|e| anyhow!("reading bound addr for {requested}: {e}"))?,
+        Err(e) => return Err(anyhow!("cannot bind {requested}: {e}")),
+    };
     let opts = SubscribeOptions {
         key: key.clone(),
         local_addr: local_addr.clone(),
@@ -140,5 +150,24 @@ mod tests {
         assert!(err.to_string().contains("cannot bind"), "got: {err}");
         // Nothing should have been registered for the failed attempt.
         assert!(!list_subscriptions().iter().any(|s| s.key == "pcx:t:api:t"));
+    }
+
+    #[test]
+    fn subscribe_auto_allocates_a_free_port_when_zero() {
+        init(std::env::temp_dir()).expect("init");
+        // Port 0 must resolve to a concrete OS-assigned port (so every service
+        // gets its own), reported back in local_addr — not a literal ":0".
+        let status = subscribe_service("pcx:t:app:zero".to_string(), 0, "relay:7666".to_string())
+            .expect("port 0 should auto-allocate a free port");
+        assert!(status.local_addr.starts_with("127.0.0.1:"), "got: {}", status.local_addr);
+        let port: u16 = status
+            .local_addr
+            .rsplit(':')
+            .next()
+            .and_then(|p| p.parse().ok())
+            .expect("local_addr must end in a numeric port");
+        assert_ne!(port, 0, "must report the concrete assigned port, not 0");
+        // Drop the spawned (relay-less) task we just started.
+        unsubscribe_service("pcx:t:app:zero");
     }
 }

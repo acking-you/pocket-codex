@@ -30,6 +30,16 @@ dependencies:
   flutter_riverpod: ^2.6.1
   go_router: ^14.6.2
   path_provider: ^2.1.5
+  # Renders agent replies as Markdown documents (headings, code, lists,
+  # tables) instead of plain chat bubbles. Maintained drop-in for the
+  # discontinued flutter_markdown (same `MarkdownBody` API).
+  flutter_markdown_plus: ^1.0.3
+  # Opens URLs in the system browser (tapped links in agent replies / tool
+  # output / plain text). url_launcher_windows is bundled and auto-registered.
+  url_launcher: ^6.3.1
+  # Linkifies bare URLs in plain-text widgets (user bubbles, tool/command
+  # output, reasoning) — markdown links are handled by MarkdownBody itself.
+  flutter_linkify: ^6.0.0
 
 dev_dependencies:
   flutter_test:
@@ -43,12 +53,21 @@ dev_dependencies:
 flutter:
   uses-material-design: true
   generate: true
+  # Only the transparent brand mark ships in the bundle. logo.png and
+  # poster.png stay in the repo as icon-generator input / marketing
+  # material — bundling them would add ~2.7 MB of dead weight.
   assets:
-    - assets/logo/
+    - assets/logo/mark.png
 
 flutter_launcher_icons:
-  image_path: "assets/logo/logo.png"
-  # iOS: Apple rejects alpha, so icons stay opaque (logo.png already is).
+  # icon_square.png: edge-to-edge brand plate (#F5F3FE) + glyph, for
+  # platforms that mask their own corners (iOS / legacy Android / web).
+  # icon_rounded.png: rounded plate with transparent corners, for
+  # platforms that show the icon as-is (Windows taskbar, macOS Dock).
+  # Both are composed from icon/adaptive_foreground.png — see
+  # docs in the icon/ directory siblings.
+  image_path: "icon/icon_square.png"
+  # iOS: Apple rejects alpha, so icons stay opaque (icon_square is).
   ios: true
   remove_alpha_ios: true
   # Android: legacy square mipmaps from image_path (pre-API-26) PLUS an
@@ -64,24 +83,29 @@ flutter_launcher_icons:
   # Web: PWA icons + manifest colours (replaces the stock Flutter favicon).
   web:
     generate: true
-    image_path: "assets/logo/logo.png"
+    image_path: "icon/icon_square.png"
     background_color: "#F5F3FE"
     theme_color: "#4C8DF6"
-  # Windows: emits runner/resources/app_icon.ico — the .ico Windows needs.
+  # Windows: emits runner/resources/app_icon.ico (window + taskbar).
+  # Bare glyph, no plate: taskbar icons render at 16-32 px, and a
+  # plate would shrink the recognisable shape to half that.
   windows:
     generate: true
-    image_path: "assets/logo/logo.png"
+    image_path: "icon/icon_glyph.png"
     icon_size: 256
-  # macOS: generates the Runner AppIcon.appiconset.
+  # macOS: generates the Runner AppIcon.appiconset. Same rounded plate;
+  # the Dock does not mask square icons either.
   macos:
     generate: true
-    image_path: "assets/logo/logo.png"
+    image_path: "icon/icon_rounded.png"
 
+# The splash mark is the transparent glyph: logo.png is opaque, which
+# showed up as a white box on the dark splash background.
 flutter_native_splash:
-  image: assets/logo/logo.png
+  image: assets/logo/mark.png
   color: "#FFFFFF"
   color_dark: "#101316"
   android_12:
-    image: assets/logo/logo.png
+    image: assets/logo/mark.png
     color: "#FFFFFF"
     color_dark: "#101316"

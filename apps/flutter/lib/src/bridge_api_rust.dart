@@ -62,4 +62,177 @@ class RustBridgeApi implements BridgeApi {
 
   @override
   Future<void> setLocale(String locale) => frb.setLocale(locale: locale);
+
+  // --- App-server remote control ---
+
+  @override
+  Future<void> appConnect(String serviceKey, int localPort) {
+    // The port crosses the bridge as a u16; reject anything that can't fit so a
+    // bad value fails here rather than as an opaque FRB codec error. `0` is the
+    // documented sentinel for "let the bridge pick a free port" (see
+    // [appLocalPort]), so it's allowed.
+    if (localPort < 0 || localPort > 65535) {
+      throw RangeError.range(localPort, 0, 65535, 'localPort');
+    }
+    return frb.appConnect(serviceKey: serviceKey, localPort: localPort);
+  }
+
+  @override
+  bool appIsConnected(String serviceKey) =>
+      frb.appIsConnected(serviceKey: serviceKey);
+
+  @override
+  Future<void> appDisconnect(String serviceKey) =>
+      frb.appDisconnect(serviceKey: serviceKey);
+
+  @override
+  Stream<AppEvent> appEvents(String serviceKey) => frb
+      .appEvents(serviceKey: serviceKey)
+      .map(
+        (e) => AppEvent(
+          kind: e.kind,
+          threadId: e.threadId,
+          itemId: e.itemId,
+          itemType: e.itemType,
+          title: e.title,
+          text: e.text,
+          requestId: e.requestId,
+          raw: e.raw,
+        ),
+      );
+
+  @override
+  Future<List<ThreadMeta>> appThreadList(String serviceKey) async {
+    final list = await frb.appThreadList(serviceKey: serviceKey);
+    return list
+        .map(
+          (t) => ThreadMeta(
+            id: t.id,
+            preview: t.preview,
+            cwd: t.cwd,
+            updatedAt: t.updatedAt.toInt(),
+          ),
+        )
+        .toList();
+  }
+
+  @override
+  Future<List<ModelInfo>> appModelList(String serviceKey) async {
+    final list = await frb.appModelList(serviceKey: serviceKey);
+    return list
+        .map(
+          (m) => ModelInfo(
+            id: m.id,
+            displayName: m.displayName,
+            description: m.description,
+            supportedReasoningEfforts: m.supportedReasoningEfforts,
+            defaultReasoningEffort: m.defaultReasoningEffort,
+          ),
+        )
+        .toList();
+  }
+
+  @override
+  Future<String> appThreadStart(
+    String serviceKey, {
+    String? model,
+    String? cwd,
+    String? approvalPolicy,
+    String? sandbox,
+  }) => frb.appThreadStart(
+    serviceKey: serviceKey,
+    model: model,
+    cwd: cwd,
+    approvalPolicy: approvalPolicy,
+    sandbox: sandbox,
+  );
+
+  @override
+  Future<void> appThreadResume(String serviceKey, String threadId) =>
+      frb.appThreadResume(serviceKey: serviceKey, threadId: threadId);
+
+  @override
+  Future<ThreadHistory> appThreadRead(
+    String serviceKey,
+    String threadId,
+  ) async {
+    final h = await frb.appThreadRead(
+      serviceKey: serviceKey,
+      threadId: threadId,
+    );
+    return ThreadHistory(
+      items: h.items
+          .map(
+            (i) => ThreadItem(
+              id: i.id,
+              itemType: i.itemType,
+              title: i.title,
+              text: i.text,
+            ),
+          )
+          .toList(),
+      running: h.running,
+      branch: h.branch,
+      cwd: h.cwd,
+      tokensUsed: h.tokensUsed?.toInt(),
+      contextWindow: h.contextWindow?.toInt(),
+      collaborationMode: h.collaborationMode,
+      reasoningEffort: h.reasoningEffort,
+    );
+  }
+
+  @override
+  Future<String> appRateLimits(String serviceKey) =>
+      frb.appRateLimits(serviceKey: serviceKey);
+
+  @override
+  Future<String> appGitDiff(String serviceKey, String cwd) =>
+      frb.appGitDiff(serviceKey: serviceKey, cwd: cwd);
+
+  @override
+  Future<void> appCompact(String serviceKey, String threadId) =>
+      frb.appCompact(serviceKey: serviceKey, threadId: threadId);
+
+  @override
+  Future<void> appTurnStart(
+    String serviceKey,
+    String threadId,
+    String text, {
+    String? model,
+    String? approvalPolicy,
+    String? sandbox,
+    String? collaborationMode,
+    String? reasoningEffort,
+  }) => frb.appTurnStart(
+    serviceKey: serviceKey,
+    threadId: threadId,
+    text: text,
+    model: model,
+    approvalPolicy: approvalPolicy,
+    sandbox: sandbox,
+    collaborationMode: collaborationMode,
+    reasoningEffort: reasoningEffort,
+  );
+
+  @override
+  Future<void> appTurnInterrupt(
+    String serviceKey,
+    String threadId, {
+    String? turnId,
+  }) => frb.appTurnInterrupt(
+    serviceKey: serviceKey,
+    threadId: threadId,
+    turnId: turnId,
+  );
+
+  @override
+  Future<void> appRespondApproval(
+    String serviceKey,
+    String requestId,
+    String decision,
+  ) => frb.appRespondApproval(
+    serviceKey: serviceKey,
+    requestId: requestId,
+    decision: decision,
+  );
 }
