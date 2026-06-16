@@ -556,13 +556,25 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
         });
         _scrollToEnd();
       case 'turn/completed':
+        // v2 reports turn FAILURES here (turn.status == 'failed' + error.message),
+        // not via a separate turn/failed method — surface the error the same way.
+        final failure = _turnFailureText(e.raw);
         setState(() {
           _streaming = false;
           _turnId = null;
           for (final it in _items) {
             it.streaming = false;
           }
-          if (_pendingInterrupt) _addStoppedMarker();
+          // A turn the user stopped also ends as failed/aborted; show the
+          // "stopped" marker rather than an error banner.
+          if (_pendingInterrupt) {
+            _addStoppedMarker();
+          } else if (failure != null) {
+            _error = failure.isNotEmpty
+                ? failure
+                : AppLocalizations.of(context).turnFailed;
+            _retry = () => _send(retry: true);
+          }
         });
         _loadGit(); // edits from the turn may have changed the diff
       case 'turn/failed':
@@ -583,6 +595,25 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
         });
       default:
         _handleItemEvent(e);
+    }
+  }
+
+  /// If a `turn/completed` event actually represents a FAILED turn (v2 reports
+  /// failures here with `turn.status == 'failed'`), return its error message —
+  /// or an empty string if it failed without one. Returns null when the turn
+  /// completed successfully (so the caller leaves the transcript untouched).
+  String? _turnFailureText(String raw) {
+    try {
+      final m = jsonDecode(raw);
+      if (m is! Map) return null;
+      final turn = m['turn'];
+      if (turn is! Map || turn['status'] != 'failed') return null;
+      final err = turn['error'];
+      return (err is Map && err['message'] is String)
+          ? err['message'] as String
+          : '';
+    } catch (_) {
+      return null;
     }
   }
 

@@ -887,6 +887,26 @@ pub fn turn_interrupt(service_key: &str, thread_id: &str, turn_id: Option<String
 /// Map an inbound server message to a flattened [`AppEvent`].
 fn map_event(inbound: Inbound) -> AppEvent {
     let params = inbound.params.unwrap_or(Value::Null);
+    // v2 streams the evolving plan via a top-level notification (`params.plan`),
+    // not as a thread item, so the generic item path below never sees it.
+    // Synthesize a per-turn singleton `plan` item (stable id keyed on the turn)
+    // so the plan card + implement-prompt render it exactly like thread history.
+    if inbound.method == "turn/plan/updated" {
+        let turn_id = params.get("turnId").and_then(Value::as_str).unwrap_or("");
+        return AppEvent {
+            kind: inbound.method.clone(),
+            thread_id: params
+                .get("threadId")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            item_id: Some(format!("plan-{turn_id}")),
+            item_type: Some("plan".to_string()),
+            title: None,
+            text: Some(encode_plan(&params)),
+            request_id: inbound.request_id,
+            raw: params.to_string(),
+        };
+    }
     let item = params.get("item");
     let summary = item.map(summarize_item);
     let (item_type, title) = match &summary {
@@ -972,6 +992,51 @@ fn parse_item(item: &Value) -> Option<ThreadItem> {
     })
 }
 
+/// Encode a plan payload (`{explanation, plan:[{step,status}]}`) into the
+/// `explanation` + `- [x|~| ] step` lines the Flutter plan card parses. Accepts
+/// both the snake_case `in_progress` (thread-history items) and the camelCase
+/// `inProgress` (the v2 `turn/plan/updated` notification) status tokens. Falls
+/// back to a `text` field, then empty.
+fn encode_plan(v: &Value) -> String {
+    let explanation = v
+        .get("explanation")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let steps: Vec<String> = v
+        .get("plan")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|p| {
+                    let step = p.get("step").and_then(Value::as_str)?;
+                    let mark = match p.get("status").and_then(Value::as_str) {
+                        Some("completed") => "x",
+                        Some("in_progress") | Some("inProgress") => "~",
+                        _ => " ",
+                    };
+                    Some(format!("- [{mark}] {step}"))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if steps.is_empty() {
+        if explanation.is_empty() {
+            v.get("text")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string()
+        } else {
+            explanation
+        }
+    } else if explanation.is_empty() {
+        steps.join("\n")
+    } else {
+        format!("{explanation}\n{}", steps.join("\n"))
+    }
+}
+
 /// Reduce a `ThreadItem` JSON value to `(type, one-line title, detail text)`
 /// for the UI. Messages return an empty title (their `text` is the body); tool
 /// / activity items return a human title (command, query, tool name, …) and a
@@ -993,43 +1058,7 @@ fn summarize_item(item: &Value) -> (String, String, String) {
         // A plan is a structured checklist (`{explanation, plan:[{step,status}]}`).
         // Encode it as `explanation` + one `- [x|~| ] step` line per step so the
         // UI can render a status-iconed checklist; fall back to plain text.
-        "plan" => {
-            let explanation = item
-                .get("explanation")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .trim()
-                .to_string();
-            let steps: Vec<String> = item
-                .get("plan")
-                .and_then(Value::as_array)
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|p| {
-                            let step = p.get("step").and_then(Value::as_str)?;
-                            let mark = match p.get("status").and_then(Value::as_str) {
-                                Some("completed") => "x",
-                                Some("in_progress") => "~",
-                                _ => " ",
-                            };
-                            Some(format!("- [{mark}] {step}"))
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
-            let body = if steps.is_empty() {
-                if explanation.is_empty() {
-                    s("text")
-                } else {
-                    explanation
-                }
-            } else if explanation.is_empty() {
-                steps.join("\n")
-            } else {
-                format!("{explanation}\n{}", steps.join("\n"))
-            };
-            (String::new(), body)
-        },
+        "plan" => (String::new(), encode_plan(item)),
         "userMessage" => (
             String::new(),
             item.get("content")
