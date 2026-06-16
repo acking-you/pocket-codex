@@ -2363,12 +2363,14 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
     }
   }
 
-  IconData _effortIcon(ReasoningEffort e) => switch (e) {
-    ReasoningEffort.minimal => Icons.battery_2_bar,
-    ReasoningEffort.low => Icons.battery_3_bar,
-    ReasoningEffort.medium => Icons.battery_4_bar,
-    ReasoningEffort.high => Icons.battery_5_bar,
-    ReasoningEffort.xhigh => Icons.battery_full,
+  IconData _effortIcon(ReasoningEffort e) => switch (e.wire) {
+    'none' => Icons.battery_0_bar,
+    'minimal' => Icons.battery_2_bar,
+    'low' => Icons.battery_3_bar,
+    'medium' => Icons.battery_4_bar,
+    'high' => Icons.battery_5_bar,
+    'xhigh' => Icons.battery_full,
+    _ => Icons.bolt, // unknown / custom level the model advertised
   };
 
   Future<void> _pickEffort() async {
@@ -2382,10 +2384,12 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
     if (!mounted) return;
     final model = _model ?? (models.isNotEmpty ? models.first : null);
     final supported = model?.supportedReasoningEfforts ?? const [];
-    final efforts = [
-      for (final e in ReasoningEffort.values)
-        if (supported.isEmpty || supported.contains(e.wire)) e,
-    ];
+    // Offer exactly what the model advertises (open string list — may include
+    // `none`/`xhigh`/custom tokens beyond the classic levels). Fall back to the
+    // common levels only when a model lists none.
+    final efforts = supported.isEmpty
+        ? ReasoningEffort.known
+        : [for (final w in supported) ReasoningEffort(w)];
     final chosen = await _optionSheet<ReasoningEffort>(
       title: l10n.effort,
       isSelected: (v) => v == _effectiveEffort,
