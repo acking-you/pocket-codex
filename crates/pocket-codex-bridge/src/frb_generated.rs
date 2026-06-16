@@ -42,7 +42,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.12.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 31755862;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -901482499;
 
 
 // Section: executor
@@ -271,6 +271,43 @@ fn wire__crate__api__bridge__app_events_impl(
         },
     )
 }
+fn wire__crate__api__bridge__app_force_resume_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "app_force_resume",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_service_key = <String>::sse_decode(&mut deserializer);
+            let api_thread_id = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
+                    (move || {
+                        let output_ok =
+                            crate::api::bridge::app_force_resume(api_service_key, api_thread_id)?;
+                        Ok(output_ok)
+                    })(),
+                )
+            }
+        },
+    )
+}
 fn wire__crate__api__bridge__app_git_diff_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -335,6 +372,40 @@ fn wire__crate__api__bridge__app_is_connected_impl(
                     Result::<_, ()>::Ok(crate::api::bridge::app_is_connected(api_service_key))?;
                 Ok(output_ok)
             })())
+        },
+    )
+}
+fn wire__crate__api__bridge__app_local_sessions_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "app_local_sessions",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
+                    (move || {
+                        let output_ok = crate::api::bridge::app_local_sessions()?;
+                        Ok(output_ok)
+                    })(),
+                )
+            }
         },
     )
 }
@@ -442,6 +513,41 @@ fn wire__crate__api__bridge__app_respond_approval_impl(
                             api_request_id,
                             api_decision,
                         )?;
+                        Ok(output_ok)
+                    })(),
+                )
+            }
+        },
+    )
+}
+fn wire__crate__api__bridge__app_session_liveness_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "app_session_liveness",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_thread_id = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
+                    (move || {
+                        let output_ok = crate::api::bridge::app_session_liveness(api_thread_id)?;
                         Ok(output_ok)
                     })(),
                 )
@@ -1172,6 +1278,36 @@ impl SseDecode for crate::api::bridge::ConfigView {
     }
 }
 
+impl SseDecode for crate::api::bridge::ForceResumeReportDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_killed = <Vec<crate::api::bridge::HolderDto>>::sse_decode(deserializer);
+        let mut var_survived = <Vec<crate::api::bridge::HolderDto>>::sse_decode(deserializer);
+        let mut var_stillHeld = <bool>::sse_decode(deserializer);
+        let mut var_resumed = <bool>::sse_decode(deserializer);
+        let mut var_resumeError = <Option<String>>::sse_decode(deserializer);
+        return crate::api::bridge::ForceResumeReportDto {
+            killed: var_killed,
+            survived: var_survived,
+            still_held: var_stillHeld,
+            resumed: var_resumed,
+            resume_error: var_resumeError,
+        };
+    }
+}
+
+impl SseDecode for crate::api::bridge::HolderDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_pid = <i64>::sse_decode(deserializer);
+        let mut var_name = <String>::sse_decode(deserializer);
+        return crate::api::bridge::HolderDto {
+            pid: var_pid,
+            name: var_name,
+        };
+    }
+}
+
 impl SseDecode for i64 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -1186,6 +1322,30 @@ impl SseDecode for Vec<String> {
         let mut ans_ = Vec::with_capacity(len_ as usize);
         for idx_ in 0..len_ {
             ans_.push(<String>::sse_decode(deserializer));
+        }
+        return ans_;
+    }
+}
+
+impl SseDecode for Vec<crate::api::bridge::HolderDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = Vec::with_capacity(len_ as usize);
+        for idx_ in 0..len_ {
+            ans_.push(<crate::api::bridge::HolderDto>::sse_decode(deserializer));
+        }
+        return ans_;
+    }
+}
+
+impl SseDecode for Vec<crate::api::bridge::LocalSessionDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = Vec::with_capacity(len_ as usize);
+        for idx_ in 0..len_ {
+            ans_.push(<crate::api::bridge::LocalSessionDto>::sse_decode(deserializer));
         }
         return ans_;
     }
@@ -1263,6 +1423,34 @@ impl SseDecode for Vec<crate::api::bridge::ThreadMetaDto> {
     }
 }
 
+impl SseDecode for crate::api::bridge::LocalSessionDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_threadId = <String>::sse_decode(deserializer);
+        let mut var_cwd = <Option<String>>::sse_decode(deserializer);
+        let mut var_preview = <String>::sse_decode(deserializer);
+        let mut var_source = <Option<String>>::sse_decode(deserializer);
+        let mut var_updatedAt = <i64>::sse_decode(deserializer);
+        let mut var_turnState = <String>::sse_decode(deserializer);
+        let mut var_heldOpen = <bool>::sse_decode(deserializer);
+        let mut var_safety = <String>::sse_decode(deserializer);
+        let mut var_allowsResume = <bool>::sse_decode(deserializer);
+        let mut var_requiresTakeover = <bool>::sse_decode(deserializer);
+        return crate::api::bridge::LocalSessionDto {
+            thread_id: var_threadId,
+            cwd: var_cwd,
+            preview: var_preview,
+            source: var_source,
+            updated_at: var_updatedAt,
+            turn_state: var_turnState,
+            held_open: var_heldOpen,
+            safety: var_safety,
+            allows_resume: var_allowsResume,
+            requires_takeover: var_requiresTakeover,
+        };
+    }
+}
+
 impl SseDecode for crate::api::bridge::ModelInfoDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -1315,6 +1503,28 @@ impl SseDecode for crate::api::bridge::ServiceIdDto {
             kind: var_kind,
             name: var_name,
             key: var_key,
+        };
+    }
+}
+
+impl SseDecode for crate::api::bridge::SessionLivenessDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_threadId = <String>::sse_decode(deserializer);
+        let mut var_turnState = <String>::sse_decode(deserializer);
+        let mut var_heldOpen = <bool>::sse_decode(deserializer);
+        let mut var_safety = <String>::sse_decode(deserializer);
+        let mut var_allowsResume = <bool>::sse_decode(deserializer);
+        let mut var_requiresTakeover = <bool>::sse_decode(deserializer);
+        let mut var_holders = <Vec<crate::api::bridge::HolderDto>>::sse_decode(deserializer);
+        return crate::api::bridge::SessionLivenessDto {
+            thread_id: var_threadId,
+            turn_state: var_turnState,
+            held_open: var_heldOpen,
+            safety: var_safety,
+            allows_resume: var_allowsResume,
+            requires_takeover: var_requiresTakeover,
+            holders: var_holders,
         };
     }
 }
@@ -1430,28 +1640,33 @@ fn pde_ffi_dispatcher_primary_impl(
         4 => wire__crate__api__bridge__app_connect_impl(port, ptr, rust_vec_len, data_len),
         5 => wire__crate__api__bridge__app_disconnect_impl(port, ptr, rust_vec_len, data_len),
         6 => wire__crate__api__bridge__app_events_impl(port, ptr, rust_vec_len, data_len),
-        7 => wire__crate__api__bridge__app_git_diff_impl(port, ptr, rust_vec_len, data_len),
-        9 => wire__crate__api__bridge__app_model_list_impl(port, ptr, rust_vec_len, data_len),
-        10 => wire__crate__api__bridge__app_rate_limits_impl(port, ptr, rust_vec_len, data_len),
-        11 => {
+        7 => wire__crate__api__bridge__app_force_resume_impl(port, ptr, rust_vec_len, data_len),
+        8 => wire__crate__api__bridge__app_git_diff_impl(port, ptr, rust_vec_len, data_len),
+        10 => wire__crate__api__bridge__app_local_sessions_impl(port, ptr, rust_vec_len, data_len),
+        11 => wire__crate__api__bridge__app_model_list_impl(port, ptr, rust_vec_len, data_len),
+        12 => wire__crate__api__bridge__app_rate_limits_impl(port, ptr, rust_vec_len, data_len),
+        13 => {
             wire__crate__api__bridge__app_respond_approval_impl(port, ptr, rust_vec_len, data_len)
         },
-        12 => wire__crate__api__bridge__app_thread_list_impl(port, ptr, rust_vec_len, data_len),
-        13 => wire__crate__api__bridge__app_thread_read_impl(port, ptr, rust_vec_len, data_len),
-        14 => wire__crate__api__bridge__app_thread_resume_impl(port, ptr, rust_vec_len, data_len),
-        15 => wire__crate__api__bridge__app_thread_start_impl(port, ptr, rust_vec_len, data_len),
-        16 => wire__crate__api__bridge__app_turn_interrupt_impl(port, ptr, rust_vec_len, data_len),
-        17 => wire__crate__api__bridge__app_turn_start_impl(port, ptr, rust_vec_len, data_len),
-        19 => wire__crate__api__bridge__discover_services_impl(port, ptr, rust_vec_len, data_len),
-        20 => wire__crate__api__bridge__export_config_impl(port, ptr, rust_vec_len, data_len),
-        21 => wire__crate__api__bridge__get_config_impl(port, ptr, rust_vec_len, data_len),
-        23 => wire__crate__api__bridge__import_config_impl(port, ptr, rust_vec_len, data_len),
-        24 => wire__crate__api__simple__init_app_impl(port, ptr, rust_vec_len, data_len),
-        25 => wire__crate__api__bridge__init_bridge_impl(port, ptr, rust_vec_len, data_len),
-        26 => wire__crate__api__bridge__set_key_impl(port, ptr, rust_vec_len, data_len),
-        27 => wire__crate__api__bridge__set_locale_impl(port, ptr, rust_vec_len, data_len),
-        28 => wire__crate__api__bridge__set_relay_impl(port, ptr, rust_vec_len, data_len),
-        29 => wire__crate__api__bridge__subscriptions_impl(port, ptr, rust_vec_len, data_len),
+        14 => {
+            wire__crate__api__bridge__app_session_liveness_impl(port, ptr, rust_vec_len, data_len)
+        },
+        15 => wire__crate__api__bridge__app_thread_list_impl(port, ptr, rust_vec_len, data_len),
+        16 => wire__crate__api__bridge__app_thread_read_impl(port, ptr, rust_vec_len, data_len),
+        17 => wire__crate__api__bridge__app_thread_resume_impl(port, ptr, rust_vec_len, data_len),
+        18 => wire__crate__api__bridge__app_thread_start_impl(port, ptr, rust_vec_len, data_len),
+        19 => wire__crate__api__bridge__app_turn_interrupt_impl(port, ptr, rust_vec_len, data_len),
+        20 => wire__crate__api__bridge__app_turn_start_impl(port, ptr, rust_vec_len, data_len),
+        22 => wire__crate__api__bridge__discover_services_impl(port, ptr, rust_vec_len, data_len),
+        23 => wire__crate__api__bridge__export_config_impl(port, ptr, rust_vec_len, data_len),
+        24 => wire__crate__api__bridge__get_config_impl(port, ptr, rust_vec_len, data_len),
+        26 => wire__crate__api__bridge__import_config_impl(port, ptr, rust_vec_len, data_len),
+        27 => wire__crate__api__simple__init_app_impl(port, ptr, rust_vec_len, data_len),
+        28 => wire__crate__api__bridge__init_bridge_impl(port, ptr, rust_vec_len, data_len),
+        29 => wire__crate__api__bridge__set_key_impl(port, ptr, rust_vec_len, data_len),
+        30 => wire__crate__api__bridge__set_locale_impl(port, ptr, rust_vec_len, data_len),
+        31 => wire__crate__api__bridge__set_relay_impl(port, ptr, rust_vec_len, data_len),
+        32 => wire__crate__api__bridge__subscriptions_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -1464,9 +1679,9 @@ fn pde_ffi_dispatcher_sync_impl(
 ) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
     // Codec=Pde (Serialization + dispatch), see doc to use other codecs
     match func_id {
-        8 => wire__crate__api__bridge__app_is_connected_impl(ptr, rust_vec_len, data_len),
-        18 => wire__crate__api__simple__bridge_version_impl(ptr, rust_vec_len, data_len),
-        22 => wire__crate__api__simple__greet_impl(ptr, rust_vec_len, data_len),
+        9 => wire__crate__api__bridge__app_is_connected_impl(ptr, rust_vec_len, data_len),
+        21 => wire__crate__api__simple__bridge_version_impl(ptr, rust_vec_len, data_len),
+        25 => wire__crate__api__simple__greet_impl(ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -1524,6 +1739,73 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::bridge::ConfigView>
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::bridge::ForceResumeReportDto {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.killed.into_into_dart().into_dart(),
+            self.survived.into_into_dart().into_dart(),
+            self.still_held.into_into_dart().into_dart(),
+            self.resumed.into_into_dart().into_dart(),
+            self.resume_error.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::bridge::ForceResumeReportDto
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::bridge::ForceResumeReportDto>
+    for crate::api::bridge::ForceResumeReportDto
+{
+    fn into_into_dart(self) -> crate::api::bridge::ForceResumeReportDto {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::bridge::HolderDto {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [self.pid.into_into_dart().into_dart(), self.name.into_into_dart().into_dart()].into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::bridge::HolderDto {}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::bridge::HolderDto>
+    for crate::api::bridge::HolderDto
+{
+    fn into_into_dart(self) -> crate::api::bridge::HolderDto {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::bridge::LocalSessionDto {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.thread_id.into_into_dart().into_dart(),
+            self.cwd.into_into_dart().into_dart(),
+            self.preview.into_into_dart().into_dart(),
+            self.source.into_into_dart().into_dart(),
+            self.updated_at.into_into_dart().into_dart(),
+            self.turn_state.into_into_dart().into_dart(),
+            self.held_open.into_into_dart().into_dart(),
+            self.safety.into_into_dart().into_dart(),
+            self.allows_resume.into_into_dart().into_dart(),
+            self.requires_takeover.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::bridge::LocalSessionDto
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::bridge::LocalSessionDto>
+    for crate::api::bridge::LocalSessionDto
+{
+    fn into_into_dart(self) -> crate::api::bridge::LocalSessionDto {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for crate::api::bridge::ModelInfoDto {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
@@ -1569,6 +1851,32 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::bridge::ServiceIdDto>
     for crate::api::bridge::ServiceIdDto
 {
     fn into_into_dart(self) -> crate::api::bridge::ServiceIdDto {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::bridge::SessionLivenessDto {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.thread_id.into_into_dart().into_dart(),
+            self.turn_state.into_into_dart().into_dart(),
+            self.held_open.into_into_dart().into_dart(),
+            self.safety.into_into_dart().into_dart(),
+            self.allows_resume.into_into_dart().into_dart(),
+            self.requires_takeover.into_into_dart().into_dart(),
+            self.holders.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::bridge::SessionLivenessDto
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::bridge::SessionLivenessDto>
+    for crate::api::bridge::SessionLivenessDto
+{
+    fn into_into_dart(self) -> crate::api::bridge::SessionLivenessDto {
         self
     }
 }
@@ -1721,6 +2029,25 @@ impl SseEncode for crate::api::bridge::ConfigView {
     }
 }
 
+impl SseEncode for crate::api::bridge::ForceResumeReportDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <Vec<crate::api::bridge::HolderDto>>::sse_encode(self.killed, serializer);
+        <Vec<crate::api::bridge::HolderDto>>::sse_encode(self.survived, serializer);
+        <bool>::sse_encode(self.still_held, serializer);
+        <bool>::sse_encode(self.resumed, serializer);
+        <Option<String>>::sse_encode(self.resume_error, serializer);
+    }
+}
+
+impl SseEncode for crate::api::bridge::HolderDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i64>::sse_encode(self.pid, serializer);
+        <String>::sse_encode(self.name, serializer);
+    }
+}
+
 impl SseEncode for i64 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -1734,6 +2061,26 @@ impl SseEncode for Vec<String> {
         <i32>::sse_encode(self.len() as _, serializer);
         for item in self {
             <String>::sse_encode(item, serializer);
+        }
+    }
+}
+
+impl SseEncode for Vec<crate::api::bridge::HolderDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <crate::api::bridge::HolderDto>::sse_encode(item, serializer);
+        }
+    }
+}
+
+impl SseEncode for Vec<crate::api::bridge::LocalSessionDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <crate::api::bridge::LocalSessionDto>::sse_encode(item, serializer);
         }
     }
 }
@@ -1798,6 +2145,22 @@ impl SseEncode for Vec<crate::api::bridge::ThreadMetaDto> {
     }
 }
 
+impl SseEncode for crate::api::bridge::LocalSessionDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.thread_id, serializer);
+        <Option<String>>::sse_encode(self.cwd, serializer);
+        <String>::sse_encode(self.preview, serializer);
+        <Option<String>>::sse_encode(self.source, serializer);
+        <i64>::sse_encode(self.updated_at, serializer);
+        <String>::sse_encode(self.turn_state, serializer);
+        <bool>::sse_encode(self.held_open, serializer);
+        <String>::sse_encode(self.safety, serializer);
+        <bool>::sse_encode(self.allows_resume, serializer);
+        <bool>::sse_encode(self.requires_takeover, serializer);
+    }
+}
+
 impl SseEncode for crate::api::bridge::ModelInfoDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -1836,6 +2199,19 @@ impl SseEncode for crate::api::bridge::ServiceIdDto {
         <String>::sse_encode(self.kind, serializer);
         <String>::sse_encode(self.name, serializer);
         <String>::sse_encode(self.key, serializer);
+    }
+}
+
+impl SseEncode for crate::api::bridge::SessionLivenessDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.thread_id, serializer);
+        <String>::sse_encode(self.turn_state, serializer);
+        <bool>::sse_encode(self.held_open, serializer);
+        <String>::sse_encode(self.safety, serializer);
+        <bool>::sse_encode(self.allows_resume, serializer);
+        <bool>::sse_encode(self.requires_takeover, serializer);
+        <Vec<crate::api::bridge::HolderDto>>::sse_encode(self.holders, serializer);
     }
 }
 

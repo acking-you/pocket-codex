@@ -1,0 +1,573 @@
+//! Read codex session *rollout* files directly from `CODEX_HOME`.
+//!
+//! Every codex client (the CLI, the desktop app, the VS Code extension,
+//! and Pocket-Codex's own spawned app-server) appends a JSON-Lines
+//! transcript — a *rollout* — under `$CODEX_HOME/sessions/YYYY/MM/DD/`
+//! as it runs. Because all those clients share one `CODEX_HOME`, reading
+//! the rollouts lets Pocket-Codex *observe* sessions it did not create
+//! (e.g. the ones the desktop app is driving) without going through any
+//! app-server.
+//!
+//! This module is deliberately transport-free and side-effect-free: it
+//! parses the on-disk JSONL and classifies a session's most recent turn
+//! ([`TurnState`]). Whether a session is *owned by a live process* — and
+//! therefore unsafe to resume — is a separate, liveness question
+//! answered by [`crate::liveness`]; the two are combined in
+//! [`crate::takeover`].
+//!
+//! ## Rollout wire shape
+//!
+//! Each line is one JSON object `{"timestamp", "type", "payload"}` where
+//! `type` is the rollout-item kind and `payload` its body. The first
+//! line is always `"type":"session_meta"`. Turn lifecycle is carried by
+//! `"type":"event_msg"` lines whose `payload.type` is one of
+//! `task_started`, `task_complete`, or `turn_aborted`.
+
+use std::{
+    io::{Read, Seek, SeekFrom},
+    path::{Path, PathBuf},
+    time::UNIX_EPOCH,
+};
+
+use pocket_codex_core::{Error, Result};
+use serde_json::Value;
+use tracing::debug;
+
+/// Only the trailing window of a rollout is scanned to classify the most
+/// recent turn: the lifecycle markers (`task_started` / `task_complete` /
+/// `turn_aborted`) are tiny events that land at the very end of the
+/// transcript, so a bounded tail keeps scanning many sessions cheap. A
+/// full-file fallback covers the rare case where the last turn's markers
+/// predate this window (see [`classify_turn_state`]).
+const MAX_TAIL_BYTES: u64 = 256 * 1024;
+
+/// How many leading lines to scan for a human-readable preview.
+const PREVIEW_HEAD_LINES: usize = 64;
+
+/// Maximum length of the extracted preview string.
+const PREVIEW_MAX_CHARS: usize = 160;
+
+/// Lifecycle state of a session's most recent turn, derived purely from
+/// the rollout transcript (no liveness probe).
+///
+/// `Incomplete` alone cannot tell *running* from *crashed* — a live
+/// writer and a dead one both leave a turn without its terminal marker.
+/// Disambiguating requires the liveness probe in [`crate::liveness`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TurnState {
+    /// The transcript carries no turn lifecycle events yet (a freshly
+    /// created session that has not run a turn).
+    Empty,
+    /// The most recent turn ended normally (`task_complete`).
+    Completed,
+    /// The most recent turn was aborted; carries the reason token
+    /// (`interrupted` / `replaced` / `reviewEnded` / `budgetLimited` /
+    /// …) as serialized on the wire.
+    Aborted(String),
+    /// A turn was started but has no matching `task_complete` or
+    /// `turn_aborted` after it — it is either running right now or was
+    /// left dangling by a crashed writer.
+    Incomplete,
+}
+
+impl TurnState {
+    /// Whether the most recent turn has reached a terminal state
+    /// (completed or aborted), i.e. the session is *not* mid-turn from
+    /// the transcript's point of view. `Empty` counts as finished (there
+    /// is nothing in flight).
+    pub fn is_finished(&self) -> bool {
+        matches!(self, TurnState::Completed | TurnState::Aborted(_) | TurnState::Empty)
+    }
+
+    /// Stable lowercase tag for FFI / UI (`empty` / `completed` /
+    /// `aborted` / `incomplete`).
+    pub fn tag(&self) -> &'static str {
+        match self {
+            TurnState::Empty => "empty",
+            TurnState::Completed => "completed",
+            TurnState::Aborted(_) => "aborted",
+            TurnState::Incomplete => "incomplete",
+        }
+    }
+}
+
+/// Session header parsed from a rollout's first `session_meta` line.
+#[derive(Debug, Clone)]
+pub struct SessionMeta {
+    /// Thread / conversation id (equals the UUID embedded in the rollout
+    /// filename).
+    pub id: String,
+    /// Working directory the session controls, when recorded.
+    pub cwd: Option<String>,
+    /// Client that created the session (`cli` / `vscode` / …), when
+    /// recorded. Useful for badging "from desktop app" in the UI.
+    pub source: Option<String>,
+    /// The recorded `originator` string, when present.
+    pub originator: Option<String>,
+}
+
+/// A session discovered on disk, with its rollout path, header metadata
+/// and classified most-recent-turn state.
+#[derive(Debug, Clone)]
+pub struct SessionInfo {
+    /// Thread / conversation id.
+    pub thread_id: String,
+    /// Absolute path to the rollout JSONL file.
+    pub rollout_path: PathBuf,
+    /// Working directory the session controls, when recorded.
+    pub cwd: Option<String>,
+    /// Client that created the session, when recorded.
+    pub source: Option<String>,
+    /// Best-effort one-line preview (the first user message text).
+    pub preview: String,
+    /// Last-modified time of the rollout file, in unix seconds.
+    pub updated_at: i64,
+    /// Classified state of the most recent turn.
+    pub turn_state: TurnState,
+}
+
+/// Resolve `CODEX_HOME`: the `CODEX_HOME` environment variable when set
+/// and non-empty, otherwise `~/.codex`.
+///
+/// This mirrors how the codex binaries themselves resolve their home, so
+/// the path Pocket-Codex reads matches the one the desktop app / CLI
+/// write to (assuming the same environment).
+pub fn codex_home() -> Result<PathBuf> {
+    if let Some(dir) = std::env::var_os("CODEX_HOME") {
+        let path = PathBuf::from(dir);
+        if !path.as_os_str().is_empty() {
+            return Ok(path);
+        }
+    }
+    let base = directories::BaseDirs::new()
+        .ok_or_else(|| Error::Path("cannot determine home directory for CODEX_HOME".into()))?;
+    Ok(base.home_dir().join(".codex"))
+}
+
+/// The `sessions` directory under [`codex_home`].
+pub fn sessions_dir() -> Result<PathBuf> {
+    Ok(codex_home()?.join("sessions"))
+}
+
+/// Enumerate every session under [`sessions_dir`], newest first.
+///
+/// Missing directories yield an empty list rather than an error (a fresh
+/// install simply has no sessions). Individual files that fail to parse
+/// are skipped (logged at debug) so one corrupt rollout cannot hide the
+/// rest.
+pub fn scan_sessions() -> Result<Vec<SessionInfo>> {
+    let dir = sessions_dir()?;
+    let mut files = Vec::new();
+    collect_jsonl(&dir, &mut files)?;
+    let mut out = Vec::with_capacity(files.len());
+    for path in files {
+        match read_session_info(&path) {
+            Ok(info) => out.push(info),
+            Err(err) => debug!(path = %path.display(), %err, "skipping unreadable rollout"),
+        }
+    }
+    out.sort_by_key(|info| std::cmp::Reverse(info.updated_at));
+    Ok(out)
+}
+
+/// Locate the rollout file for a given `thread_id`.
+///
+/// The thread id is embedded verbatim in the rollout filename
+/// (`rollout-<timestamp>-<thread_id>.jsonl`), so this matches by
+/// filename substring. Returns `None` when no rollout exists for the id.
+pub fn rollout_path_for_thread(thread_id: &str) -> Result<Option<PathBuf>> {
+    if thread_id.is_empty() {
+        return Ok(None);
+    }
+    let dir = sessions_dir()?;
+    let mut files = Vec::new();
+    collect_jsonl(&dir, &mut files)?;
+    Ok(files.into_iter().find(|p| {
+        p.file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.contains(thread_id))
+    }))
+}
+
+/// Read header metadata, preview, mtime and turn state for one rollout.
+pub fn read_session_info(path: &Path) -> Result<SessionInfo> {
+    let head = read_head(path, PREVIEW_HEAD_LINES)?;
+    let meta = head.lines().next().and_then(parse_session_meta);
+    let thread_id = meta
+        .as_ref()
+        .map(|m| m.id.clone())
+        .or_else(|| thread_id_from_path(path))
+        .ok_or_else(|| Error::Config(format!("no thread id for rollout {}", path.display())))?;
+    let updated_at = mtime_unix_secs(path);
+    let turn_state = classify_turn_state(path)?;
+    let preview = extract_preview(&head);
+    Ok(SessionInfo {
+        thread_id,
+        rollout_path: path.to_path_buf(),
+        cwd: meta.as_ref().and_then(|m| m.cwd.clone()),
+        source: meta.as_ref().and_then(|m| m.source.clone()),
+        preview,
+        updated_at,
+        turn_state,
+    })
+}
+
+/// Classify the most recent turn of a rollout from its tail.
+///
+/// Reads only the trailing [`MAX_TAIL_BYTES`]; if that window contains no
+/// lifecycle markers yet the file is larger than the window (a long turn
+/// whose `task_started` predates the tail), it falls back to a full
+/// scan so a long-running turn is never misread as [`TurnState::Empty`].
+pub fn classify_turn_state(path: &Path) -> Result<TurnState> {
+    let (text, truncated) = read_tail(path, MAX_TAIL_BYTES)?;
+    let skip = usize::from(truncated);
+    let state = classify_lines(text.lines().skip(skip));
+    if matches!(state, TurnState::Empty) && truncated {
+        let bytes = std::fs::read(path)?;
+        let full = String::from_utf8_lossy(&bytes);
+        return Ok(classify_lines(full.lines()));
+    }
+    Ok(state)
+}
+
+/// Classify turn state from an ordered iterator of rollout lines.
+///
+/// Pure and allocation-light: a cheap substring prefilter skips the
+/// overwhelming majority of lines (messages, reasoning, tool output)
+/// before any JSON parsing, so only the tiny lifecycle events are
+/// deserialized. The classification is the state left by the *last*
+/// lifecycle event in file order:
+///
+/// * `task_started`  ⇒ [`TurnState::Incomplete`]
+/// * `task_complete` ⇒ [`TurnState::Completed`]
+/// * `turn_aborted`  ⇒ [`TurnState::Aborted`]
+///
+/// with [`TurnState::Empty`] when none are present.
+fn classify_lines<'a, I: Iterator<Item = &'a str>>(lines: I) -> TurnState {
+    let mut state = TurnState::Empty;
+    for line in lines {
+        if !(line.contains("task_started")
+            || line.contains("task_complete")
+            || line.contains("turn_aborted"))
+        {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if value.get("type").and_then(Value::as_str) != Some("event_msg") {
+            continue;
+        }
+        let Some(payload) = value.get("payload") else {
+            continue;
+        };
+        match payload.get("type").and_then(Value::as_str) {
+            Some("task_started") => state = TurnState::Incomplete,
+            Some("task_complete") => state = TurnState::Completed,
+            Some("turn_aborted") => state = TurnState::Aborted(parse_abort_reason(payload)),
+            _ => {},
+        }
+    }
+    state
+}
+
+/// Extract a `turn_aborted` reason token, tolerating either a plain
+/// string (`"reason":"interrupted"`) or a tagged object
+/// (`"reason":{"replaced":…}`). Falls back to `"unknown"`.
+fn parse_abort_reason(payload: &Value) -> String {
+    match payload.get("reason") {
+        Some(Value::String(s)) => s.clone(),
+        Some(Value::Object(map)) => map
+            .keys()
+            .next()
+            .cloned()
+            .unwrap_or_else(|| "unknown".to_string()),
+        _ => "unknown".to_string(),
+    }
+}
+
+/// Parse a rollout's first line into [`SessionMeta`]; `None` when the
+/// line is not a `session_meta` record or lacks an id.
+fn parse_session_meta(line: &str) -> Option<SessionMeta> {
+    let value: Value = serde_json::from_str(line).ok()?;
+    if value.get("type").and_then(Value::as_str)? != "session_meta" {
+        return None;
+    }
+    let payload = value.get("payload")?;
+    let id = payload.get("id").and_then(Value::as_str)?.to_string();
+    Some(SessionMeta {
+        id,
+        cwd: payload
+            .get("cwd")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string),
+        source: source_label(payload.get("source")),
+        originator: payload
+            .get("originator")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string),
+    })
+}
+
+/// Reduce a `source` value (a bare string, or an object with a `kind` /
+/// `type` discriminant) to a short label.
+fn source_label(source: Option<&Value>) -> Option<String> {
+    match source? {
+        Value::String(s) if !s.is_empty() => Some(s.clone()),
+        Value::Object(map) => map
+            .get("kind")
+            .or_else(|| map.get("type"))
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string),
+        _ => None,
+    }
+}
+
+/// Best-effort preview: the first user message text found in the head of
+/// a rollout, trimmed to [`PREVIEW_MAX_CHARS`].
+fn extract_preview(head: &str) -> String {
+    for line in head.lines() {
+        if !(line.contains("user_message")
+            || line.contains("input_text")
+            || line.contains("\"role\":\"user\""))
+        {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if let Some(text) = user_text(&value) {
+            return truncate_chars(text.trim(), PREVIEW_MAX_CHARS);
+        }
+    }
+    String::new()
+}
+
+/// Pull user-authored text out of a rollout line, tolerating the shapes
+/// codex uses (`user_message` event, `input_text` payload, or a
+/// `message` response item with `role:"user"` and a `content[].text`).
+fn user_text(value: &Value) -> Option<String> {
+    let payload = value.get("payload")?;
+    if let Some(text) = payload.get("text").and_then(Value::as_str) {
+        if !text.trim().is_empty() {
+            return Some(text.to_string());
+        }
+    }
+    let is_user_message = payload.get("role").and_then(Value::as_str) == Some("user")
+        || payload.get("type").and_then(Value::as_str) == Some("user_message");
+    if !is_user_message {
+        return None;
+    }
+    let collected: String = payload
+        .get("content")
+        .and_then(Value::as_array)?
+        .iter()
+        .filter_map(|part| part.get("text").and_then(Value::as_str))
+        .collect::<Vec<_>>()
+        .join("");
+    (!collected.trim().is_empty()).then_some(collected)
+}
+
+/// Truncate to at most `max` characters (char-boundary safe), appending
+/// an ellipsis when shortened.
+fn truncate_chars(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    let mut out: String = text.chars().take(max.saturating_sub(1)).collect();
+    out.push('…');
+    out
+}
+
+/// Derive the thread id from a rollout filename
+/// (`rollout-<ts>-<thread_id>.jsonl`): the id is the trailing five
+/// dash-separated groups of the stem. Returns `None` when the stem is
+/// too short to contain one.
+fn thread_id_from_path(path: &Path) -> Option<String> {
+    let stem = path.file_stem().and_then(|s| s.to_str())?;
+    let parts: Vec<&str> = stem.split('-').collect();
+    if parts.len() < 5 {
+        return None;
+    }
+    Some(parts[parts.len() - 5..].join("-"))
+}
+
+/// Last-modified time of `path` in unix seconds (0 when unavailable).
+fn mtime_unix_secs(path: &Path) -> i64 {
+    std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// Read the trailing `max` bytes of a file as lossy UTF-8, returning the
+/// text and whether the file was larger than `max` (so the first
+/// recovered line may be partial and should be dropped by the caller).
+fn read_tail(path: &Path, max: u64) -> Result<(String, bool)> {
+    let mut file = std::fs::File::open(path)?;
+    let len = file.metadata()?.len();
+    let truncated = len > max;
+    if truncated {
+        file.seek(SeekFrom::Start(len - max))?;
+    }
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    Ok((String::from_utf8_lossy(&bytes).into_owned(), truncated))
+}
+
+/// Read at most the first `max_lines` lines of a file as lossy UTF-8.
+fn read_head(path: &Path, max_lines: usize) -> Result<String> {
+    use std::io::BufRead;
+    let file = std::fs::File::open(path)?;
+    let reader = std::io::BufReader::new(file);
+    let mut out = String::new();
+    for line in reader.lines().take(max_lines) {
+        let line = line?;
+        out.push_str(&line);
+        out.push('\n');
+    }
+    Ok(out)
+}
+
+/// Recursively collect `*.jsonl` files beneath `dir` into `out`.
+///
+/// A missing `dir` is not an error (it just contributes nothing).
+fn collect_jsonl(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err.into()),
+    };
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            collect_jsonl(&path, out)?;
+        } else if path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
+            out.push(path);
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn started(turn: &str) -> String {
+        format!(
+            r#"{{"timestamp":"t","type":"event_msg","payload":{{"type":"task_started","turn_id":"{turn}"}}}}"#
+        )
+    }
+    fn completed(turn: &str) -> String {
+        format!(
+            r#"{{"timestamp":"t","type":"event_msg","payload":{{"type":"task_complete","turn_id":"{turn}","last_agent_message":"done"}}}}"#
+        )
+    }
+    fn aborted(turn: &str, reason: &str) -> String {
+        format!(
+            r#"{{"timestamp":"t","type":"event_msg","payload":{{"type":"turn_aborted","turn_id":"{turn}","reason":"{reason}"}}}}"#
+        )
+    }
+    fn noise() -> String {
+        r#"{"timestamp":"t","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hi"}]}}"#.to_string()
+    }
+
+    #[test]
+    fn empty_when_no_lifecycle_events() {
+        assert_eq!(classify_lines([noise(), noise()].iter().map(String::as_str)), TurnState::Empty);
+    }
+
+    #[test]
+    fn completed_when_last_turn_finishes() {
+        let lines = [started("a"), noise(), completed("a")];
+        assert_eq!(classify_lines(lines.iter().map(String::as_str)), TurnState::Completed);
+    }
+
+    #[test]
+    fn incomplete_when_started_without_terminal() {
+        let lines = [started("a"), completed("a"), started("b"), noise()];
+        assert_eq!(classify_lines(lines.iter().map(String::as_str)), TurnState::Incomplete);
+    }
+
+    #[test]
+    fn aborted_carries_reason() {
+        let lines = [started("a"), aborted("a", "interrupted")];
+        assert_eq!(
+            classify_lines(lines.iter().map(String::as_str)),
+            TurnState::Aborted("interrupted".into())
+        );
+    }
+
+    #[test]
+    fn last_turn_wins_over_earlier_ones() {
+        // completed → aborted → completed: the final completed is the verdict.
+        let lines = [completed("a"), aborted("b", "replaced"), started("c"), completed("c")];
+        assert_eq!(classify_lines(lines.iter().map(String::as_str)), TurnState::Completed);
+    }
+
+    #[test]
+    fn turn_state_finished_predicate() {
+        assert!(TurnState::Completed.is_finished());
+        assert!(TurnState::Aborted("x".into()).is_finished());
+        assert!(TurnState::Empty.is_finished());
+        assert!(!TurnState::Incomplete.is_finished());
+    }
+
+    #[test]
+    fn parses_session_meta_fields() {
+        let line = r#"{"timestamp":"t","type":"session_meta","payload":{"id":"thr-1","cwd":"/repo","source":"vscode","originator":"codex_cli"}}"#;
+        let meta = parse_session_meta(line).expect("meta");
+        assert_eq!(meta.id, "thr-1");
+        assert_eq!(meta.cwd.as_deref(), Some("/repo"));
+        assert_eq!(meta.source.as_deref(), Some("vscode"));
+        assert_eq!(meta.originator.as_deref(), Some("codex_cli"));
+    }
+
+    #[test]
+    fn session_meta_source_object_shape() {
+        let line = r#"{"type":"session_meta","payload":{"id":"x","source":{"kind":"cli"}}}"#;
+        let meta = parse_session_meta(line).expect("meta");
+        assert_eq!(meta.source.as_deref(), Some("cli"));
+    }
+
+    #[test]
+    fn non_meta_first_line_is_rejected() {
+        let line = r#"{"type":"event_msg","payload":{"type":"task_started"}}"#;
+        assert!(parse_session_meta(line).is_none());
+    }
+
+    #[test]
+    fn thread_id_from_rollout_filename() {
+        let path =
+            Path::new("rollout-2026-06-17T06-20-52-019ed285-eb3f-7010-b4f9-2ad9389c8e99.jsonl");
+        assert_eq!(
+            thread_id_from_path(path).as_deref(),
+            Some("019ed285-eb3f-7010-b4f9-2ad9389c8e99")
+        );
+    }
+
+    #[test]
+    fn extracts_first_user_preview() {
+        let head = format!(
+            "{}\n{}\n",
+            r#"{"type":"session_meta","payload":{"id":"x"}}"#,
+            r#"{"type":"event_msg","payload":{"type":"user_message","content":[{"type":"text","text":"hello there"}]}}"#
+        );
+        assert_eq!(extract_preview(&head), "hello there");
+    }
+
+    #[test]
+    fn truncate_is_char_boundary_safe() {
+        let s = "héllo wörld and then some more text past the limit boundary here";
+        let out = truncate_chars(s, 10);
+        assert_eq!(out.chars().count(), 10);
+        assert!(out.ends_with('…'));
+    }
+}

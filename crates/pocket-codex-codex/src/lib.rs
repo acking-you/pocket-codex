@@ -25,4 +25,16 @@ pub mod client;
 /// Spawn / inspect / stop the supervised `codex app-server` process.
 pub mod process;
 
+/// Read codex session rollout files from `CODEX_HOME` and classify their
+/// most-recent-turn state.
+pub mod rollout;
+
+/// Detect whether a session's rollout is currently held open by a live
+/// process, and enumerate codex app-server processes.
+pub mod liveness;
+
+/// Combine transcript + liveness into a resume-safety verdict and
+/// implement force takeover of a held-open session.
+pub mod takeover;
+
 pub use process::{spawn, status, stop, ListenSpec, SpawnOptions, StatusReport, StopOutcome};
