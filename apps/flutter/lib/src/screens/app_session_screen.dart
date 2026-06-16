@@ -525,8 +525,12 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
       return;
     }
     if (e.kind == 'account/rateLimits/updated') {
+      // codex v2 sends a sparse/rolling partial here — merge into the last full
+      // snapshot rather than replace, or omitted windows would blank out.
       final r = RateLimits.fromRaw(e.raw);
-      if (r != null) setState(() => _rate = r);
+      if (r != null) {
+        setState(() => _rate = _rate == null ? r : _rate!.merge(r));
+      }
       return;
     }
     // The agent edited files: refresh the working-tree-vs-main diff badge.
