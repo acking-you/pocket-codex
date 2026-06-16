@@ -80,5 +80,51 @@ void main() {
       expect(RateLimits.fromRaw(jsonEncode({'foo': 1})), isNull);
       expect(RateLimits.fromRaw('garbage'), isNull);
     });
+
+    test('parses v2 individualLimit (string amounts) + reset credits', () {
+      final raw = jsonEncode({
+        'rateLimits': {
+          'primary': {'usedPercent': 10},
+          'individualLimit': {
+            'limit': '100.00',
+            'used': '25.00',
+            'remainingPercent': 75,
+            'resetsAt': 1900000000,
+          },
+        },
+        'rateLimitResetCredits': {'availableCount': 2},
+      });
+      final r = RateLimits.fromRaw(raw)!;
+      expect(r.individualLimit!.limit, '100.00');
+      expect(r.individualLimit!.used, '25.00');
+      expect(r.individualLimit!.remainingPercent, 75);
+      expect(r.individualLimit!.fraction, closeTo(0.25, 1e-9));
+      expect(r.individualLimit!.resetsAtEpochMs, 1900000000 * 1000);
+      expect(r.resetCreditsAvailable, 2);
+    });
+
+    test('merge keeps prior fields a sparse update omits', () {
+      final full = RateLimits.fromRaw(
+        jsonEncode({
+          'rateLimits': {
+            'primary': {'usedPercent': 40},
+            'secondary': {'usedPercent': 5},
+          },
+          'rateLimitResetCredits': {'availableCount': 1},
+        }),
+      )!;
+      // A rolling update that only re-sends the primary window.
+      final sparse = RateLimits.fromRaw(
+        jsonEncode({
+          'rateLimits': {
+            'primary': {'usedPercent': 55},
+          },
+        }),
+      )!;
+      final merged = full.merge(sparse);
+      expect(merged.primary!.usedPercent, 55); // updated
+      expect(merged.secondary!.usedPercent, 5); // preserved, not blanked
+      expect(merged.resetCreditsAvailable, 1); // preserved
+    });
   });
 }

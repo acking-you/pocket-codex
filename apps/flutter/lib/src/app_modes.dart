@@ -36,58 +36,78 @@ enum PermissionMode {
   };
 }
 
-/// The model's reasoning effort ("thinking level"). Wire values are the lowercase
-/// names the codex app-server's `ReasoningEffort` enum accepts. Which levels are
-/// available is model-dependent — the picker shows only the ones a model lists in
-/// its `supportedReasoningEfforts` (e.g. some models support `xhigh`/`minimal` but
-/// not `low`/`high`). Declared low→high so the picker can order them by intensity.
-enum ReasoningEffort {
+/// The model's reasoning effort ("thinking level"). The wire value is whatever
+/// lowercase token the codex app-server advertises — as of the v2 protocol this
+/// is an OPEN string (`{type:string, minLength:1}`), not a fixed enum, so a model
+/// may expose `none`, `minimal`, `xhigh`, or future/custom levels beyond the
+/// classic `low`/`medium`/`high`. We therefore wrap an opaque wire string rather
+/// than enumerate: the picker offers exactly the model's `supportedReasoningEfforts`,
+/// and any token we don't have a localized label for is shown title-cased.
+///
+/// The five named constants below are conveniences for the common levels; they
+/// are NOT an exhaustive set. Equality is by [wire], so values round-trip through
+/// maps/sets and selection checks regardless of whether they're "known".
+class ReasoningEffort {
+  /// Wraps a codex `effort` / `reasoning_effort` wire token (assumed non-empty).
+  const ReasoningEffort(this.wire);
+
   /// Least thinking, fastest (gpt-5-class models).
-  minimal(wire: 'minimal'),
+  static const minimal = ReasoningEffort('minimal');
 
   /// Low.
-  low(wire: 'low'),
+  static const low = ReasoningEffort('low');
 
   /// Balanced (the usual default).
-  medium(wire: 'medium'),
+  static const medium = ReasoningEffort('medium');
 
   /// Thorough.
-  high(wire: 'high'),
+  static const high = ReasoningEffort('high');
 
   /// Most thorough, slowest (extra-high).
-  xhigh(wire: 'xhigh');
+  static const xhigh = ReasoningEffort('xhigh');
 
-  const ReasoningEffort({required this.wire});
+  /// Convenience set of the common levels, low→high, used as a fallback when a
+  /// model advertises no `supportedReasoningEfforts`.
+  static const known = [minimal, low, medium, high, xhigh];
 
   /// codex `effort` / `reasoning_effort` wire value.
   final String wire;
 
-  /// Parse a server/wire value into an effort, or null for unknown/absent.
-  /// Tolerant of values we don't surface (e.g. `none`) by mapping them to null.
-  static ReasoningEffort? fromWire(String? value) => switch (value) {
-    'minimal' => ReasoningEffort.minimal,
-    'low' => ReasoningEffort.low,
-    'medium' => ReasoningEffort.medium,
-    'high' => ReasoningEffort.high,
-    'xhigh' => ReasoningEffort.xhigh,
-    _ => null,
+  /// Parse a server/wire value into an effort. `null`/empty → null (absent);
+  /// ANY other non-empty token is accepted verbatim (open string, forward-compat).
+  static ReasoningEffort? fromWire(String? value) =>
+      (value == null || value.isEmpty) ? null : ReasoningEffort(value);
+
+  /// Localized short label; unknown tokens fall back to a title-cased wire value.
+  String label(AppLocalizations l) => switch (wire) {
+    'minimal' => l.effortMinimal,
+    'low' => l.effortLow,
+    'medium' => l.effortMedium,
+    'high' => l.effortHigh,
+    'xhigh' => l.effortXhigh,
+    _ => _humanize(wire),
   };
 
-  /// Localized short label.
-  String label(AppLocalizations l) => switch (this) {
-    ReasoningEffort.minimal => l.effortMinimal,
-    ReasoningEffort.low => l.effortLow,
-    ReasoningEffort.medium => l.effortMedium,
-    ReasoningEffort.high => l.effortHigh,
-    ReasoningEffort.xhigh => l.effortXhigh,
+  /// Localized one-line description; empty for tokens we don't recognize.
+  String describe(AppLocalizations l) => switch (wire) {
+    'minimal' => l.effortMinimalDesc,
+    'low' => l.effortLowDesc,
+    'medium' => l.effortMediumDesc,
+    'high' => l.effortHighDesc,
+    'xhigh' => l.effortXhighDesc,
+    _ => '',
   };
 
-  /// Localized one-line description.
-  String describe(AppLocalizations l) => switch (this) {
-    ReasoningEffort.minimal => l.effortMinimalDesc,
-    ReasoningEffort.low => l.effortLowDesc,
-    ReasoningEffort.medium => l.effortMediumDesc,
-    ReasoningEffort.high => l.effortHighDesc,
-    ReasoningEffort.xhigh => l.effortXhighDesc,
-  };
+  static String _humanize(String w) =>
+      w.isEmpty ? w : '${w[0].toUpperCase()}${w.substring(1)}';
+
+  @override
+  bool operator ==(Object other) =>
+      other is ReasoningEffort && other.wire == wire;
+
+  @override
+  int get hashCode => wire.hashCode;
+
+  @override
+  String toString() => 'ReasoningEffort($wire)';
 }

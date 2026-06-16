@@ -85,11 +85,59 @@ class RateLimitWindow {
   }
 }
 
+/// A spend-control / "individual" limit window (codex v2 `individualLimit`).
+/// Note the wire quirk: `limit` and `used` are STRINGS (money-ish amounts),
+/// while `remainingPercent` is an int.
+class SpendControlLimit {
+  /// Creates a spend-control limit snapshot.
+  const SpendControlLimit({
+    required this.limit,
+    required this.used,
+    required this.remainingPercent,
+    this.resetsAtEpochMs,
+  });
+
+  /// The cap, as the server's opaque string (e.g. a dollar amount).
+  final String limit;
+
+  /// The amount used so far, as the server's opaque string.
+  final String used;
+
+  /// Whole-percent of the cap still remaining (0..100).
+  final int remainingPercent;
+
+  /// Absolute reset time in epoch milliseconds, if given.
+  final int? resetsAtEpochMs;
+
+  /// Fraction 0..1 consumed.
+  double get fraction => ((100 - remainingPercent) / 100).clamp(0.0, 1.0);
+
+  /// Parse a `individualLimit` object, or null if it carries nothing usable.
+  static SpendControlLimit? fromMap(Object? v) {
+    if (v is! Map) return null;
+    final limit = v['limit'];
+    final used = v['used'];
+    final pct = _int(v['remainingPercent']);
+    if (limit is! String && used is! String && pct == null) return null;
+    return SpendControlLimit(
+      limit: limit is String ? limit : '',
+      used: used is String ? used : '',
+      remainingPercent: pct ?? 0,
+      resetsAtEpochMs: _resetMs(v['resetsAt']),
+    );
+  }
+}
+
 /// The account's 5h + weekly quota snapshot, parsed from
 /// `account/rateLimits/read` or the `account/rateLimits/updated` event.
 class RateLimits {
   /// Creates a quota snapshot.
-  const RateLimits({this.primary, this.secondary});
+  const RateLimits({
+    this.primary,
+    this.secondary,
+    this.individualLimit,
+    this.resetCreditsAvailable,
+  });
 
   /// The shorter window (typically 5 hours).
   final RateLimitWindow? primary;
@@ -97,8 +145,32 @@ class RateLimits {
   /// The longer window (typically weekly).
   final RateLimitWindow? secondary;
 
-  /// Whether neither window was present.
-  bool get isEmpty => primary == null && secondary == null;
+  /// The account's spend-control window (codex v2), if any.
+  final SpendControlLimit? individualLimit;
+
+  /// How many rate-limit reset credits the user can redeem (codex v2), if the
+  /// server advertised it. Pairs with the `account/rateLimitResetCredit/consume`
+  /// endpoint (not yet wired) to clear an active window.
+  final int? resetCreditsAvailable;
+
+  /// Whether nothing usable was present.
+  bool get isEmpty =>
+      primary == null &&
+      secondary == null &&
+      individualLimit == null &&
+      resetCreditsAvailable == null;
+
+  /// Overlay a (possibly sparse) update onto this snapshot, keeping prior values
+  /// for fields the update omits. codex v2's `account/rateLimits/updated` is a
+  /// rolling PARTIAL update, so a naive replace would blank out windows it didn't
+  /// re-send — merge instead.
+  RateLimits merge(RateLimits update) => RateLimits(
+    primary: update.primary ?? primary,
+    secondary: update.secondary ?? secondary,
+    individualLimit: update.individualLimit ?? individualLimit,
+    resetCreditsAvailable:
+        update.resetCreditsAvailable ?? resetCreditsAvailable,
+  );
 
   /// Parse the raw JSON, tolerating a few nesting variants.
   static RateLimits? fromRaw(String raw) {
@@ -110,9 +182,14 @@ class RateLimits {
           : decoded['rate_limits'] is Map
           ? decoded['rate_limits'] as Map
           : decoded;
+      final credits = decoded['rateLimitResetCredits'];
       final limits = RateLimits(
         primary: RateLimitWindow.fromMap(snap['primary']),
         secondary: RateLimitWindow.fromMap(snap['secondary']),
+        individualLimit: SpendControlLimit.fromMap(snap['individualLimit']),
+        resetCreditsAvailable: credits is Map
+            ? _int(credits['availableCount'])
+            : null,
       );
       return limits.isEmpty ? null : limits;
     } catch (_) {

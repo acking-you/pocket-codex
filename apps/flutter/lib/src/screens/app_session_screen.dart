@@ -525,8 +525,12 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
       return;
     }
     if (e.kind == 'account/rateLimits/updated') {
+      // codex v2 sends a sparse/rolling partial here — merge into the last full
+      // snapshot rather than replace, or omitted windows would blank out.
       final r = RateLimits.fromRaw(e.raw);
-      if (r != null) setState(() => _rate = r);
+      if (r != null) {
+        setState(() => _rate = _rate == null ? r : _rate!.merge(r));
+      }
       return;
     }
     // The agent edited files: refresh the working-tree-vs-main diff badge.
@@ -552,13 +556,25 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
         });
         _scrollToEnd();
       case 'turn/completed':
+        // v2 reports turn FAILURES here (turn.status == 'failed' + error.message),
+        // not via a separate turn/failed method — surface the error the same way.
+        final failure = _turnFailureText(e.raw);
         setState(() {
           _streaming = false;
           _turnId = null;
           for (final it in _items) {
             it.streaming = false;
           }
-          if (_pendingInterrupt) _addStoppedMarker();
+          // A turn the user stopped also ends as failed/aborted; show the
+          // "stopped" marker rather than an error banner.
+          if (_pendingInterrupt) {
+            _addStoppedMarker();
+          } else if (failure != null) {
+            _error = failure.isNotEmpty
+                ? failure
+                : AppLocalizations.of(context).turnFailed;
+            _retry = () => _send(retry: true);
+          }
         });
         _loadGit(); // edits from the turn may have changed the diff
       case 'turn/failed':
@@ -579,6 +595,25 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
         });
       default:
         _handleItemEvent(e);
+    }
+  }
+
+  /// If a `turn/completed` event actually represents a FAILED turn (v2 reports
+  /// failures here with `turn.status == 'failed'`), return its error message —
+  /// or an empty string if it failed without one. Returns null when the turn
+  /// completed successfully (so the caller leaves the transcript untouched).
+  String? _turnFailureText(String raw) {
+    try {
+      final m = jsonDecode(raw);
+      if (m is! Map) return null;
+      final turn = m['turn'];
+      if (turn is! Map || turn['status'] != 'failed') return null;
+      final err = turn['error'];
+      return (err is Map && err['message'] is String)
+          ? err['message'] as String
+          : '';
+    } catch (_) {
+      return null;
     }
   }
 
@@ -2363,12 +2398,14 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
     }
   }
 
-  IconData _effortIcon(ReasoningEffort e) => switch (e) {
-    ReasoningEffort.minimal => Icons.battery_2_bar,
-    ReasoningEffort.low => Icons.battery_3_bar,
-    ReasoningEffort.medium => Icons.battery_4_bar,
-    ReasoningEffort.high => Icons.battery_5_bar,
-    ReasoningEffort.xhigh => Icons.battery_full,
+  IconData _effortIcon(ReasoningEffort e) => switch (e.wire) {
+    'none' => Icons.battery_0_bar,
+    'minimal' => Icons.battery_2_bar,
+    'low' => Icons.battery_3_bar,
+    'medium' => Icons.battery_4_bar,
+    'high' => Icons.battery_5_bar,
+    'xhigh' => Icons.battery_full,
+    _ => Icons.bolt, // unknown / custom level the model advertised
   };
 
   Future<void> _pickEffort() async {
@@ -2382,10 +2419,12 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
     if (!mounted) return;
     final model = _model ?? (models.isNotEmpty ? models.first : null);
     final supported = model?.supportedReasoningEfforts ?? const [];
-    final efforts = [
-      for (final e in ReasoningEffort.values)
-        if (supported.isEmpty || supported.contains(e.wire)) e,
-    ];
+    // Offer exactly what the model advertises (open string list — may include
+    // `none`/`xhigh`/custom tokens beyond the classic levels). Fall back to the
+    // common levels only when a model lists none.
+    final efforts = supported.isEmpty
+        ? ReasoningEffort.known
+        : [for (final w in supported) ReasoningEffort(w)];
     final chosen = await _optionSheet<ReasoningEffort>(
       title: l10n.effort,
       isSelected: (v) => v == _effectiveEffort,
