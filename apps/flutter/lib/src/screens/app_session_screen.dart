@@ -12,6 +12,7 @@ import 'package:pocket_codex/src/app_modes.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
 import 'package:pocket_codex/src/context_status.dart';
 import 'package:pocket_codex/src/error_format.dart';
+import 'package:pocket_codex/src/fonts.dart';
 import 'package:pocket_codex/src/git_diff.dart';
 import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/widgets/links.dart';
@@ -2526,7 +2527,11 @@ class _ApprovalCard extends StatelessWidget {
                   context,
                   _detail(),
                   selectable: true,
-                  style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+                  style: const TextStyle(
+                    fontFamily: 'monospace',
+                    fontFamilyFallback: monoCjkFallback,
+                    fontSize: 12,
+                  ),
                 ),
               ),
             ),
@@ -2752,7 +2757,11 @@ class _DiffFileTile extends StatelessWidget {
           Expanded(
             child: Text(
               file.path,
-              style: const TextStyle(fontFamily: 'monospace', fontSize: 12.5),
+              style: const TextStyle(
+                fontFamily: 'monospace',
+                fontFamilyFallback: monoCjkFallback,
+                fontSize: 12.5,
+              ),
               overflow: TextOverflow.ellipsis,
             ),
           ),
@@ -2817,7 +2826,12 @@ class _DiffFileTile extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 1),
       child: Text(
         line.kind == DiffLineKind.hunk ? line.text : '$prefix${line.text}',
-        style: TextStyle(fontFamily: 'monospace', fontSize: 12, color: fg),
+        style: TextStyle(
+          fontFamily: 'monospace',
+          fontFamilyFallback: monoCjkFallback,
+          fontSize: 12,
+          color: fg,
+        ),
       ),
     );
   }
@@ -3055,6 +3069,7 @@ class _FileChangeCardState extends State<_FileChangeCard> {
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         fontFamily: 'monospace',
+                        fontFamilyFallback: monoCjkFallback,
                         fontSize: 12,
                         color: muted,
                       ),
@@ -3139,7 +3154,11 @@ class _CopyablePath extends StatelessWidget {
         Expanded(
           child: SelectableText(
             path,
-            style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+            style: const TextStyle(
+              fontFamily: 'monospace',
+              fontFamilyFallback: monoCjkFallback,
+              fontSize: 12,
+            ),
           ),
         ),
         InkResponse(
@@ -3522,6 +3541,7 @@ class _ActivityCardState extends State<_ActivityCard> {
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
                           fontFamily: 'monospace',
+                          fontFamilyFallback: monoCjkFallback,
                           fontSize: 12,
                           color: muted,
                         ),
@@ -3564,7 +3584,11 @@ class _ActivityCardState extends State<_ActivityCard> {
                   context,
                   body,
                   selectable: true,
-                  style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+                  style: const TextStyle(
+                    fontFamily: 'monospace',
+                    fontFamilyFallback: monoCjkFallback,
+                    fontSize: 12,
+                  ),
                 ),
               ),
             ),
@@ -3645,6 +3669,7 @@ MarkdownStyleSheet _markdownStyle(BuildContext context) {
     blockSpacing: 10,
     code: theme.textTheme.bodyMedium?.copyWith(
       fontFamily: 'monospace',
+      fontFamilyFallback: monoCjkFallback,
       backgroundColor: scheme.surfaceContainerHighest,
     ),
     codeblockDecoration: BoxDecoration(

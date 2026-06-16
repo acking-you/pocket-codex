@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:pocket_codex/src/fonts.dart';
 
 /// Brand seed colour for both schemes.
 const _seed = Color(0xFF4C8DF6);
@@ -18,6 +19,8 @@ ThemeData lightTheme() => ThemeData(
     brightness: Brightness.light,
   ),
   useMaterial3: true,
+  fontFamily: appFontFamily,
+  fontFamilyFallback: cjkFontFallback,
   scrollbarTheme: _scrollbarTheme,
 );
 
@@ -28,5 +31,7 @@ ThemeData darkTheme() => ThemeData(
     brightness: Brightness.dark,
   ),
   useMaterial3: true,
+  fontFamily: appFontFamily,
+  fontFamilyFallback: cjkFontFallback,
   scrollbarTheme: _scrollbarTheme,
 );

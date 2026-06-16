@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
 import 'package:pocket_codex/src/error_format.dart';
+import 'package:pocket_codex/src/fonts.dart';
 import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/widgets/links.dart';
 
@@ -186,7 +187,11 @@ class _ProviderSnippet extends StatelessWidget {
               context,
               snippet,
               selectable: true,
-              style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+              style: const TextStyle(
+                fontFamily: 'monospace',
+                fontFamilyFallback: monoCjkFallback,
+                fontSize: 12,
+              ),
             ),
           ],
         ),
