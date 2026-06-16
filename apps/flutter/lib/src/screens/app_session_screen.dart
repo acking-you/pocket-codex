@@ -978,15 +978,38 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
   /// that (e.g. right after the user sends or taps the jump button).
   void _scrollToEnd({bool force = false}) {
     if (!force && !_atBottom) return;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scroll.hasClients) {
-        _scroll.animateTo(
-          _scroll.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 200),
-          curve: Curves.easeOut,
-        );
-      }
-    });
+    if (!force) {
+      // Auto-follow while streaming: a smooth nudge to the latest content.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_scroll.hasClients) {
+          _scroll.animateTo(
+            _scroll.position.maxScrollExtent,
+            duration: const Duration(milliseconds: 200),
+            curve: Curves.easeOut,
+          );
+        }
+      });
+      return;
+    }
+    // Forced jump (opening a conversation, sending, the jump button): a tall
+    // conversation lays its variable-height items out over several frames, so
+    // maxScrollExtent keeps growing after the first jump. Re-jump to the bottom
+    // each frame until it settles — otherwise a long conversation opens blank
+    // / mid-content until the user scrolls manually.
+    void settle(int tries) {
+      if (!_scroll.hasClients) return;
+      final before = _scroll.position.maxScrollExtent;
+      _scroll.jumpTo(before);
+      if (tries <= 0) return;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_scroll.hasClients &&
+            _scroll.position.maxScrollExtent > before + 1) {
+          settle(tries - 1);
+        }
+      });
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) => settle(10));
   }
 
   String _projectName() {
@@ -1393,18 +1416,23 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
                         // both side panes are collapsed on a wide screen.
                         : Stack(
                             children: [
-                              Center(
-                                child: ConstrainedBox(
-                                  constraints: const BoxConstraints(
-                                    maxWidth: 820,
-                                  ),
-                                  child: SelectionArea(
-                                    child: ListView.builder(
+                              // Full-width scroll area so the scrollbar sits at
+                              // the window's right edge instead of floating at
+                              // the centred column's edge; the conversation
+                              // column itself stays centred via horizontal
+                              // padding computed from the available width.
+                              SelectionArea(
+                                child: LayoutBuilder(
+                                  builder: (context, constraints) {
+                                    final side =
+                                        (constraints.maxWidth - 820) / 2;
+                                    final pad = side < 16 ? 16.0 : side;
+                                    return ListView.builder(
                                       controller: _scroll,
-                                      padding: const EdgeInsets.fromLTRB(
-                                        16,
+                                      padding: EdgeInsets.fromLTRB(
+                                        pad,
                                         12,
-                                        16,
+                                        pad,
                                         12,
                                       ),
                                       itemCount:
@@ -1418,8 +1446,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
                                             ? _GroupedActivityCard(group: row)
                                             : _MessageView(item: row as _Item);
                                       },
-                                    ),
-                                  ),
+                                    );
+                                  },
                                 ),
                               ),
                               // Jump-to-latest button when scrolled up.
