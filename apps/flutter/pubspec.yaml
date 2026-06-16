@@ -40,6 +40,18 @@ dependencies:
   # Linkifies bare URLs in plain-text widgets (user bubbles, tool/command
   # output, reasoning) — markdown links are handled by MarkdownBody itself.
   flutter_linkify: ^6.0.0
+  # Variable-height-aware lazy list. The conversation mixes very short message
+  # bubbles with tall command/code/output/grouped-activity cards; a plain
+  # ListView.builder estimates total scroll extent from a running average of
+  # laid-out children, so the scrollbar thumb jumps as differently sized rows
+  # enter/leave the viewport during a drag (and as agent text streams in).
+  # SuperListView estimates per-item extents and reconciles them against the
+  # real height as rows scroll through the cache area, giving a stable thumb
+  # while keeping lazy virtualization. Pure-Dart, MIT, all platforms. Pinned —
+  # the package is in low-maintenance mode (no release since 2024); pin guards
+  # against a future-Flutter break and avoids relying on the (buggy on desktop)
+  # animateToItem/ListController path — we keep the existing ScrollController.
+  super_sliver_list: 0.4.1
 
 dev_dependencies:
   flutter_test:

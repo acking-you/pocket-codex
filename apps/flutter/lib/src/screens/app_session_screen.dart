@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:super_sliver_list/super_sliver_list.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/app_modes.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
@@ -1427,7 +1428,24 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
                                     final side =
                                         (constraints.maxWidth - 820) / 2;
                                     final pad = side < 16 ? 16.0 : side;
-                                    return ListView.builder(
+                                    // Materialize the collapsed timeline ONCE per
+                                    // build: `_rows` is a getter that re-scans
+                                    // `_items` on every access, so reading it for
+                                    // itemCount and again per itemBuilder was
+                                    // O(n²) per frame. Hoisting it here keeps each
+                                    // build O(n).
+                                    final rows = _rows;
+                                    // SuperListView (super_sliver_list) replaces
+                                    // ListView.builder to stabilize the scrollbar:
+                                    // it derives scroll extent from per-item
+                                    // estimates reconciled against real heights as
+                                    // rows pass through the cache area, instead of
+                                    // the single running-average estimate that
+                                    // makes a plain ListView's thumb jump with the
+                                    // wide row-height variance here. Same lazy
+                                    // virtualization, same ScrollController — only
+                                    // visible rows build, so streaming stays cheap.
+                                    return SuperListView.builder(
                                       controller: _scroll,
                                       padding: EdgeInsets.fromLTRB(
                                         pad,
@@ -1436,15 +1454,35 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
                                         12,
                                       ),
                                       itemCount:
-                                          _rows.length + (_showTyping ? 1 : 0),
+                                          rows.length + (_showTyping ? 1 : 0),
                                       itemBuilder: (c, i) {
-                                        if (i >= _rows.length) {
+                                        if (i >= rows.length) {
                                           return const _TypingIndicator();
                                         }
-                                        final row = _rows[i];
+                                        final row = rows[i];
+                                        // Stable keys let the sliver's
+                                        // extent-reconciliation track each row
+                                        // across rebuilds (streaming upserts,
+                                        // collapse-into-group transitions) instead
+                                        // of recycling element/state by position —
+                                        // which otherwise churns measured heights.
+                                        // A group keys off its first item's stable
+                                        // id plus length so expand/collapse and
+                                        // run-growth produce a fresh measurement.
                                         return row is _Group
-                                            ? _GroupedActivityCard(group: row)
-                                            : _MessageView(item: row as _Item);
+                                            ? _GroupedActivityCard(
+                                                key: ValueKey(
+                                                  'g:${row.items.first.id}:'
+                                                  '${row.items.length}',
+                                                ),
+                                                group: row,
+                                              )
+                                            : _MessageView(
+                                                key: ValueKey(
+                                                  (row as _Item).id,
+                                                ),
+                                                item: row,
+                                              );
                                       },
                                     );
                                   },
@@ -2790,7 +2828,7 @@ class _DiffFileTile extends StatelessWidget {
 /// collapsible [_ActivityCard]. Message copy fades in on hover (desktop);
 /// touch uses the enclosing [SelectionArea]'s long-press.
 class _MessageView extends StatefulWidget {
-  const _MessageView({required this.item});
+  const _MessageView({super.key, required this.item});
   final _Item item;
 
   @override
@@ -3288,7 +3326,7 @@ class _Group {
 /// single low-chrome row ("Ran command ×3") that expands to the individual
 /// [_ActivityCard]s — so long tool sequences don't flood the transcript.
 class _GroupedActivityCard extends StatefulWidget {
-  const _GroupedActivityCard({required this.group});
+  const _GroupedActivityCard({super.key, required this.group});
   final _Group group;
 
   @override
