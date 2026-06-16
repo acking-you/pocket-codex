@@ -174,6 +174,32 @@ cargo doc --workspace --no-deps
 flutter_rust_bridge_codegen generate    # after editing crates/pocket-codex-bridge/src/api/
 ```
 
+### Fonts (desktop-only Noto Sans SC)
+
+Chinese renders thin and unevenly weighted on Windows with Flutter's default
+fonts, so **desktop** builds bundle **Noto Sans SC** (`apps/flutter/assets/fonts/`,
+SIL OFL 1.1). To keep the ~17 MB out of the Android/iOS artifacts, the font is
+declared only in `apps/flutter/pubspec-desktop.yaml`, **not** the default
+`pubspec.yaml`:
+
+- `pubspec.yaml` — the default used by mobile, `flutter test`, and local dev.
+  No font. Source of truth for dependencies.
+- `pubspec-desktop.yaml` — a copy of `pubspec.yaml` **plus** a `fonts:` block.
+  The desktop release jobs (`app-windows` / `app-linux` / `app-macos` in
+  `.github/workflows/release.yml`) `cp pubspec-desktop.yaml pubspec.yaml` before
+  building. **Keep its dependencies in sync with `pubspec.yaml`.**
+
+`lib/src/fonts.dart` sets the primary family to `Noto Sans SC` only on desktop
+(gated on `defaultTargetPlatform`, so `flutter test` — forced to android — takes
+the mobile branch); mobile/web use the OS CJK font (PingFang SC / Noto Sans CJK).
+To preview the bundled font locally on desktop:
+
+```bash
+cp apps/flutter/pubspec-desktop.yaml apps/flutter/pubspec.yaml
+(cd apps/flutter && fvm flutter pub get && fvm flutter run -d windows)
+git checkout -- apps/flutter/pubspec.yaml   # restore before committing
+```
+
 ## 8. Working with submodules
 
 `deps/codex` and `deps/pb-mapper` are git submodules. They pin specific

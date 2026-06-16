@@ -115,6 +115,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: app-windows
+      # Desktop bundles Noto Sans SC (fixes thin/uneven Chinese on Windows);
+      # mobile uses the OS CJK font, so only the desktop jobs swap in the
+      # manifest that declares the font. See AGENTS.md › Fonts.
+      - name: Activate desktop manifest (bundle Noto Sans SC)
+        shell: bash
+        working-directory: apps/flutter
+        run: cp pubspec-desktop.yaml pubspec.yaml
       - name: Build Windows app
         working-directory: apps/flutter
         run: |
@@ -160,6 +167,10 @@ jobs:
         run: |
           sudo apt-get update -y
           sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev
+      - name: Activate desktop manifest (bundle Noto Sans SC)
+        shell: bash
+        working-directory: apps/flutter
+        run: cp pubspec-desktop.yaml pubspec.yaml
       - name: Build Linux app
         working-directory: apps/flutter
         run: |
@@ -255,6 +266,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: app-macos
+      - name: Activate desktop manifest (bundle Noto Sans SC)
+        shell: bash
+        working-directory: apps/flutter
+        run: cp pubspec-desktop.yaml pubspec.yaml
       - name: Build macOS app
         working-directory: apps/flutter
         run: |

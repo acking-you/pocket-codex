@@ -420,4 +420,84 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get languageEnglish => 'English';
+
+  @override
+  String get newSessionTitle => 'What should the remote Codex work on?';
+
+  @override
+  String get newSessionSubtitle =>
+      'Pick a starting point, or just type your task below.';
+
+  @override
+  String get suggestExploreTitle => 'Explore the project';
+
+  @override
+  String get suggestExplorePrompt =>
+      'Give me an overview of this project — its structure, main modules, and tech stack.';
+
+  @override
+  String get suggestTestsTitle => 'Run & fix tests';
+
+  @override
+  String get suggestTestsPrompt =>
+      'Run the test suite and fix any failing tests.';
+
+  @override
+  String get suggestDiffTitle => 'Review changes';
+
+  @override
+  String get suggestDiffPrompt =>
+      'Summarize the current working-tree changes against the main branch.';
+
+  @override
+  String get suggestPlanTitle => 'Plan a feature';
+
+  @override
+  String get suggestPlanPrompt =>
+      'Help me plan out a new feature before writing any code.';
+
+  @override
+  String get searchConversations => 'Search conversations';
+
+  @override
+  String get noMatchingThreads => 'No matching conversations';
+
+  @override
+  String get groupActive => 'Active';
+
+  @override
+  String get groupToday => 'Today';
+
+  @override
+  String get groupEarlier => 'Earlier';
+
+  @override
+  String get running => 'Running…';
+
+  @override
+  String get timeJustNow => 'just now';
+
+  @override
+  String timeMinutesAgo(int n) {
+    return '${n}m ago';
+  }
+
+  @override
+  String timeHoursAgo(int n) {
+    return '${n}h ago';
+  }
+
+  @override
+  String get timeYesterday => 'yesterday';
+
+  @override
+  String timeDaysAgo(int n) {
+    return '${n}d ago';
+  }
+
+  @override
+  String get modelLabel => 'Model';
+
+  @override
+  String get permissionLabel => 'Permission';
 }

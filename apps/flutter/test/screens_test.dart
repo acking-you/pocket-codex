@@ -175,13 +175,18 @@ void main() {
       config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
     );
     await api.appConnect('pcx:lb7666:app:default', 28080);
+    // Narrow so the sessions pane is a hidden drawer — the new session's preview
+    // (also "hello") then can't collide with the transcript bubble below.
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(400, 800);
+    addTearDown(t.view.reset);
     await t.pumpWidget(
       _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
     );
     await t.pumpAndSettle();
 
-    // Empty state before any message.
-    expect(find.text('发送消息开始对话'), findsOneWidget);
+    // A brand-new conversation shows the guidance view (not a bare hint).
+    expect(find.text('想让远程 Codex 做点什么?'), findsOneWidget);
 
     await t.enterText(find.byType(TextField), 'hello');
     await t.pump(); // let the send button enable for the non-empty input
@@ -303,9 +308,173 @@ void main() {
       ),
     );
     await t.pumpAndSettle();
-    // Still empty (the foreign event was dropped, empty-state hint remains).
-    expect(find.text('发送消息开始对话'), findsOneWidget);
+    // Still the new-session guidance (the foreign event was dropped, no items).
+    expect(find.text('想让远程 Codex 做点什么?'), findsOneWidget);
     expect(find.textContaining('not mine', findRichText: true), findsNothing);
+  });
+
+  testWidgets('A new conversation inherits the last-picked permission mode', (
+    t,
+  ) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(1200, 900); // wide → left pane inline
+    addTearDown(t.view.reset);
+    await t.pumpWidget(
+      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+    );
+    await t.pumpAndSettle();
+
+    // The default permission mode is "自动" (auto). Switch it to "只读".
+    await t.tap(find.text('自动'));
+    await t.pumpAndSettle();
+    await t.tap(find.text('只读'));
+    await t.pumpAndSettle();
+    expect(find.text('只读'), findsOneWidget); // the pill now reads read-only
+
+    // Start a brand-new conversation: it inherits the read-only mode the user
+    // last chose instead of resetting to the "自动" default.
+    await t.tap(find.byIcon(Icons.add));
+    await t.pumpAndSettle();
+    expect(find.text('只读'), findsOneWidget);
+    expect(find.text('自动'), findsNothing);
+  });
+
+  testWidgets('A new session appears in the sessions pane after first send', (
+    t,
+  ) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(1200, 900); // wide → left pane inline
+    addTearDown(t.view.reset);
+    await t.pumpWidget(
+      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+    );
+    await t.pumpAndSettle();
+
+    // No conversations in the pane yet.
+    expect(find.text('暂无会话'), findsOneWidget); // noThreads (zh)
+
+    // Sending the first message surfaces the new session in the left pane.
+    await t.enterText(find.byType(TextField), 'hello there');
+    await t.pump();
+    await t.tap(find.byKey(const Key('send-btn')));
+    await t.pumpAndSettle();
+
+    expect(find.text('暂无会话'), findsNothing);
+    // The new session shows in the pane as a conversation tile, with its message
+    // preserved as the preview (not "(未命名)" — the server preview is still
+    // empty for a just-started thread, so the optimistic one must win).
+    expect(find.byIcon(Icons.chat_bubble_outline), findsOneWidget);
+    expect(find.text('(未命名)'), findsNothing);
+  });
+
+  testWidgets(
+    'Conversations pane groups by time with relative-time subtitles',
+    (t) async {
+      final nowS = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      final api = FakeBridgeApi(
+        config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+      );
+      await api.appConnect('pcx:lb7666:app:default', 28080);
+      api.appThreads.addAll([
+        ThreadMeta(
+          id: 'tRecent',
+          preview: 'recent chat',
+          cwd: '',
+          updatedAt: nowS - 120,
+        ),
+        ThreadMeta(
+          id: 'tOld',
+          preview: 'ancient chat',
+          cwd: '',
+          updatedAt: nowS - 5 * 86400,
+        ),
+      ]);
+      t.view.devicePixelRatio = 1.0;
+      t.view.physicalSize = const Size(1200, 900); // wide → left pane inline
+      addTearDown(t.view.reset);
+      await t.pumpWidget(
+        _host(
+          const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'),
+          api,
+        ),
+      );
+      await t.pumpAndSettle();
+
+      // Each conversation shows its preview + a relative-time subtitle, and the
+      // older one is bucketed under "Earlier".
+      expect(find.text('recent chat'), findsOneWidget);
+      expect(find.text('ancient chat'), findsOneWidget);
+      expect(find.text('2 分钟前'), findsOneWidget); // timeMinutesAgo (zh)
+      expect(find.text('5 天前'), findsOneWidget); // timeDaysAgo (zh)
+      expect(find.text('更早'), findsOneWidget); // groupEarlier (zh)
+    },
+  );
+
+  testWidgets('Conversations search box filters the list', (t) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    // The search box only appears once there are enough conversations (>6).
+    api.appThreads.addAll(const [
+      ThreadMeta(id: 't1', preview: 'alpha', cwd: '', updatedAt: 0),
+      ThreadMeta(id: 't2', preview: 'beta', cwd: '', updatedAt: 0),
+      ThreadMeta(id: 't3', preview: 'gamma', cwd: '', updatedAt: 0),
+      ThreadMeta(id: 't4', preview: 'delta', cwd: '', updatedAt: 0),
+      ThreadMeta(id: 't5', preview: 'epsilon', cwd: '', updatedAt: 0),
+      ThreadMeta(id: 't6', preview: 'zeta', cwd: '', updatedAt: 0),
+      ThreadMeta(id: 't7', preview: 'needle', cwd: '', updatedAt: 0),
+    ]);
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(1200, 900); // wide → left pane inline
+    addTearDown(t.view.reset);
+    await t.pumpWidget(
+      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+    );
+    await t.pumpAndSettle();
+
+    expect(find.text('alpha'), findsOneWidget);
+    expect(find.text('needle'), findsOneWidget);
+
+    // Typing a query filters the list to matching previews only — non-matches
+    // disappear and exactly one conversation tile remains.
+    await t.enterText(find.byKey(const Key('conv-search')), 'needle');
+    await t.pumpAndSettle();
+    expect(find.text('alpha'), findsNothing);
+    expect(find.text('beta'), findsNothing);
+    expect(find.byIcon(Icons.chat_bubble_outline), findsOneWidget);
+  });
+
+  testWidgets('Tapping a guidance card prefills the composer', (t) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    await t.pumpWidget(
+      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+    );
+    await t.pumpAndSettle();
+
+    // The prompt shows once on the guidance card before a tap.
+    const prompt = '介绍一下这个项目的结构、主要模块和技术栈。';
+    expect(find.text(prompt), findsOneWidget);
+
+    // Tapping the "了解项目" card prefills the composer (review-then-send).
+    await t.tap(find.text('了解项目'));
+    await t.pumpAndSettle();
+    // The prompt now appears twice: the card subtitle + the composer field.
+    expect(find.text(prompt), findsNWidgets(2));
+    // The send button is enabled now that the composer is non-empty.
+    final sendBtn = t.widget<IconButton>(find.byKey(const Key('send-btn')));
+    expect(sendBtn.onPressed, isNotNull);
   });
 
   testWidgets('Tool calls render as expandable activity cards', (t) async {
@@ -1247,7 +1416,8 @@ void main() {
     await t.tap(find.byIcon(Icons.add));
     await t.pumpAndSettle();
     expect(t.takeException(), isNull);
-    expect(find.text('发送消息开始对话'), findsOneWidget); // emptyConversation (zh)
+    // Tapping "new conversation" shows the new-session guidance.
+    expect(find.text('想让远程 Codex 做点什么?'), findsOneWidget); // guidance (zh)
   });
 
   testWidgets('Plan renders as a status-iconed checklist', (t) async {
@@ -1432,6 +1602,11 @@ void main() {
       config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
     );
     await api.appConnect('pcx:lb7666:app:default', 28080);
+    // Narrow so the sessions pane is a hidden drawer — the open thread's sidebar
+    // "running" subtitle then can't collide with the status bar's working text.
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(400, 800);
+    addTearDown(t.view.reset);
     await t.pumpWidget(
       _host(
         const AppSessionScreen(
@@ -1624,7 +1799,8 @@ void main() {
     );
     await t.pump(); // deliver the broadcast event
     await t.pump(); // build the resulting frame
-    expect(find.text('1 个运行中'), findsOneWidget); // runningSessions(1) (zh)
+    // The running thread moves into the "Active" group with a pulsing dot.
+    expect(find.text('进行中'), findsOneWidget); // groupActive (zh)
     expect(find.byType(PulsingDot), findsAtLeastNWidgets(1));
 
     // Turn completes → the badge clears.

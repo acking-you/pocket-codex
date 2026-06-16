@@ -142,5 +142,37 @@
   "language": "Language",
   "languageSystem": "Follow system",
   "languageChinese": "简体中文",
-  "languageEnglish": "English"
+  "languageEnglish": "English",
+  "newSessionTitle": "What should the remote Codex work on?",
+  "newSessionSubtitle": "Pick a starting point, or just type your task below.",
+  "suggestExploreTitle": "Explore the project",
+  "suggestExplorePrompt": "Give me an overview of this project — its structure, main modules, and tech stack.",
+  "suggestTestsTitle": "Run & fix tests",
+  "suggestTestsPrompt": "Run the test suite and fix any failing tests.",
+  "suggestDiffTitle": "Review changes",
+  "suggestDiffPrompt": "Summarize the current working-tree changes against the main branch.",
+  "suggestPlanTitle": "Plan a feature",
+  "suggestPlanPrompt": "Help me plan out a new feature before writing any code.",
+  "searchConversations": "Search conversations",
+  "noMatchingThreads": "No matching conversations",
+  "groupActive": "Active",
+  "groupToday": "Today",
+  "groupEarlier": "Earlier",
+  "running": "Running…",
+  "timeJustNow": "just now",
+  "timeMinutesAgo": "{n}m ago",
+  "@timeMinutesAgo": {
+    "placeholders": { "n": { "type": "int" } }
+  },
+  "timeHoursAgo": "{n}h ago",
+  "@timeHoursAgo": {
+    "placeholders": { "n": { "type": "int" } }
+  },
+  "timeYesterday": "yesterday",
+  "timeDaysAgo": "{n}d ago",
+  "@timeDaysAgo": {
+    "placeholders": { "n": { "type": "int" } }
+  },
+  "modelLabel": "Model",
+  "permissionLabel": "Permission"
 }
