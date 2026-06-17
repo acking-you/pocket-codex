@@ -155,44 +155,42 @@ pub fn connect(service_key: String, local_port: u16, relay: String) -> Result<()
     let sub = runtime::subscribe_service(service_key.clone(), local_port, relay)?;
     let ws_url = format!("ws://{}", sub.local_addr);
 
-    let (client, mut notify_rx) = runtime::runtime()
-        .block_on(async {
-            tokio::time::timeout(CONNECT_TIMEOUT, AppClient::connect(&ws_url))
-                .await
-                .context("app-server connect timed out")?
-                .context("connecting app-server")
-        })?;
+    let (client, mut notify_rx) = runtime::runtime().block_on(async {
+        tokio::time::timeout(CONNECT_TIMEOUT, AppClient::connect(&ws_url))
+            .await
+            .context("app-server connect timed out")?
+            .context("connecting app-server")
+    })?;
     let client = Arc::new(client);
 
     // Handshake. The app-server rejects every other method until initialized.
     // Bounded by CONNECT_TIMEOUT so a registered-but-dead backend (relay
     // registrant alive, codex app-server gone) fails fast instead of hanging
     // the connecting UI forever.
-    runtime::runtime()
-        .block_on(async {
-            tokio::time::timeout(
-                CONNECT_TIMEOUT,
-                client.request(
-                    "initialize",
-                    json!({
-                        "clientInfo": {
-                            "name": "pocket-codex",
-                            "title": "Pocket-Codex",
-                            "version": env!("CARGO_PKG_VERSION"),
-                        },
-                        // `experimentalApi` unlocks v2 features the UI relies on,
-                        // notably `turn/start.collaborationMode` (plan mode).
-                        // Without it the server rejects plan turns with
-                        // "turn/start.collaborationMode requires experimentalApi
-                        // capability".
-                        "capabilities": { "experimentalApi": true },
-                    }),
-                ),
-            )
-            .await
-            .context("app-server initialize timed out")?
-            .context("app-server initialize")
-        })?;
+    runtime::runtime().block_on(async {
+        tokio::time::timeout(
+            CONNECT_TIMEOUT,
+            client.request(
+                "initialize",
+                json!({
+                    "clientInfo": {
+                        "name": "pocket-codex",
+                        "title": "Pocket-Codex",
+                        "version": env!("CARGO_PKG_VERSION"),
+                    },
+                    // `experimentalApi` unlocks v2 features the UI relies on,
+                    // notably `turn/start.collaborationMode` (plan mode).
+                    // Without it the server rejects plan turns with
+                    // "turn/start.collaborationMode requires experimentalApi
+                    // capability".
+                    "capabilities": { "experimentalApi": true },
+                }),
+            ),
+        )
+        .await
+        .context("app-server initialize timed out")?
+        .context("app-server initialize")
+    })?;
 
     let (events_tx, _) = broadcast::channel::<AppEvent>(512);
     let forward_tx = events_tx.clone();
