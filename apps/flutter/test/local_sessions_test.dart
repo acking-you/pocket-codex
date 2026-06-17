@@ -173,6 +173,65 @@ void main() {
     expect(api.appIsConnected('pcx:lb7666:app:default'), isTrue);
   });
 
+  testWidgets('groups by activity time and the search box filters content', (
+    t,
+  ) async {
+    final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    LocalSession mk(
+      String id,
+      String preview,
+      int updated, {
+      String safety = 'resumable',
+      bool running = false,
+    }) => LocalSession(
+      threadId: id,
+      cwd: '/proj',
+      preview: preview,
+      source: 'cli',
+      updatedAt: updated,
+      turnState: running ? 'incomplete' : 'completed',
+      heldOpen: running,
+      safety: safety,
+      allowsResume: !running,
+      requiresTakeover: false,
+    );
+    // >6 sessions spanning running / today / earlier so all three groups and
+    // the search box render.
+    final api = FakeBridgeApi()
+      ..localSessions = [
+        mk(
+          'a',
+          'running now',
+          nowSec - 30,
+          safety: 'ownedRunning',
+          running: true,
+        ),
+        mk('b', 'today one', nowSec - 120),
+        mk('c', 'today two', nowSec - 300),
+        mk('d', 'today three', nowSec - 600),
+        mk('e', 'old uniquexyz', nowSec - 3 * 86400),
+        mk('f', 'old two', nowSec - 4 * 86400),
+        mk('g', 'old three', nowSec - 5 * 86400),
+      ];
+    await t.pumpWidget(_host(const LocalSessionsScreen(), api));
+    await _settle(t);
+
+    // Activity-time section headers (zh). '进行中' is the group label, distinct
+    // from the running chip's '其他进程运行中'.
+    expect(find.text('进行中'), findsOneWidget); // groupActive
+    expect(find.text('今天'), findsOneWidget); // groupToday
+    expect(find.text('更早'), findsOneWidget); // groupEarlier
+    // The search box appears once there are more than 6 sessions.
+    expect(find.byKey(const Key('local-search')), findsOneWidget);
+
+    // Typing filters across the preview text.
+    await t.enterText(find.byKey(const Key('local-search')), 'uniquexyz');
+    await _settle(t);
+    expect(find.text('old uniquexyz'), findsOneWidget);
+    expect(find.text('today one'), findsNothing);
+    expect(find.text('running now'), findsNothing);
+  });
+
   testWidgets('viewer renders the transcript read-only and offers force-resume '
       'when the owning session is idle', (t) async {
     final api = FakeBridgeApi();

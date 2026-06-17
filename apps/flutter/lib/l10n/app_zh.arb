@@ -157,6 +157,7 @@
   "suggestPlanTitle": "规划功能",
   "suggestPlanPrompt": "在写代码之前,帮我规划一个新功能。",
   "searchConversations": "搜索会话",
+  "searchLocalSessions": "搜索会话内容 / 目录 / 来源",
   "noMatchingThreads": "没有匹配的会话",
   "groupActive": "进行中",
   "groupToday": "今天",

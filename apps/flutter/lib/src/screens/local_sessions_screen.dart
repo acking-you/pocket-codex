@@ -7,6 +7,7 @@ import 'package:pocket_codex/src/error_format.dart';
 import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/screens/app_session_screen.dart'
     show appLocalPort;
+import 'package:pocket_codex/src/time_ago.dart';
 import 'package:pocket_codex/src/widgets/loading.dart';
 import 'package:pocket_codex/src/widgets/status_dots.dart';
 
@@ -29,6 +30,7 @@ class _LocalSessionsState extends ConsumerState<LocalSessionsScreen> {
   bool _loading = true;
   String? _error;
   List<LocalSession> _sessions = const [];
+  String _query = '';
 
   @override
   void initState() {
@@ -136,36 +138,138 @@ class _LocalSessionsState extends ConsumerState<LocalSessionsScreen> {
         ),
       );
     }
-    return RefreshIndicator(
-      key: const ValueKey('local-list'),
-      onRefresh: _load,
-      child: ListView.separated(
-        padding: const EdgeInsets.symmetric(vertical: 8),
-        itemCount: _sessions.length + 1,
-        separatorBuilder: (_, _) => const Divider(height: 1),
-        itemBuilder: (context, i) {
-          if (i == 0) {
-            return Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-              child: Text(
-                l10n.localSessionsHint,
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-            );
-          }
-          return _SessionRow(session: _sessions[i - 1], onResume: _onResume);
-        },
+    return _buildList(l10n);
+  }
+
+  Widget _buildList(AppLocalizations l10n) {
+    final scheme = Theme.of(context).colorScheme;
+    final now = DateTime.now();
+    final q = _query.trim().toLowerCase();
+    bool matches(LocalSession s) {
+      bool has(String? v) => v != null && v.toLowerCase().contains(q);
+      return has(s.preview) || has(s.cwd) || has(s.source);
+    }
+
+    final filtered = q.isEmpty ? _sessions : _sessions.where(matches).toList();
+
+    // Group by activity time, mirroring the conversation list: actively-running
+    // first, then today, then earlier. The source list is already sorted
+    // newest-first (scan_sessions orders by Reverse(updated_at)).
+    final active = <LocalSession>[];
+    final today = <LocalSession>[];
+    final earlier = <LocalSession>[];
+    for (final s in filtered) {
+      if (s.safety == 'ownedRunning') {
+        active.add(s);
+      } else if (isSameDay(s.updatedAt, now)) {
+        today.add(s);
+      } else {
+        earlier.add(s);
+      }
+    }
+
+    final rows = <Widget>[
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+        child: Text(
+          l10n.localSessionsHint,
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+      ),
+    ];
+    void section(String label, List<LocalSession> items) {
+      if (items.isEmpty) return;
+      rows.add(_sectionLabel(label));
+      rows.addAll(
+        items.map(
+          (s) => _SessionRow(session: s, now: now, onResume: _onResume),
+        ),
+      );
+    }
+
+    section(l10n.groupActive, active);
+    section(l10n.groupToday, today);
+    section(l10n.groupEarlier, earlier);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // Quick filter — shown once there are enough sessions to scan.
+        if (_sessions.length > 6) _searchBox(l10n),
+        Expanded(
+          child: filtered.isEmpty
+              ? Center(
+                  key: const ValueKey('local-no-match'),
+                  child: Text(
+                    l10n.noMatchingThreads,
+                    style: TextStyle(color: scheme.outline),
+                  ),
+                )
+              : RefreshIndicator(
+                  key: const ValueKey('local-list'),
+                  onRefresh: _load,
+                  child: ListView(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    children: rows,
+                  ),
+                ),
+        ),
+      ],
+    );
+  }
+
+  Widget _searchBox(AppLocalizations l10n) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+      child: TextField(
+        key: const Key('local-search'),
+        onChanged: (v) => setState(() => _query = v),
+        style: const TextStyle(fontSize: 13),
+        decoration: InputDecoration(
+          isDense: true,
+          prefixIcon: const Icon(Icons.search, size: 18),
+          prefixIconConstraints: const BoxConstraints(
+            minWidth: 34,
+            minHeight: 34,
+          ),
+          hintText: l10n.searchLocalSessions,
+          hintStyle: TextStyle(fontSize: 13, color: scheme.onSurfaceVariant),
+          filled: true,
+          fillColor: scheme.surfaceContainerHighest,
+          contentPadding: const EdgeInsets.symmetric(vertical: 9),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(10),
+            borderSide: BorderSide.none,
+          ),
+        ),
       ),
     );
   }
+
+  Widget _sectionLabel(String text) => Padding(
+    padding: const EdgeInsets.fromLTRB(16, 12, 16, 2),
+    child: Text(
+      text,
+      style: TextStyle(
+        fontSize: 11.5,
+        color: Theme.of(context).colorScheme.onSurfaceVariant,
+      ),
+    ),
+  );
 }
 
 /// One session row: preview + cwd/source/time, a resume-safety chip, and a
 /// resume / force-takeover action when allowed.
 class _SessionRow extends StatelessWidget {
-  const _SessionRow({required this.session, required this.onResume});
+  const _SessionRow({
+    required this.session,
+    required this.now,
+    required this.onResume,
+  });
 
   final LocalSession session;
+  final DateTime now;
   final Future<void> Function(LocalSession) onResume;
 
   @override
@@ -173,10 +277,15 @@ class _SessionRow extends StatelessWidget {
     final l10n = AppLocalizations.of(context);
     final scheme = Theme.of(context).colorScheme;
     final preview = session.preview.trim();
+    // Running sessions read "运行中"; everything else gets a relative-time tag.
+    final time = session.safety == 'ownedRunning'
+        ? l10n.running
+        : relativeTime(session.updatedAt, now, l10n);
     final subtitleParts = <String>[
       if (session.cwd != null && session.cwd!.trim().isNotEmpty)
         session.cwd!.trim(),
       if (session.source != null && session.source!.isNotEmpty) session.source!,
+      if (time.isNotEmpty) time,
     ];
     return ListTile(
       key: Key('local-${session.threadId}'),
