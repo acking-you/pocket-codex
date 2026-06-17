@@ -184,9 +184,17 @@ pub fn spawn(opts: SpawnOptions) -> pocket_codex_core::Result<SpawnReport> {
     // working endpoint" split that this whole function exists to avoid.
     match &endpoint {
         Some((host, port)) if tcp_port_open(host, *port) => {
-            let pid = find_codex_app_server(&listen_url)
-                .or_else(|| state.codex.as_ref().map(|c| c.pid))
-                .unwrap_or_default();
+            // Adopt ONLY when the listener is genuinely a `codex … app-server`
+            // bound to this URL. If something else holds the port,
+            // find_codex_app_server returns None: refuse rather than register a
+            // foreign service as our app-server (which `serve` would publish on
+            // the relay and `status` would report alive).
+            let Some(pid) = find_codex_app_server(&listen_url) else {
+                return Err(pocket_codex_core::Error::Config(format!(
+                    "{host}:{port} is already in use by a non-codex process; free the port or \
+                     serve on a different --port"
+                )));
+            };
             // Keep the original start time if it's the same process we already
             // tracked; otherwise stamp now (best-effort for an adopted one).
             let started_at = state
@@ -348,17 +356,19 @@ pub struct StatusReport {
 /// process is still running.
 pub fn status() -> pocket_codex_core::Result<StatusReport> {
     let state = RuntimeState::load()?;
-    // "Alive" is whether the app-server is actually reachable, not whether the
-    // recorded PID exists: the recorded PID may be a shim that exited while the
-    // real (native) app-server keeps serving the port. Probe the listen port
-    // for websocket transports; fall back to the PID for unix sockets.
-    let alive = state
-        .codex
-        .as_ref()
-        .is_some_and(|c| match ws_host_port(&c.listen) {
-            Some((host, port)) => tcp_port_open(&host, port),
-            None => pid_alive(c.pid),
-        });
+    // "Alive" is whether a real codex app-server is serving the listen URL —
+    // not merely whether the recorded PID exists (it may be a shim that exited
+    // while the native binary keeps the socket) nor whether *anything* holds
+    // the port (a foreign process must not read as our app-server). For
+    // websocket transports require a `codex … app-server` bound to the URL;
+    // fall back to the PID for unix sockets.
+    let alive = state.codex.as_ref().is_some_and(|c| {
+        if ws_host_port(&c.listen).is_some() {
+            find_codex_app_server(&c.listen).is_some()
+        } else {
+            pid_alive(c.pid)
+        }
+    });
     Ok(StatusReport {
         recorded: state.codex,
         alive,
