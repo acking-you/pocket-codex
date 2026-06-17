@@ -45,13 +45,27 @@ class _AppServiceState extends ConsumerState<AppServiceScreen> {
       _connecting = true;
       _error = null;
     });
-    // If the services list already probed this backend as unreachable (a live
-    // relay registrant whose codex app-server is gone), fail fast instead of a
-    // timeout-bounded-then-retried connect that would sit on "connecting". The
-    // retry button re-probes, so a recovered backend still connects.
-    if (ref.read(appReachableProvider(widget.serviceKey)).valueOrNull == false) {
+    // Never attempt a connect to a backend the reachability probe says is dead
+    // (a live relay registrant whose codex app-server is gone) — that just sits
+    // on "connecting" until it times out, then retries. Await the probe's
+    // future rather than a maybe-empty snapshot: it resolves instantly when the
+    // services list already probed it (the common path) and is bounded by the
+    // probe timeout otherwise. A probe error counts as unreachable. The retry
+    // button re-probes, so a recovered backend still connects.
+    var reachable = false;
+    try {
+      reachable = await ref.read(
+        appReachableProvider(widget.serviceKey).future,
+      );
+    } catch (_) {
+      // Probe failed (e.g. relay not configured) → treat as unreachable.
+    }
+    if (!mounted) return;
+    if (!reachable) {
       setState(() {
-        _error = AppLocalizations.of(context).statusUnreachable;
+        // Explain *why*: it's in the list, so the relay registration is up —
+        // the dead link is the remote app-server backend itself.
+        _error = AppLocalizations.of(context).unreachableReason;
         _connecting = false;
       });
       return;

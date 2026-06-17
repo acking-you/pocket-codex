@@ -63,7 +63,8 @@ class ServicesScreen extends ConsumerWidget {
       body: AnimatedSwitcher(
         duration: const Duration(milliseconds: 250),
         child: servicesAsync.when(
-          loading: () => const ListLoadingSkeleton(key: ValueKey('svc-loading')),
+          loading: () =>
+              const ListLoadingSkeleton(key: ValueKey('svc-loading')),
           error: (e, _) => KeyedSubtree(
             key: const ValueKey('svc-error'),
             child: _ErrorState(
@@ -73,51 +74,53 @@ class ServicesScreen extends ConsumerWidget {
           ),
           data: (services) => RefreshIndicator(
             key: const ValueKey('svc-data'),
-          onRefresh: () async => ref.invalidate(servicesProvider),
-          child: LayoutBuilder(
-            builder: (context, c) {
-              final wide = c.maxWidth >= 600;
-              final list = _ServiceList(
-                relay: config?.relay,
-                services: services,
-                onTapApi: (key) {
-                  if (wide) {
-                    ref.read(selectedApiKeyProvider.notifier).state = key;
-                  } else {
-                    context.push('/api/$key');
-                  }
-                },
-                // App-server sessions are a full-screen chat; always push a
-                // route (no embedded pane) regardless of layout width.
-                onTapApp: (key) =>
-                    context.push('/app/${Uri.encodeComponent(key)}'),
-              );
-              if (!wide) return list;
-              final apiServices = services
-                  .where((s) => s.kind == 'api')
-                  .toList();
-              final selected =
-                  apiServices.where((s) => s.key == selectedKey).firstOrNull ??
-                  apiServices.firstOrNull;
-              return Row(
-                children: [
-                  SizedBox(width: 360, child: list),
-                  const VerticalDivider(width: 1),
-                  Expanded(
-                    child: selected == null
-                        ? Center(child: Text(l10n.selectApiService))
-                        : ApiServiceScreen(
-                            key: ValueKey(selected.key),
-                            serviceKey: selected.key,
-                            embedded: true,
-                          ),
-                  ),
-                ],
-              );
-            },
+            onRefresh: () async => ref.invalidate(servicesProvider),
+            child: LayoutBuilder(
+              builder: (context, c) {
+                final wide = c.maxWidth >= 600;
+                final list = _ServiceList(
+                  relay: config?.relay,
+                  services: services,
+                  onTapApi: (key) {
+                    if (wide) {
+                      ref.read(selectedApiKeyProvider.notifier).state = key;
+                    } else {
+                      context.push('/api/$key');
+                    }
+                  },
+                  // App-server sessions are a full-screen chat; always push a
+                  // route (no embedded pane) regardless of layout width.
+                  onTapApp: (key) =>
+                      context.push('/app/${Uri.encodeComponent(key)}'),
+                );
+                if (!wide) return list;
+                final apiServices = services
+                    .where((s) => s.kind == 'api')
+                    .toList();
+                final selected =
+                    apiServices
+                        .where((s) => s.key == selectedKey)
+                        .firstOrNull ??
+                    apiServices.firstOrNull;
+                return Row(
+                  children: [
+                    SizedBox(width: 360, child: list),
+                    const VerticalDivider(width: 1),
+                    Expanded(
+                      child: selected == null
+                          ? Center(child: Text(l10n.selectApiService))
+                          : ApiServiceScreen(
+                              key: ValueKey(selected.key),
+                              serviceKey: selected.key,
+                              embedded: true,
+                            ),
+                    ),
+                  ],
+                );
+              },
+            ),
           ),
         ),
-      ),
       ),
     );
   }
@@ -190,20 +193,49 @@ class _ServiceList extends ConsumerWidget {
           // registration. Probe the real backend so a dead one reads
           // "unreachable" instead of a false green "online".
           final reach = ref.watch(appReachableProvider(s.key));
-          final (Color statusColor, String statusLabel) = connected
-              ? (online, l10n.statusConnected)
+          // `reason` is non-null only when unreachable: the backend probe failed
+          // even though the relay still lists the registration, so spell out
+          // that the dead link is the remote app-server, not the relay.
+          final (
+            Color statusColor,
+            String statusLabel,
+            String? reason,
+          ) = connected
+              ? (online, l10n.statusConnected, null)
               : reach.when(
                   data: (ok) => ok
-                      ? (online, l10n.statusOnline)
-                      : (scheme.error, l10n.statusUnreachable),
-                  loading: () => (scheme.outline, l10n.statusChecking),
-                  error: (_, _) => (scheme.error, l10n.statusUnreachable),
+                      ? (online, l10n.statusOnline, null)
+                      : (
+                          scheme.error,
+                          l10n.statusUnreachable,
+                          l10n.unreachableReason,
+                        ),
+                  loading: () => (scheme.outline, l10n.statusChecking, null),
+                  error: (_, _) => (
+                    scheme.error,
+                    l10n.statusUnreachable,
+                    l10n.unreachableReason,
+                  ),
                 );
           return ListTile(
             key: Key('svc-${s.key}'),
+            isThreeLine: reason != null,
             leading: const Icon(Icons.computer),
             title: Text(s.name),
-            subtitle: Text(l10n.appServerSubtitle(s.device)),
+            subtitle: reason == null
+                ? Text(l10n.appServerSubtitle(s.device))
+                : Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(l10n.appServerSubtitle(s.device)),
+                      Text(
+                        reason,
+                        style: Theme.of(
+                          context,
+                        ).textTheme.bodySmall?.copyWith(color: scheme.error),
+                      ),
+                    ],
+                  ),
             trailing: Row(
               mainAxisSize: MainAxisSize.min,
               children: [

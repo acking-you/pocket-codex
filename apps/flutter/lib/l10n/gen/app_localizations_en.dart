@@ -289,6 +289,10 @@ class AppLocalizationsEn extends AppLocalizations {
   String get statusUnreachable => 'Unreachable';
 
   @override
+  String get unreachableReason =>
+      'Still registered on the relay, but the remote app-server isn\'t responding — it may not be running, or has crashed.';
+
+  @override
   String get subscribedAlive => 'Subscribed';
 
   @override
