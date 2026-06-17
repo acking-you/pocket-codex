@@ -5,6 +5,8 @@ import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
 import 'package:pocket_codex/src/error_format.dart';
 import 'package:pocket_codex/src/providers.dart';
+import 'package:pocket_codex/src/screens/app_session_screen.dart'
+    show appLocalPort;
 import 'package:pocket_codex/src/widgets/loading.dart';
 import 'package:pocket_codex/src/widgets/status_dots.dart';
 
@@ -151,10 +153,7 @@ class _LocalSessionsState extends ConsumerState<LocalSessionsScreen> {
               ),
             );
           }
-          return _SessionRow(
-            session: _sessions[i - 1],
-            onResume: _onResume,
-          );
+          return _SessionRow(session: _sessions[i - 1], onResume: _onResume);
         },
       ),
     );
@@ -233,10 +232,7 @@ class _SessionRow extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final (Color color, String label) = switch (session.safety) {
       'resumable' => (Colors.green.shade600, l10n.sessionResumable),
-      'resumableUnfinished' => (
-        Colors.amber.shade800,
-        l10n.sessionUnfinished,
-      ),
+      'resumableUnfinished' => (Colors.amber.shade800, l10n.sessionUnfinished),
       'ownedRunning' => (scheme.error, l10n.sessionRunningElsewhere),
       'ownedIdle' => (Colors.orange.shade700, l10n.sessionInUseElsewhere),
       _ => (scheme.outline, session.safety),
@@ -260,6 +256,41 @@ String? connectedAppKey(WidgetRef ref) {
   return null;
 }
 
+/// Resolve a *live* app-server to resume into, connecting one if necessary.
+///
+/// Prefers a service that is already connected; otherwise connects the first
+/// reachable app-server. Crucially it first awaits `servicesProvider` — a bare
+/// `connectedAppKey` reads `valueOrNull` and sees `[]` while relay discovery is
+/// still in flight, which is why a plain resume used to report "no app-server"
+/// while a force takeover (which awaits liveness first, giving discovery time)
+/// happened to work. Returns null only when no app-server can be reached.
+Future<String?> ensureResumeTarget(WidgetRef ref) async {
+  // Let discovery resolve so the sync `connectedAppKey` below can see services.
+  try {
+    await ref.read(servicesProvider.future);
+  } catch (_) {
+    // Discovery failed — fall through; there may still be a live connection.
+  }
+  final already = connectedAppKey(ref);
+  if (already != null) return already;
+
+  // No live connection (e.g. the backend was restarted and the old socket
+  // died): connect the first reachable app-server. `appConnect` reuses or
+  // reconnects and is bounded by the connect timeout, so a dead one fails
+  // rather than hanging.
+  final bridge = ref.read(bridgeApiProvider);
+  final services = ref.read(servicesProvider).valueOrNull ?? const [];
+  for (final s in services.where((s) => s.kind == 'app')) {
+    try {
+      await bridge.appConnect(s.key, appLocalPort);
+      return s.key;
+    } catch (_) {
+      // Unreachable / handshake failed — try the next app-server.
+    }
+  }
+  return null;
+}
+
 /// Resume — or, for a finished session another process still holds, force-take-
 /// over — a local session into a connected app-server, then open it live.
 ///
@@ -278,12 +309,16 @@ Future<void> resumeLocalSession(
 }) async {
   final l10n = AppLocalizations.of(context);
   final messenger = ScaffoldMessenger.of(context);
-  final target = connectedAppKey(ref);
+  // Ensure a live app-server to resume into (connect one if needed) rather than
+  // requiring the user to have opened an app-server first.
+  final target = await ensureResumeTarget(ref);
+  if (!context.mounted) return;
 
   if (requiresTakeover) {
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (_) => TakeoverDialog(holders: holders, hasTarget: target != null),
+      builder: (_) =>
+          TakeoverDialog(holders: holders, hasTarget: target != null),
     );
     if (confirmed != true) return;
   }
@@ -301,7 +336,9 @@ Future<void> resumeLocalSession(
   }
   if (!report.resumed) {
     messenger.showSnackBar(
-      SnackBar(content: Text(l10n.takeoverResumeFailed(report.resumeError ?? ''))),
+      SnackBar(
+        content: Text(l10n.takeoverResumeFailed(report.resumeError ?? '')),
+      ),
     );
     return;
   }
@@ -317,7 +354,8 @@ Future<void> resumeLocalSession(
   final key = Uri.encodeComponent(target);
   final q = <String>[
     'tid=${Uri.encodeComponent(threadId)}',
-    if (cwd != null && cwd.trim().isNotEmpty) 'cwd=${Uri.encodeComponent(cwd.trim())}',
+    if (cwd != null && cwd.trim().isNotEmpty)
+      'cwd=${Uri.encodeComponent(cwd.trim())}',
   ];
   context.push('/app/$key/session?${q.join('&')}');
 }
@@ -326,7 +364,11 @@ Future<void> resumeLocalSession(
 /// terminated and warns about data loss.
 class TakeoverDialog extends StatelessWidget {
   /// Creates the confirm dialog.
-  const TakeoverDialog({super.key, required this.holders, required this.hasTarget});
+  const TakeoverDialog({
+    super.key,
+    required this.holders,
+    required this.hasTarget,
+  });
 
   final List<Holder> holders;
   final bool hasTarget;
@@ -363,9 +405,9 @@ class TakeoverDialog extends StatelessWidget {
             const SizedBox(height: 12),
             Text(
               l10n.takeoverNoTarget,
-              style: Theme.of(
-                context,
-              ).textTheme.bodySmall?.copyWith(color: Theme.of(context).colorScheme.error),
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: Theme.of(context).colorScheme.error,
+              ),
             ),
           ],
         ],
