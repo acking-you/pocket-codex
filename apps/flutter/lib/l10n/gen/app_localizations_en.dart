@@ -283,6 +283,12 @@ class AppLocalizationsEn extends AppLocalizations {
   String get statusConnected => 'Connected';
 
   @override
+  String get statusChecking => 'Checking…';
+
+  @override
+  String get statusUnreachable => 'Unreachable';
+
+  @override
   String get subscribedAlive => 'Subscribed';
 
   @override

@@ -147,6 +147,33 @@ void main() {
     expect(find.text('pcx:lb7666:api:first'), findsNothing);
   });
 
+  testWidgets('a registered-but-dead app-server reads "unreachable", not '
+      '"online"', (t) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+      services: const [
+        ServiceEntry(
+          device: 'lb7666',
+          kind: 'app',
+          name: 'default',
+          key: 'pcx:lb7666:app:default',
+        ),
+      ],
+    )..reachable['pcx:lb7666:app:default'] = false; // backend probe fails
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(400, 900); // narrow: single-pane list
+    addTearDown(t.view.reset);
+
+    await t.pumpWidget(_host(const ServicesScreen(), api));
+    await t.pumpAndSettle(); // let the reachability probe resolve
+
+    // The probe says the backend is dead → honest "不可达" on the app-server.
+    expect(find.text('不可达'), findsOneWidget); // statusUnreachable (zh)
+    // "在线" appears once — for the RELAY only. The old bug would have shown it
+    // a second time on the app-server (a false green "online").
+    expect(find.text('在线'), findsOneWidget);
+  });
+
   testWidgets('ApiService rejects an out-of-range port before subscribing', (
     t,
   ) async {

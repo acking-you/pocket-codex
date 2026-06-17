@@ -10,6 +10,7 @@
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
+    time::Duration,
 };
 
 use anyhow::{anyhow, Context, Result};
@@ -211,6 +212,57 @@ pub fn connect(service_key: String, local_port: u16, relay: String) -> Result<()
             pending_approvals,
         });
     Ok(())
+}
+
+/// How long a [`probe`] waits for the tunnel + handshake before declaring the
+/// backend unreachable.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Probe whether the app-server behind `service_key` is actually REACHABLE —
+/// not merely *registered* on the relay.
+///
+/// A `pb-register` worker stays registered (so the relay lists the key, and the
+/// UI would call it "online") even when the codex app-server it forwards to has
+/// died — the registration is a hollow shell. This verifies the real backend by
+/// opening a transient pb-mapper tunnel and performing the `initialize`
+/// handshake (bounded by [`PROBE_TIMEOUT`] so a dead backend can't hang it),
+/// then tearing the tunnel down. A live session counts as reachable. Returns
+/// `false` on any failure: dead backend, relay forward failure, or timeout.
+pub fn probe(service_key: String, local_port: u16, relay: String) -> bool {
+    if is_connected(&service_key) {
+        return true;
+    }
+    let outcome = (|| -> Result<()> {
+        let sub = runtime::subscribe_service(service_key.clone(), local_port, relay)?;
+        let ws_url = format!("ws://{}", sub.local_addr);
+        runtime::runtime().block_on(async {
+            let (client, _notify_rx) =
+                tokio::time::timeout(PROBE_TIMEOUT, AppClient::connect(&ws_url))
+                    .await
+                    .context("probe: connect timed out")??;
+            tokio::time::timeout(
+                PROBE_TIMEOUT,
+                client.request(
+                    "initialize",
+                    json!({
+                        "clientInfo": {
+                            "name": "pocket-codex",
+                            "title": "Pocket-Codex",
+                            "version": env!("CARGO_PKG_VERSION"),
+                        },
+                        "capabilities": { "experimentalApi": true },
+                    }),
+                ),
+            )
+            .await
+            .context("probe: initialize timed out")??;
+            Ok::<(), anyhow::Error>(())
+        })
+    })();
+    // The probe never holds a session, so tear the transient tunnel down.
+    // (When already connected we returned early above without subscribing.)
+    runtime::unsubscribe_service(&service_key);
+    outcome.is_ok()
 }
 
 /// Whether a *live* session exists for `service_key` (the websocket forwarder

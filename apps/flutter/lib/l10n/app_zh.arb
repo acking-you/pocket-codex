@@ -95,6 +95,8 @@
   "refreshStatus": "刷新状态",
   "statusOnline": "在线",
   "statusConnected": "已连接",
+  "statusChecking": "检测中…",
+  "statusUnreachable": "不可达",
   "subscribedAlive": "已订阅",
   "subscribedDead": "已断开",
   "runningSessions": "{count} 个运行中",
