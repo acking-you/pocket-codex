@@ -23,7 +23,10 @@
 //! * **Unix** — opening never reports a sharing violation, so liveness is
 //!   derived from `lsof`, which also yields the exact holder PIDs.
 
-use std::path::Path;
+use std::{
+    collections::HashSet,
+    path::{Path, PathBuf},
+};
 
 use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 
@@ -68,9 +71,17 @@ pub fn is_held_open(path: &Path) -> bool {
 
 /// Whether `path` is currently held open by some live process (unix:
 /// derived from `lsof`).
+///
+/// Fail-closed: if `lsof` cannot be run (missing binary, spawn error) we
+/// cannot prove the rollout is free, so we report it as held rather than risk
+/// resuming a session another codex still owns and creating two writers. A
+/// successful `lsof` run with no holders reports `false` (genuinely free).
 #[cfg(not(windows))]
 pub fn is_held_open(path: &Path) -> bool {
-    !file_holders(path).is_empty()
+    match lsof_pids(path) {
+        Some(pids) => !pids.is_empty(),
+        None => true,
+    }
 }
 
 /// The processes currently holding `path` open, with their PIDs.
@@ -81,7 +92,7 @@ pub fn is_held_open(path: &Path) -> bool {
 pub fn file_holders(path: &Path) -> Vec<Holder> {
     use sysinfo::Pid;
 
-    let pids = lsof_pids(path);
+    let pids = lsof_pids(path).unwrap_or_default();
     if pids.is_empty() {
         return Vec::new();
     }
@@ -110,23 +121,76 @@ pub fn file_holders(_path: &Path) -> Vec<Holder> {
     Vec::new()
 }
 
-/// Run `lsof -t -- <path>` and parse the holder PIDs. Best-effort: a
-/// missing `lsof`, or no holder, yields an empty list.
+/// Which of `paths` are currently held open by a live process, returned as the
+/// subset that is held.
+///
+/// Batches the probe so listing many sessions costs O(1) external calls rather
+/// than one per path: a single `lsof` field-mode invocation on unix (spawning
+/// dozens of `lsof` in a loop blocked the UI for seconds), and the
+/// subprocess-free sharing probe per path on Windows.
+#[cfg(windows)]
+pub fn held_open_paths(paths: &[PathBuf]) -> HashSet<PathBuf> {
+    // Windows `is_held_open` is a cheap in-process open(); no batching needed.
+    paths.iter().filter(|p| is_held_open(p)).cloned().collect()
+}
+
+/// Which of `paths` are currently held open by a live process (unix: one
+/// batched `lsof`). Matched back to inputs by file name — rollout filenames
+/// carry a unique UUID, so this is unambiguous. Fail-closed: if `lsof` cannot
+/// be run, every path is reported held (see [`is_held_open`]).
 #[cfg(not(windows))]
-fn lsof_pids(path: &Path) -> Vec<u32> {
-    let output = match std::process::Command::new("lsof")
+pub fn held_open_paths(paths: &[PathBuf]) -> HashSet<PathBuf> {
+    if paths.is_empty() {
+        return HashSet::new();
+    }
+    let mut cmd = std::process::Command::new("lsof");
+    cmd.arg("-F").arg("n").arg("--");
+    for p in paths {
+        cmd.arg(p);
+    }
+    let output = match cmd.output() {
+        Ok(o) => o,
+        // lsof unavailable → cannot prove anything free; fail-closed.
+        Err(_) => return paths.iter().cloned().collect(),
+    };
+    let open_names: HashSet<String> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|l| l.strip_prefix('n'))
+        .filter_map(|name| Path::new(name).file_name().and_then(|f| f.to_str()))
+        .map(str::to_string)
+        .collect();
+    paths
+        .iter()
+        .filter(|p| {
+            p.file_name()
+                .and_then(|f| f.to_str())
+                .is_some_and(|n| open_names.contains(n))
+        })
+        .cloned()
+        .collect()
+}
+
+/// Run `lsof -t -- <path>` and parse the holder PIDs.
+///
+/// `None` means `lsof` could not be run at all (missing binary / spawn error)
+/// — the holder set is *unknown*, which callers treat as fail-closed.
+/// `Some(pids)` means `lsof` ran; the (possibly empty) vec is the holder set.
+/// A non-zero `lsof` exit (e.g. "no process has it open") still counts as a
+/// successful determination, so only a spawn failure yields `None`.
+#[cfg(not(windows))]
+fn lsof_pids(path: &Path) -> Option<Vec<u32>> {
+    let output = std::process::Command::new("lsof")
         .arg("-t")
         .arg("--")
         .arg(path)
         .output()
-    {
-        Ok(output) => output,
-        Err(_) => return Vec::new(),
-    };
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .filter_map(|line| line.trim().parse::<u32>().ok())
-        .collect()
+        .ok()?;
+    Some(
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter_map(|line| line.trim().parse::<u32>().ok())
+            .collect(),
+    )
 }
 
 /// Enumerate every running `codex … app-server` process on this host.

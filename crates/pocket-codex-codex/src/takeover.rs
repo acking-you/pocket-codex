@@ -120,14 +120,24 @@ pub fn inspect(rollout_path: &Path) -> Result<SessionLiveness> {
 }
 
 /// The processes a [`force_release`] would attempt to terminate for a
-/// held-open rollout — the *raw* set, before any exclusions.
+/// held-open rollout — the *raw* set, before any [`force_release`] exclusions.
 ///
-/// Precise on unix (`lsof`); on Windows, where the exact holder cannot be
-/// named without FFI, this is the codex app-server candidate pool, but
-/// only when the file is actually held.
+/// On unix this is the `lsof` holders **restricted to codex app-servers**: a
+/// rollout can also be held by an editor, `tail -f`, or a backup/indexer, and
+/// confirming a codex takeover does not authorize killing those. On Windows,
+/// where the exact holder cannot be named without FFI, this is the codex
+/// app-server candidate pool, but only when the file is actually held.
 #[cfg(not(windows))]
 pub fn resume_targets(rollout_path: &Path) -> Vec<Holder> {
+    use std::collections::HashSet;
+    let codex: HashSet<u32> = liveness::codex_app_server_processes()
+        .into_iter()
+        .map(|h| h.pid)
+        .collect();
     liveness::file_holders(rollout_path)
+        .into_iter()
+        .filter(|h| codex.contains(&h.pid))
+        .collect()
 }
 
 /// The processes a [`force_release`] would attempt to terminate (Windows:
