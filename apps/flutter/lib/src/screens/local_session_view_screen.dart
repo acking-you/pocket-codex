@@ -11,6 +11,7 @@ import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/screens/local_sessions_screen.dart'
     show resumeLocalSession;
 import 'package:pocket_codex/src/widgets/loading.dart';
+import 'package:super_sliver_list/super_sliver_list.dart';
 
 /// Read-only viewer for a local codex session's transcript, parsed straight from
 /// the on-disk rollout (no app-server, no resume, no write) — so a session that
@@ -86,7 +87,8 @@ class _LocalSessionViewState extends ConsumerState<LocalSessionViewScreen> {
       if (!mounted) return;
       // Auto-follow the tail if the reader is already near the bottom, so a
       // session being driven elsewhere streams in like a live conversation.
-      final atBottom = !_scroll.hasClients ||
+      final atBottom =
+          !_scroll.hasClients ||
           _scroll.position.pixels >= _scroll.position.maxScrollExtent - 40;
       setState(() {
         _items = items;
@@ -174,8 +176,11 @@ class _LocalSessionViewState extends ConsumerState<LocalSessionViewScreen> {
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       child: Row(
         children: [
-          Icon(running ? Icons.lock_clock : Icons.lock_outline,
-              size: 16, color: color),
+          Icon(
+            running ? Icons.lock_clock : Icons.lock_outline,
+            size: 16,
+            color: color,
+          ),
           const SizedBox(width: 8),
           Expanded(
             child: Text(text, style: TextStyle(color: color, fontSize: 13)),
@@ -214,13 +219,28 @@ class _LocalSessionViewState extends ConsumerState<LocalSessionViewScreen> {
         child: Text(l10n.sessionTranscriptEmpty),
       );
     }
+    // SuperListView (super_sliver_list) replaces ListView.builder for a stable
+    // scrollbar: it reconciles per-item height estimates against real heights
+    // as rows scroll through, instead of a single running-average estimate that
+    // makes the thumb jump given the wide row-height variance here — the same
+    // fix the live conversation view uses. Content is centred and capped at
+    // ~820px so a wide desktop window doesn't stretch bubbles/markdown
+    // edge-to-edge. Stable per-row keys let the sliver track measured heights
+    // across the 3s transcript refreshes.
     return SelectionArea(
-      child: ListView.builder(
-        key: const ValueKey('view-transcript'),
-        controller: _scroll,
-        padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
-        itemCount: _items.length,
-        itemBuilder: (context, i) => _TranscriptRow(item: _items[i]),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final side = (constraints.maxWidth - 820) / 2;
+          final pad = side < 12 ? 12.0 : side;
+          return SuperListView.builder(
+            key: const ValueKey('view-transcript'),
+            controller: _scroll,
+            padding: EdgeInsets.fromLTRB(pad, 12, pad, 12),
+            itemCount: _items.length,
+            itemBuilder: (context, i) =>
+                _TranscriptRow(key: ValueKey(_items[i].id), item: _items[i]),
+          );
+        },
       ),
     );
   }
@@ -253,8 +273,11 @@ class _LocalSessionViewState extends ConsumerState<LocalSessionViewScreen> {
             : Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(Icons.lock_clock,
-                      size: 16, color: scheme.onSurfaceVariant),
+                  Icon(
+                    Icons.lock_clock,
+                    size: 16,
+                    color: scheme.onSurfaceVariant,
+                  ),
                   const SizedBox(width: 8),
                   Flexible(
                     child: Text(
@@ -272,7 +295,7 @@ class _LocalSessionViewState extends ConsumerState<LocalSessionViewScreen> {
 /// One read-only transcript row: user bubble, agent markdown, a reasoning note,
 /// or a command + output block.
 class _TranscriptRow extends StatelessWidget {
-  const _TranscriptRow({required this.item});
+  const _TranscriptRow({super.key, required this.item});
 
   final ThreadItem item;
 
@@ -281,19 +304,22 @@ class _TranscriptRow extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     switch (item.itemType) {
       case 'userMessage':
-        return Align(
-          alignment: Alignment.centerRight,
-          child: Container(
-            margin: const EdgeInsets.symmetric(vertical: 6),
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-            constraints: BoxConstraints(
-              maxWidth: MediaQuery.of(context).size.width * 0.82,
+        // Cap the bubble to a fraction of the *content* width (the centred
+        // column), not the whole screen — otherwise it stretches too wide on a
+        // desktop window.
+        return LayoutBuilder(
+          builder: (context, c) => Align(
+            alignment: Alignment.centerRight,
+            child: Container(
+              margin: const EdgeInsets.symmetric(vertical: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              constraints: BoxConstraints(maxWidth: c.maxWidth * 0.82),
+              decoration: BoxDecoration(
+                color: scheme.primaryContainer,
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Text(item.text),
             ),
-            decoration: BoxDecoration(
-              color: scheme.primaryContainer,
-              borderRadius: BorderRadius.circular(14),
-            ),
-            child: Text(item.text),
           ),
         );
       case 'agentMessage':

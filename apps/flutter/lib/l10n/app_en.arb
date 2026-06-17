@@ -157,6 +157,7 @@
   "suggestPlanTitle": "Plan a feature",
   "suggestPlanPrompt": "Help me plan out a new feature before writing any code.",
   "searchConversations": "Search conversations",
+  "searchLocalSessions": "Search content / path / source",
   "noMatchingThreads": "No matching conversations",
   "groupActive": "Active",
   "groupToday": "Today",

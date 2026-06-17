@@ -470,6 +470,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get searchConversations => 'Search conversations';
 
   @override
+  String get searchLocalSessions => 'Search content / path / source';
+
+  @override
   String get noMatchingThreads => 'No matching conversations';
 
   @override

@@ -460,6 +460,9 @@ class AppLocalizationsZh extends AppLocalizations {
   String get searchConversations => '搜索会话';
 
   @override
+  String get searchLocalSessions => '搜索会话内容 / 目录 / 来源';
+
+  @override
   String get noMatchingThreads => '没有匹配的会话';
 
   @override

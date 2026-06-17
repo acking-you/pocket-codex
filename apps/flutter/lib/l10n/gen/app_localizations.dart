@@ -986,6 +986,12 @@ abstract class AppLocalizations {
   /// **'Search conversations'**
   String get searchConversations;
 
+  /// No description provided for @searchLocalSessions.
+  ///
+  /// In en, this message translates to:
+  /// **'Search content / path / source'**
+  String get searchLocalSessions;
+
   /// No description provided for @noMatchingThreads.
   ///
   /// In en, this message translates to:
