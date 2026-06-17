@@ -281,6 +281,12 @@ class AppLocalizationsZh extends AppLocalizations {
   String get statusConnected => '已连接';
 
   @override
+  String get statusChecking => '检测中…';
+
+  @override
+  String get statusUnreachable => '不可达';
+
+  @override
   String get subscribedAlive => '已订阅';
 
   @override

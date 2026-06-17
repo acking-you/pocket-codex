@@ -397,6 +397,12 @@ abstract interface class BridgeApi {
   /// Disconnect the app-server session and its pb-mapper subscription.
   Future<void> appDisconnect(String serviceKey);
 
+  /// Probe whether an app-server is actually REACHABLE (its backend answers a
+  /// handshake) rather than merely registered on the relay. The services list
+  /// uses this so a registered-but-dead app-server shows as unreachable instead
+  /// of a false "online". A live session short-circuits to true.
+  Future<bool> appProbe(String serviceKey);
+
   /// Live event stream for [serviceKey] (turn/item notifications).
   Stream<AppEvent> appEvents(String serviceKey);
 

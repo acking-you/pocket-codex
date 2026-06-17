@@ -95,6 +95,8 @@
   "refreshStatus": "Refresh status",
   "statusOnline": "Online",
   "statusConnected": "Connected",
+  "statusChecking": "Checking…",
+  "statusUnreachable": "Unreachable",
   "subscribedAlive": "Subscribed",
   "subscribedDead": "Dropped",
   "runningSessions": "{count} running",

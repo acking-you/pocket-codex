@@ -286,6 +286,18 @@ pub fn app_disconnect(service_key: String) {
     app_session::disconnect(&service_key);
 }
 
+/// Probe whether an app-server is actually REACHABLE — its backend responds to
+/// a handshake — rather than merely registered on the relay. The services list
+/// uses this so a registered-but-dead app-server (a live relay registrant
+/// forwarding to a codex app-server that has died) shows as unreachable instead
+/// of a false "online". Opens a transient tunnel + `initialize` with a timeout,
+/// then tears it down; a live session short-circuits to `true`.
+pub fn app_probe(service_key: String) -> Result<bool> {
+    apply_key()?;
+    let relay = current_relay()?;
+    Ok(app_session::probe(service_key, 0, relay))
+}
+
 /// Stream live app-server events (turn/item notifications) for `service_key`.
 /// The Dart side receives one [`AppEventDto`] per notification until the
 /// session is disconnected.

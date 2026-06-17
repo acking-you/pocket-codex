@@ -632,6 +632,18 @@ abstract class AppLocalizations {
   /// **'Connected'**
   String get statusConnected;
 
+  /// No description provided for @statusChecking.
+  ///
+  /// In en, this message translates to:
+  /// **'Checking…'**
+  String get statusChecking;
+
+  /// No description provided for @statusUnreachable.
+  ///
+  /// In en, this message translates to:
+  /// **'Unreachable'**
+  String get statusUnreachable;
+
   /// No description provided for @subscribedAlive.
   ///
   /// In en, this message translates to:

@@ -59,6 +59,20 @@ final subscriptionsProvider = FutureProvider<List<SubInfo>>((ref) async {
   return ref.watch(bridgeApiProvider).subscriptions();
 });
 
+/// Whether an app-server service's backend is actually REACHABLE — it answers a
+/// handshake — rather than merely registered on the relay. A `pb-register`
+/// worker stays registered (so the relay lists the key) even when the codex
+/// app-server it forwards to has died, which would otherwise show a false
+/// "online". Probed lazily per service via a transient tunnel: the AsyncValue
+/// is `loading` while in flight and `data(false)` for a registered-but-dead
+/// backend. The services-screen refresh invalidates this to re-probe.
+final appReachableProvider = FutureProvider.family<bool, String>((
+  ref,
+  serviceKey,
+) async {
+  return ref.watch(bridgeApiProvider).appProbe(serviceKey);
+});
+
 /// The set of thread ids on [serviceKey] that currently have an in-flight turn,
 /// derived purely from the live event stream: `turn/started` adds a thread,
 /// `turn/completed` / `turn/failed` removes it. Lets the session lists show a

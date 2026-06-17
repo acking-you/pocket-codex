@@ -107,6 +107,14 @@ class FakeBridgeApi implements BridgeApi {
     await _appEvents.remove(serviceKey)?.close();
   }
 
+  /// Seedable reachability returned by [appProbe] (default: reachable). A
+  /// connected service is always reachable.
+  final Map<String, bool> reachable = {};
+
+  @override
+  Future<bool> appProbe(String serviceKey) async =>
+      _appConnected.contains(serviceKey) || (reachable[serviceKey] ?? true);
+
   @override
   Stream<AppEvent> appEvents(String serviceKey) => _appEvents
       .putIfAbsent(serviceKey, StreamController<AppEvent>.broadcast)

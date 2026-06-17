@@ -75,6 +75,15 @@ bool appIsConnected({required String serviceKey}) =>
 Future<void> appDisconnect({required String serviceKey}) =>
     RustLib.instance.api.crateApiBridgeAppDisconnect(serviceKey: serviceKey);
 
+/// Probe whether an app-server is actually REACHABLE — its backend responds to
+/// a handshake — rather than merely registered on the relay. The services list
+/// uses this so a registered-but-dead app-server (a live relay registrant
+/// forwarding to a codex app-server that has died) shows as unreachable instead
+/// of a false "online". Opens a transient tunnel + `initialize` with a timeout,
+/// then tears it down; a live session short-circuits to `true`.
+Future<bool> appProbe({required String serviceKey}) =>
+    RustLib.instance.api.crateApiBridgeAppProbe(serviceKey: serviceKey);
+
 /// Stream live app-server events (turn/item notifications) for `service_key`.
 /// The Dart side receives one [`AppEventDto`] per notification until the
 /// session is disconnected.

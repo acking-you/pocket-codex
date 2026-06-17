@@ -38,11 +38,13 @@ class ServicesScreen extends ConsumerWidget {
             key: const Key('refresh-btn'),
             icon: const Icon(Icons.refresh),
             tooltip: l10n.refreshStatus,
-            // Re-discover services + re-read subscription health, and rebuild so
-            // each app-server's connected/online dot re-evaluates.
+            // Re-discover services, re-read subscription health, and re-probe
+            // every app-server's backend reachability, then rebuild so each
+            // status re-evaluates.
             onPressed: () {
               ref.invalidate(servicesProvider);
               ref.invalidate(subscriptionsProvider);
+              ref.invalidate(appReachableProvider);
             },
           ),
           IconButton(
@@ -183,6 +185,20 @@ class _ServiceList extends ConsumerWidget {
         if (app.isNotEmpty) _SectionHeader(l10n.appServerServices),
         ...app.map((s) {
           final connected = bridge.appIsConnected(s.key);
+          // "Registered on the relay" is NOT "reachable": a pb-register worker
+          // can outlive the codex app-server it forwards to, leaving a hollow
+          // registration. Probe the real backend so a dead one reads
+          // "unreachable" instead of a false green "online".
+          final reach = ref.watch(appReachableProvider(s.key));
+          final (Color statusColor, String statusLabel) = connected
+              ? (online, l10n.statusConnected)
+              : reach.when(
+                  data: (ok) => ok
+                      ? (online, l10n.statusOnline)
+                      : (scheme.error, l10n.statusUnreachable),
+                  loading: () => (scheme.outline, l10n.statusChecking),
+                  error: (_, _) => (scheme.error, l10n.statusUnreachable),
+                );
           return ListTile(
             key: Key('svc-${s.key}'),
             leading: const Icon(Icons.computer),
@@ -191,10 +207,7 @@ class _ServiceList extends ConsumerWidget {
             trailing: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                StatusChip(
-                  color: online,
-                  label: connected ? l10n.statusConnected : l10n.statusOnline,
-                ),
+                StatusChip(color: statusColor, label: statusLabel),
                 const SizedBox(width: 4),
                 const Icon(Icons.chevron_right),
               ],
