@@ -250,36 +250,40 @@ pub fn probe(service_key: String, local_port: u16, relay: String) -> bool {
     if is_connected(&service_key) {
         return true;
     }
-    let outcome = (|| -> Result<()> {
-        let sub = runtime::subscribe_service(service_key.clone(), local_port, relay)?;
-        let ws_url = format!("ws://{}", sub.local_addr);
-        runtime::runtime().block_on(async {
-            let (client, _notify_rx) =
-                tokio::time::timeout(PROBE_TIMEOUT, AppClient::connect(&ws_url))
-                    .await
-                    .context("probe: connect timed out")??;
-            tokio::time::timeout(
-                PROBE_TIMEOUT,
-                client.request(
-                    "initialize",
-                    json!({
-                        "clientInfo": {
-                            "name": "pocket-codex",
-                            "title": "Pocket-Codex",
-                            "version": env!("CARGO_PKG_VERSION"),
-                        },
-                        "capabilities": { "experimentalApi": true },
-                    }),
-                ),
-            )
+    // Subscribe through a TRANSIENT tunnel that isn't in the shared registry,
+    // so this probe can never reuse a real connection's tunnel nor abort it on
+    // teardown — a `connect`/`appConnect` racing this probe for the same
+    // service key keeps its own separate entry.
+    let Ok((local_addr, handle)) =
+        runtime::subscribe_transient(service_key.clone(), local_port, relay)
+    else {
+        return false;
+    };
+    let ws_url = format!("ws://{local_addr}");
+    let outcome = runtime::runtime().block_on(async {
+        let (client, _notify_rx) = tokio::time::timeout(PROBE_TIMEOUT, AppClient::connect(&ws_url))
             .await
-            .context("probe: initialize timed out")??;
-            Ok::<(), anyhow::Error>(())
-        })
-    })();
-    // The probe never holds a session, so tear the transient tunnel down.
-    // (When already connected we returned early above without subscribing.)
-    runtime::unsubscribe_service(&service_key);
+            .context("probe: connect timed out")??;
+        tokio::time::timeout(
+            PROBE_TIMEOUT,
+            client.request(
+                "initialize",
+                json!({
+                    "clientInfo": {
+                        "name": "pocket-codex",
+                        "title": "Pocket-Codex",
+                        "version": env!("CARGO_PKG_VERSION"),
+                    },
+                    "capabilities": { "experimentalApi": true },
+                }),
+            ),
+        )
+        .await
+        .context("probe: initialize timed out")??;
+        Ok::<(), anyhow::Error>(())
+    });
+    // Tear down ONLY this probe's own transient tunnel.
+    handle.abort();
     outcome.is_ok()
 }
 
