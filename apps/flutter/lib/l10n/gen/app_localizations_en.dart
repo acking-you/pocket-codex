@@ -274,6 +274,16 @@ class AppLocalizationsEn extends AppLocalizations {
   String get turnStopped => 'Stopped';
 
   @override
+  String turnElapsed(String duration) {
+    return 'Took $duration';
+  }
+
+  @override
+  String completedAt(String time) {
+    return 'Completed at $time';
+  }
+
+  @override
   String get refreshStatus => 'Refresh status';
 
   @override

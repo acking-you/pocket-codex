@@ -562,6 +562,58 @@ void main() {
     expect(find.textContaining('total 0', findRichText: true), findsOneWidget);
   });
 
+  testWidgets('a finished turn drops a 用时 duration footnote', (t) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    await t.pumpWidget(
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          threadId: 't1',
+        ),
+        api,
+      ),
+    );
+    await t.pumpAndSettle();
+
+    // No footnote before a turn runs.
+    expect(find.textContaining('用时'), findsNothing);
+
+    // A turn starts (elapsed clock begins) then completes.
+    api.pushEvent(
+      'pcx:lb7666:app:default',
+      const AppEvent(
+        kind: 'turn/started',
+        threadId: 't1',
+        itemId: '',
+        itemType: '',
+        title: '',
+        text: '',
+        raw: '{}',
+      ),
+    );
+    await t.pump();
+    api.pushEvent(
+      'pcx:lb7666:app:default',
+      const AppEvent(
+        kind: 'turn/completed',
+        threadId: 't1',
+        itemId: '',
+        itemType: '',
+        title: '',
+        text: '',
+        raw: '{}',
+      ),
+    );
+    await t.pumpAndSettle();
+
+    // The per-turn footnote is dropped into the transcript (用时 0:00 for an
+    // instant test turn).
+    expect(find.textContaining('用时'), findsOneWidget);
+  });
+
   testWidgets('Opening an existing thread resumes it before reading', (
     t,
   ) async {

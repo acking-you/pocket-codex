@@ -92,6 +92,14 @@
   "stateReconnecting": "重连中…",
   "compacted": "对话已压缩",
   "turnStopped": "已停止",
+  "turnElapsed": "用时 {duration}",
+  "@turnElapsed": {
+    "placeholders": { "duration": { "type": "String" } }
+  },
+  "completedAt": "完成于 {time}",
+  "@completedAt": {
+    "placeholders": { "time": { "type": "String" } }
+  },
   "refreshStatus": "刷新状态",
   "statusOnline": "在线",
   "statusConnected": "已连接",

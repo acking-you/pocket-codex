@@ -614,6 +614,18 @@ abstract class AppLocalizations {
   /// **'Stopped'**
   String get turnStopped;
 
+  /// No description provided for @turnElapsed.
+  ///
+  /// In en, this message translates to:
+  /// **'Took {duration}'**
+  String turnElapsed(String duration);
+
+  /// No description provided for @completedAt.
+  ///
+  /// In en, this message translates to:
+  /// **'Completed at {time}'**
+  String completedAt(String time);
+
   /// No description provided for @refreshStatus.
   ///
   /// In en, this message translates to:
