@@ -272,6 +272,16 @@ class AppLocalizationsZh extends AppLocalizations {
   String get turnStopped => '已停止';
 
   @override
+  String turnElapsed(String duration) {
+    return '用时 $duration';
+  }
+
+  @override
+  String completedAt(String time) {
+    return '完成于 $time';
+  }
+
+  @override
   String get refreshStatus => '刷新状态';
 
   @override

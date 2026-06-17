@@ -167,6 +167,12 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
   // Set when the user taps stop; the next turn end renders a "stopped" marker
   // in the transcript so the interruption is visible.
   bool _pendingInterrupt = false;
+  // Live elapsed-time clock for the running turn: started on turn/started,
+  // ticked once a second, then frozen and recorded as a per-turn footnote on
+  // turn end. Local-only (not persisted), like the "stopped" marker.
+  DateTime? _turnStartedAt;
+  Timer? _elapsedTicker;
+  int _elapsedSecs = 0;
   // True while a thread's history is being (re)loaded, so the chat shows a
   // smooth skeleton instead of flashing empty when switching sessions.
   bool _loading = false;
@@ -393,6 +399,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
   @override
   void dispose() {
     _healthTimer?.cancel();
+    _elapsedTicker?.cancel();
     _sub?.cancel();
     _input.dispose();
     _inputFocus.dispose();
@@ -553,7 +560,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
           _turnId = _parseTurnId(e.raw);
           _implementDismissed = false;
           _pendingInterrupt = false;
+          _elapsedSecs = 0;
         });
+        _startElapsedTicker();
         _scrollToEnd();
       case 'turn/completed':
         // v2 reports turn FAILURES here (turn.status == 'failed' + error.message),
@@ -565,6 +574,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
           for (final it in _items) {
             it.streaming = false;
           }
+          _finishTurn();
           // A turn the user stopped also ends as failed/aborted; show the
           // "stopped" marker rather than an error banner.
           if (_pendingInterrupt) {
@@ -584,6 +594,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
           for (final it in _items) {
             it.streaming = false;
           }
+          _finishTurn();
           // A turn the user stopped also ends as failed/aborted; show the
           // "stopped" marker rather than an error banner.
           if (_pendingInterrupt) {
@@ -849,6 +860,59 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
     _itemIndex[id] = _items.length;
     _items.add(_Item(id: id, type: 'interrupted', text: ''));
     _pendingInterrupt = false;
+  }
+
+  /// Begin ticking the running turn's elapsed clock once a second so the status
+  /// bar counts up live. Cheap: a single `setState` per second, only while a
+  /// turn runs.
+  void _startElapsedTicker() {
+    _turnStartedAt = DateTime.now();
+    _elapsedTicker?.cancel();
+    _elapsedTicker = Timer.periodic(const Duration(seconds: 1), (_) {
+      final started = _turnStartedAt;
+      if (!mounted || started == null) return;
+      setState(
+        () => _elapsedSecs = DateTime.now().difference(started).inSeconds,
+      );
+    });
+  }
+
+  /// Stop the elapsed ticker and append a per-turn duration footnote (用时 X,
+  /// hover → 完成于 HH:MM:SS). Local-only; call inside a `setState`.
+  void _finishTurn() {
+    _elapsedTicker?.cancel();
+    _elapsedTicker = null;
+    final started = _turnStartedAt;
+    _turnStartedAt = null;
+    if (started == null) return;
+    final now = DateTime.now();
+    final id = 'local-turndur-${_localSeq++}';
+    _itemIndex[id] = _items.length;
+    _items.add(
+      _Item(
+        id: id,
+        type: 'turnDuration',
+        title: _fmtElapsed(now.difference(started).inSeconds),
+        text: _fmtClock(now),
+      ),
+    );
+  }
+
+  /// Stopwatch-format an elapsed-second count: `m:ss`, or `h:mm:ss` past an
+  /// hour (e.g. `0:08`, `1:23`, `1:02:05`).
+  String _fmtElapsed(int secs) {
+    final s = secs < 0 ? 0 : secs;
+    final h = s ~/ 3600;
+    final m = (s % 3600) ~/ 60;
+    final ss = (s % 60).toString().padLeft(2, '0');
+    if (h > 0) return '$h:${m.toString().padLeft(2, '0')}:$ss';
+    return '$m:$ss';
+  }
+
+  /// Wall-clock `HH:MM:SS` for a completion timestamp.
+  String _fmtClock(DateTime t) {
+    String p(int n) => n.toString().padLeft(2, '0');
+    return '${p(t.hour)}:${p(t.minute)}:${p(t.second)}';
   }
 
   /// Return to the project / session picker (AppServiceScreen). Pops if this
@@ -1350,6 +1414,21 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
             ),
           ),
           const Spacer(),
+          // Live elapsed clock for the running turn — ticks each second next to
+          // the working state, frozen + dropped into the transcript on turn end.
+          if (_streaming) ...[
+            Icon(Icons.schedule, size: 12, color: st.color),
+            const SizedBox(width: 4),
+            Text(
+              _fmtElapsed(_elapsedSecs),
+              style: TextStyle(
+                fontSize: 12,
+                color: st.color,
+                fontFeatures: const [FontFeature.tabularFigures()],
+              ),
+            ),
+            const SizedBox(width: 10),
+          ],
           // Branch + working-tree change counts, tappable to open the diff.
           // This is the single, unified place the git state lives (no separate
           // app-bar chip), so the status bar is the one source of truth.
@@ -2931,6 +3010,10 @@ class _MessageViewState extends State<_MessageView> {
           icon: Icons.stop_circle_outlined,
           text: AppLocalizations.of(context).turnStopped,
         ),
+        'turnDuration' => _TurnDurationFooter(
+          duration: item.title,
+          completedAt: item.text,
+        ),
         _ => _ActivityCard(item: item),
       };
       return Padding(
@@ -3044,6 +3127,49 @@ class _SystemNotice extends StatelessWidget {
           ),
           Expanded(child: Divider(color: muted.withValues(alpha: 0.3))),
         ],
+      ),
+    );
+  }
+}
+
+/// A per-turn duration footnote dropped in after a turn ends: a subtle
+/// `用时 m:ss` tag whose tooltip (hover on desktop, long-press on mobile)
+/// reveals the wall-clock completion time `完成于 HH:MM:SS`.
+class _TurnDurationFooter extends StatelessWidget {
+  const _TurnDurationFooter({
+    required this.duration,
+    required this.completedAt,
+  });
+
+  final String duration;
+  final String completedAt;
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    final muted = Theme.of(context).colorScheme.onSurfaceVariant;
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Tooltip(
+        message: l10n.completedAt(completedAt),
+        child: Padding(
+          padding: const EdgeInsets.only(left: 6, top: 2, bottom: 4),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.schedule, size: 12, color: muted),
+              const SizedBox(width: 4),
+              Text(
+                l10n.turnElapsed(duration),
+                style: TextStyle(
+                  fontSize: 11.5,
+                  color: muted,
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

@@ -92,6 +92,14 @@
   "stateReconnecting": "Reconnecting…",
   "compacted": "Conversation compacted",
   "turnStopped": "Stopped",
+  "turnElapsed": "Took {duration}",
+  "@turnElapsed": {
+    "placeholders": { "duration": { "type": "String" } }
+  },
+  "completedAt": "Completed at {time}",
+  "@completedAt": {
+    "placeholders": { "time": { "type": "String" } }
+  },
   "refreshStatus": "Refresh status",
   "statusOnline": "Online",
   "statusConnected": "Connected",
