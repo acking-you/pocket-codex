@@ -488,4 +488,12 @@ abstract interface class BridgeApi {
   /// `thread/resume` regardless of the eviction outcome. Gate on explicit user
   /// confirmation; do not call while a turn is actively running.
   Future<ForceResumeReport> appForceResume(String serviceKey, String threadId);
+
+  /// Read a local session's transcript for READ-ONLY viewing. Parses the
+  /// on-disk rollout directly (no app-server connection, no resume, no write),
+  /// so it works even while another codex client still owns the session.
+  /// Items are in the same shape as [appThreadRead]. Poll alongside
+  /// [appSessionLiveness] to follow a running session and notice when it goes
+  /// idle (resume-eligible).
+  Future<List<ThreadItem>> appLocalSessionTranscript(String threadId);
 }

@@ -293,4 +293,19 @@ class RustBridgeApi implements BridgeApi {
       resumeError: r.resumeError,
     );
   }
+
+  @override
+  Future<List<ThreadItem>> appLocalSessionTranscript(String threadId) async {
+    final items = await frb.appLocalSessionTranscript(threadId: threadId);
+    return items
+        .map(
+          (i) => ThreadItem(
+            id: i.id,
+            itemType: i.itemType,
+            title: i.title,
+            text: i.text,
+          ),
+        )
+        .toList();
+  }
 }

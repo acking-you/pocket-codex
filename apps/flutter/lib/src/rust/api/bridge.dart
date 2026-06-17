@@ -219,6 +219,19 @@ Future<List<LocalSessionDto>> appLocalSessions() =>
 Future<SessionLivenessDto> appSessionLiveness({required String threadId}) =>
     RustLib.instance.api.crateApiBridgeAppSessionLiveness(threadId: threadId);
 
+/// Read a local session's transcript for READ-ONLY viewing. Parses the
+/// on-disk rollout directly (no app-server connection, no resume, no write),
+/// so it works even while another codex client still owns the session.
+/// Items are in the same shape as [`app_thread_read`], so the read-only
+/// viewer reuses the live-conversation rendering. Poll it alongside
+/// [`app_session_liveness`] to follow a running session and notice when it
+/// goes idle (resume-eligible).
+Future<List<ThreadItemDto>> appLocalSessionTranscript({
+  required String threadId,
+}) => RustLib.instance.api.crateApiBridgeAppLocalSessionTranscript(
+  threadId: threadId,
+);
+
 /// Force-resume a session into the app-server behind `service_key`.
 ///
 /// Best-effort terminates every live process holding the session's rollout

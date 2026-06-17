@@ -212,6 +212,224 @@ pub fn read_session_info(path: &Path) -> Result<SessionInfo> {
     })
 }
 
+/// One displayable item parsed from a rollout transcript, in the same
+/// `{type, title, text}` shape the live conversation renders, so the
+/// read-only session viewer can reuse that rendering.
+#[derive(Debug, Clone)]
+pub struct TranscriptItem {
+    /// Stable row id (the source line index).
+    pub id: String,
+    /// Item kind: `userMessage` / `agentMessage` / `reasoning` /
+    /// `commandExecution`.
+    pub item_type: String,
+    /// One-line title (the command for tool calls; empty for messages).
+    pub title: String,
+    /// Body text: message markdown, reasoning summary, or command output.
+    pub text: String,
+}
+
+/// Parse a rollout's FULL transcript into displayable [`TranscriptItem`]s so
+/// a session can be viewed read-only without resuming it. Maps codex's
+/// on-disk `response_item` records:
+///
+/// * `message` (role `user` / `assistant`) → user / agent message
+/// * `function_call` + its matching `function_call_output` (by `call_id`) →
+///   one `commandExecution` item (title = command, text = output, ANSI
+///   stripped)
+/// * `reasoning` with a non-empty `summary` → a reasoning item
+///
+/// Encrypted reasoning (no readable `summary`), lifecycle and token events
+/// are skipped. Unreadable lines are skipped rather than failing the whole
+/// read, so a partially-written rollout (one a live writer is appending to)
+/// still renders what is parseable.
+pub fn read_transcript(path: &Path) -> Result<Vec<TranscriptItem>> {
+    use std::collections::HashMap;
+    use std::io::BufRead;
+    let file = std::fs::File::open(path)?;
+    let reader = std::io::BufReader::new(file);
+    let mut out: Vec<TranscriptItem> = Vec::new();
+    // Index of the `commandExecution` item awaiting its output, by call_id.
+    let mut pending: HashMap<String, usize> = HashMap::new();
+    for (idx, line) in reader.lines().enumerate() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        if value.get("type").and_then(Value::as_str) != Some("response_item") {
+            continue;
+        }
+        let Some(payload) = value.get("payload") else {
+            continue;
+        };
+        let id = format!("t{idx}");
+        match payload.get("type").and_then(Value::as_str) {
+            Some("message") => {
+                let text = message_text(payload);
+                if text.trim().is_empty() {
+                    continue;
+                }
+                let is_user = payload.get("role").and_then(Value::as_str) == Some("user");
+                out.push(TranscriptItem {
+                    id,
+                    item_type: if is_user { "userMessage" } else { "agentMessage" }.to_string(),
+                    title: String::new(),
+                    text,
+                });
+            },
+            Some("function_call") => {
+                let title = command_title(payload);
+                out.push(TranscriptItem {
+                    id,
+                    item_type: "commandExecution".to_string(),
+                    title,
+                    text: String::new(),
+                });
+                if let Some(call_id) = payload.get("call_id").and_then(Value::as_str) {
+                    pending.insert(call_id.to_string(), out.len() - 1);
+                }
+            },
+            Some("function_call_output") => {
+                let output = strip_ansi(payload.get("output").and_then(Value::as_str).unwrap_or(""));
+                match payload
+                    .get("call_id")
+                    .and_then(Value::as_str)
+                    .and_then(|cid| pending.get(cid).copied())
+                {
+                    // Merge the output into its originating command item.
+                    Some(i) => out[i].text = output,
+                    None => out.push(TranscriptItem {
+                        id,
+                        item_type: "commandExecution".to_string(),
+                        title: String::new(),
+                        text: output,
+                    }),
+                }
+            },
+            Some("reasoning") => {
+                let summary = reasoning_summary(payload);
+                if !summary.trim().is_empty() {
+                    out.push(TranscriptItem {
+                        id,
+                        item_type: "reasoning".to_string(),
+                        title: String::new(),
+                        text: summary,
+                    });
+                }
+            },
+            _ => {},
+        }
+    }
+    Ok(out)
+}
+
+/// Concatenate a `message` payload's `content[].text` (codex uses
+/// `input_text` for user turns and `output_text` for assistant turns; both
+/// carry the text under `text`).
+fn message_text(payload: &Value) -> String {
+    payload
+        .get("content")
+        .and_then(Value::as_array)
+        .map(|parts| {
+            parts
+                .iter()
+                .filter_map(|p| p.get("text").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join("")
+        })
+        .unwrap_or_default()
+}
+
+/// One-line title for a `function_call`: the shell command when present,
+/// else the tool name. `arguments` is a JSON *string* that must be
+/// re-parsed; `command` may be a string or an argv array.
+fn command_title(payload: &Value) -> String {
+    let name = payload.get("name").and_then(Value::as_str).unwrap_or("tool");
+    let args: Option<Value> = payload
+        .get("arguments")
+        .and_then(Value::as_str)
+        .and_then(|s| serde_json::from_str(s).ok());
+    if let Some(args) = args.as_ref() {
+        match args.get("command") {
+            Some(Value::String(s)) => return s.clone(),
+            Some(Value::Array(parts)) => {
+                let joined = parts
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                if !joined.is_empty() {
+                    return joined;
+                }
+            },
+            _ => {},
+        }
+    }
+    name.to_string()
+}
+
+/// Join a `reasoning` payload's `summary[].text`. codex stores the model's
+/// raw reasoning under `encrypted_content` (unreadable); only the optional
+/// `summary` is human-readable, and is often empty.
+fn reasoning_summary(payload: &Value) -> String {
+    payload
+        .get("summary")
+        .and_then(Value::as_array)
+        .map(|parts| {
+            parts
+                .iter()
+                .filter_map(|p| p.get("text").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_default()
+}
+
+/// Strip ANSI/VT escape sequences (CSI `ESC [ … final-byte` and a few
+/// common others) from command output so it reads cleanly in the UI.
+/// Avoids a regex dependency; keeps everything else verbatim.
+fn strip_ansi(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\u{1b}' {
+            out.push(c);
+            continue;
+        }
+        match chars.peek() {
+            // CSI: ESC [ ... <final byte 0x40..=0x7E>
+            Some('[') => {
+                chars.next();
+                for ec in chars.by_ref() {
+                    if ('\u{40}'..='\u{7e}').contains(&ec) {
+                        break;
+                    }
+                }
+            },
+            // OSC: ESC ] ... terminated by BEL or ESC \
+            Some(']') => {
+                chars.next();
+                while let Some(ec) = chars.next() {
+                    if ec == '\u{7}' {
+                        break;
+                    }
+                    if ec == '\u{1b}' {
+                        chars.next(); // consume the trailing backslash
+                        break;
+                    }
+                }
+            },
+            // Lone ESC or two-char sequence: drop the next char.
+            _ => {
+                chars.next();
+            },
+        }
+    }
+    out
+}
+
 /// Classify the most recent turn of a rollout from its tail.
 ///
 /// Reads only the trailing [`MAX_TAIL_BYTES`]; if that window contains no
@@ -569,5 +787,62 @@ mod tests {
         let out = truncate_chars(s, 10);
         assert_eq!(out.chars().count(), 10);
         assert!(out.ends_with('…'));
+    }
+
+    #[test]
+    fn strip_ansi_removes_escape_sequences() {
+        assert_eq!(strip_ansi("\u{1b}[31;1mred\u{1b}[0m text"), "red text");
+        assert_eq!(strip_ansi("plain text"), "plain text");
+        // OSC sequence terminated by BEL.
+        assert_eq!(strip_ansi("a\u{1b}]0;title\u{7}b"), "ab");
+    }
+
+    #[test]
+    fn command_title_prefers_the_shell_command() {
+        let call: Value = serde_json::from_str(
+            r#"{"type":"function_call","name":"shell_command","arguments":"{\"command\":\"ls -la\"}"}"#,
+        )
+        .unwrap();
+        assert_eq!(command_title(&call), "ls -la");
+        // argv-array form.
+        let argv: Value = serde_json::from_str(
+            r#"{"name":"shell","arguments":"{\"command\":[\"echo\",\"hi\"]}"}"#,
+        )
+        .unwrap();
+        assert_eq!(command_title(&argv), "echo hi");
+        // falls back to the tool name when there's no command.
+        let tool: Value =
+            serde_json::from_str(r#"{"name":"apply_patch","arguments":"{}"}"#).unwrap();
+        assert_eq!(command_title(&tool), "apply_patch");
+    }
+
+    #[test]
+    fn read_transcript_maps_messages_commands_and_merges_output() {
+        let lines = [
+            r#"{"type":"session_meta","payload":{"id":"x"}}"#,
+            r#"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}}"#,
+            r#"{"type":"response_item","payload":{"type":"function_call","name":"shell_command","arguments":"{\"command\":\"echo hi\"}","call_id":"c1"}}"#,
+            r#"{"type":"response_item","payload":{"type":"function_call_output","call_id":"c1","output":"[32mhi[0m"}}"#,
+            r#"{"type":"response_item","payload":{"type":"reasoning","summary":[],"encrypted_content":"opaque"}}"#,
+            r#"{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}}"#,
+        ];
+        let path = std::env::temp_dir()
+            .join(format!("pcx-transcript-{}-{}.jsonl", std::process::id(), line!()));
+        std::fs::write(&path, lines.join("\n")).unwrap();
+        let items = read_transcript(&path).unwrap();
+        std::fs::remove_file(&path).ok();
+
+        // session_meta + encrypted reasoning (no summary) are dropped;
+        // function_call + its output collapse into one command item.
+        assert_eq!(items.len(), 3, "{items:?}");
+        assert_eq!(items[0].item_type, "userMessage");
+        assert_eq!(items[0].text, "hi");
+        assert_eq!(items[1].item_type, "commandExecution");
+        assert_eq!(items[1].title, "echo hi");
+        // The function_call_output collapsed into its command item (ANSI
+        // stripping itself is covered by strip_ansi_removes_escape_sequences).
+        assert_eq!(items[1].text, "[32mhi[0m");
+        assert_eq!(items[2].item_type, "agentMessage");
+        assert_eq!(items[2].text, "done");
     }
 }
