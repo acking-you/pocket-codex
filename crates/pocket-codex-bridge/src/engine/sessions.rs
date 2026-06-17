@@ -93,11 +93,23 @@ pub struct ForceResumeOutcome {
 /// PIDs that a force takeover must never terminate: Pocket-Codex's own
 /// supervised app-server (the very server we resume into) and the current
 /// process.
+///
+/// On Windows the takeover can't name the exact rollout holder, so it kills
+/// from the whole `codex app-server` pool — which includes our own server.
+/// The recorded `state.codex.pid` alone is not a safe shield: it can be stale
+/// (split `state.toml`) or, when `codex` is an npm/node shim, never the real
+/// listener. So we also protect whatever process actually serves the recorded
+/// listen port, matched the same way [`crate::engine::app_session`] resolves
+/// it — that way a force takeover can never kill the live server it resumes
+/// into, even if `state.codex.pid` has drifted.
 fn protected_pids() -> Vec<u32> {
     let mut pids = vec![std::process::id()];
     if let Ok(state) = RuntimeState::load() {
         if let Some(codex) = state.codex {
             pids.push(codex.pid);
+            if let Some(pid) = pocket_codex_core::process::find_codex_app_server(&codex.listen) {
+                pids.push(pid);
+            }
         }
     }
     pids
