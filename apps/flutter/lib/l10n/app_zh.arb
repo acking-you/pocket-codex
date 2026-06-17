@@ -174,5 +174,26 @@
     "placeholders": { "n": { "type": "int" } }
   },
   "modelLabel": "模型",
-  "permissionLabel": "权限"
+  "permissionLabel": "权限",
+  "localSessions": "本地会话",
+  "localSessionsTitle": "本地会话",
+  "localSessionsHint": "此 CODEX_HOME 下的会话，包含桌面端或 CLI 创建的。可在此恢复已结束的会话。",
+  "noLocalSessions": "没有本地会话",
+  "sessionResumable": "可恢复",
+  "sessionUnfinished": "上一轮被中断",
+  "sessionRunningElsewhere": "其他进程运行中",
+  "sessionInUseElsewhere": "被其他进程占用",
+  "sessionReadOnly": "只读",
+  "resumeSession": "恢复",
+  "forceTakeover": "强制接管",
+  "takeoverTitle": "强制接管？",
+  "takeoverBody": "该会话正被另外 {n} 个进程占用。Pocket-Codex 将尝试终止它们后在此恢复。这些进程中未保存的工作将会丢失。",
+  "takeoverWillTerminate": "将终止",
+  "takeoverConfirm": "终止并恢复",
+  "takeoverResumed": "会话已恢复",
+  "takeoverKilled": "已终止 {n} 个进程",
+  "takeoverStillHeld": "仍被占用——已照常恢复",
+  "takeoverResumeFailed": "恢复失败：{error}",
+  "takeoverNoTarget": "请先连接一个 app-server 服务再恢复。",
+  "holderRow": "{name} · PID {pid}"
 }

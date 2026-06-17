@@ -491,4 +491,76 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get permissionLabel => '权限';
+
+  @override
+  String get localSessions => '本地会话';
+
+  @override
+  String get localSessionsTitle => '本地会话';
+
+  @override
+  String get localSessionsHint =>
+      '此 CODEX_HOME 下的会话，包含桌面端或 CLI 创建的。可在此恢复已结束的会话。';
+
+  @override
+  String get noLocalSessions => '没有本地会话';
+
+  @override
+  String get sessionResumable => '可恢复';
+
+  @override
+  String get sessionUnfinished => '上一轮被中断';
+
+  @override
+  String get sessionRunningElsewhere => '其他进程运行中';
+
+  @override
+  String get sessionInUseElsewhere => '被其他进程占用';
+
+  @override
+  String get sessionReadOnly => '只读';
+
+  @override
+  String get resumeSession => '恢复';
+
+  @override
+  String get forceTakeover => '强制接管';
+
+  @override
+  String get takeoverTitle => '强制接管？';
+
+  @override
+  String takeoverBody(int n) {
+    return '该会话正被另外 $n 个进程占用。Pocket-Codex 将尝试终止它们后在此恢复。这些进程中未保存的工作将会丢失。';
+  }
+
+  @override
+  String get takeoverWillTerminate => '将终止';
+
+  @override
+  String get takeoverConfirm => '终止并恢复';
+
+  @override
+  String get takeoverResumed => '会话已恢复';
+
+  @override
+  String takeoverKilled(int n) {
+    return '已终止 $n 个进程';
+  }
+
+  @override
+  String get takeoverStillHeld => '仍被占用——已照常恢复';
+
+  @override
+  String takeoverResumeFailed(String error) {
+    return '恢复失败：$error';
+  }
+
+  @override
+  String get takeoverNoTarget => '请先连接一个 app-server 服务再恢复。';
+
+  @override
+  String holderRow(String name, int pid) {
+    return '$name · PID $pid';
+  }
 }

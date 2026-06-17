@@ -174,5 +174,41 @@
     "placeholders": { "n": { "type": "int" } }
   },
   "modelLabel": "Model",
-  "permissionLabel": "Permission"
+  "permissionLabel": "Permission",
+  "localSessions": "Local sessions",
+  "localSessionsTitle": "Local sessions",
+  "localSessionsHint": "Sessions under this CODEX_HOME, including ones the desktop app or CLI created. Resume a finished one here.",
+  "noLocalSessions": "No local sessions",
+  "sessionResumable": "Resumable",
+  "sessionUnfinished": "Last turn interrupted",
+  "sessionRunningElsewhere": "Running elsewhere",
+  "sessionInUseElsewhere": "In use elsewhere",
+  "sessionReadOnly": "Read-only",
+  "resumeSession": "Resume",
+  "forceTakeover": "Force takeover",
+  "takeoverTitle": "Force takeover?",
+  "takeoverBody": "This session is held open by {n} other process(es). Pocket-Codex will try to terminate them, then resume it here. Any unsaved work in those processes will be lost.",
+  "@takeoverBody": {
+    "placeholders": { "n": { "type": "int" } }
+  },
+  "takeoverWillTerminate": "Will terminate",
+  "takeoverConfirm": "Terminate & resume",
+  "takeoverResumed": "Session resumed",
+  "takeoverKilled": "Terminated {n} process(es)",
+  "@takeoverKilled": {
+    "placeholders": { "n": { "type": "int" } }
+  },
+  "takeoverStillHeld": "Still held open — resumed anyway",
+  "takeoverResumeFailed": "Resume failed: {error}",
+  "@takeoverResumeFailed": {
+    "placeholders": { "error": { "type": "String" } }
+  },
+  "takeoverNoTarget": "Connect to an app-server service first to resume.",
+  "holderRow": "{name} · PID {pid}",
+  "@holderRow": {
+    "placeholders": {
+      "name": { "type": "String" },
+      "pid": { "type": "int" }
+    }
+  }
 }

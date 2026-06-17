@@ -46,6 +46,12 @@ class ServicesScreen extends ConsumerWidget {
             },
           ),
           IconButton(
+            key: const Key('local-sessions-btn'),
+            icon: const Icon(Icons.history),
+            tooltip: l10n.localSessions,
+            onPressed: () => context.push('/sessions'),
+          ),
+          IconButton(
             key: const Key('settings-btn'),
             icon: const Icon(Icons.settings),
             onPressed: () => context.push('/settings'),
