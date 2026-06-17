@@ -45,6 +45,17 @@ class _AppServiceState extends ConsumerState<AppServiceScreen> {
       _connecting = true;
       _error = null;
     });
+    // If the services list already probed this backend as unreachable (a live
+    // relay registrant whose codex app-server is gone), fail fast instead of a
+    // timeout-bounded-then-retried connect that would sit on "connecting". The
+    // retry button re-probes, so a recovered backend still connects.
+    if (ref.read(appReachableProvider(widget.serviceKey)).valueOrNull == false) {
+      setState(() {
+        _error = AppLocalizations.of(context).statusUnreachable;
+        _connecting = false;
+      });
+      return;
+    }
     final api = ref.read(bridgeApiProvider);
     try {
       await api.appConnect(widget.serviceKey, appLocalPort);
@@ -198,7 +209,15 @@ class _AppServiceState extends ConsumerState<AppServiceScreen> {
                 style: Theme.of(context).textTheme.bodySmall,
               ),
               const SizedBox(height: 12),
-              FilledButton(onPressed: _connect, child: Text(l10n.retry)),
+              FilledButton(
+                // Re-probe so a now-recovered backend can connect instead of
+                // fast-failing on the stale "unreachable" result.
+                onPressed: () {
+                  ref.invalidate(appReachableProvider(widget.serviceKey));
+                  _connect();
+                },
+                child: Text(l10n.retry),
+              ),
             ],
           ),
         ),
