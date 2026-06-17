@@ -614,6 +614,34 @@ void main() {
     expect(find.textContaining('用时'), findsOneWidget);
   });
 
+  testWidgets('composer pills wrap onto-screen on a narrow (mobile) width', (
+    t,
+  ) async {
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(360, 760); // a phone-ish viewport
+    addTearDown(t.view.reset);
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    await t.pumpWidget(
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          threadId: 't1',
+        ),
+        api,
+      ),
+    );
+    await t.pumpAndSettle();
+
+    // The effort pill is the last of five; a horizontal scroll left it clipped
+    // off the right edge on a phone. Wrapped, it sits fully within the viewport.
+    final effort = find.text('思考强度'); // l10n.effort (zh), no effort set
+    expect(effort, findsOneWidget);
+    expect(t.getRect(effort).right, lessThanOrEqualTo(360.0));
+  });
+
   testWidgets('Opening an existing thread resumes it before reading', (
     t,
   ) async {
