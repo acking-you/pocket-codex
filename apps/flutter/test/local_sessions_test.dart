@@ -132,12 +132,58 @@ void main() {
     expect(find.text('没有本地会话'), findsOneWidget); // noLocalSessions (zh)
   });
 
+  testWidgets('resume connects a reachable app-server when none is connected', (
+    t,
+  ) async {
+    // A discoverable, reachable app-server that the user has NOT opened yet.
+    final api = FakeBridgeApi(
+      services: const [
+        ServiceEntry(
+          device: 'lb7666',
+          kind: 'app',
+          name: 'default',
+          key: 'pcx:lb7666:app:default',
+        ),
+      ],
+    );
+    expect(api.appIsConnected('pcx:lb7666:app:default'), isFalse);
+
+    String? resolved;
+    await t.pumpWidget(
+      ProviderScope(
+        overrides: [bridgeApiProvider.overrideWithValue(api)],
+        child: MaterialApp(
+          home: Consumer(
+            builder: (ctx, ref, _) => TextButton(
+              onPressed: () async => resolved = await ensureResumeTarget(ref),
+              child: const Text('go'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await t.tap(find.text('go'));
+    await t.pump();
+    await t.pump();
+
+    // It actively connected the reachable server instead of reporting
+    // "no app-server" — the bug was requiring a pre-existing connection.
+    expect(resolved, 'pcx:lb7666:app:default');
+    expect(api.appConnectCount, 1);
+    expect(api.appIsConnected('pcx:lb7666:app:default'), isTrue);
+  });
+
   testWidgets('viewer renders the transcript read-only and offers force-resume '
       'when the owning session is idle', (t) async {
     final api = FakeBridgeApi();
     api.transcripts['thr-owned'] = const [
       ThreadItem(id: 't1', itemType: 'userMessage', title: '', text: 'hello'),
-      ThreadItem(id: 't2', itemType: 'agentMessage', title: '', text: 'hi there'),
+      ThreadItem(
+        id: 't2',
+        itemType: 'agentMessage',
+        title: '',
+        text: 'hi there',
+      ),
       ThreadItem(
         id: 't3',
         itemType: 'commandExecution',
@@ -173,30 +219,33 @@ void main() {
     await t.pumpWidget(const SizedBox()); // dispose → cancel the poll timer
   });
 
-  testWidgets('viewer stays read-only (no resume) while the session is actively '
-      'running elsewhere', (t) async {
-    final api = FakeBridgeApi();
-    api.liveness['thr-run'] = const SessionLiveness(
-      threadId: 'thr-run',
-      turnState: 'incomplete',
-      heldOpen: true,
-      safety: 'ownedRunning',
-      allowsResume: false,
-      requiresTakeover: false,
-      holders: [],
-    );
-    await t.pumpWidget(
-      _host(const LocalSessionViewScreen(threadId: 'thr-run'), api),
-    );
-    await _settle(t);
+  testWidgets(
+    'viewer stays read-only (no resume) while the session is actively '
+    'running elsewhere',
+    (t) async {
+      final api = FakeBridgeApi();
+      api.liveness['thr-run'] = const SessionLiveness(
+        threadId: 'thr-run',
+        turnState: 'incomplete',
+        heldOpen: true,
+        safety: 'ownedRunning',
+        allowsResume: false,
+        requiresTakeover: false,
+        holders: [],
+      );
+      await t.pumpWidget(
+        _host(const LocalSessionViewScreen(threadId: 'thr-run'), api),
+      );
+      await _settle(t);
 
-    // No resume action; a read-only note is shown instead.
-    expect(find.byKey(const Key('view-resume')), findsNothing);
-    expect(
-      find.text('只读 — 其他客户端正在使用此会话'),
-      findsOneWidget,
-    ); // readOnlyViewing (zh)
+      // No resume action; a read-only note is shown instead.
+      expect(find.byKey(const Key('view-resume')), findsNothing);
+      expect(
+        find.text('只读 — 其他客户端正在使用此会话'),
+        findsOneWidget,
+      ); // readOnlyViewing (zh)
 
-    await t.pumpWidget(const SizedBox()); // dispose → cancel the poll timer
-  });
+      await t.pumpWidget(const SizedBox()); // dispose → cancel the poll timer
+    },
+  );
 }
