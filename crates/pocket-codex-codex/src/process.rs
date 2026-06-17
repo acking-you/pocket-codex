@@ -16,17 +16,52 @@
 use std::{
     path::PathBuf,
     process::{Command, Stdio},
+    thread,
+    time::{Duration, Instant},
 };
 
 use chrono::Utc;
 use pocket_codex_core::{
     paths,
-    process::{pid_alive, send_sigterm},
+    process::{find_codex_app_server, pid_alive, send_sigterm, tcp_port_open},
     state::{CodexProcessInfo, RuntimeState},
 };
 use tracing::{debug, info, warn};
 
 use crate::protocol::Message as _ProtocolMessage;
+
+/// How long [`spawn`] waits for a freshly-launched app-server to start
+/// listening before giving up and recording the directly-spawned PID. codex
+/// usually binds in well under a second; the generous ceiling covers a cold
+/// start without hanging an interactive `serve` indefinitely.
+const SPAWN_RESOLVE_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Parse the `host`/`port` out of a `ws://host:port` listen URL. Returns
+/// `None` for non-websocket transports (e.g. `unix://`), which have no TCP
+/// port to probe and therefore fall back to PID-based tracking.
+fn ws_host_port(listen_url: &str) -> Option<(String, u16)> {
+    let authority = listen_url.strip_prefix("ws://")?.split('/').next()?;
+    let (host, port) = authority.rsplit_once(':')?;
+    Some((host.to_string(), port.parse().ok()?))
+}
+
+/// After a spawn, poll until the listen port is served, then return the PID of
+/// the process that actually owns it (the native app-server, even when it sits
+/// behind an npm/node shim). Falls back to `spawn_pid` if the port never comes
+/// up within [`SPAWN_RESOLVE_TIMEOUT`], so status honestly reports a server
+/// that failed to start rather than silently mislabelling one.
+fn resolve_listener_pid(host: &str, port: u16, listen_url: &str, spawn_pid: u32) -> u32 {
+    let deadline = Instant::now() + SPAWN_RESOLVE_TIMEOUT;
+    loop {
+        if tcp_port_open(host, port) {
+            return find_codex_app_server(listen_url).unwrap_or(spawn_pid);
+        }
+        if Instant::now() >= deadline {
+            return spawn_pid;
+        }
+        thread::sleep(Duration::from_millis(150));
+    }
+}
 
 /// `codex app-server`'s `--listen` URL choices we explicitly support.
 #[derive(Debug, Clone)]
@@ -130,17 +165,70 @@ pub struct SpawnReport {
 /// the existing process is returned untouched.
 pub fn spawn(opts: SpawnOptions) -> pocket_codex_core::Result<SpawnReport> {
     let mut state = RuntimeState::load()?;
+    let listen_url = opts.listen.to_listen_url();
+    let endpoint = ws_host_port(&listen_url);
 
-    if let Some(existing) = state.codex.clone() {
-        if pid_alive(existing.pid) {
-            info!(pid = existing.pid, listen = %existing.listen, "codex already running");
+    let log_file = opts
+        .log_file
+        .clone()
+        .map(Ok)
+        .unwrap_or_else(paths::codex_log_file)?;
+
+    // Reuse an app-server that is already serving the listen port. For a
+    // websocket transport "is it up" is decided by the *port*, not a recorded
+    // PID: when `codex` is an npm/node shim the PID we spawned is the shim
+    // (which exits) while the native binary keeps the socket. Adopting the
+    // live listener — ours from a prior run, or any other codex already bound
+    // there — also makes `serve` idempotent instead of launching a second
+    // codex that can't bind the port and dies, leaving the "stale codex /
+    // working endpoint" split that this whole function exists to avoid.
+    match &endpoint {
+        Some((host, port)) if tcp_port_open(host, *port) => {
+            let pid = find_codex_app_server(&listen_url)
+                .or_else(|| state.codex.as_ref().map(|c| c.pid))
+                .unwrap_or_default();
+            // Keep the original start time if it's the same process we already
+            // tracked; otherwise stamp now (best-effort for an adopted one).
+            let started_at = state
+                .codex
+                .as_ref()
+                .filter(|c| c.pid == pid)
+                .map(|c| c.started_at.clone())
+                .unwrap_or_else(|| Utc::now().to_rfc3339());
+            let info = CodexProcessInfo {
+                pid,
+                listen: listen_url,
+                log_file,
+                started_at,
+            };
+            state.codex = Some(info.clone());
+            state.save()?;
+            info!(pid, %host, port, "adopting codex app-server already on the listen port");
             return Ok(SpawnReport {
-                info: existing,
+                info,
                 reused: true,
             });
-        } else {
-            warn!(stale_pid = existing.pid, "previous codex process is gone, restarting");
-        }
+        },
+        // Unix-socket transport has no TCP port to probe — keep PID-based
+        // reuse (the shim problem is websocket-specific).
+        None => {
+            if let Some(existing) = state.codex.clone() {
+                if pid_alive(existing.pid) {
+                    info!(pid = existing.pid, listen = %existing.listen, "codex already running");
+                    return Ok(SpawnReport {
+                        info: existing,
+                        reused: true,
+                    });
+                }
+                warn!(stale_pid = existing.pid, "previous codex process is gone, restarting");
+            }
+        },
+        // Websocket port is free → fall through and spawn a fresh app-server.
+        Some(_) => {
+            if let Some(existing) = state.codex.as_ref() {
+                warn!(stale_pid = existing.pid, "recorded codex is no longer serving, restarting");
+            }
+        },
     }
 
     let binary = match opts.binary.as_ref() {
@@ -152,11 +240,6 @@ pub fn spawn(opts: SpawnOptions) -> pocket_codex_core::Result<SpawnReport> {
         })?,
     };
 
-    let log_file = opts
-        .log_file
-        .clone()
-        .map(Ok)
-        .unwrap_or_else(paths::codex_log_file)?;
     if let Some(parent) = log_file.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -166,7 +249,6 @@ pub fn spawn(opts: SpawnOptions) -> pocket_codex_core::Result<SpawnReport> {
         .open(&log_file)?;
     let log_handle_dup = log_handle.try_clone()?;
 
-    let listen_url = opts.listen.to_listen_url();
     debug!(?binary, %listen_url, ?log_file, "spawning codex app-server");
 
     let child = build_command(&binary, &listen_url, &opts.extra_args, opts.proxy.as_deref())
@@ -178,10 +260,18 @@ pub fn spawn(opts: SpawnOptions) -> pocket_codex_core::Result<SpawnReport> {
             pocket_codex_core::Error::Config(format!("failed to spawn `{}`: {e}", binary.display()))
         })?;
 
-    let pid = child.id();
-    // Drop the Child handle so the kernel keeps the process alive
-    // after this CLI exits; we track it by pid from now on.
+    let spawn_pid = child.id();
+    // Drop the Child handle so the kernel keeps the process alive after this
+    // CLI exits; we track it by pid from now on.
     drop(child);
+
+    // The PID we just spawned may be a throwaway shim. Wait for the listener to
+    // come up and record the PID that actually owns it, so status/stop target
+    // the real app-server rather than a wrapper that has already exited.
+    let pid = match &endpoint {
+        Some((host, port)) => resolve_listener_pid(host, *port, &listen_url, spawn_pid),
+        None => spawn_pid,
+    };
 
     let info = CodexProcessInfo {
         pid,
@@ -258,7 +348,17 @@ pub struct StatusReport {
 /// process is still running.
 pub fn status() -> pocket_codex_core::Result<StatusReport> {
     let state = RuntimeState::load()?;
-    let alive = state.codex.as_ref().is_some_and(|c| pid_alive(c.pid));
+    // "Alive" is whether the app-server is actually reachable, not whether the
+    // recorded PID exists: the recorded PID may be a shim that exited while the
+    // real (native) app-server keeps serving the port. Probe the listen port
+    // for websocket transports; fall back to the PID for unix sockets.
+    let alive = state
+        .codex
+        .as_ref()
+        .is_some_and(|c| match ws_host_port(&c.listen) {
+            Some((host, port)) => tcp_port_open(&host, port),
+            None => pid_alive(c.pid),
+        });
     Ok(StatusReport {
         recorded: state.codex,
         alive,
@@ -290,14 +390,23 @@ pub fn stop() -> pocket_codex_core::Result<StopOutcome> {
         return Ok(StopOutcome::NoRecord);
     };
 
-    let outcome = if pid_alive(info.pid) {
-        send_sigterm(info.pid);
+    // Target the process that actually owns the listen port — that's the real
+    // app-server, which differs from the recorded PID when codex was launched
+    // through a shim (killing the recorded shim PID would never free the port).
+    // Fall back to the recorded PID for unix sockets or when the port is idle.
+    let target = ws_host_port(&info.listen)
+        .filter(|(host, port)| tcp_port_open(host, *port))
+        .and_then(|_| find_codex_app_server(&info.listen))
+        .unwrap_or(info.pid);
+
+    let outcome = if pid_alive(target) {
+        send_sigterm(target);
         StopOutcome::Stopped {
-            pid: info.pid,
+            pid: target,
         }
     } else {
         StopOutcome::StaleRecord {
-            pid: info.pid,
+            pid: target,
         }
     };
 
@@ -366,5 +475,16 @@ mod tests {
             explicit_envs(&command).is_empty(),
             "no env should be set when proxy is None; child inherits the parent's"
         );
+    }
+
+    #[test]
+    fn ws_host_port_parses_websocket_urls_only() {
+        assert_eq!(ws_host_port("ws://127.0.0.1:18080"), Some(("127.0.0.1".to_string(), 18080)));
+        // Trailing path is ignored (authority only).
+        assert_eq!(ws_host_port("ws://0.0.0.0:9000/foo"), Some(("0.0.0.0".to_string(), 9000)));
+        // Unix sockets and missing/garbage ports have no TCP endpoint.
+        assert_eq!(ws_host_port("unix:///tmp/codex.sock"), None);
+        assert_eq!(ws_host_port("ws://127.0.0.1"), None);
+        assert_eq!(ws_host_port("ws://127.0.0.1:notaport"), None);
     }
 }
