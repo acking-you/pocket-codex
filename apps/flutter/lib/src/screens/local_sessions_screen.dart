@@ -55,92 +55,29 @@ class _LocalSessionsState extends ConsumerState<LocalSessionsScreen> {
     }
   }
 
-  /// First connected app-server service key (the resume target), or null when
-  /// none is connected yet.
-  String? _connectedAppKey() {
-    final bridge = ref.read(bridgeApiProvider);
-    final services = ref.read(servicesProvider).valueOrNull ?? const [];
-    for (final s in services) {
-      if (s.kind == 'app' && bridge.appIsConnected(s.key)) return s.key;
-    }
-    return null;
-  }
-
   Future<void> _onResume(LocalSession session) async {
-    final l10n = AppLocalizations.of(context);
-    final target = _connectedAppKey();
-
-    // A finished-but-held session needs an explicit, holder-listing confirm.
+    // A finished-but-held session needs the holder-listing confirm; pre-fetch
+    // the current holders so the dialog can name them.
+    var holders = const <Holder>[];
     if (session.requiresTakeover) {
-      final liveness = await _safeLiveness(session.threadId);
-      if (!mounted) return;
-      final confirmed = await showDialog<bool>(
-        context: context,
-        builder: (_) => _TakeoverDialog(
-          holders: liveness?.holders ?? const [],
-          hasTarget: target != null,
-        ),
-      );
-      if (confirmed != true) return;
-    } else if (target == null) {
-      _snack(l10n.takeoverNoTarget);
-      return;
-    }
-
-    if (target == null) {
-      _snack(l10n.takeoverNoTarget);
-      return;
-    }
-    await _doResume(target, session);
-  }
-
-  Future<SessionLiveness?> _safeLiveness(String threadId) async {
-    try {
-      return await ref.read(bridgeApiProvider).appSessionLiveness(threadId);
-    } catch (_) {
-      return null;
-    }
-  }
-
-  Future<void> _doResume(String serviceKey, LocalSession session) async {
-    final l10n = AppLocalizations.of(context);
-    final messenger = ScaffoldMessenger.of(context);
-    final router = GoRouter.of(context);
-    ForceResumeReport report;
-    try {
-      report = await ref
-          .read(bridgeApiProvider)
-          .appForceResume(serviceKey, session.threadId);
-    } catch (e) {
-      if (mounted) _snack(friendlyError(e));
-      return;
+      try {
+        final liveness = await ref
+            .read(bridgeApiProvider)
+            .appSessionLiveness(session.threadId);
+        holders = liveness.holders;
+      } catch (_) {
+        // Best-effort; the dialog still warns, just without names.
+      }
     }
     if (!mounted) return;
-
-    if (!report.resumed) {
-      _snack(l10n.takeoverResumeFailed(report.resumeError ?? ''));
-      return;
-    }
-    final parts = <String>[
-      l10n.takeoverResumed,
-      if (report.killed.isNotEmpty) l10n.takeoverKilled(report.killed.length),
-      if (report.stillHeld) l10n.takeoverStillHeld,
-    ];
-    messenger.showSnackBar(SnackBar(content: Text(parts.join(' · '))));
-
-    // Open the resumed conversation.
-    final key = Uri.encodeComponent(serviceKey);
-    final q = <String>[
-      'tid=${Uri.encodeComponent(session.threadId)}',
-      if (session.cwd != null && session.cwd!.trim().isNotEmpty)
-        'cwd=${Uri.encodeComponent(session.cwd!.trim())}',
-    ];
-    router.push('/app/$key/session?${q.join('&')}');
-  }
-
-  void _snack(String text) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+    await resumeLocalSession(
+      context,
+      ref,
+      threadId: session.threadId,
+      cwd: session.cwd,
+      requiresTakeover: session.requiresTakeover,
+      holders: holders,
+    );
   }
 
   @override
@@ -244,6 +181,17 @@ class _SessionRow extends StatelessWidget {
     ];
     return ListTile(
       key: Key('local-${session.threadId}'),
+      // Tapping any row opens the read-only transcript viewer (works even for
+      // a session another client owns — it reads the on-disk rollout).
+      onTap: () {
+        final q = <String>[
+          'tid=${Uri.encodeComponent(session.threadId)}',
+          if (session.cwd != null && session.cwd!.trim().isNotEmpty)
+            'cwd=${Uri.encodeComponent(session.cwd!.trim())}',
+          if (preview.isNotEmpty) 'preview=${Uri.encodeComponent(preview)}',
+        ];
+        context.push('/sessions/view?${q.join('&')}');
+      },
       leading: Icon(
         session.heldOpen ? Icons.lock_outline : Icons.chat_bubble_outline,
         size: 20,
@@ -301,10 +249,84 @@ class _SessionRow extends StatelessWidget {
   }
 }
 
+/// First connected app-server service key (the resume target), or null when
+/// none is connected yet. Shared by the sessions list and the read-only viewer.
+String? connectedAppKey(WidgetRef ref) {
+  final bridge = ref.read(bridgeApiProvider);
+  final services = ref.read(servicesProvider).valueOrNull ?? const [];
+  for (final s in services) {
+    if (s.kind == 'app' && bridge.appIsConnected(s.key)) return s.key;
+  }
+  return null;
+}
+
+/// Resume — or, for a finished session another process still holds, force-take-
+/// over — a local session into a connected app-server, then open it live.
+///
+/// Shared by the sessions list and the read-only viewer. For a takeover it first
+/// shows the holder-listing confirm dialog; on cancel it returns silently. On
+/// success it opens the live conversation; failures surface as a snackbar. The
+/// caller must ensure the session is not actively running (resume is disabled
+/// for `ownedRunning`).
+Future<void> resumeLocalSession(
+  BuildContext context,
+  WidgetRef ref, {
+  required String threadId,
+  String? cwd,
+  required bool requiresTakeover,
+  List<Holder> holders = const [],
+}) async {
+  final l10n = AppLocalizations.of(context);
+  final messenger = ScaffoldMessenger.of(context);
+  final target = connectedAppKey(ref);
+
+  if (requiresTakeover) {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => TakeoverDialog(holders: holders, hasTarget: target != null),
+    );
+    if (confirmed != true) return;
+  }
+  if (target == null) {
+    messenger.showSnackBar(SnackBar(content: Text(l10n.takeoverNoTarget)));
+    return;
+  }
+
+  ForceResumeReport report;
+  try {
+    report = await ref.read(bridgeApiProvider).appForceResume(target, threadId);
+  } catch (e) {
+    messenger.showSnackBar(SnackBar(content: Text(friendlyError(e))));
+    return;
+  }
+  if (!report.resumed) {
+    messenger.showSnackBar(
+      SnackBar(content: Text(l10n.takeoverResumeFailed(report.resumeError ?? ''))),
+    );
+    return;
+  }
+  final parts = <String>[
+    l10n.takeoverResumed,
+    if (report.killed.isNotEmpty) l10n.takeoverKilled(report.killed.length),
+    if (report.stillHeld) l10n.takeoverStillHeld,
+  ];
+  messenger.showSnackBar(SnackBar(content: Text(parts.join(' · '))));
+
+  // Open the resumed conversation (only reached on success).
+  if (!context.mounted) return;
+  final key = Uri.encodeComponent(target);
+  final q = <String>[
+    'tid=${Uri.encodeComponent(threadId)}',
+    if (cwd != null && cwd.trim().isNotEmpty) 'cwd=${Uri.encodeComponent(cwd.trim())}',
+  ];
+  context.push('/app/$key/session?${q.join('&')}');
+}
+
 /// Confirm dialog for a force takeover: lists the holder processes that will be
 /// terminated and warns about data loss.
-class _TakeoverDialog extends StatelessWidget {
-  const _TakeoverDialog({required this.holders, required this.hasTarget});
+class TakeoverDialog extends StatelessWidget {
+  /// Creates the confirm dialog.
+  const TakeoverDialog({super.key, required this.holders, required this.hasTarget});
 
   final List<Holder> holders;
   final bool hasTarget;

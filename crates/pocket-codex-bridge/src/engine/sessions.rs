@@ -152,6 +152,20 @@ pub fn session_liveness(thread_id: &str) -> Result<SessionLivenessView> {
     })
 }
 
+/// Read a local session's full transcript for READ-ONLY viewing.
+///
+/// Parses the on-disk rollout directly via [`rollout::read_transcript`], so
+/// it works for a session another codex client owns and never touches the
+/// app-server (no resume, no held-file write). Returned items are in the
+/// same `{id, type, title, text}` shape as `thread/read`, so the viewer can
+/// reuse the live-conversation rendering.
+pub fn local_session_transcript(thread_id: &str) -> Result<Vec<rollout::TranscriptItem>> {
+    let path = rollout::rollout_path_for_thread(thread_id)
+        .map_err(|e| anyhow!("locating rollout: {e}"))?
+        .ok_or_else(|| anyhow!("no rollout found for thread {thread_id}"))?;
+    rollout::read_transcript(&path).map_err(|e| anyhow!("reading transcript: {e}"))
+}
+
 /// Force-resume a session into the app-server behind `service_key`.
 ///
 /// Best-effort evicts every live process holding the session's rollout

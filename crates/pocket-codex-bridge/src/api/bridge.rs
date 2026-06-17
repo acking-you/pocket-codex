@@ -585,6 +585,25 @@ pub fn app_session_liveness(thread_id: String) -> Result<SessionLivenessDto> {
     })
 }
 
+/// Read a local session's transcript for READ-ONLY viewing. Parses the
+/// on-disk rollout directly (no app-server connection, no resume, no write),
+/// so it works even while another codex client still owns the session.
+/// Items are in the same shape as [`app_thread_read`], so the read-only
+/// viewer reuses the live-conversation rendering. Poll it alongside
+/// [`app_session_liveness`] to follow a running session and notice when it
+/// goes idle (resume-eligible).
+pub fn app_local_session_transcript(thread_id: String) -> Result<Vec<ThreadItemDto>> {
+    Ok(sessions::local_session_transcript(&thread_id)?
+        .into_iter()
+        .map(|i| ThreadItemDto {
+            id: i.id,
+            item_type: i.item_type,
+            title: i.title,
+            text: i.text,
+        })
+        .collect())
+}
+
 /// Force-resume a session into the app-server behind `service_key`.
 ///
 /// Best-effort terminates every live process holding the session's rollout

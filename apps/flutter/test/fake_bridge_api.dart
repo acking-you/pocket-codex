@@ -291,6 +291,9 @@ class FakeBridgeApi implements BridgeApi {
   /// Seedable per-thread liveness returned by [appSessionLiveness].
   final Map<String, SessionLiveness> liveness = {};
 
+  /// Seedable per-thread transcript returned by [appLocalSessionTranscript].
+  final Map<String, List<ThreadItem>> transcripts = {};
+
   /// Records the last `(serviceKey, threadId)` passed to [appForceResume].
   String? lastForceResumedKey, lastForceResumedThread;
 
@@ -327,4 +330,8 @@ class FakeBridgeApi implements BridgeApi {
     lastForceResumedThread = threadId;
     return forceResumeResult;
   }
+
+  @override
+  Future<List<ThreadItem>> appLocalSessionTranscript(String threadId) async =>
+      transcripts[threadId] ?? const [];
 }

@@ -1094,6 +1094,18 @@ abstract class AppLocalizations {
   /// **'Read-only'**
   String get sessionReadOnly;
 
+  /// No description provided for @readOnlyViewing.
+  ///
+  /// In en, this message translates to:
+  /// **'Read-only — another client is using this session'**
+  String get readOnlyViewing;
+
+  /// No description provided for @sessionTranscriptEmpty.
+  ///
+  /// In en, this message translates to:
+  /// **'Nothing to show yet'**
+  String get sessionTranscriptEmpty;
+
   /// No description provided for @resumeSession.
   ///
   /// In en, this message translates to:

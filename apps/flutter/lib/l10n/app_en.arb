@@ -184,6 +184,8 @@
   "sessionRunningElsewhere": "Running elsewhere",
   "sessionInUseElsewhere": "In use elsewhere",
   "sessionReadOnly": "Read-only",
+  "readOnlyViewing": "Read-only — another client is using this session",
+  "sessionTranscriptEmpty": "Nothing to show yet",
   "resumeSession": "Resume",
   "forceTakeover": "Force takeover",
   "takeoverTitle": "Force takeover?",

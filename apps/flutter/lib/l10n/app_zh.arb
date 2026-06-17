@@ -184,6 +184,8 @@
   "sessionRunningElsewhere": "其他进程运行中",
   "sessionInUseElsewhere": "被其他进程占用",
   "sessionReadOnly": "只读",
+  "readOnlyViewing": "只读 — 其他客户端正在使用此会话",
+  "sessionTranscriptEmpty": "暂无可显示的内容",
   "resumeSession": "恢复",
   "forceTakeover": "强制接管",
   "takeoverTitle": "强制接管？",

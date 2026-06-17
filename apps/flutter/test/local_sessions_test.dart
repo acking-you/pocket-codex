@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
 import 'package:pocket_codex/src/providers.dart';
+import 'package:pocket_codex/src/screens/local_session_view_screen.dart';
 import 'package:pocket_codex/src/screens/local_sessions_screen.dart';
 import 'fake_bridge_api.dart';
 
@@ -129,5 +130,73 @@ void main() {
     await t.pumpWidget(_host(const LocalSessionsScreen(), api));
     await t.pumpAndSettle();
     expect(find.text('没有本地会话'), findsOneWidget); // noLocalSessions (zh)
+  });
+
+  testWidgets('viewer renders the transcript read-only and offers force-resume '
+      'when the owning session is idle', (t) async {
+    final api = FakeBridgeApi();
+    api.transcripts['thr-owned'] = const [
+      ThreadItem(id: 't1', itemType: 'userMessage', title: '', text: 'hello'),
+      ThreadItem(id: 't2', itemType: 'agentMessage', title: '', text: 'hi there'),
+      ThreadItem(
+        id: 't3',
+        itemType: 'commandExecution',
+        title: 'ls -la',
+        text: 'file1\nfile2',
+      ),
+    ];
+    // Held by a desktop codex app-server, but its turn has finished (idle).
+    api.liveness['thr-owned'] = const SessionLiveness(
+      threadId: 'thr-owned',
+      turnState: 'completed',
+      heldOpen: true,
+      safety: 'ownedIdle',
+      allowsResume: true,
+      requiresTakeover: true,
+      holders: [Holder(pid: 21348, name: 'codex.exe')],
+    );
+    await t.pumpWidget(
+      _host(
+        const LocalSessionViewScreen(threadId: 'thr-owned', preview: 'hello'),
+        api,
+      ),
+    );
+    await _settle(t);
+
+    // The on-disk transcript renders read-only (no composer).
+    expect(find.text('ls -la'), findsOneWidget);
+    expect(find.text('hi there'), findsOneWidget);
+    // Idle + held ⇒ a force-takeover action is offered.
+    expect(find.byKey(const Key('view-resume')), findsOneWidget);
+    expect(find.text('强制接管'), findsOneWidget); // forceTakeover (zh)
+
+    await t.pumpWidget(const SizedBox()); // dispose → cancel the poll timer
+  });
+
+  testWidgets('viewer stays read-only (no resume) while the session is actively '
+      'running elsewhere', (t) async {
+    final api = FakeBridgeApi();
+    api.liveness['thr-run'] = const SessionLiveness(
+      threadId: 'thr-run',
+      turnState: 'incomplete',
+      heldOpen: true,
+      safety: 'ownedRunning',
+      allowsResume: false,
+      requiresTakeover: false,
+      holders: [],
+    );
+    await t.pumpWidget(
+      _host(const LocalSessionViewScreen(threadId: 'thr-run'), api),
+    );
+    await _settle(t);
+
+    // No resume action; a read-only note is shown instead.
+    expect(find.byKey(const Key('view-resume')), findsNothing);
+    expect(
+      find.text('只读 — 其他客户端正在使用此会话'),
+      findsOneWidget,
+    ); // readOnlyViewing (zh)
+
+    await t.pumpWidget(const SizedBox()); // dispose → cancel the poll timer
   });
 }

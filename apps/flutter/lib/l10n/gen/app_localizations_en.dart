@@ -530,6 +530,13 @@ class AppLocalizationsEn extends AppLocalizations {
   String get sessionReadOnly => 'Read-only';
 
   @override
+  String get readOnlyViewing =>
+      'Read-only — another client is using this session';
+
+  @override
+  String get sessionTranscriptEmpty => 'Nothing to show yet';
+
+  @override
   String get resumeSession => 'Resume';
 
   @override

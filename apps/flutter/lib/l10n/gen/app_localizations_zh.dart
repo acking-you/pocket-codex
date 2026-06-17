@@ -521,6 +521,12 @@ class AppLocalizationsZh extends AppLocalizations {
   String get sessionReadOnly => '只读';
 
   @override
+  String get readOnlyViewing => '只读 — 其他客户端正在使用此会话';
+
+  @override
+  String get sessionTranscriptEmpty => '暂无可显示的内容';
+
+  @override
   String get resumeSession => '恢复';
 
   @override
