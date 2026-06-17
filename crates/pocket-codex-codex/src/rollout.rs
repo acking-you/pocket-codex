@@ -443,9 +443,32 @@ pub fn classify_turn_state(path: &Path) -> Result<TurnState> {
     let skip = usize::from(truncated);
     let state = classify_lines(text.lines().skip(skip));
     if matches!(state, TurnState::Empty) && truncated {
-        let bytes = std::fs::read(path)?;
-        let full = String::from_utf8_lossy(&bytes);
-        return Ok(classify_lines(full.lines()));
+        // The tail held no lifecycle markers but the file is larger than the
+        // window, so a `task_started` predates it. Stream the whole file line
+        // by line (one line in memory at a time) rather than reading it into a
+        // single String, which a pathologically large rollout could OOM.
+        return scan_full_turn_state(path);
+    }
+    Ok(state)
+}
+
+/// Stream a rollout line by line to classify its most recent turn, keeping
+/// memory bounded to one line at a time. The [`classify_turn_state`] fallback
+/// for files larger than the tail window.
+fn scan_full_turn_state(path: &Path) -> Result<TurnState> {
+    use std::io::BufRead;
+    let file = std::fs::File::open(path)?;
+    let mut reader = std::io::BufReader::new(file);
+    let mut state = TurnState::Empty;
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        if reader.read_until(b'\n', &mut line)? == 0 {
+            break;
+        }
+        if let Some(s) = turn_state_of_line(&String::from_utf8_lossy(&line)) {
+            state = s;
+        }
     }
     Ok(state)
 }
@@ -466,29 +489,34 @@ pub fn classify_turn_state(path: &Path) -> Result<TurnState> {
 fn classify_lines<'a, I: Iterator<Item = &'a str>>(lines: I) -> TurnState {
     let mut state = TurnState::Empty;
     for line in lines {
-        if !(line.contains("task_started")
-            || line.contains("task_complete")
-            || line.contains("turn_aborted"))
-        {
-            continue;
-        }
-        let Ok(value) = serde_json::from_str::<Value>(line) else {
-            continue;
-        };
-        if value.get("type").and_then(Value::as_str) != Some("event_msg") {
-            continue;
-        }
-        let Some(payload) = value.get("payload") else {
-            continue;
-        };
-        match payload.get("type").and_then(Value::as_str) {
-            Some("task_started") => state = TurnState::Incomplete,
-            Some("task_complete") => state = TurnState::Completed,
-            Some("turn_aborted") => state = TurnState::Aborted(parse_abort_reason(payload)),
-            _ => {},
+        if let Some(s) = turn_state_of_line(line) {
+            state = s;
         }
     }
     state
+}
+
+/// Classify a single rollout line as a turn lifecycle transition, or `None`
+/// when it is not a `task_started` / `task_complete` / `turn_aborted`
+/// `event_msg`. Shared by the tail scan and the streaming full-file fallback.
+fn turn_state_of_line(line: &str) -> Option<TurnState> {
+    if !(line.contains("task_started")
+        || line.contains("task_complete")
+        || line.contains("turn_aborted"))
+    {
+        return None;
+    }
+    let value: Value = serde_json::from_str(line).ok()?;
+    if value.get("type").and_then(Value::as_str) != Some("event_msg") {
+        return None;
+    }
+    let payload = value.get("payload")?;
+    match payload.get("type").and_then(Value::as_str) {
+        Some("task_started") => Some(TurnState::Incomplete),
+        Some("task_complete") => Some(TurnState::Completed),
+        Some("turn_aborted") => Some(TurnState::Aborted(parse_abort_reason(payload))),
+        _ => None,
+    }
 }
 
 /// Extract a `turn_aborted` reason token, tolerating either a plain
@@ -581,9 +609,15 @@ fn user_text(value: &Value) -> Option<String> {
     if !is_user_message {
         return None;
     }
-    let collected: String = payload
-        .get("content")
-        .and_then(Value::as_array)?
+    // `content` is either a plain string (`"content":"hi"`) or the structured
+    // array of parts (`[{"type":"input_text","text":"hi"}]`). Handle both so the
+    // preview isn't lost for string-content sessions.
+    let content = payload.get("content")?;
+    if let Some(s) = content.as_str() {
+        return (!s.trim().is_empty()).then(|| s.to_string());
+    }
+    let collected: String = content
+        .as_array()?
         .iter()
         .filter_map(|part| part.get("text").and_then(Value::as_str))
         .collect::<Vec<_>>()
@@ -641,15 +675,22 @@ fn read_tail(path: &Path, max: u64) -> Result<(String, bool)> {
 }
 
 /// Read at most the first `max_lines` lines of a file as lossy UTF-8.
+///
+/// Reads raw bytes per line and decodes lossily rather than `lines()` (which
+/// errors on the first invalid-UTF-8 byte): rollouts are written by external
+/// processes, and one malformed byte must not hide the whole session.
 fn read_head(path: &Path, max_lines: usize) -> Result<String> {
     use std::io::BufRead;
     let file = std::fs::File::open(path)?;
-    let reader = std::io::BufReader::new(file);
+    let mut reader = std::io::BufReader::new(file);
     let mut out = String::new();
-    for line in reader.lines().take(max_lines) {
-        let line = line?;
-        out.push_str(&line);
-        out.push('\n');
+    let mut line = Vec::new();
+    for _ in 0..max_lines {
+        line.clear();
+        if reader.read_until(b'\n', &mut line)? == 0 {
+            break;
+        }
+        out.push_str(&String::from_utf8_lossy(&line));
     }
     Ok(out)
 }
@@ -781,6 +822,17 @@ mod tests {
             r#"{"type":"event_msg","payload":{"type":"user_message","content":[{"type":"text","text":"hello there"}]}}"#
         );
         assert_eq!(extract_preview(&head), "hello there");
+    }
+
+    #[test]
+    fn extracts_preview_from_plain_string_content() {
+        // `content` as a plain string rather than the structured parts array.
+        let head = format!(
+            "{}\n{}\n",
+            r#"{"type":"session_meta","payload":{"id":"x"}}"#,
+            r#"{"type":"response_item","payload":{"type":"message","role":"user","content":"hi from a string"}}"#
+        );
+        assert_eq!(extract_preview(&head), "hi from a string");
     }
 
     #[test]
