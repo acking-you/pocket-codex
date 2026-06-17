@@ -1572,7 +1572,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
                                           rows.length + (_showTyping ? 1 : 0),
                                       itemBuilder: (c, i) {
                                         if (i >= rows.length) {
-                                          return const _TypingIndicator();
+                                          return _TypingIndicator(
+                                            elapsed: _fmtElapsed(_elapsedSecs),
+                                          );
                                         }
                                         final row = rows[i];
                                         // Stable keys let the sliver's
@@ -3765,7 +3767,12 @@ class _ActivityCardState extends State<_ActivityCard> {
 
 /// A three-dot "typing" indicator shown while the model is starting a reply.
 class _TypingIndicator extends StatefulWidget {
-  const _TypingIndicator();
+  const _TypingIndicator({required this.elapsed});
+
+  /// Live elapsed-time label (the same value as the status-bar timer);
+  /// empty leaves just the pulsing dots.
+  final String elapsed;
+
   @override
   State<_TypingIndicator> createState() => _TypingIndicatorState();
 }
@@ -3789,30 +3796,44 @@ class _TypingIndicatorState extends State<_TypingIndicator>
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 14),
       child: Row(
-        children: List.generate(3, (i) {
-          return AnimatedBuilder(
-            animation: _c,
-            builder: (context, _) {
-              // Stagger each dot's pulse.
-              final t = (_c.value + i * 0.2) % 1.0;
-              final o = 0.3 + 0.7 * (1 - (t - 0.5).abs() * 2).clamp(0.0, 1.0);
-              return Padding(
-                padding: const EdgeInsets.only(right: 5),
-                child: Opacity(
-                  opacity: o,
-                  child: Container(
-                    width: 7,
-                    height: 7,
-                    decoration: BoxDecoration(
-                      color: color,
-                      shape: BoxShape.circle,
+        children: [
+          ...List.generate(3, (i) {
+            return AnimatedBuilder(
+              animation: _c,
+              builder: (context, _) {
+                // Stagger each dot's pulse.
+                final t = (_c.value + i * 0.2) % 1.0;
+                final o = 0.3 + 0.7 * (1 - (t - 0.5).abs() * 2).clamp(0.0, 1.0);
+                return Padding(
+                  padding: const EdgeInsets.only(right: 5),
+                  child: Opacity(
+                    opacity: o,
+                    child: Container(
+                      width: 7,
+                      height: 7,
+                      decoration: BoxDecoration(
+                        color: color,
+                        shape: BoxShape.circle,
+                      ),
                     ),
                   ),
-                ),
-              );
-            },
-          );
-        }),
+                );
+              },
+            );
+          }),
+          // The same live elapsed clock as the status bar, trailing the dots.
+          if (widget.elapsed.isNotEmpty) ...[
+            const SizedBox(width: 2),
+            Text(
+              widget.elapsed,
+              style: TextStyle(
+                fontSize: 12,
+                color: color,
+                fontFeatures: const [FontFeature.tabularFigures()],
+              ),
+            ),
+          ],
+        ],
       ),
     );
   }
