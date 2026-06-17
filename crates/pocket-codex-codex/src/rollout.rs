@@ -233,9 +233,8 @@ pub struct TranscriptItem {
 /// on-disk `response_item` records:
 ///
 /// * `message` (role `user` / `assistant`) → user / agent message
-/// * `function_call` + its matching `function_call_output` (by `call_id`) →
-///   one `commandExecution` item (title = command, text = output, ANSI
-///   stripped)
+/// * `function_call` + its matching `function_call_output` (by `call_id`) → one
+///   `commandExecution` item (title = command, text = output, ANSI stripped)
 /// * `reasoning` with a non-empty `summary` → a reasoning item
 ///
 /// Encrypted reasoning (no readable `summary`), lifecycle and token events
@@ -243,8 +242,7 @@ pub struct TranscriptItem {
 /// read, so a partially-written rollout (one a live writer is appending to)
 /// still renders what is parseable.
 pub fn read_transcript(path: &Path) -> Result<Vec<TranscriptItem>> {
-    use std::collections::HashMap;
-    use std::io::BufRead;
+    use std::{collections::HashMap, io::BufRead};
     let file = std::fs::File::open(path)?;
     let reader = std::io::BufReader::new(file);
     let mut out: Vec<TranscriptItem> = Vec::new();
@@ -292,7 +290,8 @@ pub fn read_transcript(path: &Path) -> Result<Vec<TranscriptItem>> {
                 }
             },
             Some("function_call_output") => {
-                let output = strip_ansi(payload.get("output").and_then(Value::as_str).unwrap_or(""));
+                let output =
+                    strip_ansi(payload.get("output").and_then(Value::as_str).unwrap_or(""));
                 match payload
                     .get("call_id")
                     .and_then(Value::as_str)
@@ -346,7 +345,10 @@ fn message_text(payload: &Value) -> String {
 /// else the tool name. `arguments` is a JSON *string* that must be
 /// re-parsed; `command` may be a string or an argv array.
 fn command_title(payload: &Value) -> String {
-    let name = payload.get("name").and_then(Value::as_str).unwrap_or("tool");
+    let name = payload
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or("tool");
     let args: Option<Value> = payload
         .get("arguments")
         .and_then(Value::as_str)
@@ -802,17 +804,17 @@ mod tests {
         let call: Value = serde_json::from_str(
             r#"{"type":"function_call","name":"shell_command","arguments":"{\"command\":\"ls -la\"}"}"#,
         )
-        .unwrap();
+        .expect("parse shell_command json");
         assert_eq!(command_title(&call), "ls -la");
         // argv-array form.
         let argv: Value = serde_json::from_str(
             r#"{"name":"shell","arguments":"{\"command\":[\"echo\",\"hi\"]}"}"#,
         )
-        .unwrap();
+        .expect("parse shell argv json");
         assert_eq!(command_title(&argv), "echo hi");
         // falls back to the tool name when there's no command.
-        let tool: Value =
-            serde_json::from_str(r#"{"name":"apply_patch","arguments":"{}"}"#).unwrap();
+        let tool: Value = serde_json::from_str(r#"{"name":"apply_patch","arguments":"{}"}"#)
+            .expect("parse apply_patch json");
         assert_eq!(command_title(&tool), "apply_patch");
     }
 
@@ -826,10 +828,13 @@ mod tests {
             r#"{"type":"response_item","payload":{"type":"reasoning","summary":[],"encrypted_content":"opaque"}}"#,
             r#"{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}}"#,
         ];
-        let path = std::env::temp_dir()
-            .join(format!("pcx-transcript-{}-{}.jsonl", std::process::id(), line!()));
-        std::fs::write(&path, lines.join("\n")).unwrap();
-        let items = read_transcript(&path).unwrap();
+        let path = std::env::temp_dir().join(format!(
+            "pcx-transcript-{}-{}.jsonl",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::write(&path, lines.join("\n")).expect("write transcript fixture");
+        let items = read_transcript(&path).expect("read transcript");
         std::fs::remove_file(&path).ok();
 
         // session_meta + encrypted reasoning (no summary) are dropped;
