@@ -120,9 +120,18 @@ fn protected_pids() -> Vec<u32> {
 /// process table; no app-server connection is required.
 pub fn list_local_sessions() -> Result<Vec<LocalSession>> {
     let sessions = rollout::scan_sessions().map_err(|e| anyhow!("scanning sessions: {e}"))?;
+    // Probe liveness for every session in one batched call rather than spawning
+    // an `lsof` per session in the loop (which blocked the worker for seconds
+    // once a user had dozens of sessions).
+    let held = pocket_codex_codex::liveness::held_open_paths(
+        &sessions
+            .iter()
+            .map(|s| s.rollout_path.clone())
+            .collect::<Vec<_>>(),
+    );
     let mut out = Vec::with_capacity(sessions.len());
     for info in sessions {
-        let held_open = pocket_codex_codex::liveness::is_held_open(&info.rollout_path);
+        let held_open = held.contains(&info.rollout_path);
         let safety = takeover::classify(&info.turn_state, held_open);
         out.push(LocalSession {
             thread_id: info.thread_id,
@@ -193,6 +202,18 @@ pub fn force_resume(service_key: &str, thread_id: &str) -> Result<ForceResumeOut
     let path = rollout::rollout_path_for_thread(thread_id)
         .map_err(|e| anyhow!("locating rollout: {e}"))?
         .ok_or_else(|| anyhow!("no rollout found for thread {thread_id}"))?;
+    // Re-check liveness against the freshest state right before acting: the
+    // caller gated on a possibly-stale `LocalSession`, and other FFI callers
+    // reach here directly. Never resume a rollout whose turn is running right
+    // now — that would make two writers append to one file. Only
+    // Resumable / ResumableUnfinished / (confirmed) OwnedIdle proceed.
+    let live = takeover::inspect(&path).map_err(|e| anyhow!("inspecting rollout: {e}"))?;
+    if matches!(live.safety, takeover::ResumeSafety::OwnedRunning) {
+        return Err(anyhow!(
+            "session is running in another client right now; wait for its turn to finish before \
+             resuming"
+        ));
+    }
     let protected = protected_pids();
     let report = takeover::force_release(&path, &protected);
 
