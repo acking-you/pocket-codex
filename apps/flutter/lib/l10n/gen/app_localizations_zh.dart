@@ -287,6 +287,9 @@ class AppLocalizationsZh extends AppLocalizations {
   String get statusUnreachable => '不可达';
 
   @override
+  String get unreachableReason => '中继上的注册仍在,但远端 app-server 没有响应——它可能未启动,或已经宕机。';
+
+  @override
   String get subscribedAlive => '已订阅';
 
   @override

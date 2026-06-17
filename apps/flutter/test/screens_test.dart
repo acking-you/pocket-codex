@@ -172,6 +172,8 @@ void main() {
     // "在线" appears once — for the RELAY only. The old bug would have shown it
     // a second time on the app-server (a false green "online").
     expect(find.text('在线'), findsOneWidget);
+    // …and it spells out *why*: relay registration up, remote backend down.
+    expect(find.textContaining('远端 app-server 没有响应'), findsOneWidget);
   });
 
   testWidgets('ApiService rejects an out-of-range port before subscribing', (

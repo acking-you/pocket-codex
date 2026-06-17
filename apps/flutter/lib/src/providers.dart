@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:pocket_codex/src/app_modes.dart';
@@ -96,8 +98,17 @@ final runningThreadsProvider = StreamProvider.family<Set<String>, String>((
 ) async* {
   final api = ref.watch(bridgeApiProvider);
   final running = <String>{};
+  // Cancellable re-subscribe backoff. A plain `Future.delayed` would leave a
+  // pending timer when the provider is torn down (container disposal in tests,
+  // or invalidation), so gate the wait on a Timer we cancel in onDispose.
+  var disposed = false;
+  Timer? backoff;
+  ref.onDispose(() {
+    disposed = true;
+    backoff?.cancel();
+  });
   yield const <String>{};
-  while (true) {
+  while (!disposed) {
     try {
       await for (final e in api.appEvents(serviceKey)) {
         final tid = e.threadId;
@@ -113,7 +124,12 @@ final runningThreadsProvider = StreamProvider.family<Set<String>, String>((
     } catch (_) {
       // Not connected yet / transient drop — fall through to re-subscribe.
     }
-    await Future<void>.delayed(const Duration(seconds: 1));
+    if (disposed) break;
+    final gate = Completer<void>();
+    backoff = Timer(const Duration(seconds: 1), () {
+      if (!gate.isCompleted) gate.complete();
+    });
+    await gate.future;
   }
 });
 

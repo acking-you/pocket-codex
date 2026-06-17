@@ -644,6 +644,12 @@ abstract class AppLocalizations {
   /// **'Unreachable'**
   String get statusUnreachable;
 
+  /// No description provided for @unreachableReason.
+  ///
+  /// In en, this message translates to:
+  /// **'Still registered on the relay, but the remote app-server isn\'t responding — it may not be running, or has crashed.'**
+  String get unreachableReason;
+
   /// No description provided for @subscribedAlive.
   ///
   /// In en, this message translates to:
