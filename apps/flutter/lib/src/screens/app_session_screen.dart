@@ -2153,60 +2153,57 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
               ),
               const SizedBox(height: 10),
               Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  // Settings pills scroll horizontally so the send button
-                  // always stays put on narrow screens.
+                  // Settings pills wrap onto extra rows on narrow screens so
+                  // none get clipped (a horizontal scroll left the last pill
+                  // half-cut on mobile); the send button stays bottom-right.
                   Expanded(
-                    child: SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
-                      child: Row(
-                        children: [
-                          _pill(
-                            icon: Icons.auto_awesome,
-                            label: _model?.displayName ?? l10n.modelDefault,
-                            onTap: _pickModel,
-                          ),
-                          const SizedBox(width: 6),
-                          _pill(
-                            icon: _modeIcon(),
-                            label: _mode.label(l10n),
-                            onTap: _pickMode,
-                          ),
-                          const SizedBox(width: 6),
-                          _pill(
-                            icon: Icons.folder_outlined,
-                            label: _projectName(),
-                            onTap: _threadId == null ? _pickProject : null,
-                          ),
-                          const SizedBox(width: 6),
-                          // Plan-mode toggle: when on, the agent plans before
-                          // implementing. Highlighted while active.
-                          _pill(
-                            icon: Icons.checklist_rtl,
-                            label: l10n.planMode,
-                            active: _plan,
-                            onTap: () {
-                              setState(() {
-                                _plan = !_plan;
-                                _planToggledByUser = true;
-                              });
-                              _rememberDefaults();
-                            },
-                          ),
-                          const SizedBox(width: 6),
-                          // Reasoning effort ("thinking level"): shows the effort
-                          // the thread will run with (pending pick, else current),
-                          // or just "Effort" when none is set (model default).
-                          _pill(
-                            icon: Icons.psychology_outlined,
-                            label: _effectiveEffort == null
-                                ? l10n.effort
-                                : '${l10n.effort} · ${_effectiveEffort!.label(l10n)}',
-                            active: _effectiveEffort != null,
-                            onTap: _pickEffort,
-                          ),
-                        ],
-                      ),
+                    child: Wrap(
+                      spacing: 6,
+                      runSpacing: 6,
+                      children: [
+                        _pill(
+                          icon: Icons.auto_awesome,
+                          label: _model?.displayName ?? l10n.modelDefault,
+                          onTap: _pickModel,
+                        ),
+                        _pill(
+                          icon: _modeIcon(),
+                          label: _mode.label(l10n),
+                          onTap: _pickMode,
+                        ),
+                        _pill(
+                          icon: Icons.folder_outlined,
+                          label: _projectName(),
+                          onTap: _threadId == null ? _pickProject : null,
+                        ),
+                        // Plan-mode toggle: when on, the agent plans before
+                        // implementing. Highlighted while active.
+                        _pill(
+                          icon: Icons.checklist_rtl,
+                          label: l10n.planMode,
+                          active: _plan,
+                          onTap: () {
+                            setState(() {
+                              _plan = !_plan;
+                              _planToggledByUser = true;
+                            });
+                            _rememberDefaults();
+                          },
+                        ),
+                        // Reasoning effort ("thinking level"): shows the effort
+                        // the thread will run with (pending pick, else current),
+                        // or just "Effort" when none is set (model default).
+                        _pill(
+                          icon: Icons.psychology_outlined,
+                          label: _effectiveEffort == null
+                              ? l10n.effort
+                              : '${l10n.effort} · ${_effectiveEffort!.label(l10n)}',
+                          active: _effectiveEffort != null,
+                          onTap: _pickEffort,
+                        ),
+                      ],
                     ),
                   ),
                   const SizedBox(width: 8),
