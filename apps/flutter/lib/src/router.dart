@@ -2,6 +2,7 @@ import 'package:go_router/go_router.dart';
 import 'package:pocket_codex/src/screens/api_service_screen.dart';
 import 'package:pocket_codex/src/screens/app_service_screen.dart';
 import 'package:pocket_codex/src/screens/app_session_screen.dart';
+import 'package:pocket_codex/src/screens/local_sessions_screen.dart';
 import 'package:pocket_codex/src/screens/onboarding_screen.dart';
 import 'package:pocket_codex/src/screens/services_screen.dart';
 import 'package:pocket_codex/src/screens/settings_screen.dart';
@@ -14,6 +15,7 @@ GoRouter buildRouter({required String initialLocation}) => GoRouter(
     GoRoute(path: '/onboarding', builder: (c, s) => const OnboardingScreen()),
     GoRoute(path: '/', builder: (c, s) => const ServicesScreen()),
     GoRoute(path: '/settings', builder: (c, s) => const SettingsScreen()),
+    GoRoute(path: '/sessions', builder: (c, s) => const LocalSessionsScreen()),
     GoRoute(
       path: '/api/:key',
       builder: (c, s) => ApiServiceScreen(serviceKey: s.pathParameters['key']!),

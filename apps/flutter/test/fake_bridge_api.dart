@@ -282,4 +282,49 @@ class FakeBridgeApi implements BridgeApi {
     String requestId,
     String decision,
   ) async => lastApprovalDecision = decision;
+
+  // --- Local session takeover ---
+
+  /// Seedable local sessions returned by [appLocalSessions].
+  List<LocalSession> localSessions = const [];
+
+  /// Seedable per-thread liveness returned by [appSessionLiveness].
+  final Map<String, SessionLiveness> liveness = {};
+
+  /// Records the last `(serviceKey, threadId)` passed to [appForceResume].
+  String? lastForceResumedKey, lastForceResumedThread;
+
+  /// Result returned by [appForceResume] (tests can override).
+  ForceResumeReport forceResumeResult = const ForceResumeReport(
+    killed: [],
+    survived: [],
+    stillHeld: false,
+    resumed: true,
+  );
+
+  @override
+  Future<List<LocalSession>> appLocalSessions() async => localSessions;
+
+  @override
+  Future<SessionLiveness> appSessionLiveness(String threadId) async =>
+      liveness[threadId] ??
+      SessionLiveness(
+        threadId: threadId,
+        turnState: 'completed',
+        heldOpen: false,
+        safety: 'resumable',
+        allowsResume: true,
+        requiresTakeover: false,
+        holders: const [],
+      );
+
+  @override
+  Future<ForceResumeReport> appForceResume(
+    String serviceKey,
+    String threadId,
+  ) async {
+    lastForceResumedKey = serviceKey;
+    lastForceResumedThread = threadId;
+    return forceResumeResult;
+  }
 }

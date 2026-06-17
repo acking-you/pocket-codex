@@ -220,6 +220,135 @@ class ThreadItem {
   final String text;
 }
 
+/// A process holding a session's rollout file open — a would-be force-takeover
+/// target.
+class Holder {
+  /// Creates a holder.
+  const Holder({required this.pid, required this.name});
+
+  /// Operating-system process id.
+  final int pid;
+
+  /// Process image name (e.g. `codex.exe`).
+  final String name;
+}
+
+/// One codex session discovered under the shared `CODEX_HOME`, annotated with
+/// whether it is safe to resume.
+class LocalSession {
+  /// Creates a local session entry.
+  const LocalSession({
+    required this.threadId,
+    this.cwd,
+    required this.preview,
+    this.source,
+    required this.updatedAt,
+    required this.turnState,
+    required this.heldOpen,
+    required this.safety,
+    required this.allowsResume,
+    required this.requiresTakeover,
+  });
+
+  /// Thread / conversation id.
+  final String threadId;
+
+  /// Working directory the session controls, when recorded.
+  final String? cwd;
+
+  /// Best-effort first-user-message preview.
+  final String preview;
+
+  /// Originating client (`cli` / `vscode` / …), when recorded.
+  final String? source;
+
+  /// Last-modified time of the rollout, unix seconds.
+  final int updatedAt;
+
+  /// Most-recent-turn state (`empty`/`completed`/`aborted`/`incomplete`).
+  final String turnState;
+
+  /// Whether the rollout is currently held open by a live process.
+  final bool heldOpen;
+
+  /// Resume-safety tag (`resumable`/`resumableUnfinished`/`ownedRunning`/
+  /// `ownedIdle`).
+  final String safety;
+
+  /// Whether the UI may offer a resume action (false only while a turn is
+  /// actively running).
+  final bool allowsResume;
+
+  /// Whether resuming requires a force takeover (a live owner must be evicted
+  /// first).
+  final bool requiresTakeover;
+}
+
+/// One session's liveness detail, including the processes a force takeover
+/// would terminate (Pocket-Codex's own app-server already excluded).
+class SessionLiveness {
+  /// Creates a liveness view.
+  const SessionLiveness({
+    required this.threadId,
+    required this.turnState,
+    required this.heldOpen,
+    required this.safety,
+    required this.allowsResume,
+    required this.requiresTakeover,
+    required this.holders,
+  });
+
+  /// Thread / conversation id.
+  final String threadId;
+
+  /// Most-recent-turn state tag.
+  final String turnState;
+
+  /// Whether the rollout is currently held open.
+  final bool heldOpen;
+
+  /// Resume-safety tag.
+  final String safety;
+
+  /// Whether the UI may offer a resume action.
+  final bool allowsResume;
+
+  /// Whether resuming requires a force takeover.
+  final bool requiresTakeover;
+
+  /// Processes a force takeover would attempt to terminate.
+  final List<Holder> holders;
+}
+
+/// Outcome of a force-resume: which holders were killed / survived, and whether
+/// the subsequent resume took.
+class ForceResumeReport {
+  /// Creates a force-resume report.
+  const ForceResumeReport({
+    required this.killed,
+    required this.survived,
+    required this.stillHeld,
+    required this.resumed,
+    this.resumeError,
+  });
+
+  /// Holders that were successfully terminated.
+  final List<Holder> killed;
+
+  /// Holders the kill could not reach.
+  final List<Holder> survived;
+
+  /// Whether the rollout is still held open after the attempt (the resume
+  /// proceeded regardless).
+  final bool stillHeld;
+
+  /// Whether the subsequent `thread/resume` succeeded.
+  final bool resumed;
+
+  /// The resume error message, when [resumed] is false.
+  final String? resumeError;
+}
+
 /// The whole engine surface the UI is allowed to touch. One real impl wraps
 /// flutter_rust_bridge; a fake backs widget tests.
 abstract interface class BridgeApi {
@@ -341,4 +470,22 @@ abstract interface class BridgeApi {
     String requestId,
     String decision,
   );
+
+  // --- Local session takeover (shared CODEX_HOME) ---
+
+  /// List every codex session under the shared `CODEX_HOME`, newest first,
+  /// each annotated with whether it is safe to resume. Reads local disk +
+  /// the process table; no app-server connection required.
+  Future<List<LocalSession>> appLocalSessions();
+
+  /// Inspect one session's live resume-safety and the processes a force
+  /// takeover would evict. Poll before showing a resume button so the UI
+  /// reflects live ownership.
+  Future<SessionLiveness> appSessionLiveness(String threadId);
+
+  /// Force-resume a session into the app-server behind [serviceKey]:
+  /// best-effort evict the rollout's holders (never our own app-server), then
+  /// `thread/resume` regardless of the eviction outcome. Gate on explicit user
+  /// confirmation; do not call while a turn is actively running.
+  Future<ForceResumeReport> appForceResume(String serviceKey, String threadId);
 }
