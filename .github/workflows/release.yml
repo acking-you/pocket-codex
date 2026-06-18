@@ -260,7 +260,11 @@ jobs:
         run: |
           set -euo pipefail
           tag="${GITHUB_REF_NAME//\//-}"
-          ver="${tag#v}"
+          # dpkg requires the Version field to start with a digit. A real tag
+          # yields e.g. 0.0.1; a manual/branch run has a non-numeric ref, so
+          # fall back to 0.0.0 there.
+          debver="$(printf '%s' "${tag}" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || true)"
+          [ -n "${debver}" ] || debver="0.0.0"
           bundle="build/linux/x64/release/bundle"
           mkdir -p dist
 
@@ -318,7 +322,7 @@ jobs:
           DESKTOP
           cat > "$deb/DEBIAN/control" <<CONTROL
           Package: pocket-codex
-          Version: ${ver}
+          Version: ${debver}
           Section: utils
           Priority: optional
           Architecture: amd64
