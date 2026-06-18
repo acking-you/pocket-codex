@@ -1657,7 +1657,7 @@ checksum = "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e"
 
 [[package]]
 name = "pocket-codex-cli"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -1687,7 +1687,7 @@ dependencies = [
 
 [[package]]
 name = "pocket-codex-codex"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1708,7 +1708,7 @@ dependencies = [
 
 [[package]]
 name = "pocket-codex-core"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1726,7 +1726,7 @@ dependencies = [
 
 [[package]]
 name = "pocket-codex-pb"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "anyhow",
  "pb-mapper",
@@ -1742,7 +1742,7 @@ dependencies = [
 
 [[package]]
 name = "pocket_codex_bridge"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "anyhow",
  "base64",
