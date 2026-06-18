@@ -61,6 +61,10 @@ dev_dependencies:
     sdk: flutter
   flutter_launcher_icons: ^0.14.2
   flutter_native_splash: ^2.4.3
+  # Used only by test/gen_icon_test.dart to rasterise icon/pocket_mark.svg
+  # (the vector source of truth) into the PNGs flutter_launcher_icons /
+  # flutter_native_splash consume. Not shipped in the app bundle.
+  flutter_svg: ^2.0.10
 
 flutter:
   uses-material-design: true
@@ -72,21 +76,24 @@ flutter:
     - assets/logo/mark.png
 
 flutter_launcher_icons:
-  # 方案 A "pocket is the hero": the brand mark (icon_glyph.png — the pocket
-  # itself, already a container shape) IS the icon, on a clean white surface
-  # rather than a muddy lavender plate that read as a weak outer ring.
-  # icon_glyph.png is transparent, so it doubles as the adaptive foreground.
+  # The brand mark is a single vector source — icon/pocket_mark.svg (a rounded
+  # "pocket" container with a notch cut into the top centre + a white `>_`).
+  # test/gen_icon_test.dart rasterises it into the transparent PNGs below, so
+  # every platform render is pixel-identical to the SVG. The pocket IS the
+  # icon (no plate / outer ring): it is already a container shape.
+  #   icon_glyph.png          — big, bare mark (iOS / desktop / web / legacy)
+  #   adaptive_foreground.png — same mark sized into the Android safe zone
   image_path: "icon/icon_glyph.png"
-  # iOS: Apple rejects alpha; remove_alpha flattens the transparent pocket
-  # onto white (background_color_ios default) — a big pocket on white.
+  # iOS: Apple rejects alpha; remove_alpha flattens the transparent mark onto
+  # white (background_color_ios default). The top notch is a cut-out, so it
+  # reads as white against the white fill — a clean pocket on white.
   ios: true
   remove_alpha_ios: true
-  # Android: legacy square mipmaps from image_path (big pocket — old launchers
+  # Android: legacy square mipmaps from image_path (big mark — old launchers
   # don't mask) PLUS an adaptive icon (API 26+). The adaptive FOREGROUND must
-  # stay inside the ~61% safe zone or a circle-mask launcher clips the pocket's
-  # phone-peek / stitching, so it keeps the safe-sized pocket
-  # (adaptive_foreground.png) — but now on a CLEAN WHITE background instead of
-  # the muddy lavender, so the pocket pops and there's no weak outer ring.
+  # stay inside the ~61% safe zone or a circle/squircle mask clips the mark, so
+  # it uses the safe-sized render (adaptive_foreground.png) on a clean white
+  # background. The notch cut-out reads as white against that fill.
   android: true
   min_sdk_android: 21
   adaptive_icon_background: "#FFFFFF"
@@ -106,7 +113,7 @@ flutter_launcher_icons:
     image_path: "icon/icon_glyph.png"
     icon_size: 256
   # macOS: the Dock shows the icon as-is (no mask), so the bare transparent
-  # pocket floats plate-free — the cleanest expression of 方案 A.
+  # pocket floats plate-free — the cleanest expression of the mark.
   macos:
     generate: true
     image_path: "icon/icon_glyph.png"
