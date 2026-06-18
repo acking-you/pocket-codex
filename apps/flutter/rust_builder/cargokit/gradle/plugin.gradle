@@ -3,6 +3,8 @@
 
 import java.nio.file.Paths
 import org.apache.tools.ant.taskdefs.condition.Os
+import org.gradle.process.ExecOperations
+import javax.inject.Inject
 
 CargoKitPlugin.file = buildscript.sourceFile
 
@@ -42,6 +44,13 @@ abstract class CargoKitBuildTask extends DefaultTask {
     @Input
     List<String> targetPlatforms
 
+    // Gradle 8.11 deprecated and Gradle 9.0 removed `Project.exec`. Inject
+    // `ExecOperations` instead so the task runs external processes on Gradle 9+
+    // (the project pins Gradle 9.1). See the two `execOperations.exec` calls
+    // in build() below.
+    @Inject
+    abstract ExecOperations getExecOperations()
+
     @TaskAction
     def build() {
         if (project.cargokit.manifestDir == null) {
@@ -60,12 +69,12 @@ abstract class CargoKitBuildTask extends DefaultTask {
         def rootProjectDir = project.rootProject.projectDir
 
         if (!Os.isFamily(Os.FAMILY_WINDOWS)) {
-            project.exec {
+            execOperations.exec {
                 commandLine 'chmod', '+x', path
             }
         }
 
-        project.exec {
+        execOperations.exec {
             executable path
             args "build-gradle"
             environment "CARGOKIT_ROOT_PROJECT_DIR", rootProjectDir
