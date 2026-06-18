@@ -274,6 +274,16 @@ class AppLocalizationsEn extends AppLocalizations {
   String get turnStopped => 'Stopped';
 
   @override
+  String turnElapsed(String duration) {
+    return 'Took $duration';
+  }
+
+  @override
+  String completedAt(String time) {
+    return 'Completed at $time';
+  }
+
+  @override
   String get refreshStatus => 'Refresh status';
 
   @override
@@ -281,6 +291,16 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get statusConnected => 'Connected';
+
+  @override
+  String get statusChecking => 'Checking…';
+
+  @override
+  String get statusUnreachable => 'Unreachable';
+
+  @override
+  String get unreachableReason =>
+      'Still registered on the relay, but the remote app-server isn\'t responding — it may not be running, or has crashed.';
 
   @override
   String get subscribedAlive => 'Subscribed';
@@ -460,6 +480,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get searchConversations => 'Search conversations';
 
   @override
+  String get searchLocalSessions => 'Search content / path / source';
+
+  @override
   String get noMatchingThreads => 'No matching conversations';
 
   @override
@@ -500,4 +523,84 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get permissionLabel => 'Permission';
+
+  @override
+  String get localSessions => 'Local sessions';
+
+  @override
+  String get localSessionsTitle => 'Local sessions';
+
+  @override
+  String get localSessionsHint =>
+      'Sessions under this CODEX_HOME, including ones the desktop app or CLI created. Resume a finished one here.';
+
+  @override
+  String get noLocalSessions => 'No local sessions';
+
+  @override
+  String get sessionResumable => 'Resumable';
+
+  @override
+  String get sessionUnfinished => 'Last turn interrupted';
+
+  @override
+  String get sessionRunningElsewhere => 'Running elsewhere';
+
+  @override
+  String get sessionInUseElsewhere => 'In use elsewhere';
+
+  @override
+  String get sessionReadOnly => 'Read-only';
+
+  @override
+  String get readOnlyViewing =>
+      'Read-only — another client is using this session';
+
+  @override
+  String get sessionTranscriptEmpty => 'Nothing to show yet';
+
+  @override
+  String get resumeSession => 'Resume';
+
+  @override
+  String get forceTakeover => 'Force takeover';
+
+  @override
+  String get takeoverTitle => 'Force takeover?';
+
+  @override
+  String takeoverBody(int n) {
+    return 'This session is held open by $n other process(es). Pocket-Codex will try to terminate them, then resume it here. Any unsaved work in those processes will be lost.';
+  }
+
+  @override
+  String get takeoverWillTerminate => 'Will terminate';
+
+  @override
+  String get takeoverConfirm => 'Terminate & resume';
+
+  @override
+  String get takeoverResumed => 'Session resumed';
+
+  @override
+  String takeoverKilled(int n) {
+    return 'Terminated $n process(es)';
+  }
+
+  @override
+  String get takeoverStillHeld => 'Still held open — resumed anyway';
+
+  @override
+  String takeoverResumeFailed(String error) {
+    return 'Resume failed: $error';
+  }
+
+  @override
+  String get takeoverNoTarget =>
+      'Connect to an app-server service first to resume.';
+
+  @override
+  String holderRow(String name, int pid) {
+    return '$name · PID $pid';
+  }
 }

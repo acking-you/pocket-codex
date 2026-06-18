@@ -167,6 +167,12 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
   // Set when the user taps stop; the next turn end renders a "stopped" marker
   // in the transcript so the interruption is visible.
   bool _pendingInterrupt = false;
+  // Live elapsed-time clock for the running turn: started on turn/started,
+  // ticked once a second, then frozen and recorded as a per-turn footnote on
+  // turn end. Local-only (not persisted), like the "stopped" marker.
+  DateTime? _turnStartedAt;
+  Timer? _elapsedTicker;
+  int _elapsedSecs = 0;
   // True while a thread's history is being (re)loaded, so the chat shows a
   // smooth skeleton instead of flashing empty when switching sessions.
   bool _loading = false;
@@ -393,6 +399,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
   @override
   void dispose() {
     _healthTimer?.cancel();
+    _elapsedTicker?.cancel();
     _sub?.cancel();
     _input.dispose();
     _inputFocus.dispose();
@@ -553,7 +560,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
           _turnId = _parseTurnId(e.raw);
           _implementDismissed = false;
           _pendingInterrupt = false;
+          _elapsedSecs = 0;
         });
+        _startElapsedTicker();
         _scrollToEnd();
       case 'turn/completed':
         // v2 reports turn FAILURES here (turn.status == 'failed' + error.message),
@@ -565,6 +574,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
           for (final it in _items) {
             it.streaming = false;
           }
+          _finishTurn();
           // A turn the user stopped also ends as failed/aborted; show the
           // "stopped" marker rather than an error banner.
           if (_pendingInterrupt) {
@@ -584,6 +594,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
           for (final it in _items) {
             it.streaming = false;
           }
+          _finishTurn();
           // A turn the user stopped also ends as failed/aborted; show the
           // "stopped" marker rather than an error banner.
           if (_pendingInterrupt) {
@@ -849,6 +860,59 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
     _itemIndex[id] = _items.length;
     _items.add(_Item(id: id, type: 'interrupted', text: ''));
     _pendingInterrupt = false;
+  }
+
+  /// Begin ticking the running turn's elapsed clock once a second so the status
+  /// bar counts up live. Cheap: a single `setState` per second, only while a
+  /// turn runs.
+  void _startElapsedTicker() {
+    _turnStartedAt = DateTime.now();
+    _elapsedTicker?.cancel();
+    _elapsedTicker = Timer.periodic(const Duration(seconds: 1), (_) {
+      final started = _turnStartedAt;
+      if (!mounted || started == null) return;
+      setState(
+        () => _elapsedSecs = DateTime.now().difference(started).inSeconds,
+      );
+    });
+  }
+
+  /// Stop the elapsed ticker and append a per-turn duration footnote (用时 X,
+  /// hover → 完成于 HH:MM:SS). Local-only; call inside a `setState`.
+  void _finishTurn() {
+    _elapsedTicker?.cancel();
+    _elapsedTicker = null;
+    final started = _turnStartedAt;
+    _turnStartedAt = null;
+    if (started == null) return;
+    final now = DateTime.now();
+    final id = 'local-turndur-${_localSeq++}';
+    _itemIndex[id] = _items.length;
+    _items.add(
+      _Item(
+        id: id,
+        type: 'turnDuration',
+        title: _fmtElapsed(now.difference(started).inSeconds),
+        text: _fmtClock(now),
+      ),
+    );
+  }
+
+  /// Stopwatch-format an elapsed-second count: `m:ss`, or `h:mm:ss` past an
+  /// hour (e.g. `0:08`, `1:23`, `1:02:05`).
+  String _fmtElapsed(int secs) {
+    final s = secs < 0 ? 0 : secs;
+    final h = s ~/ 3600;
+    final m = (s % 3600) ~/ 60;
+    final ss = (s % 60).toString().padLeft(2, '0');
+    if (h > 0) return '$h:${m.toString().padLeft(2, '0')}:$ss';
+    return '$m:$ss';
+  }
+
+  /// Wall-clock `HH:MM:SS` for a completion timestamp.
+  String _fmtClock(DateTime t) {
+    String p(int n) => n.toString().padLeft(2, '0');
+    return '${p(t.hour)}:${p(t.minute)}:${p(t.second)}';
   }
 
   /// Return to the project / session picker (AppServiceScreen). Pops if this
@@ -1350,6 +1414,21 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
             ),
           ),
           const Spacer(),
+          // Live elapsed clock for the running turn — ticks each second next to
+          // the working state, frozen + dropped into the transcript on turn end.
+          if (_streaming) ...[
+            Icon(Icons.schedule, size: 12, color: st.color),
+            const SizedBox(width: 4),
+            Text(
+              _fmtElapsed(_elapsedSecs),
+              style: TextStyle(
+                fontSize: 12,
+                color: st.color,
+                fontFeatures: const [FontFeature.tabularFigures()],
+              ),
+            ),
+            const SizedBox(width: 10),
+          ],
           // Branch + working-tree change counts, tappable to open the diff.
           // This is the single, unified place the git state lives (no separate
           // app-bar chip), so the status bar is the one source of truth.
@@ -1493,7 +1572,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
                                           rows.length + (_showTyping ? 1 : 0),
                                       itemBuilder: (c, i) {
                                         if (i >= rows.length) {
-                                          return const _TypingIndicator();
+                                          return _TypingIndicator(
+                                            elapsed: _fmtElapsed(_elapsedSecs),
+                                          );
                                         }
                                         final row = rows[i];
                                         // Stable keys let the sliver's
@@ -2072,60 +2153,57 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
               ),
               const SizedBox(height: 10),
               Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  // Settings pills scroll horizontally so the send button
-                  // always stays put on narrow screens.
+                  // Settings pills wrap onto extra rows on narrow screens so
+                  // none get clipped (a horizontal scroll left the last pill
+                  // half-cut on mobile); the send button stays bottom-right.
                   Expanded(
-                    child: SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
-                      child: Row(
-                        children: [
-                          _pill(
-                            icon: Icons.auto_awesome,
-                            label: _model?.displayName ?? l10n.modelDefault,
-                            onTap: _pickModel,
-                          ),
-                          const SizedBox(width: 6),
-                          _pill(
-                            icon: _modeIcon(),
-                            label: _mode.label(l10n),
-                            onTap: _pickMode,
-                          ),
-                          const SizedBox(width: 6),
-                          _pill(
-                            icon: Icons.folder_outlined,
-                            label: _projectName(),
-                            onTap: _threadId == null ? _pickProject : null,
-                          ),
-                          const SizedBox(width: 6),
-                          // Plan-mode toggle: when on, the agent plans before
-                          // implementing. Highlighted while active.
-                          _pill(
-                            icon: Icons.checklist_rtl,
-                            label: l10n.planMode,
-                            active: _plan,
-                            onTap: () {
-                              setState(() {
-                                _plan = !_plan;
-                                _planToggledByUser = true;
-                              });
-                              _rememberDefaults();
-                            },
-                          ),
-                          const SizedBox(width: 6),
-                          // Reasoning effort ("thinking level"): shows the effort
-                          // the thread will run with (pending pick, else current),
-                          // or just "Effort" when none is set (model default).
-                          _pill(
-                            icon: Icons.psychology_outlined,
-                            label: _effectiveEffort == null
-                                ? l10n.effort
-                                : '${l10n.effort} · ${_effectiveEffort!.label(l10n)}',
-                            active: _effectiveEffort != null,
-                            onTap: _pickEffort,
-                          ),
-                        ],
-                      ),
+                    child: Wrap(
+                      spacing: 6,
+                      runSpacing: 6,
+                      children: [
+                        _pill(
+                          icon: Icons.auto_awesome,
+                          label: _model?.displayName ?? l10n.modelDefault,
+                          onTap: _pickModel,
+                        ),
+                        _pill(
+                          icon: _modeIcon(),
+                          label: _mode.label(l10n),
+                          onTap: _pickMode,
+                        ),
+                        _pill(
+                          icon: Icons.folder_outlined,
+                          label: _projectName(),
+                          onTap: _threadId == null ? _pickProject : null,
+                        ),
+                        // Plan-mode toggle: when on, the agent plans before
+                        // implementing. Highlighted while active.
+                        _pill(
+                          icon: Icons.checklist_rtl,
+                          label: l10n.planMode,
+                          active: _plan,
+                          onTap: () {
+                            setState(() {
+                              _plan = !_plan;
+                              _planToggledByUser = true;
+                            });
+                            _rememberDefaults();
+                          },
+                        ),
+                        // Reasoning effort ("thinking level"): shows the effort
+                        // the thread will run with (pending pick, else current),
+                        // or just "Effort" when none is set (model default).
+                        _pill(
+                          icon: Icons.psychology_outlined,
+                          label: _effectiveEffort == null
+                              ? l10n.effort
+                              : '${l10n.effort} · ${_effectiveEffort!.label(l10n)}',
+                          active: _effectiveEffort != null,
+                          onTap: _pickEffort,
+                        ),
+                      ],
                     ),
                   ),
                   const SizedBox(width: 8),
@@ -2931,6 +3009,10 @@ class _MessageViewState extends State<_MessageView> {
           icon: Icons.stop_circle_outlined,
           text: AppLocalizations.of(context).turnStopped,
         ),
+        'turnDuration' => _TurnDurationFooter(
+          duration: item.title,
+          completedAt: item.text,
+        ),
         _ => _ActivityCard(item: item),
       };
       return Padding(
@@ -3044,6 +3126,49 @@ class _SystemNotice extends StatelessWidget {
           ),
           Expanded(child: Divider(color: muted.withValues(alpha: 0.3))),
         ],
+      ),
+    );
+  }
+}
+
+/// A per-turn duration footnote dropped in after a turn ends: a subtle
+/// `用时 m:ss` tag whose tooltip (hover on desktop, long-press on mobile)
+/// reveals the wall-clock completion time `完成于 HH:MM:SS`.
+class _TurnDurationFooter extends StatelessWidget {
+  const _TurnDurationFooter({
+    required this.duration,
+    required this.completedAt,
+  });
+
+  final String duration;
+  final String completedAt;
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    final muted = Theme.of(context).colorScheme.onSurfaceVariant;
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Tooltip(
+        message: l10n.completedAt(completedAt),
+        child: Padding(
+          padding: const EdgeInsets.only(left: 6, top: 2, bottom: 4),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.schedule, size: 12, color: muted),
+              const SizedBox(width: 4),
+              Text(
+                l10n.turnElapsed(duration),
+                style: TextStyle(
+                  fontSize: 11.5,
+                  color: muted,
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -3639,7 +3764,12 @@ class _ActivityCardState extends State<_ActivityCard> {
 
 /// A three-dot "typing" indicator shown while the model is starting a reply.
 class _TypingIndicator extends StatefulWidget {
-  const _TypingIndicator();
+  const _TypingIndicator({required this.elapsed});
+
+  /// Live elapsed-time label (the same value as the status-bar timer);
+  /// empty leaves just the pulsing dots.
+  final String elapsed;
+
   @override
   State<_TypingIndicator> createState() => _TypingIndicatorState();
 }
@@ -3663,30 +3793,44 @@ class _TypingIndicatorState extends State<_TypingIndicator>
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 14),
       child: Row(
-        children: List.generate(3, (i) {
-          return AnimatedBuilder(
-            animation: _c,
-            builder: (context, _) {
-              // Stagger each dot's pulse.
-              final t = (_c.value + i * 0.2) % 1.0;
-              final o = 0.3 + 0.7 * (1 - (t - 0.5).abs() * 2).clamp(0.0, 1.0);
-              return Padding(
-                padding: const EdgeInsets.only(right: 5),
-                child: Opacity(
-                  opacity: o,
-                  child: Container(
-                    width: 7,
-                    height: 7,
-                    decoration: BoxDecoration(
-                      color: color,
-                      shape: BoxShape.circle,
+        children: [
+          ...List.generate(3, (i) {
+            return AnimatedBuilder(
+              animation: _c,
+              builder: (context, _) {
+                // Stagger each dot's pulse.
+                final t = (_c.value + i * 0.2) % 1.0;
+                final o = 0.3 + 0.7 * (1 - (t - 0.5).abs() * 2).clamp(0.0, 1.0);
+                return Padding(
+                  padding: const EdgeInsets.only(right: 5),
+                  child: Opacity(
+                    opacity: o,
+                    child: Container(
+                      width: 7,
+                      height: 7,
+                      decoration: BoxDecoration(
+                        color: color,
+                        shape: BoxShape.circle,
+                      ),
                     ),
                   ),
-                ),
-              );
-            },
-          );
-        }),
+                );
+              },
+            );
+          }),
+          // The same live elapsed clock as the status bar, trailing the dots.
+          if (widget.elapsed.isNotEmpty) ...[
+            const SizedBox(width: 2),
+            Text(
+              widget.elapsed,
+              style: TextStyle(
+                fontSize: 12,
+                color: color,
+                fontFeatures: const [FontFeature.tabularFigures()],
+              ),
+            ),
+          ],
+        ],
       ),
     );
   }

@@ -272,6 +272,16 @@ class AppLocalizationsZh extends AppLocalizations {
   String get turnStopped => '已停止';
 
   @override
+  String turnElapsed(String duration) {
+    return '用时 $duration';
+  }
+
+  @override
+  String completedAt(String time) {
+    return '完成于 $time';
+  }
+
+  @override
   String get refreshStatus => '刷新状态';
 
   @override
@@ -279,6 +289,15 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get statusConnected => '已连接';
+
+  @override
+  String get statusChecking => '检测中…';
+
+  @override
+  String get statusUnreachable => '不可达';
+
+  @override
+  String get unreachableReason => '中继上的注册仍在,但远端 app-server 没有响应——它可能未启动,或已经宕机。';
 
   @override
   String get subscribedAlive => '已订阅';
@@ -451,6 +470,9 @@ class AppLocalizationsZh extends AppLocalizations {
   String get searchConversations => '搜索会话';
 
   @override
+  String get searchLocalSessions => '搜索会话内容 / 目录 / 来源';
+
+  @override
   String get noMatchingThreads => '没有匹配的会话';
 
   @override
@@ -491,4 +513,82 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get permissionLabel => '权限';
+
+  @override
+  String get localSessions => '本地会话';
+
+  @override
+  String get localSessionsTitle => '本地会话';
+
+  @override
+  String get localSessionsHint =>
+      '此 CODEX_HOME 下的会话，包含桌面端或 CLI 创建的。可在此恢复已结束的会话。';
+
+  @override
+  String get noLocalSessions => '没有本地会话';
+
+  @override
+  String get sessionResumable => '可恢复';
+
+  @override
+  String get sessionUnfinished => '上一轮被中断';
+
+  @override
+  String get sessionRunningElsewhere => '其他进程运行中';
+
+  @override
+  String get sessionInUseElsewhere => '被其他进程占用';
+
+  @override
+  String get sessionReadOnly => '只读';
+
+  @override
+  String get readOnlyViewing => '只读 — 其他客户端正在使用此会话';
+
+  @override
+  String get sessionTranscriptEmpty => '暂无可显示的内容';
+
+  @override
+  String get resumeSession => '恢复';
+
+  @override
+  String get forceTakeover => '强制接管';
+
+  @override
+  String get takeoverTitle => '强制接管？';
+
+  @override
+  String takeoverBody(int n) {
+    return '该会话正被另外 $n 个进程占用。Pocket-Codex 将尝试终止它们后在此恢复。这些进程中未保存的工作将会丢失。';
+  }
+
+  @override
+  String get takeoverWillTerminate => '将终止';
+
+  @override
+  String get takeoverConfirm => '终止并恢复';
+
+  @override
+  String get takeoverResumed => '会话已恢复';
+
+  @override
+  String takeoverKilled(int n) {
+    return '已终止 $n 个进程';
+  }
+
+  @override
+  String get takeoverStillHeld => '仍被占用——已照常恢复';
+
+  @override
+  String takeoverResumeFailed(String error) {
+    return '恢复失败：$error';
+  }
+
+  @override
+  String get takeoverNoTarget => '请先连接一个 app-server 服务再恢复。';
+
+  @override
+  String holderRow(String name, int pid) {
+    return '$name · PID $pid';
+  }
 }

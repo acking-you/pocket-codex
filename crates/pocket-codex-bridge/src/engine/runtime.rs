@@ -120,6 +120,39 @@ pub fn unsubscribe_service(key: &str) {
     }
 }
 
+/// Open a one-off pb-mapper subscriber for `key` that is NOT recorded in the
+/// shared registry, returning the bound local address and the task handle (the
+/// caller MUST `abort()` it when done).
+///
+/// Unlike [`subscribe_service`], this never reuses or registers a persistent
+/// entry. A transient reachability probe needs that isolation: keyed on the
+/// shared registry, a probe could reuse a live connection's tunnel and then —
+/// on its own teardown — abort the real connection. With its own handle it
+/// tears down only its own tunnel.
+pub fn subscribe_transient(
+    key: String,
+    local_port: u16,
+    relay: String,
+) -> Result<(String, JoinHandle<()>)> {
+    let requested = format!("127.0.0.1:{local_port}");
+    // Probe-bind to learn the concrete port (and fail fast if it can't bind),
+    // mirroring subscribe_service.
+    let local_addr = match std::net::TcpListener::bind(&requested) {
+        Ok(probe) => probe
+            .local_addr()
+            .map(|a| a.to_string())
+            .map_err(|e| anyhow!("reading bound addr for {requested}: {e}"))?,
+        Err(e) => return Err(anyhow!("cannot bind {requested}: {e}")),
+    };
+    let opts = SubscribeOptions {
+        key,
+        local_addr: local_addr.clone(),
+        relay_addr: relay,
+    };
+    let handle = runtime().spawn(async move { subscribe(opts).await });
+    Ok((local_addr, handle))
+}
+
 /// Snapshot of all tracked subscriptions.
 pub fn list_subscriptions() -> Vec<SubStatus> {
     registry()

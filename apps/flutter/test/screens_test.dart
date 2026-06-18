@@ -147,6 +147,35 @@ void main() {
     expect(find.text('pcx:lb7666:api:first'), findsNothing);
   });
 
+  testWidgets('a registered-but-dead app-server reads "unreachable", not '
+      '"online"', (t) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+      services: const [
+        ServiceEntry(
+          device: 'lb7666',
+          kind: 'app',
+          name: 'default',
+          key: 'pcx:lb7666:app:default',
+        ),
+      ],
+    )..reachable['pcx:lb7666:app:default'] = false; // backend probe fails
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(400, 900); // narrow: single-pane list
+    addTearDown(t.view.reset);
+
+    await t.pumpWidget(_host(const ServicesScreen(), api));
+    await t.pumpAndSettle(); // let the reachability probe resolve
+
+    // The probe says the backend is dead → honest "不可达" on the app-server.
+    expect(find.text('不可达'), findsOneWidget); // statusUnreachable (zh)
+    // "在线" appears once — for the RELAY only. The old bug would have shown it
+    // a second time on the app-server (a false green "online").
+    expect(find.text('在线'), findsOneWidget);
+    // …and it spells out *why*: relay registration up, remote backend down.
+    expect(find.textContaining('远端 app-server 没有响应'), findsOneWidget);
+  });
+
   testWidgets('ApiService rejects an out-of-range port before subscribing', (
     t,
   ) async {
@@ -531,6 +560,86 @@ void main() {
     await t.tap(find.text('ls -la'));
     await t.pumpAndSettle();
     expect(find.textContaining('total 0', findRichText: true), findsOneWidget);
+  });
+
+  testWidgets('a finished turn drops a 用时 duration footnote', (t) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    await t.pumpWidget(
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          threadId: 't1',
+        ),
+        api,
+      ),
+    );
+    await t.pumpAndSettle();
+
+    // No footnote before a turn runs.
+    expect(find.textContaining('用时'), findsNothing);
+
+    // A turn starts (elapsed clock begins) then completes.
+    api.pushEvent(
+      'pcx:lb7666:app:default',
+      const AppEvent(
+        kind: 'turn/started',
+        threadId: 't1',
+        itemId: '',
+        itemType: '',
+        title: '',
+        text: '',
+        raw: '{}',
+      ),
+    );
+    await t.pump();
+    api.pushEvent(
+      'pcx:lb7666:app:default',
+      const AppEvent(
+        kind: 'turn/completed',
+        threadId: 't1',
+        itemId: '',
+        itemType: '',
+        title: '',
+        text: '',
+        raw: '{}',
+      ),
+    );
+    await t.pumpAndSettle();
+
+    // The per-turn footnote is dropped into the transcript (用时 0:00 for an
+    // instant test turn).
+    expect(find.textContaining('用时'), findsOneWidget);
+  });
+
+  testWidgets('composer pills wrap onto-screen on a narrow (mobile) width', (
+    t,
+  ) async {
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(360, 760); // a phone-ish viewport
+    addTearDown(t.view.reset);
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    await t.pumpWidget(
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          threadId: 't1',
+        ),
+        api,
+      ),
+    );
+    await t.pumpAndSettle();
+
+    // The effort pill is the last of five; a horizontal scroll left it clipped
+    // off the right edge on a phone. Wrapped, it sits fully within the viewport.
+    final effort = find.text('思考强度'); // l10n.effort (zh), no effort set
+    expect(effort, findsOneWidget);
+    expect(t.getRect(effort).right, lessThanOrEqualTo(360.0));
   });
 
   testWidgets('Opening an existing thread resumes it before reading', (

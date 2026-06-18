@@ -27,3 +27,4 @@ which = { workspace = true }
 sysinfo = { workspace = true }
 nix = { workspace = true }
 chrono = { workspace = true }
+directories = { workspace = true }

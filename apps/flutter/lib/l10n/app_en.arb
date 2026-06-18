@@ -92,9 +92,20 @@
   "stateReconnecting": "Reconnecting…",
   "compacted": "Conversation compacted",
   "turnStopped": "Stopped",
+  "turnElapsed": "Took {duration}",
+  "@turnElapsed": {
+    "placeholders": { "duration": { "type": "String" } }
+  },
+  "completedAt": "Completed at {time}",
+  "@completedAt": {
+    "placeholders": { "time": { "type": "String" } }
+  },
   "refreshStatus": "Refresh status",
   "statusOnline": "Online",
   "statusConnected": "Connected",
+  "statusChecking": "Checking…",
+  "statusUnreachable": "Unreachable",
+  "unreachableReason": "Still registered on the relay, but the remote app-server isn't responding — it may not be running, or has crashed.",
   "subscribedAlive": "Subscribed",
   "subscribedDead": "Dropped",
   "runningSessions": "{count} running",
@@ -154,6 +165,7 @@
   "suggestPlanTitle": "Plan a feature",
   "suggestPlanPrompt": "Help me plan out a new feature before writing any code.",
   "searchConversations": "Search conversations",
+  "searchLocalSessions": "Search content / path / source",
   "noMatchingThreads": "No matching conversations",
   "groupActive": "Active",
   "groupToday": "Today",
@@ -174,5 +186,43 @@
     "placeholders": { "n": { "type": "int" } }
   },
   "modelLabel": "Model",
-  "permissionLabel": "Permission"
+  "permissionLabel": "Permission",
+  "localSessions": "Local sessions",
+  "localSessionsTitle": "Local sessions",
+  "localSessionsHint": "Sessions under this CODEX_HOME, including ones the desktop app or CLI created. Resume a finished one here.",
+  "noLocalSessions": "No local sessions",
+  "sessionResumable": "Resumable",
+  "sessionUnfinished": "Last turn interrupted",
+  "sessionRunningElsewhere": "Running elsewhere",
+  "sessionInUseElsewhere": "In use elsewhere",
+  "sessionReadOnly": "Read-only",
+  "readOnlyViewing": "Read-only — another client is using this session",
+  "sessionTranscriptEmpty": "Nothing to show yet",
+  "resumeSession": "Resume",
+  "forceTakeover": "Force takeover",
+  "takeoverTitle": "Force takeover?",
+  "takeoverBody": "This session is held open by {n} other process(es). Pocket-Codex will try to terminate them, then resume it here. Any unsaved work in those processes will be lost.",
+  "@takeoverBody": {
+    "placeholders": { "n": { "type": "int" } }
+  },
+  "takeoverWillTerminate": "Will terminate",
+  "takeoverConfirm": "Terminate & resume",
+  "takeoverResumed": "Session resumed",
+  "takeoverKilled": "Terminated {n} process(es)",
+  "@takeoverKilled": {
+    "placeholders": { "n": { "type": "int" } }
+  },
+  "takeoverStillHeld": "Still held open — resumed anyway",
+  "takeoverResumeFailed": "Resume failed: {error}",
+  "@takeoverResumeFailed": {
+    "placeholders": { "error": { "type": "String" } }
+  },
+  "takeoverNoTarget": "Connect to an app-server service first to resume.",
+  "holderRow": "{name} · PID {pid}",
+  "@holderRow": {
+    "placeholders": {
+      "name": { "type": "String" },
+      "pid": { "type": "int" }
+    }
+  }
 }

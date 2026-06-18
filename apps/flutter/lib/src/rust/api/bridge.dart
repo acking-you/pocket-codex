@@ -6,7 +6,7 @@
 import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `apply_key`, `current_relay`
+// These functions are ignored because they are not marked as `pub`: `apply_key`, `current_relay`, `holder_dto`
 
 /// Initialise the engine with the platform app-support dir (from Dart's
 /// path_provider). Must be called once after `RustLib.init()`.
@@ -74,6 +74,15 @@ bool appIsConnected({required String serviceKey}) =>
 /// Disconnect the app-server session and its pb-mapper subscription.
 Future<void> appDisconnect({required String serviceKey}) =>
     RustLib.instance.api.crateApiBridgeAppDisconnect(serviceKey: serviceKey);
+
+/// Probe whether an app-server is actually REACHABLE — its backend responds to
+/// a handshake — rather than merely registered on the relay. The services list
+/// uses this so a registered-but-dead app-server (a live relay registrant
+/// forwarding to a codex app-server that has died) shows as unreachable instead
+/// of a false "online". Opens a transient tunnel + `initialize` with a timeout,
+/// then tears it down; a live session short-circuits to `true`.
+Future<bool> appProbe({required String serviceKey}) =>
+    RustLib.instance.api.crateApiBridgeAppProbe(serviceKey: serviceKey);
 
 /// Stream live app-server events (turn/item notifications) for `service_key`.
 /// The Dart side receives one [`AppEventDto`] per notification until the
@@ -201,6 +210,54 @@ Future<void> appTurnInterrupt({
   turnId: turnId,
 );
 
+/// List every codex session under the shared `CODEX_HOME`, newest first,
+/// each annotated with whether it is safe to resume.
+///
+/// Works without any app-server connection — it reads the local rollout
+/// files and process table directly, so it surfaces sessions created by
+/// *other* codex clients (the desktop app, the CLI, the VS Code
+/// extension) that share this `CODEX_HOME`. Meaningful only when the UI
+/// runs on the same machine as those sessions.
+Future<List<LocalSessionDto>> appLocalSessions() =>
+    RustLib.instance.api.crateApiBridgeAppLocalSessions();
+
+/// Inspect one session's current resume-safety and the processes a force
+/// takeover would evict. Poll this before showing a resume button so the
+/// UI reflects live ownership (a session can flip between read-only and
+/// resumable as the desktop app loads / releases it).
+Future<SessionLivenessDto> appSessionLiveness({required String threadId}) =>
+    RustLib.instance.api.crateApiBridgeAppSessionLiveness(threadId: threadId);
+
+/// Read a local session's transcript for READ-ONLY viewing. Parses the
+/// on-disk rollout directly (no app-server connection, no resume, no write),
+/// so it works even while another codex client still owns the session.
+/// Items are in the same shape as [`app_thread_read`], so the read-only
+/// viewer reuses the live-conversation rendering. Poll it alongside
+/// [`app_session_liveness`] to follow a running session and notice when it
+/// goes idle (resume-eligible).
+Future<List<ThreadItemDto>> appLocalSessionTranscript({
+  required String threadId,
+}) => RustLib.instance.api.crateApiBridgeAppLocalSessionTranscript(
+  threadId: threadId,
+);
+
+/// Force-resume a session into the app-server behind `service_key`.
+///
+/// Best-effort terminates every live process holding the session's rollout
+/// open (never Pocket-Codex's own app-server), then issues `thread/resume`
+/// regardless of the eviction outcome. The UI must gate this on explicit
+/// user confirmation and must not offer it while a turn is actively
+/// running (`SessionLivenessDto::allows_resume == false`). The returned
+/// report says exactly which processes were killed / survived and whether
+/// the resume took.
+Future<ForceResumeReportDto> appForceResume({
+  required String serviceKey,
+  required String threadId,
+}) => RustLib.instance.api.crateApiBridgeAppForceResume(
+  serviceKey: serviceKey,
+  threadId: threadId,
+);
+
 /// One app-server event mirrored for Dart. `kind` is the JSON-RPC method
 /// (e.g. `turn/started`, `item/agentMessage/delta`, `turn/completed`).
 class AppEventDto {
@@ -295,6 +352,154 @@ class ConfigView {
           locale == other.locale;
 }
 
+/// Outcome of a force-resume, mirrored for Dart.
+class ForceResumeReportDto {
+  /// Holders that were successfully terminated.
+  final List<HolderDto> killed;
+
+  /// Holders the kill could not reach.
+  final List<HolderDto> survived;
+
+  /// Whether the rollout is still held open after the attempt (the resume
+  /// proceeded regardless).
+  final bool stillHeld;
+
+  /// Whether the subsequent `thread/resume` succeeded.
+  final bool resumed;
+
+  /// The resume error message, when `resumed` is false.
+  final String? resumeError;
+
+  const ForceResumeReportDto({
+    required this.killed,
+    required this.survived,
+    required this.stillHeld,
+    required this.resumed,
+    this.resumeError,
+  });
+
+  @override
+  int get hashCode =>
+      killed.hashCode ^
+      survived.hashCode ^
+      stillHeld.hashCode ^
+      resumed.hashCode ^
+      resumeError.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ForceResumeReportDto &&
+          runtimeType == other.runtimeType &&
+          killed == other.killed &&
+          survived == other.survived &&
+          stillHeld == other.stillHeld &&
+          resumed == other.resumed &&
+          resumeError == other.resumeError;
+}
+
+/// A process holding a session's rollout open (a would-be takeover
+/// target), mirrored for Dart.
+class HolderDto {
+  /// Operating-system process id.
+  final PlatformInt64 pid;
+
+  /// Process image name (e.g. `codex.exe`).
+  final String name;
+
+  const HolderDto({required this.pid, required this.name});
+
+  @override
+  int get hashCode => pid.hashCode ^ name.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is HolderDto &&
+          runtimeType == other.runtimeType &&
+          pid == other.pid &&
+          name == other.name;
+}
+
+/// A session discovered under `CODEX_HOME`, with the state the UI needs to
+/// render it read-only or resumable, mirrored for Dart.
+class LocalSessionDto {
+  /// Thread / conversation id.
+  final String threadId;
+
+  /// Working directory the session controls, when recorded.
+  final String? cwd;
+
+  /// Best-effort first-user-message preview.
+  final String preview;
+
+  /// Originating client (`cli` / `vscode` / …), when recorded.
+  final String? source;
+
+  /// Last-modified time of the rollout, unix seconds.
+  final PlatformInt64 updatedAt;
+
+  /// Most-recent-turn state (`empty`/`completed`/`aborted`/`incomplete`).
+  final String turnState;
+
+  /// Whether the rollout is currently held open by a live process.
+  final bool heldOpen;
+
+  /// Resume-safety tag (`resumable`/`resumableUnfinished`/`ownedRunning`/
+  /// `ownedIdle`).
+  final String safety;
+
+  /// Whether the UI may offer a resume action (false only while a turn is
+  /// actively running).
+  final bool allowsResume;
+
+  /// Whether resuming requires a force takeover (a live owner must be
+  /// evicted first).
+  final bool requiresTakeover;
+
+  const LocalSessionDto({
+    required this.threadId,
+    this.cwd,
+    required this.preview,
+    this.source,
+    required this.updatedAt,
+    required this.turnState,
+    required this.heldOpen,
+    required this.safety,
+    required this.allowsResume,
+    required this.requiresTakeover,
+  });
+
+  @override
+  int get hashCode =>
+      threadId.hashCode ^
+      cwd.hashCode ^
+      preview.hashCode ^
+      source.hashCode ^
+      updatedAt.hashCode ^
+      turnState.hashCode ^
+      heldOpen.hashCode ^
+      safety.hashCode ^
+      allowsResume.hashCode ^
+      requiresTakeover.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is LocalSessionDto &&
+          runtimeType == other.runtimeType &&
+          threadId == other.threadId &&
+          cwd == other.cwd &&
+          preview == other.preview &&
+          source == other.source &&
+          updatedAt == other.updatedAt &&
+          turnState == other.turnState &&
+          heldOpen == other.heldOpen &&
+          safety == other.safety &&
+          allowsResume == other.allowsResume &&
+          requiresTakeover == other.requiresTakeover;
+}
+
 /// One model offered by the app-server, mirrored for Dart.
 class ModelInfoDto {
   /// Model id (used as the `model` param).
@@ -306,7 +511,8 @@ class ModelInfoDto {
   /// Short description.
   final String description;
 
-  /// Reasoning efforts this model supports (so the UI offers only valid levels).
+  /// Reasoning efforts this model supports (so the UI offers only valid
+  /// levels).
   final List<String> supportedReasoningEfforts;
 
   /// The model's default reasoning effort, if any.
@@ -376,6 +582,65 @@ class ServiceIdDto {
           key == other.key;
 }
 
+/// One session's liveness detail, including the would-be takeover targets,
+/// mirrored for Dart.
+class SessionLivenessDto {
+  /// Thread / conversation id.
+  final String threadId;
+
+  /// Most-recent-turn state tag.
+  final String turnState;
+
+  /// Whether the rollout is currently held open.
+  final bool heldOpen;
+
+  /// Resume-safety tag.
+  final String safety;
+
+  /// Whether the UI may offer a resume action.
+  final bool allowsResume;
+
+  /// Whether resuming requires a force takeover.
+  final bool requiresTakeover;
+
+  /// Processes a force takeover would attempt to terminate (Pocket-Codex's
+  /// own app-server already excluded).
+  final List<HolderDto> holders;
+
+  const SessionLivenessDto({
+    required this.threadId,
+    required this.turnState,
+    required this.heldOpen,
+    required this.safety,
+    required this.allowsResume,
+    required this.requiresTakeover,
+    required this.holders,
+  });
+
+  @override
+  int get hashCode =>
+      threadId.hashCode ^
+      turnState.hashCode ^
+      heldOpen.hashCode ^
+      safety.hashCode ^
+      allowsResume.hashCode ^
+      requiresTakeover.hashCode ^
+      holders.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SessionLivenessDto &&
+          runtimeType == other.runtimeType &&
+          threadId == other.threadId &&
+          turnState == other.turnState &&
+          heldOpen == other.heldOpen &&
+          safety == other.safety &&
+          allowsResume == other.allowsResume &&
+          requiresTakeover == other.requiresTakeover &&
+          holders == other.holders;
+}
+
 /// Status of one active subscription, mirrored for Dart.
 class SubStatusDto {
   /// Service key.
@@ -431,8 +696,9 @@ class ThreadHistoryDto {
   /// reflects the server's real state.
   final String? collaborationMode;
 
-  /// Current reasoning effort (`"low"`/`"medium"`/`"high"`) so the UI can show
-  /// the "thinking level" the thread runs with (from the resume response).
+  /// Current reasoning effort (`"low"`/`"medium"`/`"high"`) so the UI can
+  /// show the "thinking level" the thread runs with (from the resume
+  /// response).
   final String? reasoningEffort;
 
   const ThreadHistoryDto({

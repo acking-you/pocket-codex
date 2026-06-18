@@ -10,6 +10,7 @@
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
+    time::Duration,
 };
 
 use anyhow::{anyhow, Context, Result};
@@ -154,29 +155,42 @@ pub fn connect(service_key: String, local_port: u16, relay: String) -> Result<()
     let sub = runtime::subscribe_service(service_key.clone(), local_port, relay)?;
     let ws_url = format!("ws://{}", sub.local_addr);
 
-    let (client, mut notify_rx) = runtime::runtime()
-        .block_on(AppClient::connect(&ws_url))
-        .context("connecting app-server")?;
+    let (client, mut notify_rx) = runtime::runtime().block_on(async {
+        tokio::time::timeout(CONNECT_TIMEOUT, AppClient::connect(&ws_url))
+            .await
+            .context("app-server connect timed out")?
+            .context("connecting app-server")
+    })?;
     let client = Arc::new(client);
 
     // Handshake. The app-server rejects every other method until initialized.
-    runtime::runtime()
-        .block_on(client.request(
-            "initialize",
-            json!({
-                "clientInfo": {
-                    "name": "pocket-codex",
-                    "title": "Pocket-Codex",
-                    "version": env!("CARGO_PKG_VERSION"),
-                },
-                // `experimentalApi` unlocks v2 features the UI relies on, notably
-                // `turn/start.collaborationMode` (plan mode). Without it the
-                // server rejects plan turns with
-                // "turn/start.collaborationMode requires experimentalApi capability".
-                "capabilities": { "experimentalApi": true },
-            }),
-        ))
-        .context("app-server initialize")?;
+    // Bounded by CONNECT_TIMEOUT so a registered-but-dead backend (relay
+    // registrant alive, codex app-server gone) fails fast instead of hanging
+    // the connecting UI forever.
+    runtime::runtime().block_on(async {
+        tokio::time::timeout(
+            CONNECT_TIMEOUT,
+            client.request(
+                "initialize",
+                json!({
+                    "clientInfo": {
+                        "name": "pocket-codex",
+                        "title": "Pocket-Codex",
+                        "version": env!("CARGO_PKG_VERSION"),
+                    },
+                    // `experimentalApi` unlocks v2 features the UI relies on,
+                    // notably `turn/start.collaborationMode` (plan mode).
+                    // Without it the server rejects plan turns with
+                    // "turn/start.collaborationMode requires experimentalApi
+                    // capability".
+                    "capabilities": { "experimentalApi": true },
+                }),
+            ),
+        )
+        .await
+        .context("app-server initialize timed out")?
+        .context("app-server initialize")
+    })?;
 
     let (events_tx, _) = broadcast::channel::<AppEvent>(512);
     let forward_tx = events_tx.clone();
@@ -211,6 +225,66 @@ pub fn connect(service_key: String, local_port: u16, relay: String) -> Result<()
             pending_approvals,
         });
     Ok(())
+}
+
+/// How long a [`probe`] waits for the tunnel + handshake before declaring the
+/// backend unreachable.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How long [`connect`] waits for the tunnel + `initialize` handshake before
+/// failing, so opening a registered-but-dead app-server errors fast instead of
+/// hanging the UI on "connecting".
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
+
+/// Probe whether the app-server behind `service_key` is actually REACHABLE —
+/// not merely *registered* on the relay.
+///
+/// A `pb-register` worker stays registered (so the relay lists the key, and the
+/// UI would call it "online") even when the codex app-server it forwards to has
+/// died — the registration is a hollow shell. This verifies the real backend by
+/// opening a transient pb-mapper tunnel and performing the `initialize`
+/// handshake (bounded by [`PROBE_TIMEOUT`] so a dead backend can't hang it),
+/// then tearing the tunnel down. A live session counts as reachable. Returns
+/// `false` on any failure: dead backend, relay forward failure, or timeout.
+pub fn probe(service_key: String, local_port: u16, relay: String) -> bool {
+    if is_connected(&service_key) {
+        return true;
+    }
+    // Subscribe through a TRANSIENT tunnel that isn't in the shared registry,
+    // so this probe can never reuse a real connection's tunnel nor abort it on
+    // teardown — a `connect`/`appConnect` racing this probe for the same
+    // service key keeps its own separate entry.
+    let Ok((local_addr, handle)) =
+        runtime::subscribe_transient(service_key.clone(), local_port, relay)
+    else {
+        return false;
+    };
+    let ws_url = format!("ws://{local_addr}");
+    let outcome = runtime::runtime().block_on(async {
+        let (client, _notify_rx) = tokio::time::timeout(PROBE_TIMEOUT, AppClient::connect(&ws_url))
+            .await
+            .context("probe: connect timed out")??;
+        tokio::time::timeout(
+            PROBE_TIMEOUT,
+            client.request(
+                "initialize",
+                json!({
+                    "clientInfo": {
+                        "name": "pocket-codex",
+                        "title": "Pocket-Codex",
+                        "version": env!("CARGO_PKG_VERSION"),
+                    },
+                    "capabilities": { "experimentalApi": true },
+                }),
+            ),
+        )
+        .await
+        .context("probe: initialize timed out")??;
+        Ok::<(), anyhow::Error>(())
+    });
+    // Tear down ONLY this probe's own transient tunnel.
+    handle.abort();
+    outcome.is_ok()
 }
 
 /// Whether a *live* session exists for `service_key` (the websocket forwarder

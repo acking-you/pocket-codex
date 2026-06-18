@@ -43,10 +43,22 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ConfigView dco_decode_config_view(dynamic raw);
 
   @protected
+  ForceResumeReportDto dco_decode_force_resume_report_dto(dynamic raw);
+
+  @protected
+  HolderDto dco_decode_holder_dto(dynamic raw);
+
+  @protected
   PlatformInt64 dco_decode_i_64(dynamic raw);
 
   @protected
   List<String> dco_decode_list_String(dynamic raw);
+
+  @protected
+  List<HolderDto> dco_decode_list_holder_dto(dynamic raw);
+
+  @protected
+  List<LocalSessionDto> dco_decode_list_local_session_dto(dynamic raw);
 
   @protected
   List<ModelInfoDto> dco_decode_list_model_info_dto(dynamic raw);
@@ -67,6 +79,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<ThreadMetaDto> dco_decode_list_thread_meta_dto(dynamic raw);
 
   @protected
+  LocalSessionDto dco_decode_local_session_dto(dynamic raw);
+
+  @protected
   ModelInfoDto dco_decode_model_info_dto(dynamic raw);
 
   @protected
@@ -77,6 +92,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   ServiceIdDto dco_decode_service_id_dto(dynamic raw);
+
+  @protected
+  SessionLivenessDto dco_decode_session_liveness_dto(dynamic raw);
 
   @protected
   SubStatusDto dco_decode_sub_status_dto(dynamic raw);
@@ -123,10 +141,26 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ConfigView sse_decode_config_view(SseDeserializer deserializer);
 
   @protected
+  ForceResumeReportDto sse_decode_force_resume_report_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  HolderDto sse_decode_holder_dto(SseDeserializer deserializer);
+
+  @protected
   PlatformInt64 sse_decode_i_64(SseDeserializer deserializer);
 
   @protected
   List<String> sse_decode_list_String(SseDeserializer deserializer);
+
+  @protected
+  List<HolderDto> sse_decode_list_holder_dto(SseDeserializer deserializer);
+
+  @protected
+  List<LocalSessionDto> sse_decode_list_local_session_dto(
+    SseDeserializer deserializer,
+  );
 
   @protected
   List<ModelInfoDto> sse_decode_list_model_info_dto(
@@ -157,6 +191,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  LocalSessionDto sse_decode_local_session_dto(SseDeserializer deserializer);
+
+  @protected
   ModelInfoDto sse_decode_model_info_dto(SseDeserializer deserializer);
 
   @protected
@@ -167,6 +204,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   ServiceIdDto sse_decode_service_id_dto(SseDeserializer deserializer);
+
+  @protected
+  SessionLivenessDto sse_decode_session_liveness_dto(
+    SseDeserializer deserializer,
+  );
 
   @protected
   SubStatusDto sse_decode_sub_status_dto(SseDeserializer deserializer);
@@ -223,10 +265,31 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_config_view(ConfigView self, SseSerializer serializer);
 
   @protected
+  void sse_encode_force_resume_report_dto(
+    ForceResumeReportDto self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_holder_dto(HolderDto self, SseSerializer serializer);
+
+  @protected
   void sse_encode_i_64(PlatformInt64 self, SseSerializer serializer);
 
   @protected
   void sse_encode_list_String(List<String> self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_list_holder_dto(
+    List<HolderDto> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_local_session_dto(
+    List<LocalSessionDto> self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_list_model_info_dto(
@@ -265,6 +328,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_local_session_dto(
+    LocalSessionDto self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_model_info_dto(ModelInfoDto self, SseSerializer serializer);
 
   @protected
@@ -278,6 +347,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_service_id_dto(ServiceIdDto self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_session_liveness_dto(
+    SessionLivenessDto self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_sub_status_dto(SubStatusDto self, SseSerializer serializer);

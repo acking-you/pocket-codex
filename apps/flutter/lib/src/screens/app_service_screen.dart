@@ -45,6 +45,31 @@ class _AppServiceState extends ConsumerState<AppServiceScreen> {
       _connecting = true;
       _error = null;
     });
+    // Never attempt a connect to a backend the reachability probe says is dead
+    // (a live relay registrant whose codex app-server is gone) — that just sits
+    // on "connecting" until it times out, then retries. Await the probe's
+    // future rather than a maybe-empty snapshot: it resolves instantly when the
+    // services list already probed it (the common path) and is bounded by the
+    // probe timeout otherwise. A probe error counts as unreachable. The retry
+    // button re-probes, so a recovered backend still connects.
+    var reachable = false;
+    try {
+      reachable = await ref.read(
+        appReachableProvider(widget.serviceKey).future,
+      );
+    } catch (_) {
+      // Probe failed (e.g. relay not configured) → treat as unreachable.
+    }
+    if (!mounted) return;
+    if (!reachable) {
+      setState(() {
+        // Explain *why*: it's in the list, so the relay registration is up —
+        // the dead link is the remote app-server backend itself.
+        _error = AppLocalizations.of(context).unreachableReason;
+        _connecting = false;
+      });
+      return;
+    }
     final api = ref.read(bridgeApiProvider);
     try {
       await api.appConnect(widget.serviceKey, appLocalPort);
@@ -198,7 +223,15 @@ class _AppServiceState extends ConsumerState<AppServiceScreen> {
                 style: Theme.of(context).textTheme.bodySmall,
               ),
               const SizedBox(height: 12),
-              FilledButton(onPressed: _connect, child: Text(l10n.retry)),
+              FilledButton(
+                // Re-probe so a now-recovered backend can connect instead of
+                // fast-failing on the stale "unreachable" result.
+                onPressed: () {
+                  ref.invalidate(appReachableProvider(widget.serviceKey));
+                  _connect();
+                },
+                child: Text(l10n.retry),
+              ),
             ],
           ),
         ),
