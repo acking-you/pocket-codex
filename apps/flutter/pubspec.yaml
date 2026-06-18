@@ -72,44 +72,44 @@ flutter:
     - assets/logo/mark.png
 
 flutter_launcher_icons:
-  # icon_square.png: edge-to-edge brand plate (#F5F3FE) + glyph, for
-  # platforms that mask their own corners (iOS / legacy Android / web).
-  # icon_rounded.png: rounded plate with transparent corners, for
-  # platforms that show the icon as-is (Windows taskbar, macOS Dock).
-  # Both are composed from icon/adaptive_foreground.png — see
-  # docs in the icon/ directory siblings.
-  image_path: "icon/icon_square.png"
-  # iOS: Apple rejects alpha, so icons stay opaque (icon_square is).
+  # 方案 A "pocket is the hero": the brand mark (icon_glyph.png — the pocket
+  # itself, already a container shape) IS the icon, on a clean white surface
+  # rather than a muddy lavender plate that read as a weak outer ring.
+  # icon_glyph.png is transparent, so it doubles as the adaptive foreground.
+  image_path: "icon/icon_glyph.png"
+  # iOS: Apple rejects alpha; remove_alpha flattens the transparent pocket
+  # onto white (background_color_ios default) — a big pocket on white.
   ios: true
   remove_alpha_ios: true
-  # Android: legacy square mipmaps from image_path (pre-API-26) PLUS an
-  # adaptive icon (API 26+) = lavender plate background + transparent
-  # glyph foreground, so it integrates with the launcher's round/squircle
-  # mask instead of showing a white-plate "sticker". The foreground PNG
-  # already bakes a 62% safe-zone margin, so inset is 0 (no double-pad).
+  # Android: legacy square mipmaps from image_path (big pocket — old launchers
+  # don't mask) PLUS an adaptive icon (API 26+). The adaptive FOREGROUND must
+  # stay inside the ~61% safe zone or a circle-mask launcher clips the pocket's
+  # phone-peek / stitching, so it keeps the safe-sized pocket
+  # (adaptive_foreground.png) — but now on a CLEAN WHITE background instead of
+  # the muddy lavender, so the pocket pops and there's no weak outer ring.
   android: true
   min_sdk_android: 21
-  adaptive_icon_background: "#F5F3FE"
+  adaptive_icon_background: "#FFFFFF"
   adaptive_icon_foreground: "icon/adaptive_foreground.png"
   adaptive_icon_foreground_inset: 0
   # Web: PWA icons + manifest colours (replaces the stock Flutter favicon).
   web:
     generate: true
-    image_path: "icon/icon_square.png"
-    background_color: "#F5F3FE"
-    theme_color: "#4C8DF6"
+    image_path: "icon/icon_glyph.png"
+    background_color: "#FFFFFF"
+    theme_color: "#7C5CF6"
   # Windows: emits runner/resources/app_icon.ico (window + taskbar).
-  # Bare glyph, no plate: taskbar icons render at 16-32 px, and a
-  # plate would shrink the recognisable shape to half that.
+  # Bare pocket, no plate: taskbar icons render at 16-32 px, and a plate
+  # would shrink the recognisable shape to half that.
   windows:
     generate: true
     image_path: "icon/icon_glyph.png"
     icon_size: 256
-  # macOS: generates the Runner AppIcon.appiconset. Same rounded plate;
-  # the Dock does not mask square icons either.
+  # macOS: the Dock shows the icon as-is (no mask), so the bare transparent
+  # pocket floats plate-free — the cleanest expression of 方案 A.
   macos:
     generate: true
-    image_path: "icon/icon_rounded.png"
+    image_path: "icon/icon_glyph.png"
 
 # The splash mark is the transparent glyph: logo.png is opaque, which
 # showed up as a white box on the dark splash background.
