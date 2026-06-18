@@ -7,7 +7,7 @@ use anyhow::{anyhow, Result};
 use flutter_rust_bridge::frb;
 
 use crate::{
-    engine::{app_session, config, discovery, runtime},
+    engine::{app_session, config, discovery, runtime, sessions},
     frb_generated::StreamSink,
 };
 
@@ -286,6 +286,18 @@ pub fn app_disconnect(service_key: String) {
     app_session::disconnect(&service_key);
 }
 
+/// Probe whether an app-server is actually REACHABLE — its backend responds to
+/// a handshake — rather than merely registered on the relay. The services list
+/// uses this so a registered-but-dead app-server (a live relay registrant
+/// forwarding to a codex app-server that has died) shows as unreachable instead
+/// of a false "online". Opens a transient tunnel + `initialize` with a timeout,
+/// then tears it down; a live session short-circuits to `true`.
+pub fn app_probe(service_key: String) -> Result<bool> {
+    apply_key()?;
+    let relay = current_relay()?;
+    Ok(app_session::probe(service_key, 0, relay))
+}
+
 /// Stream live app-server events (turn/item notifications) for `service_key`.
 /// The Dart side receives one [`AppEventDto`] per notification until the
 /// session is disconnected.
@@ -457,4 +469,169 @@ pub fn app_turn_interrupt(
     turn_id: Option<String>,
 ) -> Result<()> {
     app_session::turn_interrupt(&service_key, &thread_id, turn_id)
+}
+
+// ---------------------------------------------------------------------------
+// Local session takeover (shared CODEX_HOME)
+// ---------------------------------------------------------------------------
+
+/// A process holding a session's rollout open (a would-be takeover
+/// target), mirrored for Dart.
+pub struct HolderDto {
+    /// Operating-system process id.
+    pub pid: i64,
+    /// Process image name (e.g. `codex.exe`).
+    pub name: String,
+}
+
+/// A session discovered under `CODEX_HOME`, with the state the UI needs to
+/// render it read-only or resumable, mirrored for Dart.
+pub struct LocalSessionDto {
+    /// Thread / conversation id.
+    pub thread_id: String,
+    /// Working directory the session controls, when recorded.
+    pub cwd: Option<String>,
+    /// Best-effort first-user-message preview.
+    pub preview: String,
+    /// Originating client (`cli` / `vscode` / …), when recorded.
+    pub source: Option<String>,
+    /// Last-modified time of the rollout, unix seconds.
+    pub updated_at: i64,
+    /// Most-recent-turn state (`empty`/`completed`/`aborted`/`incomplete`).
+    pub turn_state: String,
+    /// Whether the rollout is currently held open by a live process.
+    pub held_open: bool,
+    /// Resume-safety tag (`resumable`/`resumableUnfinished`/`ownedRunning`/
+    /// `ownedIdle`).
+    pub safety: String,
+    /// Whether the UI may offer a resume action (false only while a turn is
+    /// actively running).
+    pub allows_resume: bool,
+    /// Whether resuming requires a force takeover (a live owner must be
+    /// evicted first).
+    pub requires_takeover: bool,
+}
+
+/// One session's liveness detail, including the would-be takeover targets,
+/// mirrored for Dart.
+pub struct SessionLivenessDto {
+    /// Thread / conversation id.
+    pub thread_id: String,
+    /// Most-recent-turn state tag.
+    pub turn_state: String,
+    /// Whether the rollout is currently held open.
+    pub held_open: bool,
+    /// Resume-safety tag.
+    pub safety: String,
+    /// Whether the UI may offer a resume action.
+    pub allows_resume: bool,
+    /// Whether resuming requires a force takeover.
+    pub requires_takeover: bool,
+    /// Processes a force takeover would attempt to terminate (Pocket-Codex's
+    /// own app-server already excluded).
+    pub holders: Vec<HolderDto>,
+}
+
+/// Outcome of a force-resume, mirrored for Dart.
+pub struct ForceResumeReportDto {
+    /// Holders that were successfully terminated.
+    pub killed: Vec<HolderDto>,
+    /// Holders the kill could not reach.
+    pub survived: Vec<HolderDto>,
+    /// Whether the rollout is still held open after the attempt (the resume
+    /// proceeded regardless).
+    pub still_held: bool,
+    /// Whether the subsequent `thread/resume` succeeded.
+    pub resumed: bool,
+    /// The resume error message, when `resumed` is false.
+    pub resume_error: Option<String>,
+}
+
+fn holder_dto(h: pocket_codex_codex::liveness::Holder) -> HolderDto {
+    HolderDto {
+        pid: i64::from(h.pid),
+        name: h.name,
+    }
+}
+
+/// List every codex session under the shared `CODEX_HOME`, newest first,
+/// each annotated with whether it is safe to resume.
+///
+/// Works without any app-server connection — it reads the local rollout
+/// files and process table directly, so it surfaces sessions created by
+/// *other* codex clients (the desktop app, the CLI, the VS Code
+/// extension) that share this `CODEX_HOME`. Meaningful only when the UI
+/// runs on the same machine as those sessions.
+pub fn app_local_sessions() -> Result<Vec<LocalSessionDto>> {
+    Ok(sessions::list_local_sessions()?
+        .into_iter()
+        .map(|s| LocalSessionDto {
+            thread_id: s.thread_id,
+            cwd: s.cwd,
+            preview: s.preview,
+            source: s.source,
+            updated_at: s.updated_at,
+            turn_state: s.turn_state,
+            held_open: s.held_open,
+            safety: s.safety,
+            allows_resume: s.allows_resume,
+            requires_takeover: s.requires_takeover,
+        })
+        .collect())
+}
+
+/// Inspect one session's current resume-safety and the processes a force
+/// takeover would evict. Poll this before showing a resume button so the
+/// UI reflects live ownership (a session can flip between read-only and
+/// resumable as the desktop app loads / releases it).
+pub fn app_session_liveness(thread_id: String) -> Result<SessionLivenessDto> {
+    let view = sessions::session_liveness(&thread_id)?;
+    Ok(SessionLivenessDto {
+        thread_id: view.thread_id,
+        turn_state: view.turn_state,
+        held_open: view.held_open,
+        safety: view.safety,
+        allows_resume: view.allows_resume,
+        requires_takeover: view.requires_takeover,
+        holders: view.holders.into_iter().map(holder_dto).collect(),
+    })
+}
+
+/// Read a local session's transcript for READ-ONLY viewing. Parses the
+/// on-disk rollout directly (no app-server connection, no resume, no write),
+/// so it works even while another codex client still owns the session.
+/// Items are in the same shape as [`app_thread_read`], so the read-only
+/// viewer reuses the live-conversation rendering. Poll it alongside
+/// [`app_session_liveness`] to follow a running session and notice when it
+/// goes idle (resume-eligible).
+pub fn app_local_session_transcript(thread_id: String) -> Result<Vec<ThreadItemDto>> {
+    Ok(sessions::local_session_transcript(&thread_id)?
+        .into_iter()
+        .map(|i| ThreadItemDto {
+            id: i.id,
+            item_type: i.item_type,
+            title: i.title,
+            text: i.text,
+        })
+        .collect())
+}
+
+/// Force-resume a session into the app-server behind `service_key`.
+///
+/// Best-effort terminates every live process holding the session's rollout
+/// open (never Pocket-Codex's own app-server), then issues `thread/resume`
+/// regardless of the eviction outcome. The UI must gate this on explicit
+/// user confirmation and must not offer it while a turn is actively
+/// running (`SessionLivenessDto::allows_resume == false`). The returned
+/// report says exactly which processes were killed / survived and whether
+/// the resume took.
+pub fn app_force_resume(service_key: String, thread_id: String) -> Result<ForceResumeReportDto> {
+    let outcome = sessions::force_resume(&service_key, &thread_id)?;
+    Ok(ForceResumeReportDto {
+        killed: outcome.killed.into_iter().map(holder_dto).collect(),
+        survived: outcome.survived.into_iter().map(holder_dto).collect(),
+        still_held: outcome.still_held,
+        resumed: outcome.resumed,
+        resume_error: outcome.resume_error,
+    })
 }

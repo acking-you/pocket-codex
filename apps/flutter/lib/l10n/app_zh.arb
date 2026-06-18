@@ -92,9 +92,20 @@
   "stateReconnecting": "重连中…",
   "compacted": "对话已压缩",
   "turnStopped": "已停止",
+  "turnElapsed": "用时 {duration}",
+  "@turnElapsed": {
+    "placeholders": { "duration": { "type": "String" } }
+  },
+  "completedAt": "完成于 {time}",
+  "@completedAt": {
+    "placeholders": { "time": { "type": "String" } }
+  },
   "refreshStatus": "刷新状态",
   "statusOnline": "在线",
   "statusConnected": "已连接",
+  "statusChecking": "检测中…",
+  "statusUnreachable": "不可达",
+  "unreachableReason": "中继上的注册仍在,但远端 app-server 没有响应——它可能未启动,或已经宕机。",
   "subscribedAlive": "已订阅",
   "subscribedDead": "已断开",
   "runningSessions": "{count} 个运行中",
@@ -154,6 +165,7 @@
   "suggestPlanTitle": "规划功能",
   "suggestPlanPrompt": "在写代码之前,帮我规划一个新功能。",
   "searchConversations": "搜索会话",
+  "searchLocalSessions": "搜索会话内容 / 目录 / 来源",
   "noMatchingThreads": "没有匹配的会话",
   "groupActive": "进行中",
   "groupToday": "今天",
@@ -174,5 +186,28 @@
     "placeholders": { "n": { "type": "int" } }
   },
   "modelLabel": "模型",
-  "permissionLabel": "权限"
+  "permissionLabel": "权限",
+  "localSessions": "本地会话",
+  "localSessionsTitle": "本地会话",
+  "localSessionsHint": "此 CODEX_HOME 下的会话，包含桌面端或 CLI 创建的。可在此恢复已结束的会话。",
+  "noLocalSessions": "没有本地会话",
+  "sessionResumable": "可恢复",
+  "sessionUnfinished": "上一轮被中断",
+  "sessionRunningElsewhere": "其他进程运行中",
+  "sessionInUseElsewhere": "被其他进程占用",
+  "sessionReadOnly": "只读",
+  "readOnlyViewing": "只读 — 其他客户端正在使用此会话",
+  "sessionTranscriptEmpty": "暂无可显示的内容",
+  "resumeSession": "恢复",
+  "forceTakeover": "强制接管",
+  "takeoverTitle": "强制接管？",
+  "takeoverBody": "该会话正被另外 {n} 个进程占用。Pocket-Codex 将尝试终止它们后在此恢复。这些进程中未保存的工作将会丢失。",
+  "takeoverWillTerminate": "将终止",
+  "takeoverConfirm": "终止并恢复",
+  "takeoverResumed": "会话已恢复",
+  "takeoverKilled": "已终止 {n} 个进程",
+  "takeoverStillHeld": "仍被占用——已照常恢复",
+  "takeoverResumeFailed": "恢复失败：{error}",
+  "takeoverNoTarget": "请先连接一个 app-server 服务再恢复。",
+  "holderRow": "{name} · PID {pid}"
 }

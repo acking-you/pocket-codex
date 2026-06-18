@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:pocket_codex/src/app_modes.dart';
@@ -59,6 +61,20 @@ final subscriptionsProvider = FutureProvider<List<SubInfo>>((ref) async {
   return ref.watch(bridgeApiProvider).subscriptions();
 });
 
+/// Whether an app-server service's backend is actually REACHABLE — it answers a
+/// handshake — rather than merely registered on the relay. A `pb-register`
+/// worker stays registered (so the relay lists the key) even when the codex
+/// app-server it forwards to has died, which would otherwise show a false
+/// "online". Probed lazily per service via a transient tunnel: the AsyncValue
+/// is `loading` while in flight and `data(false)` for a registered-but-dead
+/// backend. The services-screen refresh invalidates this to re-probe.
+final appReachableProvider = FutureProvider.family<bool, String>((
+  ref,
+  serviceKey,
+) async {
+  return ref.watch(bridgeApiProvider).appProbe(serviceKey);
+});
+
 /// The set of thread ids on [serviceKey] that currently have an in-flight turn,
 /// derived purely from the live event stream: `turn/started` adds a thread,
 /// `turn/completed` / `turn/failed` removes it. Lets the session lists show a
@@ -82,8 +98,17 @@ final runningThreadsProvider = StreamProvider.family<Set<String>, String>((
 ) async* {
   final api = ref.watch(bridgeApiProvider);
   final running = <String>{};
+  // Cancellable re-subscribe backoff. A plain `Future.delayed` would leave a
+  // pending timer when the provider is torn down (container disposal in tests,
+  // or invalidation), so gate the wait on a Timer we cancel in onDispose.
+  var disposed = false;
+  Timer? backoff;
+  ref.onDispose(() {
+    disposed = true;
+    backoff?.cancel();
+  });
   yield const <String>{};
-  while (true) {
+  while (!disposed) {
     try {
       await for (final e in api.appEvents(serviceKey)) {
         final tid = e.threadId;
@@ -99,7 +124,12 @@ final runningThreadsProvider = StreamProvider.family<Set<String>, String>((
     } catch (_) {
       // Not connected yet / transient drop — fall through to re-subscribe.
     }
-    await Future<void>.delayed(const Duration(seconds: 1));
+    if (disposed) break;
+    final gate = Completer<void>();
+    backoff = Timer(const Duration(seconds: 1), () {
+      if (!gate.isCompleted) gate.complete();
+    });
+    await gate.future;
   }
 });
 

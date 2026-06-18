@@ -107,6 +107,14 @@ class FakeBridgeApi implements BridgeApi {
     await _appEvents.remove(serviceKey)?.close();
   }
 
+  /// Seedable reachability returned by [appProbe] (default: reachable). A
+  /// connected service is always reachable.
+  final Map<String, bool> reachable = {};
+
+  @override
+  Future<bool> appProbe(String serviceKey) async =>
+      _appConnected.contains(serviceKey) || (reachable[serviceKey] ?? true);
+
   @override
   Stream<AppEvent> appEvents(String serviceKey) => _appEvents
       .putIfAbsent(serviceKey, StreamController<AppEvent>.broadcast)
@@ -282,4 +290,56 @@ class FakeBridgeApi implements BridgeApi {
     String requestId,
     String decision,
   ) async => lastApprovalDecision = decision;
+
+  // --- Local session takeover ---
+
+  /// Seedable local sessions returned by [appLocalSessions].
+  List<LocalSession> localSessions = const [];
+
+  /// Seedable per-thread liveness returned by [appSessionLiveness].
+  final Map<String, SessionLiveness> liveness = {};
+
+  /// Seedable per-thread transcript returned by [appLocalSessionTranscript].
+  final Map<String, List<ThreadItem>> transcripts = {};
+
+  /// Records the last `(serviceKey, threadId)` passed to [appForceResume].
+  String? lastForceResumedKey, lastForceResumedThread;
+
+  /// Result returned by [appForceResume] (tests can override).
+  ForceResumeReport forceResumeResult = const ForceResumeReport(
+    killed: [],
+    survived: [],
+    stillHeld: false,
+    resumed: true,
+  );
+
+  @override
+  Future<List<LocalSession>> appLocalSessions() async => localSessions;
+
+  @override
+  Future<SessionLiveness> appSessionLiveness(String threadId) async =>
+      liveness[threadId] ??
+      SessionLiveness(
+        threadId: threadId,
+        turnState: 'completed',
+        heldOpen: false,
+        safety: 'resumable',
+        allowsResume: true,
+        requiresTakeover: false,
+        holders: const [],
+      );
+
+  @override
+  Future<ForceResumeReport> appForceResume(
+    String serviceKey,
+    String threadId,
+  ) async {
+    lastForceResumedKey = serviceKey;
+    lastForceResumedThread = threadId;
+    return forceResumeResult;
+  }
+
+  @override
+  Future<List<ThreadItem>> appLocalSessionTranscript(String threadId) async =>
+      transcripts[threadId] ?? const [];
 }

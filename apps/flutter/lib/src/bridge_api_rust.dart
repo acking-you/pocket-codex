@@ -86,6 +86,10 @@ class RustBridgeApi implements BridgeApi {
       frb.appDisconnect(serviceKey: serviceKey);
 
   @override
+  Future<bool> appProbe(String serviceKey) =>
+      frb.appProbe(serviceKey: serviceKey);
+
+  @override
   Stream<AppEvent> appEvents(String serviceKey) => frb
       .appEvents(serviceKey: serviceKey)
       .map(
@@ -235,4 +239,77 @@ class RustBridgeApi implements BridgeApi {
     requestId: requestId,
     decision: decision,
   );
+
+  // --- Local session takeover ---
+
+  @override
+  Future<List<LocalSession>> appLocalSessions() async {
+    final list = await frb.appLocalSessions();
+    return list
+        .map(
+          (s) => LocalSession(
+            threadId: s.threadId,
+            cwd: s.cwd,
+            preview: s.preview,
+            source: s.source,
+            updatedAt: s.updatedAt.toInt(),
+            turnState: s.turnState,
+            heldOpen: s.heldOpen,
+            safety: s.safety,
+            allowsResume: s.allowsResume,
+            requiresTakeover: s.requiresTakeover,
+          ),
+        )
+        .toList();
+  }
+
+  @override
+  Future<SessionLiveness> appSessionLiveness(String threadId) async {
+    final v = await frb.appSessionLiveness(threadId: threadId);
+    return SessionLiveness(
+      threadId: v.threadId,
+      turnState: v.turnState,
+      heldOpen: v.heldOpen,
+      safety: v.safety,
+      allowsResume: v.allowsResume,
+      requiresTakeover: v.requiresTakeover,
+      holders: v.holders
+          .map((h) => Holder(pid: h.pid.toInt(), name: h.name))
+          .toList(),
+    );
+  }
+
+  @override
+  Future<ForceResumeReport> appForceResume(
+    String serviceKey,
+    String threadId,
+  ) async {
+    final r = await frb.appForceResume(
+      serviceKey: serviceKey,
+      threadId: threadId,
+    );
+    Holder map(frb.HolderDto h) => Holder(pid: h.pid.toInt(), name: h.name);
+    return ForceResumeReport(
+      killed: r.killed.map(map).toList(),
+      survived: r.survived.map(map).toList(),
+      stillHeld: r.stillHeld,
+      resumed: r.resumed,
+      resumeError: r.resumeError,
+    );
+  }
+
+  @override
+  Future<List<ThreadItem>> appLocalSessionTranscript(String threadId) async {
+    final items = await frb.appLocalSessionTranscript(threadId: threadId);
+    return items
+        .map(
+          (i) => ThreadItem(
+            id: i.id,
+            itemType: i.itemType,
+            title: i.title,
+            text: i.text,
+          ),
+        )
+        .toList();
+  }
 }

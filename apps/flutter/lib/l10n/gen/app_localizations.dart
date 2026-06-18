@@ -614,6 +614,18 @@ abstract class AppLocalizations {
   /// **'Stopped'**
   String get turnStopped;
 
+  /// No description provided for @turnElapsed.
+  ///
+  /// In en, this message translates to:
+  /// **'Took {duration}'**
+  String turnElapsed(String duration);
+
+  /// No description provided for @completedAt.
+  ///
+  /// In en, this message translates to:
+  /// **'Completed at {time}'**
+  String completedAt(String time);
+
   /// No description provided for @refreshStatus.
   ///
   /// In en, this message translates to:
@@ -631,6 +643,24 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Connected'**
   String get statusConnected;
+
+  /// No description provided for @statusChecking.
+  ///
+  /// In en, this message translates to:
+  /// **'Checking…'**
+  String get statusChecking;
+
+  /// No description provided for @statusUnreachable.
+  ///
+  /// In en, this message translates to:
+  /// **'Unreachable'**
+  String get statusUnreachable;
+
+  /// No description provided for @unreachableReason.
+  ///
+  /// In en, this message translates to:
+  /// **'Still registered on the relay, but the remote app-server isn\'t responding — it may not be running, or has crashed.'**
+  String get unreachableReason;
 
   /// No description provided for @subscribedAlive.
   ///
@@ -968,6 +998,12 @@ abstract class AppLocalizations {
   /// **'Search conversations'**
   String get searchConversations;
 
+  /// No description provided for @searchLocalSessions.
+  ///
+  /// In en, this message translates to:
+  /// **'Search content / path / source'**
+  String get searchLocalSessions;
+
   /// No description provided for @noMatchingThreads.
   ///
   /// In en, this message translates to:
@@ -1039,6 +1075,144 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Permission'**
   String get permissionLabel;
+
+  /// No description provided for @localSessions.
+  ///
+  /// In en, this message translates to:
+  /// **'Local sessions'**
+  String get localSessions;
+
+  /// No description provided for @localSessionsTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Local sessions'**
+  String get localSessionsTitle;
+
+  /// No description provided for @localSessionsHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Sessions under this CODEX_HOME, including ones the desktop app or CLI created. Resume a finished one here.'**
+  String get localSessionsHint;
+
+  /// No description provided for @noLocalSessions.
+  ///
+  /// In en, this message translates to:
+  /// **'No local sessions'**
+  String get noLocalSessions;
+
+  /// No description provided for @sessionResumable.
+  ///
+  /// In en, this message translates to:
+  /// **'Resumable'**
+  String get sessionResumable;
+
+  /// No description provided for @sessionUnfinished.
+  ///
+  /// In en, this message translates to:
+  /// **'Last turn interrupted'**
+  String get sessionUnfinished;
+
+  /// No description provided for @sessionRunningElsewhere.
+  ///
+  /// In en, this message translates to:
+  /// **'Running elsewhere'**
+  String get sessionRunningElsewhere;
+
+  /// No description provided for @sessionInUseElsewhere.
+  ///
+  /// In en, this message translates to:
+  /// **'In use elsewhere'**
+  String get sessionInUseElsewhere;
+
+  /// No description provided for @sessionReadOnly.
+  ///
+  /// In en, this message translates to:
+  /// **'Read-only'**
+  String get sessionReadOnly;
+
+  /// No description provided for @readOnlyViewing.
+  ///
+  /// In en, this message translates to:
+  /// **'Read-only — another client is using this session'**
+  String get readOnlyViewing;
+
+  /// No description provided for @sessionTranscriptEmpty.
+  ///
+  /// In en, this message translates to:
+  /// **'Nothing to show yet'**
+  String get sessionTranscriptEmpty;
+
+  /// No description provided for @resumeSession.
+  ///
+  /// In en, this message translates to:
+  /// **'Resume'**
+  String get resumeSession;
+
+  /// No description provided for @forceTakeover.
+  ///
+  /// In en, this message translates to:
+  /// **'Force takeover'**
+  String get forceTakeover;
+
+  /// No description provided for @takeoverTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Force takeover?'**
+  String get takeoverTitle;
+
+  /// No description provided for @takeoverBody.
+  ///
+  /// In en, this message translates to:
+  /// **'This session is held open by {n} other process(es). Pocket-Codex will try to terminate them, then resume it here. Any unsaved work in those processes will be lost.'**
+  String takeoverBody(int n);
+
+  /// No description provided for @takeoverWillTerminate.
+  ///
+  /// In en, this message translates to:
+  /// **'Will terminate'**
+  String get takeoverWillTerminate;
+
+  /// No description provided for @takeoverConfirm.
+  ///
+  /// In en, this message translates to:
+  /// **'Terminate & resume'**
+  String get takeoverConfirm;
+
+  /// No description provided for @takeoverResumed.
+  ///
+  /// In en, this message translates to:
+  /// **'Session resumed'**
+  String get takeoverResumed;
+
+  /// No description provided for @takeoverKilled.
+  ///
+  /// In en, this message translates to:
+  /// **'Terminated {n} process(es)'**
+  String takeoverKilled(int n);
+
+  /// No description provided for @takeoverStillHeld.
+  ///
+  /// In en, this message translates to:
+  /// **'Still held open — resumed anyway'**
+  String get takeoverStillHeld;
+
+  /// No description provided for @takeoverResumeFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Resume failed: {error}'**
+  String takeoverResumeFailed(String error);
+
+  /// No description provided for @takeoverNoTarget.
+  ///
+  /// In en, this message translates to:
+  /// **'Connect to an app-server service first to resume.'**
+  String get takeoverNoTarget;
+
+  /// No description provided for @holderRow.
+  ///
+  /// In en, this message translates to:
+  /// **'{name} · PID {pid}'**
+  String holderRow(String name, int pid);
 }
 
 class _AppLocalizationsDelegate
