@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- Pocket-Codex brand mark: a rounded "pocket/box" container with a square
+       notch cut down into the top centre, plus a white `>_` terminal prompt.
+       Traced from the approved reference; gradient colours sampled from it
+       (top-left #7381FD -> bottom-right #8144F0). The notch is a true cut-out
+       (transparent) so it reads against any launcher background. -->
+  <defs>
+    <linearGradient id="pocket" x1="0" y1="0" x2="256" y2="256" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#7381FD"/>
+      <stop offset="0.5" stop-color="#8761F7"/>
+      <stop offset="1" stop-color="#8144F0"/>
+    </linearGradient>
+  </defs>
+  <path fill="url(#pocket)" d="M54,0 L80,0 Q86,0 86,6 L86,36 Q86,60 110,60 L146,60 Q170,60 170,36 L170,6 Q170,0 176,0 L202,0 Q256,0 256,54 L256,162 Q256,256 162,256 L94,256 Q0,256 0,162 L0,54 Q0,0 54,0 Z"/>
+  <path fill="none" stroke="#ffffff" stroke-width="20" stroke-linecap="round" stroke-linejoin="round" d="M48,150 L108,186 L48,222"/>
+  <path fill="none" stroke="#ffffff" stroke-width="20" stroke-linecap="round" d="M134,214 L202,214"/>
+</svg>

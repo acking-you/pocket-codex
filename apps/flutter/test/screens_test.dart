@@ -1608,11 +1608,15 @@ void main() {
     );
     await t.pumpWidget(_host(const ServicesScreen(), api));
     await t.pumpAndSettle();
-    final tile = t.widget<ListTile>(
-      find.byKey(const Key('svc-pcx:lb7666:app:default')),
+    // Service rows are tappable cards now; the row is enabled iff its InkWell
+    // carries an onTap (a disabled row would have a null callback).
+    final ink = t.widget<InkWell>(
+      find.descendant(
+        of: find.byKey(const Key('svc-pcx:lb7666:app:default')),
+        matching: find.byType(InkWell),
+      ),
     );
-    expect(tile.onTap, isNotNull);
-    expect(tile.enabled, isTrue);
+    expect(ink.onTap, isNotNull);
   });
 
   testWidgets('Services renders English strings under Locale(en)', (t) async {

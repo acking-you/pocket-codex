@@ -78,9 +78,20 @@ class ServicesScreen extends ConsumerWidget {
             child: LayoutBuilder(
               builder: (context, c) {
                 final wide = c.maxWidth >= 600;
+                final apiServices = services
+                    .where((s) => s.kind == 'api')
+                    .toList();
+                final selected =
+                    apiServices
+                        .where((s) => s.key == selectedKey)
+                        .firstOrNull ??
+                    apiServices.firstOrNull;
                 final list = _ServiceList(
                   relay: config?.relay,
                   services: services,
+                  // Only the inline detail pane has a "current" service worth
+                  // highlighting; in narrow mode tapping pushes a route instead.
+                  highlightKey: wide ? selected?.key : null,
                   onTapApi: (key) {
                     if (wide) {
                       ref.read(selectedApiKeyProvider.notifier).state = key;
@@ -94,14 +105,6 @@ class ServicesScreen extends ConsumerWidget {
                       context.push('/app/${Uri.encodeComponent(key)}'),
                 );
                 if (!wide) return list;
-                final apiServices = services
-                    .where((s) => s.kind == 'api')
-                    .toList();
-                final selected =
-                    apiServices
-                        .where((s) => s.key == selectedKey)
-                        .firstOrNull ??
-                    apiServices.firstOrNull;
                 return Row(
                   children: [
                     SizedBox(width: 360, child: list),
@@ -109,10 +112,19 @@ class ServicesScreen extends ConsumerWidget {
                     Expanded(
                       child: selected == null
                           ? Center(child: Text(l10n.selectApiService))
-                          : ApiServiceScreen(
-                              key: ValueKey(selected.key),
-                              serviceKey: selected.key,
-                              embedded: true,
+                          // Keep the detail readable instead of stretching the
+                          // form across a wide pane: a centred, capped column.
+                          : Center(
+                              child: ConstrainedBox(
+                                constraints: const BoxConstraints(
+                                  maxWidth: 460,
+                                ),
+                                child: ApiServiceScreen(
+                                  key: ValueKey(selected.key),
+                                  serviceKey: selected.key,
+                                  embedded: true,
+                                ),
+                              ),
                             ),
                     ),
                   ],
@@ -132,11 +144,16 @@ class _ServiceList extends ConsumerWidget {
     required this.services,
     required this.onTapApi,
     required this.onTapApp,
+    this.highlightKey,
   });
   final String? relay;
   final List<ServiceEntry> services;
   final void Function(String key) onTapApi;
   final void Function(String key) onTapApp;
+
+  /// The service key to render selected (a 2px accent border) — the inline
+  /// detail pane's current service in the wide layout; null otherwise.
+  final String? highlightKey;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -154,34 +171,35 @@ class _ServiceList extends ConsumerWidget {
     final bridge = ref.watch(bridgeApiProvider);
 
     // Per-API status: subscribed+alive, subscribed+dropped, or just online.
-    Widget apiStatus(ServiceEntry s) {
+    StatusChip apiStatus(ServiceEntry s) {
       final sub = subs[s.key];
       if (sub != null) {
         return sub.alive
-            ? StatusChip(color: online, label: l10n.subscribedAlive)
-            : StatusChip(color: scheme.error, label: l10n.subscribedDead);
+            ? StatusChip(color: online, label: l10n.subscribedAlive, filled: true)
+            : StatusChip(
+                color: scheme.error,
+                label: l10n.subscribedDead,
+                filled: true,
+              );
       }
-      return StatusChip(color: online, label: l10n.statusOnline);
+      return StatusChip(color: online, label: l10n.statusOnline, filled: true);
     }
 
     return ListView(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 16),
       children: [
-        ListTile(
-          leading: const Icon(Icons.dns),
-          title: Text(relay ?? l10n.relayNotConfigured),
-          subtitle: Text(l10n.relayRow),
-          // The list only renders once discovery succeeded, so the relay is
-          // reachable here; the error/offline case is the screen's error state.
-          trailing: StatusChip(color: online, label: l10n.statusOnline),
-        ),
+        _RelayBanner(relay: relay ?? l10n.relayNotConfigured, online: online),
         if (api.isNotEmpty) _SectionHeader(l10n.apiServicesSection),
         ...api.map(
-          (s) => ListTile(
+          (s) => _ServiceCard(
             key: Key('svc-${s.key}'),
-            leading: const Icon(Icons.api),
-            title: Text(s.name),
-            subtitle: Text(s.device),
-            trailing: apiStatus(s),
+            icon: Icons.api,
+            iconBg: scheme.secondaryContainer,
+            iconFg: scheme.onSecondaryContainer,
+            title: s.name,
+            subtitle: s.device,
+            selected: s.key == highlightKey,
+            status: apiStatus(s),
             onTap: () => onTapApi(s.key),
           ),
         ),
@@ -217,32 +235,19 @@ class _ServiceList extends ConsumerWidget {
                     l10n.unreachableReason,
                   ),
                 );
-          return ListTile(
+          return _ServiceCard(
             key: Key('svc-${s.key}'),
-            isThreeLine: reason != null,
-            leading: const Icon(Icons.computer),
-            title: Text(s.name),
-            subtitle: reason == null
-                ? Text(l10n.appServerSubtitle(s.device))
-                : Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(l10n.appServerSubtitle(s.device)),
-                      Text(
-                        reason,
-                        style: Theme.of(
-                          context,
-                        ).textTheme.bodySmall?.copyWith(color: scheme.error),
-                      ),
-                    ],
-                  ),
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                StatusChip(color: statusColor, label: statusLabel),
-                const SizedBox(width: 4),
-                const Icon(Icons.chevron_right),
-              ],
+            icon: Icons.computer,
+            iconBg: scheme.tertiaryContainer,
+            iconFg: scheme.onTertiaryContainer,
+            title: s.name,
+            subtitle: l10n.appServerSubtitle(s.device),
+            reason: reason,
+            chevron: true,
+            status: StatusChip(
+              color: statusColor,
+              label: statusLabel,
+              filled: true,
             ),
             onTap: () => onTapApp(s.key),
           );
@@ -257,17 +262,192 @@ class _ServiceList extends ConsumerWidget {
   }
 }
 
+/// The relay header: a tinted banner showing the configured relay and its
+/// (implicitly online — the list only renders once discovery succeeded) status.
+class _RelayBanner extends StatelessWidget {
+  const _RelayBanner({required this.relay, required this.online});
+  final String relay;
+  final Color online;
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: scheme.primaryContainer.withValues(alpha: 0.45),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: scheme.primary.withValues(alpha: 0.18)),
+      ),
+      child: Row(
+        children: [
+          _IconBadge(
+            icon: Icons.dns,
+            bg: scheme.primaryContainer,
+            fg: scheme.onPrimaryContainer,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  relay,
+                  style: Theme.of(context).textTheme.titleSmall,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: 1),
+                Text(
+                  l10n.relayRow,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          StatusChip(color: online, label: l10n.statusOnline, filled: true),
+        ],
+      ),
+    );
+  }
+}
+
+/// A discovered service, rendered as a tappable card: tinted icon badge, name +
+/// device, an optional unreachable reason, and a filled status pill.
+class _ServiceCard extends StatelessWidget {
+  const _ServiceCard({
+    super.key,
+    required this.icon,
+    required this.iconBg,
+    required this.iconFg,
+    required this.title,
+    required this.subtitle,
+    required this.status,
+    required this.onTap,
+    this.reason,
+    this.chevron = false,
+    this.selected = false,
+  });
+
+  final IconData icon;
+  final Color iconBg;
+  final Color iconFg;
+  final String title;
+  final String subtitle;
+
+  /// Non-null only for an unreachable app-server: the "why" line under the
+  /// subtitle (relay registration up, remote backend down).
+  final String? reason;
+  final StatusChip status;
+  final VoidCallback onTap;
+  final bool chevron;
+  final bool selected;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Material(
+        color: scheme.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(14),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(14),
+          child: Container(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(
+                color: selected ? scheme.primary : scheme.outlineVariant,
+                width: selected ? 2 : 1,
+              ),
+            ),
+            padding: const EdgeInsets.all(12),
+            child: Row(
+              children: [
+                _IconBadge(icon: icon, bg: iconBg, fg: iconFg),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        style: Theme.of(context).textTheme.titleSmall,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        subtitle,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: scheme.onSurfaceVariant,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      if (reason != null) ...[
+                        const SizedBox(height: 3),
+                        Text(
+                          reason!,
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(color: scheme.error),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                status,
+                if (chevron) ...[
+                  const SizedBox(width: 2),
+                  Icon(Icons.chevron_right, color: scheme.outline),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// A rounded, theme-tinted icon tile — the visual anchor on relay/service rows.
+class _IconBadge extends StatelessWidget {
+  const _IconBadge({required this.icon, required this.bg, required this.fg});
+  final IconData icon;
+  final Color bg;
+  final Color fg;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    width: 42,
+    height: 42,
+    decoration: BoxDecoration(
+      color: bg,
+      borderRadius: BorderRadius.circular(12),
+    ),
+    child: Icon(icon, size: 22, color: fg),
+  );
+}
+
 class _SectionHeader extends StatelessWidget {
   const _SectionHeader(this.text);
   final String text;
   @override
   Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
+    padding: const EdgeInsets.fromLTRB(6, 16, 6, 6),
     child: Text(
       text,
-      style: Theme.of(
-        context,
-      ).textTheme.labelSmall?.copyWith(letterSpacing: .5),
+      style: Theme.of(context).textTheme.labelMedium?.copyWith(
+        letterSpacing: .5,
+        color: Theme.of(context).colorScheme.onSurfaceVariant,
+      ),
     ),
   );
 }
