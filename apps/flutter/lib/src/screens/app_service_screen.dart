@@ -484,7 +484,9 @@ class _AppServiceState extends ConsumerState<AppServiceScreen> {
     if (c.isEmpty) return '';
     if (c.startsWith('/')) return '/';
     final m = RegExp(r'^([A-Za-z]:)').firstMatch(c);
-    return m?.group(1)!.toUpperCase() ?? '';
+    // `m?.` null-shorts the whole chain, so this is already crash-safe; `?.`
+    // (over `!`) just keeps it bang-free and equally clear.
+    return m?.group(1)?.toUpperCase() ?? '';
   }
 
   /// Leaf folder name of [cwd] (the project's own directory), or empty.
