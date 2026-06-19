@@ -7,11 +7,12 @@ import 'package:pocket_codex/src/error_format.dart';
 import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/screens/app_session_screen.dart'
     show appLocalPort;
+import 'package:pocket_codex/src/time_ago.dart';
 import 'package:pocket_codex/src/widgets/loading.dart';
 import 'package:pocket_codex/src/widgets/status_dots.dart';
 
-/// App-server service detail: connect over the relay, then list threads and
-/// open or start a remote-control conversation.
+/// App-server service detail: connect over the relay, then list threads grouped
+/// by project and open or start a remote-control conversation.
 class AppServiceScreen extends ConsumerStatefulWidget {
   /// Creates the screen for [serviceKey] (`pcx:<device>:app:<name>`).
   const AppServiceScreen({super.key, required this.serviceKey});
@@ -27,6 +28,7 @@ class _AppServiceState extends ConsumerState<AppServiceScreen> {
   bool _connecting = true;
   String? _error;
   List<ThreadMeta> _threads = const [];
+  String _query = '';
 
   @override
   void initState() {
@@ -249,154 +251,247 @@ class _AppServiceState extends ConsumerState<AppServiceScreen> {
         ),
       );
     }
-    // Build a collapsible folder tree from thread cwds (hierarchical,
-    // collapsible project view).
-    final root = _buildTree(_threads);
-    return RefreshIndicator(
+    return _buildProjectList(l10n, running);
+  }
+
+  /// Threads grouped by project (cwd), each project ordered by its most recent
+  /// activity, mirroring the local-sessions language: a lightweight folder
+  /// header + lean conversation rows, with drive dividers only when projects
+  /// actually span more than one drive.
+  Widget _buildProjectList(AppLocalizations l10n, Set<String> running) {
+    final scheme = Theme.of(context).colorScheme;
+    final now = DateTime.now();
+    final q = _query.trim().toLowerCase();
+    bool matches(ThreadMeta t) =>
+        t.preview.toLowerCase().contains(q) || t.cwd.toLowerCase().contains(q);
+    final filtered = q.isEmpty ? _threads : _threads.where(matches).toList();
+
+    // Group by project; sort threads (and then projects) newest-first.
+    final projects = <String, List<ThreadMeta>>{};
+    for (final t in filtered) {
+      projects.putIfAbsent(t.cwd.trim(), () => <ThreadMeta>[]).add(t);
+    }
+    for (final ts in projects.values) {
+      ts.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+    }
+    int recent(List<ThreadMeta> ts) =>
+        ts.fold(0, (m, t) => t.updatedAt > m ? t.updatedAt : m);
+    final ordered = projects.entries.toList()
+      ..sort((a, b) => recent(b.value).compareTo(recent(a.value)));
+
+    // Drive headers only earn their keep when projects span >1 drive.
+    final drives = ordered
+        .map((e) => _drive(e.key))
+        .where((d) => d.isNotEmpty)
+        .toSet();
+    final showDrives = drives.length > 1;
+
+    final rows = <Widget>[];
+    String? lastDrive;
+    for (final entry in ordered) {
+      final d = _drive(entry.key);
+      if (showDrives && d.isNotEmpty && d != lastDrive) {
+        rows.add(_driveDivider(d));
+        lastDrive = d;
+      }
+      rows.add(_projectHeader(entry.key, entry.value, running, l10n));
+      rows.addAll(entry.value.map((t) => _threadRow(t, running, now, l10n)));
+    }
+
+    return Column(
       key: const ValueKey('app-tree'),
-      onRefresh: _refreshThreads,
-      child: ListView(
-        padding: const EdgeInsets.symmetric(vertical: 8),
-        children: _nodeWidgets(root, l10n, 0, running),
-      ),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // Quick filter — shown once there are enough threads to scan.
+        if (_threads.length > 6) _searchBox(l10n),
+        Expanded(
+          child: filtered.isEmpty
+              ? Center(
+                  key: const ValueKey('app-no-match'),
+                  child: Text(
+                    l10n.noMatchingThreads,
+                    style: TextStyle(color: scheme.outline),
+                  ),
+                )
+              : RefreshIndicator(
+                  onRefresh: _refreshThreads,
+                  child: ListView(
+                    // Bottom room so the extended FAB never covers the last row.
+                    padding: const EdgeInsets.only(top: 4, bottom: 88),
+                    children: rows,
+                  ),
+                ),
+        ),
+      ],
     );
   }
 
-  /// How many threads in [node]'s subtree currently have a running turn.
-  int _runningCount(_Node node, Set<String> running) {
-    var n = node.threads.where((t) => running.contains(t.id)).length;
-    for (final c in node.children.values) {
-      n += _runningCount(c, running);
-    }
-    return n;
-  }
-
-  /// Build a path tree from cwds, then collapse single-child chains.
-  _Node _buildTree(List<ThreadMeta> threads) {
-    final root = _Node('', '');
-    for (final t in threads) {
-      final cwd = t.cwd.trim();
-      if (cwd.isEmpty) {
-        root.children.putIfAbsent('', () => _Node('', '')).threads.add(t);
-        continue;
-      }
-      final unix = cwd.startsWith('/');
-      final sep = cwd.contains('\\') ? '\\' : '/';
-      final segs = cwd.split(RegExp(r'[\\/]'))..removeWhere((s) => s.isEmpty);
-      var node = root;
-      var prefix = '';
-      for (final seg in segs) {
-        prefix = prefix.isEmpty ? (unix ? '/$seg' : seg) : '$prefix$sep$seg';
-        node = node.children.putIfAbsent(seg, () => _Node(seg, prefix));
-      }
-      node.threads.add(t);
-    }
-    _compress(root);
-    return root;
-  }
-
-  /// Merge folder nodes with a single child and no threads of their own, so
-  /// chains like `C:` › `Users` › `me` render as one `C:\Users\me` node.
-  void _compress(_Node node) {
-    final merged = <String, _Node>{};
-    for (var child in node.children.values) {
-      _compress(child);
-      while (child.threads.isEmpty && child.children.length == 1) {
-        final only = child.children.values.first;
-        final sep = only.fullPath.contains('\\') ? '\\' : '/';
-        only.name = '${child.name}$sep${only.name}';
-        child = only;
-      }
-      merged[child.name] = child;
-    }
-    node.children
-      ..clear()
-      ..addAll(merged);
-  }
-
-  List<Widget> _nodeWidgets(
-    _Node node,
-    AppLocalizations l10n,
-    int depth,
+  /// A folder header for one project: its name, full path, a running badge, and
+  /// the only "+" (start a conversation in this cwd) — rows below stay clean.
+  Widget _projectHeader(
+    String cwd,
+    List<ThreadMeta> threads,
     Set<String> running,
+    AppLocalizations l10n,
   ) {
     final scheme = Theme.of(context).colorScheme;
-    final kids = node.children.values.toList()
-      ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
-    final widgets = <Widget>[];
-    for (final child in kids) {
-      final label = child.name.isEmpty ? l10n.defaultFolder : child.name;
-      // Surface running sessions at the folder level too, so a collapsed
-      // project still shows that something inside it is active.
-      final runCount = _runningCount(child, running);
-      widgets.add(
-        ExpansionTile(
-          key: PageStorageKey('proj-${child.fullPath}-$label'),
-          initiallyExpanded: depth == 0,
-          tilePadding: EdgeInsets.only(left: 16.0 + depth * 14, right: 4),
-          childrenPadding: EdgeInsets.zero,
-          leading: Icon(Icons.folder_outlined, color: scheme.primary),
-          title: Row(
-            children: [
-              Expanded(
-                child: Text(
+    final leaf = _leaf(cwd);
+    final label = leaf.isEmpty ? l10n.defaultFolder : leaf;
+    final path = cwd.trim();
+    final showPath = path.isNotEmpty && path != label;
+    final runCount = threads.where((t) => running.contains(t.id)).length;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 12, 4, 2),
+      child: Row(
+        children: [
+          Icon(Icons.folder_outlined, size: 19, color: scheme.primary),
+          const SizedBox(width: 9),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
                   label,
                   style: Theme.of(context).textTheme.titleSmall,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
-              ),
-              if (runCount > 0) ...[
-                StatusChip(
-                  color: scheme.primary,
-                  label: l10n.runningSessions(runCount),
-                  pulsing: true,
-                ),
-                const SizedBox(width: 4),
-              ],
-              IconButton(
-                icon: const Icon(Icons.add, size: 20),
-                tooltip: l10n.newConversation,
-                onPressed: () => _open(cwd: child.fullPath),
-              ),
-            ],
-          ),
-          children: [
-            ...child.threads.map(
-              (t) => Padding(
-                padding: EdgeInsets.only(left: 16.0 + (depth + 1) * 14),
-                child: ListTile(
-                  key: Key('thread-${t.id}'),
-                  dense: true,
-                  leading: const Icon(Icons.chat_bubble_outline, size: 18),
-                  title: Text(
-                    t.preview.trim().isEmpty
-                        ? l10n.untitledThread
-                        : t.preview.trim(),
+                if (showPath)
+                  Text(
+                    path,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
-                  trailing: running.contains(t.id)
-                      ? PulsingDot(color: scheme.primary)
-                      : null,
-                  onTap: () => _open(threadId: t.id, cwd: t.cwd),
-                ),
+              ],
+            ),
+          ),
+          if (runCount > 0) ...[
+            StatusChip(
+              color: scheme.primary,
+              label: l10n.runningSessions(runCount),
+              pulsing: true,
+            ),
+            const SizedBox(width: 2),
+          ],
+          IconButton(
+            icon: const Icon(Icons.add, size: 20),
+            tooltip: l10n.newConversation,
+            visualDensity: VisualDensity.compact,
+            onPressed: () => _open(cwd: cwd),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// One conversation row: indented under its project, preview + relative-time,
+  /// and a pulse when a turn is live.
+  Widget _threadRow(
+    ThreadMeta t,
+    Set<String> running,
+    DateTime now,
+    AppLocalizations l10n,
+  ) {
+    final scheme = Theme.of(context).colorScheme;
+    final isRunning = running.contains(t.id);
+    final preview = t.preview.trim();
+    final time = relativeTime(t.updatedAt, now, l10n);
+    return ListTile(
+      key: Key('thread-${t.id}'),
+      dense: true,
+      visualDensity: VisualDensity.compact,
+      contentPadding: const EdgeInsets.only(left: 40, right: 14),
+      horizontalTitleGap: 8,
+      minLeadingWidth: 0,
+      leading: Icon(
+        Icons.chat_bubble_outline,
+        size: 17,
+        color: scheme.onSurfaceVariant,
+      ),
+      title: Text(
+        preview.isEmpty ? l10n.untitledThread : preview,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (time.isNotEmpty)
+            Text(
+              time,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: scheme.onSurfaceVariant,
               ),
             ),
-            ..._nodeWidgets(child, l10n, depth + 1, running),
+          if (isRunning) ...[
+            const SizedBox(width: 8),
+            PulsingDot(color: scheme.primary),
           ],
-        ),
-      );
-    }
-    return widgets;
+        ],
+      ),
+      onTap: () => _open(threadId: t.id, cwd: t.cwd),
+    );
   }
-}
 
-/// One folder node in the project tree.
-class _Node {
-  _Node(this.name, this.fullPath);
-  String name;
-  final String fullPath;
-  final Map<String, _Node> children = {};
-  final List<ThreadMeta> threads = [];
+  Widget _driveDivider(String drive) => Padding(
+    padding: const EdgeInsets.fromLTRB(14, 14, 14, 0),
+    child: Text(
+      drive,
+      style: TextStyle(
+        fontSize: 11,
+        fontWeight: FontWeight.w600,
+        letterSpacing: .5,
+        color: Theme.of(context).colorScheme.onSurfaceVariant,
+      ),
+    ),
+  );
+
+  Widget _searchBox(AppLocalizations l10n) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+      child: TextField(
+        key: const Key('app-thread-search'),
+        onChanged: (v) => setState(() => _query = v),
+        style: const TextStyle(fontSize: 13),
+        decoration: InputDecoration(
+          isDense: true,
+          prefixIcon: const Icon(Icons.search, size: 18),
+          prefixIconConstraints: const BoxConstraints(
+            minWidth: 34,
+            minHeight: 34,
+          ),
+          hintText: l10n.searchConversations,
+          hintStyle: TextStyle(fontSize: 13, color: scheme.onSurfaceVariant),
+          filled: true,
+          fillColor: scheme.surfaceContainerHighest,
+          contentPadding: const EdgeInsets.symmetric(vertical: 9),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(10),
+            borderSide: BorderSide.none,
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Drive prefix of [cwd] (`C:` / `D:` / `/` for unix), or empty when unknown.
+  String _drive(String cwd) {
+    final c = cwd.trim();
+    if (c.isEmpty) return '';
+    if (c.startsWith('/')) return '/';
+    final m = RegExp(r'^([A-Za-z]:)').firstMatch(c);
+    return m?.group(1)!.toUpperCase() ?? '';
+  }
+
+  /// Leaf folder name of [cwd] (the project's own directory), or empty.
+  String _leaf(String cwd) {
+    final c = cwd.trim();
+    if (c.isEmpty) return '';
+    final segs = c.split(RegExp(r'[\\/]'))..removeWhere((s) => s.isEmpty);
+    return segs.isEmpty ? c : segs.last;
+  }
 }

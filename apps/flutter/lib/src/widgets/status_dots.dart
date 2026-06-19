@@ -90,7 +90,9 @@ class _PulsingDotState extends State<PulsingDot>
 }
 
 /// A dot + label pill for service availability rows. Set [pulsing] for an
-/// active state (renders a [PulsingDot] instead of a [StatusDot]).
+/// active state (renders a [PulsingDot] instead of a [StatusDot]); set [filled]
+/// to wrap the dot+label in a status-tinted rounded pill (used on the card-style
+/// service rows, where a bare dot+text would float without weight).
 class StatusChip extends StatelessWidget {
   /// Creates a status chip.
   const StatusChip({
@@ -98,6 +100,7 @@ class StatusChip extends StatelessWidget {
     required this.color,
     required this.label,
     this.pulsing = false,
+    this.filled = false,
   });
 
   /// Colour shared by the dot and (subtly) the label.
@@ -109,10 +112,13 @@ class StatusChip extends StatelessWidget {
   /// Whether to animate the dot (running / in-flight states).
   final bool pulsing;
 
+  /// Whether to draw a status-tinted rounded background behind the dot+label.
+  final bool filled;
+
   @override
   Widget build(BuildContext context) {
     final muted = Theme.of(context).colorScheme.onSurfaceVariant;
-    return Row(
+    final row = Row(
       mainAxisSize: MainAxisSize.min,
       children: [
         pulsing
@@ -121,6 +127,17 @@ class StatusChip extends StatelessWidget {
         const SizedBox(width: 5),
         Text(label, style: TextStyle(fontSize: 11.5, color: muted)),
       ],
+    );
+    if (!filled) return row;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+      decoration: BoxDecoration(
+        // A faint wash of the status colour: enough to read as a pill in both
+        // themes, neutral enough that the label (onSurfaceVariant) stays legible.
+        color: color.withValues(alpha: 0.13),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: row,
     );
   }
 }
