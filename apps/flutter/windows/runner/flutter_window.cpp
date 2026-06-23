@@ -27,7 +27,10 @@ void ForceForegroundWindow(HWND hwnd) {
   DWORD foreground_thread =
       ::GetWindowThreadProcessId(foreground, nullptr);
   DWORD this_thread = ::GetCurrentThreadId();
-  bool attached = foreground_thread != this_thread &&
+  // foreground_thread is 0 when no window holds focus; AttachThreadInput(0, ...)
+  // is invalid, so skip the attach in that case.
+  bool attached = foreground_thread != 0 &&
+                  foreground_thread != this_thread &&
                   ::AttachThreadInput(foreground_thread, this_thread, TRUE);
   ::BringWindowToTop(hwnd);
   ::SetForegroundWindow(hwnd);

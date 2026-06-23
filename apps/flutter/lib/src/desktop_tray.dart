@@ -1,5 +1,3 @@
-import 'dart:io' show Platform;
-
 import 'package:flutter/foundation.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
@@ -67,6 +65,14 @@ class DesktopTray with TrayListener, WindowListener {
           defaultTargetPlatform == TargetPlatform.macOS ||
           defaultTargetPlatform == TargetPlatform.linux);
 
+  // Platform checks via defaultTargetPlatform (NOT `dart:io` Platform), so this
+  // file imports no dart:io and main.dart can import it unconditionally without
+  // breaking the web compile. Only read on desktop (init/handlers run only when
+  // [supported]).
+  static bool get _isWindows => defaultTargetPlatform == TargetPlatform.windows;
+  static bool get _isMacOS => defaultTargetPlatform == TargetPlatform.macOS;
+  static bool get _isLinux => defaultTargetPlatform == TargetPlatform.linux;
+
   /// Brings up the tray icon and arms close-to-tray. Idempotent.
   ///
   /// [onOpenSettings] is invoked by the "Settings" menu item (after the window
@@ -86,11 +92,11 @@ class DesktopTray with TrayListener, WindowListener {
     // Windows' Shell_NotifyIcon needs a real .ico (tray_manager feeds the path
     // to LoadImage); macOS/Linux take a PNG. Both ship as flutter_assets.
     await trayManager.setIcon(
-      Platform.isWindows ? 'assets/tray/tray.ico' : 'assets/tray/tray.png',
+      _isWindows ? 'assets/tray/tray.ico' : 'assets/tray/tray.png',
     );
     // appindicator (Linux) has no hover tooltip; setting one is a harmless
     // no-op, but skip it to keep the platform log clean.
-    if (!Platform.isLinux) {
+    if (!_isLinux) {
       await trayManager.setToolTip('Pocket-Codex');
     }
   }
@@ -154,9 +160,9 @@ class DesktopTray with TrayListener, WindowListener {
     // macOS: the plugin does NOT auto-attach the status-item menu, so a click
     // must pop it explicitly — otherwise the icon is inert. Linux/appindicator
     // opens its menu natively and sends no click events, so it needs nothing.
-    if (Platform.isWindows) {
+    if (_isWindows) {
       _show();
-    } else if (Platform.isMacOS) {
+    } else if (_isMacOS) {
       trayManager.popUpContextMenu();
     }
   }
@@ -165,7 +171,7 @@ class DesktopTray with TrayListener, WindowListener {
   void onTrayIconRightMouseDown() {
     // Windows and macOS pop the context menu on (right-)click; Linux's
     // appindicator does it natively.
-    if (Platform.isWindows || Platform.isMacOS) {
+    if (_isWindows || _isMacOS) {
       trayManager.popUpContextMenu();
     }
   }

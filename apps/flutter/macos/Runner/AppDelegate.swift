@@ -16,7 +16,9 @@ class AppDelegate: FlutterAppDelegate {
   // the window was hidden to the tray, surface it.
   override func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
     if !flag {
-      for window in sender.windows {
+      // Only restore real top-level windows; canBecomeKey filters out hidden
+      // helper/background windows some plugins create.
+      for window in sender.windows where window.canBecomeKey {
         window.makeKeyAndOrderFront(self)
       }
       NSApp.activate(ignoringOtherApps: true)
