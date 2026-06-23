@@ -141,6 +141,8 @@
   "noAuthWarning": "⚠ 本地端点无鉴权,仅监听 127.0.0.1。仅在 App 前台存活。",
   "subscribeFailed": "无法启动订阅",
   "settingsTitle": "设置",
+  "trayShow": "显示主窗口",
+  "trayQuit": "退出",
   "relayRow": "relay",
   "notConfigured": "(未配置)",
   "keyRow": "MSG_HEADER_KEY",

@@ -52,6 +52,13 @@ dependencies:
   # against a future-Flutter break and avoids relying on the (buggy on desktop)
   # animateToItem/ListController path — we keep the existing ScrollController.
   super_sliver_list: 0.4.1
+  # Desktop system tray (Windows/macOS/Linux). tray_manager draws the tray icon
+  # + context menu; window_manager intercepts the window-close (so closing
+  # hides to tray instead of quitting) and shows/focuses the window from the
+  # tray. Both are no-ops on mobile — main.dart gates init on desktop. Linux
+  # builds additionally need libayatana-appindicator3-dev (see release.yml).
+  tray_manager: ^0.5.2
+  window_manager: ^0.5.1
 
 dev_dependencies:
   flutter_test:
@@ -65,6 +72,9 @@ dev_dependencies:
   # (the vector source of truth) into the PNGs flutter_launcher_icons /
   # flutter_native_splash consume. Not shipped in the app bundle.
   flutter_svg: ^2.0.10
+  # Also test/gen_icon_test.dart only: encodes the Windows tray .ico (multi-size,
+  # PNG-framed) from icon/tray_mark.svg. Not shipped in the app bundle.
+  image: ^4.9.1
 
 flutter:
   uses-material-design: true
@@ -72,8 +82,15 @@ flutter:
   # Only the transparent brand mark ships in the bundle. logo.png and
   # poster.png stay in the repo as icon-generator input / marketing
   # material — bundling them would add ~2.7 MB of dead weight.
+  #
+  # The tray icons (tray.png for macOS/Linux, tray.ico for Windows) are tiny and
+  # only loaded on desktop; tray_manager resolves them relative to
+  # data/flutter_assets, so they must ship as bundled assets. Generated from
+  # icon/tray_mark.svg by test/gen_icon_test.dart.
   assets:
     - assets/logo/mark.png
+    - assets/tray/tray.png
+    - assets/tray/tray.ico
 
 flutter_launcher_icons:
   # The brand mark is a single vector source — icon/pocket_mark.svg (a rounded

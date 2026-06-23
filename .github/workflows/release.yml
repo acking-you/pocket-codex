@@ -243,7 +243,10 @@ jobs:
       - name: Install Linux desktop + packaging deps
         run: |
           sudo apt-get update -y
+          # libayatana-appindicator3-dev: required by tray_manager's Linux build
+          # (the plugin CMake errors out without an appindicator implementation).
           sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev \
+            libayatana-appindicator3-dev \
             file desktop-file-utils fakeroot zip
       - name: Activate desktop manifest (bundle Noto Sans SC)
         shell: bash
@@ -277,6 +280,17 @@ jobs:
           mkdir -p "$appdir/usr/bin" "$appdir/usr/share/applications" \
                    "$appdir/usr/share/icons/hicolor/256x256/apps"
           cp -r "$bundle"/* "$appdir/usr/bin/"
+          # Bundle the appindicator runtime (+ its libdbusmenu deps) that
+          # tray_manager's plugin .so links against, so the portable AppImage
+          # runs on hosts without it. GTK/glib stay host-provided (the bundle
+          # already relies on the host's libgtk-3). The flutter bundle's libs
+          # live in usr/bin/lib, which AppRun puts on LD_LIBRARY_PATH.
+          mkdir -p "$appdir/usr/bin/lib"
+          for soname in libayatana-appindicator3.so.1 libdbusmenu-glib.so.4 \
+                        libdbusmenu-gtk3.so.4; do
+            so="$(find /usr/lib /lib -name "$soname" 2>/dev/null | head -n1)"
+            [ -n "$so" ] && cp -L "$so" "$appdir/usr/bin/lib/"
+          done
           cp icon/icon_square.png "$appdir/usr/share/icons/hicolor/256x256/apps/pocket-codex.png"
           cp "$appdir/usr/share/icons/hicolor/256x256/apps/pocket-codex.png" "$appdir/pocket-codex.png"
           cat > "$appdir/usr/share/applications/pocket-codex.desktop" <<'DESKTOP'
@@ -327,7 +341,7 @@ jobs:
           Priority: optional
           Architecture: amd64
           Maintainer: Pocket-Codex Contributors <noreply@github.com>
-          Depends: libgtk-3-0
+          Depends: libgtk-3-0, libayatana-appindicator3-1
           Description: Pocket-Codex desktop app
            Remote-control your codex sessions from any device.
           CONTROL

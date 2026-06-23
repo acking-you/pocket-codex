@@ -8,9 +8,35 @@ import 'package:pocket_codex/src/screens/onboarding_screen.dart';
 import 'package:pocket_codex/src/screens/services_screen.dart';
 import 'package:pocket_codex/src/screens/settings_screen.dart';
 
+/// The live router instance, captured by [buildRouter] so code outside the
+/// widget tree — namely the desktop tray's "Settings" item — can navigate. Null
+/// until the app has built its router (so [openSettingsFromTray] is a no-op
+/// before then).
+GoRouter? _appRouter;
+
+/// Open the settings screen from outside the widget tree (the desktop tray).
+/// Safe to call before the router exists (no-op) and needs no BuildContext.
+///
+/// Uses `push`, not `go`: settings is a top-level route, so `go` would REPLACE
+/// the stack, leaving the screen with nothing to pop — its AppBar shows no back
+/// button and the user is stranded there. `push` mirrors the in-app settings
+/// button (`context.push('/settings')`), so the back button works.
+void openSettingsFromTray() {
+  final router = _appRouter;
+  if (router == null) return;
+  // The tray item can be clicked repeatedly; don't stack duplicate Settings
+  // pages when it's already the current route.
+  if (router.routerDelegate.currentConfiguration.uri.path == '/settings') {
+    return;
+  }
+  router.push('/settings');
+}
+
 /// Build the app router. [initialLocation] is `/onboarding` on first run
 /// (no relay configured) and `/` otherwise.
-GoRouter buildRouter({required String initialLocation}) => GoRouter(
+GoRouter buildRouter({
+  required String initialLocation,
+}) => _appRouter = GoRouter(
   initialLocation: initialLocation,
   routes: [
     GoRoute(path: '/onboarding', builder: (c, s) => const OnboardingScreen()),

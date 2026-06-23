@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
+import 'package:pocket_codex/src/desktop_tray.dart';
 import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/router.dart';
 import 'package:pocket_codex/src/theme.dart';
@@ -24,6 +25,12 @@ Future<void> main() async {
   await RustLib.init();
   final dir = await getApplicationSupportDirectory();
   await frb.initBridge(supportDir: dir.path);
+
+  // Desktop only: bring up the system tray and make the window close-to-tray.
+  // No-op on mobile (DesktopTray.init guards on the platform). The menu labels
+  // are filled in once the app builds (see the MaterialApp.router builder).
+  await DesktopTray.instance.init(onOpenSettings: openSettingsFromTray);
+
   final cfg = await frb.getConfig();
   final relay = cfg.relay?.trim();
   final start = (relay == null || relay.isEmpty) ? '/onboarding' : '/';
@@ -98,6 +105,22 @@ class _PocketCodexAppState extends ConsumerState<PocketCodexApp> {
       locale: locale,
       localizationsDelegates: AppLocalizations.localizationsDelegates,
       supportedLocales: AppLocalizations.supportedLocales,
+      // Keep the desktop tray menu in the active UI language. This builder runs
+      // below Localizations, so AppLocalizations.of(context) resolves the
+      // current locale; setMenu skips the platform call when nothing changed.
+      builder: (context, child) {
+        if (DesktopTray.supported) {
+          final l10n = AppLocalizations.of(context);
+          DesktopTray.instance.setMenu(
+            TrayMenuLabels(
+              show: l10n.trayShow,
+              settings: l10n.settingsTitle,
+              quit: l10n.trayQuit,
+            ),
+          );
+        }
+        return child ?? const SizedBox.shrink();
+      },
       routerConfig: _router,
     );
   }

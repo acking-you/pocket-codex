@@ -854,6 +854,18 @@ abstract class AppLocalizations {
   /// **'Settings'**
   String get settingsTitle;
 
+  /// No description provided for @trayShow.
+  ///
+  /// In en, this message translates to:
+  /// **'Show window'**
+  String get trayShow;
+
+  /// No description provided for @trayQuit.
+  ///
+  /// In en, this message translates to:
+  /// **'Quit'**
+  String get trayQuit;
+
   /// No description provided for @relayRow.
   ///
   /// In en, this message translates to:
