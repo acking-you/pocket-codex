@@ -4,6 +4,44 @@
 
 #include "flutter/generated_plugin_registrant.h"
 
+// Set in main.cpp: the RegisterWindowMessage id a second launch broadcasts to
+// ask this (already-running) instance to surface its window.
+extern UINT g_pocket_codex_show_msg;
+
+namespace {
+
+// Restores, shows and force-foregrounds |hwnd|, defeating Windows' foreground
+// lock with the AttachThreadInput trick (the second instance already called
+// AllowSetForegroundWindow(ASFW_ANY)). Used to surface the window when hidden
+// to the tray and when a second launch asks the running instance to appear.
+void ForceForegroundWindow(HWND hwnd) {
+  if (hwnd == nullptr) {
+    return;
+  }
+  if (::IsIconic(hwnd)) {
+    ::ShowWindow(hwnd, SW_RESTORE);
+  }
+  ::ShowWindow(hwnd, SW_SHOW);
+
+  HWND foreground = ::GetForegroundWindow();
+  DWORD foreground_thread =
+      ::GetWindowThreadProcessId(foreground, nullptr);
+  DWORD this_thread = ::GetCurrentThreadId();
+  // foreground_thread is 0 when no window holds focus; AttachThreadInput(0, ...)
+  // is invalid, so skip the attach in that case.
+  bool attached = foreground_thread != 0 &&
+                  foreground_thread != this_thread &&
+                  ::AttachThreadInput(foreground_thread, this_thread, TRUE);
+  ::BringWindowToTop(hwnd);
+  ::SetForegroundWindow(hwnd);
+  ::SetActiveWindow(hwnd);
+  if (attached) {
+    ::AttachThreadInput(foreground_thread, this_thread, FALSE);
+  }
+}
+
+}  // namespace
+
 FlutterWindow::FlutterWindow(const flutter::DartProject& project)
     : project_(project) {}
 
@@ -51,6 +89,13 @@ LRESULT
 FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
                               WPARAM const wparam,
                               LPARAM const lparam) noexcept {
+  // A second launch asked us to surface (see main.cpp). The id is unique to
+  // this app, so only our own windows ever receive it.
+  if (message == g_pocket_codex_show_msg && g_pocket_codex_show_msg != 0) {
+    ForceForegroundWindow(GetHandle());
+    return 0;
+  }
+
   // Give Flutter, including plugins, an opportunity to handle window messages.
   if (flutter_controller_) {
     std::optional<LRESULT> result =

@@ -398,6 +398,12 @@ class AppLocalizationsZh extends AppLocalizations {
   String get settingsTitle => '设置';
 
   @override
+  String get trayShow => '显示主窗口';
+
+  @override
+  String get trayQuit => '退出';
+
+  @override
   String get relayRow => 'relay';
 
   @override

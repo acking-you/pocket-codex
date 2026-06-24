@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- Pocket-Codex TRAY mark: a small-size-tuned variant of icon/pocket_mark.svg.
+       The system tray renders this at 16-24 px, where the top notch and the thin
+       `>_` of the full brand mark turn to mush. So this is a deliberately
+       simplified, higher-contrast take: a solid rounded "pocket" square in the
+       brand gradient (no notch) with a BOLDER, centred white `>_` prompt that
+       still reads at 16 px. test/gen_icon_test.dart rasterises it into
+       assets/tray/tray.png (macOS/Linux) and a multi-size assets/tray/tray.ico
+       (Windows), so the single vector stays the source of truth. Inset ~8% so
+       the OS tray padding doesn't clip the corners. -->
+  <defs>
+    <linearGradient id="tray" x1="0" y1="0" x2="256" y2="256" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#7381FD"/>
+      <stop offset="0.5" stop-color="#8761F7"/>
+      <stop offset="1" stop-color="#8144F0"/>
+    </linearGradient>
+  </defs>
+  <rect x="20" y="20" width="216" height="216" rx="58" fill="url(#tray)"/>
+  <path fill="none" stroke="#ffffff" stroke-width="26" stroke-linecap="round" stroke-linejoin="round" d="M82,88 L136,128 L82,168"/>
+  <path fill="none" stroke="#ffffff" stroke-width="26" stroke-linecap="round" d="M150,168 L196,168"/>
+</svg>

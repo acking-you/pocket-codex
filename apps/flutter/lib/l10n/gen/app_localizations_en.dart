@@ -403,6 +403,12 @@ class AppLocalizationsEn extends AppLocalizations {
   String get settingsTitle => 'Settings';
 
   @override
+  String get trayShow => 'Show window';
+
+  @override
+  String get trayQuit => 'Quit';
+
+  @override
   String get relayRow => 'relay';
 
   @override

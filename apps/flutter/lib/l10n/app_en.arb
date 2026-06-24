@@ -141,6 +141,8 @@
   "noAuthWarning": "⚠ The local endpoint has no auth and binds 127.0.0.1 only. Alive only while the app is foregrounded.",
   "subscribeFailed": "Couldn't start the subscription",
   "settingsTitle": "Settings",
+  "trayShow": "Show window",
+  "trayQuit": "Quit",
   "relayRow": "relay",
   "notConfigured": "(not configured)",
   "keyRow": "MSG_HEADER_KEY",

@@ -243,7 +243,10 @@ jobs:
       - name: Install Linux desktop + packaging deps
         run: |
           sudo apt-get update -y
+          # libayatana-appindicator3-dev: required by tray_manager's Linux build
+          # (the plugin CMake errors out without an appindicator implementation).
           sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev \
+            libayatana-appindicator3-dev \
             file desktop-file-utils fakeroot zip
       - name: Activate desktop manifest (bundle Noto Sans SC)
         shell: bash
@@ -268,6 +271,24 @@ jobs:
           bundle="build/linux/x64/release/bundle"
           mkdir -p dist
 
+          # Bundle the FULL non-GTK Ayatana/dbusmenu runtime closure that the
+          # Linux tray plugin links against, so the portable zip AND AppImage run
+          # on hosts lacking the Ayatana packages. Derived from ldd (the whole
+          # transitive closure: libayatana-appindicator3 -> -indicator3 -> -ido3,
+          # plus libdbusmenu-{glib,gtk3}) instead of a partial hard-coded list;
+          # GTK/glib stay host-provided. They land in the flutter bundle's own
+          # lib/ (already on the runner's rpath), so every artifact built from
+          # $bundle below is self-contained. The .deb additionally Depends on the
+          # runtime package as the apt-native mechanism.
+          mkdir -p "$bundle/lib"
+          appindicator="$(find /usr/lib /lib -name 'libayatana-appindicator3.so.1' 2>/dev/null | head -n1)"
+          if [ -n "${appindicator}" ]; then
+            ayatana_libs="$({ echo "${appindicator}"; ldd "${appindicator}" | awk '/=> \//{print $3}'; } \
+              | grep -E 'libayatana-(appindicator3|indicator3|ido3)|libdbusmenu-(glib|gtk3)' \
+              | sort -u || true)"
+            for so in ${ayatana_libs}; do cp -Lf "${so}" "$bundle/lib/"; done
+          fi
+
           # 1) Portable zip
           ( cd "$bundle" && zip -qry "${OLDPWD}/dist/pocket-codex-app-${tag}-linux-x64.zip" . )
 
@@ -276,6 +297,8 @@ jobs:
           rm -rf "$appdir"
           mkdir -p "$appdir/usr/bin" "$appdir/usr/share/applications" \
                    "$appdir/usr/share/icons/hicolor/256x256/apps"
+          # $bundle/lib already carries the Ayatana closure (bundled above), so
+          # copying the whole bundle makes the AppImage self-contained too.
           cp -r "$bundle"/* "$appdir/usr/bin/"
           cp icon/icon_square.png "$appdir/usr/share/icons/hicolor/256x256/apps/pocket-codex.png"
           cp "$appdir/usr/share/icons/hicolor/256x256/apps/pocket-codex.png" "$appdir/pocket-codex.png"
@@ -327,7 +350,7 @@ jobs:
           Priority: optional
           Architecture: amd64
           Maintainer: Pocket-Codex Contributors <noreply@github.com>
-          Depends: libgtk-3-0
+          Depends: libgtk-3-0, libayatana-appindicator3-1
           Description: Pocket-Codex desktop app
            Remote-control your codex sessions from any device.
           CONTROL

@@ -61,6 +61,13 @@ dependencies:
   # against a future-Flutter break and avoids relying on the (buggy on desktop)
   # animateToItem/ListController path — we keep the existing ScrollController.
   super_sliver_list: 0.4.1
+  # Desktop system tray (Windows/macOS/Linux). tray_manager draws the tray icon
+  # + context menu; window_manager intercepts the window-close (so closing
+  # hides to tray instead of quitting) and shows/focuses the window from the
+  # tray. Both are no-ops on mobile — main.dart gates init on desktop. Linux
+  # builds additionally need libayatana-appindicator3-dev (see release.yml).
+  tray_manager: ^0.5.2
+  window_manager: ^0.5.1
 
 dev_dependencies:
   flutter_test:
@@ -70,6 +77,11 @@ dev_dependencies:
     sdk: flutter
   flutter_launcher_icons: ^0.14.2
   flutter_native_splash: ^2.4.3
+  # Mirrors pubspec.yaml: test/gen_icon_test.dart rasterises the brand/tray SVGs
+  # (flutter_svg) and encodes the Windows tray .ico (image). Kept in sync so the
+  # icon-regen test compiles when this desktop manifest is the active pubspec.
+  flutter_svg: ^2.0.10
+  image: ^4.9.1
 
 flutter:
   uses-material-design: true
@@ -79,6 +91,8 @@ flutter:
   # material — bundling them would add ~2.7 MB of dead weight.
   assets:
     - assets/logo/mark.png
+    - assets/tray/tray.png
+    - assets/tray/tray.ico
   # Desktop-only bundled font (this file is the desktop manifest). Noto Sans SC
   # fixes thin/unevenly-weighted Chinese on Windows; theme.dart registers it as
   # the app's primary family on desktop (appFontFamily). Mobile omits this and
