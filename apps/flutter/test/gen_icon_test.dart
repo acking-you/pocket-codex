@@ -60,6 +60,36 @@ Future<void> renderSvg(
   await File(path).writeAsBytes(bytes);
 }
 
+/// Stacks [layers] (each `(svg, markFraction)`, bottom-first) onto one
+/// [size]x[size] transparent canvas and returns the PNG bytes. Each layer is
+/// scaled to [markFraction] of the canvas and centred (the SVGs are square), so
+/// a full-bleed background (1.0) can carry a smaller centred glyph on top.
+Future<Uint8List> compositeSvgs(
+  List<(String, double)> layers, {
+  double size = 1024,
+}) async {
+  final recorder = ui.PictureRecorder();
+  final canvas = Canvas(recorder, Rect.fromLTWH(0, 0, size, size));
+  for (final (svg, markFraction) in layers) {
+    final info = await vg.loadPicture(SvgStringLoader(svg), null);
+    final draw = size * markFraction;
+    final scale = draw / info.size.width;
+    final offset = (size - draw) / 2;
+    canvas.save();
+    canvas.translate(offset, offset);
+    canvas.scale(scale);
+    canvas.drawPicture(info.picture);
+    canvas.restore();
+    info.picture.dispose();
+  }
+  final image = await recorder.endRecording().toImage(
+    size.toInt(),
+    size.toInt(),
+  );
+  final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+  return bytes!.buffer.asUint8List();
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -71,6 +101,28 @@ void main() {
     expect(File('icon/icon_glyph.png').existsSync(), isTrue);
     expect(File('icon/adaptive_foreground.png').existsSync(), isTrue);
     expect(File('assets/logo/mark.png').existsSync(), isTrue);
+  });
+
+  test('rasterise mobile icon (brand tile + centred white glyph)', () async {
+    final bg = File('icon/mobile_bg.svg').readAsStringSync();
+    final glyph = File('icon/mobile_glyph.svg').readAsStringSync();
+
+    // Legacy Android mipmaps + iOS take a single full-bleed image: the brand
+    // gradient tile with the white >_ centred and small (the launcher / iOS
+    // round the corners). Composited so the glyph sits over the gradient.
+    final mobile = await compositeSvgs([(bg, 1.0), (glyph, 0.76)]);
+    await File('icon/icon_mobile.png').writeAsBytes(mobile);
+
+    // Android adaptive layers (API 26+): the gradient is the full-bleed
+    // background and the white >_ is the foreground. The foreground is rendered
+    // a touch smaller (0.66) because the adaptive safe zone shows less of the
+    // canvas, so the glyph ends up the same on-screen size as the legacy icon.
+    await renderSvg(bg, 'icon/icon_adaptive_bg.png', 1.0);
+    await renderSvg(glyph, 'icon/icon_adaptive_fg.png', 0.66);
+
+    expect(File('icon/icon_mobile.png').existsSync(), isTrue);
+    expect(File('icon/icon_adaptive_bg.png').existsSync(), isTrue);
+    expect(File('icon/icon_adaptive_fg.png').existsSync(), isTrue);
   });
 
   test('rasterise tray mark into tray assets (png + multi-size ico)', () async {

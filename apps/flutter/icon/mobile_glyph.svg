@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- Mobile icon FOREGROUND: the white `>_` terminal prompt only, centred on
+       transparent. This is the "subject" of the mobile icon and is deliberately
+       smaller than the desktop mark so it sits centred with generous brand-
+       colour margin. Used as the Android adaptive-icon foreground and composited
+       over mobile_bg.svg for the legacy/iOS icon. The glyph is centred in the
+       viewBox (bbox ~x52-204, y68-188 -> centre 128,128); gen_icon_test.dart
+       scales it down via markFraction so the final size has margin. -->
+  <g fill="none" stroke="#ffffff" stroke-width="26" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M52,68 L152,128 L52,188"/>
+    <path d="M152,188 L204,188"/>
+  </g>
+</svg>

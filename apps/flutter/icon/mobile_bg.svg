@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- Mobile icon BACKGROUND: full-bleed brand gradient (sampled from
+       pocket_mark.svg: top-left #7381FD -> bottom-right #8144F0). Used as the
+       Android adaptive-icon background (must bleed to every edge) and as the
+       base of the composited legacy/iOS icon. Corners are square on purpose —
+       the launcher / iOS apply their own rounded-square / circle mask. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="256" y2="256" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#7381FD"/>
+      <stop offset="0.5" stop-color="#8761F7"/>
+      <stop offset="1" stop-color="#8144F0"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="256" height="256" fill="url(#bg)"/>
+</svg>
