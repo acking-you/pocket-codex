@@ -8,6 +8,7 @@ members = [
     "crates/pocket-codex-bridge",
     "crates/pocket-codex-account-proto",
     "crates/pocket-codex-store",
+    "crates/pocket-codex-auth",
 ]
 # `deps/codex` and `deps/pb-mapper` are vendored upstream sources kept
 # as git submodules. They are intentionally excluded from this
@@ -103,7 +104,6 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "serd
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros"] }
 uuid = { version = "1", features = ["v4"] }
 jsonwebtoken = { version = "9", default-features = false }
-oauth2 = { version = "5", default-features = false, features = ["reqwest", "rustls-tls"] }
 sha2 = "0.10"
 rand = "0.8"
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
