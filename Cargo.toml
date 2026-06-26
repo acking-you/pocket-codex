@@ -6,6 +6,7 @@ members = [
     "crates/pocket-codex-pb",
     "crates/pocket-codex-cli",
     "crates/pocket-codex-bridge",
+    "crates/pocket-codex-account-proto",
 ]
 # `deps/codex` and `deps/pb-mapper` are vendored upstream sources kept
 # as git submodules. They are intentionally excluded from this
@@ -38,6 +39,7 @@ readme = "README.md"
 [workspace.dependencies]
 # Internal crates
 pocket-codex-core = { path = "crates/pocket-codex-core" }
+pocket-codex-account-proto = { path = "crates/pocket-codex-account-proto" }
 pocket-codex-codex = { path = "crates/pocket-codex-codex" }
 pocket-codex-pb = { path = "crates/pocket-codex-pb" }
 

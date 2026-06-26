@@ -1,0 +1,26 @@
+[package]
+name = "pocket-codex-account-proto"
+description = "Wire types and pb-mapper key namespacing shared between the Pocket-Codex hosted backend and its CLI/app clients."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+# Length-prefixed JSON framing for the broker HELLO/Ack over async streams.
+# Off by default so pure-type consumers (no I/O) don't pull in tokio; the
+# broker client and server enable it.
+frame = ["dep:tokio"]
+
+[dependencies]
+pocket-codex-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, optional = true }
