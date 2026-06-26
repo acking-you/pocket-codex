@@ -34,32 +34,47 @@
 //! user has already pinned a default through `services default set`
 //! or implicitly via a successful prior `connect`.
 
-use anyhow::Result;
+use std::{sync::Arc, time::Duration};
+
+use anyhow::{bail, Context, Result};
+use pocket_codex_broker_client::{run_subscribe, Connector, SubscribeConfig, TokenProvider};
 use pocket_codex_core::{
     config::Config,
-    service::ServiceKind,
+    service::{sanitize_component, ServiceKind, DEFAULT_SERVICE_NAME},
     state::{PbRole, RuntimeState},
 };
+use tokio::net::TcpListener;
 
 use crate::{
     cli::ConnectArgs,
     commands::{
+        account,
         managed_pb::{self, EnsureOutcome, PbWorkerSpec},
         service_target::{choose_target, discover_services, TargetRequest},
+        transport::{self, Transport},
         ui,
     },
 };
 
+/// Idle timeout applied to account-mode data bridges.
+const ACCOUNT_DATA_IDLE: Duration = Duration::from_secs(1800);
+
 /// Run the client-side setup flow.
 pub async fn run(args: ConnectArgs) -> Result<()> {
+    let config = Config::load()?;
+    match transport::resolve_transport(args.relay.relay.as_deref(), None, &config)? {
+        Transport::SelfHost { relay } => connect_self_host(args, &config, relay).await,
+        Transport::Account { backend } => connect_account(args, backend).await,
+    }
+}
+
+async fn connect_self_host(args: ConnectArgs, config: &Config, relay: String) -> Result<()> {
     let request = TargetRequest {
         key: args.key,
         device: args.device,
         name: args.name,
     };
     let needs_discovery = request.key.is_none() && request.device.is_none();
-    let config = Config::load()?;
-    let relay = crate::commands::relay::resolve_relay(args.relay.relay.as_deref(), &config)?;
     let state = RuntimeState::load()?;
     let has_local_default = config.default_service(ServiceKind::App).is_some()
         || state.selected_service(ServiceKind::App).is_some();
@@ -68,7 +83,7 @@ pub async fn run(args: ConnectArgs) -> Result<()> {
     } else {
         Vec::new()
     };
-    let target = choose_target(ServiceKind::App, request, &config, &state, &discovered)?;
+    let target = choose_target(ServiceKind::App, request, config, &state, &discovered)?;
     let outcome = managed_pb::ensure(PbWorkerSpec {
         role: PbRole::Subscribe,
         key: target.key,
@@ -83,6 +98,83 @@ pub async fn run(args: ConnectArgs) -> Result<()> {
     }
     print_connect_summary(&outcome);
     Ok(())
+}
+
+/// Account-mode client side: subscribe to a relay-exposed app-server through the
+/// backend broker, exposing it on a local listener. Runs in the foreground.
+async fn connect_account(args: ConnectArgs, backend: String) -> Result<()> {
+    let mut config = Config::load()?;
+    let (device, name) =
+        resolve_account_target(&mut config, &backend, args.device.as_deref(), args.name.as_deref())
+            .await?;
+
+    let (host, port) = account::broker_endpoint(&backend)?;
+    let connector: Arc<dyn Connector> = Arc::new(account::BrokerTlsConnector::new(host, port)?);
+    let tokens: Arc<dyn TokenProvider> =
+        Arc::new(account::ConfigTokenProvider::new(backend.clone()));
+    let listener = TcpListener::bind(&args.local_addr)
+        .await
+        .with_context(|| format!("binding local subscriber listener {}", args.local_addr))?;
+
+    ui::headline(ui::Tone::Ok, "account connect");
+    ui::field("service", &format!("{device}/app/{name}"));
+    ui::field("local", &args.local_addr);
+    ui::headline(ui::Tone::Action, "codex remote");
+    ui::code(&codex_remote_command(&args.local_addr));
+    ui::headline(ui::Tone::Action, "keep this running, Ctrl-C to stop");
+
+    run_subscribe(
+        connector,
+        tokens,
+        SubscribeConfig {
+            device,
+            kind: ServiceKind::App,
+            name,
+            idle: ACCOUNT_DATA_IDLE,
+        },
+        listener,
+    )
+    .await;
+    Ok(())
+}
+
+/// Resolve the target `(device, name)` in account mode: an explicit `--device`
+/// wins; otherwise discover the account's app services and auto-pick a single
+/// one, asking the user to disambiguate when there is more than one.
+async fn resolve_account_target(
+    config: &mut Config,
+    backend: &str,
+    device: Option<&str>,
+    name: Option<&str>,
+) -> Result<(String, String)> {
+    if let Some(device) = device {
+        let name = name
+            .map(sanitize_component)
+            .unwrap_or_else(|| DEFAULT_SERVICE_NAME.to_string());
+        return Ok((sanitize_component(device), name));
+    }
+    let mut apps: Vec<_> = account::fetch_services(config, backend)
+        .await?
+        .into_iter()
+        .filter(|s| s.kind == ServiceKind::App)
+        .collect();
+    match apps.len() {
+        0 => bail!("no app services in your account; run `pocket-codex serve` on the host first"),
+        1 => {
+            let app = apps.remove(0);
+            Ok((app.device, app.name))
+        }
+        _ => {
+            let names: Vec<String> = apps
+                .iter()
+                .map(|s| format!("{}/{}", s.device, s.name))
+                .collect();
+            bail!(
+                "multiple app services; pick one with --device <device> [--name <name>]: {}",
+                names.join(", ")
+            )
+        }
+    }
 }
 
 fn print_connect_summary(outcome: &EnsureOutcome) {

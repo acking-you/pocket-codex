@@ -6,7 +6,12 @@ use pocket_codex_core::{config::Config, service::ServiceKind};
 
 use crate::{
     cli::{ServicesCmd, ServicesDefaultCmd, ServicesDefaultSetArgs, ServicesListArgs},
-    commands::{service_target::discover_services, ui},
+    commands::{
+        account,
+        service_target::discover_services,
+        transport::{self, Transport},
+        ui,
+    },
 };
 
 /// Dispatch the `services` subcommand group.
@@ -19,9 +24,15 @@ pub async fn run(cmd: ServicesCmd) -> Result<()> {
 
 async fn list(args: ServicesListArgs) -> Result<()> {
     let kind = args.kind.map(ServiceKind::from);
-    let config = pocket_codex_core::config::Config::load()?;
-    let relay = crate::commands::relay::resolve_relay(args.relay.relay.as_deref(), &config)?;
-    let mut services = discover_services(&relay).await?;
+    let mut config = Config::load()?;
+    match transport::resolve_transport(args.relay.relay.as_deref(), None, &config)? {
+        Transport::SelfHost { relay } => list_self_host(&relay, kind).await,
+        Transport::Account { backend } => list_account(&mut config, &backend, kind).await,
+    }
+}
+
+async fn list_self_host(relay: &str, kind: Option<ServiceKind>) -> Result<()> {
+    let mut services = discover_services(relay).await?;
     services.retain(|id| kind.is_none_or(|kind| id.kind == kind));
     services.sort_by_key(|id| id.key());
 
@@ -34,6 +45,28 @@ async fn list(args: ServicesListArgs) -> Result<()> {
     for service in services {
         table.add_row(vec![
             Cell::new(service.key()),
+            Cell::new(&service.device),
+            ui::kind_cell(service.kind.as_key_segment(), service.kind),
+            Cell::new(&service.name),
+        ]);
+    }
+    println!("{table}");
+    Ok(())
+}
+
+async fn list_account(config: &mut Config, backend: &str, kind: Option<ServiceKind>) -> Result<()> {
+    let mut services = account::fetch_services(config, backend).await?;
+    services.retain(|s| kind.is_none_or(|kind| s.kind == kind));
+    services.sort_by(|a, b| (a.device.as_str(), a.name.as_str()).cmp(&(b.device.as_str(), b.name.as_str())));
+
+    if services.is_empty() {
+        ui::muted("no services in your account");
+        return Ok(());
+    }
+
+    let mut table = ui::new_table(&["DEVICE", "KIND", "NAME"]);
+    for service in services {
+        table.add_row(vec![
             Cell::new(&service.device),
             ui::kind_cell(service.kind.as_key_segment(), service.kind),
             Cell::new(&service.name),

@@ -22,6 +22,8 @@ workspace = true
 pocket-codex-core = { workspace = true }
 pocket-codex-codex = { workspace = true }
 pocket-codex-pb = { workspace = true }
+pocket-codex-account-proto = { workspace = true }
+pocket-codex-broker-client = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true }
 serde = { workspace = true }
@@ -38,7 +40,10 @@ http = { workspace = true }
 reqwest = { workspace = true }
 tokio-tungstenite = { workspace = true }
 tokio-socks = { workspace = true }
+async-trait = { workspace = true }
 rustls = { workspace = true }
+tokio-rustls = { workspace = true }
+rustls-native-certs = "0.8"
 url = { workspace = true }
 comfy-table = { workspace = true }
 owo-colors = { workspace = true }

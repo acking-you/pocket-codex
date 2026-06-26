@@ -8,6 +8,7 @@ use anyhow::Result;
 
 use crate::cli::{Cli, Command};
 
+mod account;
 mod api;
 mod api_proxy;
 mod codex;
@@ -23,6 +24,7 @@ mod service_target;
 mod services;
 mod status;
 mod stop;
+mod transport;
 mod ui;
 mod version;
 mod worker;
@@ -30,6 +32,9 @@ mod worker;
 /// Dispatch a parsed [`Cli`] invocation to the matching subcommand.
 pub async fn dispatch(cli: Cli) -> Result<()> {
     match cli.command {
+        Command::Login(args) => account::login(args.backend.as_deref()).await,
+        Command::Logout => account::logout().await,
+        Command::Account => account::status().await,
         Command::Init(args) => init::run(args).await,
         Command::Serve(args) => serve::run(args).await,
         Command::Connect(args) => connect::run(args).await,
