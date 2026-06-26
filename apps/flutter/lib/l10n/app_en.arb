@@ -20,6 +20,8 @@
   "accountCodeExpired": "The code expired. Please try again.",
   "accountDenied": "Sign-in was denied on GitHub.",
   "accountAdvancedSelfHost": "Advanced: self-hosted relay",
+  "accountSection": "Account",
+  "accountSignOut": "Sign out",
   "apiServicesSection": "API services",
   "appServerServices": "App-server services",
   "appServerSubtitle": "{device} · remote control",

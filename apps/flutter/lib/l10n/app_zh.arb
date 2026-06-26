@@ -20,6 +20,8 @@
   "accountCodeExpired": "代码已过期,请重试。",
   "accountDenied": "GitHub 登录被拒绝。",
   "accountAdvancedSelfHost": "高级:自建 relay",
+  "accountSection": "账户",
+  "accountSignOut": "退出登录",
   "apiServicesSection": "API 服务",
   "appServerServices": "App-server 服务",
   "appServerSubtitle": "{device} · 远程控制",
