@@ -11,6 +11,7 @@ members = [
     "crates/pocket-codex-auth",
     "crates/pocket-codex-broker-client",
     "crates/pocket-codex-broker-server",
+    "crates/pocket-codex-backend",
 ]
 # `deps/codex` and `deps/pb-mapper` are vendored upstream sources kept
 # as git submodules. They are intentionally excluded from this

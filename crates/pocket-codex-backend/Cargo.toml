@@ -1,0 +1,53 @@
+[package]
+name = "pocket-codex-backend"
+description = "Hosted Pocket-Codex backend: GitHub-login HTTP API + the broker that bridges authenticated clients to a loopback pb-mapper relay."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+name = "pocket_codex_backend"
+path = "src/lib.rs"
+
+[[bin]]
+name = "pocket-codex-backend"
+path = "src/main.rs"
+
+[dependencies]
+pocket-codex-account-proto = { workspace = true, features = ["frame"] }
+pocket-codex-core = { workspace = true }
+pocket-codex-store = { workspace = true }
+pocket-codex-auth = { workspace = true }
+pocket-codex-broker-server = { workspace = true }
+pocket-codex-pb = { workspace = true }
+
+tokio = { workspace = true }
+tokio-rustls = { workspace = true }
+rustls = { workspace = true }
+rustls-pemfile = { workspace = true }
+axum = { workspace = true, features = ["json"] }
+tower-http = { workspace = true }
+hyper = { version = "1", features = ["server", "http1", "http2"] }
+hyper-util = { version = "0.1", features = ["server", "server-auto", "tokio", "service"] }
+figment = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+time = { workspace = true }
+
+[dev-dependencies]
+pocket-codex-broker-client = { workspace = true }
+pb-mapper = { path = "../../deps/pb-mapper" }
+async-trait = { workspace = true }
+jsonwebtoken = { workspace = true }
+reqwest = { workspace = true }

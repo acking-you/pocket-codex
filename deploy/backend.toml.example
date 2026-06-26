@@ -1,0 +1,26 @@
+# Non-secret backend configuration. Install at /etc/pocket-codex/backend.toml.
+# Secrets (msg_header_key, jwt_secret, github_client_id) come from the 0600
+# EnvironmentFile (backend.env) as PCX_-prefixed vars and override anything here.
+
+# SQLite identity/credential store.
+database_url = "sqlite:///var/lib/pocket-codex/backend.db"
+
+# Loopback pb-mapper relay (MUST be firewalled to localhost — see README).
+relay_addr = "127.0.0.1:7666"
+
+# Listeners. Both terminate TLS in-process (tls_mode below).
+http_listen = "0.0.0.0:8443"
+broker_listen = "0.0.0.0:7900"
+
+# GitHub OAuth scope requested at login.
+github_scope = "read:user"
+
+# Session lifetimes.
+jwt_ttl_secs = 3600
+refresh_ttl_secs = 2592000
+data_idle_secs = 1800
+
+# TLS: "plain" (no TLS — local/smoke only) or "files" (static PEM, e.g. certbot).
+tls_mode = "files"
+tls_cert = "/etc/letsencrypt/live/lb7666.top/fullchain.pem"
+tls_key = "/etc/letsencrypt/live/lb7666.top/privkey.pem"
