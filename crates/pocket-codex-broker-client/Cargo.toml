@@ -1,0 +1,25 @@
+[package]
+name = "pocket-codex-broker-client"
+description = "Client side of the Pocket-Codex broker tunnel (register/subscribe), shared by the CLI and the Flutter bridge."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+pocket-codex-account-proto = { workspace = true, features = ["frame"] }
+pocket-codex-core = { workspace = true }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+rand = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
