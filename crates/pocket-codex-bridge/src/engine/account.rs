@@ -8,8 +8,9 @@
 //! engine runtime.
 
 use std::{
-    path::Path,
-    time::{SystemTime, UNIX_EPOCH},
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -18,12 +19,18 @@ use pocket_codex_account_proto::http::{
     DevicePollRequest, DevicePollResponse, DevicePollStatus, DeviceStartRequest,
     DeviceStartResponse, LogoutRequest, MeResponse, RefreshRequest, RefreshResponse, ServiceEntry,
 };
+use pocket_codex_broker_client::{BrokerError, BrokerStream, Connector, TokenProvider};
 use pocket_codex_core::config::Config;
+use tokio::net::TcpStream;
 
 use crate::engine::config::{load_config, save_config};
 
 /// Compile-time default backend base URL.
 pub const DEFAULT_BACKEND: &str = "https://lb7666.top:8443";
+/// Default broker TLS port; the host comes from the backend URL.
+const DEFAULT_BROKER_PORT: u16 = 7900;
+/// Idle timeout applied to account-mode data bridges.
+pub const ACCOUNT_DATA_IDLE: Duration = Duration::from_secs(1800);
 
 /// The persisted backend base URL, or the built-in default.
 pub fn backend_base(config: &Config) -> String {
@@ -269,6 +276,90 @@ fn unix_now() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+/// Derive the broker `host` + `port` from the backend URL.
+pub fn broker_endpoint(backend: &str) -> Result<(String, u16)> {
+    let url = reqwest::Url::parse(backend).with_context(|| format!("parsing backend url {backend}"))?;
+    let host = url
+        .host_str()
+        .ok_or_else(|| anyhow!("backend url {backend} has no host"))?
+        .to_string();
+    let port = std::env::var("POCKET_CODEX_BROKER_PORT")
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(DEFAULT_BROKER_PORT);
+    Ok((host, port))
+}
+
+/// Build a broker TLS connector + token provider for the configured backend, so
+/// the app can open account-mode tunnels the same way the CLI does.
+pub fn broker_transport(
+    support_dir: &Path,
+) -> Result<(Arc<dyn Connector>, Arc<dyn TokenProvider>)> {
+    let config = load_config(support_dir)?;
+    let backend = backend_base(&config);
+    let (host, port) = broker_endpoint(&backend)?;
+    let connector: Arc<dyn Connector> = Arc::new(BrokerTlsConnector::new(host, port)?);
+    let tokens: Arc<dyn TokenProvider> = Arc::new(ConfigTokenProvider {
+        support_dir: support_dir.to_path_buf(),
+        backend,
+    });
+    Ok((connector, tokens))
+}
+
+/// Opens TLS broker tunnels to the backend, trusting the bundled webpki roots
+/// (portable across desktop + mobile, no OS trust-store integration needed).
+struct BrokerTlsConnector {
+    host: String,
+    addr: String,
+    tls: tokio_rustls::TlsConnector,
+}
+
+impl BrokerTlsConnector {
+    fn new(host: String, port: u16) -> Result<Self> {
+        let mut roots = rustls::RootCertStore::empty();
+        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        let config = rustls::ClientConfig::builder()
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+        Ok(Self {
+            addr: format!("{host}:{port}"),
+            host,
+            tls: tokio_rustls::TlsConnector::from(Arc::new(config)),
+        })
+    }
+}
+
+#[async_trait::async_trait]
+impl Connector for BrokerTlsConnector {
+    async fn connect(&self) -> std::result::Result<Box<dyn BrokerStream>, BrokerError> {
+        let tcp = TcpStream::connect(&self.addr).await?;
+        let server_name = rustls::pki_types::ServerName::try_from(self.host.clone())
+            .map_err(|e| BrokerError::Token(format!("invalid broker host {}: {e}", self.host)))?;
+        let tls = self
+            .tls
+            .connect(server_name, tcp)
+            .await
+            .map_err(BrokerError::Io)?;
+        Ok(Box::new(tls))
+    }
+}
+
+/// Supplies a valid token on every (re)connect, refreshing near expiry.
+struct ConfigTokenProvider {
+    support_dir: PathBuf,
+    backend: String,
+}
+
+#[async_trait::async_trait]
+impl TokenProvider for ConfigTokenProvider {
+    async fn token(&self) -> std::result::Result<String, BrokerError> {
+        let mut config = load_config(&self.support_dir).map_err(|e| BrokerError::Token(e.to_string()))?;
+        valid_token(&self.support_dir, &mut config, &self.backend)
+            .await
+            .map_err(|e| BrokerError::Token(e.to_string()))
+    }
 }
 
 #[cfg(test)]

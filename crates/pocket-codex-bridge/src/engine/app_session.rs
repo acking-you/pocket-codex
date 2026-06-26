@@ -135,25 +135,46 @@ fn sessions() -> &'static Mutex<HashMap<String, Session>> {
 /// JSON-RPC client over it and run the `initialize` handshake. Idempotent: a
 /// live session for the same key is reused.
 pub fn connect(service_key: String, local_port: u16, relay: String) -> Result<()> {
-    {
-        let map = sessions().lock().expect("sessions poisoned");
-        if let Some(s) = map.get(&service_key) {
-            // Reuse only a *live* session. The forwarder task ends when the
-            // websocket closes, so `is_finished()` means the socket is dead —
-            // reusing it would make every request fail with "closed
-            // connection" (the service still shows registered/online on the
-            // relay, hiding the dead socket). Fall through to reconnect.
-            if !s.forwarder.is_finished() {
-                return Ok(());
-            }
-        }
+    if reuse_live(&service_key) {
+        return Ok(());
     }
-    // No live session: drop any stale one (and its pb-mapper subscription) so we
-    // reconnect cleanly rather than reusing a closed socket.
+    // No live session: drop any stale one (and its subscription) so we reconnect
+    // cleanly rather than reusing a closed socket.
     disconnect(&service_key);
     // Materialise the local ws endpoint via pb-mapper (kind-agnostic subscribe).
     let sub = runtime::subscribe_service(service_key.clone(), local_port, relay)?;
-    let ws_url = format!("ws://{}", sub.local_addr);
+    establish(service_key, &sub.local_addr)
+}
+
+/// Account-mode connect: broker-subscribe the service through the backend, then
+/// run the identical JSON-RPC handshake/session as [`connect`].
+pub fn connect_account(
+    service_key: String,
+    local_port: u16,
+    support_dir: &std::path::Path,
+) -> Result<()> {
+    if reuse_live(&service_key) {
+        return Ok(());
+    }
+    disconnect(&service_key);
+    let sub = runtime::subscribe_account(service_key.clone(), local_port, support_dir)?;
+    establish(service_key, &sub.local_addr)
+}
+
+/// Whether a live session already exists for `service_key`. The forwarder task
+/// ends when the websocket closes, so `is_finished()` means the socket is dead
+/// (the service may still show registered/online on the relay) — reconnect.
+fn reuse_live(service_key: &str) -> bool {
+    let map = sessions().lock().expect("sessions poisoned");
+    map.get(service_key)
+        .is_some_and(|s| !s.forwarder.is_finished())
+}
+
+/// Open the JSON-RPC client over `ws://<local_addr>`, run the `initialize`
+/// handshake, wire the event forwarder, and record the session. Transport-
+/// agnostic: the local endpoint is materialised by the caller's subscribe.
+fn establish(service_key: String, local_addr: &str) -> Result<()> {
+    let ws_url = format!("ws://{local_addr}");
 
     let (client, mut notify_rx) = runtime::runtime().block_on(async {
         tokio::time::timeout(CONNECT_TIMEOUT, AppClient::connect(&ws_url))
@@ -259,6 +280,30 @@ pub fn probe(service_key: String, local_port: u16, relay: String) -> bool {
     else {
         return false;
     };
+    let ok = probe_endpoint(&local_addr);
+    // Tear down ONLY this probe's own transient tunnel.
+    handle.abort();
+    ok
+}
+
+/// Account-mode analogue of [`probe`]: reachability via a transient broker tunnel.
+pub fn probe_account(service_key: String, local_port: u16, support_dir: &std::path::Path) -> bool {
+    if is_connected(&service_key) {
+        return true;
+    }
+    let Ok((local_addr, handle)) =
+        runtime::subscribe_account_transient(service_key.clone(), local_port, support_dir)
+    else {
+        return false;
+    };
+    let ok = probe_endpoint(&local_addr);
+    handle.abort();
+    ok
+}
+
+/// Open a transient JSON-RPC client over `ws://<local_addr>` and run the
+/// `initialize` handshake, bounded by [`PROBE_TIMEOUT`]; `true` iff it succeeds.
+fn probe_endpoint(local_addr: &str) -> bool {
     let ws_url = format!("ws://{local_addr}");
     let outcome = runtime::runtime().block_on(async {
         let (client, _notify_rx) = tokio::time::timeout(PROBE_TIMEOUT, AppClient::connect(&ws_url))
@@ -282,8 +327,6 @@ pub fn probe(service_key: String, local_port: u16, relay: String) -> bool {
         .context("probe: initialize timed out")??;
         Ok::<(), anyhow::Error>(())
     });
-    // Tear down ONLY this probe's own transient tunnel.
-    handle.abort();
     outcome.is_ok()
 }
 

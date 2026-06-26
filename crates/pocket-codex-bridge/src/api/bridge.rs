@@ -146,8 +146,25 @@ pub fn export_config() -> Result<String> {
     config::encode_pcx1(relay, key)
 }
 
-/// Discover services on the configured relay (applies the stored key first).
+/// Discover services: in account mode from the backend (`/v1/services`), in
+/// self-host mode from the relay (applying the stored key first).
 pub fn discover_services() -> Result<Vec<ServiceIdDto>> {
+    let dir = runtime::support_dir()?;
+    if config::load_config(&dir)?.account_mode() == Mode::Account {
+        let services = runtime::runtime().block_on(account::services(&dir))?;
+        return Ok(services
+            .into_iter()
+            .map(|s| {
+                let id = s.to_service_id();
+                ServiceIdDto {
+                    device: id.device.clone(),
+                    kind: id.kind.as_key_segment().to_string(),
+                    name: id.name.clone(),
+                    key: id.key(),
+                }
+            })
+            .collect());
+    }
     apply_key()?;
     let relay = current_relay()?;
     let found = runtime::runtime().block_on(discovery::discover(&relay))?;
@@ -164,9 +181,14 @@ pub fn discover_services() -> Result<Vec<ServiceIdDto>> {
 
 /// Subscribe to an API service, exposing it on `127.0.0.1:<local_port>`.
 pub fn api_subscribe(service_key: String, local_port: u16) -> Result<SubStatusDto> {
-    apply_key()?;
-    let relay = current_relay()?;
-    let s = runtime::subscribe_service(service_key, local_port, relay)?;
+    let dir = runtime::support_dir()?;
+    let s = if config::load_config(&dir)?.account_mode() == Mode::Account {
+        runtime::subscribe_account(service_key, local_port, &dir)?
+    } else {
+        apply_key()?;
+        let relay = current_relay()?;
+        runtime::subscribe_service(service_key, local_port, relay)?
+    };
     Ok(SubStatusDto {
         key: s.key,
         local_addr: s.local_addr,
@@ -286,6 +308,10 @@ pub struct ThreadHistoryDto {
 /// Connect to an app-server service: subscribe on `127.0.0.1:<local_port>`,
 /// open the JSON-RPC websocket and run the `initialize` handshake. Idempotent.
 pub fn app_connect(service_key: String, local_port: u16) -> Result<()> {
+    let dir = runtime::support_dir()?;
+    if config::load_config(&dir)?.account_mode() == Mode::Account {
+        return app_session::connect_account(service_key, local_port, &dir);
+    }
     apply_key()?;
     let relay = current_relay()?;
     app_session::connect(service_key, local_port, relay)
@@ -309,6 +335,10 @@ pub fn app_disconnect(service_key: String) {
 /// of a false "online". Opens a transient tunnel + `initialize` with a timeout,
 /// then tears it down; a live session short-circuits to `true`.
 pub fn app_probe(service_key: String) -> Result<bool> {
+    let dir = runtime::support_dir()?;
+    if config::load_config(&dir)?.account_mode() == Mode::Account {
+        return Ok(app_session::probe_account(service_key, 0, &dir));
+    }
     apply_key()?;
     let relay = current_relay()?;
     Ok(app_session::probe(service_key, 0, relay))
