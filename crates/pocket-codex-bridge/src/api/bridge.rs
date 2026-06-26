@@ -5,13 +5,14 @@ use std::path::PathBuf;
 
 use anyhow::{anyhow, Result};
 use flutter_rust_bridge::frb;
+use pocket_codex_core::config::Mode;
 
 use crate::{
-    engine::{app_session, config, discovery, runtime, sessions},
+    engine::{account, app_session, config, discovery, runtime, sessions},
     frb_generated::StreamSink,
 };
 
-/// View of persisted config for the UI; never exposes the raw key.
+/// View of persisted config for the UI; never exposes the raw key or token.
 pub struct ConfigView {
     /// Configured relay `host:port`, if any.
     pub relay: Option<String>,
@@ -20,6 +21,12 @@ pub struct ConfigView {
     /// Configured UI locale (BCP-47, e.g. `en`/`zh`), or `None` to follow
     /// the system locale.
     pub locale: Option<String>,
+    /// Active transport mode: `account` / `self_host` / `unconfigured`.
+    pub mode: String,
+    /// Signed-in GitHub login (account mode), if any.
+    pub account_login: Option<String>,
+    /// Whether an account session token is stored (value withheld).
+    pub has_account_token: bool,
 }
 
 /// A discovered service, mirrored for Dart.
@@ -71,13 +78,22 @@ fn apply_key() -> Result<()> {
     Ok(())
 }
 
-/// Current config view (relay + whether a key is set).
+/// Current config view (relay/key presence, locale, and account state).
 pub fn get_config() -> Result<ConfigView> {
     let cfg = config::load_config(&runtime::support_dir()?)?;
+    let mode = match cfg.account_mode() {
+        Mode::Account => "account",
+        Mode::SelfHost => "self_host",
+        Mode::Unconfigured => "unconfigured",
+    }
+    .to_string();
     Ok(ConfigView {
         relay: cfg.relay().map(str::to_string),
         has_key: cfg.relay_key().is_some(),
         locale: cfg.locale().map(str::to_string),
+        mode,
+        account_login: cfg.account_login().map(str::to_string),
+        has_account_token: cfg.account_token().is_some(),
     })
 }
 
@@ -634,4 +650,134 @@ pub fn app_force_resume(service_key: String, thread_id: String) -> Result<ForceR
         resumed: outcome.resumed,
         resume_error: outcome.resume_error,
     })
+}
+
+// ---------------------------------------------------------------------------
+// Hosted account (GitHub device-flow login)
+// ---------------------------------------------------------------------------
+
+/// A started device flow, mirrored for Dart: show the code + URL, then poll.
+pub struct DeviceCodeDto {
+    /// Code the user types at [`Self::verification_uri`].
+    pub user_code: String,
+    /// URL the user opens to enter the code.
+    pub verification_uri: String,
+    /// Opaque handle passed back to [`account_login_poll`].
+    pub poll_handle: String,
+    /// Minimum seconds between polls.
+    pub interval_secs: u64,
+    /// Seconds until the flow expires.
+    pub expires_in_secs: u64,
+    /// Resolved backend base URL to echo back to [`account_login_poll`].
+    pub backend: String,
+}
+
+/// Signed-in identity mirrored for Dart.
+pub struct AccountUserDto {
+    /// GitHub login/handle.
+    pub login: String,
+    /// GitHub account id, if known.
+    pub account_id: Option<String>,
+}
+
+/// One service in the account, mirrored for Dart (the `pcxu:` prefix stripped).
+pub struct AccountServiceDto {
+    /// Device id segment.
+    pub device: String,
+    /// `app` or `api`.
+    pub kind: String,
+    /// Instance name segment.
+    pub name: String,
+}
+
+/// Outcome of one device-flow poll, mirrored for Dart. `status` is one of
+/// `pending` / `slow_down` / `authorized` / `expired` / `denied`; `login` is
+/// set only when `authorized`.
+pub struct AccountPollDto {
+    /// Poll status string.
+    pub status: String,
+    /// Signed-in login, when `status == "authorized"`.
+    pub login: Option<String>,
+    /// GitHub account id, when authorized and known.
+    pub account_id: Option<String>,
+}
+
+/// Begin a GitHub device-flow login. `backend` overrides the configured /
+/// default backend (and is remembered on success).
+pub fn account_login_start(backend: Option<String>) -> Result<DeviceCodeDto> {
+    let dir = runtime::support_dir()?;
+    let start = runtime::runtime().block_on(account::device_start(&dir, backend.as_deref()))?;
+    Ok(DeviceCodeDto {
+        user_code: start.user_code,
+        verification_uri: start.verification_uri,
+        poll_handle: start.poll_handle,
+        interval_secs: start.interval_secs,
+        expires_in_secs: start.expires_in_secs,
+        backend: start.backend,
+    })
+}
+
+/// Poll a device flow once. On `authorized` the session is persisted and the
+/// app switches to account mode.
+pub fn account_login_poll(poll_handle: String, backend: String) -> Result<AccountPollDto> {
+    let dir = runtime::support_dir()?;
+    let outcome = runtime::runtime().block_on(account::device_poll(&dir, &backend, poll_handle))?;
+    Ok(match outcome {
+        account::PollOutcome::Pending => AccountPollDto {
+            status: "pending".to_string(),
+            login: None,
+            account_id: None,
+        },
+        account::PollOutcome::SlowDown => AccountPollDto {
+            status: "slow_down".to_string(),
+            login: None,
+            account_id: None,
+        },
+        account::PollOutcome::Expired => AccountPollDto {
+            status: "expired".to_string(),
+            login: None,
+            account_id: None,
+        },
+        account::PollOutcome::Denied => AccountPollDto {
+            status: "denied".to_string(),
+            login: None,
+            account_id: None,
+        },
+        account::PollOutcome::Authorized { login, account_id } => AccountPollDto {
+            status: "authorized".to_string(),
+            login: Some(login),
+            account_id,
+        },
+    })
+}
+
+/// The signed-in user (verified against the backend), or `None` if not signed in.
+pub fn account_current_user() -> Result<Option<AccountUserDto>> {
+    let dir = runtime::support_dir()?;
+    Ok(runtime::runtime()
+        .block_on(account::current_user(&dir))?
+        .map(|u| AccountUserDto {
+            login: u.login,
+            account_id: u.account_id,
+        }))
+}
+
+/// Sign out: revoke the refresh token (best effort) and clear the local session.
+pub fn account_logout() -> Result<()> {
+    let dir = runtime::support_dir()?;
+    runtime::runtime().block_on(account::logout(&dir))
+}
+
+/// List the account's services from the backend.
+pub fn account_services() -> Result<Vec<AccountServiceDto>> {
+    let dir = runtime::support_dir()?;
+    Ok(runtime::runtime()
+        .block_on(account::services(&dir))?
+        .into_iter()
+        .map(|s| AccountServiceDto {
+            device: s.device,
+            kind: s.kind.as_key_segment().to_string(),
+            name: s.name,
+        })
+        .collect())
 }

@@ -13,7 +13,7 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 Future<void> initBridge({required String supportDir}) =>
     RustLib.instance.api.crateApiBridgeInitBridge(supportDir: supportDir);
 
-/// Current config view (relay + whether a key is set).
+/// Current config view (relay/key presence, locale, and account state).
 Future<ConfigView> getConfig() =>
     RustLib.instance.api.crateApiBridgeGetConfig();
 
@@ -258,6 +258,113 @@ Future<ForceResumeReportDto> appForceResume({
   threadId: threadId,
 );
 
+/// Begin a GitHub device-flow login. `backend` overrides the configured /
+/// default backend (and is remembered on success).
+Future<DeviceCodeDto> accountLoginStart({String? backend}) =>
+    RustLib.instance.api.crateApiBridgeAccountLoginStart(backend: backend);
+
+/// Poll a device flow once. On `authorized` the session is persisted and the
+/// app switches to account mode.
+Future<AccountPollDto> accountLoginPoll({
+  required String pollHandle,
+  required String backend,
+}) => RustLib.instance.api.crateApiBridgeAccountLoginPoll(
+  pollHandle: pollHandle,
+  backend: backend,
+);
+
+/// The signed-in user (verified against the backend), or `None` if not signed in.
+Future<AccountUserDto?> accountCurrentUser() =>
+    RustLib.instance.api.crateApiBridgeAccountCurrentUser();
+
+/// Sign out: revoke the refresh token (best effort) and clear the local session.
+Future<void> accountLogout() =>
+    RustLib.instance.api.crateApiBridgeAccountLogout();
+
+/// List the account's services from the backend.
+Future<List<AccountServiceDto>> accountServices() =>
+    RustLib.instance.api.crateApiBridgeAccountServices();
+
+/// Outcome of one device-flow poll, mirrored for Dart. `status` is one of
+/// `pending` / `slow_down` / `authorized` / `expired` / `denied`; `login` is
+/// set only when `authorized`.
+class AccountPollDto {
+  /// Poll status string.
+  final String status;
+
+  /// Signed-in login, when `status == "authorized"`.
+  final String? login;
+
+  /// GitHub account id, when authorized and known.
+  final String? accountId;
+
+  const AccountPollDto({required this.status, this.login, this.accountId});
+
+  @override
+  int get hashCode => status.hashCode ^ login.hashCode ^ accountId.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AccountPollDto &&
+          runtimeType == other.runtimeType &&
+          status == other.status &&
+          login == other.login &&
+          accountId == other.accountId;
+}
+
+/// One service in the account, mirrored for Dart (the `pcxu:` prefix stripped).
+class AccountServiceDto {
+  /// Device id segment.
+  final String device;
+
+  /// `app` or `api`.
+  final String kind;
+
+  /// Instance name segment.
+  final String name;
+
+  const AccountServiceDto({
+    required this.device,
+    required this.kind,
+    required this.name,
+  });
+
+  @override
+  int get hashCode => device.hashCode ^ kind.hashCode ^ name.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AccountServiceDto &&
+          runtimeType == other.runtimeType &&
+          device == other.device &&
+          kind == other.kind &&
+          name == other.name;
+}
+
+/// Signed-in identity mirrored for Dart.
+class AccountUserDto {
+  /// GitHub login/handle.
+  final String login;
+
+  /// GitHub account id, if known.
+  final String? accountId;
+
+  const AccountUserDto({required this.login, this.accountId});
+
+  @override
+  int get hashCode => login.hashCode ^ accountId.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AccountUserDto &&
+          runtimeType == other.runtimeType &&
+          login == other.login &&
+          accountId == other.accountId;
+}
+
 /// One app-server event mirrored for Dart. `kind` is the JSON-RPC method
 /// (e.g. `turn/started`, `item/agentMessage/delta`, `turn/completed`).
 class AppEventDto {
@@ -325,7 +432,7 @@ class AppEventDto {
           raw == other.raw;
 }
 
-/// View of persisted config for the UI; never exposes the raw key.
+/// View of persisted config for the UI; never exposes the raw key or token.
 class ConfigView {
   /// Configured relay `host:port`, if any.
   final String? relay;
@@ -337,10 +444,32 @@ class ConfigView {
   /// the system locale.
   final String? locale;
 
-  const ConfigView({this.relay, required this.hasKey, this.locale});
+  /// Active transport mode: `account` / `self_host` / `unconfigured`.
+  final String mode;
+
+  /// Signed-in GitHub login (account mode), if any.
+  final String? accountLogin;
+
+  /// Whether an account session token is stored (value withheld).
+  final bool hasAccountToken;
+
+  const ConfigView({
+    this.relay,
+    required this.hasKey,
+    this.locale,
+    required this.mode,
+    this.accountLogin,
+    required this.hasAccountToken,
+  });
 
   @override
-  int get hashCode => relay.hashCode ^ hasKey.hashCode ^ locale.hashCode;
+  int get hashCode =>
+      relay.hashCode ^
+      hasKey.hashCode ^
+      locale.hashCode ^
+      mode.hashCode ^
+      accountLogin.hashCode ^
+      hasAccountToken.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -349,7 +478,61 @@ class ConfigView {
           runtimeType == other.runtimeType &&
           relay == other.relay &&
           hasKey == other.hasKey &&
-          locale == other.locale;
+          locale == other.locale &&
+          mode == other.mode &&
+          accountLogin == other.accountLogin &&
+          hasAccountToken == other.hasAccountToken;
+}
+
+/// A started device flow, mirrored for Dart: show the code + URL, then poll.
+class DeviceCodeDto {
+  /// Code the user types at [`Self::verification_uri`].
+  final String userCode;
+
+  /// URL the user opens to enter the code.
+  final String verificationUri;
+
+  /// Opaque handle passed back to [`account_login_poll`].
+  final String pollHandle;
+
+  /// Minimum seconds between polls.
+  final BigInt intervalSecs;
+
+  /// Seconds until the flow expires.
+  final BigInt expiresInSecs;
+
+  /// Resolved backend base URL to echo back to [`account_login_poll`].
+  final String backend;
+
+  const DeviceCodeDto({
+    required this.userCode,
+    required this.verificationUri,
+    required this.pollHandle,
+    required this.intervalSecs,
+    required this.expiresInSecs,
+    required this.backend,
+  });
+
+  @override
+  int get hashCode =>
+      userCode.hashCode ^
+      verificationUri.hashCode ^
+      pollHandle.hashCode ^
+      intervalSecs.hashCode ^
+      expiresInSecs.hashCode ^
+      backend.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is DeviceCodeDto &&
+          runtimeType == other.runtimeType &&
+          userCode == other.userCode &&
+          verificationUri == other.verificationUri &&
+          pollHandle == other.pollHandle &&
+          intervalSecs == other.intervalSecs &&
+          expiresInSecs == other.expiresInSecs &&
+          backend == other.backend;
 }
 
 /// Outcome of a force-resume, mirrored for Dart.
