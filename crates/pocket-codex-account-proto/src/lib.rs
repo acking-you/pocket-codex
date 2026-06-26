@@ -29,6 +29,9 @@ pub mod params;
 #[cfg(feature = "frame")]
 pub mod frame;
 
+#[cfg(feature = "frame")]
+pub mod bridge;
+
 pub use broker::{BrokerAck, BrokerControl, BrokerHello, BrokerRole, TunnelPurpose};
 pub use key::{NamespacedServiceId, SERVICE_NS_PREFIX};
 pub use params::RetryBackoff;
