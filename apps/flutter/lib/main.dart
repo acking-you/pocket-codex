@@ -32,8 +32,9 @@ Future<void> main() async {
   await DesktopTray.instance.init(onOpenSettings: openSettingsFromTray);
 
   final cfg = await frb.getConfig();
-  final relay = cfg.relay?.trim();
-  final start = (relay == null || relay.isEmpty) ? '/onboarding' : '/';
+  // Three-way boot: an account session or a self-host relay → home; neither
+  // (first run) → the account onboarding screen.
+  final start = cfg.mode == 'unconfigured' ? '/onboarding' : '/';
   // Seed the locale provider from the persisted config (read in this same
   // bridge call — no extra latency, no language flash). null = follow system.
   final locale = cfg.locale == null ? null : Locale(cfg.locale!);

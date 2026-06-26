@@ -9,7 +9,55 @@ class RustBridgeApi implements BridgeApi {
   @override
   Future<ConfigInfo> getConfig() async {
     final c = await frb.getConfig();
-    return ConfigInfo(relay: c.relay, hasKey: c.hasKey, locale: c.locale);
+    return ConfigInfo(
+      relay: c.relay,
+      hasKey: c.hasKey,
+      locale: c.locale,
+      mode: c.mode,
+      accountLogin: c.accountLogin,
+      hasAccountToken: c.hasAccountToken,
+    );
+  }
+
+  @override
+  Future<DeviceCode> accountLoginStart({String? backend}) async {
+    final d = await frb.accountLoginStart(backend: backend);
+    return DeviceCode(
+      userCode: d.userCode,
+      verificationUri: d.verificationUri,
+      pollHandle: d.pollHandle,
+      intervalSecs: d.intervalSecs.toInt(),
+      expiresInSecs: d.expiresInSecs.toInt(),
+      backend: d.backend,
+    );
+  }
+
+  @override
+  Future<AccountPoll> accountLoginPoll(String pollHandle, String backend) async {
+    final p = await frb.accountLoginPoll(
+      pollHandle: pollHandle,
+      backend: backend,
+    );
+    return AccountPoll(status: p.status, login: p.login, accountId: p.accountId);
+  }
+
+  @override
+  Future<AccountUser?> accountCurrentUser() async {
+    final u = await frb.accountCurrentUser();
+    return u == null ? null : AccountUser(login: u.login, accountId: u.accountId);
+  }
+
+  @override
+  Future<void> accountLogout() => frb.accountLogout();
+
+  @override
+  Future<List<AccountService>> accountServices() async {
+    final list = await frb.accountServices();
+    return list
+        .map(
+          (s) => AccountService(device: s.device, kind: s.kind, name: s.name),
+        )
+        .toList();
   }
 
   @override

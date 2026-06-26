@@ -44,10 +44,17 @@ class SubInfo {
   final bool alive;
 }
 
-/// View of persisted config (relay + whether a key is set).
+/// View of persisted config (relay/key presence, locale, account state).
 class ConfigInfo {
   /// Creates a config view.
-  const ConfigInfo({required this.relay, required this.hasKey, this.locale});
+  const ConfigInfo({
+    required this.relay,
+    required this.hasKey,
+    this.locale,
+    this.mode = 'unconfigured',
+    this.accountLogin,
+    this.hasAccountToken = false,
+  });
 
   /// Configured relay `host:port`, if any.
   final String? relay;
@@ -58,6 +65,96 @@ class ConfigInfo {
   /// Configured UI locale (BCP-47, e.g. `en`/`zh`), or `null` to follow the
   /// system locale.
   final String? locale;
+
+  /// Active transport mode: `account` / `self_host` / `unconfigured`.
+  final String mode;
+
+  /// Signed-in GitHub login (account mode), if any.
+  final String? accountLogin;
+
+  /// Whether an account session token is stored.
+  final bool hasAccountToken;
+}
+
+/// A started GitHub device flow: show the code + URL, then poll.
+class DeviceCode {
+  /// Creates a device code.
+  const DeviceCode({
+    required this.userCode,
+    required this.verificationUri,
+    required this.pollHandle,
+    required this.intervalSecs,
+    required this.expiresInSecs,
+    required this.backend,
+  });
+
+  /// Code the user types at [verificationUri].
+  final String userCode;
+
+  /// URL the user opens to enter [userCode].
+  final String verificationUri;
+
+  /// Opaque handle passed back to [BridgeApi.accountLoginPoll].
+  final String pollHandle;
+
+  /// Minimum seconds between polls.
+  final int intervalSecs;
+
+  /// Seconds until the flow expires.
+  final int expiresInSecs;
+
+  /// Resolved backend base URL to echo back to [BridgeApi.accountLoginPoll].
+  final String backend;
+}
+
+/// Outcome of one device-flow poll. [status] is `pending` / `slow_down` /
+/// `authorized` / `expired` / `denied`; [login] is set only when authorized.
+class AccountPoll {
+  /// Creates a poll outcome.
+  const AccountPoll({required this.status, this.login, this.accountId});
+
+  /// Poll status string.
+  final String status;
+
+  /// Signed-in login, when authorized.
+  final String? login;
+
+  /// GitHub account id, when authorized and known.
+  final String? accountId;
+}
+
+/// The signed-in account identity.
+class AccountUser {
+  /// Creates an account user.
+  const AccountUser({required this.login, this.accountId});
+
+  /// GitHub login/handle.
+  final String login;
+
+  /// GitHub account id, if known.
+  final String? accountId;
+}
+
+/// One service in the account (the `pcxu:` prefix already stripped).
+class AccountService {
+  /// Creates an account service.
+  const AccountService({
+    required this.device,
+    required this.kind,
+    required this.name,
+  });
+
+  /// Device id segment.
+  final String device;
+
+  /// `app` or `api`.
+  final String kind;
+
+  /// Instance name segment.
+  final String name;
+
+  /// The local `pcx:<device>:<kind>:<name>` key the app/session layer uses.
+  String get key => 'pcx:$device:$kind:$name';
 }
 
 /// A live app-server event (one JSON-RPC notification), flattened for the UI.
@@ -382,6 +479,27 @@ abstract interface class BridgeApi {
   /// Persist the UI locale (BCP-47, e.g. `en`/`zh`). An empty string clears
   /// it, meaning follow the system locale.
   Future<void> setLocale(String locale);
+
+  // --- Hosted account (GitHub device-flow login) ---
+
+  /// Begin a GitHub device-flow login. [backend] overrides the configured /
+  /// default backend (remembered on success). Show the returned code + URL,
+  /// then poll with [accountLoginPoll].
+  Future<DeviceCode> accountLoginStart({String? backend});
+
+  /// Poll a device flow once. On `authorized` the session is persisted and the
+  /// app switches to account mode.
+  Future<AccountPoll> accountLoginPoll(String pollHandle, String backend);
+
+  /// The signed-in user (verified against the backend), or `null` if not signed
+  /// in.
+  Future<AccountUser?> accountCurrentUser();
+
+  /// Sign out: revoke the refresh token (best effort) and clear the session.
+  Future<void> accountLogout();
+
+  /// List the account's services from the backend.
+  Future<List<AccountService>> accountServices();
 
   // --- App-server remote control ---
 
