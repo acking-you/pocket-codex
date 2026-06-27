@@ -124,7 +124,7 @@ mod tests {
 
         // Revoke → no longer active.
         store
-            .revoke_refresh_token(&id, 6_000, Some("next-id"))
+            .revoke_refresh_token(&id, 6_000, None)
             .await
             .expect("revoke");
         assert!(store
@@ -132,17 +132,33 @@ mod tests {
             .await
             .expect("lookup")
             .is_none());
+
+        // Backfilling the rotation chain records the successor + the revoke time,
+        // which the auth grace window keys off to tell a lost-response retry from
+        // theft.
+        store
+            .set_rotated_to(&id, "next-id")
+            .await
+            .expect("set rotated_to");
+        let seen = store
+            .refresh_token_by_hash(b"hash1")
+            .await
+            .expect("by hash")
+            .expect("some");
+        assert_eq!(seen.rotated_to.as_deref(), Some("next-id"));
+        assert_eq!(seen.revoked_at, Some(6_000));
     }
 
     #[tokio::test]
     async fn device_flow_consume_once() {
         let store = mem_store().await;
         store
-            .insert_device_flow("h1", "dc1", 5, 0, 900)
+            .insert_device_flow("h1", "dc1", Some("laptop"), 5, 0, 900)
             .await
             .expect("insert");
         let f = store.device_flow("h1").await.expect("get").expect("some");
         assert_eq!(f.github_device_code, "dc1");
+        assert_eq!(f.device_label.as_deref(), Some("laptop"));
         assert!(f.consumed_at.is_none());
 
         assert!(store.consume_device_flow("h1", 100).await.expect("consume"));

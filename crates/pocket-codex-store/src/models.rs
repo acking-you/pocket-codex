@@ -55,4 +55,7 @@ pub struct DeviceFlow {
     pub expires_at: i64,
     /// When the flow was authorized + consumed, or `None`.
     pub consumed_at: Option<i64>,
+    /// Optional client-supplied device label, carried onto the issued refresh
+    /// token at poll time so the user can tell sessions apart.
+    pub device_label: Option<String>,
 }

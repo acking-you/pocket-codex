@@ -72,6 +72,18 @@ impl Store {
         Ok(res.rows_affected())
     }
 
+    /// Record the id a (just-revoked) token was rotated into, completing the
+    /// rotation chain so a later replay of the old token can be recognised as a
+    /// benign lost-response retry rather than theft.
+    pub async fn set_rotated_to(&self, id: &str, rotated_to: &str) -> Result<()> {
+        sqlx::query("UPDATE refresh_tokens SET rotated_to = ?2 WHERE id = ?1")
+            .bind(id)
+            .bind(rotated_to)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     /// Look up a refresh token by hash in ANY state (active, revoked, expired).
     /// Used for reuse/replay detection: a presented token that is no longer
     /// active but still exists was already rotated, signalling theft.

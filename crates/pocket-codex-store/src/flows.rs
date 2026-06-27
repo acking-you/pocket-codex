@@ -3,21 +3,25 @@
 use crate::{models::DeviceFlow, Result, Store};
 
 impl Store {
-    /// Record a pending device flow keyed by its opaque handle.
+    /// Record a pending device flow keyed by its opaque handle, with an
+    /// optional client device label to carry onto the eventual refresh
+    /// token.
     pub async fn insert_device_flow(
         &self,
         handle: &str,
         github_device_code: &str,
+        device_label: Option<&str>,
         interval_secs: i64,
         created_at: i64,
         expires_at: i64,
     ) -> Result<()> {
         sqlx::query(
-            "INSERT INTO device_flows (handle, github_device_code, interval_secs, created_at, \
-             expires_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO device_flows (handle, github_device_code, device_label, interval_secs, \
+             created_at, expires_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         )
         .bind(handle)
         .bind(github_device_code)
+        .bind(device_label)
         .bind(interval_secs)
         .bind(created_at)
         .bind(expires_at)
@@ -30,7 +34,7 @@ impl Store {
     pub async fn device_flow(&self, handle: &str) -> Result<Option<DeviceFlow>> {
         let flow = sqlx::query_as::<_, DeviceFlow>(
             "SELECT handle, github_device_code, interval_secs, created_at, expires_at, \
-             consumed_at FROM device_flows WHERE handle = ?1",
+             consumed_at, device_label FROM device_flows WHERE handle = ?1",
         )
         .bind(handle)
         .fetch_optional(&self.pool)

@@ -1,6 +1,8 @@
 //! Accept loops that wrap each connection in the configured TLS layer and feed
 //! it to the HTTP API (hyper) or the broker.
 
+use std::time::Duration;
+
 use axum::Router;
 use hyper_util::{
     rt::{TokioExecutor, TokioIo},
@@ -19,17 +21,30 @@ use crate::tls::TlsKind;
 trait Stream: AsyncRead + AsyncWrite + Unpin + Send + 'static {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send + 'static> Stream for T {}
 
+/// How long a TLS handshake may take before the connection is abandoned. Each
+/// accepted connection is its own task, so an unbounded handshake lets a client
+/// that opens a socket but never completes (or slowly drips) the handshake pin
+/// a task + file descriptor indefinitely — a slowloris-style
+/// resource-exhaustion vector on a public listener. Bound it.
+const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Wrap one accepted TCP connection, or `None` if it was an ACME challenge or
-/// the handshake failed.
+/// the handshake failed/stalled.
 async fn accept_tls(tls: &TlsKind, tcp: TcpStream) -> Option<Box<dyn Stream>> {
     match tls {
         TlsKind::Plain => Some(Box::new(tcp)),
-        TlsKind::Static(acceptor) => match acceptor.accept(tcp).await {
-            Ok(stream) => Some(Box::new(stream)),
-            Err(e) => {
-                tracing::warn!(error = %e, "tls handshake failed");
-                None
-            },
+        TlsKind::Static(acceptor) => {
+            match tokio::time::timeout(TLS_HANDSHAKE_TIMEOUT, acceptor.accept(tcp)).await {
+                Ok(Ok(stream)) => Some(Box::new(stream)),
+                Ok(Err(e)) => {
+                    tracing::warn!(error = %e, "tls handshake failed");
+                    None
+                },
+                Err(_) => {
+                    tracing::warn!("tls handshake timed out");
+                    None
+                },
+            }
         },
     }
 }

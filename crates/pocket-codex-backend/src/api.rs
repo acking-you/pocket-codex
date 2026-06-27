@@ -12,8 +12,8 @@ use axum::{
 };
 use pocket_codex_account_proto::{
     http::{
-        DevicePollRequest, DevicePollResponse, DeviceStartResponse, LogoutRequest, MeResponse,
-        RefreshRequest, RefreshResponse, ServiceEntry, ServicesResponse,
+        DevicePollRequest, DevicePollResponse, DeviceStartRequest, DeviceStartResponse,
+        LogoutRequest, MeResponse, RefreshRequest, RefreshResponse, ServiceEntry, ServicesResponse,
     },
     key::NamespacedServiceId,
 };
@@ -101,8 +101,15 @@ async fn healthz() -> &'static str {
     "ok"
 }
 
-async fn device_start(State(state): State<AppState>) -> ApiResult<Json<DeviceStartResponse>> {
-    let resp = state.auth.device_start(now()).await.map_err(auth_err)?;
+async fn device_start(
+    State(state): State<AppState>,
+    Json(req): Json<DeviceStartRequest>,
+) -> ApiResult<Json<DeviceStartResponse>> {
+    let resp = state
+        .auth
+        .device_start(req.device_label.as_deref(), now())
+        .await
+        .map_err(auth_err)?;
     Ok(Json(resp))
 }
 
@@ -112,7 +119,7 @@ async fn device_poll(
 ) -> ApiResult<Json<DevicePollResponse>> {
     let resp = state
         .auth
-        .device_poll(&req.poll_handle, None, now())
+        .device_poll(&req.poll_handle, now())
         .await
         .map_err(auth_err)?;
     Ok(Json(resp))

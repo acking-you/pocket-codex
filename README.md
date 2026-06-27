@@ -43,24 +43,40 @@ Codex login as a relay-reachable Responses API endpoint for any device:
 - A Flutter front-end (driven through `flutter_rust_bridge`) consumes
   the app-server JSON-RPC protocol directly, giving every platform a
   native UI for Codex without re-implementing model logic.
+- **Two ways to connect.** *Self-host* — point every device at your own
+  `pb-mapper` relay with a shared 32-byte key (the original flow).
+  *Hosted account* — run the optional `pocket-codex-backend` once on your
+  server, then every device just signs in with **GitHub**
+  (`pocket-codex login`, or "Sign in with GitHub" in the app); the backend
+  brokers each account's services through the relay under per-user
+  `pcxu:<user>:…` keys, so the relay's master key is never handed to clients
+  and accounts can't see each other.
 
 In short: **one machine stays logged in to Codex; every other device —
 the Flutter UI, a remote `codex` CLI, or any OpenAI-compatible tool —
-reaches it through the relay.**
+reaches it through the relay**, either with a shared relay key (self-host)
+or a per-account GitHub login (hosted).
 
 ## Status
 
 | Area                           | State                                  |
 | ------------------------------ | -------------------------------------- |
 | Workspace / lints / CI         | bootstrapped                           |
-| `pocket-codex` CLI             | `init`, `serve`, `connect`, `api {serve,connect}`, `services {list,default set}`, top-level `status`/`stop`, `codex {start,stop,status}`, `pb {register,subscribe,status}`, `remote-hint`, `version` |
+| `pocket-codex` CLI             | `login`, `logout`, `account`, `init`, `serve`, `connect`, `api {serve,connect}`, `services {list,default set}`, top-level `status`/`stop`, `codex {start,stop,status}`, `pb {register,subscribe,status}`, `remote-hint`, `version` |
 | `pb-mapper` register/subscribe | wired through `deps/pb-mapper`         |
 | `codex app-server` supervision | spawn/stop/status via PID + state.toml |
 | Direct Responses API proxy     | local HTTP/WS proxy registered through pb-mapper |
-| Flutter UI (`apps/flutter`)    | P1: onboarding (relay+key, `pcx1:` import/export), service discovery, API-service subscribe, settings; responsive Material 3 (light/dark). P2: app-server sessions |
+| Hosted account (GitHub)        | optional `pocket-codex-backend`: GitHub device-flow login, per-user `pcxu:<user>:…` broker tunnels through the relay (master key never leaves the server); self-host preserved behind `--relay`. See [`deploy/`](deploy/README.md) |
+| Flutter UI (`apps/flutter`)    | account onboarding ("Sign in with GitHub") + self-host onboarding (relay+key, `pcx1:` import/export); service discovery, app-server sessions, API-service subscribe, settings; responsive Material 3 (light/dark) |
 
-The first usable milestone now covers multi-device CLI flows:
+Multi-device CLI flows are usable in both modes:
 
+- `pocket-codex login` / `logout` / `account` drive the **hosted-account**
+  mode: a GitHub device-flow session (token stored 0600 in `config.toml`) makes
+  `serve` / `connect` / `api` / `services` work with **no relay or key** — the
+  backend brokers them under per-user `pcxu:<user>:…` keys. The `--relay`
+  examples below are the **self-host** mode, which an explicit `--relay` flag
+  always selects (the escape hatch).
 - `pocket-codex init [--relay <host:port>] [--key <32B>]` persists the
   default relay address and shared `MSG_HEADER_KEY` to
   `~/.config/pocket-codex/config.toml` (0600 on Unix). All subsequent
@@ -134,7 +150,10 @@ A working `codex` binary is expected to exist on `$PATH`; Pocket-Codex
 does **not** vendor a model runtime. The CLI exposes:
 
 ```text
-pocket-codex init
+pocket-codex login                          # hosted account (GitHub)
+pocket-codex logout
+pocket-codex account
+pocket-codex init                           # self-host (relay + key)
 pocket-codex serve
 pocket-codex connect
 pocket-codex api      serve | connect
@@ -147,24 +166,47 @@ pocket-codex remote-hint
 pocket-codex version
 ```
 
-Typical host-side flow (expose the local `codex app-server` to the relay):
+#### Hosted account (recommended)
+
+Sign in once with GitHub and every command works **without a relay address or
+shared key**. Requires a reachable `pocket-codex-backend` — run your own; see
+[`deploy/`](deploy/README.md).
 
 ```bash
-pocket-codex serve --relay relay.example.com:7666
-```
+pocket-codex login                 # GitHub device flow: open the URL, enter the code
+pocket-codex account               # who you're signed in as + transport mode
 
-Typical client-side flow (drive a remote app-server from another device):
+# Host: expose this machine's codex app-server under your account.
+pocket-codex serve
 
-```bash
-pocket-codex connect --relay relay.example.com:7666
+# Another device: sign in to the SAME GitHub account, then list + drive services.
+pocket-codex services list
+pocket-codex connect               # picks your default / only app-server
 codex --remote ws://127.0.0.1:28080
+
+# Or reach your Codex login as an OpenAI-compatible Responses API.
+pocket-codex api serve
+pocket-codex api connect
+
+pocket-codex logout                # revoke + clear the local session
 ```
 
-Typical direct API proxy flow (reach the host's Codex login as an
-OpenAI-compatible Responses API from any device):
+In the **app** this is just "Sign in with GitHub" on first launch; the same
+account's app-servers then appear on the home screen, ready to drive.
+
+#### Self-host (advanced)
+
+Pass `--relay` (and set a shared 32-byte key via `init`) to bypass the account
+backend and talk to your own `pb-mapper` relay directly. An explicit `--relay`
+**always forces self-host mode**, even when you are logged in — it's the escape
+hatch.
 
 ```bash
-pocket-codex api serve --relay relay.example.com:7666
+pocket-codex init    --relay relay.example.com:7666   # persist relay + 32B key
+pocket-codex serve   --relay relay.example.com:7666   # host side
+pocket-codex connect --relay relay.example.com:7666   # client side
+codex --remote ws://127.0.0.1:28080
+pocket-codex api serve   --relay relay.example.com:7666
 pocket-codex api connect --device my-host --relay relay.example.com:7666
 ```
 
