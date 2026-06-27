@@ -222,13 +222,19 @@ class _ServiceList extends ConsumerWidget {
     final l10n = AppLocalizations.of(context);
     final scheme = Theme.of(context).colorScheme;
     final online = Colors.green.shade600;
-    // Optimistically hide a just-removed service so it vanishes at once; clear
-    // the set whenever fresh discovery data lands (truth wins — a service kept
-    // alive by a running host then reappears).
+    // Optimistically hide a just-removed service so it vanishes at once. When
+    // fresh discovery data lands, stop hiding keys that are now ABSENT (confirmed
+    // gone) — keys still present stay hidden, so a deregister that the relay
+    // hasn't finished processing doesn't flicker back as 不可达.
     final pending = ref.watch(pendingRemovalProvider);
     ref.listen(servicesProvider, (_, next) {
-      if (next.hasValue && ref.read(pendingRemovalProvider).isNotEmpty) {
-        ref.read(pendingRemovalProvider.notifier).state = {};
+      final data = next.valueOrNull;
+      if (data == null) return;
+      final present = {for (final s in data) s.key};
+      final current = ref.read(pendingRemovalProvider);
+      final stillHidden = current.intersection(present);
+      if (stillHidden.length != current.length) {
+        ref.read(pendingRemovalProvider.notifier).state = stillHidden;
       }
     });
     final api = services
@@ -436,14 +442,17 @@ Future<void> _confirmDeregister(
   );
   if (ok != true) return;
   try {
+    // Stop our own host first, so its codex dies and its client tunnel won't
+    // reconnect…
     if (isLocalHost) {
       await ref.read(bridgeApiProvider).appServeStop(s.name);
       ref.invalidate(localServeListProvider);
-    } else {
-      await ref
-          .read(bridgeApiProvider)
-          .accountDeregisterService(device: s.device, kind: s.kind, name: s.name);
     }
+    // …then always force the backend to drop the relay registration now, instead
+    // of waiting out the tunnel teardown / lease.
+    await ref
+        .read(bridgeApiProvider)
+        .accountDeregisterService(device: s.device, kind: s.kind, name: s.name);
     ref.read(pendingRemovalProvider.notifier).update((set) => {...set, s.key});
     ref.invalidate(servicesProvider);
   } catch (e) {
@@ -853,9 +862,24 @@ class _LocalHostDialogState extends ConsumerState<_LocalHostDialog> {
       _error = null;
     });
     try {
-      await ref
-          .read(bridgeApiProvider)
-          .appServeStop(widget.existing!.name ?? 'default');
+      final host = widget.existing!;
+      await ref.read(bridgeApiProvider).appServeStop(host.name ?? 'default');
+      // Force the backend to drop the relay registration now (stopping the
+      // client tunnel alone leaves the registration up until its lease expires).
+      if (host.device != null && host.name != null) {
+        await ref.read(bridgeApiProvider).accountDeregisterService(
+          device: host.device!,
+          kind: 'app',
+          name: host.name!,
+        );
+      }
+      // Optimistically hide the App-server entry too, so it leaves at once.
+      final key = host.serviceKey;
+      if (key != null) {
+        ref
+            .read(pendingRemovalProvider.notifier)
+            .update((set) => {...set, key});
+      }
       ref.invalidate(localServeListProvider);
       ref.invalidate(servicesProvider);
       if (mounted) Navigator.of(context).pop();
