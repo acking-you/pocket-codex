@@ -129,7 +129,8 @@ class AppLocalizationsZh extends AppLocalizations {
   String get emptyConversation => '发送消息开始对话';
 
   @override
-  String get turnFailed => '本轮对话失败';
+  String get turnFailed =>
+      '本轮未完成 —— 连接中断或远程 codex 异常。请重试,或检查主机上的 codex(可能需重新登录)。';
 
   @override
   String get disconnect => '断开连接';

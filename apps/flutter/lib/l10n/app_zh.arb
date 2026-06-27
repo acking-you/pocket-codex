@@ -42,7 +42,7 @@
   "interrupt": "打断",
   "thinking": "思考中…",
   "emptyConversation": "发送消息开始对话",
-  "turnFailed": "本轮对话失败",
+  "turnFailed": "本轮未完成 —— 连接中断或远程 codex 异常。请重试,或检查主机上的 codex(可能需重新登录)。",
   "disconnect": "断开连接",
   "connectionLost": "连接已断开",
   "reconnect": "重新连接",

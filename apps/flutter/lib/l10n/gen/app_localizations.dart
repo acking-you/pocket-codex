@@ -335,7 +335,7 @@ abstract class AppLocalizations {
   /// No description provided for @turnFailed.
   ///
   /// In en, this message translates to:
-  /// **'The turn failed'**
+  /// **'Turn didn\'t finish — the connection dropped or the remote codex failed. Retry, or check codex on the host machine (it may need to be logged in again).'**
   String get turnFailed;
 
   /// No description provided for @disconnect.
