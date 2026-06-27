@@ -43,7 +43,14 @@ impl TokenVerifier for AuthVerifier {
 /// error or a serving task aborts.
 pub async fn run(cfg: ServerConfig) -> anyhow::Result<()> {
     let _ = rustls::crypto::ring::default_provider().install_default();
-    pocket_codex_pb::set_msg_header_key(Some(&cfg.msg_header_key))
+    // An explicit key, or `None` to adopt the relay's machine-derived key
+    // (matching `pb-mapper-server --use-machine-msg-header-key` on the same host).
+    let configured_key = cfg
+        .msg_header_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    pocket_codex_pb::set_msg_header_key(configured_key)
         .map_err(|e| anyhow::anyhow!("invalid msg_header_key: {e}"))?;
 
     let store = Store::connect(&cfg.database_url).await?;

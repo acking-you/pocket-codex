@@ -17,7 +17,11 @@ pub enum TlsMode {
 #[derive(Debug, Clone, Deserialize)]
 pub struct ServerConfig {
     /// The real 32-byte pb-mapper `MSG_HEADER_KEY`. Never leaves the backend.
-    pub msg_header_key: String,
+    /// Omit (or leave blank) to use the relay's machine-derived key — required
+    /// when the relay runs with `--use-machine-msg-header-key` and the backend
+    /// is on the same host.
+    #[serde(default)]
+    pub msg_header_key: Option<String>,
     /// HS256 secret used to sign session JWTs.
     pub jwt_secret: String,
     /// GitHub OAuth app client id (Device Flow enabled).
