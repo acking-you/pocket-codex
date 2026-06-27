@@ -96,3 +96,24 @@ cargo build --release -p pocket-codex-backend
 ```
 Or cross-compile a static musl binary (see `.github/workflows/release.yml` for
 the `cross` setup) and `scp` it over.
+
+## Notes from the lb7666.top deployment
+
+Validated on the live server (Tencent Cloud Ubuntu, 2 GB RAM):
+
+- **Caddy** owns `:80`/`:443` (TLS for `lb7666.top` → an existing app). The
+  backend therefore terminates its **own** TLS on `:8443` (API) and `:7900`
+  (broker), reusing Caddy's Let's Encrypt cert
+  (`/var/lib/caddy/.local/share/caddy/certificates/.../lb7666.top/lb7666.top.{crt,key}`,
+  copied to `/etc/pocket-codex/` so `pcx` can read them). Caddy renews that cert,
+  so add a renewal hook that re-copies + `systemctl restart pocket-codex-backend`.
+- **Cloud security group:** only `:80`/`:443`/`:7666` were open. `:8443`+`:7900`
+  must be opened in the **Tencent Cloud console** (a local `ufw` won't help) for
+  external clients to reach the API + broker.
+- **Relay key:** the relay runs `--use-machine-msg-header-key`; `deploy.sh`
+  adopts it from `/var/lib/pb-mapper-server/msg_header_key` automatically.
+- **Verified on the box** (loopback, since the cloud SG blocks the ports
+  externally): `GET /healthz` (TLS), `GET /v1/me` (a JWT), `GET /v1/services`
+  (relay query with the matching key), and a full broker
+  register→relay→subscribe→echo via
+  `cargo run -p pocket-codex-broker-client --example broker_smoke`.

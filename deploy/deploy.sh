@@ -38,6 +38,15 @@ if [[ ! -f "$ETC/backend.env" ]]; then
   NEEDS_SECRETS=1
 fi
 
+# If the relay runs with --use-machine-msg-header-key, adopt its cached key so
+# the backend's loopback pb-mapper calls authenticate (the pb-mapper *default*
+# key would NOT match a machine-derived one).
+RELAY_KEY=/var/lib/pb-mapper-server/msg_header_key
+if [[ -f "$RELAY_KEY" ]] && ! grep -q '^PCX_MSG_HEADER_KEY=' "$ETC/backend.env"; then
+  echo "PCX_MSG_HEADER_KEY=$(tr -d '\n' < "$RELAY_KEY")" >> "$ETC/backend.env"
+  echo "==> adopted relay machine key from $RELAY_KEY"
+fi
+
 echo "==> binary + unit"
 install -m 0755 "$BIN_SRC" "$BIN_DEST"
 install -m 0644 "$HERE/pocket-codex-backend.service" "$UNIT"
