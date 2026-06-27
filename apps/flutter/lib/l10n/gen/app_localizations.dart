@@ -164,6 +164,84 @@ abstract class AppLocalizations {
   /// **'MSG_HEADER_KEY must be exactly 32 bytes'**
   String get keyLengthError;
 
+  /// No description provided for @accountSignInTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Sign in'**
+  String get accountSignInTitle;
+
+  /// No description provided for @accountSignInButton.
+  ///
+  /// In en, this message translates to:
+  /// **'Sign in with GitHub'**
+  String get accountSignInButton;
+
+  /// No description provided for @accountEnterCode.
+  ///
+  /// In en, this message translates to:
+  /// **'Enter this code on GitHub to finish signing in:'**
+  String get accountEnterCode;
+
+  /// No description provided for @accountCopyCode.
+  ///
+  /// In en, this message translates to:
+  /// **'Copy code'**
+  String get accountCopyCode;
+
+  /// No description provided for @accountOpenGitHub.
+  ///
+  /// In en, this message translates to:
+  /// **'Open GitHub'**
+  String get accountOpenGitHub;
+
+  /// No description provided for @accountWaiting.
+  ///
+  /// In en, this message translates to:
+  /// **'Waiting for you to authorize on GitHub…'**
+  String get accountWaiting;
+
+  /// No description provided for @accountCodeExpired.
+  ///
+  /// In en, this message translates to:
+  /// **'The code expired. Please try again.'**
+  String get accountCodeExpired;
+
+  /// No description provided for @accountDenied.
+  ///
+  /// In en, this message translates to:
+  /// **'Sign-in was denied on GitHub.'**
+  String get accountDenied;
+
+  /// No description provided for @accountAdvancedSelfHost.
+  ///
+  /// In en, this message translates to:
+  /// **'Use a self-hosted relay instead'**
+  String get accountAdvancedSelfHost;
+
+  /// No description provided for @accountAdvanced.
+  ///
+  /// In en, this message translates to:
+  /// **'Advanced / self-hosted'**
+  String get accountAdvanced;
+
+  /// No description provided for @accountBackendHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Backend URL (blank = default)'**
+  String get accountBackendHint;
+
+  /// No description provided for @accountSection.
+  ///
+  /// In en, this message translates to:
+  /// **'Account'**
+  String get accountSection;
+
+  /// No description provided for @accountSignOut.
+  ///
+  /// In en, this message translates to:
+  /// **'Sign out'**
+  String get accountSignOut;
+
   /// No description provided for @apiServicesSection.
   ///
   /// In en, this message translates to:
@@ -257,7 +335,7 @@ abstract class AppLocalizations {
   /// No description provided for @turnFailed.
   ///
   /// In en, this message translates to:
-  /// **'The turn failed'**
+  /// **'Turn didn\'t finish — the connection dropped or the remote codex failed. Retry, or check codex on the host machine (it may need to be logged in again).'**
   String get turnFailed;
 
   /// No description provided for @disconnect.
@@ -661,6 +739,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Still registered on the relay, but the remote app-server isn\'t responding — it may not be running, or has crashed.'**
   String get unreachableReason;
+
+  /// No description provided for @apiUnreachableReason.
+  ///
+  /// In en, this message translates to:
+  /// **'Still registered on the relay, but the remote API service isn\'t responding — it may not be running, or has crashed.'**
+  String get apiUnreachableReason;
 
   /// No description provided for @subscribedAlive.
   ///

@@ -86,6 +86,51 @@ class FakeBridgeApi implements BridgeApi {
     locale: locale.isEmpty ? null : locale,
   );
 
+  // --- Hosted account ---
+
+  /// Seedable signed-in user returned by [accountCurrentUser] (null = signed out).
+  AccountUser? accountUser;
+
+  /// Seedable services returned by [accountServices].
+  List<AccountService> accountServiceList = const [];
+
+  /// Status [accountLoginPoll] returns (default `authorized`).
+  String accountPollStatus = 'authorized';
+
+  @override
+  Future<DeviceCode> accountLoginStart({String? backend}) async => DeviceCode(
+    userCode: 'ABCD-1234',
+    verificationUri: 'https://github.com/login/device',
+    pollHandle: 'handle',
+    intervalSecs: 0,
+    expiresInSecs: 900,
+    backend: backend ?? 'https://backend.example',
+  );
+
+  @override
+  Future<AccountPoll> accountLoginPoll(
+    String pollHandle,
+    String backend,
+  ) async {
+    if (accountPollStatus == 'authorized') {
+      accountUser = const AccountUser(login: 'octocat', accountId: '42');
+    }
+    return AccountPoll(
+      status: accountPollStatus,
+      login: accountUser?.login,
+      accountId: accountUser?.accountId,
+    );
+  }
+
+  @override
+  Future<AccountUser?> accountCurrentUser() async => accountUser;
+
+  @override
+  Future<void> accountLogout() async => accountUser = null;
+
+  @override
+  Future<List<AccountService>> accountServices() async => accountServiceList;
+
   // --- App-server remote control ---
 
   /// Number of [appConnect] calls (asserts a reconnect actually happened).
@@ -114,6 +159,10 @@ class FakeBridgeApi implements BridgeApi {
   @override
   Future<bool> appProbe(String serviceKey) async =>
       _appConnected.contains(serviceKey) || (reachable[serviceKey] ?? true);
+
+  @override
+  Future<bool> apiProbe(String serviceKey) async =>
+      reachable[serviceKey] ?? true;
 
   @override
   Stream<AppEvent> appEvents(String serviceKey) => _appEvents

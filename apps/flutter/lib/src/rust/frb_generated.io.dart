@@ -31,16 +31,31 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   String dco_decode_String(dynamic raw);
 
   @protected
+  AccountPollDto dco_decode_account_poll_dto(dynamic raw);
+
+  @protected
+  AccountServiceDto dco_decode_account_service_dto(dynamic raw);
+
+  @protected
+  AccountUserDto dco_decode_account_user_dto(dynamic raw);
+
+  @protected
   AppEventDto dco_decode_app_event_dto(dynamic raw);
 
   @protected
   bool dco_decode_bool(dynamic raw);
 
   @protected
+  AccountUserDto dco_decode_box_autoadd_account_user_dto(dynamic raw);
+
+  @protected
   PlatformInt64 dco_decode_box_autoadd_i_64(dynamic raw);
 
   @protected
   ConfigView dco_decode_config_view(dynamic raw);
+
+  @protected
+  DeviceCodeDto dco_decode_device_code_dto(dynamic raw);
 
   @protected
   ForceResumeReportDto dco_decode_force_resume_report_dto(dynamic raw);
@@ -53,6 +68,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<String> dco_decode_list_String(dynamic raw);
+
+  @protected
+  List<AccountServiceDto> dco_decode_list_account_service_dto(dynamic raw);
 
   @protected
   List<HolderDto> dco_decode_list_holder_dto(dynamic raw);
@@ -88,6 +106,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   String? dco_decode_opt_String(dynamic raw);
 
   @protected
+  AccountUserDto? dco_decode_opt_box_autoadd_account_user_dto(dynamic raw);
+
+  @protected
   PlatformInt64? dco_decode_opt_box_autoadd_i_64(dynamic raw);
 
   @protected
@@ -112,6 +133,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   int dco_decode_u_16(dynamic raw);
 
   @protected
+  BigInt dco_decode_u_64(dynamic raw);
+
+  @protected
   int dco_decode_u_8(dynamic raw);
 
   @protected
@@ -129,16 +153,35 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   String sse_decode_String(SseDeserializer deserializer);
 
   @protected
+  AccountPollDto sse_decode_account_poll_dto(SseDeserializer deserializer);
+
+  @protected
+  AccountServiceDto sse_decode_account_service_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  AccountUserDto sse_decode_account_user_dto(SseDeserializer deserializer);
+
+  @protected
   AppEventDto sse_decode_app_event_dto(SseDeserializer deserializer);
 
   @protected
   bool sse_decode_bool(SseDeserializer deserializer);
 
   @protected
+  AccountUserDto sse_decode_box_autoadd_account_user_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   PlatformInt64 sse_decode_box_autoadd_i_64(SseDeserializer deserializer);
 
   @protected
   ConfigView sse_decode_config_view(SseDeserializer deserializer);
+
+  @protected
+  DeviceCodeDto sse_decode_device_code_dto(SseDeserializer deserializer);
 
   @protected
   ForceResumeReportDto sse_decode_force_resume_report_dto(
@@ -153,6 +196,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<String> sse_decode_list_String(SseDeserializer deserializer);
+
+  @protected
+  List<AccountServiceDto> sse_decode_list_account_service_dto(
+    SseDeserializer deserializer,
+  );
 
   @protected
   List<HolderDto> sse_decode_list_holder_dto(SseDeserializer deserializer);
@@ -200,6 +248,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   String? sse_decode_opt_String(SseDeserializer deserializer);
 
   @protected
+  AccountUserDto? sse_decode_opt_box_autoadd_account_user_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   PlatformInt64? sse_decode_opt_box_autoadd_i_64(SseDeserializer deserializer);
 
   @protected
@@ -226,6 +279,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   int sse_decode_u_16(SseDeserializer deserializer);
 
   @protected
+  BigInt sse_decode_u_64(SseDeserializer deserializer);
+
+  @protected
   int sse_decode_u_8(SseDeserializer deserializer);
 
   @protected
@@ -250,10 +306,34 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_String(String self, SseSerializer serializer);
 
   @protected
+  void sse_encode_account_poll_dto(
+    AccountPollDto self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_account_service_dto(
+    AccountServiceDto self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_account_user_dto(
+    AccountUserDto self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_app_event_dto(AppEventDto self, SseSerializer serializer);
 
   @protected
   void sse_encode_bool(bool self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_box_autoadd_account_user_dto(
+    AccountUserDto self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_box_autoadd_i_64(
@@ -263,6 +343,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_config_view(ConfigView self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_device_code_dto(DeviceCodeDto self, SseSerializer serializer);
 
   @protected
   void sse_encode_force_resume_report_dto(
@@ -278,6 +361,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_list_String(List<String> self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_list_account_service_dto(
+    List<AccountServiceDto> self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_list_holder_dto(
@@ -340,6 +429,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_opt_String(String? self, SseSerializer serializer);
 
   @protected
+  void sse_encode_opt_box_autoadd_account_user_dto(
+    AccountUserDto? self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_opt_box_autoadd_i_64(
     PlatformInt64? self,
     SseSerializer serializer,
@@ -371,6 +466,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_u_16(int self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_u_64(BigInt self, SseSerializer serializer);
 
   @protected
   void sse_encode_u_8(int self, SseSerializer serializer);

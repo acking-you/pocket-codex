@@ -28,6 +28,15 @@ pub struct Cli {
 /// Top-level subcommands.
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Sign in to a hosted Pocket-Codex account via GitHub device flow.
+    Login(LoginArgs),
+
+    /// Sign out of the hosted account (revoke + clear the local session).
+    Logout,
+
+    /// Show the current account / transport status.
+    Account,
+
     /// Interactively configure the default relay URL and shared key.
     Init(InitArgs),
 
@@ -69,6 +78,16 @@ pub enum Command {
     /// Internal worker entrypoints spawned by high-level commands.
     #[command(name = "__worker", hide = true, subcommand)]
     Worker(WorkerCmd),
+}
+
+/// Args for `pocket-codex login`.
+#[derive(Debug, Args)]
+pub struct LoginArgs {
+    /// Backend base URL. Defaults to the configured backend, then
+    /// `$POCKET_CODEX_BACKEND`, then the built-in default. When set, it is
+    /// remembered for later commands.
+    #[arg(long)]
+    pub backend: Option<String>,
 }
 
 /// Args for `pocket-codex init`.

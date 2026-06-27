@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -11,12 +13,59 @@ import 'package:pocket_codex/src/widgets/loading.dart';
 import 'package:pocket_codex/src/widgets/status_dots.dart';
 
 /// Home screen: lists discovered services on the configured relay.
-class ServicesScreen extends ConsumerWidget {
+class ServicesScreen extends ConsumerStatefulWidget {
   /// Default constructor.
   const ServicesScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<ServicesScreen> createState() => _ServicesScreenState();
+}
+
+class _ServicesScreenState extends ConsumerState<ServicesScreen>
+    with WidgetsBindingObserver {
+  /// Cadence for re-probing every app-server's reachability so a server that
+  /// came back online flips from "unreachable" to "online" on its own — the
+  /// manual refresh button stays as a fallback. Kept in the same order of
+  /// magnitude as the session keepalive while staying gentle enough to avoid
+  /// probe churn against the remote app-server.
+  static const _reprobeInterval = Duration(seconds: 15);
+
+  Timer? _reprobeTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _reprobeTimer = Timer.periodic(_reprobeInterval, (_) {
+      // Re-probe each service's reachability (app-server + API proxy), not the
+      // full discovery: cheap, and the thing that goes stale when a remote
+      // server is restarted out from under us.
+      if (mounted) {
+        ref.invalidate(appReachableProvider);
+        ref.invalidate(apiReachableProvider);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _reprobeTimer?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Returning to the foreground: re-probe once immediately so a server that
+    // recovered while we were backgrounded shows online without waiting a tick.
+    if (state == AppLifecycleState.resumed && mounted) {
+      ref.invalidate(appReachableProvider);
+      ref.invalidate(apiReachableProvider);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
     final servicesAsync = ref.watch(servicesProvider);
     final config = ref.watch(configProvider).valueOrNull;
@@ -45,6 +94,7 @@ class ServicesScreen extends ConsumerWidget {
               ref.invalidate(servicesProvider);
               ref.invalidate(subscriptionsProvider);
               ref.invalidate(appReachableProvider);
+              ref.invalidate(apiReachableProvider);
             },
           ),
           IconButton(
@@ -88,6 +138,9 @@ class ServicesScreen extends ConsumerWidget {
                     apiServices.firstOrNull;
                 final list = _ServiceList(
                   relay: config?.relay,
+                  accountLogin: config?.mode == 'account'
+                      ? config?.accountLogin
+                      : null,
                   services: services,
                   // Only the inline detail pane has a "current" service worth
                   // highlighting; in narrow mode tapping pushes a route instead.
@@ -141,12 +194,17 @@ class ServicesScreen extends ConsumerWidget {
 class _ServiceList extends ConsumerWidget {
   const _ServiceList({
     required this.relay,
+    required this.accountLogin,
     required this.services,
     required this.onTapApi,
     required this.onTapApp,
     this.highlightKey,
   });
   final String? relay;
+
+  /// The signed-in GitHub login in account mode (null in self-host mode), shown
+  /// in the header card instead of a relay address.
+  final String? accountLogin;
   final List<ServiceEntry> services;
   final void Function(String key) onTapApi;
   final void Function(String key) onTapApp;
@@ -170,28 +228,56 @@ class _ServiceList extends ConsumerWidget {
     };
     final bridge = ref.watch(bridgeApiProvider);
 
-    // Per-API status: subscribed+alive, subscribed+dropped, or just online.
-    StatusChip apiStatus(ServiceEntry s) {
+    // Per-API status. Subscribed → the live tunnel's alive/dropped flag.
+    // Otherwise PROBE the proxy (like the app-server) so a registered-but-dead
+    // api-proxy reads "unreachable" instead of a false green "online", with the
+    // reason spelled out.
+    (StatusChip, String?) apiStatus(ServiceEntry s) {
       final sub = subs[s.key];
       if (sub != null) {
         return sub.alive
-            ? StatusChip(color: online, label: l10n.subscribedAlive, filled: true)
-            : StatusChip(
-                color: scheme.error,
-                label: l10n.subscribedDead,
-                filled: true,
+            ? (
+                StatusChip(color: online, label: l10n.subscribedAlive, filled: true),
+                null,
+              )
+            : (
+                StatusChip(color: scheme.error, label: l10n.subscribedDead, filled: true),
+                null,
               );
       }
-      return StatusChip(color: online, label: l10n.statusOnline, filled: true);
+      return ref.watch(apiReachableProvider(s.key)).when(
+        data: (ok) => ok
+            ? (
+                StatusChip(color: online, label: l10n.statusOnline, filled: true),
+                null,
+              )
+            : (
+                StatusChip(color: scheme.error, label: l10n.statusUnreachable, filled: true),
+                l10n.apiUnreachableReason,
+              ),
+        loading: () => (
+          StatusChip(color: scheme.outline, label: l10n.statusChecking, filled: true),
+          null,
+        ),
+        error: (_, _) => (
+          StatusChip(color: scheme.error, label: l10n.statusUnreachable, filled: true),
+          l10n.apiUnreachableReason,
+        ),
+      );
     }
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 16),
       children: [
-        _RelayBanner(relay: relay ?? l10n.relayNotConfigured, online: online),
+        _RelayBanner(
+          relay: relay ?? l10n.relayNotConfigured,
+          accountLogin: accountLogin,
+          online: online,
+        ),
         if (api.isNotEmpty) _SectionHeader(l10n.apiServicesSection),
-        ...api.map(
-          (s) => _ServiceCard(
+        ...api.map((s) {
+          final (status, reason) = apiStatus(s);
+          return _ServiceCard(
             key: Key('svc-${s.key}'),
             icon: Icons.api,
             iconBg: scheme.secondaryContainer,
@@ -199,10 +285,11 @@ class _ServiceList extends ConsumerWidget {
             title: s.name,
             subtitle: s.device,
             selected: s.key == highlightKey,
-            status: apiStatus(s),
+            reason: reason,
+            status: status,
             onTap: () => onTapApi(s.key),
-          ),
-        ),
+          );
+        }),
         if (app.isNotEmpty) _SectionHeader(l10n.appServerServices),
         ...app.map((s) {
           final connected = bridge.appIsConnected(s.key);
@@ -262,17 +349,27 @@ class _ServiceList extends ConsumerWidget {
   }
 }
 
-/// The relay header: a tinted banner showing the configured relay and its
-/// (implicitly online — the list only renders once discovery succeeded) status.
+/// The header card: in account mode the signed-in GitHub identity; in self-host
+/// mode the configured relay. Status is implicitly online — the list only
+/// renders once discovery (which needs a valid session/relay) has succeeded.
 class _RelayBanner extends StatelessWidget {
-  const _RelayBanner({required this.relay, required this.online});
+  const _RelayBanner({
+    required this.relay,
+    required this.accountLogin,
+    required this.online,
+  });
   final String relay;
+
+  /// Non-null in account mode: the signed-in GitHub login (shown instead of a
+  /// relay address, so an account user never sees "(no relay configured)").
+  final String? accountLogin;
   final Color online;
 
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
     final scheme = Theme.of(context).colorScheme;
+    final account = accountLogin != null;
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.all(14),
@@ -284,7 +381,7 @@ class _RelayBanner extends StatelessWidget {
       child: Row(
         children: [
           _IconBadge(
-            icon: Icons.dns,
+            icon: account ? Icons.account_circle : Icons.dns,
             bg: scheme.primaryContainer,
             fg: scheme.onPrimaryContainer,
           ),
@@ -294,14 +391,14 @@ class _RelayBanner extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  relay,
+                  account ? '@$accountLogin' : relay,
                   style: Theme.of(context).textTheme.titleSmall,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
                 const SizedBox(height: 1),
                 Text(
-                  l10n.relayRow,
+                  account ? l10n.accountSection : l10n.relayRow,
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
                     color: scheme.onSurfaceVariant,
                   ),

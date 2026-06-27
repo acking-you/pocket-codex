@@ -23,40 +23,44 @@
 //! `[model_providers.pocket-codex-api]` snippet a remote `codex` should
 //! use.
 
-use anyhow::Result;
+use std::{net::SocketAddr, sync::Arc, time::Duration};
+
+use anyhow::{Context, Result};
+use pocket_codex_broker_client::{
+    run_register, run_subscribe, Connector, RegisterConfig, SubscribeConfig, TokenProvider,
+};
 use pocket_codex_core::{
     config::Config,
     service::{default_device_id, ServiceId, ServiceKind},
     state::{PbRole, RuntimeState},
 };
+use tokio::net::TcpListener;
 
 use crate::{
     cli::{ApiCmd, ApiConnectArgs, ApiServeArgs},
     commands::{
-        api_proxy,
+        account, api_proxy,
         managed_api::{self, ApiWorkerSpec, EnsureOutcome as ApiEnsureOutcome},
         managed_pb::{self, EnsureOutcome as PbEnsureOutcome, PbWorkerSpec},
         service_target::{choose_target, discover_services, TargetRequest},
+        transport::{self, Transport},
         ui,
     },
 };
 
+/// Idle timeout applied to account-mode data bridges.
+const ACCOUNT_DATA_IDLE: Duration = Duration::from_secs(1800);
+
 /// Dispatch the `api` subcommand group.
 pub async fn run(cmd: ApiCmd) -> Result<()> {
     match cmd {
-        ApiCmd::Serve(args) => serve(args),
+        ApiCmd::Serve(args) => serve(args).await,
         ApiCmd::Connect(args) => connect(args).await,
     }
 }
 
-fn serve(args: ApiServeArgs) -> Result<()> {
-    let service_id = ServiceId::new(
-        args.device.clone().unwrap_or_else(default_device_id),
-        ServiceKind::Api,
-        &args.name,
-    );
-    let key = args.key.clone().unwrap_or_else(|| service_id.key());
-    let local_addr = format!("{}:{}", args.host, args.port);
+async fn serve(args: ApiServeArgs) -> Result<()> {
+    let device = args.device.clone().unwrap_or_else(default_device_id);
 
     // Resolve the effective upstream proxy once (explicit flag or env) so we
     // can fail fast on a bad scheme, surface it to the user, and record a
@@ -66,36 +70,99 @@ fn serve(args: ApiServeArgs) -> Result<()> {
         api_proxy::validate_proxy(raw)?;
     }
     let proxy_signature = effective_proxy.as_deref().map(api_proxy::redact_proxy);
+    let local_addr = format!("{}:{}", args.host, args.port);
 
     let config = Config::load()?;
-    let relay = crate::commands::relay::resolve_relay(args.relay.relay.as_deref(), &config)?;
+    let transport = transport::resolve_transport(args.relay.relay.as_deref(), None, &config)?;
 
+    let key = args
+        .key
+        .clone()
+        .unwrap_or_else(|| ServiceId::new(&device, ServiceKind::Api, &args.name).key());
     let api_outcome = managed_api::ensure(ApiWorkerSpec {
         key: key.clone(),
         local_addr: local_addr.clone(),
         proxy: args.proxy.clone(),
         proxy_signature,
     })?;
-    let pb_outcome = managed_pb::ensure(PbWorkerSpec {
-        role: PbRole::Register,
-        key: key.clone(),
-        local_addr,
-        relay_addr: relay.clone(),
-        codec: args.codec,
-    })?;
-    print_serve_summary(&api_outcome, &pb_outcome, &key, &relay, effective_proxy.as_deref());
+
+    match transport {
+        Transport::SelfHost {
+            relay,
+        } => {
+            let pb_outcome = managed_pb::ensure(PbWorkerSpec {
+                role: PbRole::Register,
+                key: key.clone(),
+                local_addr,
+                relay_addr: relay.clone(),
+                codec: args.codec,
+            })?;
+            print_serve_summary(
+                &api_outcome,
+                &pb_outcome,
+                &key,
+                &relay,
+                effective_proxy.as_deref(),
+            );
+            Ok(())
+        },
+        Transport::Account {
+            backend,
+        } => {
+            api_outcome.render();
+            print_proxy_status(effective_proxy.as_deref());
+            serve_account(&backend, &device, &args.name, local_addr).await
+        },
+    }
+}
+
+/// Account-mode host side: register the local Responses API proxy through the
+/// backend broker (foreground; holds the control tunnel until interrupted).
+async fn serve_account(backend: &str, device: &str, name: &str, local_addr: String) -> Result<()> {
+    let (host, port) = account::broker_endpoint(backend)?;
+    let connector: Arc<dyn Connector> = Arc::new(account::BrokerTlsConnector::new(host, port)?);
+    let tokens: Arc<dyn TokenProvider> =
+        Arc::new(account::ConfigTokenProvider::new(backend.to_string()));
+    let local: SocketAddr = local_addr
+        .parse()
+        .with_context(|| format!("api proxy addr `{local_addr}` is not a socket address"))?;
+
+    ui::headline(ui::Tone::Ok, "account register");
+    ui::field("backend", backend);
+    ui::field("service", &format!("{device}/api/{name}"));
+    ui::headline(ui::Tone::Action, "exposing — keep this running, Ctrl-C to stop");
+
+    run_register(connector, tokens, RegisterConfig {
+        device: device.to_string(),
+        kind: ServiceKind::Api,
+        name: name.to_string(),
+        client_instance_id: account::client_instance_id(),
+        local_addr: local,
+        idle: ACCOUNT_DATA_IDLE,
+    })
+    .await;
     Ok(())
 }
 
 async fn connect(args: ApiConnectArgs) -> Result<()> {
+    let config = Config::load()?;
+    match transport::resolve_transport(args.relay.relay.as_deref(), None, &config)? {
+        Transport::SelfHost {
+            relay,
+        } => connect_self_host(args, &config, relay).await,
+        Transport::Account {
+            backend,
+        } => connect_account(args, backend).await,
+    }
+}
+
+async fn connect_self_host(args: ApiConnectArgs, config: &Config, relay: String) -> Result<()> {
     let request = TargetRequest {
         key: args.key,
         device: args.device,
         name: args.name,
     };
     let needs_discovery = request.key.is_none() && request.device.is_none();
-    let config = Config::load()?;
-    let relay = crate::commands::relay::resolve_relay(args.relay.relay.as_deref(), &config)?;
     let state = RuntimeState::load()?;
     let has_local_default = config.default_service(ServiceKind::Api).is_some()
         || state.selected_service(ServiceKind::Api).is_some();
@@ -104,7 +171,7 @@ async fn connect(args: ApiConnectArgs) -> Result<()> {
     } else {
         Vec::new()
     };
-    let target = choose_target(ServiceKind::Api, request, &config, &state, &discovered)?;
+    let target = choose_target(ServiceKind::Api, request, config, &state, &discovered)?;
     let outcome = managed_pb::ensure(PbWorkerSpec {
         role: PbRole::Subscribe,
         key: target.key,
@@ -118,6 +185,49 @@ async fn connect(args: ApiConnectArgs) -> Result<()> {
         state.save()?;
     }
     print_connect_summary(&outcome);
+    Ok(())
+}
+
+/// Account-mode client side: subscribe to a relay-exposed API proxy through the
+/// backend broker, expose it locally, and print the codex provider config.
+async fn connect_account(args: ApiConnectArgs, backend: String) -> Result<()> {
+    let mut config = Config::load()?;
+    let (device, name) = account::resolve_target(
+        &mut config,
+        &backend,
+        ServiceKind::Api,
+        args.device.as_deref(),
+        args.name.as_deref(),
+    )
+    .await?;
+
+    let (host, port) = account::broker_endpoint(&backend)?;
+    let connector: Arc<dyn Connector> = Arc::new(account::BrokerTlsConnector::new(host, port)?);
+    let tokens: Arc<dyn TokenProvider> =
+        Arc::new(account::ConfigTokenProvider::new(backend.clone()));
+    let listener = TcpListener::bind(&args.local_addr)
+        .await
+        .with_context(|| format!("binding local API listener {}", args.local_addr))?;
+
+    ui::headline(ui::Tone::Ok, "account connect (api)");
+    ui::field("service", &format!("{device}/api/{name}"));
+    ui::headline(ui::Tone::Action, "codex provider config");
+    ui::muted("    paste into ~/.codex/config.toml:");
+    println!("{}", codex_provider_config(&args.local_addr));
+    ui::headline(ui::Tone::Action, "keep this running, Ctrl-C to stop");
+
+    run_subscribe(
+        connector,
+        tokens,
+        SubscribeConfig {
+            device,
+            kind: ServiceKind::Api,
+            name,
+            idle: ACCOUNT_DATA_IDLE,
+        },
+        listener,
+    )
+    .await;
     Ok(())
 }
 

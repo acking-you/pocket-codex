@@ -1,0 +1,33 @@
+[Unit]
+Description=Pocket-Codex hosted backend (account API + broker)
+Documentation=https://github.com/acking-you/pocket-codex
+# The broker bridges to the loopback pb-mapper relay, so start after it.
+After=network-online.target pb-mapper-server.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pcx
+Group=pcx
+# Secrets — PCX_MSG_HEADER_KEY, PCX_JWT_SECRET, PCX_GITHUB_CLIENT_ID — live here
+# (chmod 0600, owned by pcx). Non-secret settings go in backend.toml.
+EnvironmentFile=/etc/pocket-codex/backend.env
+Environment=POCKET_CODEX_BACKEND_CONFIG=/etc/pocket-codex/backend.toml
+Environment=RUST_LOG=info
+ExecStart=/usr/local/bin/pocket-codex-backend
+WorkingDirectory=/var/lib/pocket-codex
+Restart=on-failure
+RestartSec=2
+LimitNOFILE=65535
+
+# Hardening.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/pocket-codex
+# Only needed if http_listen / broker_listen bind a port < 1024.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target

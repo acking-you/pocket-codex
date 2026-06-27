@@ -55,6 +55,55 @@ pub struct Config {
     /// UI preferences (front-end only).
     #[serde(default)]
     pub ui: UiConfig,
+
+    /// Hosted-account (GitHub login) settings. Absent in older configs, which
+    /// load as the default (self-host / unconfigured).
+    #[serde(default)]
+    pub account: AccountConfig,
+}
+
+/// Which transport the client uses to reach Pocket-Codex services.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    /// Hosted account via the GitHub-login backend — the default experience.
+    Account,
+    /// Self-hosted pb-mapper relay (relay `host:port` + `MSG_HEADER_KEY`) —
+    /// the advanced experience.
+    SelfHost,
+    /// Neither configured yet (first run).
+    Unconfigured,
+}
+
+/// Hosted-account configuration. The session [`AccountConfig::token`] is a
+/// backend-issued bearer credential (never the GitHub token) and is stored in
+/// the same `0o600` `config.toml` as the relay key.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AccountConfig {
+    /// Explicit mode override. Only `"self_host"` is honoured (the user toggled
+    /// to advanced mode); otherwise the mode is derived from whether a token /
+    /// relay is present. `None` for normal account use.
+    pub mode: Option<String>,
+
+    /// Identity provider. Currently only `"github"`.
+    pub provider: Option<String>,
+
+    /// Backend base URL override (e.g. for self-hosting the backend or dev).
+    /// `None` falls back to the client's compile-time default.
+    pub backend: Option<String>,
+
+    /// Backend session bearer token (a JWT). Sensitive; persisted 0600.
+    pub token: Option<String>,
+
+    /// Opaque refresh token used to renew [`Self::token`] when it expires.
+    /// Sensitive; persisted 0600.
+    pub refresh_token: Option<String>,
+
+    /// Signed-in GitHub login/handle (display only).
+    pub login: Option<String>,
+
+    /// GitHub account id (opaque; display/debug only).
+    pub account_id: Option<String>,
 }
 
 /// Front-end UI preferences. Engine code ignores these; they exist so the
@@ -139,7 +188,7 @@ impl Config {
     /// Persist configuration to the default location. On unix the file is
     /// created with `0o600` and any pre-existing file is tightened to
     /// `0o600` *before* the bytes are written, because it may hold the
-    /// relay `MSG_HEADER_KEY`.
+    /// relay `MSG_HEADER_KEY` or the account session/refresh tokens.
     pub fn save(&self) -> Result<()> {
         let path = paths::config_file()?;
         if let Some(parent) = path.parent() {
@@ -243,6 +292,106 @@ impl Config {
         let trimmed = locale.as_ref().trim();
         self.ui.locale = (!trimmed.is_empty()).then(|| trimmed.to_string());
     }
+
+    /// The active transport mode.
+    ///
+    /// An explicit `account.mode = "self_host"` always wins (the user toggled
+    /// to advanced mode). Otherwise: a stored account token means
+    /// [`Mode::Account`], a configured relay means [`Mode::SelfHost`], and
+    /// neither is [`Mode::Unconfigured`].
+    pub fn account_mode(&self) -> Mode {
+        if self.account.mode.as_deref().map(str::trim) == Some("self_host") {
+            return Mode::SelfHost;
+        }
+        if self.account_token().is_some() {
+            Mode::Account
+        } else if self.relay().is_some() {
+            Mode::SelfHost
+        } else {
+            Mode::Unconfigured
+        }
+    }
+
+    /// Force a transport mode. [`Mode::SelfHost`] records the override (so it
+    /// sticks even with a token present);
+    /// [`Mode::Account`]/[`Mode::Unconfigured`] clear the override and let
+    /// [`Self::account_mode`] derive it.
+    pub fn set_mode(&mut self, mode: Mode) {
+        self.account.mode = match mode {
+            Mode::SelfHost => Some("self_host".to_string()),
+            Mode::Account | Mode::Unconfigured => None,
+        };
+    }
+
+    /// Backend session token, or `None` when unset/blank.
+    pub fn account_token(&self) -> Option<&str> {
+        self.account
+            .token
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+    }
+
+    /// Refresh token used to renew the session token, or `None` when unset.
+    pub fn account_refresh_token(&self) -> Option<&str> {
+        self.account
+            .refresh_token
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+    }
+
+    /// Signed-in GitHub login, or `None`.
+    pub fn account_login(&self) -> Option<&str> {
+        self.account
+            .login
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+    }
+
+    /// Configured backend base URL override, or `None` (use the default).
+    pub fn account_backend(&self) -> Option<&str> {
+        self.account
+            .backend
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+    }
+
+    /// Set the backend base URL override. A blank value clears it.
+    pub fn set_account_backend(&mut self, backend: impl AsRef<str>) {
+        let trimmed = backend.as_ref().trim();
+        self.account.backend = (!trimmed.is_empty()).then(|| trimmed.to_string());
+    }
+
+    /// Record a freshly issued session (after login or refresh) and switch to
+    /// account mode by clearing any self-host override.
+    pub fn set_account_session(
+        &mut self,
+        token: impl AsRef<str>,
+        refresh_token: impl AsRef<str>,
+        login: impl AsRef<str>,
+        account_id: Option<String>,
+    ) {
+        self.account.token = Some(token.as_ref().to_string());
+        self.account.refresh_token = Some(refresh_token.as_ref().to_string());
+        self.account.login = Some(login.as_ref().to_string());
+        self.account.account_id = account_id.filter(|s| !s.trim().is_empty());
+        self.account.provider = Some("github".to_string());
+        self.account.mode = None;
+    }
+
+    /// Clear the account session (logout): drops the tokens, identity and any
+    /// mode override, leaving the self-host relay config untouched.
+    pub fn clear_account(&mut self) {
+        self.account.token = None;
+        self.account.refresh_token = None;
+        self.account.login = None;
+        self.account.account_id = None;
+        self.account.provider = None;
+        self.account.mode = None;
+    }
 }
 
 #[cfg(test)]
@@ -317,5 +466,68 @@ mod tests {
         // Blank clears it (= follow system).
         config.set_locale("  ");
         assert_eq!(config.locale(), None);
+    }
+
+    #[test]
+    fn account_mode_derives_from_token_and_relay() {
+        // Nothing configured → unconfigured.
+        let mut config = Config::default();
+        assert_eq!(config.account_mode(), Mode::Unconfigured);
+
+        // Relay only → self-host.
+        config.set_relay("lb7666.top:7666");
+        assert_eq!(config.account_mode(), Mode::SelfHost);
+
+        // A token present → account, even with a relay configured.
+        config.set_account_session("jwt", "refresh", "octocat", Some("42".into()));
+        assert_eq!(config.account_mode(), Mode::Account);
+        assert_eq!(config.account_token(), Some("jwt"));
+        assert_eq!(config.account_refresh_token(), Some("refresh"));
+        assert_eq!(config.account_login(), Some("octocat"));
+
+        // Explicit self-host override wins even with a token present.
+        config.set_mode(Mode::SelfHost);
+        assert_eq!(config.account_mode(), Mode::SelfHost);
+
+        // Switching back to account clears the override (token still present).
+        config.set_mode(Mode::Account);
+        assert_eq!(config.account_mode(), Mode::Account);
+    }
+
+    #[test]
+    fn account_session_roundtrips_and_logout_reverts() {
+        let mut config = Config::default();
+        config.set_relay("r:1");
+        config.set_account_session("tok", "ref", "octocat", None);
+
+        let raw = toml::to_string_pretty(&config).expect("serialize");
+        let reloaded: Config = toml::from_str(&raw).expect("deserialize");
+        assert_eq!(reloaded.account_mode(), Mode::Account);
+        assert_eq!(reloaded.account_login(), Some("octocat"));
+
+        // Logout drops the account but keeps the self-host relay.
+        let mut config = reloaded;
+        config.clear_account();
+        assert_eq!(config.account_token(), None);
+        assert_eq!(config.relay(), Some("r:1"));
+        assert_eq!(config.account_mode(), Mode::SelfHost);
+    }
+
+    #[test]
+    fn old_config_without_account_section_loads() {
+        // Older builds wrote no [account] table; it must still parse.
+        let old: Config = toml::from_str("[pb_mapper]\nrelay = \"r:1\"\n").expect("deserialize");
+        assert_eq!(old.account_mode(), Mode::SelfHost);
+        assert_eq!(old.account_token(), None);
+    }
+
+    #[test]
+    fn account_backend_override_trims_and_clears() {
+        let mut config = Config::default();
+        assert_eq!(config.account_backend(), None);
+        config.set_account_backend("  https://api.lb7666.top  ");
+        assert_eq!(config.account_backend(), Some("https://api.lb7666.top"));
+        config.set_account_backend("");
+        assert_eq!(config.account_backend(), None);
     }
 }

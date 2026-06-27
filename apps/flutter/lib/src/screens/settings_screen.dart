@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
 import 'package:pocket_codex/src/providers.dart';
@@ -36,6 +37,23 @@ class _SettingsState extends ConsumerState<SettingsScreen> {
             onTap: () => _pickLanguage(api),
           ),
           const Divider(),
+          if (config?.mode == 'account') ...[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+              child: Text(l10n.accountSection),
+            ),
+            ListTile(
+              leading: const Icon(Icons.account_circle),
+              title: Text('@${config?.accountLogin ?? ''}'),
+            ),
+            ListTile(
+              key: const Key('sign-out-btn'),
+              title: Text(l10n.accountSignOut),
+              trailing: const Icon(Icons.logout),
+              onTap: () => _signOut(api),
+            ),
+            const Divider(),
+          ],
           ListTile(
             title: Text(l10n.relayRow),
             subtitle: Text(config?.relay ?? l10n.notConfigured),
@@ -139,6 +157,12 @@ class _SettingsState extends ConsumerState<SettingsScreen> {
         ],
       ),
     );
+  }
+
+  Future<void> _signOut(BridgeApi api) async {
+    await api.accountLogout();
+    ref.invalidate(configProvider);
+    if (mounted) context.go('/onboarding');
   }
 
   Future<void> _editRelay(BridgeApi api) async {

@@ -43,6 +43,46 @@ class AppLocalizationsEn extends AppLocalizations {
   String get keyLengthError => 'MSG_HEADER_KEY must be exactly 32 bytes';
 
   @override
+  String get accountSignInTitle => 'Sign in';
+
+  @override
+  String get accountSignInButton => 'Sign in with GitHub';
+
+  @override
+  String get accountEnterCode =>
+      'Enter this code on GitHub to finish signing in:';
+
+  @override
+  String get accountCopyCode => 'Copy code';
+
+  @override
+  String get accountOpenGitHub => 'Open GitHub';
+
+  @override
+  String get accountWaiting => 'Waiting for you to authorize on GitHub…';
+
+  @override
+  String get accountCodeExpired => 'The code expired. Please try again.';
+
+  @override
+  String get accountDenied => 'Sign-in was denied on GitHub.';
+
+  @override
+  String get accountAdvancedSelfHost => 'Use a self-hosted relay instead';
+
+  @override
+  String get accountAdvanced => 'Advanced / self-hosted';
+
+  @override
+  String get accountBackendHint => 'Backend URL (blank = default)';
+
+  @override
+  String get accountSection => 'Account';
+
+  @override
+  String get accountSignOut => 'Sign out';
+
+  @override
   String get apiServicesSection => 'API services';
 
   @override
@@ -90,7 +130,8 @@ class AppLocalizationsEn extends AppLocalizations {
   String get emptyConversation => 'Send a message to start the conversation';
 
   @override
-  String get turnFailed => 'The turn failed';
+  String get turnFailed =>
+      'Turn didn\'t finish — the connection dropped or the remote codex failed. Retry, or check codex on the host machine (it may need to be logged in again).';
 
   @override
   String get disconnect => 'Disconnect';
@@ -301,6 +342,10 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get unreachableReason =>
       'Still registered on the relay, but the remote app-server isn\'t responding — it may not be running, or has crashed.';
+
+  @override
+  String get apiUnreachableReason =>
+      'Still registered on the relay, but the remote API service isn\'t responding — it may not be running, or has crashed.';
 
   @override
   String get subscribedAlive => 'Subscribed';

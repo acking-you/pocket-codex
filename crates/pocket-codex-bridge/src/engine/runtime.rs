@@ -1,12 +1,20 @@
 //! Process-global tokio runtime, support-dir, and the in-process
 //! subscription registry. Mobile has no child processes / state.toml, so
 //! subscriptions are spawned tasks tracked here and aborted on unsubscribe.
-use std::{collections::HashMap, path::PathBuf, sync::Mutex};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    sync::Mutex,
+};
 
 use anyhow::{anyhow, Result};
 use once_cell::sync::OnceCell;
+use pocket_codex_broker_client::{run_subscribe, SubscribeConfig};
+use pocket_codex_core::service::ServiceId;
 use pocket_codex_pb::{subscribe, SubscribeOptions};
 use tokio::{runtime::Runtime, task::JoinHandle};
+
+use crate::engine::account;
 
 static RUNTIME: OnceCell<Runtime> = OnceCell::new();
 static SUPPORT_DIR: OnceCell<PathBuf> = OnceCell::new();
@@ -150,6 +158,81 @@ pub fn subscribe_transient(
         relay_addr: relay,
     };
     let handle = runtime().spawn(async move { subscribe(opts).await });
+    Ok((local_addr, handle))
+}
+
+/// Account-mode analogue of [`subscribe_service`]: broker-subscribe the service
+/// identified by `service_key` (a `pcx:device:kind:name` key) through the
+/// backend, exposing it on a local listener tracked in the same registry. A
+/// live subscription for `service_key` is reused.
+pub fn subscribe_account(
+    service_key: String,
+    local_port: u16,
+    support_dir: &Path,
+) -> Result<SubStatus> {
+    let mut reg = registry().lock().expect("registry poisoned");
+    if let Some(e) = reg.get(&service_key) {
+        if !e.handle.is_finished() {
+            return Ok(SubStatus {
+                key: service_key,
+                local_addr: e.local_addr.clone(),
+                alive: true,
+            });
+        }
+    }
+    let (local_addr, handle) = spawn_account_subscribe(&service_key, local_port, support_dir)?;
+    reg.insert(service_key.clone(), SubEntry {
+        local_addr: local_addr.clone(),
+        handle,
+    });
+    Ok(SubStatus {
+        key: service_key,
+        local_addr,
+        alive: true,
+    })
+}
+
+/// Transient (unregistered) account subscribe for a reachability probe; the
+/// caller MUST `abort()` the returned handle when done (mirrors
+/// [`subscribe_transient`]).
+pub fn subscribe_account_transient(
+    service_key: String,
+    local_port: u16,
+    support_dir: &Path,
+) -> Result<(String, JoinHandle<()>)> {
+    spawn_account_subscribe(&service_key, local_port, support_dir)
+}
+
+/// Bind a local listener (sync, so no nested `block_on`) and spawn a broker
+/// subscribe forwarding it to the account's relay-exposed service.
+fn spawn_account_subscribe(
+    service_key: &str,
+    local_port: u16,
+    support_dir: &Path,
+) -> Result<(String, JoinHandle<()>)> {
+    let service = ServiceId::parse_key(service_key)
+        .ok_or_else(|| anyhow!("not a pocket-codex service key: {service_key}"))?;
+    let (connector, tokens) = account::broker_transport(support_dir)?;
+    let std_listener = std::net::TcpListener::bind(format!("127.0.0.1:{local_port}"))
+        .map_err(|e| anyhow!("cannot bind 127.0.0.1:{local_port}: {e}"))?;
+    std_listener
+        .set_nonblocking(true)
+        .map_err(|e| anyhow!("set_nonblocking: {e}"))?;
+    let local_addr = std_listener
+        .local_addr()
+        .map_err(|e| anyhow!("reading bound addr: {e}"))?
+        .to_string();
+    let cfg = SubscribeConfig {
+        device: service.device,
+        kind: service.kind,
+        name: service.name,
+        idle: account::ACCOUNT_DATA_IDLE,
+    };
+    let handle = runtime().spawn(async move {
+        if let Ok(listener) = tokio::net::TcpListener::from_std(std_listener) {
+            run_subscribe(connector, tokens, cfg, listener).await;
+        }
+    });
     Ok((local_addr, handle))
 }
 

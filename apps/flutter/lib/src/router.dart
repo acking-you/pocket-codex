@@ -3,6 +3,7 @@ import 'package:pocket_codex/src/screens/api_service_screen.dart';
 import 'package:pocket_codex/src/screens/app_service_screen.dart';
 import 'package:pocket_codex/src/screens/app_session_screen.dart';
 import 'package:pocket_codex/src/screens/local_session_view_screen.dart';
+import 'package:pocket_codex/src/screens/account_onboarding_screen.dart';
 import 'package:pocket_codex/src/screens/local_sessions_screen.dart';
 import 'package:pocket_codex/src/screens/onboarding_screen.dart';
 import 'package:pocket_codex/src/screens/services_screen.dart';
@@ -39,7 +40,15 @@ GoRouter buildRouter({
 }) => _appRouter = GoRouter(
   initialLocation: initialLocation,
   routes: [
-    GoRoute(path: '/onboarding', builder: (c, s) => const OnboardingScreen()),
+    // Account login is the default onboarding; self-host is the advanced path.
+    GoRoute(
+      path: '/onboarding',
+      builder: (c, s) => const AccountOnboardingScreen(),
+    ),
+    GoRoute(
+      path: '/onboarding/self-host',
+      builder: (c, s) => const OnboardingScreen(),
+    ),
     GoRoute(path: '/', builder: (c, s) => const ServicesScreen()),
     GoRoute(path: '/settings', builder: (c, s) => const SettingsScreen()),
     GoRoute(path: '/sessions', builder: (c, s) => const LocalSessionsScreen()),

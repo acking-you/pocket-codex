@@ -1,0 +1,29 @@
+[package]
+name = "pocket-codex-broker-server"
+description = "Server side of the Pocket-Codex broker: bridges authenticated client tunnels to the loopback pb-mapper relay under per-user namespaced keys."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+pocket-codex-account-proto = { workspace = true, features = ["frame"] }
+pocket-codex-core = { workspace = true }
+pocket-codex-pb = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+pb-mapper = { path = "../../deps/pb-mapper" }
+tracing-subscriber = { workspace = true }
+pocket-codex-broker-client = { workspace = true }
+async-trait = { workspace = true }

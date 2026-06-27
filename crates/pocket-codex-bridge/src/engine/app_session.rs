@@ -117,6 +117,14 @@ struct Session {
     /// [`respond_approval`] needs the original grant to echo back on
     /// accept. See [`track_pending_approval`].
     pending_approvals: Arc<Mutex<HashMap<String, Value>>>,
+    /// Per-thread buffer of the item snapshots this session has streamed
+    /// (`item/*` notifications), upserted by id in stream order.
+    /// [`thread_read`] merges these in so an in-progress turn's
+    /// already-streamed thinking/tool items survive re-opening the
+    /// conversation: the forwarder drops events when no UI is attached, and
+    /// the server's `thread/read` doesn't return the in-progress turn's
+    /// items.
+    transcript: Arc<Mutex<HashMap<String, Vec<ThreadItem>>>>,
 }
 
 impl Drop for Session {
@@ -135,25 +143,46 @@ fn sessions() -> &'static Mutex<HashMap<String, Session>> {
 /// JSON-RPC client over it and run the `initialize` handshake. Idempotent: a
 /// live session for the same key is reused.
 pub fn connect(service_key: String, local_port: u16, relay: String) -> Result<()> {
-    {
-        let map = sessions().lock().expect("sessions poisoned");
-        if let Some(s) = map.get(&service_key) {
-            // Reuse only a *live* session. The forwarder task ends when the
-            // websocket closes, so `is_finished()` means the socket is dead —
-            // reusing it would make every request fail with "closed
-            // connection" (the service still shows registered/online on the
-            // relay, hiding the dead socket). Fall through to reconnect.
-            if !s.forwarder.is_finished() {
-                return Ok(());
-            }
-        }
+    if reuse_live(&service_key) {
+        return Ok(());
     }
-    // No live session: drop any stale one (and its pb-mapper subscription) so we
-    // reconnect cleanly rather than reusing a closed socket.
+    // No live session: drop any stale one (and its subscription) so we reconnect
+    // cleanly rather than reusing a closed socket.
     disconnect(&service_key);
     // Materialise the local ws endpoint via pb-mapper (kind-agnostic subscribe).
     let sub = runtime::subscribe_service(service_key.clone(), local_port, relay)?;
-    let ws_url = format!("ws://{}", sub.local_addr);
+    establish(service_key, &sub.local_addr)
+}
+
+/// Account-mode connect: broker-subscribe the service through the backend, then
+/// run the identical JSON-RPC handshake/session as [`connect`].
+pub fn connect_account(
+    service_key: String,
+    local_port: u16,
+    support_dir: &std::path::Path,
+) -> Result<()> {
+    if reuse_live(&service_key) {
+        return Ok(());
+    }
+    disconnect(&service_key);
+    let sub = runtime::subscribe_account(service_key.clone(), local_port, support_dir)?;
+    establish(service_key, &sub.local_addr)
+}
+
+/// Whether a live session already exists for `service_key`. The forwarder task
+/// ends when the websocket closes, so `is_finished()` means the socket is dead
+/// (the service may still show registered/online on the relay) — reconnect.
+fn reuse_live(service_key: &str) -> bool {
+    let map = sessions().lock().expect("sessions poisoned");
+    map.get(service_key)
+        .is_some_and(|s| !s.forwarder.is_finished())
+}
+
+/// Open the JSON-RPC client over `ws://<local_addr>`, run the `initialize`
+/// handshake, wire the event forwarder, and record the session. Transport-
+/// agnostic: the local endpoint is materialised by the caller's subscribe.
+fn establish(service_key: String, local_addr: &str) -> Result<()> {
+    let ws_url = format!("ws://{local_addr}");
 
     let (client, mut notify_rx) = runtime::runtime().block_on(async {
         tokio::time::timeout(CONNECT_TIMEOUT, AppClient::connect(&ws_url))
@@ -199,6 +228,9 @@ pub fn connect(service_key: String, local_port: u16, relay: String) -> Result<()
     let pending_approvals: Arc<Mutex<HashMap<String, Value>>> =
         Arc::new(Mutex::new(HashMap::new()));
     let approvals_for_forwarder = Arc::clone(&pending_approvals);
+    let transcript: Arc<Mutex<HashMap<String, Vec<ThreadItem>>>> =
+        Arc::new(Mutex::new(HashMap::new()));
+    let transcript_for_forwarder = Arc::clone(&transcript);
     let forwarder = runtime::runtime().spawn(async move {
         while let Some(inbound) = notify_rx.recv().await {
             // Learn the active turnId per thread before mapping, so interrupt
@@ -207,6 +239,10 @@ pub fn connect(service_key: String, local_port: u16, relay: String) -> Result<()
             // Remember a permissions request's grant so its protocol-specific
             // response can be built when the user answers.
             track_pending_approval(&approvals_for_forwarder, &inbound);
+            // Buffer item snapshots so a re-opened conversation can restore an
+            // in-progress turn's items even though the broadcast below is
+            // dropped while no UI is attached.
+            buffer_item(&transcript_for_forwarder, &inbound);
             // Ignore send errors: no current subscribers is fine, the event
             // is simply dropped (the UI re-reads thread state on attach).
             let _ = forward_tx.send(map_event(inbound));
@@ -223,8 +259,52 @@ pub fn connect(service_key: String, local_port: u16, relay: String) -> Result<()
             active_turns,
             reasoning_effort: Arc::new(Mutex::new(HashMap::new())),
             pending_approvals,
+            transcript,
         });
     Ok(())
+}
+
+/// Buffer a full item snapshot from an `item/*` notification into the
+/// per-thread transcript, upserted by id in stream order. Deltas (no
+/// `params.item`) are skipped — they are transient and re-derived from the
+/// eventual completed item.
+fn buffer_item(transcript: &Mutex<HashMap<String, Vec<ThreadItem>>>, inbound: &Inbound) {
+    let Some(params) = inbound.params.as_ref() else {
+        return;
+    };
+    let Some(thread_id) = params.get("threadId").and_then(Value::as_str) else {
+        return;
+    };
+    let Some(parsed) = params.get("item").and_then(parse_item) else {
+        return;
+    };
+    if parsed.id.is_empty() {
+        return;
+    }
+    let mut map = transcript.lock().expect("transcript poisoned");
+    let items = map.entry(thread_id.to_string()).or_default();
+    match items.iter_mut().find(|i| i.id == parsed.id) {
+        Some(existing) => *existing = parsed, // later snapshot wins
+        None => items.push(parsed),           // new id keeps stream order
+    }
+}
+
+/// The item snapshots this session has streamed for `thread_id`, in stream
+/// order. Empty when the service has no live session.
+fn buffered_items(service_key: &str, thread_id: &str) -> Vec<ThreadItem> {
+    sessions()
+        .lock()
+        .expect("sessions poisoned")
+        .get(service_key)
+        .map(|s| {
+            s.transcript
+                .lock()
+                .expect("transcript poisoned")
+                .get(thread_id)
+                .cloned()
+                .unwrap_or_default()
+        })
+        .unwrap_or_default()
 }
 
 /// How long a [`probe`] waits for the tunnel + handshake before declaring the
@@ -259,6 +339,32 @@ pub fn probe(service_key: String, local_port: u16, relay: String) -> bool {
     else {
         return false;
     };
+    let ok = probe_endpoint(&local_addr);
+    // Tear down ONLY this probe's own transient tunnel.
+    handle.abort();
+    ok
+}
+
+/// Account-mode analogue of [`probe`]: reachability via a transient broker
+/// tunnel.
+pub fn probe_account(service_key: String, local_port: u16, support_dir: &std::path::Path) -> bool {
+    if is_connected(&service_key) {
+        return true;
+    }
+    let Ok((local_addr, handle)) =
+        runtime::subscribe_account_transient(service_key.clone(), local_port, support_dir)
+    else {
+        return false;
+    };
+    let ok = probe_endpoint(&local_addr);
+    handle.abort();
+    ok
+}
+
+/// Open a transient JSON-RPC client over `ws://<local_addr>` and run the
+/// `initialize` handshake, bounded by [`PROBE_TIMEOUT`]; `true` iff it
+/// succeeds.
+fn probe_endpoint(local_addr: &str) -> bool {
     let ws_url = format!("ws://{local_addr}");
     let outcome = runtime::runtime().block_on(async {
         let (client, _notify_rx) = tokio::time::timeout(PROBE_TIMEOUT, AppClient::connect(&ws_url))
@@ -282,9 +388,56 @@ pub fn probe(service_key: String, local_port: u16, relay: String) -> bool {
         .context("probe: initialize timed out")??;
         Ok::<(), anyhow::Error>(())
     });
-    // Tear down ONLY this probe's own transient tunnel.
-    handle.abort();
     outcome.is_ok()
+}
+
+/// Account-mode reachability of an API proxy: a transient broker tunnel + a
+/// minimal HTTP request. Mirrors [`probe_account`] but for the HTTP proxy.
+pub fn probe_api_account(service_key: String, support_dir: &std::path::Path) -> bool {
+    let Ok((local_addr, handle)) =
+        runtime::subscribe_account_transient(service_key, 0, support_dir)
+    else {
+        return false;
+    };
+    let ok = probe_http_endpoint(&local_addr);
+    handle.abort();
+    ok
+}
+
+/// Self-host analogue of [`probe_api_account`].
+pub fn probe_api(service_key: String, relay: String) -> bool {
+    let Ok((local_addr, handle)) = runtime::subscribe_transient(service_key, 0, relay) else {
+        return false;
+    };
+    let ok = probe_http_endpoint(&local_addr);
+    handle.abort();
+    ok
+}
+
+/// Connect to a local TCP endpoint tunnelling to a remote API proxy and check
+/// it answers a minimal HTTP request within [`PROBE_TIMEOUT`]. A request to a
+/// non-`/v1/responses` path hits the proxy's local 403 fallback (no upstream
+/// model call), so ANY HTTP response proves the proxy is reachable; a
+/// connect/read timeout means the relay registration is hollow.
+fn probe_http_endpoint(local_addr: &str) -> bool {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    runtime::runtime().block_on(async {
+        let Ok(Ok(mut stream)) =
+            tokio::time::timeout(PROBE_TIMEOUT, tokio::net::TcpStream::connect(local_addr)).await
+        else {
+            return false;
+        };
+        let req =
+            b"GET /pocket-codex-probe HTTP/1.0\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+        if stream.write_all(req).await.is_err() {
+            return false;
+        }
+        let mut buf = [0u8; 16];
+        matches!(
+            tokio::time::timeout(PROBE_TIMEOUT, stream.read(&mut buf)).await,
+            Ok(Ok(n)) if n > 0
+        )
+    })
 }
 
 /// Whether a *live* session exists for `service_key` (the websocket forwarder
@@ -678,6 +831,18 @@ pub fn thread_read(service_key: &str, thread_id: &str) -> Result<ThreadHistory> 
         for item in turn_items {
             if let Some(parsed) = parse_item(item) {
                 items.push(parsed);
+            }
+        }
+    }
+    // Merge in any items this session streamed that `thread/read` didn't return
+    // — an in-progress turn's thinking/tool items are buffered by the forwarder
+    // but the server omits them here — preserving their stream order so a
+    // re-opened conversation shows the live progress instead of a blank turn.
+    {
+        let seen: std::collections::HashSet<String> = items.iter().map(|i| i.id.clone()).collect();
+        for buffered in buffered_items(service_key, thread_id) {
+            if !seen.contains(&buffered.id) {
+                items.push(buffered);
             }
         }
     }
