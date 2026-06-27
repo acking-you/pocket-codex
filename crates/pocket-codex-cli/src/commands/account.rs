@@ -17,7 +17,7 @@ use pocket_codex_account_proto::http::{
 use pocket_codex_broker_client::{BrokerError, BrokerStream, Connector, TokenProvider};
 use pocket_codex_core::{
     config::{Config, Mode},
-    service::default_device_id,
+    service::{default_device_id, sanitize_component, ServiceKind, DEFAULT_SERVICE_NAME},
 };
 use tokio::net::TcpStream;
 
@@ -206,6 +206,47 @@ pub(crate) async fn fetch_services(config: &mut Config, base: &str) -> Result<Ve
         .await
         .context("parsing /v1/services")?;
     Ok(body.services)
+}
+
+/// Resolve the target `(device, name)` for a `kind` in account mode: an explicit
+/// `--device` wins; otherwise discover the account's services of that kind and
+/// auto-pick a single one, asking to disambiguate when there is more than one.
+pub(crate) async fn resolve_target(
+    config: &mut Config,
+    backend: &str,
+    kind: ServiceKind,
+    device: Option<&str>,
+    name: Option<&str>,
+) -> Result<(String, String)> {
+    if let Some(device) = device {
+        let name = name
+            .map(sanitize_component)
+            .unwrap_or_else(|| DEFAULT_SERVICE_NAME.to_string());
+        return Ok((sanitize_component(device), name));
+    }
+    let mut matches: Vec<_> = fetch_services(config, backend)
+        .await?
+        .into_iter()
+        .filter(|s| s.kind == kind)
+        .collect();
+    let label = kind.as_key_segment();
+    match matches.len() {
+        0 => bail!("no {label} services in your account; run the matching serve on the host first"),
+        1 => {
+            let m = matches.remove(0);
+            Ok((m.device, m.name))
+        }
+        _ => {
+            let names: Vec<String> = matches
+                .iter()
+                .map(|s| format!("{}/{}", s.device, s.name))
+                .collect();
+            bail!(
+                "multiple {label} services; pick one with --device <device> [--name <name>]: {}",
+                names.join(", ")
+            )
+        }
+    }
 }
 
 /// Return a currently-valid session token, refreshing it when it is missing,

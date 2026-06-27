@@ -36,11 +36,11 @@
 
 use std::{sync::Arc, time::Duration};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use pocket_codex_broker_client::{run_subscribe, Connector, SubscribeConfig, TokenProvider};
 use pocket_codex_core::{
     config::Config,
-    service::{sanitize_component, ServiceKind, DEFAULT_SERVICE_NAME},
+    service::ServiceKind,
     state::{PbRole, RuntimeState},
 };
 use tokio::net::TcpListener;
@@ -104,9 +104,14 @@ async fn connect_self_host(args: ConnectArgs, config: &Config, relay: String) ->
 /// backend broker, exposing it on a local listener. Runs in the foreground.
 async fn connect_account(args: ConnectArgs, backend: String) -> Result<()> {
     let mut config = Config::load()?;
-    let (device, name) =
-        resolve_account_target(&mut config, &backend, args.device.as_deref(), args.name.as_deref())
-            .await?;
+    let (device, name) = account::resolve_target(
+        &mut config,
+        &backend,
+        ServiceKind::App,
+        args.device.as_deref(),
+        args.name.as_deref(),
+    )
+    .await?;
 
     let (host, port) = account::broker_endpoint(&backend)?;
     let connector: Arc<dyn Connector> = Arc::new(account::BrokerTlsConnector::new(host, port)?);
@@ -138,44 +143,6 @@ async fn connect_account(args: ConnectArgs, backend: String) -> Result<()> {
     Ok(())
 }
 
-/// Resolve the target `(device, name)` in account mode: an explicit `--device`
-/// wins; otherwise discover the account's app services and auto-pick a single
-/// one, asking the user to disambiguate when there is more than one.
-async fn resolve_account_target(
-    config: &mut Config,
-    backend: &str,
-    device: Option<&str>,
-    name: Option<&str>,
-) -> Result<(String, String)> {
-    if let Some(device) = device {
-        let name = name
-            .map(sanitize_component)
-            .unwrap_or_else(|| DEFAULT_SERVICE_NAME.to_string());
-        return Ok((sanitize_component(device), name));
-    }
-    let mut apps: Vec<_> = account::fetch_services(config, backend)
-        .await?
-        .into_iter()
-        .filter(|s| s.kind == ServiceKind::App)
-        .collect();
-    match apps.len() {
-        0 => bail!("no app services in your account; run `pocket-codex serve` on the host first"),
-        1 => {
-            let app = apps.remove(0);
-            Ok((app.device, app.name))
-        }
-        _ => {
-            let names: Vec<String> = apps
-                .iter()
-                .map(|s| format!("{}/{}", s.device, s.name))
-                .collect();
-            bail!(
-                "multiple app services; pick one with --device <device> [--name <name>]: {}",
-                names.join(", ")
-            )
-        }
-    }
-}
 
 fn print_connect_summary(outcome: &EnsureOutcome) {
     let session = outcome.render("pb subscribe");
