@@ -37,4 +37,7 @@ pub mod liveness;
 /// implement force takeover of a held-open session.
 pub mod takeover;
 
-pub use process::{spawn, status, stop, ListenSpec, SpawnOptions, StatusReport, StopOutcome};
+pub use process::{
+    locate_binary, spawn, status, stop, ListenSpec, SpawnOptions, SpawnReport, StatusReport,
+    StopOutcome,
+};

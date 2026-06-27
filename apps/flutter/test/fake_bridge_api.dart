@@ -8,7 +8,7 @@ class FakeBridgeApi implements BridgeApi {
   /// Creates a fake seeded with an optional [config] and [services].
   FakeBridgeApi({ConfigInfo? config, List<ServiceEntry>? services})
     : _config = config ?? const ConfigInfo(relay: null, hasKey: false),
-      _services = services ?? const [];
+      _services = List.of(services ?? const []);
 
   ConfigInfo _config;
   final List<ServiceEntry> _services;
@@ -130,6 +130,124 @@ class FakeBridgeApi implements BridgeApi {
 
   @override
   Future<List<AccountService>> accountServices() async => accountServiceList;
+
+  /// Records the last [accountDeregisterService] call for assertions.
+  String? lastDeregistered;
+
+  @override
+  Future<void> accountDeregisterService({
+    required String device,
+    required String kind,
+    required String name,
+  }) async {
+    lastDeregistered = 'pcx:$device:$kind:$name';
+    _services.removeWhere(
+      (s) => s.device == device && s.kind == kind && s.name == name,
+    );
+  }
+
+  // --- Local hosting ---
+
+  /// Live local hosts, keyed by name (mirrors the bridge's per-name map).
+  final List<AppServeStatus> serveHosts = [];
+
+  /// Records the last [appServeStart] args for assertions.
+  int? lastServePort;
+  String? lastServeBinary, lastServeName, lastServeProxy;
+
+  /// Path returned by [codexLocate] (set null to simulate "codex not found").
+  String? codexPath = '/usr/local/bin/codex';
+
+  @override
+  Future<AppServeResult> appServeStart({
+    required int port,
+    String? binaryOverride,
+    String? name,
+    String? proxy,
+  }) async {
+    lastServePort = port;
+    lastServeBinary = binaryOverride;
+    lastServeName = name;
+    lastServeProxy = proxy;
+    final n = name ?? 'default';
+    const device = 'local';
+    final appKey = 'pcx:$device:app:$n';
+    final apiKey = 'pcx:$device:api:$n';
+    serveHosts
+      ..removeWhere((h) => h.name == n)
+      ..add(
+        AppServeStatus(
+          name: n,
+          device: device,
+          pid: 4242,
+          alive: true,
+          appListenAddr: '127.0.0.1:$port',
+          appServiceKey: appKey,
+          appRegistered: true,
+          apiListenAddr: '127.0.0.1:18080',
+          apiServiceKey: apiKey,
+          apiRegistered: true,
+        ),
+      );
+    return AppServeResult(
+      device: device,
+      name: n,
+      appServiceKey: appKey,
+      appListenAddr: '127.0.0.1:$port',
+      apiServiceKey: apiKey,
+      apiListenAddr: '127.0.0.1:18080',
+      pid: 4242,
+      reused: false,
+    );
+  }
+
+  AppServeStatus _withTunnel(AppServeStatus h, String kind, bool registered) =>
+      AppServeStatus(
+        name: h.name,
+        device: h.device,
+        pid: h.pid,
+        alive: h.alive,
+        appListenAddr: h.appListenAddr,
+        appServiceKey: h.appServiceKey,
+        appRegistered: kind == 'app' ? registered : h.appRegistered,
+        apiListenAddr: h.apiListenAddr,
+        apiServiceKey: h.apiServiceKey,
+        apiRegistered: kind == 'api' ? registered : h.apiRegistered,
+      );
+
+  @override
+  Future<List<AppServeStatus>> appServeStatus() async =>
+      List.unmodifiable(serveHosts);
+
+  @override
+  Future<void> appServeDeregister({
+    required String name,
+    required String kind,
+  }) async {
+    final i = serveHosts.indexWhere((h) => h.name == name);
+    if (i < 0) return;
+    serveHosts[i] = _withTunnel(serveHosts[i], kind, false);
+  }
+
+  @override
+  Future<void> appServeReregister({
+    required String name,
+    required String kind,
+  }) async {
+    final i = serveHosts.indexWhere((h) => h.name == name);
+    if (i < 0) return;
+    serveHosts[i] = _withTunnel(serveHosts[i], kind, true);
+  }
+
+  @override
+  Future<void> appServeStop(String name) async =>
+      serveHosts.removeWhere((h) => h.name == name);
+
+  @override
+  Future<void> appServeStopAll() async => serveHosts.clear();
+
+  @override
+  Future<String?> codexLocate() async => codexPath;
 
   // --- App-server remote control ---
 

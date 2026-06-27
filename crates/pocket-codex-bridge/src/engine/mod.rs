@@ -5,4 +5,5 @@ pub mod app_session;
 pub mod config;
 pub mod discovery;
 pub mod runtime;
+pub mod serve;
 pub mod sessions;

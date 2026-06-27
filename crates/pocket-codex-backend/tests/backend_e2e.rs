@@ -124,9 +124,16 @@ async fn backend_http_and_broker_end_to_end() {
         })
         .expect("auth"),
     );
+    // Broker, shared into the HTTP AppState so DELETE /v1/services can drop keys.
+    let broker = BrokerServer::new(
+        Arc::new(AuthVerifier(auth.clone())),
+        relay_addr_s.clone(),
+        Duration::from_secs(60),
+    );
     let app = router(AppState {
         auth: auth.clone(),
         relay_addr: relay_sock,
+        broker: broker.clone(),
     });
     let http_listener = TcpListener::bind("127.0.0.1:0").await.expect("http bind");
     let http_addr = http_listener.local_addr().expect("http addr");
@@ -134,12 +141,6 @@ async fn backend_http_and_broker_end_to_end() {
         let _ = axum::serve(http_listener, app.into_make_service()).await;
     });
 
-    // Broker.
-    let broker = BrokerServer::new(
-        Arc::new(AuthVerifier(auth.clone())),
-        relay_addr_s.clone(),
-        Duration::from_secs(60),
-    );
     let broker_listener = TcpListener::bind("127.0.0.1:0").await.expect("broker bind");
     let broker_addr = broker_listener.local_addr().expect("broker addr");
     {

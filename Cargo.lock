@@ -1908,6 +1908,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "pocket-codex-api-proxy"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "axum",
+ "base64",
+ "bytes",
+ "futures",
+ "http",
+ "reqwest",
+ "rustls",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-socks",
+ "tokio-tungstenite",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "pocket-codex-auth"
 version = "0.0.1"
 dependencies = [
@@ -1998,17 +2019,14 @@ version = "0.0.1"
 dependencies = [
  "anyhow",
  "async-trait",
- "axum",
  "base64",
- "bytes",
  "chrono",
  "clap",
  "comfy-table",
  "crossterm",
- "futures",
- "http",
  "owo-colors",
  "pocket-codex-account-proto",
+ "pocket-codex-api-proxy",
  "pocket-codex-broker-client",
  "pocket-codex-codex",
  "pocket-codex-core",
@@ -2020,8 +2038,6 @@ dependencies = [
  "serde_json",
  "tokio",
  "tokio-rustls",
- "tokio-socks",
- "tokio-tungstenite",
  "tracing",
  "tracing-subscriber",
  "url",
@@ -2103,6 +2119,7 @@ dependencies = [
  "flutter_rust_bridge",
  "once_cell",
  "pocket-codex-account-proto",
+ "pocket-codex-api-proxy",
  "pocket-codex-broker-client",
  "pocket-codex-codex",
  "pocket-codex-core",
@@ -2114,6 +2131,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "toml",
+ "tracing",
  "webpki-roots 0.26.11",
 ]
 

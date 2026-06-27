@@ -63,6 +63,21 @@ fn resolve_listener_pid(host: &str, port: u16, listen_url: &str, spawn_pid: u32)
     }
 }
 
+/// Resolve the `codex` binary: the `explicit` path if it exists, otherwise
+/// `codex` on `$PATH`. Returns `None` when neither resolves, so a caller (e.g.
+/// the UI) can prompt the user to point at a binary before spawning. This is
+/// the same resolution [`spawn`] performs internally, exposed so the path can
+/// be shown / validated without starting a process.
+pub fn locate_binary(explicit: Option<&str>) -> Option<PathBuf> {
+    match explicit.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(path) => {
+            let p = PathBuf::from(path);
+            p.exists().then_some(p)
+        },
+        None => which::which("codex").ok(),
+    }
+}
+
 /// `codex app-server`'s `--listen` URL choices we explicitly support.
 #[derive(Debug, Clone)]
 pub enum ListenSpec {
@@ -446,6 +461,18 @@ mod tests {
             .get_envs()
             .map(|(k, v)| (k.to_owned(), v.map(ToOwned::to_owned)))
             .collect()
+    }
+
+    #[test]
+    fn locate_binary_prefers_an_existing_explicit_path() {
+        // An explicit path that exists is used verbatim (here, the test binary).
+        let exe = std::env::current_exe().expect("current exe");
+        assert_eq!(locate_binary(Some(exe.to_str().expect("utf8 path"))), Some(exe.clone()));
+        // A missing explicit path resolves to nothing, so the UI can prompt.
+        assert_eq!(locate_binary(Some("/definitely/not/here/codex-xyz")), None);
+        // A blank override is treated as "not given" → PATH lookup (which may or
+        // may not find codex on the test host); assert only that it doesn't panic.
+        let _ = locate_binary(Some("   "));
     }
 
     #[test]

@@ -4,10 +4,10 @@
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use axum::{
-    extract::State,
+    extract::{Path, State},
     http::{header::AUTHORIZATION, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{delete, get, post},
     Json, Router,
 };
 use pocket_codex_account_proto::{
@@ -18,6 +18,8 @@ use pocket_codex_account_proto::{
     key::NamespacedServiceId,
 };
 use pocket_codex_auth::{Auth, AuthError, Claims};
+use pocket_codex_broker_server::BrokerServer;
+use pocket_codex_core::service::{ServiceId, ServiceKind};
 use tower_http::{limit::RequestBodyLimitLayer, timeout::TimeoutLayer, trace::TraceLayer};
 
 /// Shared state for the HTTP handlers.
@@ -27,6 +29,8 @@ pub struct AppState {
     pub auth: Arc<Auth>,
     /// Loopback relay address, queried for the account's service listing.
     pub relay_addr: SocketAddr,
+    /// The broker, used to force-deregister a caller's relay key on demand.
+    pub broker: BrokerServer,
 }
 
 /// Build the HTTP API router.
@@ -39,6 +43,7 @@ pub fn router(state: AppState) -> Router {
         .route("/auth/logout", post(logout))
         .route("/v1/me", get(me))
         .route("/v1/services", get(services))
+        .route("/v1/services/{device}/{kind}/{name}", delete(deregister_service))
         // Bound every request so a slow upstream (GitHub) can't pin connections
         // on the unauthenticated /auth/* surface indefinitely.
         .layer(TimeoutLayer::with_status_code(
@@ -53,6 +58,7 @@ pub fn router(state: AppState) -> Router {
 /// API error mapped to an HTTP status + JSON `{ "error": … }`.
 enum ApiError {
     Unauthorized,
+    BadRequest(&'static str),
     Internal(String),
 }
 
@@ -62,6 +68,7 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let (status, message) = match self {
             ApiError::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized"),
+            ApiError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
             ApiError::Internal(detail) => {
                 // Log the detail server-side but never leak raw upstream/store/JWT
                 // error strings (which fingerprint the backend) to the client.
@@ -181,4 +188,23 @@ async fn services(
     Ok(Json(ServicesResponse {
         services,
     }))
+}
+
+/// Force-deregister one of the caller's own services from the relay. The relay
+/// key is derived server-side from the verified user id, so a caller can only
+/// ever drop keys in their own `pcxu:<user>:` namespace. Best-effort: a client
+/// still hosting the service will reconnect and re-register shortly after.
+async fn deregister_service(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((device, kind, name)): Path<(String, String, String)>,
+) -> ApiResult<StatusCode> {
+    let claims = authed(&state, &headers)?;
+    let kind: ServiceKind = kind
+        .parse()
+        .map_err(|_| ApiError::BadRequest("invalid service kind"))?;
+    let relay_key =
+        NamespacedServiceId::new(&claims.sub, ServiceId::new(&device, kind, &name)).key();
+    state.broker.deregister_key(&relay_key).await;
+    Ok(StatusCode::NO_CONTENT)
 }

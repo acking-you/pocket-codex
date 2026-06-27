@@ -20,7 +20,7 @@ use pocket_codex_account_proto::http::{
     DeviceStartResponse, LogoutRequest, MeResponse, RefreshRequest, RefreshResponse, ServiceEntry,
 };
 use pocket_codex_broker_client::{BrokerError, BrokerStream, Connector, TokenProvider};
-use pocket_codex_core::config::Config;
+use pocket_codex_core::{config::Config, service::sanitize_component};
 use tokio::net::TcpStream;
 
 use crate::engine::config::{load_config, save_config};
@@ -237,6 +237,35 @@ pub async fn services(support_dir: &Path) -> Result<Vec<ServiceEntry>> {
         .await
         .context("parsing /v1/services")?;
     Ok(body.services)
+}
+
+/// Deregister one of the account's services from the relay (best-effort).
+/// `kind` is `"app"` or `"api"`. The backend derives the relay key from the
+/// verified token, so this can only ever drop the caller's own keys; a client
+/// still hosting the service will reconnect and re-register shortly after.
+pub async fn deregister_service(
+    support_dir: &Path,
+    device: &str,
+    kind: &str,
+    name: &str,
+) -> Result<()> {
+    let mut config = load_config(support_dir)?;
+    let backend = backend_base(&config);
+    let token = valid_token(support_dir, &mut config, &backend).await?;
+    // Sanitize the user-chosen segments to the exact key the backend derives, so
+    // a name with `/`, `#`, or `?` can't break the URL path / target a wrong key
+    // (the relay key was registered through the same sanitizer).
+    let device = sanitize_component(device);
+    let name = sanitize_component(name);
+    reqwest::Client::new()
+        .delete(format!("{backend}/v1/services/{device}/{kind}/{name}"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .context("calling DELETE /v1/services")?
+        .error_for_status()
+        .context("/v1/services deregister failed")?;
+    Ok(())
 }
 
 /// Return a currently-valid token, refreshing when missing/near-expiry.
