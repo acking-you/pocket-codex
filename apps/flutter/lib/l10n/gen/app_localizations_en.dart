@@ -43,6 +43,46 @@ class AppLocalizationsEn extends AppLocalizations {
   String get keyLengthError => 'MSG_HEADER_KEY must be exactly 32 bytes';
 
   @override
+  String get accountSignInTitle => 'Sign in';
+
+  @override
+  String get accountSignInButton => 'Sign in with GitHub';
+
+  @override
+  String get accountEnterCode =>
+      'Enter this code on GitHub to finish signing in:';
+
+  @override
+  String get accountCopyCode => 'Copy code';
+
+  @override
+  String get accountOpenGitHub => 'Open GitHub';
+
+  @override
+  String get accountWaiting => 'Waiting for you to authorize on GitHub…';
+
+  @override
+  String get accountCodeExpired => 'The code expired. Please try again.';
+
+  @override
+  String get accountDenied => 'Sign-in was denied on GitHub.';
+
+  @override
+  String get accountAdvancedSelfHost => 'Use a self-hosted relay instead';
+
+  @override
+  String get accountAdvanced => 'Advanced / self-hosted';
+
+  @override
+  String get accountBackendHint => 'Backend URL (blank = default)';
+
+  @override
+  String get accountSection => 'Account';
+
+  @override
+  String get accountSignOut => 'Sign out';
+
+  @override
   String get apiServicesSection => 'API services';
 
   @override

@@ -43,6 +43,45 @@ class AppLocalizationsZh extends AppLocalizations {
   String get keyLengthError => 'MSG_HEADER_KEY 必须是 32 字节';
 
   @override
+  String get accountSignInTitle => '登录';
+
+  @override
+  String get accountSignInButton => '使用 GitHub 登录';
+
+  @override
+  String get accountEnterCode => '在 GitHub 上输入此代码以完成登录:';
+
+  @override
+  String get accountCopyCode => '复制代码';
+
+  @override
+  String get accountOpenGitHub => '打开 GitHub';
+
+  @override
+  String get accountWaiting => '等待你在 GitHub 上授权…';
+
+  @override
+  String get accountCodeExpired => '代码已过期,请重试。';
+
+  @override
+  String get accountDenied => 'GitHub 登录被拒绝。';
+
+  @override
+  String get accountAdvancedSelfHost => '改用自建 relay';
+
+  @override
+  String get accountAdvanced => '高级 / 自部署';
+
+  @override
+  String get accountBackendHint => '后端地址(留空用默认)';
+
+  @override
+  String get accountSection => '账户';
+
+  @override
+  String get accountSignOut => '退出登录';
+
+  @override
   String get apiServicesSection => 'API 服务';
 
   @override

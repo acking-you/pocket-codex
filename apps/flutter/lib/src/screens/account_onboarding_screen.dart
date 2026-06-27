@@ -27,10 +27,13 @@ class _AccountOnboardingState extends ConsumerState<AccountOnboardingScreen> {
   String? _error;
   bool _busy = false;
   bool _polling = false;
+  bool _advanced = false;
+  final _backend = TextEditingController();
 
   @override
   void dispose() {
     _polling = false; // stop the poll loop if the screen goes away
+    _backend.dispose();
     super.dispose();
   }
 
@@ -41,7 +44,12 @@ class _AccountOnboardingState extends ConsumerState<AccountOnboardingScreen> {
     });
     final api = ref.read(bridgeApiProvider);
     try {
-      final device = await api.accountLoginStart();
+      // Blank backend → the built-in default (lb7666.top); a self-deployed
+      // backend can be entered under "Advanced".
+      final override = _backend.text.trim();
+      final device = await api.accountLoginStart(
+        backend: override.isEmpty ? null : override,
+      );
       if (!mounted) return;
       setState(() {
         _device = device;
@@ -188,10 +196,30 @@ class _AccountOnboardingState extends ConsumerState<AccountOnboardingScreen> {
                   ),
                 ],
                 const SizedBox(height: 24),
-                TextButton(
-                  onPressed: () => context.go('/onboarding/self-host'),
-                  child: Text(l10n.accountAdvancedSelfHost),
-                ),
+                // Unobtrusive escape hatch: a self-deployed backend URL or the
+                // legacy self-hosted relay. Hidden behind one quiet toggle so
+                // the default is simply "Sign in with GitHub".
+                if (!_advanced)
+                  TextButton(
+                    onPressed: () => setState(() => _advanced = true),
+                    child: Text(l10n.accountAdvanced),
+                  )
+                else ...[
+                  TextField(
+                    controller: _backend,
+                    enabled: device == null,
+                    keyboardType: TextInputType.url,
+                    autocorrect: false,
+                    decoration: InputDecoration(
+                      labelText: l10n.accountBackendHint,
+                      isDense: true,
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () => context.go('/onboarding/self-host'),
+                    child: Text(l10n.accountAdvancedSelfHost),
+                  ),
+                ],
               ],
             ),
           ),
