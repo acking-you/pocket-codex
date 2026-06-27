@@ -311,6 +311,16 @@ fn buffered_items(service_key: &str, thread_id: &str) -> Vec<ThreadItem> {
 /// backend unreachable.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// How long the API probe waits for its HTTP response to come back. The full
+/// round-trip is local-listener → broker → relay → the api proxy's *register*
+/// side → the proxy → all the way back, plus the cold transient tunnel's TLS
+/// handshakes. For a proxy hosted on a remote server that easily exceeds
+/// [`PROBE_TIMEOUT`], which made a perfectly reachable API service read as
+/// "unreachable" until you actually subscribed. Give the read a generous
+/// budget; a genuinely dead (hollow) registration still fails fast on
+/// connection reset.
+const API_PROBE_READ_TIMEOUT: Duration = Duration::from_secs(15);
+
 /// How long [`connect`] waits for the tunnel + `initialize` handshake before
 /// failing, so opening a registered-but-dead app-server errors fast instead of
 /// hanging the UI on "connecting".
@@ -434,7 +444,7 @@ fn probe_http_endpoint(local_addr: &str) -> bool {
         }
         let mut buf = [0u8; 16];
         matches!(
-            tokio::time::timeout(PROBE_TIMEOUT, stream.read(&mut buf)).await,
+            tokio::time::timeout(API_PROBE_READ_TIMEOUT, stream.read(&mut buf)).await,
             Ok(Ok(n)) if n > 0
         )
     })

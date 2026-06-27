@@ -8,7 +8,7 @@ use flutter_rust_bridge::frb;
 use pocket_codex_core::config::Mode;
 
 use crate::{
-    engine::{account, app_session, config, discovery, runtime, sessions},
+    engine::{account, app_session, config, discovery, runtime, serve, sessions},
     frb_generated::StreamSink,
 };
 
@@ -211,6 +211,132 @@ pub fn subscriptions() -> Vec<SubStatusDto> {
             alive: s.alive,
         })
         .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Local hosting (desktop): run + manage a local codex app-server, the in-app
+// equivalent of `pocket-codex serve` (account mode).
+// ---------------------------------------------------------------------------
+
+/// Result of starting local hosting, mirrored for Dart. One host publishes two
+/// tunnels (`app:<name>` remote control + `api:<name>` Responses proxy).
+pub struct AppServeDto {
+    /// Device id both services registered under.
+    pub device: String,
+    /// Service instance name (shared by the app + api tunnels).
+    pub name: String,
+    /// `pcx:<device>:app:<name>` key (what discovery + `app_connect` use).
+    pub app_service_key: String,
+    /// Loopback `host:port` codex is listening on.
+    pub app_listen_addr: String,
+    /// `pcx:<device>:api:<name>` key (what an `api connect` resolves).
+    pub api_service_key: String,
+    /// Loopback `host:port` the in-app Responses API proxy is listening on.
+    pub api_listen_addr: String,
+    /// The codex process id.
+    pub pid: u32,
+    /// Whether an already-running host was reused instead of freshly spawned.
+    pub reused: bool,
+}
+
+/// Status of one local host, mirrored for Dart. Each host carries both tunnels'
+/// publish state so the UI can offer per-tunnel 注销 / 重新注册.
+pub struct AppServeStatusDto {
+    /// Service instance name.
+    pub name: String,
+    /// Device id.
+    pub device: String,
+    /// codex process id.
+    pub pid: Option<u32>,
+    /// codex is accepting on its listen port.
+    pub alive: bool,
+    /// Loopback `host:port` codex listens on.
+    pub app_listen_addr: String,
+    /// `pcx:<device>:app:<name>` key.
+    pub app_service_key: String,
+    /// The app tunnel is currently published.
+    pub app_registered: bool,
+    /// Loopback `host:port` the API proxy listens on.
+    pub api_listen_addr: String,
+    /// `pcx:<device>:api:<name>` key.
+    pub api_service_key: String,
+    /// The api tunnel is currently published.
+    pub api_registered: bool,
+}
+
+/// Start hosting a local codex app-server **and** Responses API proxy under the
+/// signed-in account, publishing both `app:<name>` and `api:<name>`. Re-hosting
+/// a name whose codex is still alive just re-registers any dropped tunnels.
+/// `proxy` is the upstream proxy both use to reach chatgpt.com (`None` =
+/// inherit env). Desktop only.
+pub fn app_serve_start(
+    port: u16,
+    binary_override: Option<String>,
+    name: Option<String>,
+    proxy: Option<String>,
+) -> Result<AppServeDto> {
+    let r = serve::serve_start(port, binary_override, name, proxy)?;
+    Ok(AppServeDto {
+        device: r.device,
+        name: r.name,
+        app_service_key: r.app_service_key,
+        app_listen_addr: r.app_listen_addr,
+        api_service_key: r.api_service_key,
+        api_listen_addr: r.api_listen_addr,
+        pid: r.pid,
+        reused: r.reused,
+    })
+}
+
+/// Snapshot of every local host (for the status cards + periodic re-probe).
+pub fn app_serve_status() -> Vec<AppServeStatusDto> {
+    serve::serve_status()
+        .into_iter()
+        .map(|s| AppServeStatusDto {
+            name: s.name,
+            device: s.device,
+            pid: s.pid,
+            alive: s.alive,
+            app_listen_addr: s.app_listen_addr,
+            app_service_key: s.app_service_key,
+            app_registered: s.app_registered,
+            api_listen_addr: s.api_listen_addr,
+            api_service_key: s.api_service_key,
+            api_registered: s.api_registered,
+        })
+        .collect()
+}
+
+/// Take one tunnel (`kind` = `"app"`/`"api"`) of a local host off the relay
+/// without stopping the host — a reversible unpublish. The codex / API proxy
+/// keep running; [`app_serve_reregister`] re-publishes it instantly.
+pub fn app_serve_deregister(name: String, kind: String) -> Result<()> {
+    serve::serve_deregister(&name, &kind)
+}
+
+/// Re-publish a previously deregistered tunnel (`kind` = `"app"`/`"api"`) of a
+/// still-running local host.
+pub fn app_serve_reregister(name: String, kind: String) -> Result<()> {
+    serve::serve_reregister(&name, &kind)
+}
+
+/// Fully stop one local host by name (both tunnels + watchdog + API proxy, and
+/// stops codex).
+pub fn app_serve_stop(name: String) -> Result<()> {
+    serve::serve_stop(&name)
+}
+
+/// Stop every local host (called on app quit so a real quit leaves no orphan
+/// codex). A no-op when nothing is hosting.
+pub fn app_serve_stop_all() -> Result<()> {
+    serve::serve_stop_all();
+    Ok(())
+}
+
+/// The resolved `codex` binary path (persisted config → `$PATH`), or `None` so
+/// the UI can prompt the user to point at one.
+pub fn codex_locate() -> Option<String> {
+    serve::codex_locate()
 }
 
 // ---------------------------------------------------------------------------
@@ -833,4 +959,12 @@ pub fn account_services() -> Result<Vec<AccountServiceDto>> {
             name: s.name,
         })
         .collect())
+}
+
+/// Deregister one of the account's services from the relay (best-effort; a
+/// still-running host re-registers shortly after). `kind` is `"app"` or
+/// `"api"`.
+pub fn account_deregister_service(device: String, kind: String, name: String) -> Result<()> {
+    let dir = runtime::support_dir()?;
+    runtime::runtime().block_on(account::deregister_service(&dir, &device, &kind, &name))
 }

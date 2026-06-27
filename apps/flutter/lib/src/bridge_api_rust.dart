@@ -61,6 +61,80 @@ class RustBridgeApi implements BridgeApi {
   }
 
   @override
+  Future<void> accountDeregisterService({
+    required String device,
+    required String kind,
+    required String name,
+  }) => frb.accountDeregisterService(device: device, kind: kind, name: name);
+
+  @override
+  Future<AppServeResult> appServeStart({
+    required int port,
+    String? binaryOverride,
+    String? name,
+    String? proxy,
+  }) async {
+    final r = await frb.appServeStart(
+      port: port,
+      binaryOverride: binaryOverride,
+      name: name,
+      proxy: proxy,
+    );
+    return AppServeResult(
+      device: r.device,
+      name: r.name,
+      appServiceKey: r.appServiceKey,
+      appListenAddr: r.appListenAddr,
+      apiServiceKey: r.apiServiceKey,
+      apiListenAddr: r.apiListenAddr,
+      pid: r.pid,
+      reused: r.reused,
+    );
+  }
+
+  @override
+  Future<List<AppServeStatus>> appServeStatus() async {
+    final list = await frb.appServeStatus();
+    return list
+        .map(
+          (s) => AppServeStatus(
+            name: s.name,
+            device: s.device,
+            pid: s.pid,
+            alive: s.alive,
+            appListenAddr: s.appListenAddr,
+            appServiceKey: s.appServiceKey,
+            appRegistered: s.appRegistered,
+            apiListenAddr: s.apiListenAddr,
+            apiServiceKey: s.apiServiceKey,
+            apiRegistered: s.apiRegistered,
+          ),
+        )
+        .toList();
+  }
+
+  @override
+  Future<void> appServeDeregister({
+    required String name,
+    required String kind,
+  }) => frb.appServeDeregister(name: name, kind: kind);
+
+  @override
+  Future<void> appServeReregister({
+    required String name,
+    required String kind,
+  }) => frb.appServeReregister(name: name, kind: kind);
+
+  @override
+  Future<void> appServeStop(String name) => frb.appServeStop(name: name);
+
+  @override
+  Future<void> appServeStopAll() => frb.appServeStopAll();
+
+  @override
+  Future<String?> codexLocate() => frb.codexLocate();
+
+  @override
   Future<void> setRelay(String relay) => frb.setRelay(relay: relay);
 
   @override

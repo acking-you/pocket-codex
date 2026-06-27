@@ -654,4 +654,121 @@ class AppLocalizationsEn extends AppLocalizations {
   String holderRow(String name, int pid) {
     return '$name · PID $pid';
   }
+
+  @override
+  String get localHostingSection => 'Local hosting';
+
+  @override
+  String get localHostTitle => 'Local codex';
+
+  @override
+  String get localHostStopped => 'Stopped';
+
+  @override
+  String get localHostRunning => 'Hosting';
+
+  @override
+  String get localHostStarting => 'Starting…';
+
+  @override
+  String get startHosting => 'Start hosting';
+
+  @override
+  String get stopHosting => 'Stop hosting';
+
+  @override
+  String get localHostPort => 'Port';
+
+  @override
+  String get localHostName => 'Instance name';
+
+  @override
+  String get codexBinaryPath => 'codex binary path';
+
+  @override
+  String get codexNotFound =>
+      'codex wasn\'t found on PATH — enter its full path below.';
+
+  @override
+  String get localHostDialogTitle => 'Host a local app-server';
+
+  @override
+  String get localHostHint =>
+      'Runs codex on this machine and registers it to your account, so your other devices can drive it.';
+
+  @override
+  String localHostListening(String addr) {
+    return 'Listening on $addr';
+  }
+
+  @override
+  String localHostStartError(String error) {
+    return 'Couldn\'t start hosting: $error';
+  }
+
+  @override
+  String codexFoundAt(String path) {
+    return 'codex found: $path';
+  }
+
+  @override
+  String get chooseCodexPath => 'Choose codex binary…';
+
+  @override
+  String get codexPathRequired => 'Choose the codex binary to continue.';
+
+  @override
+  String get useProxy => 'Use a proxy';
+
+  @override
+  String get proxyLabel => 'Proxy';
+
+  @override
+  String get proxyRequired => 'Enter a proxy, or turn off “Use a proxy”.';
+
+  @override
+  String get noProxyWarning =>
+      'Without a proxy, codex on this machine may fail to reach chatgpt.com.';
+
+  @override
+  String get addLocalHost => 'Host another…';
+
+  @override
+  String get customizeCodexPath => 'Change path';
+
+  @override
+  String appServerSubtitleLocal(String device) {
+    return '$device · hosted here';
+  }
+
+  @override
+  String get deregister => 'Deregister';
+
+  @override
+  String get reregister => 'Re-register';
+
+  @override
+  String get deregisterTitle => 'Deregister this service?';
+
+  @override
+  String deregisterWarning(String name) {
+    return 'Remove “$name” from your account\'s relay listing. If a host is still running it, it will re-register within seconds — stop that host to remove it for good.';
+  }
+
+  @override
+  String deregisterLocalWarning(String name) {
+    return 'Take “$name” off the relay. codex and the API proxy keep running — re-register it from the Local hosting card anytime.';
+  }
+
+  @override
+  String get deregisterFailed => 'Couldn\'t deregister the service';
+
+  @override
+  String get tunnelAppLabel => 'App-server';
+
+  @override
+  String get tunnelApiLabel => 'API';
+
+  @override
+  String get tunnelOffline => 'Offline';
 }

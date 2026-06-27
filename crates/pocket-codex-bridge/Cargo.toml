@@ -35,6 +35,7 @@ pocket-codex-codex = { workspace = true }
 pocket-codex-pb = { workspace = true }
 pocket-codex-account-proto = { workspace = true }
 pocket-codex-broker-client = { workspace = true }
+pocket-codex-api-proxy = { workspace = true }
 tokio = { workspace = true }
 anyhow = { workspace = true }
 serde = { workspace = true }
@@ -47,3 +48,4 @@ rustls = { workspace = true }
 tokio-rustls = { workspace = true }
 webpki-roots = "0.26"
 once_cell = { workspace = true }
+tracing = { workspace = true }

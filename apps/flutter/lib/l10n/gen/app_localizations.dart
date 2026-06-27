@@ -1309,6 +1309,210 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'{name} · PID {pid}'**
   String holderRow(String name, int pid);
+
+  /// No description provided for @localHostingSection.
+  ///
+  /// In en, this message translates to:
+  /// **'Local hosting'**
+  String get localHostingSection;
+
+  /// No description provided for @localHostTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Local codex'**
+  String get localHostTitle;
+
+  /// No description provided for @localHostStopped.
+  ///
+  /// In en, this message translates to:
+  /// **'Stopped'**
+  String get localHostStopped;
+
+  /// No description provided for @localHostRunning.
+  ///
+  /// In en, this message translates to:
+  /// **'Hosting'**
+  String get localHostRunning;
+
+  /// No description provided for @localHostStarting.
+  ///
+  /// In en, this message translates to:
+  /// **'Starting…'**
+  String get localHostStarting;
+
+  /// No description provided for @startHosting.
+  ///
+  /// In en, this message translates to:
+  /// **'Start hosting'**
+  String get startHosting;
+
+  /// No description provided for @stopHosting.
+  ///
+  /// In en, this message translates to:
+  /// **'Stop hosting'**
+  String get stopHosting;
+
+  /// No description provided for @localHostPort.
+  ///
+  /// In en, this message translates to:
+  /// **'Port'**
+  String get localHostPort;
+
+  /// No description provided for @localHostName.
+  ///
+  /// In en, this message translates to:
+  /// **'Instance name'**
+  String get localHostName;
+
+  /// No description provided for @codexBinaryPath.
+  ///
+  /// In en, this message translates to:
+  /// **'codex binary path'**
+  String get codexBinaryPath;
+
+  /// No description provided for @codexNotFound.
+  ///
+  /// In en, this message translates to:
+  /// **'codex wasn\'t found on PATH — enter its full path below.'**
+  String get codexNotFound;
+
+  /// No description provided for @localHostDialogTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Host a local app-server'**
+  String get localHostDialogTitle;
+
+  /// No description provided for @localHostHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Runs codex on this machine and registers it to your account, so your other devices can drive it.'**
+  String get localHostHint;
+
+  /// No description provided for @localHostListening.
+  ///
+  /// In en, this message translates to:
+  /// **'Listening on {addr}'**
+  String localHostListening(String addr);
+
+  /// No description provided for @localHostStartError.
+  ///
+  /// In en, this message translates to:
+  /// **'Couldn\'t start hosting: {error}'**
+  String localHostStartError(String error);
+
+  /// No description provided for @codexFoundAt.
+  ///
+  /// In en, this message translates to:
+  /// **'codex found: {path}'**
+  String codexFoundAt(String path);
+
+  /// No description provided for @chooseCodexPath.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose codex binary…'**
+  String get chooseCodexPath;
+
+  /// No description provided for @codexPathRequired.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose the codex binary to continue.'**
+  String get codexPathRequired;
+
+  /// No description provided for @useProxy.
+  ///
+  /// In en, this message translates to:
+  /// **'Use a proxy'**
+  String get useProxy;
+
+  /// No description provided for @proxyLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Proxy'**
+  String get proxyLabel;
+
+  /// No description provided for @proxyRequired.
+  ///
+  /// In en, this message translates to:
+  /// **'Enter a proxy, or turn off “Use a proxy”.'**
+  String get proxyRequired;
+
+  /// No description provided for @noProxyWarning.
+  ///
+  /// In en, this message translates to:
+  /// **'Without a proxy, codex on this machine may fail to reach chatgpt.com.'**
+  String get noProxyWarning;
+
+  /// No description provided for @addLocalHost.
+  ///
+  /// In en, this message translates to:
+  /// **'Host another…'**
+  String get addLocalHost;
+
+  /// No description provided for @customizeCodexPath.
+  ///
+  /// In en, this message translates to:
+  /// **'Change path'**
+  String get customizeCodexPath;
+
+  /// No description provided for @appServerSubtitleLocal.
+  ///
+  /// In en, this message translates to:
+  /// **'{device} · hosted here'**
+  String appServerSubtitleLocal(String device);
+
+  /// No description provided for @deregister.
+  ///
+  /// In en, this message translates to:
+  /// **'Deregister'**
+  String get deregister;
+
+  /// No description provided for @reregister.
+  ///
+  /// In en, this message translates to:
+  /// **'Re-register'**
+  String get reregister;
+
+  /// No description provided for @deregisterTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Deregister this service?'**
+  String get deregisterTitle;
+
+  /// No description provided for @deregisterWarning.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove “{name}” from your account\'s relay listing. If a host is still running it, it will re-register within seconds — stop that host to remove it for good.'**
+  String deregisterWarning(String name);
+
+  /// No description provided for @deregisterLocalWarning.
+  ///
+  /// In en, this message translates to:
+  /// **'Take “{name}” off the relay. codex and the API proxy keep running — re-register it from the Local hosting card anytime.'**
+  String deregisterLocalWarning(String name);
+
+  /// No description provided for @deregisterFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Couldn\'t deregister the service'**
+  String get deregisterFailed;
+
+  /// No description provided for @tunnelAppLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'App-server'**
+  String get tunnelAppLabel;
+
+  /// No description provided for @tunnelApiLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'API'**
+  String get tunnelApiLabel;
+
+  /// No description provided for @tunnelOffline.
+  ///
+  /// In en, this message translates to:
+  /// **'Offline'**
+  String get tunnelOffline;
 }
 
 class _AppLocalizationsDelegate

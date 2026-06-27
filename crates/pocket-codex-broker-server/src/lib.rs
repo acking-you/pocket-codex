@@ -135,6 +135,23 @@ impl BrokerServer {
         }
     }
 
+    /// Force-deregister a relay key: cancel the live register session holding
+    /// it (if any) and evict it. Cancelling tears down that session's
+    /// loopback pb-register, so the relay drops the key at once. Returns
+    /// `true` when a session was holding the key. Best-effort — a client
+    /// whose `run_register` is still alive will reconnect and re-register
+    /// shortly after.
+    pub async fn deregister_key(&self, relay_key: &str) -> bool {
+        let removed = self.inner.registers.lock().await.remove(relay_key);
+        match removed {
+            Some(session) => {
+                session.cancel.cancel();
+                true
+            },
+            None => false,
+        }
+    }
+
     /// Handle one accepted client tunnel to completion. Errors are logged, not
     /// returned, so this can be `tokio::spawn`ed directly per connection.
     pub async fn handle_connection<S: ServerStream>(&self, stream: S) {
@@ -207,5 +224,42 @@ impl BrokerServer {
         // Past the ack the tunnel is raw; hand it to the waiting seam bridge.
         let _ = tx.send(data);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct RejectAll;
+    impl TokenVerifier for RejectAll {
+        fn verify(&self, _token: &str) -> Option<String> {
+            None
+        }
+    }
+
+    #[tokio::test]
+    async fn deregister_key_cancels_and_evicts_the_session() {
+        let broker = BrokerServer::new(Arc::new(RejectAll), "127.0.0.1:1", Duration::from_secs(1));
+        let cancel = CancellationToken::new();
+        let key = "pcxu:u:dev:app:default";
+        broker.inner.registers.lock().await.insert(
+            key.to_string(),
+            Arc::new(RegisterSession {
+                generation: 0,
+                client_instance_id: "test".to_string(),
+                cancel: cancel.clone(),
+                pending: Mutex::new(HashMap::new()),
+            }),
+        );
+
+        assert!(!cancel.is_cancelled());
+        // Deregistering cancels the session (tearing down its pb-register) and
+        // evicts the map slot.
+        assert!(broker.deregister_key(key).await);
+        assert!(cancel.is_cancelled());
+        assert!(broker.inner.registers.lock().await.get(key).is_none());
+        // A second call (no live session) is a no-op.
+        assert!(!broker.deregister_key(key).await);
     }
 }

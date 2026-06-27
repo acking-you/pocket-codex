@@ -44,6 +44,94 @@ class SubInfo {
   final bool alive;
 }
 
+/// Result of starting local hosting. One host publishes two tunnels:
+/// `app:<name>` (codex app-server) and `api:<name>` (Responses API proxy).
+class AppServeResult {
+  /// Creates a hosting-start result.
+  const AppServeResult({
+    required this.device,
+    required this.name,
+    required this.appServiceKey,
+    required this.appListenAddr,
+    required this.apiServiceKey,
+    required this.apiListenAddr,
+    required this.pid,
+    required this.reused,
+  });
+
+  /// Device id both services registered under.
+  final String device;
+
+  /// Service instance name (shared by the app + api tunnels).
+  final String name;
+
+  /// `pcx:<device>:app:<name>` key (what discovery + `appConnect` use).
+  final String appServiceKey;
+
+  /// Loopback `host:port` codex is listening on.
+  final String appListenAddr;
+
+  /// `pcx:<device>:api:<name>` key (what an `api connect` resolves).
+  final String apiServiceKey;
+
+  /// Loopback `host:port` the in-app Responses API proxy is listening on.
+  final String apiListenAddr;
+
+  /// The codex process id.
+  final int pid;
+
+  /// Whether an already-running host was reused instead of freshly spawned.
+  final bool reused;
+}
+
+/// Status of one local host: a codex app-server + an in-app Responses API
+/// proxy, each published through its own (independently toggleable) tunnel.
+class AppServeStatus {
+  /// Creates a hosting-status snapshot.
+  const AppServeStatus({
+    required this.name,
+    required this.device,
+    this.pid,
+    this.alive = false,
+    this.appListenAddr = '',
+    this.appServiceKey = '',
+    this.appRegistered = false,
+    this.apiListenAddr = '',
+    this.apiServiceKey = '',
+    this.apiRegistered = false,
+  });
+
+  /// Service instance name.
+  final String name;
+
+  /// Device id.
+  final String device;
+
+  /// codex process id.
+  final int? pid;
+
+  /// codex is accepting on its listen port.
+  final bool alive;
+
+  /// Loopback `host:port` codex listens on.
+  final String appListenAddr;
+
+  /// `pcx:<device>:app:<name>` key.
+  final String appServiceKey;
+
+  /// The app tunnel is currently published.
+  final bool appRegistered;
+
+  /// Loopback `host:port` the API proxy listens on.
+  final String apiListenAddr;
+
+  /// `pcx:<device>:api:<name>` key.
+  final String apiServiceKey;
+
+  /// The api tunnel is currently published.
+  final bool apiRegistered;
+}
+
 /// View of persisted config (relay/key presence, locale, account state).
 class ConfigInfo {
   /// Creates a config view.
@@ -500,6 +588,52 @@ abstract interface class BridgeApi {
 
   /// List the account's services from the backend.
   Future<List<AccountService>> accountServices();
+
+  /// Deregister one of the account's services from the relay (best-effort; a
+  /// still-running host re-registers shortly after). [kind] is 'app' or 'api'.
+  Future<void> accountDeregisterService({
+    required String device,
+    required String kind,
+    required String name,
+  });
+
+  // --- Local hosting (desktop): run a local codex app-server + API proxy ---
+
+  /// Start hosting under the signed-in account. Spawns (or reuses) codex on
+  /// `127.0.0.1:<port>` and an in-app Responses API proxy, publishing both
+  /// `app:<name>` and `api:<name>`. [binaryOverride] points at the codex binary
+  /// when it isn't on `PATH` (remembered for next time); [proxy] is the upstream
+  /// proxy both use to reach chatgpt.com (`null` = inherit env). Re-hosting a
+  /// live name just re-registers any dropped tunnels. Desktop only.
+  Future<AppServeResult> appServeStart({
+    required int port,
+    String? binaryOverride,
+    String? name,
+    String? proxy,
+  });
+
+  /// Snapshot of every local host (for the status cards + periodic re-probe).
+  Future<List<AppServeStatus>> appServeStatus();
+
+  /// Take one tunnel ([kind] = 'app' or 'api') of a local host off the relay
+  /// without stopping the host — a reversible unpublish. The codex / API proxy
+  /// keep running; [appServeReregister] re-publishes it instantly.
+  Future<void> appServeDeregister({required String name, required String kind});
+
+  /// Re-publish a previously deregistered tunnel ([kind] = 'app'/'api') of a
+  /// still-running local host.
+  Future<void> appServeReregister({required String name, required String kind});
+
+  /// Fully stop one local host by name (both tunnels + watchdog + API proxy, and
+  /// stops codex).
+  Future<void> appServeStop(String name);
+
+  /// Stop every local host (called on app quit so a real quit leaves no orphan).
+  Future<void> appServeStopAll();
+
+  /// The resolved codex binary path (persisted config → `PATH`), or `null` so
+  /// the UI can prompt the user to point at one.
+  Future<String?> codexLocate();
 
   // --- App-server remote control ---
 

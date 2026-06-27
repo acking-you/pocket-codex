@@ -239,6 +239,30 @@ pub async fn services(support_dir: &Path) -> Result<Vec<ServiceEntry>> {
     Ok(body.services)
 }
 
+/// Deregister one of the account's services from the relay (best-effort).
+/// `kind` is `"app"` or `"api"`. The backend derives the relay key from the
+/// verified token, so this can only ever drop the caller's own keys; a client
+/// still hosting the service will reconnect and re-register shortly after.
+pub async fn deregister_service(
+    support_dir: &Path,
+    device: &str,
+    kind: &str,
+    name: &str,
+) -> Result<()> {
+    let mut config = load_config(support_dir)?;
+    let backend = backend_base(&config);
+    let token = valid_token(support_dir, &mut config, &backend).await?;
+    reqwest::Client::new()
+        .delete(format!("{backend}/v1/services/{device}/{kind}/{name}"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .context("calling DELETE /v1/services")?
+        .error_for_status()
+        .context("/v1/services deregister failed")?;
+    Ok(())
+}
+
 /// Return a currently-valid token, refreshing when missing/near-expiry.
 async fn valid_token(support_dir: &Path, config: &mut Config, backend: &str) -> Result<String> {
     // Fast path: the in-hand token is comfortably valid. An unparsable / exp-less
