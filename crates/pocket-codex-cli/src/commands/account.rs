@@ -253,7 +253,10 @@ pub(crate) async fn resolve_target(
 /// unparsable, or within a minute of expiry.
 async fn valid_token(config: &mut Config, base: &str) -> Result<String> {
     if let Some(token) = config.account_token() {
-        if jwt_exp(token).is_none_or(|exp| exp > unix_now() + 60) {
+        // Reuse the token only when we can confirm it is not within a minute of
+        // expiry; an unparsable / exp-less token falls through to a refresh
+        // (rather than being treated as valid forever).
+        if jwt_exp(token).is_some_and(|exp| exp > unix_now() + 60) {
             return Ok(token.to_string());
         }
     }

@@ -50,14 +50,16 @@ impl Store {
     }
 
     /// Revoke a refresh token (no-op if already revoked), optionally recording
-    /// the id it was rotated into.
+    /// the id it was rotated into. Returns the number of rows actually flipped
+    /// (1 when this call won the revoke, 0 if it was already revoked) so a caller
+    /// can serialize single-use rotation by acting only when it flipped the row.
     pub async fn revoke_refresh_token(
         &self,
         id: &str,
         now: i64,
         rotated_to: Option<&str>,
-    ) -> Result<()> {
-        sqlx::query(
+    ) -> Result<u64> {
+        let res = sqlx::query(
             "UPDATE refresh_tokens SET revoked_at = ?2, rotated_to = ?3 WHERE id = ?1 AND \
              revoked_at IS NULL",
         )
@@ -66,7 +68,21 @@ impl Store {
         .bind(rotated_to)
         .execute(&self.pool)
         .await?;
-        Ok(())
+        Ok(res.rows_affected())
+    }
+
+    /// Look up a refresh token by hash in ANY state (active, revoked, expired).
+    /// Used for reuse/replay detection: a presented token that is no longer
+    /// active but still exists was already rotated, signalling theft.
+    pub async fn refresh_token_by_hash(&self, token_hash: &[u8]) -> Result<Option<RefreshToken>> {
+        let token = sqlx::query_as::<_, RefreshToken>(
+            "SELECT id, user_id, token_hash, device_label, created_at, expires_at, revoked_at, \
+             rotated_to FROM refresh_tokens WHERE token_hash = ?1",
+        )
+        .bind(token_hash)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(token)
     }
 
     /// Revoke all of a user's active refresh tokens (full logout); returns the

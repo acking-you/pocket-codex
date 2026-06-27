@@ -54,6 +54,21 @@ pub async fn run(cfg: ServerConfig) -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("invalid msg_header_key: {e}"))?;
 
     let store = Store::connect(&cfg.database_url).await?;
+
+    // Periodically purge expired device flows + refresh tokens so the tables
+    // don't grow unbounded under device-flow churn / abandoned logins.
+    let purge_store = store.clone();
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(3600));
+        loop {
+            tick.tick().await;
+            let now = time::OffsetDateTime::now_utc().unix_timestamp();
+            if let Err(e) = purge_store.purge_expired(now).await {
+                tracing::warn!(error = %e, "periodic purge_expired failed");
+            }
+        }
+    });
+
     let auth = Arc::new(Auth::new(
         store,
         pocket_codex_auth::Config {

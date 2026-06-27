@@ -21,6 +21,11 @@ refresh_ttl_secs = 2592000
 data_idle_secs = 1800
 
 # TLS: "plain" (no TLS — local/smoke only) or "files" (static PEM, e.g. certbot).
+# Point at COPIES owned by the pcx service user: the non-root service cannot read
+# certbot's root-only /etc/letsencrypt/live/<host>/privkey.pem directly. Add a
+# certbot/Caddy renewal hook that copies fullchain/privkey into /etc/pocket-codex/
+# (0640 pcx:pcx) and runs `systemctl restart pocket-codex-backend` (certs are read
+# once at startup, so a renewal needs a restart to take effect).
 tls_mode = "files"
-tls_cert = "/etc/letsencrypt/live/lb7666.top/fullchain.pem"
-tls_key = "/etc/letsencrypt/live/lb7666.top/privkey.pem"
+tls_cert = "/etc/pocket-codex/fullchain.pem"
+tls_key = "/etc/pocket-codex/privkey.pem"

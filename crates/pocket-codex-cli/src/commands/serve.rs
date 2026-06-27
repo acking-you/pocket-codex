@@ -44,6 +44,7 @@ use pocket_codex_broker_client::{run_register, Connector, RegisterConfig, TokenP
 use pocket_codex_codex::{spawn, stop, ListenSpec, SpawnOptions};
 use pocket_codex_core::{
     config::Config,
+    process::{find_codex_app_server, force_kill},
     service::{default_device_id, ServiceId, ServiceKind},
     state::PbRole,
 };
@@ -70,6 +71,11 @@ const HEALTH_FAILURES: u32 = 3;
 /// Pause after a restart before probing resumes, so a freshly spawned
 /// app-server isn't re-flagged while it is still booting.
 const HEALTH_RESTART_GRACE: Duration = Duration::from_secs(12);
+/// Upper bound on the backoff between repeated failed restarts, so a
+/// hopelessly-broken codex is retried calmly rather than hammered every cycle.
+const MAX_RESTART_BACKOFF: Duration = Duration::from_secs(300);
+/// After this many consecutive failed restarts, stop logging every attempt.
+const MAX_RESTART_WARNINGS: u32 = 3;
 
 /// Run the host-side one-shot setup flow.
 pub async fn run(args: ServeArgs) -> Result<()> {
@@ -225,12 +231,15 @@ fn websocket_listen_addr(listen: &str) -> Option<String> {
 }
 
 /// Background task (account mode): probe the codex app-server's `/readyz` and
-/// restart it when it wedges, so turns recover without operator intervention.
+/// restart it when it stops responding, so turns recover without operator
+/// intervention.
 ///
-/// A handshake-OK tunnel can still front a codex that has stopped serving (model
-/// refresh hung, repeated connection resets); the register tunnel and the ws
-/// handshake stay green while every turn fails. Probing the HTTP health endpoint
-/// catches that and a same-port respawn fixes it transparently.
+/// `/readyz` reflects the HTTP acceptor's liveness, so this recovers a codex
+/// that has fully crashed or stopped accepting (process gone, connection
+/// refused, hung acceptor) — the "registered on the relay but the remote is
+/// dead" case. It does NOT catch a codex that still accepts connections but has
+/// wedged deeper (a hung model turn keeps `/readyz` green); detecting that would
+/// need a turn-level probe and is out of scope here.
 async fn codex_health_watchdog(local_addr: String, spawn_opts: SpawnOptions) {
     let url = format!("http://{local_addr}/readyz");
     let client = match reqwest::Client::builder().timeout(HEALTH_TIMEOUT).build() {
@@ -240,6 +249,7 @@ async fn codex_health_watchdog(local_addr: String, spawn_opts: SpawnOptions) {
         Err(_) => return,
     };
     let mut consecutive: u32 = 0;
+    let mut restart_failures: u32 = 0;
     loop {
         tokio::time::sleep(HEALTH_INTERVAL).await;
         let healthy = matches!(
@@ -248,6 +258,7 @@ async fn codex_health_watchdog(local_addr: String, spawn_opts: SpawnOptions) {
         );
         if healthy {
             consecutive = 0;
+            restart_failures = 0;
             continue;
         }
         consecutive += 1;
@@ -258,27 +269,64 @@ async fn codex_health_watchdog(local_addr: String, spawn_opts: SpawnOptions) {
             "codex app-server failed {HEALTH_FAILURES} health checks — restarting it"
         ));
         match restart_codex(spawn_opts.clone()).await {
-            Ok(()) => ui::headline(ui::Tone::Ok, "codex app-server restarted"),
-            Err(e) => ui::warn(&format!("could not restart codex app-server: {e:#}")),
+            Ok(()) => {
+                ui::headline(ui::Tone::Ok, "codex app-server restarted");
+                restart_failures = 0;
+            },
+            Err(e) => {
+                restart_failures += 1;
+                if restart_failures <= MAX_RESTART_WARNINGS {
+                    ui::warn(&format!(
+                        "could not restart codex app-server (attempt {restart_failures}): {e:#}"
+                    ));
+                } else if restart_failures == MAX_RESTART_WARNINGS + 1 {
+                    ui::warn(
+                        "codex app-server is not recovering — will keep retrying quietly; \
+                         check the codex install on this host",
+                    );
+                }
+            },
         }
         consecutive = 0;
-        // Let the fresh (or still-recovering) server settle before probing again.
-        tokio::time::sleep(HEALTH_RESTART_GRACE).await;
+        // After repeated failures back off (capped) so a hopeless loop neither
+        // spams nor hammers; a transient wedge that restarts cleanly resets the
+        // counter and returns to the short grace.
+        let backoff = HEALTH_RESTART_GRACE
+            .saturating_mul(1u32 << restart_failures.min(5))
+            .min(MAX_RESTART_BACKOFF);
+        tokio::time::sleep(backoff).await;
     }
 }
 
 /// Stop the wedged codex app-server and spawn a fresh one on the same port. The
 /// register tunnel forwards to a fixed local address, so a same-port respawn
-/// keeps routing intact. Runs the blocking process calls off the async runtime.
+/// keeps routing intact. Escalates to a hard kill if the process ignores the
+/// graceful stop, and reports failure (rather than false success) when codex is
+/// still holding the port afterwards. Runs the blocking process calls off the
+/// async runtime.
 async fn restart_codex(spawn_opts: SpawnOptions) -> Result<()> {
     tokio::task::spawn_blocking(move || -> Result<()> {
+        let listen_url = spawn_opts.listen.to_listen_url();
         stop().context("stopping the wedged codex app-server")?;
-        // Wait for the listen port to actually free up; otherwise spawn() would
-        // adopt the dying process instead of starting a clean one.
+        // Wait for the listen port to free; otherwise spawn() would adopt the
+        // dying process instead of starting a clean one.
         if let Some(addr) = spawn_opts.listen.as_socket_addr() {
-            wait_for_port_closed(&addr, Duration::from_secs(10));
+            if !wait_for_port_closed(&addr, Duration::from_secs(8)) {
+                // The graceful SIGTERM didn't free the port — a wedged codex may
+                // be ignoring it; hard-kill whatever codex still owns the port.
+                if let Some(pid) = find_codex_app_server(&listen_url) {
+                    force_kill(pid);
+                    wait_for_port_closed(&addr, Duration::from_secs(5));
+                }
+            }
         }
-        spawn(spawn_opts).context("respawning the codex app-server")?;
+        let report = spawn(spawn_opts).context("respawning the codex app-server")?;
+        // If spawn adopted the still-bound old process instead of starting a
+        // fresh one, the restart did not take effect.
+        anyhow::ensure!(
+            !report.reused,
+            "codex is still holding the listen port; restart did not take effect"
+        );
         Ok(())
     })
     .await
@@ -286,17 +334,19 @@ async fn restart_codex(spawn_opts: SpawnOptions) -> Result<()> {
 }
 
 /// Block until nothing accepts TCP connections on `addr`, or `timeout` elapses.
-fn wait_for_port_closed(addr: &str, timeout: Duration) {
+/// Returns `true` if the port closed, `false` on timeout.
+fn wait_for_port_closed(addr: &str, timeout: Duration) -> bool {
     let Ok(sock) = addr.parse::<SocketAddr>() else {
-        return;
+        return true;
     };
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         if TcpStream::connect_timeout(&sock, Duration::from_millis(200)).is_err() {
-            return;
+            return true;
         }
         std::thread::sleep(Duration::from_millis(200));
     }
+    false
 }
 
 #[cfg(test)]

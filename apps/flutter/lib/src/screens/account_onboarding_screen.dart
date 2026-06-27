@@ -69,14 +69,31 @@ class _AccountOnboardingState extends ConsumerState<AccountOnboardingScreen> {
   Future<void> _poll(DeviceCode device) async {
     _polling = true;
     final api = ref.read(bridgeApiProvider);
-    final l10n = AppLocalizations.of(context);
     final interval = Duration(
       seconds: device.intervalSecs < 1 ? 5 : device.intervalSecs,
+    );
+    // Client-side expiry: stop once the device code's lifetime elapses even if
+    // the backend never answers, so the spinner can't spin forever.
+    final deadline = DateTime.now().add(
+      Duration(seconds: device.expiresInSecs < 1 ? 900 : device.expiresInSecs),
     );
     var delay = interval;
     while (_polling && mounted) {
       await Future<void>.delayed(delay);
       if (!_polling || !mounted) return;
+      if (DateTime.now().isAfter(deadline)) {
+        _polling = false;
+        if (mounted) {
+          setState(() {
+            _device = null;
+            _error = AppLocalizations.of(context).accountCodeExpired;
+          });
+        }
+        return;
+      }
+      // Resolve l10n fresh each iteration so a locale change mid-poll shows the
+      // terminal message in the current language.
+      final l10n = AppLocalizations.of(context);
       try {
         final poll = await api.accountLoginPoll(
           device.pollHandle,

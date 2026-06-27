@@ -417,8 +417,9 @@ pub fn app_thread_start(
     app_session::thread_start(&service_key, model, cwd, approval_policy, sandbox)
 }
 
-/// Answer a server approval request. `decision` is a ReviewDecision wire value
-/// (`approved` / `denied` / `abort` …).
+/// Answer a server approval request. `decision` is the wire value the session
+/// layer recognises: `accept` or `acceptForSession` to grant, any other value
+/// (e.g. `decline`) to decline.
 pub fn app_respond_approval(
     service_key: String,
     request_id: String,

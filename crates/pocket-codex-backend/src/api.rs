@@ -1,7 +1,7 @@
 //! The HTTP API: GitHub device-flow auth, session refresh/logout, and the
 //! per-account `/v1/me` + `/v1/services` views.
 
-use std::{net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use axum::{
     extract::State,
@@ -18,7 +18,7 @@ use pocket_codex_account_proto::{
     key::NamespacedServiceId,
 };
 use pocket_codex_auth::{Auth, AuthError, Claims};
-use tower_http::{limit::RequestBodyLimitLayer, trace::TraceLayer};
+use tower_http::{limit::RequestBodyLimitLayer, timeout::TimeoutLayer, trace::TraceLayer};
 
 /// Shared state for the HTTP handlers.
 #[derive(Clone)]
@@ -39,6 +39,12 @@ pub fn router(state: AppState) -> Router {
         .route("/auth/logout", post(logout))
         .route("/v1/me", get(me))
         .route("/v1/services", get(services))
+        // Bound every request so a slow upstream (GitHub) can't pin connections
+        // on the unauthenticated /auth/* surface indefinitely.
+        .layer(TimeoutLayer::with_status_code(
+            StatusCode::REQUEST_TIMEOUT,
+            Duration::from_secs(20),
+        ))
         .layer(RequestBodyLimitLayer::new(64 * 1024))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
@@ -55,8 +61,13 @@ type ApiResult<T> = Result<T, ApiError>;
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let (status, message) = match self {
-            ApiError::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized".to_string()),
-            ApiError::Internal(m) => (StatusCode::INTERNAL_SERVER_ERROR, m),
+            ApiError::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized"),
+            ApiError::Internal(detail) => {
+                // Log the detail server-side but never leak raw upstream/store/JWT
+                // error strings (which fingerprint the backend) to the client.
+                tracing::error!(error = %detail, "internal error");
+                (StatusCode::INTERNAL_SERVER_ERROR, "internal error")
+            },
         };
         (status, Json(serde_json::json!({ "error": message }))).into_response()
     }

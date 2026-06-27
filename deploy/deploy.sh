@@ -38,6 +38,12 @@ if [[ ! -f "$ETC/backend.env" ]]; then
   NEEDS_SECRETS=1
 fi
 
+# Even on an upgrade re-run, refuse to claim success while secrets are still the
+# shipped placeholders — the backend now fails closed on them at startup.
+if grep -q 'replace-with' "$ETC/backend.env" 2>/dev/null; then
+  NEEDS_SECRETS=1
+fi
+
 # If the relay runs with --use-machine-msg-header-key, adopt its cached key so
 # the backend's loopback pb-mapper calls authenticate (the pb-mapper *default*
 # key would NOT match a machine-derived one).
@@ -55,11 +61,14 @@ systemctl daemon-reload
 echo
 echo "==> done. Next steps:"
 if [[ "${NEEDS_SECRETS:-0}" == "1" ]]; then
+  echo "  ⚠ SECRETS NOT SET — the backend will REFUSE TO BOOT until you fill these:"
   echo "  1. Fill secrets:  sudoedit $ETC/backend.env"
-  echo "     (PCX_MSG_HEADER_KEY = the relay's 32-byte key; PCX_JWT_SECRET = openssl rand -hex 32;"
-  echo "      PCX_GITHUB_CLIENT_ID = your GitHub OAuth app client id)"
+  echo "     (PCX_JWT_SECRET = openssl rand -hex 32 (>=32 bytes);"
+  echo "      PCX_GITHUB_CLIENT_ID = your GitHub OAuth app client id."
+  echo "      PCX_MSG_HEADER_KEY is adopted automatically — set it only for a non-machine-keyed relay.)"
 fi
-echo "  2. TLS certs in $ETC/backend.toml (tls_cert/tls_key) — e.g. certbot certonly --standalone -d lb7666.top"
+echo "  2. TLS certs readable by the pcx user in $ETC/ (tls_cert/tls_key in $ETC/backend.toml):"
+echo "     copy certbot/Caddy PEMs into $ETC/ (0640 pcx:pcx) via a renewal hook that restarts the unit."
 echo "  3. Firewall the relay to loopback:  sudo ufw deny 7666/tcp"
 echo "     Open API + broker:               sudo ufw allow 8443/tcp && sudo ufw allow 7900/tcp"
 echo "  4. Start:  sudo systemctl enable --now pocket-codex-backend"

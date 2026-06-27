@@ -161,9 +161,11 @@ impl BrokerServer {
             }
         });
 
-        // Control read loop: Ping→Pong, note StreamAck. No frame for the idle
+        // Control read loop: Ping→Pong, note StreamAck. No frame for the lease
         // window ⇒ the client is gone; tear the session down so it reconnects.
-        let idle = params::HEARTBEAT_TOLERANCE + params::SUSPECT_GRACE;
+        // LEASE_TIMEOUT is intentionally longer than the client's own read idle
+        // so the client reconnects before the backend retires the registration.
+        let idle = params::LEASE_TIMEOUT;
         let result = loop {
             let frame = tokio::select! {
                 _ = cancel.cancelled() => break Ok(()),

@@ -5,9 +5,11 @@ import 'package:flutter_linkify/flutter_linkify.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
 import 'package:pocket_codex/src/providers.dart';
+import 'package:pocket_codex/src/screens/account_onboarding_screen.dart';
 import 'package:pocket_codex/src/screens/api_service_screen.dart';
 import 'package:pocket_codex/src/screens/app_session_screen.dart';
 import 'package:pocket_codex/src/screens/app_service_screen.dart';
@@ -33,6 +35,25 @@ Widget _host(
     home: child,
   ),
 );
+
+/// Mount under a GoRouter so screens that call `context.go(...)` navigate; each
+/// extra [stubs] entry (path → label) renders a Text so a route can be asserted.
+Widget _routerHost(
+  BridgeApi api, {
+  required String initial,
+  required List<GoRoute> routes,
+}) => ProviderScope(
+  overrides: [bridgeApiProvider.overrideWithValue(api)],
+  child: MaterialApp.router(
+    locale: const Locale('zh'),
+    localizationsDelegates: AppLocalizations.localizationsDelegates,
+    supportedLocales: AppLocalizations.supportedLocales,
+    routerConfig: GoRouter(initialLocation: initial, routes: routes),
+  ),
+);
+
+GoRoute _stub(String path, String label) =>
+    GoRoute(path: path, builder: (_, _) => Scaffold(body: Text(label)));
 
 void main() {
   testWidgets('Services groups api + app and shows relay', (t) async {
@@ -205,6 +226,100 @@ void main() {
 
     expect(find.text('不可达'), findsNothing); // recovered on its own
     expect(find.text('在线'), findsNWidgets(2)); // relay + app-server both online
+  });
+
+  testWidgets('onboarding: sign in shows the code, then authorized navigates '
+      'home', (t) async {
+    final api =
+        FakeBridgeApi(config: const ConfigInfo(relay: '', hasKey: false))
+          ..accountPollStatus = 'authorized';
+    await t.pumpWidget(
+      _routerHost(
+        api,
+        initial: '/onboarding',
+        routes: [
+          GoRoute(
+            path: '/onboarding',
+            builder: (_, _) => const AccountOnboardingScreen(),
+          ),
+          _stub('/', 'HOME-ROUTE'),
+        ],
+      ),
+    );
+    await t.pumpAndSettle(); // initial onboarding (no spinner yet)
+    await t.tap(find.text('使用 GitHub 登录')); // accountSignInButton (zh)
+    // The polling spinner is a perpetual animation, so advance via bounded pumps
+    // (pumpAndSettle would never settle while it spins).
+    await t.pump(); // _start: accountLoginStart resolves
+    await t.pump(); // setState shows the code + spinner
+    expect(find.text('ABCD-1234'), findsOneWidget); // user code shown
+    expect(find.text('打开 GitHub'), findsOneWidget); // accountOpenGitHub (zh)
+    await t.pump(const Duration(seconds: 6)); // fire the 5s poll interval
+    await t.pump(); // accountLoginPoll resolves → context.go('/')
+    await t.pump(); // router rebuilds at '/'
+    expect(find.text('HOME-ROUTE'), findsOneWidget); // navigated on authorize
+  });
+
+  testWidgets('onboarding: an expired code clears and shows the expired '
+      'message without navigating', (t) async {
+    final api =
+        FakeBridgeApi(config: const ConfigInfo(relay: '', hasKey: false))
+          ..accountPollStatus = 'expired';
+    await t.pumpWidget(
+      _routerHost(
+        api,
+        initial: '/onboarding',
+        routes: [
+          GoRoute(
+            path: '/onboarding',
+            builder: (_, _) => const AccountOnboardingScreen(),
+          ),
+          _stub('/', 'HOME-ROUTE'),
+        ],
+      ),
+    );
+    await t.pumpAndSettle(); // initial onboarding (no spinner yet)
+    await t.tap(find.text('使用 GitHub 登录'));
+    await t.pump(); // start resolves
+    await t.pump(); // code + spinner show
+    expect(find.text('ABCD-1234'), findsOneWidget);
+    await t.pump(const Duration(seconds: 6)); // poll fires → 'expired' → setState
+    // 'expired' clears _device, so the spinner is gone and we can settle.
+    await t.pumpAndSettle();
+    expect(find.text('代码已过期,请重试。'), findsOneWidget); // accountCodeExpired (zh)
+    expect(find.text('ABCD-1234'), findsNothing); // cleared, back to sign-in
+    expect(find.text('HOME-ROUTE'), findsNothing); // did NOT navigate
+  });
+
+  testWidgets('settings: account sign-out clears the user and returns to '
+      'onboarding', (t) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(
+        relay: '',
+        hasKey: false,
+        mode: 'account',
+        accountLogin: 'octocat',
+      ),
+    )..accountUser = const AccountUser(login: 'octocat', accountId: '42');
+    await t.pumpWidget(
+      _routerHost(
+        api,
+        initial: '/settings',
+        routes: [
+          GoRoute(
+            path: '/settings',
+            builder: (_, _) => const SettingsScreen(),
+          ),
+          _stub('/onboarding', 'ONBOARDING-ROUTE'),
+        ],
+      ),
+    );
+    await t.pumpAndSettle();
+    expect(find.text('@octocat'), findsOneWidget); // signed-in identity
+    await t.tap(find.byKey(const Key('sign-out-btn')));
+    await t.pumpAndSettle();
+    expect(api.accountUser, isNull); // accountLogout ran
+    expect(find.text('ONBOARDING-ROUTE'), findsOneWidget); // back to onboarding
   });
 
   testWidgets('ApiService rejects an out-of-range port before subscribing', (

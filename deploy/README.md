@@ -36,12 +36,12 @@ sudo useradd --system --home /var/lib/pocket-codex --shell /usr/sbin/nologin pcx
 sudo mkdir -p /var/lib/pocket-codex /etc/pocket-codex
 sudo chown pcx:pcx /var/lib/pocket-codex
 
-# Config + secrets
-sudo cp backend.toml.example  /etc/pocket-codex/backend.toml
-sudo cp backend.env.example   /etc/pocket-codex/backend.env
-sudo "$EDITOR" /etc/pocket-codex/backend.env   # fill in the three secrets
-sudo chmod 600 /etc/pocket-codex/backend.env
-sudo chown pcx:pcx /etc/pocket-codex/backend.env
+# Config + secrets (or just run ./deploy.sh, which does all of this correctly).
+sudo install -m 0644 backend.toml.example /etc/pocket-codex/backend.toml
+# Create the secret file 0600 + pcx-owned BEFORE typing any secret into it, and
+# use sudoedit (sudo resets $EDITOR's environment):
+sudo install -m 0600 -o pcx -g pcx backend.env.example /etc/pocket-codex/backend.env
+sudoedit /etc/pocket-codex/backend.env   # set PCX_JWT_SECRET + PCX_GITHUB_CLIENT_ID
 
 # Binary + unit
 sudo install -m755 pocket-codex-backend /usr/local/bin/pocket-codex-backend

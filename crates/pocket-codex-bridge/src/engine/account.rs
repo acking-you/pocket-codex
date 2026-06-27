@@ -41,12 +41,21 @@ pub fn backend_base(config: &Config) -> String {
 }
 
 /// Resolve the backend: an explicit override wins, else the persisted/default.
-fn resolve_backend(config: &Config, override_url: Option<&str>) -> String {
-    override_url
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(ToString::to_string)
-        .unwrap_or_else(|| backend_base(config))
+/// An override must be `https://` so the bearer JWT + refresh token are never
+/// sent in cleartext to a mistyped or hostile endpoint (the default is https).
+fn resolve_backend(config: &Config, override_url: Option<&str>) -> Result<String> {
+    match override_url.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(url) => {
+            if !url.starts_with("https://") {
+                bail!(
+                    "backend URL must start with https:// (got `{url}`); the session token \
+                     must not be sent in cleartext"
+                );
+            }
+            Ok(url.to_string())
+        },
+        None => Ok(backend_base(config)),
+    }
 }
 
 /// A started device flow: the code/URL to show the user plus the handle (and
@@ -69,7 +78,7 @@ pub struct DeviceStart {
 /// Begin a device flow against the (optionally overridden) backend.
 pub async fn device_start(support_dir: &Path, backend_override: Option<&str>) -> Result<DeviceStart> {
     let config = load_config(support_dir)?;
-    let backend = resolve_backend(&config, backend_override);
+    let backend = resolve_backend(&config, backend_override)?;
     let resp: DeviceStartResponse = reqwest::Client::new()
         .post(format!("{backend}/auth/device/start"))
         .json(&DeviceStartRequest::default())
@@ -226,8 +235,22 @@ pub async fn services(support_dir: &Path) -> Result<Vec<ServiceEntry>> {
 
 /// Return a currently-valid token, refreshing when missing/near-expiry.
 async fn valid_token(support_dir: &Path, config: &mut Config, backend: &str) -> Result<String> {
+    // Fast path: the in-hand token is comfortably valid. An unparsable / exp-less
+    // token does NOT count as valid here — it falls through to a refresh.
     if let Some(token) = config.account_token() {
-        if jwt_exp(token).is_none_or(|exp| exp > unix_now() + 60) {
+        if jwt_exp(token).is_some_and(|exp| exp > unix_now() + 60) {
+            return Ok(token.to_string());
+        }
+    }
+    // Refresh is needed. Serialize it process-wide so concurrent callers (the
+    // broker opens a tunnel per stream, plus FRB queries) don't each spend the
+    // single-use, rotating refresh token and lost-update each other's writes.
+    let _guard = refresh_lock().lock().await;
+    // Re-read from disk and re-check: another waiter may have refreshed while we
+    // were queued, in which case we reuse its freshly-persisted token.
+    *config = load_config(support_dir)?;
+    if let Some(token) = config.account_token() {
+        if jwt_exp(token).is_some_and(|exp| exp > unix_now() + 60) {
             return Ok(token.to_string());
         }
     }
@@ -259,6 +282,15 @@ async fn valid_token(support_dir: &Path, config: &mut Config, backend: &str) -> 
     );
     save_config(support_dir, config)?;
     Ok(cred.token)
+}
+
+/// Process-global lock serializing token refreshes, so overlapping callers don't
+/// each spend the rotating refresh token (401-ing the losers) or lost-update
+/// each other's persisted credential.
+fn refresh_lock() -> &'static tokio::sync::Mutex<()> {
+    static LOCK: once_cell::sync::OnceCell<tokio::sync::Mutex<()>> =
+        once_cell::sync::OnceCell::new();
+    LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
 }
 
 /// Decode a JWT's `exp` (unix seconds) without verifying the signature.
@@ -375,13 +407,18 @@ mod tests {
     }
 
     #[test]
-    fn resolve_backend_override_wins() {
+    fn resolve_backend_override_wins_and_requires_https() {
         let config = Config::default();
         assert_eq!(
-            resolve_backend(&config, Some("https://flag.example")),
+            resolve_backend(&config, Some("https://flag.example")).expect("https override"),
             "https://flag.example"
         );
-        assert_eq!(resolve_backend(&config, None), DEFAULT_BACKEND);
+        assert_eq!(
+            resolve_backend(&config, None).expect("default backend"),
+            DEFAULT_BACKEND
+        );
+        // An http override is rejected so the bearer token can't go out in cleartext.
+        assert!(resolve_backend(&config, Some("http://insecure.example")).is_err());
     }
 
     #[test]

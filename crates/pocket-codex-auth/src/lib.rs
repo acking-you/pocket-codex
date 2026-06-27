@@ -60,6 +60,10 @@ impl Auth {
     pub fn new(store: Store, config: Config) -> Result<Self> {
         let http = reqwest::Client::builder()
             .user_agent("pocket-codex")
+            // Bound every GitHub call so a slow/black-holing upstream can't pin a
+            // backend request (and its connection) indefinitely.
+            .timeout(std::time::Duration::from_secs(15))
+            .connect_timeout(std::time::Duration::from_secs(10))
             .build()?;
         Ok(Self {
             github: GitHub::new(http, config.github_client_id),
@@ -122,22 +126,38 @@ impl Auth {
     /// the presented token.
     pub async fn refresh(&self, refresh_token: &str, now: i64) -> Result<SessionCredential> {
         let hash = hash_token(refresh_token);
-        let existing = self
-            .store
-            .active_refresh_token(&hash, now)
-            .await?
-            .ok_or(AuthError::BadRefresh)?;
+        let existing = match self.store.active_refresh_token(&hash, now).await? {
+            Some(token) => token,
+            None => {
+                // A token that exists but is no longer active was already
+                // rotated/revoked; a replay of it signals theft — revoke the
+                // whole family (RFC 6819 reuse mitigation) before rejecting.
+                if let Some(seen) = self.store.refresh_token_by_hash(&hash).await? {
+                    self.store
+                        .revoke_user_refresh_tokens(&seen.user_id, now)
+                        .await?;
+                    tracing::warn!(
+                        user_id = %seen.user_id,
+                        "refresh-token reuse detected; revoked all of the user's sessions"
+                    );
+                }
+                return Err(AuthError::BadRefresh);
+            },
+        };
+        // Consume the presented token atomically: the conditional UPDATE flips at
+        // most one row, so under concurrent refreshes only the caller that flips
+        // it (rows == 1) mints a session. Single-use rotation therefore holds even
+        // though the read and the write are separate SQLite statements.
+        if self.store.revoke_refresh_token(&existing.id, now, None).await? != 1 {
+            return Err(AuthError::BadRefresh);
+        }
         let user = self
             .store
             .user(&existing.user_id)
             .await?
             .ok_or(AuthError::BadRefresh)?;
-        let label = existing.device_label.clone();
-        let credential = self.issue_session(&user, label.as_deref(), now).await?;
-        self.store
-            .revoke_refresh_token(&existing.id, now, None)
-            .await?;
-        Ok(credential)
+        self.issue_session(&user, existing.device_label.as_deref(), now)
+            .await
     }
 
     /// Revoke a refresh token (logout of one device). Unknown tokens are a

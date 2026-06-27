@@ -34,11 +34,16 @@ pub struct NamespacedServiceId {
 }
 
 impl NamespacedServiceId {
-    /// Build a namespaced id, sanitising `user_id` into a stable key segment.
+    /// Build a namespaced id, sanitising `user_id` AND the service segments into
+    /// stable key segments. Re-sanitising `service` here (not just trusting the
+    /// caller to have built it via [`ServiceId::new`]) makes the namespace
+    /// guarantee a property of this security-critical type rather than of caller
+    /// discipline: `key()` can never emit a stray `:` that injects extra
+    /// segments or another user's prefix.
     pub fn new(user_id: impl AsRef<str>, service: ServiceId) -> Self {
         Self {
             user_id: sanitize_component(user_id.as_ref()),
-            service,
+            service: ServiceId::new(&service.device, service.kind, &service.name),
         }
     }
 
@@ -72,6 +77,15 @@ impl NamespacedServiceId {
         let kind = parts.next()?.parse().ok()?;
         let name = parts.next()?;
         if parts.next().is_some() || user_id.is_empty() || device.is_empty() || name.is_empty() {
+            return None;
+        }
+        // Only accept canonical (already-sanitised) segments, so `parse_key` is a
+        // true inverse of `key()` and a non-canonical key (e.g. mixed case) can
+        // never be read as a distinct identity by a caller that relies on it.
+        if sanitize_component(user_id) != user_id
+            || sanitize_component(device) != device
+            || sanitize_component(name) != name
+        {
             return None;
         }
         Some(Self {
@@ -116,5 +130,29 @@ mod tests {
         assert!(NamespacedServiceId::parse_key("pcx:studio:api:default").is_none());
         assert!(NamespacedServiceId::parse_key("pcxu:bob:studio:api").is_none());
         assert!(NamespacedServiceId::parse_key("pcxu::studio:app:default").is_none());
+    }
+
+    #[test]
+    fn key_cannot_escape_the_namespace_via_a_struct_literal_service() {
+        // A ServiceId built by struct literal (bypassing ::new) with ':' in its
+        // fields must still yield a key with exactly the 4 segment separators,
+        // inside this user's prefix — no injected segments, no foreign prefix.
+        let id = NamespacedServiceId::new(
+            "bob",
+            ServiceId {
+                device: "x:pcxu:victim:y".to_string(),
+                kind: ServiceKind::App,
+                name: "n:m".to_string(),
+            },
+        );
+        assert_eq!(id.key().matches(':').count(), 4);
+        assert!(id.key().starts_with("pcxu:bob:"));
+    }
+
+    #[test]
+    fn parse_key_rejects_non_canonical_segments() {
+        // Mixed-case / unsanitised segments are not keys the system could emit.
+        assert!(NamespacedServiceId::parse_key("pcxu:Bob:dev:app:name").is_none());
+        assert!(NamespacedServiceId::parse_key("pcxu:bob:Dev:app:name").is_none());
     }
 }

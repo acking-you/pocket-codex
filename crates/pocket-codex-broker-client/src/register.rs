@@ -133,12 +133,17 @@ async fn control_loop(
                 generation,
                 stream_id,
             } => {
-                {
-                    // Ack on the control tunnel: renews the lease and signals
-                    // intent to dial the data tunnel.
+                // Ack on the control tunnel: renews the lease and signals intent
+                // to dial the data tunnel.
+                let ack = {
                     let mut w = writer.lock().await;
-                    let _ = write_frame(&mut *w, &BrokerControl::StreamAck { generation, stream_id })
-                        .await;
+                    write_frame(&mut *w, &BrokerControl::StreamAck { generation, stream_id }).await
+                };
+                if let Err(e) = ack {
+                    // A failed control write means the session is dead — tear it
+                    // down (it reconnects via backoff) rather than dialing a data
+                    // tunnel the backend will never pair.
+                    break Err(e.into());
                 }
                 let connector = connector.clone();
                 let tokens = tokens.clone();
