@@ -117,6 +117,14 @@ struct Session {
     /// [`respond_approval`] needs the original grant to echo back on
     /// accept. See [`track_pending_approval`].
     pending_approvals: Arc<Mutex<HashMap<String, Value>>>,
+    /// Per-thread buffer of the item snapshots this session has streamed
+    /// (`item/*` notifications), upserted by id in stream order.
+    /// [`thread_read`] merges these in so an in-progress turn's
+    /// already-streamed thinking/tool items survive re-opening the
+    /// conversation: the forwarder drops events when no UI is attached, and
+    /// the server's `thread/read` doesn't return the in-progress turn's
+    /// items.
+    transcript: Arc<Mutex<HashMap<String, Vec<ThreadItem>>>>,
 }
 
 impl Drop for Session {
@@ -220,6 +228,9 @@ fn establish(service_key: String, local_addr: &str) -> Result<()> {
     let pending_approvals: Arc<Mutex<HashMap<String, Value>>> =
         Arc::new(Mutex::new(HashMap::new()));
     let approvals_for_forwarder = Arc::clone(&pending_approvals);
+    let transcript: Arc<Mutex<HashMap<String, Vec<ThreadItem>>>> =
+        Arc::new(Mutex::new(HashMap::new()));
+    let transcript_for_forwarder = Arc::clone(&transcript);
     let forwarder = runtime::runtime().spawn(async move {
         while let Some(inbound) = notify_rx.recv().await {
             // Learn the active turnId per thread before mapping, so interrupt
@@ -228,6 +239,10 @@ fn establish(service_key: String, local_addr: &str) -> Result<()> {
             // Remember a permissions request's grant so its protocol-specific
             // response can be built when the user answers.
             track_pending_approval(&approvals_for_forwarder, &inbound);
+            // Buffer item snapshots so a re-opened conversation can restore an
+            // in-progress turn's items even though the broadcast below is
+            // dropped while no UI is attached.
+            buffer_item(&transcript_for_forwarder, &inbound);
             // Ignore send errors: no current subscribers is fine, the event
             // is simply dropped (the UI re-reads thread state on attach).
             let _ = forward_tx.send(map_event(inbound));
@@ -244,8 +259,52 @@ fn establish(service_key: String, local_addr: &str) -> Result<()> {
             active_turns,
             reasoning_effort: Arc::new(Mutex::new(HashMap::new())),
             pending_approvals,
+            transcript,
         });
     Ok(())
+}
+
+/// Buffer a full item snapshot from an `item/*` notification into the
+/// per-thread transcript, upserted by id in stream order. Deltas (no
+/// `params.item`) are skipped — they are transient and re-derived from the
+/// eventual completed item.
+fn buffer_item(transcript: &Mutex<HashMap<String, Vec<ThreadItem>>>, inbound: &Inbound) {
+    let Some(params) = inbound.params.as_ref() else {
+        return;
+    };
+    let Some(thread_id) = params.get("threadId").and_then(Value::as_str) else {
+        return;
+    };
+    let Some(parsed) = params.get("item").and_then(parse_item) else {
+        return;
+    };
+    if parsed.id.is_empty() {
+        return;
+    }
+    let mut map = transcript.lock().expect("transcript poisoned");
+    let items = map.entry(thread_id.to_string()).or_default();
+    match items.iter_mut().find(|i| i.id == parsed.id) {
+        Some(existing) => *existing = parsed, // later snapshot wins
+        None => items.push(parsed),           // new id keeps stream order
+    }
+}
+
+/// The item snapshots this session has streamed for `thread_id`, in stream
+/// order. Empty when the service has no live session.
+fn buffered_items(service_key: &str, thread_id: &str) -> Vec<ThreadItem> {
+    sessions()
+        .lock()
+        .expect("sessions poisoned")
+        .get(service_key)
+        .map(|s| {
+            s.transcript
+                .lock()
+                .expect("transcript poisoned")
+                .get(thread_id)
+                .cloned()
+                .unwrap_or_default()
+        })
+        .unwrap_or_default()
 }
 
 /// How long a [`probe`] waits for the tunnel + handshake before declaring the
@@ -772,6 +831,18 @@ pub fn thread_read(service_key: &str, thread_id: &str) -> Result<ThreadHistory> 
         for item in turn_items {
             if let Some(parsed) = parse_item(item) {
                 items.push(parsed);
+            }
+        }
+    }
+    // Merge in any items this session streamed that `thread/read` didn't return
+    // — an in-progress turn's thinking/tool items are buffered by the forwarder
+    // but the server omits them here — preserving their stream order so a
+    // re-opened conversation shows the live progress instead of a blank turn.
+    {
+        let seen: std::collections::HashSet<String> = items.iter().map(|i| i.id.clone()).collect();
+        for buffered in buffered_items(service_key, thread_id) {
+            if !seen.contains(&buffered.id) {
+                items.push(buffered);
             }
         }
     }

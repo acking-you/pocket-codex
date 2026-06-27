@@ -464,6 +464,17 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
         // Restore the "thinking" state if a turn was still running when we
         // left: live events (delivered after resume) will finish rendering it.
         _streaming = history.running;
+        // Restore the running turn's live clock + loading animation. Without
+        // this the streaming flag was set but the ticker wasn't, so the bottom
+        // in-progress indicator showed a frozen 0:00 (looked "gone"). We can't
+        // recover the real start time on a cold re-open, so count from now — the
+        // point is to show, live, that the turn is still working.
+        _elapsedTicker?.cancel();
+        _elapsedTicker = null;
+        if (history.running) {
+          _elapsedSecs = 0;
+          _startElapsedTicker();
+        }
         // Restore the thread's plan mode authoritatively: prefer the server's
         // collaborationMode if it ever exposes it, else our per-thread memory.
         // (The old "last item is plan" guess was wrong — the model's reply
