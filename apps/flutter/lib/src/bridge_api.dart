@@ -44,6 +44,72 @@ class SubInfo {
   final bool alive;
 }
 
+/// Result of starting local hosting (the app's own codex app-server).
+class AppServeResult {
+  /// Creates a hosting-start result.
+  const AppServeResult({
+    required this.device,
+    required this.name,
+    required this.serviceKey,
+    required this.listenAddr,
+    required this.pid,
+    required this.reused,
+  });
+
+  /// Device id the service registered under.
+  final String device;
+
+  /// Service instance name.
+  final String name;
+
+  /// `pcx:<device>:app:<name>` key (what discovery + `appConnect` use).
+  final String serviceKey;
+
+  /// Loopback `host:port` codex is listening on.
+  final String listenAddr;
+
+  /// The codex process id.
+  final int pid;
+
+  /// Whether an already-running codex was reused instead of freshly spawned.
+  final bool reused;
+}
+
+/// Status of local hosting (the app's own codex app-server).
+class AppServeStatus {
+  /// Creates a hosting-status snapshot.
+  const AppServeStatus({
+    this.running = false,
+    this.alive = false,
+    this.pid,
+    this.listenAddr,
+    this.device,
+    this.name,
+    this.serviceKey,
+  });
+
+  /// The register tunnel is live (hosting / trying to).
+  final bool running;
+
+  /// codex is accepting on its listen port.
+  final bool alive;
+
+  /// codex process id, when hosting.
+  final int? pid;
+
+  /// Loopback `host:port`, when hosting.
+  final String? listenAddr;
+
+  /// Device id, when hosting.
+  final String? device;
+
+  /// Service instance name, when hosting.
+  final String? name;
+
+  /// `pcx:<device>:app:<name>` key, when hosting.
+  final String? serviceKey;
+}
+
 /// View of persisted config (relay/key presence, locale, account state).
 class ConfigInfo {
   /// Creates a config view.
@@ -500,6 +566,41 @@ abstract interface class BridgeApi {
 
   /// List the account's services from the backend.
   Future<List<AccountService>> accountServices();
+
+  /// Deregister one of the account's services from the relay (best-effort; a
+  /// still-running host re-registers shortly after). [kind] is 'app' or 'api'.
+  Future<void> accountDeregisterService({
+    required String device,
+    required String kind,
+    required String name,
+  });
+
+  // --- Local hosting (desktop): run a local codex app-server ---
+
+  /// Start hosting a local codex app-server under the signed-in account. Spawns
+  /// (or reuses) codex on `127.0.0.1:<port>`; [binaryOverride] points at the
+  /// codex binary when it isn't on `PATH` (remembered for next time); [proxy] is
+  /// the upstream proxy codex uses to reach chatgpt.com (`null` = no proxy).
+  /// Desktop only.
+  Future<AppServeResult> appServeStart({
+    required int port,
+    String? binaryOverride,
+    String? name,
+    String? proxy,
+  });
+
+  /// Snapshot of every local host (for the status cards + periodic re-probe).
+  Future<List<AppServeStatus>> appServeStatus();
+
+  /// Stop one local host by name (aborts its tunnel + watchdog and stops codex).
+  Future<void> appServeStop(String name);
+
+  /// Stop every local host (called on app quit so a real quit leaves no orphan).
+  Future<void> appServeStopAll();
+
+  /// The resolved codex binary path (persisted config → `PATH`), or `null` so
+  /// the UI can prompt the user to point at one.
+  Future<String?> codexLocate();
 
   // --- App-server remote control ---
 

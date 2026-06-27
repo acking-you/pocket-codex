@@ -8,7 +8,7 @@ use flutter_rust_bridge::frb;
 use pocket_codex_core::config::Mode;
 
 use crate::{
-    engine::{account, app_session, config, discovery, runtime, sessions},
+    engine::{account, app_session, config, discovery, runtime, serve, sessions},
     frb_generated::StreamSink,
 };
 
@@ -211,6 +211,100 @@ pub fn subscriptions() -> Vec<SubStatusDto> {
             alive: s.alive,
         })
         .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Local hosting (desktop): run + manage a local codex app-server, the in-app
+// equivalent of `pocket-codex serve` (account mode).
+// ---------------------------------------------------------------------------
+
+/// Result of starting local hosting, mirrored for Dart.
+pub struct AppServeDto {
+    /// Device id the service registered under.
+    pub device: String,
+    /// Service instance name.
+    pub name: String,
+    /// `pcx:<device>:app:<name>` key (what discovery + `app_connect` use).
+    pub service_key: String,
+    /// Loopback `host:port` codex is listening on.
+    pub listen_addr: String,
+    /// The codex process id.
+    pub pid: u32,
+    /// Whether an already-running codex was reused instead of freshly spawned.
+    pub reused: bool,
+}
+
+/// Status of local hosting, mirrored for Dart.
+pub struct AppServeStatusDto {
+    /// The register tunnel is live (hosting / trying to).
+    pub running: bool,
+    /// codex is accepting on its listen port.
+    pub alive: bool,
+    /// codex process id, when hosting.
+    pub pid: Option<u32>,
+    /// Loopback `host:port`, when hosting.
+    pub listen_addr: Option<String>,
+    /// Device id, when hosting.
+    pub device: Option<String>,
+    /// Service instance name, when hosting.
+    pub name: Option<String>,
+    /// `pcx:<device>:app:<name>` key, when hosting.
+    pub service_key: Option<String>,
+}
+
+/// Start hosting a local codex app-server under the signed-in account. Spawns
+/// (or reuses) codex on `127.0.0.1:<port>` and registers it through the broker.
+/// `proxy` is the upstream proxy codex uses to reach chatgpt.com (`None` =
+/// none). Desktop only.
+pub fn app_serve_start(
+    port: u16,
+    binary_override: Option<String>,
+    name: Option<String>,
+    proxy: Option<String>,
+) -> Result<AppServeDto> {
+    let r = serve::serve_start(port, binary_override, name, proxy)?;
+    Ok(AppServeDto {
+        device: r.device,
+        name: r.name,
+        service_key: r.service_key,
+        listen_addr: r.listen_addr,
+        pid: r.pid,
+        reused: r.reused,
+    })
+}
+
+/// Snapshot of every local host (for the status cards + periodic re-probe).
+pub fn app_serve_status() -> Vec<AppServeStatusDto> {
+    serve::serve_status()
+        .into_iter()
+        .map(|s| AppServeStatusDto {
+            running: s.running,
+            alive: s.alive,
+            pid: s.pid,
+            listen_addr: s.listen_addr,
+            device: s.device,
+            name: s.name,
+            service_key: s.service_key,
+        })
+        .collect()
+}
+
+/// Stop one local host by name (aborts its tunnel + watchdog and stops codex).
+pub fn app_serve_stop(name: String) -> Result<()> {
+    serve::serve_stop(&name)
+}
+
+/// Stop every local host (called on app quit so a real quit leaves no orphan
+/// codex). A no-op when nothing is hosting.
+pub fn app_serve_stop_all() -> Result<()> {
+    serve::serve_stop_all();
+    Ok(())
+}
+
+/// The resolved `codex` binary path (persisted config → `$PATH`), or `None` so
+/// the UI can prompt the user to point at one.
+pub fn codex_locate() -> Option<String> {
+    serve::codex_locate()
 }
 
 // ---------------------------------------------------------------------------
@@ -833,4 +927,12 @@ pub fn account_services() -> Result<Vec<AccountServiceDto>> {
             name: s.name,
         })
         .collect())
+}
+
+/// Deregister one of the account's services from the relay (best-effort; a
+/// still-running host re-registers shortly after). `kind` is `"app"` or
+/// `"api"`.
+pub fn account_deregister_service(device: String, kind: String, name: String) -> Result<()> {
+    let dir = runtime::support_dir()?;
+    runtime::runtime().block_on(account::deregister_service(&dir, &device, &kind, &name))
 }

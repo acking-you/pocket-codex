@@ -2114,6 +2114,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "toml",
+ "tracing",
  "webpki-roots 0.26.11",
 ]
 

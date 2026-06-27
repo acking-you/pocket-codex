@@ -240,5 +240,49 @@
       "name": { "type": "String" },
       "pid": { "type": "int" }
     }
-  }
+  },
+  "localHostingSection": "Local hosting",
+  "localHostTitle": "Local codex",
+  "localHostStopped": "Stopped",
+  "localHostRunning": "Hosting",
+  "localHostStarting": "Starting…",
+  "startHosting": "Start hosting",
+  "stopHosting": "Stop hosting",
+  "localHostPort": "Port",
+  "localHostName": "Instance name",
+  "codexBinaryPath": "codex binary path",
+  "codexNotFound": "codex wasn't found on PATH — enter its full path below.",
+  "localHostDialogTitle": "Host a local app-server",
+  "localHostHint": "Runs codex on this machine and registers it to your account, so your other devices can drive it.",
+  "localHostListening": "Listening on {addr}",
+  "@localHostListening": {
+    "placeholders": { "addr": { "type": "String" } }
+  },
+  "localHostStartError": "Couldn't start hosting: {error}",
+  "@localHostStartError": {
+    "placeholders": { "error": { "type": "String" } }
+  },
+  "codexFoundAt": "codex found: {path}",
+  "@codexFoundAt": {
+    "placeholders": { "path": { "type": "String" } }
+  },
+  "chooseCodexPath": "Choose codex binary…",
+  "codexPathRequired": "Choose the codex binary to continue.",
+  "useProxy": "Use a proxy",
+  "proxyLabel": "Proxy",
+  "proxyRequired": "Enter a proxy, or turn off “Use a proxy”.",
+  "noProxyWarning": "Without a proxy, codex on this machine may fail to reach chatgpt.com.",
+  "addLocalHost": "Host another…",
+  "customizeCodexPath": "Change path",
+  "appServerSubtitleLocal": "{device} · hosted here",
+  "@appServerSubtitleLocal": {
+    "placeholders": { "device": { "type": "String" } }
+  },
+  "deregister": "Deregister",
+  "deregisterTitle": "Deregister this service?",
+  "deregisterWarning": "Remove “{name}” from your account's relay listing. If a host is still running it, it will re-register within seconds — stop that host to remove it for good.",
+  "@deregisterWarning": {
+    "placeholders": { "name": { "type": "String" } }
+  },
+  "deregisterFailed": "Couldn't deregister the service"
 }

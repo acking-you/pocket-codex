@@ -43,6 +43,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   AppEventDto dco_decode_app_event_dto(dynamic raw);
 
   @protected
+  AppServeDto dco_decode_app_serve_dto(dynamic raw);
+
+  @protected
+  AppServeStatusDto dco_decode_app_serve_status_dto(dynamic raw);
+
+  @protected
   bool dco_decode_bool(dynamic raw);
 
   @protected
@@ -50,6 +56,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   PlatformInt64 dco_decode_box_autoadd_i_64(dynamic raw);
+
+  @protected
+  int dco_decode_box_autoadd_u_32(dynamic raw);
 
   @protected
   ConfigView dco_decode_config_view(dynamic raw);
@@ -71,6 +80,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<AccountServiceDto> dco_decode_list_account_service_dto(dynamic raw);
+
+  @protected
+  List<AppServeStatusDto> dco_decode_list_app_serve_status_dto(dynamic raw);
 
   @protected
   List<HolderDto> dco_decode_list_holder_dto(dynamic raw);
@@ -112,6 +124,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   PlatformInt64? dco_decode_opt_box_autoadd_i_64(dynamic raw);
 
   @protected
+  int? dco_decode_opt_box_autoadd_u_32(dynamic raw);
+
+  @protected
   ServiceIdDto dco_decode_service_id_dto(dynamic raw);
 
   @protected
@@ -131,6 +146,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   int dco_decode_u_16(dynamic raw);
+
+  @protected
+  int dco_decode_u_32(dynamic raw);
 
   @protected
   BigInt dco_decode_u_64(dynamic raw);
@@ -167,6 +185,14 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   AppEventDto sse_decode_app_event_dto(SseDeserializer deserializer);
 
   @protected
+  AppServeDto sse_decode_app_serve_dto(SseDeserializer deserializer);
+
+  @protected
+  AppServeStatusDto sse_decode_app_serve_status_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   bool sse_decode_bool(SseDeserializer deserializer);
 
   @protected
@@ -176,6 +202,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   PlatformInt64 sse_decode_box_autoadd_i_64(SseDeserializer deserializer);
+
+  @protected
+  int sse_decode_box_autoadd_u_32(SseDeserializer deserializer);
 
   @protected
   ConfigView sse_decode_config_view(SseDeserializer deserializer);
@@ -199,6 +228,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<AccountServiceDto> sse_decode_list_account_service_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<AppServeStatusDto> sse_decode_list_app_serve_status_dto(
     SseDeserializer deserializer,
   );
 
@@ -256,6 +290,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   PlatformInt64? sse_decode_opt_box_autoadd_i_64(SseDeserializer deserializer);
 
   @protected
+  int? sse_decode_opt_box_autoadd_u_32(SseDeserializer deserializer);
+
+  @protected
   ServiceIdDto sse_decode_service_id_dto(SseDeserializer deserializer);
 
   @protected
@@ -277,6 +314,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   int sse_decode_u_16(SseDeserializer deserializer);
+
+  @protected
+  int sse_decode_u_32(SseDeserializer deserializer);
 
   @protected
   BigInt sse_decode_u_64(SseDeserializer deserializer);
@@ -327,6 +367,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_app_event_dto(AppEventDto self, SseSerializer serializer);
 
   @protected
+  void sse_encode_app_serve_dto(AppServeDto self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_app_serve_status_dto(
+    AppServeStatusDto self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_bool(bool self, SseSerializer serializer);
 
   @protected
@@ -340,6 +389,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
     PlatformInt64 self,
     SseSerializer serializer,
   );
+
+  @protected
+  void sse_encode_box_autoadd_u_32(int self, SseSerializer serializer);
 
   @protected
   void sse_encode_config_view(ConfigView self, SseSerializer serializer);
@@ -365,6 +417,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_list_account_service_dto(
     List<AccountServiceDto> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_app_serve_status_dto(
+    List<AppServeStatusDto> self,
     SseSerializer serializer,
   );
 
@@ -441,6 +499,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_opt_box_autoadd_u_32(int? self, SseSerializer serializer);
+
+  @protected
   void sse_encode_service_id_dto(ServiceIdDto self, SseSerializer serializer);
 
   @protected
@@ -466,6 +527,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_u_16(int self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_u_32(int self, SseSerializer serializer);
 
   @protected
   void sse_encode_u_64(BigInt self, SseSerializer serializer);

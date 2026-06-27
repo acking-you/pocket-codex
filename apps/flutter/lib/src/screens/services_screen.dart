@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'package:file_selector/file_selector.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -43,6 +45,7 @@ class _ServicesScreenState extends ConsumerState<ServicesScreen>
       if (mounted) {
         ref.invalidate(appReachableProvider);
         ref.invalidate(apiReachableProvider);
+        ref.invalidate(localServeListProvider);
       }
     });
   }
@@ -95,6 +98,7 @@ class _ServicesScreenState extends ConsumerState<ServicesScreen>
               ref.invalidate(subscriptionsProvider);
               ref.invalidate(appReachableProvider);
               ref.invalidate(apiReachableProvider);
+              ref.invalidate(localServeListProvider);
             },
           ),
           IconButton(
@@ -218,8 +222,29 @@ class _ServiceList extends ConsumerWidget {
     final l10n = AppLocalizations.of(context);
     final scheme = Theme.of(context).colorScheme;
     final online = Colors.green.shade600;
-    final api = services.where((s) => s.kind == 'api').toList();
-    final app = services.where((s) => s.kind == 'app').toList();
+    // Optimistically hide a just-removed service so it vanishes at once; clear
+    // the set whenever fresh discovery data lands (truth wins — a service kept
+    // alive by a running host then reappears).
+    final pending = ref.watch(pendingRemovalProvider);
+    ref.listen(servicesProvider, (_, next) {
+      if (next.hasValue && ref.read(pendingRemovalProvider).isNotEmpty) {
+        ref.read(pendingRemovalProvider.notifier).state = {};
+      }
+    });
+    final api = services
+        .where((s) => s.kind == 'api' && !pending.contains(s.key))
+        .toList();
+    final app = services
+        .where((s) => s.kind == 'app' && !pending.contains(s.key))
+        .toList();
+    // App-servers this machine hosts itself (its own `serve`): used both to
+    // render the 本地托管 section and to relabel their App-server cards as local.
+    final localHosts =
+        ref.watch(localServeListProvider).valueOrNull ?? const <AppServeStatus>[];
+    final localKeys = {
+      for (final h in localHosts)
+        if (h.serviceKey != null) h.serviceKey!,
+    };
     // Live subscription health, keyed by service key (alive/dead). A discovered
     // service is by definition currently registered on the relay → "online".
     final subs = {
@@ -288,10 +313,16 @@ class _ServiceList extends ConsumerWidget {
             reason: reason,
             status: status,
             onTap: () => onTapApi(s.key),
+            onDeregister: () =>
+                _confirmDeregister(context, ref, s, isLocalHost: false),
           );
         }),
         if (app.isNotEmpty) _SectionHeader(l10n.appServerServices),
         ...app.map((s) {
+          // An app-server we host locally also shows here (to drive it); label
+          // it "本地托管" with the host icon instead of "远程控制", so it reads
+          // as the same instance the 本地托管 section manages, not a separate one.
+          final isLocal = localKeys.contains(s.key);
           final connected = bridge.appIsConnected(s.key);
           // "Registered on the relay" is NOT "reachable": a pb-register worker
           // can outlive the codex app-server it forwards to, leaving a hollow
@@ -324,11 +355,13 @@ class _ServiceList extends ConsumerWidget {
                 );
           return _ServiceCard(
             key: Key('svc-${s.key}'),
-            icon: Icons.computer,
+            icon: isLocal ? Icons.dns : Icons.computer,
             iconBg: scheme.tertiaryContainer,
             iconFg: scheme.onTertiaryContainer,
             title: s.name,
-            subtitle: l10n.appServerSubtitle(s.device),
+            subtitle: isLocal
+                ? l10n.appServerSubtitleLocal(s.device)
+                : l10n.appServerSubtitle(s.device),
             reason: reason,
             chevron: true,
             status: StatusChip(
@@ -337,8 +370,21 @@ class _ServiceList extends ConsumerWidget {
               filled: true,
             ),
             onTap: () => onTapApp(s.key),
+            onDeregister: () =>
+                _confirmDeregister(context, ref, s, isLocalHost: isLocal),
           );
         }),
+        // Desktop + account mode: host this machine's codex app-server(s) from
+        // the app (the in-app equivalent of `pocket-codex serve`). Several can
+        // run at once. Hidden on mobile (no local codex) and in self-host mode
+        // (account-only for now).
+        if (_hostingSupported && accountLogin != null) ...[
+          _SectionHeader(l10n.localHostingSection),
+          ...localHosts.map(
+            (h) => _LocalHostCard(key: Key('local-host-${h.name}'), host: h),
+          ),
+          const _AddLocalHostCard(),
+        ],
         if (services.isEmpty)
           Padding(
             padding: const EdgeInsets.all(32),
@@ -346,6 +392,66 @@ class _ServiceList extends ConsumerWidget {
           ),
       ],
     );
+  }
+}
+
+/// Local hosting spawns a local `codex` binary + child processes — desktop only.
+bool get _hostingSupported =>
+    !kIsWeb &&
+    (defaultTargetPlatform == TargetPlatform.windows ||
+        defaultTargetPlatform == TargetPlatform.macOS ||
+        defaultTargetPlatform == TargetPlatform.linux);
+
+/// Strong-confirm, then deregister a service: stop it if it's one of our local
+/// hosts (reliable), else ask the backend to drop the relay registration
+/// (best-effort — a still-running host re-registers). The key is hidden at once
+/// via [pendingRemovalProvider].
+Future<void> _confirmDeregister(
+  BuildContext context,
+  WidgetRef ref,
+  ServiceEntry s, {
+  required bool isLocalHost,
+}) async {
+  final l10n = AppLocalizations.of(context);
+  final scheme = Theme.of(context).colorScheme;
+  final ok = await showDialog<bool>(
+    context: context,
+    builder: (_) => AlertDialog(
+      key: const Key('deregister-dialog'),
+      title: Text(l10n.deregisterTitle),
+      content: Text(l10n.deregisterWarning(s.name)),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(false),
+          child: Text(l10n.cancel),
+        ),
+        FilledButton(
+          key: const Key('deregister-confirm-btn'),
+          style: FilledButton.styleFrom(backgroundColor: scheme.error),
+          onPressed: () => Navigator.of(context).pop(true),
+          child: Text(l10n.deregister),
+        ),
+      ],
+    ),
+  );
+  if (ok != true) return;
+  try {
+    if (isLocalHost) {
+      await ref.read(bridgeApiProvider).appServeStop(s.name);
+      ref.invalidate(localServeListProvider);
+    } else {
+      await ref
+          .read(bridgeApiProvider)
+          .accountDeregisterService(device: s.device, kind: s.kind, name: s.name);
+    }
+    ref.read(pendingRemovalProvider.notifier).update((set) => {...set, s.key});
+    ref.invalidate(servicesProvider);
+  } catch (e) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${l10n.deregisterFailed}: ${friendlyError(e)}')),
+      );
+    }
   }
 }
 
@@ -429,6 +535,7 @@ class _ServiceCard extends StatelessWidget {
     this.reason,
     this.chevron = false,
     this.selected = false,
+    this.onDeregister,
   });
 
   final IconData icon;
@@ -444,6 +551,9 @@ class _ServiceCard extends StatelessWidget {
   final VoidCallback onTap;
   final bool chevron;
   final bool selected;
+
+  /// When set, an overflow menu offers a 注销 (deregister) action.
+  final VoidCallback? onDeregister;
 
   @override
   Widget build(BuildContext context) {
@@ -505,6 +615,25 @@ class _ServiceCard extends StatelessWidget {
                   const SizedBox(width: 2),
                   Icon(Icons.chevron_right, color: scheme.outline),
                 ],
+                if (onDeregister != null)
+                  PopupMenuButton<String>(
+                    icon: Icon(Icons.more_vert, color: scheme.outline),
+                    padding: EdgeInsets.zero,
+                    onSelected: (_) => onDeregister!(),
+                    itemBuilder: (context) => [
+                      PopupMenuItem(
+                        value: 'deregister',
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.link_off, size: 18, color: scheme.error),
+                            const SizedBox(width: 8),
+                            Text(AppLocalizations.of(context).deregister),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
               ],
             ),
           ),
@@ -547,6 +676,353 @@ class _SectionHeader extends StatelessWidget {
       ),
     ),
   );
+}
+
+/// One locally-hosted codex app-server's status card. Tapping opens
+/// [_LocalHostDialog] for that host (running → stop). Once hosting, the server
+/// also appears in the App-server list above (discovery lists it) to drive.
+class _LocalHostCard extends StatelessWidget {
+  const _LocalHostCard({super.key, required this.host});
+
+  final AppServeStatus host;
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    final scheme = Theme.of(context).colorScheme;
+    final online = Colors.green.shade600;
+    final chip = host.running
+        ? StatusChip(
+            color: host.alive ? online : scheme.tertiary,
+            label: host.alive ? l10n.localHostRunning : l10n.localHostStarting,
+            filled: true,
+          )
+        : StatusChip(color: scheme.outline, label: l10n.localHostStopped, filled: true);
+    return _ServiceCard(
+      icon: Icons.dns,
+      iconBg: scheme.tertiaryContainer,
+      iconFg: scheme.onTertiaryContainer,
+      title: host.name ?? l10n.localHostTitle,
+      subtitle: host.listenAddr != null
+          ? l10n.localHostListening(host.listenAddr!)
+          : l10n.localHostStopped,
+      status: chip,
+      chevron: true,
+      onTap: () => showDialog<void>(
+        context: context,
+        builder: (_) => _LocalHostDialog(existing: host),
+      ),
+    );
+  }
+}
+
+/// The "+ host another" entry that opens [_LocalHostDialog] in new-host mode.
+class _AddLocalHostCard extends StatelessWidget {
+  const _AddLocalHostCard();
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: OutlinedButton.icon(
+        key: const Key('add-local-host-card'),
+        onPressed: () => showDialog<void>(
+          context: context,
+          builder: (_) => const _LocalHostDialog(),
+        ),
+        icon: const Icon(Icons.add),
+        label: Text(l10n.addLocalHost),
+        style: OutlinedButton.styleFrom(
+          minimumSize: const Size.fromHeight(44),
+          alignment: Alignment.centerLeft,
+        ),
+      ),
+    );
+  }
+}
+
+/// Manage one local host. With [existing] set it shows that host's listen
+/// address + service key and a Stop button. Otherwise it's the "new host" form
+/// (codex path, port, instance name, proxy) with a Start button. codex is
+/// auto-detected (with a "change path" override) or picked when not on PATH.
+class _LocalHostDialog extends ConsumerStatefulWidget {
+  const _LocalHostDialog({this.existing});
+
+  /// The running host this dialog manages, or null to host a new one.
+  final AppServeStatus? existing;
+
+  @override
+  ConsumerState<_LocalHostDialog> createState() => _LocalHostDialogState();
+}
+
+class _LocalHostDialogState extends ConsumerState<_LocalHostDialog> {
+  final _port = TextEditingController(text: '18080');
+  final _path = TextEditingController();
+  final _name = TextEditingController(text: 'default');
+  // Codex needs a proxy to reach chatgpt.com on most networks, so hosting
+  // defaults to a proxy (a local HTTP proxy on :11111) unless the user opts out.
+  final _proxy = TextEditingController(text: 'http://127.0.0.1:11111');
+  bool _useProxy = true;
+  bool _overridePath = false; // user chose to customize the codex path
+  String? _codexPath; // auto-detected codex (config → PATH), null = not found
+  bool _codexChecked = false;
+  bool _busy = false;
+  String? _error;
+
+  bool get _isExisting => widget.existing != null;
+  bool get _codexFound => _codexPath != null;
+
+  @override
+  void initState() {
+    super.initState();
+    if (_isExisting) return;
+    // Auto-detect codex: when found we just show "available" (with a "change
+    // path" override); when not, the user picks a path (persisted on start).
+    Future.microtask(() async {
+      final found = await ref.read(bridgeApiProvider).codexLocate();
+      if (!mounted) return;
+      setState(() {
+        _codexPath = found;
+        _codexChecked = true;
+        if (found != null) _path.text = found; // prefill the override field
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    _port.dispose();
+    _path.dispose();
+    _name.dispose();
+    _proxy.dispose();
+    super.dispose();
+  }
+
+  Future<void> _browseCodex() async {
+    final file = await openFile();
+    if (file != null && mounted) setState(() => _path.text = file.path);
+  }
+
+  Future<void> _start() async {
+    final l10n = AppLocalizations.of(context);
+    final port = int.tryParse(_port.text.trim());
+    if (port == null || port > 65535) {
+      setState(() => _error = l10n.localHostPort);
+      return;
+    }
+    // codex: auto-detected and not overridden → let the bridge resolve it;
+    // otherwise the path the user typed / picked.
+    final manual = !_codexFound || _overridePath;
+    final override = manual ? _path.text.trim() : '';
+    if (manual && override.isEmpty) {
+      setState(() => _error = l10n.codexPathRequired);
+      return;
+    }
+    // A proxy is mandatory unless the user explicitly turned it off.
+    final proxy = _useProxy ? _proxy.text.trim() : null;
+    if (_useProxy && (proxy == null || proxy.isEmpty)) {
+      setState(() => _error = l10n.proxyRequired);
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      final name = _name.text.trim();
+      await ref.read(bridgeApiProvider).appServeStart(
+        port: port,
+        binaryOverride: override.isEmpty ? null : override,
+        name: name.isEmpty ? null : name,
+        proxy: proxy,
+      );
+      ref.invalidate(localServeListProvider);
+      ref.invalidate(servicesProvider);
+      if (mounted) Navigator.of(context).pop();
+    } catch (e) {
+      if (mounted) setState(() => _error = friendlyError(e));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _stop() async {
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      await ref
+          .read(bridgeApiProvider)
+          .appServeStop(widget.existing!.name ?? 'default');
+      ref.invalidate(localServeListProvider);
+      ref.invalidate(servicesProvider);
+      if (mounted) Navigator.of(context).pop();
+    } catch (e) {
+      if (mounted) setState(() => _error = friendlyError(e));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    final scheme = Theme.of(context).colorScheme;
+    final small = Theme.of(context).textTheme.bodySmall;
+    final existing = widget.existing;
+    final children = <Widget>[Text(l10n.localHostHint)];
+    if (existing != null) {
+      children.add(const SizedBox(height: 12));
+      if (existing.listenAddr != null) {
+        children.add(
+          Text(l10n.localHostListening(existing.listenAddr!), style: small),
+        );
+      }
+      if (existing.serviceKey != null) {
+        children
+          ..add(const SizedBox(height: 4))
+          ..add(
+            SelectableText(
+              existing.serviceKey!,
+              style: small?.copyWith(color: scheme.onSurfaceVariant),
+            ),
+          );
+      }
+    } else {
+      children.add(const SizedBox(height: 16));
+      // --- codex availability ---
+      if (!_codexChecked) {
+        children.add(const LinearProgressIndicator());
+      } else if (_codexFound && !_overridePath) {
+        children.add(
+          Row(
+            children: [
+              Icon(Icons.check_circle, size: 18, color: Colors.green.shade600),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  l10n.codexFoundAt(_codexPath!),
+                  style: small,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              TextButton(
+                key: const Key('customize-codex-btn'),
+                onPressed: _busy
+                    ? null
+                    : () => setState(() => _overridePath = true),
+                child: Text(l10n.customizeCodexPath),
+              ),
+            ],
+          ),
+        );
+      } else {
+        if (!_codexFound) {
+          children
+            ..add(Text(l10n.codexNotFound, style: TextStyle(color: scheme.error)))
+            ..add(const SizedBox(height: 8));
+        }
+        children.add(
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Expanded(
+                child: TextField(
+                  key: const Key('codex-path-field'),
+                  controller: _path,
+                  decoration: InputDecoration(labelText: l10n.codexBinaryPath),
+                ),
+              ),
+              const SizedBox(width: 8),
+              OutlinedButton(
+                key: const Key('browse-codex-btn'),
+                onPressed: _busy ? null : _browseCodex,
+                child: Text(l10n.chooseCodexPath),
+              ),
+            ],
+          ),
+        );
+      }
+      // --- port + name ---
+      children
+        ..add(const SizedBox(height: 12))
+        ..add(
+          TextField(
+            controller: _port,
+            decoration: InputDecoration(labelText: l10n.localHostPort),
+            keyboardType: TextInputType.number,
+          ),
+        )
+        ..add(const SizedBox(height: 12))
+        ..add(
+          TextField(
+            controller: _name,
+            decoration: InputDecoration(labelText: l10n.localHostName),
+          ),
+        )
+        // --- proxy (mandatory unless turned off) ---
+        ..add(
+          SwitchListTile(
+            key: const Key('use-proxy-switch'),
+            contentPadding: EdgeInsets.zero,
+            title: Text(l10n.useProxy),
+            value: _useProxy,
+            onChanged: _busy ? null : (v) => setState(() => _useProxy = v),
+          ),
+        );
+      if (_useProxy) {
+        children.add(
+          TextField(
+            key: const Key('proxy-field'),
+            controller: _proxy,
+            decoration: InputDecoration(labelText: l10n.proxyLabel),
+          ),
+        );
+      } else {
+        children.add(
+          Text(l10n.noProxyWarning, style: TextStyle(color: Colors.orange.shade800)),
+        );
+      }
+    }
+    if (_error != null) {
+      children
+        ..add(const SizedBox(height: 12))
+        ..add(Text(_error!, style: TextStyle(color: scheme.error)));
+    }
+    return AlertDialog(
+      title: Text(l10n.localHostDialogTitle),
+      content: SizedBox(
+        width: 380,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: children,
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _busy ? null : () => Navigator.of(context).pop(),
+          child: Text(l10n.cancel),
+        ),
+        if (existing != null)
+          FilledButton(
+            key: const Key('stop-hosting-btn'),
+            onPressed: _busy ? null : _stop,
+            child: Text(l10n.stopHosting),
+          )
+        else
+          FilledButton(
+            key: const Key('start-hosting-btn'),
+            onPressed: _busy ? null : _start,
+            child: Text(l10n.startHosting),
+          ),
+      ],
+    );
+  }
 }
 
 class _ErrorState extends StatelessWidget {

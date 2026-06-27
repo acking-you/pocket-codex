@@ -85,6 +85,19 @@ final apiReachableProvider = FutureProvider.family<bool, String>((
   return ref.watch(bridgeApiProvider).apiProbe(serviceKey);
 });
 
+/// Every locally-hosted codex app-server (the app's own `serve` hosts), for the
+/// desktop local-hosting block. Invalidated by the services-screen re-probe
+/// timer + the refresh button, and after start/stop.
+final localServeListProvider = FutureProvider<List<AppServeStatus>>((ref) async {
+  return ref.watch(bridgeApiProvider).appServeStatus();
+});
+
+/// Service keys the user just removed (stopped a host, or 注销), hidden from the
+/// service lists optimistically so the entry vanishes at once. Cleared whenever
+/// fresh discovery data arrives, so a service kept alive by a still-running host
+/// correctly reappears on the next discovery.
+final pendingRemovalProvider = StateProvider<Set<String>>((ref) => {});
+
 /// The set of thread ids on [serviceKey] that currently have an in-flight turn,
 /// derived purely from the live event stream: `turn/started` adds a thread,
 /// `turn/completed` / `turn/failed` removes it. Lets the session lists show a

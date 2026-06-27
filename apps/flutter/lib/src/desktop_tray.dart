@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'package:pocket_codex/src/bridge_api_rust.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
 
@@ -134,6 +135,15 @@ class DesktopTray with TrayListener, WindowListener {
   }
 
   Future<void> _quit() async {
+    // Stop any locally-hosted codex app-servers first so a real quit leaves no
+    // orphan processes (closing to the tray, by contrast, keeps the app alive
+    // and therefore keeps hosting). Best-effort + time-bounded so a wedged stop
+    // can never block shutdown; a no-op when nothing is hosting.
+    try {
+      await const RustBridgeApi().appServeStopAll().timeout(
+        const Duration(seconds: 3),
+      );
+    } catch (_) {}
     // Remove the tray icon, lift the close guard so destroy() isn't intercepted
     // again, then tear the window down. window_manager.destroy() ends the app —
     // Windows posts WM_QUIT to break the runner's message loop, macOS/Linux

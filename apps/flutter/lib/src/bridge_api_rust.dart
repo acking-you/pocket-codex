@@ -61,6 +61,63 @@ class RustBridgeApi implements BridgeApi {
   }
 
   @override
+  Future<void> accountDeregisterService({
+    required String device,
+    required String kind,
+    required String name,
+  }) => frb.accountDeregisterService(device: device, kind: kind, name: name);
+
+  @override
+  Future<AppServeResult> appServeStart({
+    required int port,
+    String? binaryOverride,
+    String? name,
+    String? proxy,
+  }) async {
+    final r = await frb.appServeStart(
+      port: port,
+      binaryOverride: binaryOverride,
+      name: name,
+      proxy: proxy,
+    );
+    return AppServeResult(
+      device: r.device,
+      name: r.name,
+      serviceKey: r.serviceKey,
+      listenAddr: r.listenAddr,
+      pid: r.pid,
+      reused: r.reused,
+    );
+  }
+
+  @override
+  Future<List<AppServeStatus>> appServeStatus() async {
+    final list = await frb.appServeStatus();
+    return list
+        .map(
+          (s) => AppServeStatus(
+            running: s.running,
+            alive: s.alive,
+            pid: s.pid,
+            listenAddr: s.listenAddr,
+            device: s.device,
+            name: s.name,
+            serviceKey: s.serviceKey,
+          ),
+        )
+        .toList();
+  }
+
+  @override
+  Future<void> appServeStop(String name) => frb.appServeStop(name: name);
+
+  @override
+  Future<void> appServeStopAll() => frb.appServeStopAll();
+
+  @override
+  Future<String?> codexLocate() => frb.codexLocate();
+
+  @override
   Future<void> setRelay(String relay) => frb.setRelay(relay: relay);
 
   @override

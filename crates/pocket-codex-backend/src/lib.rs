@@ -94,6 +94,7 @@ pub async fn run(cfg: ServerConfig) -> anyhow::Result<()> {
     let app = api::router(AppState {
         auth,
         relay_addr,
+        broker: broker.clone(),
     });
     tracing::info!(
         http = %cfg.http_listen,

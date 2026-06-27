@@ -47,3 +47,4 @@ rustls = { workspace = true }
 tokio-rustls = { workspace = true }
 webpki-roots = "0.26"
 once_cell = { workspace = true }
+tracing = { workspace = true }

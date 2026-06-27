@@ -640,4 +640,101 @@ class AppLocalizationsZh extends AppLocalizations {
   String holderRow(String name, int pid) {
     return '$name · PID $pid';
   }
+
+  @override
+  String get localHostingSection => '本地托管';
+
+  @override
+  String get localHostTitle => '本地 codex';
+
+  @override
+  String get localHostStopped => '已停止';
+
+  @override
+  String get localHostRunning => '托管中';
+
+  @override
+  String get localHostStarting => '启动中…';
+
+  @override
+  String get startHosting => '开始托管';
+
+  @override
+  String get stopHosting => '停止托管';
+
+  @override
+  String get localHostPort => '端口';
+
+  @override
+  String get localHostName => '实例名';
+
+  @override
+  String get codexBinaryPath => 'codex 程序路径';
+
+  @override
+  String get codexNotFound => '未在 PATH 中找到 codex —— 请在下方填写完整路径。';
+
+  @override
+  String get localHostDialogTitle => '托管本地 app-server';
+
+  @override
+  String get localHostHint => '在本机运行 codex 并注册到你的账号，让你的其它设备可以驱动它。';
+
+  @override
+  String localHostListening(String addr) {
+    return '正在监听 $addr';
+  }
+
+  @override
+  String localHostStartError(String error) {
+    return '启动托管失败：$error';
+  }
+
+  @override
+  String codexFoundAt(String path) {
+    return '已找到 codex：$path';
+  }
+
+  @override
+  String get chooseCodexPath => '选择 codex 程序…';
+
+  @override
+  String get codexPathRequired => '请先选择 codex 程序再继续。';
+
+  @override
+  String get useProxy => '使用代理';
+
+  @override
+  String get proxyLabel => '代理';
+
+  @override
+  String get proxyRequired => '请填写代理，或关闭「使用代理」。';
+
+  @override
+  String get noProxyWarning => '未使用代理时，本机的 codex 可能无法连接 chatgpt.com。';
+
+  @override
+  String get addLocalHost => '再托管一个…';
+
+  @override
+  String get customizeCodexPath => '自定义路径';
+
+  @override
+  String appServerSubtitleLocal(String device) {
+    return '$device · 本地托管';
+  }
+
+  @override
+  String get deregister => '注销';
+
+  @override
+  String get deregisterTitle => '注销该服务？';
+
+  @override
+  String deregisterWarning(String name) {
+    return '将「$name」从你账号的中继列表中移除。如果仍有主机在运行它，它会在几秒内重新注册——要彻底移除请停掉该主机。';
+  }
+
+  @override
+  String get deregisterFailed => '注销失败';
 }

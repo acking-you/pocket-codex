@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -224,6 +225,218 @@ void main() {
     expect(find.text('@acking-you'), findsOneWidget);
     // …and never the confusing "(no relay configured)" placeholder.
     expect(find.text('(未配置 relay)'), findsNothing);
+  });
+
+  FakeBridgeApi accountFake() => FakeBridgeApi(
+    config: const ConfigInfo(
+      relay: '',
+      hasKey: false,
+      mode: 'account',
+      accountLogin: 'acking-you',
+    ),
+    services: const [],
+  );
+
+  testWidgets('desktop account mode: add a host, then stop it', (t) async {
+    // The block is desktop-only; force a desktop target. Reset inside the body
+    // (not addTearDown) so the framework's debug-var invariant check passes.
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    try {
+      final api = accountFake();
+      await t.pumpWidget(_host(const ServicesScreen(), api));
+      await t.pumpAndSettle();
+
+      // No hosts yet → only the "host another" entry (desktop + account mode).
+      expect(find.byKey(const Key('add-local-host-card')), findsOneWidget);
+
+      // Add a host → start on the default port with the default proxy.
+      await t.tap(find.byKey(const Key('add-local-host-card')));
+      await t.pumpAndSettle();
+      expect(find.byKey(const Key('start-hosting-btn')), findsOneWidget);
+      await t.tap(find.byKey(const Key('start-hosting-btn')));
+      await t.pumpAndSettle();
+      expect(api.lastServePort, 18080);
+      expect(api.lastServeProxy, 'http://127.0.0.1:11111');
+      expect(api.serveHosts, hasLength(1));
+
+      // The running host's card appears; open it → Stop tears it down.
+      expect(find.byKey(const Key('local-host-default')), findsOneWidget);
+      await t.tap(find.byKey(const Key('local-host-default')));
+      await t.pumpAndSettle();
+      expect(find.byKey(const Key('stop-hosting-btn')), findsOneWidget);
+      await t.tap(find.byKey(const Key('stop-hosting-btn')));
+      await t.pumpAndSettle();
+      expect(api.serveHosts, isEmpty);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
+  testWidgets('local-host: turning off the proxy passes no proxy', (t) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    try {
+      final api = accountFake();
+      await t.pumpWidget(_host(const ServicesScreen(), api));
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(const Key('add-local-host-card')));
+      await t.pumpAndSettle();
+      // The proxy field shows by default (proxy is mandatory); toggle it off.
+      expect(find.byKey(const Key('proxy-field')), findsOneWidget);
+      await t.tap(find.byKey(const Key('use-proxy-switch')));
+      await t.pumpAndSettle();
+      expect(find.byKey(const Key('proxy-field')), findsNothing);
+      await t.tap(find.byKey(const Key('start-hosting-btn')));
+      await t.pumpAndSettle();
+      expect(api.lastServeProxy, isNull);
+      expect(api.serveHosts, hasLength(1));
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
+  testWidgets('local-host: "change path" reveals the codex path field', (
+    t,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    try {
+      final api = accountFake(); // codexLocate returns a path → "found"
+      await t.pumpWidget(_host(const ServicesScreen(), api));
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(const Key('add-local-host-card')));
+      await t.pumpAndSettle();
+      // Found → no path field, but a "change path" override is offered.
+      expect(find.byKey(const Key('codex-path-field')), findsNothing);
+      expect(find.byKey(const Key('customize-codex-btn')), findsOneWidget);
+      await t.tap(find.byKey(const Key('customize-codex-btn')));
+      await t.pumpAndSettle();
+      expect(find.byKey(const Key('codex-path-field')), findsOneWidget);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
+  testWidgets('local-host: a second host coexists with the first', (t) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    try {
+      final api = accountFake();
+      await t.pumpWidget(_host(const ServicesScreen(), api));
+      await t.pumpAndSettle();
+
+      // First host "default".
+      await t.tap(find.byKey(const Key('add-local-host-card')));
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(const Key('start-hosting-btn')));
+      await t.pumpAndSettle();
+
+      // Second host "work" (codex found → fields are port, name, proxy).
+      await t.tap(find.byKey(const Key('add-local-host-card')));
+      await t.pumpAndSettle();
+      await t.enterText(find.byType(TextField).at(0), '18081');
+      await t.enterText(find.byType(TextField).at(1), 'work');
+      await t.tap(find.byKey(const Key('start-hosting-btn')));
+      await t.pumpAndSettle();
+
+      expect(api.serveHosts, hasLength(2));
+      expect(find.byKey(const Key('local-host-default')), findsOneWidget);
+      expect(find.byKey(const Key('local-host-work')), findsOneWidget);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
+  testWidgets('local-host: a hosted server is labeled local in the App-server '
+      'list', (t) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    try {
+      final api = FakeBridgeApi(
+        config: const ConfigInfo(
+          relay: '',
+          hasKey: false,
+          mode: 'account',
+          accountLogin: 'acking-you',
+        ),
+        // A discovered app-server whose key matches the host we'll start.
+        services: const [
+          ServiceEntry(
+            device: 'local',
+            kind: 'app',
+            name: 'default',
+            key: 'pcx:local:app:default',
+          ),
+        ],
+      );
+      await t.pumpWidget(_host(const ServicesScreen(), api));
+      await t.pumpAndSettle();
+      // Before hosting it's a plain remote app-server.
+      expect(find.text('local · 远程控制'), findsOneWidget);
+
+      // Host "default" locally → its key matches the discovered service.
+      await t.tap(find.byKey(const Key('add-local-host-card')));
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(const Key('start-hosting-btn')));
+      await t.pumpAndSettle();
+
+      // The same App-server card now reads as locally hosted.
+      expect(find.text('local · 本地托管'), findsOneWidget);
+      expect(find.text('local · 远程控制'), findsNothing);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
+  testWidgets('local-host card is hidden on mobile', (t) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    try {
+      final api = accountFake();
+      await t.pumpWidget(_host(const ServicesScreen(), api));
+      await t.pumpAndSettle();
+      expect(find.byKey(const Key('add-local-host-card')), findsNothing);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
+  testWidgets('注销: cancel keeps the service, confirm removes it', (t) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(
+        relay: '',
+        hasKey: false,
+        mode: 'account',
+        accountLogin: 'acking-you',
+      ),
+      services: const [
+        ServiceEntry(
+          device: 'lb7666',
+          kind: 'api',
+          name: 'default',
+          key: 'pcx:lb7666:api:default',
+        ),
+      ],
+    );
+    await t.pumpWidget(_host(const ServicesScreen(), api));
+    await t.pumpAndSettle();
+    expect(find.text('default'), findsOneWidget);
+
+    // Open the card overflow menu → 注销 → cancel: nothing happens.
+    await t.tap(find.byIcon(Icons.more_vert).first);
+    await t.pumpAndSettle();
+    await t.tap(find.text('注销'));
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('deregister-dialog')), findsOneWidget);
+    await t.tap(find.text('取消'));
+    await t.pumpAndSettle();
+    expect(api.lastDeregistered, isNull);
+    expect(find.text('default'), findsOneWidget);
+
+    // Re-open → confirm: the service is deregistered + leaves the list.
+    await t.tap(find.byIcon(Icons.more_vert).first);
+    await t.pumpAndSettle();
+    await t.tap(find.text('注销'));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('deregister-confirm-btn')));
+    await t.pumpAndSettle();
+    expect(api.lastDeregistered, 'pcx:lb7666:api:default');
+    expect(find.text('default'), findsNothing);
   });
 
   testWidgets('a registered-but-dead API proxy reads "unreachable", not '
@@ -1812,13 +2025,17 @@ void main() {
     await t.pumpWidget(_host(const ServicesScreen(), api));
     await t.pumpAndSettle();
     // Service rows are tappable cards now; the row is enabled iff its InkWell
-    // carries an onTap (a disabled row would have a null callback).
-    final ink = t.widget<InkWell>(
-      find.descendant(
-        of: find.byKey(const Key('svc-pcx:lb7666:app:default')),
-        matching: find.byType(InkWell),
-      ),
-    );
+    // carries an onTap (a disabled row would have a null callback). The card's
+    // own InkWell is the first descendant (the deregister overflow menu adds its
+    // own InkWell deeper in the tree).
+    final ink = t
+        .widgetList<InkWell>(
+          find.descendant(
+            of: find.byKey(const Key('svc-pcx:lb7666:app:default')),
+            matching: find.byType(InkWell),
+          ),
+        )
+        .first;
     expect(ink.onTap, isNotNull);
   });
 

@@ -60,6 +60,40 @@ Future<void> apiUnsubscribe({required String serviceKey}) =>
 Future<List<SubStatusDto>> subscriptions() =>
     RustLib.instance.api.crateApiBridgeSubscriptions();
 
+/// Start hosting a local codex app-server under the signed-in account. Spawns
+/// (or reuses) codex on `127.0.0.1:<port>` and registers it through the broker.
+/// `proxy` is the upstream proxy codex uses to reach chatgpt.com (`None` =
+/// none). Desktop only.
+Future<AppServeDto> appServeStart({
+  required int port,
+  String? binaryOverride,
+  String? name,
+  String? proxy,
+}) => RustLib.instance.api.crateApiBridgeAppServeStart(
+  port: port,
+  binaryOverride: binaryOverride,
+  name: name,
+  proxy: proxy,
+);
+
+/// Snapshot of every local host (for the status cards + periodic re-probe).
+Future<List<AppServeStatusDto>> appServeStatus() =>
+    RustLib.instance.api.crateApiBridgeAppServeStatus();
+
+/// Stop one local host by name (aborts its tunnel + watchdog and stops codex).
+Future<void> appServeStop({required String name}) =>
+    RustLib.instance.api.crateApiBridgeAppServeStop(name: name);
+
+/// Stop every local host (called on app quit so a real quit leaves no orphan
+/// codex). A no-op when nothing is hosting.
+Future<void> appServeStopAll() =>
+    RustLib.instance.api.crateApiBridgeAppServeStopAll();
+
+/// The resolved `codex` binary path (persisted config → `$PATH`), or `None` so
+/// the UI can prompt the user to point at one.
+Future<String?> codexLocate() =>
+    RustLib.instance.api.crateApiBridgeCodexLocate();
+
 /// Connect to an app-server service: subscribe on `127.0.0.1:<local_port>`,
 /// open the JSON-RPC websocket and run the `initialize` handshake. Idempotent.
 Future<void> appConnect({required String serviceKey, required int localPort}) =>
@@ -85,13 +119,13 @@ Future<void> appDisconnect({required String serviceKey}) =>
 Future<bool> appProbe({required String serviceKey}) =>
     RustLib.instance.api.crateApiBridgeAppProbe(serviceKey: serviceKey);
 
-/// Probe whether an API proxy is actually REACHABLE — its host answers a minimal
-/// HTTP request — rather than merely registered on the relay. The services list
-/// uses this so a registered-but-dead API proxy (a live relay registrant
-/// forwarding to an api-proxy that has died) shows unreachable instead of a
-/// false "online", matching the app-server's [`app_probe`]. Opens a transient
-/// tunnel, hits the proxy's local 403 fallback (no upstream model call), then
-/// tears it down.
+/// Probe whether an API proxy is actually REACHABLE — its host answers a
+/// minimal HTTP request — rather than merely registered on the relay. The
+/// services list uses this so a registered-but-dead API proxy (a live relay
+/// registrant forwarding to an api-proxy that has died) shows unreachable
+/// instead of a false "online", matching the app-server's [`app_probe`]. Opens
+/// a transient tunnel, hits the proxy's local 403 fallback (no upstream model
+/// call), then tears it down.
 Future<bool> apiProbe({required String serviceKey}) =>
     RustLib.instance.api.crateApiBridgeApiProbe(serviceKey: serviceKey);
 
@@ -285,17 +319,31 @@ Future<AccountPollDto> accountLoginPoll({
   backend: backend,
 );
 
-/// The signed-in user (verified against the backend), or `None` if not signed in.
+/// The signed-in user (verified against the backend), or `None` if not signed
+/// in.
 Future<AccountUserDto?> accountCurrentUser() =>
     RustLib.instance.api.crateApiBridgeAccountCurrentUser();
 
-/// Sign out: revoke the refresh token (best effort) and clear the local session.
+/// Sign out: revoke the refresh token (best effort) and clear the local
+/// session.
 Future<void> accountLogout() =>
     RustLib.instance.api.crateApiBridgeAccountLogout();
 
 /// List the account's services from the backend.
 Future<List<AccountServiceDto>> accountServices() =>
     RustLib.instance.api.crateApiBridgeAccountServices();
+
+/// Deregister one of the account's services from the relay (best-effort; a
+/// still-running host re-registers shortly after). `kind` is `"app"` or `"api"`.
+Future<void> accountDeregisterService({
+  required String device,
+  required String kind,
+  required String name,
+}) => RustLib.instance.api.crateApiBridgeAccountDeregisterService(
+  device: device,
+  kind: kind,
+  name: name,
+);
 
 /// Outcome of one device-flow poll, mirrored for Dart. `status` is one of
 /// `pending` / `slow_down` / `authorized` / `expired` / `denied`; `login` is
@@ -442,6 +490,114 @@ class AppEventDto {
           text == other.text &&
           requestId == other.requestId &&
           raw == other.raw;
+}
+
+/// Result of starting local hosting, mirrored for Dart.
+class AppServeDto {
+  /// Device id the service registered under.
+  final String device;
+
+  /// Service instance name.
+  final String name;
+
+  /// `pcx:<device>:app:<name>` key (what discovery + `app_connect` use).
+  final String serviceKey;
+
+  /// Loopback `host:port` codex is listening on.
+  final String listenAddr;
+
+  /// The codex process id.
+  final int pid;
+
+  /// Whether an already-running codex was reused instead of freshly spawned.
+  final bool reused;
+
+  const AppServeDto({
+    required this.device,
+    required this.name,
+    required this.serviceKey,
+    required this.listenAddr,
+    required this.pid,
+    required this.reused,
+  });
+
+  @override
+  int get hashCode =>
+      device.hashCode ^
+      name.hashCode ^
+      serviceKey.hashCode ^
+      listenAddr.hashCode ^
+      pid.hashCode ^
+      reused.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AppServeDto &&
+          runtimeType == other.runtimeType &&
+          device == other.device &&
+          name == other.name &&
+          serviceKey == other.serviceKey &&
+          listenAddr == other.listenAddr &&
+          pid == other.pid &&
+          reused == other.reused;
+}
+
+/// Status of local hosting, mirrored for Dart.
+class AppServeStatusDto {
+  /// The register tunnel is live (hosting / trying to).
+  final bool running;
+
+  /// codex is accepting on its listen port.
+  final bool alive;
+
+  /// codex process id, when hosting.
+  final int? pid;
+
+  /// Loopback `host:port`, when hosting.
+  final String? listenAddr;
+
+  /// Device id, when hosting.
+  final String? device;
+
+  /// Service instance name, when hosting.
+  final String? name;
+
+  /// `pcx:<device>:app:<name>` key, when hosting.
+  final String? serviceKey;
+
+  const AppServeStatusDto({
+    required this.running,
+    required this.alive,
+    this.pid,
+    this.listenAddr,
+    this.device,
+    this.name,
+    this.serviceKey,
+  });
+
+  @override
+  int get hashCode =>
+      running.hashCode ^
+      alive.hashCode ^
+      pid.hashCode ^
+      listenAddr.hashCode ^
+      device.hashCode ^
+      name.hashCode ^
+      serviceKey.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AppServeStatusDto &&
+          runtimeType == other.runtimeType &&
+          running == other.running &&
+          alive == other.alive &&
+          pid == other.pid &&
+          listenAddr == other.listenAddr &&
+          device == other.device &&
+          name == other.name &&
+          serviceKey == other.serviceKey;
 }
 
 /// View of persisted config for the UI; never exposes the raw key or token.
