@@ -172,6 +172,8 @@ Sign in once with GitHub and every command works **without a relay address or
 shared key**. Requires a reachable `pocket-codex-backend` — run your own; see
 [`deploy/`](deploy/README.md).
 
+> **Full step-by-step guide (CLI + app):** [`docs/usage.md`](docs/usage.md).
+
 ```bash
 pocket-codex login                 # GitHub device flow: open the URL, enter the code
 pocket-codex account               # who you're signed in as + transport mode
