@@ -278,6 +278,13 @@ pub fn serve_start(
         }
     }
 
+    // The API proxy reuses the host's codex login (`CODEX_ACCESS_TOKEN` or
+    // `~/.codex/auth.json`). Fail fast here rather than registering an api tunnel
+    // to a proxy that would immediately exit because the login is missing.
+    runtime::runtime()
+        .block_on(pocket_codex_api_proxy::check_auth())
+        .context("hosting needs a codex login; run `codex login` first")?;
+
     // Spawn codex. Runs on the flutter_rust_bridge worker thread (not the UI
     // thread), so the port-resolve poll inside `spawn` is fine.
     let spawn_opts = SpawnOptions {
@@ -301,8 +308,11 @@ pub fn serve_start(
         .parse()
         .with_context(|| format!("codex listen `{listen_addr}` is not a socket address"))?;
 
-    // Bind the in-process API proxy on an ephemeral loopback port *before*
-    // spawning it, so we learn the port to register; hand it the bound listener.
+    // Reserve an ephemeral loopback port for the in-process API proxy and learn
+    // it (so we can register that port). A supervisor task keeps the proxy alive
+    // on that port — re-binding + restarting it with backoff if it ever exits —
+    // so the registered `api:<name>` tunnel keeps forwarding to a live proxy
+    // rather than a dead socket.
     let api_std = std::net::TcpListener::bind("127.0.0.1:0")
         .context("binding the in-app API proxy listener")?;
     api_std
@@ -311,19 +321,8 @@ pub fn serve_start(
     let api_local: SocketAddr = api_std
         .local_addr()
         .context("reading the API proxy listener address")?;
-    let api_proxy_arg = proxy.clone();
-    let api_proxy = runtime::runtime().spawn(async move {
-        let listener = match tokio::net::TcpListener::from_std(api_std) {
-            Ok(listener) => listener,
-            Err(e) => {
-                tracing::warn!(error = %e, "adopting the in-app API proxy listener failed");
-                return;
-            },
-        };
-        if let Err(e) = pocket_codex_api_proxy::serve(listener, api_proxy_arg).await {
-            tracing::warn!(error = %format!("{e:#}"), "in-app API proxy exited");
-        }
-    });
+    let api_proxy =
+        runtime::runtime().spawn(api_proxy_supervisor(api_local, api_std, proxy.clone()));
 
     // Pin the watchdog's respawn to the resolved codex port.
     let mut watchdog_opts = spawn_opts;
@@ -424,12 +423,22 @@ pub fn serve_deregister(name: &str, kind: &str) -> Result<()> {
         }
         (ls.device.clone(), ls.name.clone())
     };
-    let _ = runtime::runtime().block_on(account::deregister_service(
+    // Force the relay to drop the key now (the aborted register tunnel alone
+    // would otherwise linger until its lease expires). Best-effort: the local
+    // forward is already stopped, so a failure only delays the relay drop.
+    if let Err(e) = runtime::runtime().block_on(account::deregister_service(
         &support,
         &device,
         kind.as_key_segment(),
         &svc_name,
-    ));
+    )) {
+        tracing::warn!(
+            error = %format!("{e:#}"),
+            service = %svc_name,
+            kind = %kind.as_key_segment(),
+            "force-dropping the relay key on deregister failed; it lingers until lease expiry"
+        );
+    }
     Ok(())
 }
 
@@ -552,6 +561,72 @@ fn listen_addr_open(listen_addr: &str) -> bool {
             .unwrap_or(false),
         None => false,
     }
+}
+
+/// Keep the in-process Responses API proxy alive on `addr`. Runs
+/// [`pocket_codex_api_proxy::serve`] and, if it ever exits (a transient auth/IO
+/// error, or an `axum::serve` accept error), re-binds the SAME loopback port
+/// and restarts it with backoff — so the registered `api:<name>` tunnel keeps
+/// forwarding to a live proxy instead of a dead socket. `first` is the listener
+/// already bound in [`serve_start`] (so the port is reserved); later restarts
+/// re-bind it. Aborting this task (on `serve_stop`) drops the listener.
+async fn api_proxy_supervisor(
+    addr: SocketAddr,
+    first: std::net::TcpListener,
+    proxy: Option<String>,
+) {
+    let mut reserved = Some(first);
+    let mut failures: u32 = 0;
+    loop {
+        let std_listener = match reserved.take() {
+            Some(listener) => listener,
+            None => match std::net::TcpListener::bind(addr) {
+                Ok(listener) => {
+                    let _ = listener.set_nonblocking(true);
+                    listener
+                },
+                Err(e) => {
+                    tracing::warn!(error = %e, %addr, "re-binding the in-app API proxy failed");
+                    failures = failures.saturating_add(1);
+                    tokio::time::sleep(proxy_restart_backoff(failures)).await;
+                    continue;
+                },
+            },
+        };
+        let listener = match tokio::net::TcpListener::from_std(std_listener) {
+            Ok(listener) => listener,
+            Err(e) => {
+                tracing::warn!(error = %e, "adopting the in-app API proxy listener failed");
+                failures = failures.saturating_add(1);
+                tokio::time::sleep(proxy_restart_backoff(failures)).await;
+                continue;
+            },
+        };
+        let started = Instant::now();
+        match pocket_codex_api_proxy::serve(listener, proxy.clone()).await {
+            Ok(()) => tracing::warn!("in-app API proxy server returned; restarting"),
+            Err(e) => {
+                tracing::warn!(error = %format!("{e:#}"), "in-app API proxy exited; restarting")
+            },
+        }
+        // A proxy that ran a while then died hit a transient fault — reset the
+        // backoff; one that fails fast (e.g. a persistently missing login) backs
+        // off progressively.
+        failures = if started.elapsed() > Duration::from_secs(60) {
+            1
+        } else {
+            failures.saturating_add(1)
+        };
+        tokio::time::sleep(proxy_restart_backoff(failures)).await;
+    }
+}
+
+/// Backoff before restarting the API proxy: 2s, doubling, capped at
+/// [`MAX_RESTART_BACKOFF`].
+fn proxy_restart_backoff(failures: u32) -> Duration {
+    Duration::from_secs(2)
+        .saturating_mul(1u32 << failures.saturating_sub(1).min(7))
+        .min(MAX_RESTART_BACKOFF)
 }
 
 /// Probe codex's `/readyz` and restart it when it stops responding, so turns

@@ -64,6 +64,9 @@ class _ServicesScreenState extends ConsumerState<ServicesScreen>
     if (state == AppLifecycleState.resumed && mounted) {
       ref.invalidate(appReachableProvider);
       ref.invalidate(apiReachableProvider);
+      // Refresh local hosts too (a host's codex/tunnels may have changed while
+      // backgrounded) — same as the periodic timer + the refresh button.
+      ref.invalidate(localServeListProvider);
     }
   }
 
@@ -489,14 +492,20 @@ Future<void> _confirmDeregister(
   if (ok != true) return;
   try {
     if (localTunnel != null) {
-      // Reversible: just stop this tunnel's register task (codex/proxy keep
-      // running). serve_deregister also force-drops the relay key immediately.
+      // Reversible: stop this tunnel's register task (codex/proxy keep running);
+      // serve_deregister also best-effort force-drops the relay key. Our own
+      // tunnel reliably leaves discovery, so optimistically hide it at once.
       await ref
           .read(bridgeApiProvider)
           .appServeDeregister(name: localTunnel.name, kind: localTunnel.kind);
+      ref
+          .read(pendingRemovalProvider.notifier)
+          .update((set) => {...set, s.key});
       ref.invalidate(localServeListProvider);
     } else {
-      // Someone else's service: ask the backend to drop the relay key now.
+      // Someone else's service: best-effort ask the backend to drop the relay
+      // key. Do NOT optimistically hide it — a still-running host re-registers
+      // within seconds, and hiding would strand a live service off the list.
       await ref
           .read(bridgeApiProvider)
           .accountDeregisterService(
@@ -505,7 +514,6 @@ Future<void> _confirmDeregister(
             name: s.name,
           );
     }
-    ref.read(pendingRemovalProvider.notifier).update((set) => {...set, s.key});
     ref.invalidate(servicesProvider);
   } catch (e) {
     if (context.mounted) {
@@ -1037,7 +1045,9 @@ class _LocalHostDialogState extends ConsumerState<_LocalHostDialog> {
   Future<void> _start() async {
     final l10n = AppLocalizations.of(context);
     final port = int.tryParse(_port.text.trim());
-    if (port == null || port > 65535) {
+    // 0 is allowed (the engine picks an ephemeral port); reject out-of-range,
+    // incl. negatives, which would otherwise wrap silently to a u16.
+    if (port == null || port < 0 || port > 65535) {
       setState(() => _error = l10n.localHostPort);
       return;
     }

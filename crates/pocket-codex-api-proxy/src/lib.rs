@@ -91,6 +91,14 @@ pub async fn run(listen: String, proxy: Option<String>) -> Result<()> {
     serve(listener, proxy).await
 }
 
+/// Verify the host's codex login is usable — `CODEX_ACCESS_TOKEN`, else a
+/// parseable `~/.codex/auth.json` with ChatGPT tokens. Lets a caller fail fast
+/// *before* registering a tunnel to a proxy that would immediately exit because
+/// [`serve`] loads the same auth and returns `Err` when it is missing.
+pub async fn check_auth() -> Result<()> {
+    load_auth_headers().await.map(|_| ())
+}
+
 /// Run the Responses API proxy on an already-bound `listener` until the task
 /// is dropped. The in-app host binds `127.0.0.1:0` first (to learn the port it
 /// registers through the broker), then hands the listener here.
