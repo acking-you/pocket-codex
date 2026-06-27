@@ -740,6 +740,12 @@ abstract class AppLocalizations {
   /// **'Still registered on the relay, but the remote app-server isn\'t responding — it may not be running, or has crashed.'**
   String get unreachableReason;
 
+  /// No description provided for @apiUnreachableReason.
+  ///
+  /// In en, this message translates to:
+  /// **'Still registered on the relay, but the remote API service isn\'t responding — it may not be running, or has crashed.'**
+  String get apiUnreachableReason;
+
   /// No description provided for @subscribedAlive.
   ///
   /// In en, this message translates to:

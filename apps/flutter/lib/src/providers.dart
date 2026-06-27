@@ -75,6 +75,16 @@ final appReachableProvider = FutureProvider.family<bool, String>((
   return ref.watch(bridgeApiProvider).appProbe(serviceKey);
 });
 
+/// Whether an API proxy is actually reachable (its host answers a minimal HTTP
+/// request) vs merely registered on the relay — the API analogue of
+/// [`appReachableProvider`], so a dead-but-registered proxy reads unreachable.
+final apiReachableProvider = FutureProvider.family<bool, String>((
+  ref,
+  serviceKey,
+) async {
+  return ref.watch(bridgeApiProvider).apiProbe(serviceKey);
+});
+
 /// The set of thread ids on [serviceKey] that currently have an in-flight turn,
 /// derived purely from the live event stream: `turn/started` adds a thread,
 /// `turn/completed` / `turn/failed` removes it. Lets the session lists show a

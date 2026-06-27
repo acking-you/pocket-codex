@@ -119,6 +119,7 @@
   "statusChecking": "Checking…",
   "statusUnreachable": "Unreachable",
   "unreachableReason": "Still registered on the relay, but the remote app-server isn't responding — it may not be running, or has crashed.",
+  "apiUnreachableReason": "Still registered on the relay, but the remote API service isn't responding — it may not be running, or has crashed.",
   "subscribedAlive": "Subscribed",
   "subscribedDead": "Dropped",
   "runningSessions": "{count} running",

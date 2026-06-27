@@ -521,6 +521,11 @@ abstract interface class BridgeApi {
   /// of a false "online". A live session short-circuits to true.
   Future<bool> appProbe(String serviceKey);
 
+  /// Probe whether an API proxy is actually reachable — its host answers a
+  /// minimal HTTP request — rather than merely registered on the relay, so a
+  /// dead-but-registered proxy reads unreachable instead of a false "online".
+  Future<bool> apiProbe(String serviceKey);
+
   /// Live event stream for [serviceKey] (turn/item notifications).
   Stream<AppEvent> appEvents(String serviceKey);
 

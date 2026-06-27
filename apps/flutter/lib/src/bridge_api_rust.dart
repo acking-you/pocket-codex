@@ -138,6 +138,10 @@ class RustBridgeApi implements BridgeApi {
       frb.appProbe(serviceKey: serviceKey);
 
   @override
+  Future<bool> apiProbe(String serviceKey) =>
+      frb.apiProbe(serviceKey: serviceKey);
+
+  @override
   Stream<AppEvent> appEvents(String serviceKey) => frb
       .appEvents(serviceKey: serviceKey)
       .map(

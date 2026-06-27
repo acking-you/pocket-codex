@@ -197,6 +197,59 @@ void main() {
     expect(find.textContaining('远端 app-server 没有响应'), findsOneWidget);
   });
 
+  testWidgets('account mode shows the GitHub identity, not "(no relay)"', (
+    t,
+  ) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(
+        relay: '',
+        hasKey: false,
+        mode: 'account',
+        accountLogin: 'acking-you',
+      ),
+      services: const [
+        ServiceEntry(
+          device: 'lb7666',
+          kind: 'app',
+          name: 'default',
+          key: 'pcxu:u:lb7666:app:default',
+        ),
+      ],
+    );
+    await t.pumpWidget(_host(const ServicesScreen(), api));
+    await t.pumpAndSettle();
+    // The header shows the signed-in GitHub identity…
+    expect(find.text('@acking-you'), findsOneWidget);
+    // …and never the confusing "(no relay configured)" placeholder.
+    expect(find.text('(未配置 relay)'), findsNothing);
+  });
+
+  testWidgets('a registered-but-dead API proxy reads "unreachable", not '
+      '"online"', (t) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+      services: const [
+        ServiceEntry(
+          device: 'lb7666',
+          kind: 'api',
+          name: 'default',
+          key: 'pcx:lb7666:api:default',
+        ),
+      ],
+    )..reachable['pcx:lb7666:api:default'] = false; // proxy probe fails
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(400, 900); // narrow: single-pane list
+    addTearDown(t.view.reset);
+
+    await t.pumpWidget(_host(const ServicesScreen(), api));
+    await t.pumpAndSettle(); // let the API probe resolve
+
+    // The probe says the proxy is dead → honest "不可达" on the API service…
+    expect(find.text('不可达'), findsOneWidget);
+    // …and spells out that the dead link is the remote API service.
+    expect(find.textContaining('远端 API 服务没有响应'), findsOneWidget);
+  });
+
   testWidgets('app-server auto-re-probes: a recovered server flips to online '
       'without a manual refresh', (t) async {
     final api = FakeBridgeApi(

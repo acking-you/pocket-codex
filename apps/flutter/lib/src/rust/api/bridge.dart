@@ -38,7 +38,8 @@ Future<String> importConfig({required String text}) =>
 Future<String> exportConfig() =>
     RustLib.instance.api.crateApiBridgeExportConfig();
 
-/// Discover services on the configured relay (applies the stored key first).
+/// Discover services: in account mode from the backend (`/v1/services`), in
+/// self-host mode from the relay (applying the stored key first).
 Future<List<ServiceIdDto>> discoverServices() =>
     RustLib.instance.api.crateApiBridgeDiscoverServices();
 
@@ -84,6 +85,16 @@ Future<void> appDisconnect({required String serviceKey}) =>
 Future<bool> appProbe({required String serviceKey}) =>
     RustLib.instance.api.crateApiBridgeAppProbe(serviceKey: serviceKey);
 
+/// Probe whether an API proxy is actually REACHABLE — its host answers a minimal
+/// HTTP request — rather than merely registered on the relay. The services list
+/// uses this so a registered-but-dead API proxy (a live relay registrant
+/// forwarding to an api-proxy that has died) shows unreachable instead of a
+/// false "online", matching the app-server's [`app_probe`]. Opens a transient
+/// tunnel, hits the proxy's local 403 fallback (no upstream model call), then
+/// tears it down.
+Future<bool> apiProbe({required String serviceKey}) =>
+    RustLib.instance.api.crateApiBridgeApiProbe(serviceKey: serviceKey);
+
 /// Stream live app-server events (turn/item notifications) for `service_key`.
 /// The Dart side receives one [`AppEventDto`] per notification until the
 /// session is disconnected.
@@ -115,8 +126,9 @@ Future<String> appThreadStart({
   sandbox: sandbox,
 );
 
-/// Answer a server approval request. `decision` is a ReviewDecision wire value
-/// (`approved` / `denied` / `abort` …).
+/// Answer a server approval request. `decision` is the wire value the session
+/// layer recognises: `accept` or `acceptForSession` to grant, any other value
+/// (e.g. `decline`) to decline.
 Future<void> appRespondApproval({
   required String serviceKey,
   required String requestId,

@@ -330,6 +330,58 @@ fn probe_endpoint(local_addr: &str) -> bool {
     outcome.is_ok()
 }
 
+/// Account-mode reachability of an API proxy: a transient broker tunnel + a
+/// minimal HTTP request. Mirrors [`probe_account`] but for the HTTP proxy.
+pub fn probe_api_account(service_key: String, support_dir: &std::path::Path) -> bool {
+    let Ok((local_addr, handle)) =
+        runtime::subscribe_account_transient(service_key, 0, support_dir)
+    else {
+        return false;
+    };
+    let ok = probe_http_endpoint(&local_addr);
+    handle.abort();
+    ok
+}
+
+/// Self-host analogue of [`probe_api_account`].
+pub fn probe_api(service_key: String, relay: String) -> bool {
+    let Ok((local_addr, handle)) = runtime::subscribe_transient(service_key, 0, relay) else {
+        return false;
+    };
+    let ok = probe_http_endpoint(&local_addr);
+    handle.abort();
+    ok
+}
+
+/// Connect to a local TCP endpoint tunnelling to a remote API proxy and check it
+/// answers a minimal HTTP request within [`PROBE_TIMEOUT`]. A request to a
+/// non-`/v1/responses` path hits the proxy's local 403 fallback (no upstream
+/// model call), so ANY HTTP response proves the proxy is reachable; a
+/// connect/read timeout means the relay registration is hollow.
+fn probe_http_endpoint(local_addr: &str) -> bool {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    runtime::runtime().block_on(async {
+        let Ok(Ok(mut stream)) = tokio::time::timeout(
+            PROBE_TIMEOUT,
+            tokio::net::TcpStream::connect(local_addr),
+        )
+        .await
+        else {
+            return false;
+        };
+        let req =
+            b"GET /pocket-codex-probe HTTP/1.0\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+        if stream.write_all(req).await.is_err() {
+            return false;
+        }
+        let mut buf = [0u8; 16];
+        matches!(
+            tokio::time::timeout(PROBE_TIMEOUT, stream.read(&mut buf)).await,
+            Ok(Ok(n)) if n > 0
+        )
+    })
+}
+
 /// Whether a *live* session exists for `service_key` (the websocket forwarder
 /// is still running). A session whose socket has closed reports `false` so the
 /// UI doesn't show a dead connection as "connected".

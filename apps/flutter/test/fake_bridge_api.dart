@@ -158,6 +158,9 @@ class FakeBridgeApi implements BridgeApi {
       _appConnected.contains(serviceKey) || (reachable[serviceKey] ?? true);
 
   @override
+  Future<bool> apiProbe(String serviceKey) async => reachable[serviceKey] ?? true;
+
+  @override
   Stream<AppEvent> appEvents(String serviceKey) => _appEvents
       .putIfAbsent(serviceKey, StreamController<AppEvent>.broadcast)
       .stream;

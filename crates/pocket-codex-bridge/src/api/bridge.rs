@@ -344,6 +344,23 @@ pub fn app_probe(service_key: String) -> Result<bool> {
     Ok(app_session::probe(service_key, 0, relay))
 }
 
+/// Probe whether an API proxy is actually REACHABLE — its host answers a minimal
+/// HTTP request — rather than merely registered on the relay. The services list
+/// uses this so a registered-but-dead API proxy (a live relay registrant
+/// forwarding to an api-proxy that has died) shows unreachable instead of a
+/// false "online", matching the app-server's [`app_probe`]. Opens a transient
+/// tunnel, hits the proxy's local 403 fallback (no upstream model call), then
+/// tears it down.
+pub fn api_probe(service_key: String) -> Result<bool> {
+    let dir = runtime::support_dir()?;
+    if config::load_config(&dir)?.account_mode() == Mode::Account {
+        return Ok(app_session::probe_api_account(service_key, &dir));
+    }
+    apply_key()?;
+    let relay = current_relay()?;
+    Ok(app_session::probe_api(service_key, relay))
+}
+
 /// Stream live app-server events (turn/item notifications) for `service_key`.
 /// The Dart side receives one [`AppEventDto`] per notification until the
 /// session is disconnected.

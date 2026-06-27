@@ -344,6 +344,10 @@ class AppLocalizationsEn extends AppLocalizations {
       'Still registered on the relay, but the remote app-server isn\'t responding — it may not be running, or has crashed.';
 
   @override
+  String get apiUnreachableReason =>
+      'Still registered on the relay, but the remote API service isn\'t responding — it may not be running, or has crashed.';
+
+  @override
   String get subscribedAlive => 'Subscribed';
 
   @override
