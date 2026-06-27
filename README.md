@@ -172,7 +172,8 @@ Sign in once with GitHub and every command works **without a relay address or
 shared key**. Requires a reachable `pocket-codex-backend` — run your own; see
 [`deploy/`](deploy/README.md).
 
-> **Full step-by-step guide (CLI + app):** [`docs/usage.md`](docs/usage.md).
+> **Full step-by-step guide (CLI + app):** [`docs/usage.md`](docs/usage.md)
+> （中文：[`docs/usage.zh-CN.md`](docs/usage.zh-CN.md)）。
 
 ```bash
 pocket-codex login                 # GitHub device flow: open the URL, enter the code
