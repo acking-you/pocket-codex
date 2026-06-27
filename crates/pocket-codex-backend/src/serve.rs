@@ -29,7 +29,7 @@ async fn accept_tls(tls: &TlsKind, tcp: TcpStream) -> Option<Box<dyn Stream>> {
             Err(e) => {
                 tracing::warn!(error = %e, "tls handshake failed");
                 None
-            }
+            },
         },
     }
 }
@@ -42,7 +42,7 @@ pub async fn serve_http(listener: TcpListener, router: Router, tls: TlsKind) {
             Err(e) => {
                 tracing::warn!(error = %e, "http accept failed");
                 continue;
-            }
+            },
         };
         let tls = tls.clone();
         let router = router.clone();
@@ -69,7 +69,7 @@ pub async fn serve_broker(listener: TcpListener, broker: BrokerServer, tls: TlsK
             Err(e) => {
                 tracing::warn!(error = %e, "broker accept failed");
                 continue;
-            }
+            },
         };
         let tls = tls.clone();
         let broker = broker.clone();

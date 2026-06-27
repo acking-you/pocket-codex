@@ -25,9 +25,7 @@ pub(crate) async fn handshake<S: BrokerStream>(
     if ack.ok {
         Ok(ack)
     } else {
-        Err(BrokerError::Rejected(
-            ack.error.unwrap_or_else(|| "rejected".to_string()),
-        ))
+        Err(BrokerError::Rejected(ack.error.unwrap_or_else(|| "rejected".to_string())))
     }
 }
 

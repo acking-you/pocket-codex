@@ -127,7 +127,9 @@ async fn refresh(
         .refresh(&req.refresh_token, now())
         .await
         .map_err(auth_err)?;
-    Ok(Json(RefreshResponse { credential }))
+    Ok(Json(RefreshResponse {
+        credential,
+    }))
 }
 
 async fn logout(
@@ -169,5 +171,7 @@ async fn services(
             name: nsid.service.name,
         })
         .collect();
-    Ok(Json(ServicesResponse { services }))
+    Ok(Json(ServicesResponse {
+        services,
+    }))
 }

@@ -51,8 +51,9 @@ impl Store {
 
     /// Revoke a refresh token (no-op if already revoked), optionally recording
     /// the id it was rotated into. Returns the number of rows actually flipped
-    /// (1 when this call won the revoke, 0 if it was already revoked) so a caller
-    /// can serialize single-use rotation by acting only when it flipped the row.
+    /// (1 when this call won the revoke, 0 if it was already revoked) so a
+    /// caller can serialize single-use rotation by acting only when it
+    /// flipped the row.
     pub async fn revoke_refresh_token(
         &self,
         id: &str,

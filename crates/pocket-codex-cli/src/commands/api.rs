@@ -87,7 +87,9 @@ async fn serve(args: ApiServeArgs) -> Result<()> {
     })?;
 
     match transport {
-        Transport::SelfHost { relay } => {
+        Transport::SelfHost {
+            relay,
+        } => {
             let pb_outcome = managed_pb::ensure(PbWorkerSpec {
                 role: PbRole::Register,
                 key: key.clone(),
@@ -95,14 +97,22 @@ async fn serve(args: ApiServeArgs) -> Result<()> {
                 relay_addr: relay.clone(),
                 codec: args.codec,
             })?;
-            print_serve_summary(&api_outcome, &pb_outcome, &key, &relay, effective_proxy.as_deref());
+            print_serve_summary(
+                &api_outcome,
+                &pb_outcome,
+                &key,
+                &relay,
+                effective_proxy.as_deref(),
+            );
             Ok(())
-        }
-        Transport::Account { backend } => {
+        },
+        Transport::Account {
+            backend,
+        } => {
             api_outcome.render();
             print_proxy_status(effective_proxy.as_deref());
             serve_account(&backend, &device, &args.name, local_addr).await
-        }
+        },
     }
 }
 
@@ -122,18 +132,14 @@ async fn serve_account(backend: &str, device: &str, name: &str, local_addr: Stri
     ui::field("service", &format!("{device}/api/{name}"));
     ui::headline(ui::Tone::Action, "exposing — keep this running, Ctrl-C to stop");
 
-    run_register(
-        connector,
-        tokens,
-        RegisterConfig {
-            device: device.to_string(),
-            kind: ServiceKind::Api,
-            name: name.to_string(),
-            client_instance_id: account::client_instance_id(),
-            local_addr: local,
-            idle: ACCOUNT_DATA_IDLE,
-        },
-    )
+    run_register(connector, tokens, RegisterConfig {
+        device: device.to_string(),
+        kind: ServiceKind::Api,
+        name: name.to_string(),
+        client_instance_id: account::client_instance_id(),
+        local_addr: local,
+        idle: ACCOUNT_DATA_IDLE,
+    })
     .await;
     Ok(())
 }
@@ -141,8 +147,12 @@ async fn serve_account(backend: &str, device: &str, name: &str, local_addr: Stri
 async fn connect(args: ApiConnectArgs) -> Result<()> {
     let config = Config::load()?;
     match transport::resolve_transport(args.relay.relay.as_deref(), None, &config)? {
-        Transport::SelfHost { relay } => connect_self_host(args, &config, relay).await,
-        Transport::Account { backend } => connect_account(args, backend).await,
+        Transport::SelfHost {
+            relay,
+        } => connect_self_host(args, &config, relay).await,
+        Transport::Account {
+            backend,
+        } => connect_account(args, backend).await,
     }
 }
 

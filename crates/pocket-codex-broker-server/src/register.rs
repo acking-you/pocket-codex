@@ -22,7 +22,8 @@ use crate::{BrokerServer, BrokerServerError, RegisterSession, Result, ServerStre
 impl BrokerServer {
     /// Own a register control tunnel for its lifetime: install the session
     /// (taking over any prior one for the key), run pb-mapper register against
-    /// the loopback relay, and serve `NewStream`/heartbeat on the control tunnel.
+    /// the loopback relay, and serve `NewStream`/heartbeat on the control
+    /// tunnel.
     pub(crate) async fn handle_register_control(
         &self,
         mut ctrl: Box<dyn ServerStream>,
@@ -44,7 +45,7 @@ impl BrokerServer {
                 Some(old) => {
                     old.cancel.cancel();
                     old.generation.wrapping_add(1)
-                }
+                },
                 None => 0,
             };
             let session = Arc::new(RegisterSession {
@@ -129,13 +130,10 @@ impl BrokerServer {
                     session.pending.lock().await.insert(stream_id, tx);
                     {
                         let mut w = writer.lock().await;
-                        if write_frame(
-                            &mut *w,
-                            &BrokerControl::NewStream {
-                                generation: session.generation,
-                                stream_id,
-                            },
-                        )
+                        if write_frame(&mut *w, &BrokerControl::NewStream {
+                            generation: session.generation,
+                            stream_id,
+                        })
                         .await
                         .is_err()
                         {
@@ -150,11 +148,11 @@ impl BrokerServer {
                                 if let Err(e) = bridge(conn, tunnel, data_idle).await {
                                     tracing::debug!(stream_id, error = %e, "register data bridge ended");
                                 }
-                            }
+                            },
                             _ => {
                                 // Client never dialed in time; reclaim the slot.
                                 session.pending.lock().await.remove(&stream_id);
-                            }
+                            },
                         }
                     });
                 }
@@ -176,15 +174,28 @@ impl BrokerServer {
                 },
             };
             match frame {
-                BrokerControl::Ping { seq } => {
+                BrokerControl::Ping {
+                    seq,
+                } => {
                     let mut w = writer.lock().await;
-                    let _ = write_frame(&mut *w, &BrokerControl::Pong { seq }).await;
-                }
-                BrokerControl::StreamAck { .. } => {}
+                    let _ = write_frame(&mut *w, &BrokerControl::Pong {
+                        seq,
+                    })
+                    .await;
+                },
+                BrokerControl::StreamAck {
+                    ..
+                } => {},
                 // A register control tunnel never receives these from a client.
-                BrokerControl::NewStream { .. }
-                | BrokerControl::Pong { .. }
-                | BrokerControl::Retire { .. } => {}
+                BrokerControl::NewStream {
+                    ..
+                }
+                | BrokerControl::Pong {
+                    ..
+                }
+                | BrokerControl::Retire {
+                    ..
+                } => {},
             }
         };
         accept.abort();

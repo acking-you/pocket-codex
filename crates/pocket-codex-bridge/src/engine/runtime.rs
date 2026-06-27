@@ -163,8 +163,8 @@ pub fn subscribe_transient(
 
 /// Account-mode analogue of [`subscribe_service`]: broker-subscribe the service
 /// identified by `service_key` (a `pcx:device:kind:name` key) through the
-/// backend, exposing it on a local listener tracked in the same registry. A live
-/// subscription for `service_key` is reused.
+/// backend, exposing it on a local listener tracked in the same registry. A
+/// live subscription for `service_key` is reused.
 pub fn subscribe_account(
     service_key: String,
     local_port: u16,

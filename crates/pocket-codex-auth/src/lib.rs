@@ -148,7 +148,12 @@ impl Auth {
         // most one row, so under concurrent refreshes only the caller that flips
         // it (rows == 1) mints a session. Single-use rotation therefore holds even
         // though the read and the write are separate SQLite statements.
-        if self.store.revoke_refresh_token(&existing.id, now, None).await? != 1 {
+        if self
+            .store
+            .revoke_refresh_token(&existing.id, now, None)
+            .await?
+            != 1
+        {
             return Err(AuthError::BadRefresh);
         }
         let user = self

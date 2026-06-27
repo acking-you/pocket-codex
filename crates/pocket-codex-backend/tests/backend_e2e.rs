@@ -115,16 +115,13 @@ async fn backend_http_and_broker_end_to_end() {
     // Auth + HTTP router.
     let store = Store::connect("sqlite::memory:").await.expect("store");
     let auth = Arc::new(
-        Auth::new(
-            store,
-            pocket_codex_auth::Config {
-                github_client_id: "test-client".to_string(),
-                github_scope: "read:user".to_string(),
-                jwt_secret: JWT_SECRET.to_string(),
-                jwt_ttl_secs: 3600,
-                refresh_ttl_secs: 1000,
-            },
-        )
+        Auth::new(store, pocket_codex_auth::Config {
+            github_client_id: "test-client".to_string(),
+            github_scope: "read:user".to_string(),
+            jwt_secret: JWT_SECRET.to_string(),
+            jwt_ttl_secs: 3600,
+            refresh_ttl_secs: 1000,
+        })
         .expect("auth"),
     );
     let app = router(AppState {
@@ -176,7 +173,11 @@ async fn backend_http_and_broker_end_to_end() {
     let base = format!("http://{http_addr}");
 
     // healthz
-    let r = client.get(format!("{base}/healthz")).send().await.expect("healthz");
+    let r = client
+        .get(format!("{base}/healthz"))
+        .send()
+        .await
+        .expect("healthz");
     assert_eq!(r.status(), 200);
     assert_eq!(r.text().await.expect("healthz body"), "ok");
 
@@ -192,24 +193,26 @@ async fn backend_http_and_broker_end_to_end() {
     assert_eq!(me.login, "octocat");
     assert_eq!(me.account_id.as_deref(), Some("42"));
 
-    let r = client.get(format!("{base}/v1/me")).send().await.expect("me noauth");
+    let r = client
+        .get(format!("{base}/v1/me"))
+        .send()
+        .await
+        .expect("me noauth");
     assert_eq!(r.status(), 401);
 
     // Register an echo service under the account.
-    let connector: Arc<dyn Connector> = Arc::new(TcpConnector { addr: broker_addr });
+    let connector: Arc<dyn Connector> = Arc::new(TcpConnector {
+        addr: broker_addr,
+    });
     let tokens: Arc<dyn TokenProvider> = Arc::new(StaticToken(token.clone()));
-    tokio::spawn(run_register(
-        connector.clone(),
-        tokens.clone(),
-        RegisterConfig {
-            device: "dev".to_string(),
-            kind: ServiceKind::App,
-            name: "default".to_string(),
-            client_instance_id: "test".to_string(),
-            local_addr: echo_addr,
-            idle: Duration::from_secs(60),
-        },
-    ));
+    tokio::spawn(run_register(connector.clone(), tokens.clone(), RegisterConfig {
+        device: "dev".to_string(),
+        kind: ServiceKind::App,
+        name: "default".to_string(),
+        client_instance_id: "test".to_string(),
+        local_addr: echo_addr,
+        idle: Duration::from_secs(60),
+    }));
     wait_for_key(relay_sock, "pcxu:usera:dev:app:default").await;
 
     // /v1/services lists it (prefix stripped to device/kind/name).

@@ -62,8 +62,9 @@ pub struct ServerConfig {
 }
 
 impl ServerConfig {
-    /// Load config from the TOML file at `$POCKET_CODEX_BACKEND_CONFIG` (default
-    /// `backend.toml`, optional) layered under `PCX_`-prefixed env vars.
+    /// Load config from the TOML file at `$POCKET_CODEX_BACKEND_CONFIG`
+    /// (default `backend.toml`, optional) layered under `PCX_`-prefixed env
+    /// vars.
     pub fn load() -> anyhow::Result<Self> {
         use figment::{
             providers::{Env, Format, Toml},
@@ -88,8 +89,8 @@ impl ServerConfig {
         use anyhow::ensure;
         ensure!(
             !is_placeholder(&self.jwt_secret),
-            "PCX_JWT_SECRET is unset or still the example placeholder; set a real secret \
-             (e.g. `openssl rand -hex 32`)"
+            "PCX_JWT_SECRET is unset or still the example placeholder; set a real secret (e.g. \
+             `openssl rand -hex 32`)"
         );
         ensure!(
             self.jwt_secret.len() >= 32,
@@ -172,7 +173,9 @@ mod tests {
 
     #[test]
     fn accepts_a_real_config() {
-        valid().validate().expect("a fully-specified config should validate");
+        valid()
+            .validate()
+            .expect("a fully-specified config should validate");
     }
 
     #[test]
@@ -205,6 +208,7 @@ mod tests {
         c.msg_header_key = Some("replace-with-the-32-byte-relay-key".to_string());
         assert!(c.validate().is_err());
         c.msg_header_key = None;
-        c.validate().expect("an absent key adopts the relay machine key");
+        c.validate()
+            .expect("an absent key adopts the relay machine key");
     }
 }

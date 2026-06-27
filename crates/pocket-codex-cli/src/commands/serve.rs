@@ -64,7 +64,8 @@ const ACCOUNT_DATA_IDLE: Duration = Duration::from_secs(1800);
 
 /// How often the watchdog probes the codex app-server's health endpoint.
 const HEALTH_INTERVAL: Duration = Duration::from_secs(15);
-/// Per-probe timeout — a wedged app-server typically hangs rather than refusing.
+/// Per-probe timeout — a wedged app-server typically hangs rather than
+/// refusing.
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(4);
 /// Consecutive failed probes before the app-server is treated as wedged.
 const HEALTH_FAILURES: u32 = 3;
@@ -111,7 +112,9 @@ pub async fn run(args: ServeArgs) -> Result<()> {
     })?;
 
     match transport {
-        Transport::SelfHost { relay } => {
+        Transport::SelfHost {
+            relay,
+        } => {
             let key = explicit_key
                 .unwrap_or_else(|| ServiceId::new(&device, ServiceKind::App, &name).key());
             let outcome = managed_pb::ensure(PbWorkerSpec {
@@ -131,8 +134,10 @@ pub async fn run(args: ServeArgs) -> Result<()> {
                 report.reused,
             );
             Ok(())
-        }
-        Transport::Account { backend } => {
+        },
+        Transport::Account {
+            backend,
+        } => {
             ui::headline(ui::Tone::Ok, "codex app-server");
             ui::field("pid", &report.info.pid.to_string());
             ui::field("listen", &report.info.listen);
@@ -144,10 +149,12 @@ pub async fn run(args: ServeArgs) -> Result<()> {
                 api_proxy::SpawnCommand::Serve,
             );
             if explicit_key.is_some() {
-                ui::warn("--key is ignored in account mode; the service is namespaced to your account");
+                ui::warn(
+                    "--key is ignored in account mode; the service is namespaced to your account",
+                );
             }
             serve_account(&backend, &device, &name, local_addr, spawn_opts).await
-        }
+        },
     }
 }
 
@@ -183,18 +190,14 @@ async fn serve_account(
     ui::field("service", &format!("{device}/app/{name}"));
     ui::headline(ui::Tone::Action, "exposing — keep this running, Ctrl-C to stop");
 
-    run_register(
-        connector,
-        tokens,
-        RegisterConfig {
-            device: device.to_string(),
-            kind: ServiceKind::App,
-            name: name.to_string(),
-            client_instance_id: account::client_instance_id(),
-            local_addr: local,
-            idle: ACCOUNT_DATA_IDLE,
-        },
-    )
+    run_register(connector, tokens, RegisterConfig {
+        device: device.to_string(),
+        kind: ServiceKind::App,
+        name: name.to_string(),
+        client_instance_id: account::client_instance_id(),
+        local_addr: local,
+        idle: ACCOUNT_DATA_IDLE,
+    })
     .await;
     Ok(())
 }
@@ -238,8 +241,8 @@ fn websocket_listen_addr(listen: &str) -> Option<String> {
 /// that has fully crashed or stopped accepting (process gone, connection
 /// refused, hung acceptor) — the "registered on the relay but the remote is
 /// dead" case. It does NOT catch a codex that still accepts connections but has
-/// wedged deeper (a hung model turn keeps `/readyz` green); detecting that would
-/// need a turn-level probe and is out of scope here.
+/// wedged deeper (a hung model turn keeps `/readyz` green); detecting that
+/// would need a turn-level probe and is out of scope here.
 async fn codex_health_watchdog(local_addr: String, spawn_opts: SpawnOptions) {
     let url = format!("http://{local_addr}/readyz");
     let client = match reqwest::Client::builder().timeout(HEALTH_TIMEOUT).build() {
@@ -281,8 +284,8 @@ async fn codex_health_watchdog(local_addr: String, spawn_opts: SpawnOptions) {
                     ));
                 } else if restart_failures == MAX_RESTART_WARNINGS + 1 {
                     ui::warn(
-                        "codex app-server is not recovering — will keep retrying quietly; \
-                         check the codex install on this host",
+                        "codex app-server is not recovering — will keep retrying quietly; check \
+                         the codex install on this host",
                     );
                 }
             },

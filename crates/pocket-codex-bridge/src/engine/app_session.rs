@@ -286,7 +286,8 @@ pub fn probe(service_key: String, local_port: u16, relay: String) -> bool {
     ok
 }
 
-/// Account-mode analogue of [`probe`]: reachability via a transient broker tunnel.
+/// Account-mode analogue of [`probe`]: reachability via a transient broker
+/// tunnel.
 pub fn probe_account(service_key: String, local_port: u16, support_dir: &std::path::Path) -> bool {
     if is_connected(&service_key) {
         return true;
@@ -302,7 +303,8 @@ pub fn probe_account(service_key: String, local_port: u16, support_dir: &std::pa
 }
 
 /// Open a transient JSON-RPC client over `ws://<local_addr>` and run the
-/// `initialize` handshake, bounded by [`PROBE_TIMEOUT`]; `true` iff it succeeds.
+/// `initialize` handshake, bounded by [`PROBE_TIMEOUT`]; `true` iff it
+/// succeeds.
 fn probe_endpoint(local_addr: &str) -> bool {
     let ws_url = format!("ws://{local_addr}");
     let outcome = runtime::runtime().block_on(async {
@@ -353,19 +355,16 @@ pub fn probe_api(service_key: String, relay: String) -> bool {
     ok
 }
 
-/// Connect to a local TCP endpoint tunnelling to a remote API proxy and check it
-/// answers a minimal HTTP request within [`PROBE_TIMEOUT`]. A request to a
+/// Connect to a local TCP endpoint tunnelling to a remote API proxy and check
+/// it answers a minimal HTTP request within [`PROBE_TIMEOUT`]. A request to a
 /// non-`/v1/responses` path hits the proxy's local 403 fallback (no upstream
 /// model call), so ANY HTTP response proves the proxy is reachable; a
 /// connect/read timeout means the relay registration is hollow.
 fn probe_http_endpoint(local_addr: &str) -> bool {
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
     runtime::runtime().block_on(async {
-        let Ok(Ok(mut stream)) = tokio::time::timeout(
-            PROBE_TIMEOUT,
-            tokio::net::TcpStream::connect(local_addr),
-        )
-        .await
+        let Ok(Ok(mut stream)) =
+            tokio::time::timeout(PROBE_TIMEOUT, tokio::net::TcpStream::connect(local_addr)).await
         else {
             return false;
         };

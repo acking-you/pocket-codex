@@ -63,8 +63,12 @@ const ACCOUNT_DATA_IDLE: Duration = Duration::from_secs(1800);
 pub async fn run(args: ConnectArgs) -> Result<()> {
     let config = Config::load()?;
     match transport::resolve_transport(args.relay.relay.as_deref(), None, &config)? {
-        Transport::SelfHost { relay } => connect_self_host(args, &config, relay).await,
-        Transport::Account { backend } => connect_account(args, backend).await,
+        Transport::SelfHost {
+            relay,
+        } => connect_self_host(args, &config, relay).await,
+        Transport::Account {
+            backend,
+        } => connect_account(args, backend).await,
     }
 }
 
@@ -100,8 +104,8 @@ async fn connect_self_host(args: ConnectArgs, config: &Config, relay: String) ->
     Ok(())
 }
 
-/// Account-mode client side: subscribe to a relay-exposed app-server through the
-/// backend broker, exposing it on a local listener. Runs in the foreground.
+/// Account-mode client side: subscribe to a relay-exposed app-server through
+/// the backend broker, exposing it on a local listener. Runs in the foreground.
 async fn connect_account(args: ConnectArgs, backend: String) -> Result<()> {
     let mut config = Config::load()?;
     let (device, name) = account::resolve_target(

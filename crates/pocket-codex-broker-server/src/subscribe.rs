@@ -44,11 +44,12 @@ impl BrokerServer {
         let local = match connect_with_retry(sub_addr, params::STREAM_DIAL_TIMEOUT).await {
             Ok(local) => local,
             Err(e) => {
-                let _ = write_frame(&mut data, &BrokerAck::err("relay subscribe unavailable")).await;
+                let _ =
+                    write_frame(&mut data, &BrokerAck::err("relay subscribe unavailable")).await;
                 cancel.cancel();
                 pb.abort();
                 return Err(e);
-            }
+            },
         };
 
         write_frame(&mut data, &BrokerAck::ok(relay_key)).await?;
@@ -70,7 +71,7 @@ async fn connect_with_retry(addr: SocketAddr, budget: Duration) -> Result<TcpStr
                     return Err(e.into());
                 }
                 sleep(Duration::from_millis(25)).await;
-            }
+            },
         }
     }
 }

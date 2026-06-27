@@ -48,8 +48,8 @@ fn resolve_backend(config: &Config, override_url: Option<&str>) -> Result<String
         Some(url) => {
             if !url.starts_with("https://") {
                 bail!(
-                    "backend URL must start with https:// (got `{url}`); the session token \
-                     must not be sent in cleartext"
+                    "backend URL must start with https:// (got `{url}`); the session token must \
+                     not be sent in cleartext"
                 );
             }
             Ok(url.to_string())
@@ -76,7 +76,10 @@ pub struct DeviceStart {
 }
 
 /// Begin a device flow against the (optionally overridden) backend.
-pub async fn device_start(support_dir: &Path, backend_override: Option<&str>) -> Result<DeviceStart> {
+pub async fn device_start(
+    support_dir: &Path,
+    backend_override: Option<&str>,
+) -> Result<DeviceStart> {
     let config = load_config(support_dir)?;
     let backend = resolve_backend(&config, backend_override)?;
     let resp: DeviceStartResponse = reqwest::Client::new()
@@ -127,7 +130,9 @@ pub async fn device_poll(
 ) -> Result<PollOutcome> {
     let resp: DevicePollResponse = reqwest::Client::new()
         .post(format!("{backend}/auth/device/poll"))
-        .json(&DevicePollRequest { poll_handle })
+        .json(&DevicePollRequest {
+            poll_handle,
+        })
         .send()
         .await
         .context("calling /auth/device/poll")?
@@ -158,7 +163,7 @@ pub async fn device_poll(
                 login: cred.login,
                 account_id: cred.account_id,
             })
-        }
+        },
     }
 }
 
@@ -214,7 +219,8 @@ pub async fn logout(support_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Fetch the account's services from the backend (refreshing the token if needed).
+/// Fetch the account's services from the backend (refreshing the token if
+/// needed).
 pub async fn services(support_dir: &Path) -> Result<Vec<ServiceEntry>> {
     let mut config = load_config(support_dir)?;
     let backend = backend_base(&config);
@@ -260,7 +266,9 @@ async fn valid_token(support_dir: &Path, config: &mut Config, backend: &str) -> 
         .to_string();
     let resp = reqwest::Client::new()
         .post(format!("{backend}/auth/refresh"))
-        .json(&RefreshRequest { refresh_token })
+        .json(&RefreshRequest {
+            refresh_token,
+        })
         .send()
         .await
         .context("calling /auth/refresh")?;
@@ -284,9 +292,9 @@ async fn valid_token(support_dir: &Path, config: &mut Config, backend: &str) -> 
     Ok(cred.token)
 }
 
-/// Process-global lock serializing token refreshes, so overlapping callers don't
-/// each spend the rotating refresh token (401-ing the losers) or lost-update
-/// each other's persisted credential.
+/// Process-global lock serializing token refreshes, so overlapping callers
+/// don't each spend the rotating refresh token (401-ing the losers) or
+/// lost-update each other's persisted credential.
 fn refresh_lock() -> &'static tokio::sync::Mutex<()> {
     static LOCK: once_cell::sync::OnceCell<tokio::sync::Mutex<()>> =
         once_cell::sync::OnceCell::new();
@@ -312,7 +320,8 @@ fn unix_now() -> i64 {
 
 /// Derive the broker `host` + `port` from the backend URL.
 pub fn broker_endpoint(backend: &str) -> Result<(String, u16)> {
-    let url = reqwest::Url::parse(backend).with_context(|| format!("parsing backend url {backend}"))?;
+    let url =
+        reqwest::Url::parse(backend).with_context(|| format!("parsing backend url {backend}"))?;
     let host = url
         .host_str()
         .ok_or_else(|| anyhow!("backend url {backend} has no host"))?
@@ -387,7 +396,8 @@ struct ConfigTokenProvider {
 #[async_trait::async_trait]
 impl TokenProvider for ConfigTokenProvider {
     async fn token(&self) -> std::result::Result<String, BrokerError> {
-        let mut config = load_config(&self.support_dir).map_err(|e| BrokerError::Token(e.to_string()))?;
+        let mut config =
+            load_config(&self.support_dir).map_err(|e| BrokerError::Token(e.to_string()))?;
         valid_token(&self.support_dir, &mut config, &self.backend)
             .await
             .map_err(|e| BrokerError::Token(e.to_string()))
@@ -413,10 +423,7 @@ mod tests {
             resolve_backend(&config, Some("https://flag.example")).expect("https override"),
             "https://flag.example"
         );
-        assert_eq!(
-            resolve_backend(&config, None).expect("default backend"),
-            DEFAULT_BACKEND
-        );
+        assert_eq!(resolve_backend(&config, None).expect("default backend"), DEFAULT_BACKEND);
         // An http override is rejected so the bearer token can't go out in cleartext.
         assert!(resolve_backend(&config, Some("http://insecure.example")).is_err());
     }

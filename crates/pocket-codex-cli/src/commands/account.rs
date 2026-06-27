@@ -44,10 +44,11 @@ pub(crate) fn backend_base(flag: Option<&str>, config: &Config) -> String {
         .unwrap_or_else(|| DEFAULT_BACKEND.to_string())
 }
 
-/// Derive the broker `host` + `port` from the backend URL (`$POCKET_CODEX_BROKER_PORT`
-/// overrides the default port).
+/// Derive the broker `host` + `port` from the backend URL
+/// (`$POCKET_CODEX_BROKER_PORT` overrides the default port).
 pub(crate) fn broker_endpoint(backend: &str) -> Result<(String, u16)> {
-    let url = url::Url::parse(backend).with_context(|| format!("parsing backend url `{backend}`"))?;
+    let url =
+        url::Url::parse(backend).with_context(|| format!("parsing backend url `{backend}`"))?;
     let host = url
         .host_str()
         .ok_or_else(|| anyhow!("backend url `{backend}` has no host"))?
@@ -83,10 +84,7 @@ pub(crate) async fn login(backend_flag: Option<&str>) -> Result<()> {
     ui::headline(ui::Tone::Action, "sign in with GitHub");
     ui::field("code", &start.user_code);
     ui::field("url", &start.verification_uri);
-    ui::code(&format!(
-        "open {} and enter {}",
-        start.verification_uri, start.user_code
-    ));
+    ui::code(&format!("open {} and enter {}", start.verification_uri, start.user_code));
 
     let interval = Duration::from_secs(start.interval_secs.max(1));
     loop {
@@ -124,8 +122,10 @@ pub(crate) async fn login(backend_flag: Option<&str>) -> Result<()> {
                 ui::headline(ui::Tone::Ok, "signed in");
                 ui::field("login", &cred.login);
                 return Ok(());
-            }
-            DevicePollStatus::Expired => bail!("device code expired; run `pocket-codex login` again"),
+            },
+            DevicePollStatus::Expired => {
+                bail!("device code expired; run `pocket-codex login` again")
+            },
             DevicePollStatus::Denied => bail!("access denied on GitHub"),
         }
     }
@@ -176,22 +176,23 @@ pub(crate) async fn status() -> Result<()> {
                 ui::field("account", &id);
             }
             ui::field("backend", &base);
-        }
+        },
         Mode::SelfHost => {
             ui::headline(ui::Tone::Muted, "self-hosted mode");
             if let Some(relay) = config.relay() {
                 ui::field("relay", relay);
             }
-        }
+        },
         Mode::Unconfigured => {
             ui::headline(ui::Tone::Muted, "not configured");
             ui::code("pocket-codex login");
-        }
+        },
     }
     Ok(())
 }
 
-/// Fetch the account's services from the backend, refreshing the token if needed.
+/// Fetch the account's services from the backend, refreshing the token if
+/// needed.
 pub(crate) async fn fetch_services(config: &mut Config, base: &str) -> Result<Vec<ServiceEntry>> {
     let token = valid_token(config, base).await?;
     let body: ServicesResponse = reqwest::Client::new()
@@ -208,9 +209,10 @@ pub(crate) async fn fetch_services(config: &mut Config, base: &str) -> Result<Ve
     Ok(body.services)
 }
 
-/// Resolve the target `(device, name)` for a `kind` in account mode: an explicit
-/// `--device` wins; otherwise discover the account's services of that kind and
-/// auto-pick a single one, asking to disambiguate when there is more than one.
+/// Resolve the target `(device, name)` for a `kind` in account mode: an
+/// explicit `--device` wins; otherwise discover the account's services of that
+/// kind and auto-pick a single one, asking to disambiguate when there is more
+/// than one.
 pub(crate) async fn resolve_target(
     config: &mut Config,
     backend: &str,
@@ -235,7 +237,7 @@ pub(crate) async fn resolve_target(
         1 => {
             let m = matches.remove(0);
             Ok((m.device, m.name))
-        }
+        },
         _ => {
             let names: Vec<String> = matches
                 .iter()
@@ -245,7 +247,7 @@ pub(crate) async fn resolve_target(
                 "multiple {label} services; pick one with --device <device> [--name <name>]: {}",
                 names.join(", ")
             )
-        }
+        },
     }
 }
 
@@ -271,7 +273,9 @@ async fn refresh_session(config: &mut Config, base: &str) -> Result<String> {
         .to_string();
     let resp = reqwest::Client::new()
         .post(format!("{base}/auth/refresh"))
-        .json(&RefreshRequest { refresh_token })
+        .json(&RefreshRequest {
+            refresh_token,
+        })
         .send()
         .await
         .context("calling /auth/refresh")?;
@@ -309,8 +313,8 @@ fn unix_now() -> i64 {
     chrono::Utc::now().timestamp()
 }
 
-/// A stable per-process id so a reconnect deterministically takes over the prior
-/// register session rather than racing it.
+/// A stable per-process id so a reconnect deterministically takes over the
+/// prior register session rather than racing it.
 pub(crate) fn client_instance_id() -> String {
     format!("cli-{}", std::process::id())
 }
@@ -331,10 +335,7 @@ impl BrokerTlsConnector {
         for cert in loaded.certs {
             let _ = roots.add(cert);
         }
-        anyhow::ensure!(
-            !roots.is_empty(),
-            "no trusted root certificates found on this system"
-        );
+        anyhow::ensure!(!roots.is_empty(), "no trusted root certificates found on this system");
         let config = rustls::ClientConfig::builder()
             .with_root_certificates(roots)
             .with_no_client_auth();
@@ -370,7 +371,9 @@ pub(crate) struct ConfigTokenProvider {
 impl ConfigTokenProvider {
     /// Build a provider against the given backend base URL.
     pub(crate) fn new(base: String) -> Self {
-        Self { base }
+        Self {
+            base,
+        }
     }
 }
 
@@ -391,10 +394,7 @@ mod tests {
     #[test]
     fn backend_base_precedence_flag_over_default() {
         let config = Config::default();
-        assert_eq!(
-            backend_base(Some("https://flag.example"), &config),
-            "https://flag.example"
-        );
+        assert_eq!(backend_base(Some("https://flag.example"), &config), "https://flag.example");
         // No flag, no config, no env → default.
         assert_eq!(backend_base(None, &config), DEFAULT_BACKEND);
     }
@@ -419,7 +419,8 @@ mod tests {
     #[test]
     fn jwt_exp_reads_exp_claim() {
         // header.payload.sig with payload {"exp": 1700000000}
-        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b"{\"exp\":1700000000}");
+        let payload =
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b"{\"exp\":1700000000}");
         let token = format!("h.{payload}.s");
         assert_eq!(jwt_exp(&token), Some(1_700_000_000));
         assert_eq!(jwt_exp("not-a-jwt"), None);

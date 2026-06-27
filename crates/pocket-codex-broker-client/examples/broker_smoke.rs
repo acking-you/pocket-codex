@@ -95,18 +95,14 @@ async fn main() {
         }
     });
 
-    tokio::spawn(run_register(
-        connector.clone(),
-        tokens.clone(),
-        RegisterConfig {
-            device: "smokedev".to_string(),
-            kind: ServiceKind::App,
-            name: "default".to_string(),
-            client_instance_id: "smoke".to_string(),
-            local_addr: echo_addr,
-            idle: Duration::from_secs(60),
-        },
-    ));
+    tokio::spawn(run_register(connector.clone(), tokens.clone(), RegisterConfig {
+        device: "smokedev".to_string(),
+        kind: ServiceKind::App,
+        name: "default".to_string(),
+        client_instance_id: "smoke".to_string(),
+        local_addr: echo_addr,
+        idle: Duration::from_secs(60),
+    }));
     tokio::time::sleep(Duration::from_secs(3)).await;
 
     let sub = TcpListener::bind("127.0.0.1:0").await.expect("sub bind");

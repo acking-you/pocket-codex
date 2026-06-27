@@ -163,29 +163,27 @@ async fn end_to_end_register_subscribe_echo() {
                             if stream.write_all(&buf[..n]).await.is_err() {
                                 break;
                             }
-                        }
+                        },
                     }
                 }
             });
         }
     });
 
-    let connector: Arc<dyn Connector> = Arc::new(TcpConnector { addr: broker_addr });
+    let connector: Arc<dyn Connector> = Arc::new(TcpConnector {
+        addr: broker_addr,
+    });
     let tokens: Arc<dyn TokenProvider> = Arc::new(StaticToken("tok-A".to_string()));
 
     // 4. Register: expose the echo server under the account.
-    tokio::spawn(run_register(
-        connector.clone(),
-        tokens.clone(),
-        RegisterConfig {
-            device: "dev".to_string(),
-            kind: ServiceKind::App,
-            name: "default".to_string(),
-            client_instance_id: "test-instance".to_string(),
-            local_addr: echo_addr,
-            idle: Duration::from_secs(60),
-        },
-    ));
+    tokio::spawn(run_register(connector.clone(), tokens.clone(), RegisterConfig {
+        device: "dev".to_string(),
+        kind: ServiceKind::App,
+        name: "default".to_string(),
+        client_instance_id: "test-instance".to_string(),
+        local_addr: echo_addr,
+        idle: Duration::from_secs(60),
+    }));
 
     // The backend namespaces the key under the verified user.
     let relay_sock: SocketAddr = relay_addr_s.parse().expect("relay sockaddr");
@@ -225,7 +223,8 @@ async fn end_to_end_register_subscribe_echo() {
     relay_shutdown.cancel();
 }
 
-/// Spawn a real loopback pb-mapper relay; returns its address + a shutdown token.
+/// Spawn a real loopback pb-mapper relay; returns its address + a shutdown
+/// token.
 async fn spawn_relay() -> (String, CancellationToken) {
     let relay_port = free_port().await;
     let relay_addr_s = format!("127.0.0.1:{relay_port}");
@@ -311,7 +310,8 @@ async fn subscribe_and_try_echo(
 }
 
 /// The crate's reason to exist: a second account cannot reach the first's
-/// service, and an unknown token cannot reach any service — while the owner can.
+/// service, and an unknown token cannot reach any service — while the owner
+/// can.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn cross_user_isolation_and_unauthorized_are_enforced() {
     let _ = tracing_subscriber::fmt()
@@ -327,49 +327,37 @@ async fn cross_user_isolation_and_unauthorized_are_enforced() {
     ]));
     let broker_addr = spawn_broker(verifier, relay_addr_s.clone()).await;
     let echo_addr = spawn_echo().await;
-    let connector: Arc<dyn Connector> = Arc::new(TcpConnector { addr: broker_addr });
+    let connector: Arc<dyn Connector> = Arc::new(TcpConnector {
+        addr: broker_addr,
+    });
 
     // userA registers the echo under dev/app/default.
     let tokens_a: Arc<dyn TokenProvider> = Arc::new(StaticToken("tok-A".to_string()));
-    tokio::spawn(run_register(
-        connector.clone(),
-        tokens_a,
-        RegisterConfig {
-            device: "dev".to_string(),
-            kind: ServiceKind::App,
-            name: "default".to_string(),
-            client_instance_id: "a".to_string(),
-            local_addr: echo_addr,
-            idle: Duration::from_secs(60),
-        },
-    ));
+    tokio::spawn(run_register(connector.clone(), tokens_a, RegisterConfig {
+        device: "dev".to_string(),
+        kind: ServiceKind::App,
+        name: "default".to_string(),
+        client_instance_id: "a".to_string(),
+        local_addr: echo_addr,
+        idle: Duration::from_secs(60),
+    }));
     let relay_sock: SocketAddr = relay_addr_s.parse().expect("relay sockaddr");
     wait_for_key(relay_sock, "pcxu:usera:dev:app:default").await;
 
     // Positive control: userA reaches its own service (also warms the path).
     let own = subscribe_and_try_echo(connector.clone(), "tok-A", b"mine", 50).await;
-    assert_eq!(
-        own.as_deref(),
-        Some(b"mine".as_slice()),
-        "userA must reach its own service"
-    );
+    assert_eq!(own.as_deref(), Some(b"mine".as_slice()), "userA must reach its own service");
 
     // Isolation: userB subscribes to the SAME device/kind/name. The broker
     // derives pcxu:userb:dev:app:default — a key the relay has no registration
     // for — so the echo must never round-trip.
     let cross = subscribe_and_try_echo(connector.clone(), "tok-B", b"theirs", 20).await;
-    assert_eq!(
-        cross, None,
-        "userB must NOT reach userA's service (cross-user isolation)"
-    );
+    assert_eq!(cross, None, "userB must NOT reach userA's service (cross-user isolation)");
 
     // Unauthorized: an unknown token is rejected at the hello, so it reaches
     // nothing either.
     let unauth = subscribe_and_try_echo(connector.clone(), "tok-bogus", b"nope", 20).await;
-    assert_eq!(
-        unauth, None,
-        "an unauthorized token must not reach any service"
-    );
+    assert_eq!(unauth, None, "an unauthorized token must not reach any service");
 
     relay_shutdown.cancel();
 }

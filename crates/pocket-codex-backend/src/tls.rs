@@ -1,9 +1,9 @@
 //! TLS termination: plain (none) or static cert files. The same layer fronts
 //! both the HTTP API and the broker.
 //!
-//! For a self-contained Let's Encrypt deploy, obtain certs out of band (certbot)
-//! and point `tls_cert`/`tls_key` at the live PEMs; the backend reloads them on
-//! restart.
+//! For a self-contained Let's Encrypt deploy, obtain certs out of band
+//! (certbot) and point `tls_cert`/`tls_key` at the live PEMs; the backend
+//! reloads them on restart.
 
 use std::sync::Arc;
 
@@ -39,7 +39,7 @@ pub fn build_tls(cfg: &Cfg) -> anyhow::Result<TlsKind> {
                 .as_deref()
                 .context("tls_mode = \"files\" requires tls_key")?;
             Ok(TlsKind::Static(static_acceptor(cert, key)?))
-        }
+        },
     }
 }
 
@@ -60,5 +60,6 @@ fn load_certs(path: &str) -> anyhow::Result<Vec<CertificateDer<'static>>> {
 
 fn load_key(path: &str) -> anyhow::Result<PrivateKeyDer<'static>> {
     let data = std::fs::read(path).with_context(|| format!("reading key {path}"))?;
-    rustls_pemfile::private_key(&mut &data[..])?.with_context(|| format!("no private key in {path}"))
+    rustls_pemfile::private_key(&mut &data[..])?
+        .with_context(|| format!("no private key in {path}"))
 }

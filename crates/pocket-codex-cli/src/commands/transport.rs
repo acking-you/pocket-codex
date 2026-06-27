@@ -1,4 +1,5 @@
-//! Transport resolution: account (backend broker) vs self-host (pb-mapper relay).
+//! Transport resolution: account (backend broker) vs self-host (pb-mapper
+//! relay).
 //!
 //! Precedence rule: an explicit `--relay` always forces self-host (the escape
 //! hatch, even when signed in); otherwise account mode when a session token is
@@ -40,14 +41,12 @@ pub(crate) fn resolve_transport(
             // Validate we're actually signed in; the token itself is loaded and
             // refreshed lazily by the token provider.
             if config.account_token().is_none() {
-                return Err(anyhow!(
-                    "account mode but not signed in; run `pocket-codex login`"
-                ));
+                return Err(anyhow!("account mode but not signed in; run `pocket-codex login`"));
             }
             Ok(Transport::Account {
                 backend: account::backend_base(backend_flag, config),
             })
-        }
+        },
         Mode::SelfHost | Mode::Unconfigured => Ok(Transport::SelfHost {
             relay: relay::resolve_relay(relay_flag, config)?,
         }),
@@ -63,8 +62,12 @@ mod tests {
         let mut config = Config::default();
         config.set_account_session("tok", "ref", "octocat", None);
         match resolve_transport(Some("relay.example:7666"), None, &config).expect("resolve") {
-            Transport::SelfHost { relay } => assert_eq!(relay, "relay.example:7666"),
-            Transport::Account { .. } => panic!("expected self-host"),
+            Transport::SelfHost {
+                relay,
+            } => assert_eq!(relay, "relay.example:7666"),
+            Transport::Account {
+                ..
+            } => panic!("expected self-host"),
         }
     }
 
@@ -73,8 +76,12 @@ mod tests {
         let mut config = Config::default();
         config.set_account_session("tok", "ref", "octocat", None);
         match resolve_transport(None, None, &config).expect("resolve") {
-            Transport::Account { backend } => assert!(!backend.is_empty()),
-            Transport::SelfHost { .. } => panic!("expected account"),
+            Transport::Account {
+                backend,
+            } => assert!(!backend.is_empty()),
+            Transport::SelfHost {
+                ..
+            } => panic!("expected account"),
         }
     }
 
@@ -83,8 +90,12 @@ mod tests {
         let mut config = Config::default();
         config.set_relay("relay.example:7666");
         match resolve_transport(None, None, &config).expect("resolve") {
-            Transport::SelfHost { relay } => assert_eq!(relay, "relay.example:7666"),
-            Transport::Account { .. } => panic!("expected self-host"),
+            Transport::SelfHost {
+                relay,
+            } => assert_eq!(relay, "relay.example:7666"),
+            Transport::Account {
+                ..
+            } => panic!("expected self-host"),
         }
     }
 }

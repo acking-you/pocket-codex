@@ -52,8 +52,10 @@ Widget _routerHost(
   ),
 );
 
-GoRoute _stub(String path, String label) =>
-    GoRoute(path: path, builder: (_, _) => Scaffold(body: Text(label)));
+GoRoute _stub(String path, String label) => GoRoute(
+  path: path,
+  builder: (_, _) => Scaffold(body: Text(label)),
+);
 
 void main() {
   testWidgets('Services groups api + app and shows relay', (t) async {
@@ -252,17 +254,20 @@ void main() {
 
   testWidgets('app-server auto-re-probes: a recovered server flips to online '
       'without a manual refresh', (t) async {
-    final api = FakeBridgeApi(
-      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
-      services: const [
-        ServiceEntry(
-          device: 'lb7666',
-          kind: 'app',
-          name: 'default',
-          key: 'pcx:lb7666:app:default',
-        ),
-      ],
-    )..reachable['pcx:lb7666:app:default'] = false; // starts registered-but-dead
+    final api =
+        FakeBridgeApi(
+            config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+            services: const [
+              ServiceEntry(
+                device: 'lb7666',
+                kind: 'app',
+                name: 'default',
+                key: 'pcx:lb7666:app:default',
+              ),
+            ],
+          )
+          ..reachable['pcx:lb7666:app:default'] =
+              false; // starts registered-but-dead
     t.view.devicePixelRatio = 1.0;
     t.view.physicalSize = const Size(400, 900); // narrow: single-pane list
     addTearDown(t.view.reset);
@@ -283,9 +288,9 @@ void main() {
 
   testWidgets('onboarding: sign in shows the code, then authorized navigates '
       'home', (t) async {
-    final api =
-        FakeBridgeApi(config: const ConfigInfo(relay: '', hasKey: false))
-          ..accountPollStatus = 'authorized';
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: '', hasKey: false),
+    )..accountPollStatus = 'authorized';
     await t.pumpWidget(
       _routerHost(
         api,
@@ -315,9 +320,9 @@ void main() {
 
   testWidgets('onboarding: an expired code clears and shows the expired '
       'message without navigating', (t) async {
-    final api =
-        FakeBridgeApi(config: const ConfigInfo(relay: '', hasKey: false))
-          ..accountPollStatus = 'expired';
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: '', hasKey: false),
+    )..accountPollStatus = 'expired';
     await t.pumpWidget(
       _routerHost(
         api,
@@ -336,7 +341,9 @@ void main() {
     await t.pump(); // start resolves
     await t.pump(); // code + spinner show
     expect(find.text('ABCD-1234'), findsOneWidget);
-    await t.pump(const Duration(seconds: 6)); // poll fires → 'expired' → setState
+    await t.pump(
+      const Duration(seconds: 6),
+    ); // poll fires → 'expired' → setState
     // 'expired' clears _device, so the spinner is gone and we can settle.
     await t.pumpAndSettle();
     expect(find.text('代码已过期,请重试。'), findsOneWidget); // accountCodeExpired (zh)
@@ -359,10 +366,7 @@ void main() {
         api,
         initial: '/settings',
         routes: [
-          GoRoute(
-            path: '/settings',
-            builder: (_, _) => const SettingsScreen(),
-          ),
+          GoRoute(path: '/settings', builder: (_, _) => const SettingsScreen()),
           _stub('/onboarding', 'ONBOARDING-ROUTE'),
         ],
       ),

@@ -344,13 +344,13 @@ pub fn app_probe(service_key: String) -> Result<bool> {
     Ok(app_session::probe(service_key, 0, relay))
 }
 
-/// Probe whether an API proxy is actually REACHABLE — its host answers a minimal
-/// HTTP request — rather than merely registered on the relay. The services list
-/// uses this so a registered-but-dead API proxy (a live relay registrant
-/// forwarding to an api-proxy that has died) shows unreachable instead of a
-/// false "online", matching the app-server's [`app_probe`]. Opens a transient
-/// tunnel, hits the proxy's local 403 fallback (no upstream model call), then
-/// tears it down.
+/// Probe whether an API proxy is actually REACHABLE — its host answers a
+/// minimal HTTP request — rather than merely registered on the relay. The
+/// services list uses this so a registered-but-dead API proxy (a live relay
+/// registrant forwarding to an api-proxy that has died) shows unreachable
+/// instead of a false "online", matching the app-server's [`app_probe`]. Opens
+/// a transient tunnel, hits the proxy's local 403 fallback (no upstream model
+/// call), then tears it down.
 pub fn api_probe(service_key: String) -> Result<bool> {
     let dir = runtime::support_dir()?;
     if config::load_config(&dir)?.account_mode() == Mode::Account {
@@ -791,7 +791,10 @@ pub fn account_login_poll(poll_handle: String, backend: String) -> Result<Accoun
             login: None,
             account_id: None,
         },
-        account::PollOutcome::Authorized { login, account_id } => AccountPollDto {
+        account::PollOutcome::Authorized {
+            login,
+            account_id,
+        } => AccountPollDto {
             status: "authorized".to_string(),
             login: Some(login),
             account_id,
@@ -799,7 +802,8 @@ pub fn account_login_poll(poll_handle: String, backend: String) -> Result<Accoun
     })
 }
 
-/// The signed-in user (verified against the backend), or `None` if not signed in.
+/// The signed-in user (verified against the backend), or `None` if not signed
+/// in.
 pub fn account_current_user() -> Result<Option<AccountUserDto>> {
     let dir = runtime::support_dir()?;
     Ok(runtime::runtime()
@@ -810,7 +814,8 @@ pub fn account_current_user() -> Result<Option<AccountUserDto>> {
         }))
 }
 
-/// Sign out: revoke the refresh token (best effort) and clear the local session.
+/// Sign out: revoke the refresh token (best effort) and clear the local
+/// session.
 pub fn account_logout() -> Result<()> {
     let dir = runtime::support_dir()?;
     runtime::runtime().block_on(account::logout(&dir))

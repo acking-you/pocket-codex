@@ -1,10 +1,11 @@
 //! Client side of the Pocket-Codex broker tunnel.
 //!
-//! Speaks the [`pocket_codex_account_proto`] broker protocol over TLS tunnels to
-//! the backend; the backend does the pb-mapper work. The transport is abstracted
-//! behind [`Connector`] (the CLI/bridge plug in `tokio-rustls`; tests use plain
-//! TCP) and the session token behind [`TokenProvider`] (called on every
-//! (re)connect, so a long-lived register survives JWT expiry — broker-review D1).
+//! Speaks the [`pocket_codex_account_proto`] broker protocol over TLS tunnels
+//! to the backend; the backend does the pb-mapper work. The transport is
+//! abstracted behind [`Connector`] (the CLI/bridge plug in `tokio-rustls`;
+//! tests use plain TCP) and the session token behind [`TokenProvider`] (called
+//! on every (re)connect, so a long-lived register survives JWT expiry —
+//! broker-review D1).
 //!
 //! Two entry points, mirroring pb-mapper's publisher/subscriber:
 //! - [`run_register`] — the controller: hold one control tunnel, heartbeat it,
@@ -18,10 +19,9 @@ mod conn;
 mod register;
 mod subscribe;
 
-use tokio::io::{AsyncRead, AsyncWrite};
-
 pub use register::{run_register, RegisterConfig};
 pub use subscribe::{run_subscribe, SubscribeConfig};
+use tokio::io::{AsyncRead, AsyncWrite};
 
 /// A connected byte stream to the backend broker (one TLS tunnel).
 pub trait BrokerStream: AsyncRead + AsyncWrite + Unpin + Send {}

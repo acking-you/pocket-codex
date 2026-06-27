@@ -6,8 +6,8 @@
 //! another account's services: the backend derives the relay key from the
 //! verified token as `pcxu:<user_id>:<device>:<kind>:<name>`.
 //!
-//! The pb-mapper work is reused unchanged via [`pocket_codex_pb`]; this crate is
-//! the seam between pb-mapper's address-based `register`/`subscribe` and the
+//! The pb-mapper work is reused unchanged via [`pocket_codex_pb`]; this crate
+//! is the seam between pb-mapper's address-based `register`/`subscribe` and the
 //! per-stream client tunnels:
 //!
 //! - **register** ([`TunnelPurpose::RegisterControl`]): bind a loopback seam
@@ -16,8 +16,8 @@
 //!   backend emits a [`BrokerControl::NewStream`] and rendezvous the answering
 //!   [`TunnelPurpose::RegisterData`] tunnel with that accepted connection.
 //! - **subscribe** ([`TunnelPurpose::SubscribeData`]): run
-//!   [`pocket_codex_pb::subscribe`] on a loopback listener and dial it, bridging
-//!   the result to the client tunnel.
+//!   [`pocket_codex_pb::subscribe`] on a loopback listener and dial it,
+//!   bridging the result to the client tunnel.
 //!
 //! The process-global `MSG_HEADER_KEY` must be set (via
 //! [`pocket_codex_pb::set_msg_header_key`]) before any connection is handled.
@@ -94,7 +94,8 @@ struct RegisterSession {
     /// Stable per-process id of the owning client (diagnostics / takeover).
     #[allow(dead_code, reason = "retained for diagnostics and future policy")]
     client_instance_id: String,
-    /// Cancels the whole session (pb register task + seam accept + control loop).
+    /// Cancels the whole session (pb register task + seam accept + control
+    /// loop).
     cancel: CancellationToken,
     /// Per-stream rendezvous: a seam accept inserts a slot, the answering data
     /// tunnel removes it and sends itself through.
@@ -116,8 +117,9 @@ pub struct BrokerServer {
 }
 
 impl BrokerServer {
-    /// Build a broker server that bridges to the pb-mapper relay at `relay_addr`
-    /// (expected loopback). `data_idle` bounds an idle data bridge.
+    /// Build a broker server that bridges to the pb-mapper relay at
+    /// `relay_addr` (expected loopback). `data_idle` bounds an idle data
+    /// bridge.
     pub fn new(
         verifier: Arc<dyn TokenVerifier>,
         relay_addr: impl Into<String>,
@@ -155,17 +157,17 @@ impl BrokerServer {
         match (hello.role, hello.purpose) {
             (BrokerRole::Register, TunnelPurpose::RegisterControl) => {
                 self.handle_register_control(stream, hello, relay_key).await
-            }
+            },
             (BrokerRole::Register, TunnelPurpose::RegisterData) => {
                 self.handle_register_data(stream, hello, relay_key).await
-            }
+            },
             (BrokerRole::Subscribe, TunnelPurpose::SubscribeData) => {
                 self.handle_subscribe_data(stream, relay_key).await
-            }
+            },
             _ => {
                 let _ = write_frame(&mut stream, &BrokerAck::err("invalid role/purpose")).await;
                 Err(BrokerServerError::BadHello("invalid role/purpose"))
-            }
+            },
         }
     }
 

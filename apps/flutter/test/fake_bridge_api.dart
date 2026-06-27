@@ -108,7 +108,10 @@ class FakeBridgeApi implements BridgeApi {
   );
 
   @override
-  Future<AccountPoll> accountLoginPoll(String pollHandle, String backend) async {
+  Future<AccountPoll> accountLoginPoll(
+    String pollHandle,
+    String backend,
+  ) async {
     if (accountPollStatus == 'authorized') {
       accountUser = const AccountUser(login: 'octocat', accountId: '42');
     }
@@ -158,7 +161,8 @@ class FakeBridgeApi implements BridgeApi {
       _appConnected.contains(serviceKey) || (reachable[serviceKey] ?? true);
 
   @override
-  Future<bool> apiProbe(String serviceKey) async => reachable[serviceKey] ?? true;
+  Future<bool> apiProbe(String serviceKey) async =>
+      reachable[serviceKey] ?? true;
 
   @override
   Stream<AppEvent> appEvents(String serviceKey) => _appEvents

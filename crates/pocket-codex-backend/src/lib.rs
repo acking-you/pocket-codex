@@ -3,9 +3,9 @@
 //! One self-contained service that:
 //! - serves the GitHub-device-flow HTTP API ([`api::router`]) and the
 //!   per-account `/v1/me` + `/v1/services` views;
-//! - runs the broker ([`pocket_codex_broker_server`]) that bridges authenticated
-//!   client tunnels to a loopback pb-mapper relay holding the real
-//!   `MSG_HEADER_KEY`, namespacing every key per user;
+//! - runs the broker ([`pocket_codex_broker_server`]) that bridges
+//!   authenticated client tunnels to a loopback pb-mapper relay holding the
+//!   real `MSG_HEADER_KEY`, namespacing every key per user;
 //! - terminates TLS for both in-process (plain / cert files / ACME).
 //!
 //! The HTTP and broker logic are exposed as library items so they can be driven
@@ -21,13 +21,12 @@ mod tls;
 
 use std::{net::SocketAddr, sync::Arc};
 
+pub use api::{router, AppState};
+pub use config::{ServerConfig, TlsMode};
 use pocket_codex_auth::Auth;
 use pocket_codex_broker_server::{BrokerServer, TokenVerifier};
 use pocket_codex_store::Store;
 use tokio::net::TcpListener;
-
-pub use api::{router, AppState};
-pub use config::{ServerConfig, TlsMode};
 
 /// Adapts [`Auth`]'s stateless JWT verification to the broker's
 /// [`TokenVerifier`], so the broker never touches the database on the hot path.
@@ -69,16 +68,13 @@ pub async fn run(cfg: ServerConfig) -> anyhow::Result<()> {
         }
     });
 
-    let auth = Arc::new(Auth::new(
-        store,
-        pocket_codex_auth::Config {
-            github_client_id: cfg.github_client_id.clone(),
-            github_scope: cfg.github_scope.clone(),
-            jwt_secret: cfg.jwt_secret.clone(),
-            jwt_ttl_secs: cfg.jwt_ttl_secs,
-            refresh_ttl_secs: cfg.refresh_ttl_secs,
-        },
-    )?);
+    let auth = Arc::new(Auth::new(store, pocket_codex_auth::Config {
+        github_client_id: cfg.github_client_id.clone(),
+        github_scope: cfg.github_scope.clone(),
+        jwt_secret: cfg.jwt_secret.clone(),
+        jwt_ttl_secs: cfg.jwt_ttl_secs,
+        refresh_ttl_secs: cfg.refresh_ttl_secs,
+    })?);
     let relay_addr: SocketAddr = cfg
         .relay_addr
         .parse()
@@ -95,7 +91,10 @@ pub async fn run(cfg: ServerConfig) -> anyhow::Result<()> {
         .await
         .map_err(|e| anyhow::anyhow!("binding broker {}: {e}", cfg.broker_listen))?;
 
-    let app = api::router(AppState { auth, relay_addr });
+    let app = api::router(AppState {
+        auth,
+        relay_addr,
+    });
     tracing::info!(
         http = %cfg.http_listen,
         broker = %cfg.broker_listen,

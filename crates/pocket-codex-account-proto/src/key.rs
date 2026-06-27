@@ -34,12 +34,12 @@ pub struct NamespacedServiceId {
 }
 
 impl NamespacedServiceId {
-    /// Build a namespaced id, sanitising `user_id` AND the service segments into
-    /// stable key segments. Re-sanitising `service` here (not just trusting the
-    /// caller to have built it via [`ServiceId::new`]) makes the namespace
-    /// guarantee a property of this security-critical type rather than of caller
-    /// discipline: `key()` can never emit a stray `:` that injects extra
-    /// segments or another user's prefix.
+    /// Build a namespaced id, sanitising `user_id` AND the service segments
+    /// into stable key segments. Re-sanitising `service` here (not just
+    /// trusting the caller to have built it via [`ServiceId::new`]) makes
+    /// the namespace guarantee a property of this security-critical type
+    /// rather than of caller discipline: `key()` can never emit a stray `:`
+    /// that injects extra segments or another user's prefix.
     pub fn new(user_id: impl AsRef<str>, service: ServiceId) -> Self {
         Self {
             user_id: sanitize_component(user_id.as_ref()),
@@ -137,14 +137,11 @@ mod tests {
         // A ServiceId built by struct literal (bypassing ::new) with ':' in its
         // fields must still yield a key with exactly the 4 segment separators,
         // inside this user's prefix — no injected segments, no foreign prefix.
-        let id = NamespacedServiceId::new(
-            "bob",
-            ServiceId {
-                device: "x:pcxu:victim:y".to_string(),
-                kind: ServiceKind::App,
-                name: "n:m".to_string(),
-            },
-        );
+        let id = NamespacedServiceId::new("bob", ServiceId {
+            device: "x:pcxu:victim:y".to_string(),
+            kind: ServiceKind::App,
+            name: "n:m".to_string(),
+        });
         assert_eq!(id.key().matches(':').count(), 4);
         assert!(id.key().starts_with("pcxu:bob:"));
     }

@@ -105,7 +105,9 @@ async fn control_loop(
             if !matches!(
                 timeout(
                     params::CONTROL_IO_TIMEOUT,
-                    write_frame(&mut *w, &BrokerControl::Ping { seq }),
+                    write_frame(&mut *w, &BrokerControl::Ping {
+                        seq
+                    }),
                 )
                 .await,
                 Ok(Ok(()))
@@ -124,11 +126,15 @@ async fn control_loop(
             Ok(Ok(frame)) => frame,
         };
         match frame {
-            BrokerControl::Pong { .. } => {}
-            BrokerControl::Retire { reason } => {
+            BrokerControl::Pong {
+                ..
+            } => {},
+            BrokerControl::Retire {
+                reason,
+            } => {
                 tracing::info!("register retired by backend: {reason}");
                 break Ok(());
-            }
+            },
             BrokerControl::NewStream {
                 generation,
                 stream_id,
@@ -137,7 +143,11 @@ async fn control_loop(
                 // to dial the data tunnel.
                 let ack = {
                     let mut w = writer.lock().await;
-                    write_frame(&mut *w, &BrokerControl::StreamAck { generation, stream_id }).await
+                    write_frame(&mut *w, &BrokerControl::StreamAck {
+                        generation,
+                        stream_id,
+                    })
+                    .await
                 };
                 if let Err(e) = ack {
                     // A failed control write means the session is dead — tear it
@@ -154,9 +164,14 @@ async fn control_loop(
                         tracing::warn!(stream_id, error = %e, "register data tunnel failed");
                     }
                 });
-            }
+            },
             // A register client never receives these.
-            BrokerControl::Ping { .. } | BrokerControl::StreamAck { .. } => {}
+            BrokerControl::Ping {
+                ..
+            }
+            | BrokerControl::StreamAck {
+                ..
+            } => {},
         }
     };
     heartbeat.abort();

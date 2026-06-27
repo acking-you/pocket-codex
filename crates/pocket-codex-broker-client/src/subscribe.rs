@@ -39,7 +39,7 @@ pub async fn run_subscribe(
             Err(e) => {
                 tracing::warn!(error = %e, "subscribe accept failed");
                 continue;
-            }
+            },
         };
         let connector = connector.clone();
         let tokens = tokens.clone();

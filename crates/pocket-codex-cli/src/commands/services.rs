@@ -26,8 +26,12 @@ async fn list(args: ServicesListArgs) -> Result<()> {
     let kind = args.kind.map(ServiceKind::from);
     let mut config = Config::load()?;
     match transport::resolve_transport(args.relay.relay.as_deref(), None, &config)? {
-        Transport::SelfHost { relay } => list_self_host(&relay, kind).await,
-        Transport::Account { backend } => list_account(&mut config, &backend, kind).await,
+        Transport::SelfHost {
+            relay,
+        } => list_self_host(&relay, kind).await,
+        Transport::Account {
+            backend,
+        } => list_account(&mut config, &backend, kind).await,
     }
 }
 
@@ -57,7 +61,9 @@ async fn list_self_host(relay: &str, kind: Option<ServiceKind>) -> Result<()> {
 async fn list_account(config: &mut Config, backend: &str, kind: Option<ServiceKind>) -> Result<()> {
     let mut services = account::fetch_services(config, backend).await?;
     services.retain(|s| kind.is_none_or(|kind| s.kind == kind));
-    services.sort_by(|a, b| (a.device.as_str(), a.name.as_str()).cmp(&(b.device.as_str(), b.name.as_str())));
+    services.sort_by(|a, b| {
+        (a.device.as_str(), a.name.as_str()).cmp(&(b.device.as_str(), b.name.as_str()))
+    });
 
     if services.is_empty() {
         ui::muted("no services in your account");
