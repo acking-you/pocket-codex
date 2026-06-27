@@ -15,6 +15,10 @@
   <a href="LICENSE"><img alt="license" src="https://img.shields.io/badge/license-Apache--2.0-blue.svg"></a>
 </p>
 
+<p align="center">
+  <strong>English</strong> · <a href="README.zh-CN.md">中文</a>
+</p>
+
 > [!WARNING]
 > **Pocket-Codex is under active development.** Nothing here is stable
 > yet — APIs, on-disk layout, the protocol mapping and even the crate
