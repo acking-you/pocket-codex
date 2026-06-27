@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -11,12 +13,55 @@ import 'package:pocket_codex/src/widgets/loading.dart';
 import 'package:pocket_codex/src/widgets/status_dots.dart';
 
 /// Home screen: lists discovered services on the configured relay.
-class ServicesScreen extends ConsumerWidget {
+class ServicesScreen extends ConsumerStatefulWidget {
   /// Default constructor.
   const ServicesScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<ServicesScreen> createState() => _ServicesScreenState();
+}
+
+class _ServicesScreenState extends ConsumerState<ServicesScreen>
+    with WidgetsBindingObserver {
+  /// Cadence for re-probing every app-server's reachability so a server that
+  /// came back online flips from "unreachable" to "online" on its own — the
+  /// manual refresh button stays as a fallback. Kept in the same order of
+  /// magnitude as the session keepalive while staying gentle enough to avoid
+  /// probe churn against the remote app-server.
+  static const _reprobeInterval = Duration(seconds: 15);
+
+  Timer? _reprobeTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _reprobeTimer = Timer.periodic(_reprobeInterval, (_) {
+      // Re-probe only the reachability of each app-server (not the full service
+      // discovery): cheap, and the single thing that goes stale when a remote
+      // server is restarted out from under us.
+      if (mounted) ref.invalidate(appReachableProvider);
+    });
+  }
+
+  @override
+  void dispose() {
+    _reprobeTimer?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Returning to the foreground: re-probe once immediately so a server that
+    // recovered while we were backgrounded shows online without waiting a tick.
+    if (state == AppLifecycleState.resumed && mounted) {
+      ref.invalidate(appReachableProvider);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
     final servicesAsync = ref.watch(servicesProvider);
     final config = ref.watch(configProvider).valueOrNull;

@@ -176,6 +176,37 @@ void main() {
     expect(find.textContaining('远端 app-server 没有响应'), findsOneWidget);
   });
 
+  testWidgets('app-server auto-re-probes: a recovered server flips to online '
+      'without a manual refresh', (t) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+      services: const [
+        ServiceEntry(
+          device: 'lb7666',
+          kind: 'app',
+          name: 'default',
+          key: 'pcx:lb7666:app:default',
+        ),
+      ],
+    )..reachable['pcx:lb7666:app:default'] = false; // starts registered-but-dead
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(400, 900); // narrow: single-pane list
+    addTearDown(t.view.reset);
+
+    await t.pumpWidget(_host(const ServicesScreen(), api));
+    await t.pumpAndSettle(); // initial probe resolves
+    expect(find.text('不可达'), findsOneWidget); // honest dead status
+
+    // The remote app-server comes back up out from under us...
+    api.reachable['pcx:lb7666:app:default'] = true;
+    // ...and the periodic re-probe picks it up with NO manual refresh tap.
+    await t.pump(const Duration(seconds: 16)); // fire the 15s re-probe timer
+    await t.pumpAndSettle(); // let the fresh probe resolve
+
+    expect(find.text('不可达'), findsNothing); // recovered on its own
+    expect(find.text('在线'), findsNWidgets(2)); // relay + app-server both online
+  });
+
   testWidgets('ApiService rejects an out-of-range port before subscribing', (
     t,
   ) async {
