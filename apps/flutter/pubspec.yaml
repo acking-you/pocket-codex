@@ -2,7 +2,7 @@ name: pocket_codex
 description: "Pocket-Codex Flutter front-end. Drives codex app-server through flutter_rust_bridge."
 publish_to: 'none'
 
-version: 0.0.3+3
+version: 0.0.4+4
 
 # Flutter SDK is locked at the project level via FVM (`.fvmrc`) and at
 # the language level via `environment.flutter`. CI uses

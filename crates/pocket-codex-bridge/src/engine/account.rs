@@ -25,10 +25,22 @@ use tokio::net::TcpStream;
 
 use crate::engine::config::{load_config, save_config};
 
-/// Compile-time default backend base URL.
-pub const DEFAULT_BACKEND: &str = "https://lb7666.top:8443";
+/// Compile-time default backend host, overridable at build time via the
+/// `POCKET_CODEX_BACKEND_HOST` env var (the release pipeline injects the repo's
+/// configured server). An empty/unset value falls back to the bundled default.
+const DEFAULT_BACKEND_HOST: Option<&str> = option_env!("POCKET_CODEX_BACKEND_HOST");
 /// Default broker TLS port; the host comes from the backend URL.
 const DEFAULT_BROKER_PORT: u16 = 7900;
+
+/// The compile-time default backend API base URL — `https://<host>:8443`, where
+/// `<host>` is the build-time [`DEFAULT_BACKEND_HOST`] or the bundled fallback.
+pub fn default_backend() -> String {
+    let host = match DEFAULT_BACKEND_HOST {
+        Some(host) if !host.is_empty() => host,
+        _ => "lb7666.top",
+    };
+    format!("https://{host}:8443")
+}
 /// Idle timeout applied to account-mode data bridges.
 pub const ACCOUNT_DATA_IDLE: Duration = Duration::from_secs(1800);
 
@@ -37,7 +49,7 @@ pub fn backend_base(config: &Config) -> String {
     config
         .account_backend()
         .map(ToString::to_string)
-        .unwrap_or_else(|| DEFAULT_BACKEND.to_string())
+        .unwrap_or_else(default_backend)
 }
 
 /// Resolve the backend: an explicit override wins, else the persisted/default.
@@ -440,7 +452,7 @@ mod tests {
     #[test]
     fn backend_base_defaults_then_uses_config() {
         let mut config = Config::default();
-        assert_eq!(backend_base(&config), DEFAULT_BACKEND);
+        assert_eq!(backend_base(&config), default_backend());
         config.set_account_backend("https://cfg.example");
         assert_eq!(backend_base(&config), "https://cfg.example");
     }
@@ -452,7 +464,7 @@ mod tests {
             resolve_backend(&config, Some("https://flag.example")).expect("https override"),
             "https://flag.example"
         );
-        assert_eq!(resolve_backend(&config, None).expect("default backend"), DEFAULT_BACKEND);
+        assert_eq!(resolve_backend(&config, None).expect("default backend"), default_backend());
         // An http override is rejected so the bearer token can't go out in cleartext.
         assert!(resolve_backend(&config, Some("http://insecure.example")).is_err());
     }
