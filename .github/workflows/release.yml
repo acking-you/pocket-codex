@@ -30,6 +30,11 @@ env:
   RUST_TOOLCHAIN: nightly-2026-04-01
   RELEASE_NAME: Pocket-Codex ${{ github.ref_name }}
   IS_DRAFT: ${{ github.event_name == 'workflow_dispatch' }}
+  # The backend server the CLI + app default to, baked at build time from the
+  # repo-configurable variable (`gh variable set POCKET_CODEX_BACKEND_HOST`).
+  # Read via option_env! in both account.rs; empty/unset falls back to the
+  # bundled default. cross forwards it into the musl container via Cross.toml.
+  POCKET_CODEX_BACKEND_HOST: ${{ vars.POCKET_CODEX_BACKEND_HOST }}
 
 jobs:
   # --- Release notes, generated exactly once ---------------------------------

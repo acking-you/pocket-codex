@@ -1,0 +1,7 @@
+# `cross` runs the musl CLI builds inside a container that does NOT inherit the
+# host's env by default. Forward the build-time backend host (set by the release
+# pipeline from the repo's `POCKET_CODEX_BACKEND_HOST` variable) into the
+# container so the static Linux CLI binaries bake the configured server, exactly
+# like the native (non-cross) builds do.
+[build.env]
+passthrough = ["POCKET_CODEX_BACKEND_HOST"]
