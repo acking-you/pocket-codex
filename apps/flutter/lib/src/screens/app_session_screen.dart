@@ -357,6 +357,45 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
     );
   }
 
+  /// The current per-thread settings as a persistable config.
+  ThreadConfig _threadConfigSnapshot() => ThreadConfig(
+    model: _model?.id,
+    reasoningEffort: _effectiveEffort?.wire,
+    permissionMode: _mode.name,
+    planMode: _plan,
+  );
+
+  /// Persist the current per-thread settings on the host so re-opening this
+  /// session — on this or another device — restores the user's model / effort /
+  /// permission / plan instead of resetting to defaults (requirement #2). No-op
+  /// for a brand-new conversation (no thread id yet; persisted at thread-start
+  /// instead). Best-effort + fire-and-forget: a failure (e.g. the host meta
+  /// tunnel briefly unreachable) must never disrupt the conversation.
+  void _persistThreadConfig() {
+    final tid = _threadId;
+    if (tid == null) return;
+    final cfg = _threadConfigSnapshot();
+    unawaited(
+      ref
+          .read(bridgeApiProvider)
+          .metaThreadConfigSet(widget.serviceKey, tid, cfg)
+          .catchError((_) => cfg),
+    );
+  }
+
+  /// Load a thread's persisted config from the host. Best-effort: returns an
+  /// all-unset config when the host meta tunnel is unreachable, so the caller
+  /// falls back to the server / in-memory restore.
+  Future<ThreadConfig> _loadPersistedConfig(String threadId) async {
+    try {
+      return await ref
+          .read(bridgeApiProvider)
+          .metaThreadConfigGet(widget.serviceKey, threadId);
+    } catch (_) {
+      return const ThreadConfig();
+    }
+  }
+
   /// Switch the screen to another conversation (or a new one when [tid] is
   /// null) in place, resetting per-thread state. Used by the left sessions pane.
   void _openThread(String? tid, String? cwd) {
@@ -446,11 +485,33 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
       _error = null;
       _retry = null;
     });
+    final startTid = _threadId!;
     try {
       final api = ref.read(bridgeApiProvider);
-      await api.appThreadResume(widget.serviceKey, _threadId!);
-      final history = await api.appThreadRead(widget.serviceKey, _threadId!);
-      if (!mounted) return;
+      await api.appThreadResume(widget.serviceKey, startTid);
+      // Read the thread history and its persisted config concurrently. The
+      // config is best-effort (an unreachable host meta tunnel yields an
+      // all-unset config and we fall back to the server / in-memory restore).
+      final historyFuture = api.appThreadRead(widget.serviceKey, startTid);
+      final persistedFuture = _loadPersistedConfig(startTid);
+      final history = await historyFuture;
+      final persisted = await persistedFuture;
+      // The server restores neither the model nor the permission mode, so the
+      // persisted store is their only source across re-opens; resolve a stored
+      // model id against this service's model list.
+      ModelInfo? persistedModel;
+      if (persisted.model != null) {
+        try {
+          final models = await _ensureModels();
+          persistedModel = models
+              .where((m) => m.id == persisted.model)
+              .firstOrNull;
+        } catch (_) {
+          // Model list unavailable — leave the model unchanged.
+        }
+      }
+      // The user may have switched threads during the awaits above.
+      if (!mounted || _threadId != startTid) return;
       setState(() {
         _loading = false;
         _items.clear();
@@ -481,20 +542,33 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
         // usually isn't a plan item — which left plan mode stuck on.) Don't
         // clobber a pending toggle the user set before a drop/reload.
         final tid = _threadId;
+        // Permission mode + model: restored from the persisted store (the
+        // server tracks neither, so without this they'd reset to defaults on
+        // every re-open).
+        final persistedMode = persisted.permissionMode == null
+            ? null
+            : PermissionMode.values
+                  .where((m) => m.name == persisted.permissionMode)
+                  .firstOrNull;
+        if (persistedMode != null) _mode = persistedMode;
+        if (persistedModel != null) _model = persistedModel;
         final serverMode = history.collaborationMode;
         final restored = serverMode != null
             ? serverMode == 'plan'
-            : (tid != null && (_planByThread[tid] ?? false));
+            : (persisted.planMode ??
+                  (tid != null && (_planByThread[tid] ?? false)));
         final hadPendingToggle = _plan != _planActive;
         _planActive = restored;
         if (!hadPendingToggle) _plan = _planActive;
         // Restore the thread's current effort: prefer the server value (from the
-        // resume response), else our per-thread memory. A pending pick (_effort)
-        // is left untouched — the chip shows `_effort ?? _effortActive`, so it
-        // survives a drop/reload without being clobbered.
+        // resume response), else the persisted store, else our per-thread
+        // memory. A pending pick (_effort) is left untouched — the chip shows
+        // `_effort ?? _effortActive`, so it survives a drop/reload unclobbered.
         final serverEffort = ReasoningEffort.fromWire(history.reasoningEffort);
         _effortActive =
-            serverEffort ?? (tid != null ? _effortByThread[tid] : null);
+            serverEffort ??
+            ReasoningEffort.fromWire(persisted.reasoningEffort) ??
+            (tid != null ? _effortByThread[tid] : null);
         // Seed the status gauge + branch chip + cwd from the thread metadata.
         // _cwd may be null if the thread was opened without it (e.g. a default
         // folder that codex resolved to a real path) — adopt the resolved cwd
@@ -509,7 +583,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
       _loadGit();
       _scrollToEnd(force: true);
     } catch (e) {
-      if (mounted) {
+      if (mounted && _threadId == startTid) {
         setState(() {
           _loading = false;
           _error = friendlyError(e);
@@ -802,6 +876,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
           _planByThread[_threadId!] = _plan;
           _effortByThread[_threadId!] = effort;
         }
+        // Persist the config now that the thread has an id — covers a brand-new
+        // conversation whose settings were chosen before its first turn.
+        _persistThreadConfig();
       }
     } catch (e) {
       final msg = friendlyError(e);
@@ -2227,6 +2304,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
                               _planToggledByUser = true;
                             });
                             _rememberDefaults();
+                            _persistThreadConfig();
                           },
                         ),
                         // Reasoning effort ("thinking level"): shows the effort
@@ -2489,6 +2567,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
         }
       });
       _rememberDefaults();
+      _persistThreadConfig();
     }
   }
 
@@ -2510,6 +2589,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
     if (chosen != null) {
       setState(() => _mode = chosen);
       _rememberDefaults();
+      _persistThreadConfig();
     }
   }
 
@@ -2556,6 +2636,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
     if (chosen != null) {
       setState(() => _effort = chosen);
       _rememberDefaults();
+      _persistThreadConfig();
     }
   }
 

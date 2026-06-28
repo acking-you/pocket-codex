@@ -556,6 +556,10 @@ class FakeBridgeApi implements BridgeApi {
   /// thread id. [metaThreadConfigSet] writes here.
   final Map<String, ThreadConfig> threadConfigs = {};
 
+  /// Records the last `(serviceKey, threadId)` passed to [metaThreadConfigGet] /
+  /// [metaThreadConfigSet], so tests can assert the config wiring fired.
+  String? lastConfigGetThread, lastConfigSetThread;
+
   /// Records the last `(serviceKey, threadId)` passed to [metaForceResume].
   String? lastMetaResumedKey, lastMetaResumedThread;
 
@@ -589,7 +593,10 @@ class FakeBridgeApi implements BridgeApi {
   Future<ThreadConfig> metaThreadConfigGet(
     String serviceKey,
     String threadId,
-  ) async => threadConfigs[threadId] ?? const ThreadConfig();
+  ) async {
+    lastConfigGetThread = threadId;
+    return threadConfigs[threadId] ?? const ThreadConfig();
+  }
 
   @override
   Future<ThreadConfig> metaThreadConfigSet(
@@ -597,6 +604,7 @@ class FakeBridgeApi implements BridgeApi {
     String threadId,
     ThreadConfig config,
   ) async {
+    lastConfigSetThread = threadId;
     threadConfigs[threadId] = config;
     return config;
   }

@@ -1332,6 +1332,31 @@ void main() {
     expect(find.byKey(const Key('send-btn')), findsNothing);
   });
 
+  testWidgets('#2: a thread restores its persisted config on open', (t) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    api.readResult = const ThreadHistory(items: [], running: false);
+    // The host persisted a non-default model for this thread; the server does
+    // not restore the model, so without persistence it would reset to default.
+    api.threadConfigs['thread-cfg'] = const ThreadConfig(model: 'gpt-5');
+    await t.pumpWidget(
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          threadId: 'thread-cfg',
+        ),
+        api,
+      ),
+    );
+    await t.pumpAndSettle();
+    // The screen fetched this thread's persisted config and applied the stored
+    // model to the composer chip (instead of the default).
+    expect(api.lastConfigGetThread, 'thread-cfg');
+    expect(find.text('GPT-5'), findsOneWidget);
+  });
+
   testWidgets('App session answers an approval prompt interactively', (
     t,
   ) async {
