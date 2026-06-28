@@ -105,6 +105,15 @@ class AppLocalizationsZh extends AppLocalizations {
   String get appServerServices => 'App-server 服务';
 
   @override
+  String get navApi => 'API';
+
+  @override
+  String get navAppServer => 'App-server';
+
+  @override
+  String get navHosting => '托管';
+
+  @override
   String appServerSubtitle(String device) {
     return '$device · 远程控制';
   }
@@ -689,7 +698,10 @@ class AppLocalizationsZh extends AppLocalizations {
   String get codexBinaryPath => 'codex 程序路径';
 
   @override
-  String get codexNotFound => '未在 PATH 中找到 codex —— 请在下方填写完整路径。';
+  String get codexNotFound => '未在 PATH 中找到 codex —— 请在下方填写完整路径,或安装后点击「重新检测」。';
+
+  @override
+  String get codexRedetect => '重新检测';
 
   @override
   String get localHostDialogTitle => '托管本地 app-server';

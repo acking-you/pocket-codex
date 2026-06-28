@@ -34,6 +34,9 @@
   "accountSignOut": "Sign out",
   "apiServicesSection": "API services",
   "appServerServices": "App-server services",
+  "navApi": "API",
+  "navAppServer": "App-server",
+  "navHosting": "Hosting",
   "appServerSubtitle": "{device} · remote control",
   "@appServerSubtitle": {
     "placeholders": { "device": { "type": "String" } }
@@ -259,7 +262,8 @@
   "localHostPort": "Port",
   "localHostName": "Instance name",
   "codexBinaryPath": "codex binary path",
-  "codexNotFound": "codex wasn't found on PATH — enter its full path below.",
+  "codexNotFound": "codex wasn't found on PATH — enter its full path below, or install it and tap Re-detect.",
+  "codexRedetect": "Re-detect",
   "localHostDialogTitle": "Host a local app-server",
   "localHostHint": "Runs codex on this machine and registers it to your account, so your other devices can drive it.",
   "localHostListening": "Listening on {addr}",

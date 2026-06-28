@@ -107,6 +107,15 @@ class AppLocalizationsEn extends AppLocalizations {
   String get appServerServices => 'App-server services';
 
   @override
+  String get navApi => 'API';
+
+  @override
+  String get navAppServer => 'App-server';
+
+  @override
+  String get navHosting => 'Hosting';
+
+  @override
   String appServerSubtitle(String device) {
     return '$device · remote control';
   }
@@ -705,7 +714,10 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get codexNotFound =>
-      'codex wasn\'t found on PATH — enter its full path below.';
+      'codex wasn\'t found on PATH — enter its full path below, or install it and tap Re-detect.';
+
+  @override
+  String get codexRedetect => 'Re-detect';
 
   @override
   String get localHostDialogTitle => 'Host a local app-server';

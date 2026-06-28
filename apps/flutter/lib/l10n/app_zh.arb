@@ -34,6 +34,9 @@
   "accountSignOut": "退出登录",
   "apiServicesSection": "API 服务",
   "appServerServices": "App-server 服务",
+  "navApi": "API",
+  "navAppServer": "App-server",
+  "navHosting": "托管",
   "appServerSubtitle": "{device} · 远程控制",
   "@appServerSubtitle": {
     "placeholders": { "device": { "type": "String" } }
@@ -244,7 +247,8 @@
   "localHostPort": "端口",
   "localHostName": "实例名",
   "codexBinaryPath": "codex 程序路径",
-  "codexNotFound": "未在 PATH 中找到 codex —— 请在下方填写完整路径。",
+  "codexNotFound": "未在 PATH 中找到 codex —— 请在下方填写完整路径,或安装后点击「重新检测」。",
+  "codexRedetect": "重新检测",
   "localHostDialogTitle": "托管本地 app-server",
   "localHostHint": "在本机运行 codex 并注册到你的账号，让你的其它设备可以驱动它。",
   "localHostListening": "正在监听 {addr}",
