@@ -202,7 +202,8 @@ pub(crate) fn state_cell(label: &str, ok: bool) -> Cell {
 }
 
 /// Build a KIND cell: blue for app-server services, magenta for API
-/// proxies. Color is applied only when [`use_color`] allows it.
+/// proxies, cyan for host meta services. Color is applied only when
+/// [`use_color`] allows it.
 pub(crate) fn kind_cell(label: &str, kind: ServiceKind) -> Cell {
     let cell = Cell::new(label);
     if !use_color() {
@@ -211,6 +212,7 @@ pub(crate) fn kind_cell(label: &str, kind: ServiceKind) -> Cell {
     cell.fg(match kind {
         ServiceKind::App => Color::Blue,
         ServiceKind::Api => Color::Magenta,
+        ServiceKind::Meta => Color::Cyan,
     })
 }
 

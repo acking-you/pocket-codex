@@ -6,7 +6,7 @@
 //!                      │      │          │        └── instance name
 //!                      │      │          │            (e.g. "default", "work")
 //!                      │      │          └─────────── ServiceKind::as_key_segment
-//!                      │      │                       ("app" | "api")
+//!                      │      │                       ("app" | "api" | "meta")
 //!                      │      └────────────────────── sanitised host id
 //!                      │                              (default: hostname)
 //!                      └───────────────────────────── SERVICE_KEY_PREFIX
@@ -40,6 +40,9 @@ pub enum ServiceKind {
     App,
     /// Responses API proxy service.
     Api,
+    /// Host-side meta service (session inventory + per-thread config), exposed
+    /// alongside an `app`/`api` host so its local sessions are remote-viewable.
+    Meta,
 }
 
 impl ServiceKind {
@@ -48,6 +51,7 @@ impl ServiceKind {
         match self {
             Self::App => "app",
             Self::Api => "api",
+            Self::Meta => "meta",
         }
     }
 }
@@ -65,6 +69,7 @@ impl FromStr for ServiceKind {
         match raw {
             "app" => Ok(Self::App),
             "api" => Ok(Self::Api),
+            "meta" => Ok(Self::Meta),
             _ => Err(()),
         }
     }

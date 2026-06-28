@@ -227,6 +227,9 @@ impl Config {
         match kind {
             ServiceKind::App => self.services.app.default.as_ref(),
             ServiceKind::Api => self.services.api.default.as_ref(),
+            // The meta service is always colocated with an app/api host and its
+            // key is derived from theirs, so it has no standalone default target.
+            ServiceKind::Meta => None,
         }
     }
 
@@ -244,6 +247,8 @@ impl Config {
         match kind {
             ServiceKind::App => self.services.app.default = Some(target),
             ServiceKind::Api => self.services.api.default = Some(target),
+            // No standalone default for the colocated/derived meta service.
+            ServiceKind::Meta => {},
         }
     }
 

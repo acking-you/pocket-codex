@@ -200,6 +200,7 @@ class FakeBridgeApi implements BridgeApi {
     const device = 'local';
     final appKey = 'pcx:$device:app:$n';
     final apiKey = 'pcx:$device:api:$n';
+    final metaKey = 'pcx:$device:meta:$n';
     serveHosts
       ..removeWhere((h) => h.name == n)
       ..add(
@@ -214,6 +215,9 @@ class FakeBridgeApi implements BridgeApi {
           apiListenAddr: '127.0.0.1:18080',
           apiServiceKey: apiKey,
           apiRegistered: true,
+          metaListenAddr: '127.0.0.1:18090',
+          metaServiceKey: metaKey,
+          metaRegistered: true,
         ),
       );
     return AppServeResult(
@@ -223,6 +227,8 @@ class FakeBridgeApi implements BridgeApi {
       appListenAddr: '127.0.0.1:$port',
       apiServiceKey: apiKey,
       apiListenAddr: '127.0.0.1:18080',
+      metaServiceKey: metaKey,
+      metaListenAddr: '127.0.0.1:18090',
       pid: 4242,
       reused: false,
     );
@@ -240,6 +246,9 @@ class FakeBridgeApi implements BridgeApi {
         apiListenAddr: h.apiListenAddr,
         apiServiceKey: h.apiServiceKey,
         apiRegistered: kind == 'api' ? registered : h.apiRegistered,
+        metaListenAddr: h.metaListenAddr,
+        metaServiceKey: h.metaServiceKey,
+        metaRegistered: kind == 'meta' ? registered : h.metaRegistered,
       );
 
   @override
@@ -536,4 +545,59 @@ class FakeBridgeApi implements BridgeApi {
   @override
   Future<List<ThreadItem>> appLocalSessionTranscript(String threadId) async =>
       transcripts[threadId] ?? const [];
+
+  // --- Remote (meta service) sessions + per-thread config ---
+
+  /// Per-service-key override for [metaSessions]; falls back to [localSessions]
+  /// so a test that only seeds local sessions also sees them "remotely".
+  final Map<String, List<LocalSession>> remoteSessions = {};
+
+  /// Seedable per-thread config returned by [metaThreadConfigGet], keyed by
+  /// thread id. [metaThreadConfigSet] writes here.
+  final Map<String, ThreadConfig> threadConfigs = {};
+
+  /// Records the last `(serviceKey, threadId)` passed to [metaForceResume].
+  String? lastMetaResumedKey, lastMetaResumedThread;
+
+  @override
+  Future<List<LocalSession>> metaSessions(String serviceKey) async =>
+      remoteSessions[serviceKey] ?? localSessions;
+
+  @override
+  Future<SessionLiveness> metaSessionLiveness(
+    String serviceKey,
+    String threadId,
+  ) async => appSessionLiveness(threadId);
+
+  @override
+  Future<List<ThreadItem>> metaSessionTranscript(
+    String serviceKey,
+    String threadId,
+  ) async => transcripts[threadId] ?? const [];
+
+  @override
+  Future<ForceResumeReport> metaForceResume(
+    String serviceKey,
+    String threadId,
+  ) async {
+    lastMetaResumedKey = serviceKey;
+    lastMetaResumedThread = threadId;
+    return forceResumeResult;
+  }
+
+  @override
+  Future<ThreadConfig> metaThreadConfigGet(
+    String serviceKey,
+    String threadId,
+  ) async => threadConfigs[threadId] ?? const ThreadConfig();
+
+  @override
+  Future<ThreadConfig> metaThreadConfigSet(
+    String serviceKey,
+    String threadId,
+    ThreadConfig config,
+  ) async {
+    threadConfigs[threadId] = config;
+    return config;
+  }
 }

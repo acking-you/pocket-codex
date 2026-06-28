@@ -41,9 +41,7 @@ TextStyle linkStyleOf(BuildContext context) {
 // The GFM autolink parser only links a bare URL at a word boundary (space/start
 // or ASCII delimiter), so `应用：https://x` or `仓库https://x` won't link. Models
 // writing Chinese routinely glue URLs to a full-width colon, so insert a space.
-final _cjkBeforeUrl = RegExp(
-  r'([　-〿一-鿿＀-￯])(https?://)',
-);
+final _cjkBeforeUrl = RegExp(r'([　-〿一-鿿＀-￯])(https?://)');
 
 /// Make bare URLs glued to CJK text/punctuation autolinkable by the markdown
 /// parser, without touching markdown links (`](http…`) which have ASCII

@@ -6,7 +6,7 @@
 import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `apply_key`, `current_relay`, `holder_dto`
+// These functions are ignored because they are not marked as `pub`: `apply_key`, `current_relay`, `holder_dto`, `meta_holder_dto`, `thread_config_dto`, `thread_config_from_dto`
 
 /// Initialise the engine with the platform app-support dir (from Dart's
 /// path_provider). Must be called once after `RustLib.init()`.
@@ -81,17 +81,17 @@ Future<AppServeDto> appServeStart({
 Future<List<AppServeStatusDto>> appServeStatus() =>
     RustLib.instance.api.crateApiBridgeAppServeStatus();
 
-/// Take one tunnel (`kind` = `"app"`/`"api"`) of a local host off the relay
-/// without stopping the host — a reversible unpublish. The codex / API proxy
-/// keep running; [`app_serve_reregister`] re-publishes it instantly.
+/// Take one tunnel (`kind` = `"app"`/`"api"`/`"meta"`) of a local host off the
+/// relay without stopping the host — a reversible unpublish. The codex / API
+/// proxy / meta service keep running; [`app_serve_reregister`] re-publishes it.
 Future<void> appServeDeregister({required String name, required String kind}) =>
     RustLib.instance.api.crateApiBridgeAppServeDeregister(
       name: name,
       kind: kind,
     );
 
-/// Re-publish a previously deregistered tunnel (`kind` = `"app"`/`"api"`) of a
-/// still-running local host.
+/// Re-publish a previously deregistered tunnel (`kind` = `"app"`/`"api"`/
+/// `"meta"`) of a still-running local host.
 Future<void> appServeReregister({required String name, required String kind}) =>
     RustLib.instance.api.crateApiBridgeAppServeReregister(
       name: name,
@@ -323,6 +323,63 @@ Future<ForceResumeReportDto> appForceResume({
   threadId: threadId,
 );
 
+/// Remote analogue of [`app_local_sessions`]: list the sessions of the host
+/// behind `service_key` via its meta tunnel (loopback when this app is the
+/// host, broker when remote). Lets a phone see a desktop host's sessions —
+/// including those owned by another codex client.
+Future<List<LocalSessionDto>> metaSessions({required String serviceKey}) =>
+    RustLib.instance.api.crateApiBridgeMetaSessions(serviceKey: serviceKey);
+
+/// Remote analogue of [`app_session_liveness`].
+Future<SessionLivenessDto> metaSessionLiveness({
+  required String serviceKey,
+  required String threadId,
+}) => RustLib.instance.api.crateApiBridgeMetaSessionLiveness(
+  serviceKey: serviceKey,
+  threadId: threadId,
+);
+
+/// Remote analogue of [`app_local_session_transcript`].
+Future<List<ThreadItemDto>> metaSessionTranscript({
+  required String serviceKey,
+  required String threadId,
+}) => RustLib.instance.api.crateApiBridgeMetaSessionTranscript(
+  serviceKey: serviceKey,
+  threadId: threadId,
+);
+
+/// Remote analogue of [`app_force_resume`]: the host evicts the rollout's live
+/// holders and resumes it into its colocated app-server over loopback. The UI
+/// must gate this on explicit confirmation and not offer it while a turn runs.
+Future<ForceResumeReportDto> metaForceResume({
+  required String serviceKey,
+  required String threadId,
+}) => RustLib.instance.api.crateApiBridgeMetaForceResume(
+  serviceKey: serviceKey,
+  threadId: threadId,
+);
+
+/// Read a thread's persisted config from the host behind `service_key`.
+Future<ThreadConfigDto> metaThreadConfigGet({
+  required String serviceKey,
+  required String threadId,
+}) => RustLib.instance.api.crateApiBridgeMetaThreadConfigGet(
+  serviceKey: serviceKey,
+  threadId: threadId,
+);
+
+/// Persist a thread's config on the host behind `service_key`; returns the
+/// stored value.
+Future<ThreadConfigDto> metaThreadConfigSet({
+  required String serviceKey,
+  required String threadId,
+  required ThreadConfigDto config,
+}) => RustLib.instance.api.crateApiBridgeMetaThreadConfigSet(
+  serviceKey: serviceKey,
+  threadId: threadId,
+  config: config,
+);
+
 /// Begin a GitHub device-flow login. `backend` overrides the configured /
 /// default backend (and is remembered on success).
 Future<DeviceCodeDto> accountLoginStart({String? backend}) =>
@@ -339,8 +396,8 @@ Future<AccountPollDto> accountLoginPoll({
 );
 
 /// Begin a web (browser-redirect) GitHub login. `redirect_uri` is the
-/// platform-specific callback the browser returns to (the app's custom scheme on
-/// mobile, a loopback URL on desktop). `backend` overrides the configured /
+/// platform-specific callback the browser returns to (the app's custom scheme
+/// on mobile, a loopback URL on desktop). `backend` overrides the configured /
 /// default backend (and is remembered on a successful exchange).
 Future<WebLoginStartDto> accountWebLoginStart({
   required String redirectUri,
@@ -351,8 +408,8 @@ Future<WebLoginStartDto> accountWebLoginStart({
 );
 
 /// Redeem the one-time `exchange_code` (with its PKCE `code_verifier`) from the
-/// browser redirect. On success the session is persisted and the app switches to
-/// account mode. Returns the signed-in identity.
+/// browser redirect. On success the session is persisted and the app switches
+/// to account mode. Returns the signed-in identity.
 Future<AccountUserDto> accountWebLoginExchange({
   required String exchangeCode,
   required String codeVerifier,
@@ -558,6 +615,12 @@ class AppServeDto {
   /// Loopback `host:port` the in-app Responses API proxy is listening on.
   final String apiListenAddr;
 
+  /// `pcx:<device>:meta:<name>` key (the host meta service tunnel).
+  final String metaServiceKey;
+
+  /// Loopback `host:port` the in-app meta service is listening on.
+  final String metaListenAddr;
+
   /// The codex process id.
   final int pid;
 
@@ -571,6 +634,8 @@ class AppServeDto {
     required this.appListenAddr,
     required this.apiServiceKey,
     required this.apiListenAddr,
+    required this.metaServiceKey,
+    required this.metaListenAddr,
     required this.pid,
     required this.reused,
   });
@@ -583,6 +648,8 @@ class AppServeDto {
       appListenAddr.hashCode ^
       apiServiceKey.hashCode ^
       apiListenAddr.hashCode ^
+      metaServiceKey.hashCode ^
+      metaListenAddr.hashCode ^
       pid.hashCode ^
       reused.hashCode;
 
@@ -597,6 +664,8 @@ class AppServeDto {
           appListenAddr == other.appListenAddr &&
           apiServiceKey == other.apiServiceKey &&
           apiListenAddr == other.apiListenAddr &&
+          metaServiceKey == other.metaServiceKey &&
+          metaListenAddr == other.metaListenAddr &&
           pid == other.pid &&
           reused == other.reused;
 }
@@ -634,6 +703,15 @@ class AppServeStatusDto {
   /// The api tunnel is currently published.
   final bool apiRegistered;
 
+  /// Loopback `host:port` the meta service listens on.
+  final String metaListenAddr;
+
+  /// `pcx:<device>:meta:<name>` key.
+  final String metaServiceKey;
+
+  /// The meta tunnel is currently published.
+  final bool metaRegistered;
+
   const AppServeStatusDto({
     required this.name,
     required this.device,
@@ -645,6 +723,9 @@ class AppServeStatusDto {
     required this.apiListenAddr,
     required this.apiServiceKey,
     required this.apiRegistered,
+    required this.metaListenAddr,
+    required this.metaServiceKey,
+    required this.metaRegistered,
   });
 
   @override
@@ -658,7 +739,10 @@ class AppServeStatusDto {
       appRegistered.hashCode ^
       apiListenAddr.hashCode ^
       apiServiceKey.hashCode ^
-      apiRegistered.hashCode;
+      apiRegistered.hashCode ^
+      metaListenAddr.hashCode ^
+      metaServiceKey.hashCode ^
+      metaRegistered.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -674,7 +758,10 @@ class AppServeStatusDto {
           appRegistered == other.appRegistered &&
           apiListenAddr == other.apiListenAddr &&
           apiServiceKey == other.apiServiceKey &&
-          apiRegistered == other.apiRegistered;
+          apiRegistered == other.apiRegistered &&
+          metaListenAddr == other.metaListenAddr &&
+          metaServiceKey == other.metaServiceKey &&
+          metaRegistered == other.metaRegistered;
 }
 
 /// View of persisted config for the UI; never exposes the raw key or token.
@@ -1099,6 +1186,47 @@ class SubStatusDto {
           alive == other.alive;
 }
 
+/// Per-thread session config persisted on the host (mirrored for Dart). Every
+/// field is optional: `None`/null means "no stored preference", so the UI falls
+/// back to its own default.
+class ThreadConfigDto {
+  /// Selected model id, when pinned for this thread.
+  final String? model;
+
+  /// Reasoning-effort tag (`minimal`/`low`/`medium`/`high`), when set.
+  final String? reasoningEffort;
+
+  /// Permission / approval mode tag, when set.
+  final String? permissionMode;
+
+  /// Whether plan mode is on for this thread, when set.
+  final bool? planMode;
+
+  const ThreadConfigDto({
+    this.model,
+    this.reasoningEffort,
+    this.permissionMode,
+    this.planMode,
+  });
+
+  @override
+  int get hashCode =>
+      model.hashCode ^
+      reasoningEffort.hashCode ^
+      permissionMode.hashCode ^
+      planMode.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ThreadConfigDto &&
+          runtimeType == other.runtimeType &&
+          model == other.model &&
+          reasoningEffort == other.reasoningEffort &&
+          permissionMode == other.permissionMode &&
+          planMode == other.planMode;
+}
+
 /// A thread's recovered history + whether a turn is still running, plus the
 /// metadata the status bar / git chip seed from on open.
 class ThreadHistoryDto {
@@ -1254,7 +1382,8 @@ class WebLoginStartDto {
   /// PKCE verifier to pass back to [`account_web_login_exchange`].
   final String codeVerifier;
 
-  /// Resolved backend base URL to echo back to [`account_web_login_exchange`].
+  /// Resolved backend base URL to echo back to
+  /// [`account_web_login_exchange`].
   final String backend;
 
   const WebLoginStartDto({
