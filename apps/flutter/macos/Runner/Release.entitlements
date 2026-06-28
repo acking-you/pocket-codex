@@ -2,7 +2,12 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!-- Pocket-Codex is a non-App-Store desktop tool that networks extensively
+	     and spawns the user's codex binary for in-app hosting; the App Sandbox
+	     blocks both (no outbound without network.client, and it can't exec
+	     arbitrary external binaries). Windows/Linux aren't sandboxed — macOS
+	     matches them so the release app actually works. -->
 	<key>com.apple.security.app-sandbox</key>
-	<true/>
+	<false/>
 </dict>
 </plist>

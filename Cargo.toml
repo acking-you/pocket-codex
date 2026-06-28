@@ -30,7 +30,7 @@ exclude = [
 ]
 
 [workspace.package]
-version = "0.0.4"
+version = "0.0.5"
 edition = "2021"
 rust-version = "1.83"
 authors = ["Pocket-Codex Contributors"]
@@ -88,12 +88,15 @@ once_cell = "1"
 bytes = "1"
 http = "1.3"
 # rustls (not the default native-tls/OpenSSL) so the CLI links fully static
-# against musl — see .github/workflows/release.yml. Matches the rest of the
-# stack: `rustls` below + tokio-tungstenite's rustls-tls-native-roots. `http2`
-# and `charset` were default features we keep; `system-proxy` is dropped (the
-# api_proxy command sets reqwest::Proxy explicitly, never via env).
-reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "socks", "http2", "charset", "rustls-tls-native-roots"] }
-tokio-tungstenite = { version = "0.29", features = ["rustls-tls-native-roots"] }
+# against musl — see .github/workflows/release.yml. Trust anchors are the bundled
+# WEBPKI (Mozilla) roots, NOT the OS native store: rustls-native-certs does not
+# reliably read the Android / iOS system cert store, so `rustls-tls-native-roots`
+# yields "invalid peer certificate: UnknownIssuer" on mobile. webpki-roots is
+# compiled in → trusts public CAs (Let's Encrypt for the backend, chatgpt.com,
+# api.github.com) on every platform. `http2`/`charset` kept; `system-proxy`
+# dropped (api_proxy sets reqwest::Proxy explicitly).
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "socks", "http2", "charset", "rustls-tls-webpki-roots"] }
+tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"] }
 tokio-socks = "0.5"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 url = "2.5"
