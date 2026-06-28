@@ -55,6 +55,9 @@ class AppLocalizationsZh extends AppLocalizations {
   String get accountWebFailed => '登录未完成,请重试。';
 
   @override
+  String get accountWebTrouble => '浏览器登录未完成。如果 GitHub 页面打不开,请改用下方的设备码登录。';
+
+  @override
   String get accountSignedIn => '已登录';
 
   @override

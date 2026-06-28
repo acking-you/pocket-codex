@@ -84,8 +84,12 @@ class _AccountOnboardingState extends ConsumerState<AccountOnboardingScreen> {
         return;
       }
     } on PlatformException catch (e) {
-      // The user dismissed the browser tab: a silent abort, no error banner.
-      if (e.code != 'CANCELED') failure = friendlyError(e);
+      // Android Custom Tabs have no timeout: when GitHub won't load (a flaky /
+      // proxied network where the in-app browser tab can't reach github.com),
+      // the user closes the tab and we get CANCELED. Don't fail silently —
+      // point them at the device code, which reaches GitHub through the backend
+      // and stays reliable when the in-app browser can't.
+      failure = e.code == 'CANCELED' ? l10n.accountWebTrouble : friendlyError(e);
     } catch (e) {
       failure = friendlyError(e);
     }
