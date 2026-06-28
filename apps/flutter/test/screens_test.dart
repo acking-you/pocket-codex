@@ -665,7 +665,7 @@ void main() {
     await t.pumpAndSettle(); // drain the SnackBar timer
   });
 
-  testWidgets('onboarding: a cancelled browser sign-in shows no error', (
+  testWidgets('onboarding: a cancelled browser sign-in guides to device code', (
     t,
   ) async {
     final api = FakeBridgeApi(
@@ -695,12 +695,22 @@ void main() {
     await t.pumpAndSettle();
     await t.tap(find.text('使用 GitHub 登录'));
     await t.pumpAndSettle();
-    // A user-cancelled tab is a silent abort: still on onboarding, no error.
+    // Cancelling the browser tab (e.g. after GitHub wouldn't load) does NOT
+    // navigate; it surfaces guidance pointing at the reliable device-code path,
+    // with that button still on screen.
     expect(find.text('HOME-ROUTE'), findsNothing);
+    expect(
+      find.textContaining('设备码'),
+      findsWidgets,
+    ); // guidance + button mention it
+    expect(
+      find.text('改用设备码登录'),
+      findsOneWidget,
+    ); // device-code fallback present
     expect(
       find.text('使用 GitHub 登录'),
       findsOneWidget,
-    ); // back on the sign-in button
+    ); // can retry the browser too
   });
 
   testWidgets('settings: account sign-out clears the user and returns to '

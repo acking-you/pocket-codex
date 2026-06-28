@@ -188,6 +188,12 @@ abstract class AppLocalizations {
   /// **'Sign-in didn\'t complete. Please try again.'**
   String get accountWebFailed;
 
+  /// No description provided for @accountWebTrouble.
+  ///
+  /// In en, this message translates to:
+  /// **'Browser sign-in didn\'t finish. If the GitHub page wouldn\'t load, use the device code below.'**
+  String get accountWebTrouble;
+
   /// No description provided for @accountSignedIn.
   ///
   /// In en, this message translates to:

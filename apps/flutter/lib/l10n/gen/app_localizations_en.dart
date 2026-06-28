@@ -55,6 +55,10 @@ class AppLocalizationsEn extends AppLocalizations {
   String get accountWebFailed => 'Sign-in didn\'t complete. Please try again.';
 
   @override
+  String get accountWebTrouble =>
+      'Browser sign-in didn\'t finish. If the GitHub page wouldn\'t load, use the device code below.';
+
+  @override
   String get accountSignedIn => 'Signed in';
 
   @override

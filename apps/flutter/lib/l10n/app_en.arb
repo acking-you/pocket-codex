@@ -15,6 +15,7 @@
   "accountSignInButton": "Sign in with GitHub",
   "accountUseDeviceCode": "Use a device code instead",
   "accountWebFailed": "Sign-in didn't complete. Please try again.",
+  "accountWebTrouble": "Browser sign-in didn't finish. If the GitHub page wouldn't load, use the device code below.",
   "accountSignedIn": "Signed in",
   "accountSignedInAs": "Signed in as @{login}",
   "@accountSignedInAs": {

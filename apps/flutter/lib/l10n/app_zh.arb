@@ -15,6 +15,7 @@
   "accountSignInButton": "使用 GitHub 登录",
   "accountUseDeviceCode": "改用设备码登录",
   "accountWebFailed": "登录未完成,请重试。",
+  "accountWebTrouble": "浏览器登录未完成。如果 GitHub 页面打不开,请改用下方的设备码登录。",
   "accountSignedIn": "已登录",
   "accountSignedInAs": "已登录为 @{login}",
   "@accountSignedInAs": {
