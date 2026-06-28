@@ -176,7 +176,15 @@ void main() {
   testWidgets('groups by activity time and the search box filters content', (
     t,
   ) async {
-    final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    // Pin "now" to a fixed mid-day instant and thread it into the screen via its
+    // injected `clock`. The seeded "today" timestamps below are minutes before
+    // this same instant, so they're unambiguously within the current day — and
+    // because the screen reads the *same* fixed `now`, the test and production
+    // clocks can never straddle midnight. With the real wall clock this flaked
+    // when CI ran just after 00:00 UTC: `nowSec - 120/300/600` fell into the
+    // previous calendar day, emptying the 今天 group and failing the assertion.
+    final now = DateTime(2024, 6, 15, 12); // noon, local
+    final nowSec = now.millisecondsSinceEpoch ~/ 1000;
     LocalSession mk(
       String id,
       String preview,
@@ -213,7 +221,7 @@ void main() {
         mk('f', 'old two', nowSec - 4 * 86400),
         mk('g', 'old three', nowSec - 5 * 86400),
       ];
-    await t.pumpWidget(_host(const LocalSessionsScreen(), api));
+    await t.pumpWidget(_host(LocalSessionsScreen(clock: () => now), api));
     await _settle(t);
 
     // Activity-time section headers (zh). '进行中' is the group label, distinct

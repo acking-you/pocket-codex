@@ -20,7 +20,14 @@ import 'package:pocket_codex/src/widgets/status_dots.dart';
 /// needed); the actual resume targets the first connected app-server service.
 class LocalSessionsScreen extends ConsumerStatefulWidget {
   /// Default constructor.
-  const LocalSessionsScreen({super.key});
+  const LocalSessionsScreen({super.key, this.clock});
+
+  /// Clock used to bucket sessions by activity time (今天 / 更早) and to render
+  /// relative times. Defaults to [DateTime.now]; injectable so tests can pin
+  /// "now" to a fixed mid-day instant. Without this the grouping flakes when the
+  /// suite runs just after midnight (UTC): minutes-ago "today" timestamps fall
+  /// into the previous calendar day and the 今天 group renders empty.
+  final DateTime Function()? clock;
 
   @override
   ConsumerState<LocalSessionsScreen> createState() => _LocalSessionsState();
@@ -143,7 +150,7 @@ class _LocalSessionsState extends ConsumerState<LocalSessionsScreen> {
 
   Widget _buildList(AppLocalizations l10n) {
     final scheme = Theme.of(context).colorScheme;
-    final now = DateTime.now();
+    final now = (widget.clock ?? DateTime.now)();
     final q = _query.trim().toLowerCase();
     bool matches(LocalSession s) {
       bool has(String? v) => v != null && v.toLowerCase().contains(q);
