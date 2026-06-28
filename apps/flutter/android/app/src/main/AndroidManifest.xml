@@ -1,4 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Required for ALL builds (Flutter only auto-adds INTERNET to the debug
+         manifest, so without this the RELEASE APK has no network access and every
+         request fails with a DNS "No address associated with hostname"). -->
+    <uses-permission android:name="android.permission.INTERNET"/>
     <application
         android:label="pocket_codex"
         android:name="${applicationName}"
