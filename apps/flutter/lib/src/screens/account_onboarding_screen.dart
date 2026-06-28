@@ -74,11 +74,12 @@ class _AccountOnboardingState extends ConsumerState<AccountOnboardingScreen> {
         // A mismatched state or missing code means the redirect wasn't ours.
         failure = l10n.accountWebFailed;
       } else {
-        await api.accountWebLoginExchange(
+        final user = await api.accountWebLoginExchange(
           exchangeCode: code,
           codeVerifier: start.codeVerifier,
           backend: start.backend,
         );
+        _showSignedIn(user.login);
         if (mounted) context.go('/');
         return;
       }
@@ -163,6 +164,7 @@ class _AccountOnboardingState extends ConsumerState<AccountOnboardingScreen> {
         switch (poll.status) {
           case 'authorized':
             _polling = false;
+            _showSignedIn(poll.login);
             if (mounted) context.go('/');
             return;
           case 'slow_down':
@@ -193,6 +195,23 @@ class _AccountOnboardingState extends ConsumerState<AccountOnboardingScreen> {
         delay = interval;
       }
     }
+  }
+
+  /// Confirm a successful sign-in with a toast. Shown via the root
+  /// ScaffoldMessenger so it survives the immediate `context.go('/')`.
+  void _showSignedIn(String? login) {
+    if (!mounted) return;
+    final l10n = AppLocalizations.of(context);
+    final message = (login != null && login.isNotEmpty)
+        ? l10n.accountSignedInAs(login)
+        : l10n.accountSignedIn;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 3),
+      ),
+    );
   }
 
   Future<void> _openVerification(String url) async {

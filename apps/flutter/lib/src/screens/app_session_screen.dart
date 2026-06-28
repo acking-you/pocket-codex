@@ -1283,6 +1283,12 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
       drawer: isMobile
           ? Drawer(child: SafeArea(child: _sessionsPane(l10n)))
           : null,
+      // Widen the edge-swipe-to-open zone (default ~20px). The narrow default
+      // sits under Android's system back-gesture strip, so a left-edge swipe
+      // almost always triggered "back" instead of the drawer; a 56px zone lets
+      // the swipe start just inside that strip and open the sessions list.
+      // (Swipe-to-close already works once the drawer is open.)
+      drawerEdgeDragWidth: isMobile ? 56 : null,
       appBar: AppBar(
         // Back to the project / session picker (AppServiceScreen).
         leading: IconButton(

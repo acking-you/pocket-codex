@@ -188,6 +188,18 @@ abstract class AppLocalizations {
   /// **'Sign-in didn\'t complete. Please try again.'**
   String get accountWebFailed;
 
+  /// No description provided for @accountSignedIn.
+  ///
+  /// In en, this message translates to:
+  /// **'Signed in'**
+  String get accountSignedIn;
+
+  /// No description provided for @accountSignedInAs.
+  ///
+  /// In en, this message translates to:
+  /// **'Signed in as @{login}'**
+  String accountSignedInAs(String login);
+
   /// No description provided for @accountEnterCode.
   ///
   /// In en, this message translates to:
