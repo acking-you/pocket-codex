@@ -66,6 +66,52 @@ pub struct DevicePollResponse {
     pub credential: Option<SessionCredential>,
 }
 
+/// Request body for `POST /auth/web/start` (the browser-redirect /
+/// authorization-code login flow).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WebStartRequest {
+    /// Where the backend sends the browser at the end of the flow: the app's
+    /// custom-scheme deep link (`pocketcodex://…`) or a loopback `http://` URL.
+    /// The backend rejects anything else so the one-time exchange code can never
+    /// be redirected off-device.
+    pub redirect_uri: String,
+    /// The client's own CSRF state; echoed back in the final redirect so the
+    /// client can confirm the response matches its request.
+    pub state: String,
+    /// PKCE `base64url(SHA-256(code_verifier))`. Binds the eventual exchange code
+    /// to this client (which alone holds the verifier).
+    pub code_challenge: String,
+    /// Optional human label for the session (e.g. hostname), carried onto the
+    /// issued refresh token.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_label: Option<String>,
+}
+
+/// Response to `POST /auth/web/start`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WebStartResponse {
+    /// The GitHub authorization URL to open in a browser. After the user
+    /// authorizes, the backend redirects the browser to the requested
+    /// `redirect_uri` with `?exchange_code=…&state=…`.
+    pub authorize_url: String,
+}
+
+/// Request body for `POST /auth/web/exchange`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WebExchangeRequest {
+    /// The one-time code delivered to the client via the final redirect.
+    pub exchange_code: String,
+    /// The PKCE code verifier whose challenge was sent at `web/start`.
+    pub code_verifier: String,
+}
+
+/// Response to `POST /auth/web/exchange`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WebExchangeResponse {
+    /// The issued session (same shape as the device flow).
+    pub credential: SessionCredential,
+}
+
 /// A backend-issued session: a short-lived bearer token plus an opaque,
 /// long-lived refresh token and the GitHub identity (for display).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

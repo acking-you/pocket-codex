@@ -55,17 +55,20 @@ impl Store {
         Ok(res.rows_affected() > 0)
     }
 
-    /// Delete expired device flows and expired refresh tokens (periodic
-    /// cleanup).
+    /// Delete expired device flows, web login flows, web exchange codes and
+    /// refresh tokens (periodic cleanup).
     pub async fn purge_expired(&self, now: i64) -> Result<()> {
-        sqlx::query("DELETE FROM device_flows WHERE expires_at < ?1")
-            .bind(now)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query("DELETE FROM refresh_tokens WHERE expires_at < ?1")
-            .bind(now)
-            .execute(&self.pool)
-            .await?;
+        for table in [
+            "device_flows",
+            "web_auth_flows",
+            "web_exchange_codes",
+            "refresh_tokens",
+        ] {
+            sqlx::query(&format!("DELETE FROM {table} WHERE expires_at < ?1"))
+                .bind(now)
+                .execute(&self.pool)
+                .await?;
+        }
         Ok(())
     }
 }

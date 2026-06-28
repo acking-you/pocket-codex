@@ -338,6 +338,31 @@ Future<AccountPollDto> accountLoginPoll({
   backend: backend,
 );
 
+/// Begin a web (browser-redirect) GitHub login. `redirect_uri` is the
+/// platform-specific callback the browser returns to (the app's custom scheme on
+/// mobile, a loopback URL on desktop). `backend` overrides the configured /
+/// default backend (and is remembered on a successful exchange).
+Future<WebLoginStartDto> accountWebLoginStart({
+  required String redirectUri,
+  String? backend,
+}) => RustLib.instance.api.crateApiBridgeAccountWebLoginStart(
+  redirectUri: redirectUri,
+  backend: backend,
+);
+
+/// Redeem the one-time `exchange_code` (with its PKCE `code_verifier`) from the
+/// browser redirect. On success the session is persisted and the app switches to
+/// account mode. Returns the signed-in identity.
+Future<AccountUserDto> accountWebLoginExchange({
+  required String exchangeCode,
+  required String codeVerifier,
+  required String backend,
+}) => RustLib.instance.api.crateApiBridgeAccountWebLoginExchange(
+  exchangeCode: exchangeCode,
+  codeVerifier: codeVerifier,
+  backend: backend,
+);
+
 /// The signed-in user (verified against the backend), or `None` if not signed
 /// in.
 Future<AccountUserDto?> accountCurrentUser() =>
@@ -1212,4 +1237,47 @@ class ThreadMetaDto {
           preview == other.preview &&
           cwd == other.cwd &&
           updatedAt == other.updatedAt;
+}
+
+/// A started web (authorization-code) login, mirrored for Dart. The caller
+/// opens [`Self::authorize_url`] in a browser, captures the redirect to its
+/// `redirect_uri`, checks the redirect's `state` equals [`Self::state`], then
+/// calls [`account_web_login_exchange`] with the redirect's `exchange_code` and
+/// [`Self::code_verifier`].
+class WebLoginStartDto {
+  /// GitHub authorization URL to open in a browser.
+  final String authorizeUrl;
+
+  /// CSRF state to match against the redirect's `state`.
+  final String state;
+
+  /// PKCE verifier to pass back to [`account_web_login_exchange`].
+  final String codeVerifier;
+
+  /// Resolved backend base URL to echo back to [`account_web_login_exchange`].
+  final String backend;
+
+  const WebLoginStartDto({
+    required this.authorizeUrl,
+    required this.state,
+    required this.codeVerifier,
+    required this.backend,
+  });
+
+  @override
+  int get hashCode =>
+      authorizeUrl.hashCode ^
+      state.hashCode ^
+      codeVerifier.hashCode ^
+      backend.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is WebLoginStartDto &&
+          runtimeType == other.runtimeType &&
+          authorizeUrl == other.authorizeUrl &&
+          state == other.state &&
+          codeVerifier == other.codeVerifier &&
+          backend == other.backend;
 }

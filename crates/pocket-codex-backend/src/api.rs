@@ -4,9 +4,9 @@
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{header::AUTHORIZATION, HeaderMap, StatusCode},
-    response::{IntoResponse, Response},
+    response::{Html, IntoResponse, Redirect, Response},
     routing::{delete, get, post},
     Json, Router,
 };
@@ -14,9 +14,11 @@ use pocket_codex_account_proto::{
     http::{
         DevicePollRequest, DevicePollResponse, DeviceStartRequest, DeviceStartResponse,
         LogoutRequest, MeResponse, RefreshRequest, RefreshResponse, ServiceEntry, ServicesResponse,
+        WebExchangeRequest, WebExchangeResponse, WebStartRequest, WebStartResponse,
     },
     key::NamespacedServiceId,
 };
+use serde::Deserialize;
 use pocket_codex_auth::{Auth, AuthError, Claims};
 use pocket_codex_broker_server::BrokerServer;
 use pocket_codex_core::service::{ServiceId, ServiceKind};
@@ -39,6 +41,9 @@ pub fn router(state: AppState) -> Router {
         .route("/healthz", get(healthz))
         .route("/auth/device/start", post(device_start))
         .route("/auth/device/poll", post(device_poll))
+        .route("/auth/web/start", post(web_start))
+        .route("/auth/web/callback", get(web_callback))
+        .route("/auth/web/exchange", post(web_exchange))
         .route("/auth/refresh", post(refresh))
         .route("/auth/logout", post(logout))
         .route("/v1/me", get(me))
@@ -59,6 +64,7 @@ pub fn router(state: AppState) -> Router {
 enum ApiError {
     Unauthorized,
     BadRequest(&'static str),
+    Unavailable(&'static str),
     Internal(String),
 }
 
@@ -69,6 +75,7 @@ impl IntoResponse for ApiError {
         let (status, message) = match self {
             ApiError::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized"),
             ApiError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
+            ApiError::Unavailable(msg) => (StatusCode::SERVICE_UNAVAILABLE, msg),
             ApiError::Internal(detail) => {
                 // Log the detail server-side but never leak raw upstream/store/JWT
                 // error strings (which fingerprint the backend) to the client.
@@ -82,7 +89,10 @@ impl IntoResponse for ApiError {
 
 fn auth_err(err: AuthError) -> ApiError {
     match err {
-        AuthError::BadRefresh => ApiError::Unauthorized,
+        AuthError::BadRefresh | AuthError::BadExchange => ApiError::Unauthorized,
+        AuthError::WebDisabled => ApiError::Unavailable("web login is not configured"),
+        AuthError::BadRedirect => ApiError::BadRequest("redirect_uri is not allowed"),
+        AuthError::BadWebState => ApiError::BadRequest("invalid or expired web login state"),
         other => ApiError::Internal(other.to_string()),
     }
 }
@@ -130,6 +140,84 @@ async fn device_poll(
         .await
         .map_err(auth_err)?;
     Ok(Json(resp))
+}
+
+async fn web_start(
+    State(state): State<AppState>,
+    Json(req): Json<WebStartRequest>,
+) -> ApiResult<Json<WebStartResponse>> {
+    let resp = state
+        .auth
+        .web_start(
+            &req.redirect_uri,
+            &req.state,
+            &req.code_challenge,
+            req.device_label.as_deref(),
+            now(),
+        )
+        .await
+        .map_err(auth_err)?;
+    Ok(Json(resp))
+}
+
+/// Query params GitHub appends to the backend's OAuth callback. `code` + `state`
+/// on success; `error` (+ `state`) when the user denied or GitHub failed.
+#[derive(Debug, Deserialize)]
+struct WebCallbackQuery {
+    code: Option<String>,
+    state: Option<String>,
+    error: Option<String>,
+}
+
+/// GitHub's redirect lands here. We never return JSON to the browser: on a
+/// recognized flow we 302 the browser back to the app (custom scheme / loopback)
+/// with the one-time exchange code or an error; on an unknown/expired state (or
+/// when the flow is disabled) we render a generic page instead of redirecting
+/// somewhere unvalidated.
+async fn web_callback(State(state): State<AppState>, Query(q): Query<WebCallbackQuery>) -> Response {
+    let gh_state = q.state.unwrap_or_default();
+    match state
+        .auth
+        .web_callback(q.code.as_deref(), &gh_state, q.error.as_deref(), now())
+        .await
+    {
+        Ok(redirect) => Redirect::to(&redirect.location).into_response(),
+        Err(AuthError::BadWebState | AuthError::WebDisabled) => web_callback_page(
+            "This sign-in link is no longer valid. Return to Pocket-Codex and try again.",
+        ),
+        Err(e) => {
+            tracing::error!(error = %e, "web callback failed");
+            web_callback_page("Something went wrong signing in. Return to Pocket-Codex and try again.")
+        },
+    }
+}
+
+/// A minimal self-contained HTML page shown when the callback can't redirect
+/// back into the app (unknown state, disabled flow, or an internal error).
+fn web_callback_page(message: &str) -> Response {
+    let body = format!(
+        "<!doctype html><html><head><meta charset=\"utf-8\">\
+         <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
+         <title>Pocket-Codex</title></head>\
+         <body style=\"font-family: system-ui, sans-serif; max-width: 28rem; margin: 4rem auto; \
+         padding: 0 1.5rem; text-align: center; color: #1a1a1a;\">\
+         <h1 style=\"font-size: 1.25rem;\">Pocket-Codex</h1><p>{message}</p></body></html>"
+    );
+    Html(body).into_response()
+}
+
+async fn web_exchange(
+    State(state): State<AppState>,
+    Json(req): Json<WebExchangeRequest>,
+) -> ApiResult<Json<WebExchangeResponse>> {
+    let credential = state
+        .auth
+        .web_exchange(&req.exchange_code, &req.code_verifier, now())
+        .await
+        .map_err(auth_err)?;
+    Ok(Json(WebExchangeResponse {
+        credential,
+    }))
 }
 
 async fn refresh(

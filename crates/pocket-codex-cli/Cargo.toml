@@ -40,6 +40,9 @@ rustls = { workspace = true }
 tokio-rustls = { workspace = true }
 rustls-native-certs = "0.8"
 url = { workspace = true }
+# Opens the system browser for the `login --web` authorization-code flow. Pure
+# Rust (spawns the platform opener), so it stays fine for the static-musl build.
+open = "5"
 comfy-table = { workspace = true }
 owo-colors = { workspace = true }
 crossterm = { workspace = true }

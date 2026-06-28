@@ -15,9 +15,13 @@ use std::{
 
 use anyhow::{anyhow, bail, Context, Result};
 use base64::Engine as _;
-use pocket_codex_account_proto::http::{
-    DevicePollRequest, DevicePollResponse, DevicePollStatus, DeviceStartRequest,
-    DeviceStartResponse, LogoutRequest, MeResponse, RefreshRequest, RefreshResponse, ServiceEntry,
+use pocket_codex_account_proto::{
+    http::{
+        DevicePollRequest, DevicePollResponse, DevicePollStatus, DeviceStartRequest,
+        DeviceStartResponse, LogoutRequest, MeResponse, RefreshRequest, RefreshResponse,
+        ServiceEntry, WebExchangeRequest, WebExchangeResponse, WebStartRequest, WebStartResponse,
+    },
+    pkce,
 };
 use pocket_codex_broker_client::{BrokerError, BrokerStream, Connector, TokenProvider};
 use pocket_codex_core::{config::Config, service::sanitize_component};
@@ -177,6 +181,97 @@ pub async fn device_poll(
             })
         },
     }
+}
+
+/// A started web (authorization-code) login: the browser URL to open plus the
+/// per-flow secrets the caller carries to [`web_login_exchange`]. The
+/// `code_verifier` and `state` stay on-device (Dart holds them across the
+/// browser round-trip); only the verifier's challenge ever reaches the backend.
+pub struct WebLoginStart {
+    /// GitHub authorization URL to open in a browser.
+    pub authorize_url: String,
+    /// CSRF state the caller must match against the final redirect's `state`.
+    pub state: String,
+    /// PKCE verifier the caller passes back to [`web_login_exchange`].
+    pub code_verifier: String,
+    /// The resolved backend base URL (echo back to [`web_login_exchange`]).
+    pub backend: String,
+}
+
+/// Begin a web (authorization-code / browser-redirect) login. `redirect_uri` is
+/// the platform-specific callback the browser is sent back to at the end (the
+/// app's custom scheme on mobile, a loopback URL on desktop); the caller drives
+/// the browser, then redeems the returned exchange code via
+/// [`web_login_exchange`].
+pub async fn web_login_start(
+    support_dir: &Path,
+    redirect_uri: &str,
+    backend_override: Option<&str>,
+) -> Result<WebLoginStart> {
+    let config = load_config(support_dir)?;
+    let backend = resolve_backend(&config, backend_override)?;
+    let code_verifier = pkce::gen_verifier();
+    let state = pkce::gen_state();
+    let resp: WebStartResponse = reqwest::Client::new()
+        .post(format!("{backend}/auth/web/start"))
+        .json(&WebStartRequest {
+            redirect_uri: redirect_uri.to_string(),
+            state: state.clone(),
+            code_challenge: pkce::challenge(&code_verifier),
+            device_label: None,
+        })
+        .send()
+        .await
+        .context("calling /auth/web/start")?
+        .error_for_status()
+        .context("/auth/web/start failed")?
+        .json()
+        .await
+        .context("parsing web start response")?;
+    Ok(WebLoginStart {
+        authorize_url: resp.authorize_url,
+        state,
+        code_verifier,
+        backend,
+    })
+}
+
+/// Redeem the one-time exchange code (with its PKCE verifier) returned by the
+/// browser redirect for a session, persisting it exactly like the device flow.
+pub async fn web_login_exchange(
+    support_dir: &Path,
+    backend: &str,
+    exchange_code: String,
+    code_verifier: String,
+) -> Result<PollOutcome> {
+    let resp: WebExchangeResponse = reqwest::Client::new()
+        .post(format!("{backend}/auth/web/exchange"))
+        .json(&WebExchangeRequest {
+            exchange_code,
+            code_verifier,
+        })
+        .send()
+        .await
+        .context("calling /auth/web/exchange")?
+        .error_for_status()
+        .context("/auth/web/exchange failed")?
+        .json()
+        .await
+        .context("parsing web exchange response")?;
+    let cred = resp.credential;
+    let mut config = load_config(support_dir)?;
+    config.set_account_session(
+        &cred.token,
+        &cred.refresh_token,
+        &cred.login,
+        cred.account_id.clone(),
+    );
+    config.set_account_backend(backend);
+    save_config(support_dir, &config)?;
+    Ok(PollOutcome::Authorized {
+        login: cred.login,
+        account_id: cred.account_id,
+    })
 }
 
 /// The signed-in identity.

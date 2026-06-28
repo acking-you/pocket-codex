@@ -11,6 +11,8 @@
 //!   [`pocket_codex_core::service::ServiceId`].
 //! - [`http`] — the JSON request/response bodies for the backend's HTTP API
 //!   (GitHub device flow, session credentials, `/v1/me`, `/v1/services`).
+//! - [`pkce`] — client-side PKCE + CSRF helpers for the web (authorization-code)
+//!   login flow.
 //! - [`broker`] — the `HELLO`/`Ack` handshake exchanged over the broker tunnel.
 //! - [`frame`] (behind the `frame` feature) — length-prefixed JSON framing used
 //!   by the broker client and server to exchange the handshake on a byte
@@ -25,6 +27,7 @@ pub mod broker;
 pub mod http;
 pub mod key;
 pub mod params;
+pub mod pkce;
 
 #[cfg(feature = "frame")]
 pub mod frame;

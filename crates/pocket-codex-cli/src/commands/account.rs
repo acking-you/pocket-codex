@@ -10,9 +10,13 @@ use std::{sync::Arc, time::Duration};
 
 use anyhow::{anyhow, bail, Context, Result};
 use base64::Engine as _;
-use pocket_codex_account_proto::http::{
-    DevicePollResponse, DevicePollStatus, DeviceStartRequest, DeviceStartResponse, LogoutRequest,
-    MeResponse, RefreshRequest, RefreshResponse, ServiceEntry, ServicesResponse,
+use pocket_codex_account_proto::{
+    http::{
+        DevicePollResponse, DevicePollStatus, DeviceStartRequest, DeviceStartResponse,
+        LogoutRequest, MeResponse, RefreshRequest, RefreshResponse, ServiceEntry, ServicesResponse,
+        WebExchangeRequest, WebExchangeResponse, WebStartRequest, WebStartResponse,
+    },
+    pkce,
 };
 use pocket_codex_broker_client::{BrokerError, BrokerStream, Connector, TokenProvider};
 use pocket_codex_core::{
@@ -72,9 +76,20 @@ pub(crate) fn broker_endpoint(backend: &str) -> Result<(String, u16)> {
     Ok((host, port))
 }
 
-/// `pocket-codex login`: run the GitHub device flow against the backend and
-/// persist the issued session.
-pub(crate) async fn login(backend_flag: Option<&str>) -> Result<()> {
+/// `pocket-codex login`: sign in against the backend and persist the session.
+/// Defaults to the GitHub device flow; `--web` (`web = true`) runs the
+/// browser-redirect authorization-code flow instead.
+pub(crate) async fn login(backend_flag: Option<&str>, web: bool) -> Result<()> {
+    if web {
+        login_web(backend_flag).await
+    } else {
+        login_device(backend_flag).await
+    }
+}
+
+/// The GitHub device flow: show a code to enter at github.com/login/device, then
+/// poll until authorized.
+async fn login_device(backend_flag: Option<&str>) -> Result<()> {
     let mut config = Config::load()?;
     let base = backend_base(backend_flag, &config);
     let client = reqwest::Client::new();
@@ -141,6 +156,143 @@ pub(crate) async fn login(backend_flag: Option<&str>) -> Result<()> {
             DevicePollStatus::Denied => bail!("access denied on GitHub"),
         }
     }
+}
+
+/// The browser-redirect (authorization-code) flow: bind a loopback callback,
+/// open the browser to GitHub, capture the one-time exchange code on redirect,
+/// and trade it (with the PKCE verifier) for a session.
+async fn login_web(backend_flag: Option<&str>) -> Result<()> {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+    let mut config = Config::load()?;
+    let base = backend_base(backend_flag, &config);
+    let client = reqwest::Client::new();
+
+    // A loopback listener on an ephemeral port catches the final redirect. GitHub
+    // never sees this URL — only the backend's callback is registered there; the
+    // backend redirects the browser here at the end of the flow.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .context("binding loopback callback listener")?;
+    let port = listener
+        .local_addr()
+        .context("reading callback listener port")?
+        .port();
+    let redirect_uri = format!("http://127.0.0.1:{port}/callback");
+
+    let code_verifier = pkce::gen_verifier();
+    let state = pkce::gen_state();
+    let start: WebStartResponse = client
+        .post(format!("{base}/auth/web/start"))
+        .json(&WebStartRequest {
+            redirect_uri,
+            state: state.clone(),
+            code_challenge: pkce::challenge(&code_verifier),
+            device_label: Some(default_device_id()),
+        })
+        .send()
+        .await
+        .context("calling /auth/web/start")?
+        .error_for_status()
+        .context("/auth/web/start failed")?
+        .json()
+        .await
+        .context("parsing web start response")?;
+
+    ui::headline(ui::Tone::Action, "sign in with GitHub");
+    ui::field("url", &start.authorize_url);
+    // Try to open the browser; always show the URL so a headless user can copy it.
+    match open::that_detached(&start.authorize_url) {
+        Ok(()) => ui::code("a browser window should open — complete the sign-in there"),
+        Err(e) => {
+            tracing::debug!(error = %e, "failed to auto-open the browser");
+            ui::code("open the URL above to continue signing in");
+        },
+    }
+
+    // Wait for the single browser redirect (bounded so we never hang forever).
+    let accept = tokio::time::timeout(Duration::from_secs(300), listener.accept())
+        .await
+        .context("timed out waiting for the browser redirect")?;
+    let (mut stream, _) = accept.context("accepting the browser redirect")?;
+
+    // The request line is "GET /callback?exchange_code=…&state=… HTTP/1.1"; the
+    // first read carries it (a localhost browser GET arrives in one segment).
+    let mut buf = vec![0u8; 8192];
+    let n = stream
+        .read(&mut buf)
+        .await
+        .context("reading the redirect request")?;
+    let request = String::from_utf8_lossy(&buf[..n]);
+    let target = request
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .ok_or_else(|| anyhow!("malformed redirect request"))?;
+    let url = url::Url::parse(&format!("http://127.0.0.1{target}"))
+        .context("parsing the redirect URL")?;
+    let params: std::collections::HashMap<String, String> =
+        url.query_pairs().into_owned().collect();
+
+    let result: Result<String> = if let Some(err) = params.get("error") {
+        Err(anyhow!("GitHub sign-in failed: {err}"))
+    } else if params.get("state").map(String::as_str) != Some(state.as_str()) {
+        Err(anyhow!("redirect state mismatch — sign-in could not be verified"))
+    } else if let Some(code) = params.get("exchange_code") {
+        Ok(code.clone())
+    } else {
+        Err(anyhow!("redirect did not carry an exchange code"))
+    };
+
+    // Reply to the browser before continuing, so the user sees a closing message.
+    let message = if result.is_ok() {
+        "Signed in. You can close this tab and return to the terminal."
+    } else {
+        "Sign-in could not be completed. You can close this tab and try again."
+    };
+    let body = format!(
+        "<!doctype html><meta charset=\"utf-8\"><title>Pocket-Codex</title>\
+         <p style=\"font-family: system-ui, sans-serif; text-align:center; margin-top:4rem\">\
+         {message}</p>"
+    );
+    let response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\n\
+         Connection: close\r\n\r\n{}",
+        body.len(),
+        body
+    );
+    let _ = stream.write_all(response.as_bytes()).await;
+    let _ = stream.shutdown().await;
+
+    let exchange_code = result?;
+    let resp: WebExchangeResponse = client
+        .post(format!("{base}/auth/web/exchange"))
+        .json(&WebExchangeRequest {
+            exchange_code,
+            code_verifier,
+        })
+        .send()
+        .await
+        .context("calling /auth/web/exchange")?
+        .error_for_status()
+        .context("/auth/web/exchange failed")?
+        .json()
+        .await
+        .context("parsing web exchange response")?;
+    let cred = resp.credential;
+    if backend_flag.is_some() {
+        config.set_account_backend(&base);
+    }
+    config.set_account_session(
+        &cred.token,
+        &cred.refresh_token,
+        &cred.login,
+        cred.account_id.clone(),
+    );
+    config.save()?;
+    ui::headline(ui::Tone::Ok, "signed in");
+    ui::field("login", &cred.login);
+    Ok(())
 }
 
 /// `pocket-codex logout`: revoke the refresh token (best effort) and clear the

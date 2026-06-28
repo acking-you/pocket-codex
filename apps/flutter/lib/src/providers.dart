@@ -5,9 +5,16 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:pocket_codex/src/app_modes.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
 import 'package:pocket_codex/src/bridge_api_rust.dart';
+import 'package:pocket_codex/src/web_authenticator.dart';
 
 /// The engine API. Overridden with a FakeBridgeApi in tests.
 final bridgeApiProvider = Provider<BridgeApi>((ref) => const RustBridgeApi());
+
+/// Drives the browser-redirect login tab. Overridden with a fake in tests so the
+/// onboarding flow runs without the real platform-channel plugin.
+final webAuthenticatorProvider = Provider<WebAuthenticator>(
+  (ref) => const FlutterWebAuthenticator(),
+);
 
 /// The model / permission mode / plan mode / reasoning effort the user last
 /// chose, so a brand-new conversation inherits them instead of resetting to

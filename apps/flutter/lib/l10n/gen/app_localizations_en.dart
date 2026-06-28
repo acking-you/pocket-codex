@@ -49,6 +49,12 @@ class AppLocalizationsEn extends AppLocalizations {
   String get accountSignInButton => 'Sign in with GitHub';
 
   @override
+  String get accountUseDeviceCode => 'Use a device code instead';
+
+  @override
+  String get accountWebFailed => 'Sign-in didn\'t complete. Please try again.';
+
+  @override
   String get accountEnterCode =>
       'Enter this code on GitHub to finish signing in:';
 

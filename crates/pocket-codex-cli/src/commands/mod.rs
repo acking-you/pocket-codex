@@ -32,7 +32,7 @@ mod worker;
 /// Dispatch a parsed [`Cli`] invocation to the matching subcommand.
 pub async fn dispatch(cli: Cli) -> Result<()> {
     match cli.command {
-        Command::Login(args) => account::login(args.backend.as_deref()).await,
+        Command::Login(args) => account::login(args.backend.as_deref(), args.web).await,
         Command::Logout => account::logout().await,
         Command::Account => account::status().await,
         Command::Init(args) => init::run(args).await,

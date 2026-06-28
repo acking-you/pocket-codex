@@ -37,6 +37,14 @@ dependencies:
   # Opens URLs in the system browser (tapped links in agent replies / tool
   # output / plain text). url_launcher_windows is bundled and auto-registered.
   url_launcher: ^6.3.1
+  # Browser-redirect GitHub login (the convenient mode): opens an in-app browser
+  # tab (ASWebAuthenticationSession on iOS, Custom Tabs on Android) or a system
+  # browser + loopback listener (desktop), and captures the backend's redirect
+  # back to the app. The backend brokers GitHub's authorization-code flow; the
+  # app only ever holds a one-time exchange code (+ a PKCE verifier). Mobile
+  # needs the CallbackActivity intent-filter (AndroidManifest) / CFBundleURLSchemes
+  # (Info.plist) for the `pocketcodex` scheme; desktop uses http://localhost.
+  flutter_web_auth_2: ^4.1.0
   # Linkifies bare URLs in plain-text widgets (user bubbles, tool/command
   # output, reasoning) — markdown links are handled by MarkdownBody itself.
   flutter_linkify: ^6.0.0

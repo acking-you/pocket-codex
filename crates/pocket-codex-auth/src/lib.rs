@@ -22,7 +22,10 @@ use github::{GitHub, PollResult};
 pub use jwt::Claims;
 use jwt::Jwt;
 use pocket_codex_account_proto::{
-    http::{DevicePollResponse, DevicePollStatus, DeviceStartResponse, SessionCredential},
+    http::{
+        DevicePollResponse, DevicePollStatus, DeviceStartResponse, SessionCredential,
+        WebStartResponse,
+    },
     key::SERVICE_NS_PREFIX,
 };
 use pocket_codex_store::{Store, User};
@@ -34,6 +37,9 @@ use uuid::Uuid;
 pub struct Config {
     /// GitHub OAuth app client id (Device Flow enabled).
     pub github_client_id: String,
+    /// GitHub OAuth app client secret. Required only for the web
+    /// (authorization-code) flow; leave `None` to keep it disabled.
+    pub github_client_secret: Option<String>,
     /// OAuth scope to request (e.g. `read:user`).
     pub github_scope: String,
     /// HS256 secret for signing session tokens.
@@ -42,6 +48,19 @@ pub struct Config {
     pub jwt_ttl_secs: i64,
     /// Refresh-token lifetime in seconds.
     pub refresh_ttl_secs: i64,
+    /// The backend's public OAuth callback URL
+    /// (`https://<host>[:port]/auth/web/callback`). Required only for the web
+    /// flow; must exactly match the GitHub OAuth app's registered callback URL.
+    pub web_callback_url: Option<String>,
+}
+
+/// The web-flow-only secrets, present iff both the client secret and the public
+/// callback URL are configured.
+struct WebConfig {
+    /// GitHub OAuth app client secret (backend-only).
+    client_secret: String,
+    /// Public callback URL handed to GitHub as `redirect_uri`.
+    callback_url: String,
 }
 
 /// The auth service: device-flow login, session issue/refresh/logout, and
@@ -53,6 +72,8 @@ pub struct Auth {
     jwt_ttl_secs: i64,
     refresh_ttl_secs: i64,
     scope: String,
+    /// Web-flow secrets, or `None` when the authorization-code flow is disabled.
+    web: Option<WebConfig>,
 }
 
 impl Auth {
@@ -65,14 +86,34 @@ impl Auth {
             .timeout(std::time::Duration::from_secs(15))
             .connect_timeout(std::time::Duration::from_secs(10))
             .build()?;
+        // The web (authorization-code) flow lights up only when BOTH the client
+        // secret and the public callback URL are set; otherwise it stays off and
+        // its endpoints return `WebDisabled` while the device flow keeps working.
+        let web = match (config.github_client_secret, config.web_callback_url) {
+            (Some(secret), Some(callback))
+                if !secret.trim().is_empty() && !callback.trim().is_empty() =>
+            {
+                Some(WebConfig {
+                    client_secret: secret,
+                    callback_url: callback,
+                })
+            },
+            _ => None,
+        };
         Ok(Self {
             github: GitHub::new(http, config.github_client_id),
             jwt: Jwt::new(config.jwt_secret.as_bytes()),
             jwt_ttl_secs: config.jwt_ttl_secs,
             refresh_ttl_secs: config.refresh_ttl_secs,
             scope: config.github_scope,
+            web,
             store,
         })
+    }
+
+    /// Whether the web (authorization-code) login flow is configured + enabled.
+    pub fn web_enabled(&self) -> bool {
+        self.web.is_some()
     }
 
     /// Begin a device flow: ask GitHub for a code, stash the device code (and
@@ -130,6 +171,154 @@ impl Auth {
                 })
             },
         }
+    }
+
+    /// Begin a web (authorization-code) login: validate the client's
+    /// `redirect_uri`, stash the flow (CSRF state + PKCE challenge), and return
+    /// the GitHub authorization URL to open in a browser.
+    pub async fn web_start(
+        &self,
+        redirect_uri: &str,
+        app_state: &str,
+        code_challenge: &str,
+        device_label: Option<&str>,
+        now: i64,
+    ) -> Result<WebStartResponse> {
+        let web = self.web.as_ref().ok_or(AuthError::WebDisabled)?;
+        if !is_allowed_redirect(redirect_uri) {
+            return Err(AuthError::BadRedirect);
+        }
+        let flow_id = Uuid::new_v4().simple().to_string();
+        let gh_state = gen_state();
+        self.store
+            .insert_web_flow(
+                &flow_id,
+                &gh_state,
+                redirect_uri,
+                app_state,
+                code_challenge,
+                device_label,
+                now,
+                now + WEB_FLOW_TTL_SECS,
+            )
+            .await?;
+        let authorize_url = self
+            .github
+            .authorize_url(&self.scope, &web.callback_url, &gh_state);
+        Ok(WebStartResponse {
+            authorize_url,
+        })
+    }
+
+    /// Handle GitHub's redirect to the backend callback. Matches the `state`,
+    /// consumes the flow once, exchanges the code for a GitHub token (using the
+    /// client secret), upserts the user, and mints a single-use exchange code.
+    /// Returns where to redirect the browser next (the client's `redirect_uri`
+    /// with `?exchange_code=…&state=…`, or `?error=…&state=…`).
+    ///
+    /// An unknown/expired/duplicate `state` yields [`AuthError::BadWebState`] so
+    /// the caller can render a generic page rather than redirect somewhere
+    /// unvalidated.
+    pub async fn web_callback(
+        &self,
+        code: Option<&str>,
+        gh_state: &str,
+        error: Option<&str>,
+        now: i64,
+    ) -> Result<WebCallbackRedirect> {
+        let web = self.web.as_ref().ok_or(AuthError::WebDisabled)?;
+        let flow = self
+            .store
+            .web_flow_by_state(gh_state)
+            .await?
+            .filter(|f| f.consumed_at.is_none() && f.expires_at > now)
+            .ok_or(AuthError::BadWebState)?;
+        // Consume once before doing any work: a duplicated callback (GitHub
+        // retry, double-click) flips the row only for the first caller.
+        if !self.store.consume_web_flow(&flow.flow_id, now).await? {
+            return Err(AuthError::BadWebState);
+        }
+        // The user denied on GitHub (or GitHub reported an error): bounce the
+        // app back with an error param so it can show a friendly message.
+        if let Some(err) = error.filter(|e| !e.is_empty()) {
+            return Ok(WebCallbackRedirect::error(&flow.redirect_uri, &flow.app_state, err));
+        }
+        let Some(code) = code.filter(|c| !c.is_empty()) else {
+            return Ok(WebCallbackRedirect::error(
+                &flow.redirect_uri,
+                &flow.app_state,
+                "missing_code",
+            ));
+        };
+        let access = match self
+            .github
+            .exchange_code(&web.client_secret, code, &web.callback_url)
+            .await
+        {
+            Ok(token) => token,
+            Err(e) => {
+                tracing::warn!(error = %e, "web flow: GitHub code exchange failed");
+                return Ok(WebCallbackRedirect::error(
+                    &flow.redirect_uri,
+                    &flow.app_state,
+                    "exchange_failed",
+                ));
+            },
+        };
+        let gh = self.github.fetch_user(&access).await?;
+        let user = self.store.upsert_user(gh.id, &gh.login, now).await?;
+        let exchange_code = Uuid::new_v4().simple().to_string();
+        self.store
+            .insert_web_exchange(
+                &exchange_code,
+                &user.id,
+                flow.device_label.as_deref(),
+                &flow.code_challenge,
+                now,
+                now + WEB_EXCHANGE_TTL_SECS,
+            )
+            .await?;
+        Ok(WebCallbackRedirect::success(
+            &flow.redirect_uri,
+            &flow.app_state,
+            &exchange_code,
+        ))
+    }
+
+    /// Redeem a one-time exchange code (with its PKCE verifier) for a session,
+    /// the same credential the device flow issues. The verifier must hash to the
+    /// challenge captured at `web_start`, so a party that only intercepted the
+    /// redirect (e.g. a custom-scheme hijacker) cannot redeem it.
+    pub async fn web_exchange(
+        &self,
+        exchange_code: &str,
+        code_verifier: &str,
+        now: i64,
+    ) -> Result<SessionCredential> {
+        // The flow being configured is implied by a live exchange code, but
+        // guard explicitly so a disabled backend never mints a session.
+        let _ = self.web.as_ref().ok_or(AuthError::WebDisabled)?;
+        let entry = self
+            .store
+            .active_web_exchange(exchange_code, now)
+            .await?
+            .ok_or(AuthError::BadExchange)?;
+        if pkce_challenge(code_verifier) != entry.code_challenge {
+            return Err(AuthError::BadExchange);
+        }
+        // Redeem once: only the caller that flips the row mints a session.
+        if !self.store.consume_web_exchange(exchange_code, now).await? {
+            return Err(AuthError::BadExchange);
+        }
+        let user = self
+            .store
+            .user(&entry.user_id)
+            .await?
+            .ok_or(AuthError::BadExchange)?;
+        let (credential, _) = self
+            .issue_session(&user, entry.device_label.as_deref(), now)
+            .await?;
+        Ok(credential)
     }
 
     /// Exchange a valid refresh token for a new session, rotating (revoking)
@@ -260,6 +449,83 @@ impl Auth {
     }
 }
 
+/// Lifetime of a started web login flow — the browser round-trip (open GitHub,
+/// authorize, redirect back). Generous enough for a real sign-in, short enough
+/// that abandoned flows are purged promptly.
+const WEB_FLOW_TTL_SECS: i64 = 600;
+
+/// Lifetime of a one-time exchange code. Tighter than the flow: the client
+/// already has the redirect in hand and only needs one round-trip to redeem it.
+const WEB_EXCHANGE_TTL_SECS: i64 = 300;
+
+/// Where to send the browser after the GitHub callback: the client's
+/// `redirect_uri` with the result appended as query params.
+pub struct WebCallbackRedirect {
+    /// The fully-built redirect location (custom scheme or loopback http).
+    pub location: String,
+}
+
+impl WebCallbackRedirect {
+    /// A success redirect carrying the one-time exchange code + the app's state.
+    fn success(redirect_uri: &str, app_state: &str, exchange_code: &str) -> Self {
+        Self {
+            location: build_redirect(
+                redirect_uri,
+                &[("exchange_code", exchange_code), ("state", app_state)],
+            ),
+        }
+    }
+
+    /// An error redirect carrying an error code + the app's state.
+    fn error(redirect_uri: &str, app_state: &str, error: &str) -> Self {
+        Self {
+            location: build_redirect(redirect_uri, &[("error", error), ("state", app_state)]),
+        }
+    }
+}
+
+/// Append query params to a (query-less) redirect target. Works for both custom
+/// schemes (`pocketcodex://auth`) and loopback http URLs; values are
+/// percent-encoded.
+fn build_redirect(redirect_uri: &str, params: &[(&str, &str)]) -> String {
+    let query = url::form_urlencoded::Serializer::new(String::new())
+        .extend_pairs(params.iter().copied())
+        .finish();
+    let sep = if redirect_uri.contains('?') { '&' } else { '?' };
+    format!("{redirect_uri}{sep}{query}")
+}
+
+/// Whether a client `redirect_uri` is allowed as a web-flow callback target.
+/// Only the app's custom scheme (mobile deep link) and loopback http
+/// (desktop / CLI) are permitted, so the one-time exchange code can never be
+/// redirected to an arbitrary origin.
+fn is_allowed_redirect(redirect_uri: &str) -> bool {
+    let Ok(url) = url::Url::parse(redirect_uri) else {
+        return false;
+    };
+    match url.scheme() {
+        // Mobile deep link back into the app.
+        "pocketcodex" => true,
+        // Desktop / CLI loopback listener (no TLS needed — it never leaves the
+        // device). Reject any other http host so a token can't be exfiltrated.
+        "http" => matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "[::1]" | "::1")),
+        _ => false,
+    }
+}
+
+/// A random, URL-safe CSRF state token.
+fn gen_state() -> String {
+    let mut bytes = [0u8; 24];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+}
+
+/// The PKCE challenge for a verifier: `base64url(SHA-256(verifier))`, no pad.
+fn pkce_challenge(code_verifier: &str) -> String {
+    let digest = Sha256::digest(code_verifier.as_bytes());
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest)
+}
+
 /// How recently a token must have been rotated for a replay of it to be treated
 /// as a benign lost-response retry (vs theft). A client that successfully
 /// rotated but lost the response retries with the old token within seconds; a
@@ -316,5 +582,81 @@ mod tests {
         assert!(!is_lost_response_retry(None, Some(rotated_at), rotated_at));
         // Never revoked → not an inactive-token replay at all.
         assert!(!is_lost_response_retry(Some("next"), None, rotated_at));
+    }
+
+    #[test]
+    fn redirect_allowlist_accepts_scheme_and_loopback_only() {
+        // Mobile custom scheme.
+        assert!(is_allowed_redirect("pocketcodex://auth"));
+        assert!(is_allowed_redirect("pocketcodex://auth/callback"));
+        // Desktop / CLI loopback.
+        assert!(is_allowed_redirect("http://127.0.0.1:54321/callback"));
+        assert!(is_allowed_redirect("http://localhost:8080"));
+        // Rejected: arbitrary origins, https non-loopback, other schemes.
+        assert!(!is_allowed_redirect("https://evil.example/callback"));
+        assert!(!is_allowed_redirect("http://evil.example/callback"));
+        assert!(!is_allowed_redirect("https://127.0.0.1/callback"));
+        assert!(!is_allowed_redirect("javascript:alert(1)"));
+        assert!(!is_allowed_redirect("not a url"));
+    }
+
+    #[test]
+    fn pkce_challenge_matches_rfc7636_vector() {
+        // RFC 7636 Appendix B test vector.
+        let verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+        assert_eq!(pkce_challenge(verifier), "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM");
+    }
+
+    #[test]
+    fn build_redirect_appends_query_for_scheme_and_url() {
+        assert_eq!(
+            build_redirect("pocketcodex://auth", &[("exchange_code", "abc"), ("state", "s1")]),
+            "pocketcodex://auth?exchange_code=abc&state=s1"
+        );
+        // A target that already has a query gets `&`.
+        assert_eq!(
+            build_redirect("http://localhost:8080/cb?x=1", &[("error", "denied")]),
+            "http://localhost:8080/cb?x=1&error=denied"
+        );
+        // Values are percent-encoded.
+        assert_eq!(
+            build_redirect("pocketcodex://auth", &[("error", "exchange failed")]),
+            "pocketcodex://auth?error=exchange+failed"
+        );
+    }
+
+    fn cfg(web: bool) -> Config {
+        Config {
+            github_client_id: "Iv1.test".to_string(),
+            github_client_secret: web.then(|| "client-secret".to_string()),
+            github_scope: "read:user".to_string(),
+            jwt_secret: "x".repeat(32),
+            jwt_ttl_secs: 3600,
+            refresh_ttl_secs: 1000,
+            web_callback_url: web.then(|| "https://lb7666.top:8443/auth/web/callback".to_string()),
+        }
+    }
+
+    #[tokio::test]
+    async fn web_start_gates_on_config_and_redirect_allowlist() {
+        // Disabled flow → WebDisabled before touching the store, even for an
+        // otherwise-valid redirect.
+        let store = Store::connect("sqlite::memory:").await.expect("store");
+        let disabled = Auth::new(store, cfg(false)).expect("auth");
+        assert!(!disabled.web_enabled());
+        assert!(matches!(
+            disabled.web_start("pocketcodex://auth", "s", "c", None, 0).await,
+            Err(AuthError::WebDisabled)
+        ));
+
+        // Enabled flow but a disallowed redirect → BadRedirect (returned before
+        // any store write, so the in-memory pool is never queried).
+        let store = Store::connect("sqlite::memory:").await.expect("store");
+        let enabled = Auth::new(store, cfg(true)).expect("auth");
+        assert!(enabled.web_enabled());
+        assert!(matches!(
+            enabled.web_start("https://evil.example/cb", "s", "c", None, 0).await,
+            Err(AuthError::BadRedirect)
+        ));
     }
 }

@@ -68,13 +68,23 @@ pub async fn run(cfg: ServerConfig) -> anyhow::Result<()> {
         }
     });
 
+    // The web (authorization-code) flow's OAuth callback the backend hands to
+    // GitHub — derived from the configured public URL, and enabled only when a
+    // client secret is also present (Auth gates on both).
+    let web_callback_url = cfg
+        .public_url
+        .as_deref()
+        .map(|u| format!("{}/auth/web/callback", u.trim_end_matches('/')));
     let auth = Arc::new(Auth::new(store, pocket_codex_auth::Config {
         github_client_id: cfg.github_client_id.clone(),
+        github_client_secret: cfg.github_client_secret.clone(),
         github_scope: cfg.github_scope.clone(),
         jwt_secret: cfg.jwt_secret.clone(),
         jwt_ttl_secs: cfg.jwt_ttl_secs,
         refresh_ttl_secs: cfg.refresh_ttl_secs,
+        web_callback_url,
     })?);
+    tracing::info!(web_login = auth.web_enabled(), "auth flows configured");
     let relay_addr: SocketAddr = cfg
         .relay_addr
         .parse()
