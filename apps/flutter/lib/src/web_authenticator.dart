@@ -58,5 +58,14 @@ class FlutterWebAuthenticator implements WebAuthenticator {
   }) => FlutterWebAuth2.authenticate(
     url: url,
     callbackUrlScheme: callbackUrlScheme,
+    // CRITICAL for desktop: flutter_web_auth_2 v4 defaults useWebview=true, which
+    // on Windows/Linux routes to an embedded webview that matches the callback by
+    // scheme ONLY (`uri.scheme != callbackUrlScheme`). Our desktop callback is a
+    // full `http://localhost:{port}`, whose scheme is just `http`, so it would
+    // NEVER match and the flow would hang. useWebview=false selects the loopback
+    // HTTP-server path (system browser + 127.0.0.1:{port} listener) — exactly the
+    // design here. The option is desktop-only; mobile/macOS native sessions
+    // (custom `pocketcodex` scheme) ignore it.
+    options: const FlutterWebAuth2Options(useWebview: false),
   );
 }
