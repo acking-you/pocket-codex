@@ -13,6 +13,8 @@
   "keyLengthError": "MSG_HEADER_KEY 必须是 32 字节",
   "accountSignInTitle": "登录",
   "accountSignInButton": "使用 GitHub 登录",
+  "accountUseDeviceCode": "改用设备码登录",
+  "accountWebFailed": "登录未完成,请重试。",
   "accountEnterCode": "在 GitHub 上输入此代码以完成登录:",
   "accountCopyCode": "复制代码",
   "accountOpenGitHub": "打开 GitHub",

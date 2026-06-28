@@ -26,6 +26,19 @@ pub struct ServerConfig {
     pub jwt_secret: String,
     /// GitHub OAuth app client id (Device Flow enabled).
     pub github_client_id: String,
+    /// GitHub OAuth app client secret. Required ONLY for the web
+    /// (authorization-code / browser-redirect) login flow; the device flow
+    /// needs none. Leave unset to keep the web flow disabled (its endpoints
+    /// then return 503 while the device flow keeps working).
+    #[serde(default)]
+    pub github_client_secret: Option<String>,
+    /// Public base URL the browser reaches this backend at (e.g.
+    /// `https://lb7666.top:8443`). The web flow's OAuth callback is
+    /// `{public_url}/auth/web/callback`, which must EXACTLY match the GitHub
+    /// OAuth app's registered Authorization callback URL. Required (with
+    /// `github_client_secret`) to enable the web flow.
+    #[serde(default)]
+    pub public_url: Option<String>,
     /// OAuth scope requested at login.
     #[serde(default = "default_scope")]
     pub github_scope: String,
@@ -108,6 +121,21 @@ impl ServerConfig {
                  or leave it unset to adopt the relay's machine-derived key"
             );
         }
+        // Web flow is opt-in: a shipped placeholder secret must fail closed
+        // rather than silently enable a half-configured flow. Both the secret
+        // and the public callback URL are needed together.
+        if let Some(secret) = &self.github_client_secret {
+            ensure!(
+                !is_placeholder(secret),
+                "PCX_GITHUB_CLIENT_SECRET is still the example placeholder; set a real secret to \
+                 enable web login, or remove it to keep web login disabled"
+            );
+            ensure!(
+                self.public_url.as_deref().is_some_and(|u| !is_placeholder(u)),
+                "PCX_GITHUB_CLIENT_SECRET is set but PCX_PUBLIC_URL is missing; the web flow needs \
+                 the public callback base URL (e.g. https://lb7666.top:8443)"
+            );
+        }
         Ok(())
     }
 
@@ -157,6 +185,8 @@ mod tests {
             msg_header_key: None,
             jwt_secret: "x".repeat(32),
             github_client_id: "Iv1.0123456789abcdef".to_string(),
+            github_client_secret: None,
+            public_url: None,
             github_scope: default_scope(),
             database_url: default_database_url(),
             relay_addr: default_relay_addr(),
@@ -210,5 +240,19 @@ mod tests {
         c.msg_header_key = None;
         c.validate()
             .expect("an absent key adopts the relay machine key");
+    }
+
+    #[test]
+    fn web_flow_secret_requires_public_url_and_rejects_placeholder() {
+        // Secret set but no public_url → fail closed.
+        let mut c = valid();
+        c.github_client_secret = Some("a-real-looking-secret".to_string());
+        assert!(c.validate().is_err());
+        // Both set → valid (web flow enabled).
+        c.public_url = Some("https://lb7666.top:8443".to_string());
+        c.validate().expect("secret + public_url enables web flow");
+        // A placeholder secret fails closed even with a public_url.
+        c.github_client_secret = Some("replace-with-github-oauth-client-secret".to_string());
+        assert!(c.validate().is_err());
     }
 }

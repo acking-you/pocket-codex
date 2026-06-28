@@ -928,6 +928,72 @@ pub fn account_login_poll(poll_handle: String, backend: String) -> Result<Accoun
     })
 }
 
+/// A started web (authorization-code) login, mirrored for Dart. The caller
+/// opens [`Self::authorize_url`] in a browser, captures the redirect to its
+/// `redirect_uri`, checks the redirect's `state` equals [`Self::state`], then
+/// calls [`account_web_login_exchange`] with the redirect's `exchange_code` and
+/// [`Self::code_verifier`].
+pub struct WebLoginStartDto {
+    /// GitHub authorization URL to open in a browser.
+    pub authorize_url: String,
+    /// CSRF state to match against the redirect's `state`.
+    pub state: String,
+    /// PKCE verifier to pass back to [`account_web_login_exchange`].
+    pub code_verifier: String,
+    /// Resolved backend base URL to echo back to
+    /// [`account_web_login_exchange`].
+    pub backend: String,
+}
+
+/// Begin a web (browser-redirect) GitHub login. `redirect_uri` is the
+/// platform-specific callback the browser returns to (the app's custom scheme
+/// on mobile, a loopback URL on desktop). `backend` overrides the configured /
+/// default backend (and is remembered on a successful exchange).
+pub fn account_web_login_start(
+    redirect_uri: String,
+    backend: Option<String>,
+) -> Result<WebLoginStartDto> {
+    let dir = runtime::support_dir()?;
+    let start = runtime::runtime().block_on(account::web_login_start(
+        &dir,
+        &redirect_uri,
+        backend.as_deref(),
+    ))?;
+    Ok(WebLoginStartDto {
+        authorize_url: start.authorize_url,
+        state: start.state,
+        code_verifier: start.code_verifier,
+        backend: start.backend,
+    })
+}
+
+/// Redeem the one-time `exchange_code` (with its PKCE `code_verifier`) from the
+/// browser redirect. On success the session is persisted and the app switches
+/// to account mode. Returns the signed-in identity.
+pub fn account_web_login_exchange(
+    exchange_code: String,
+    code_verifier: String,
+    backend: String,
+) -> Result<AccountUserDto> {
+    let dir = runtime::support_dir()?;
+    let outcome = runtime::runtime().block_on(account::web_login_exchange(
+        &dir,
+        &backend,
+        exchange_code,
+        code_verifier,
+    ))?;
+    match outcome {
+        account::PollOutcome::Authorized {
+            login,
+            account_id,
+        } => Ok(AccountUserDto {
+            login,
+            account_id,
+        }),
+        _ => Err(anyhow!("web exchange did not authorize")),
+    }
+}
+
 /// The signed-in user (verified against the backend), or `None` if not signed
 /// in.
 pub fn account_current_user() -> Result<Option<AccountUserDto>> {

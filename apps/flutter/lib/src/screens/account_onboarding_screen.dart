@@ -8,11 +8,14 @@ import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
 import 'package:pocket_codex/src/error_format.dart';
 import 'package:pocket_codex/src/providers.dart';
+import 'package:pocket_codex/src/web_authenticator.dart';
 import 'package:pocket_codex/src/widgets/brand_logo.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-/// Default first-run experience: sign in to a hosted account via GitHub device
-/// flow. The self-host relay setup remains available behind an "Advanced" link.
+/// Default first-run experience: sign in to a hosted account. The convenient
+/// browser-redirect login is the default ("Sign in with GitHub" opens a browser
+/// and returns automatically); a device-code fallback (enter a code on GitHub)
+/// stays one tap away. The self-host relay setup remains behind "Advanced".
 class AccountOnboardingScreen extends ConsumerStatefulWidget {
   /// Default constructor.
   const AccountOnboardingScreen({super.key});
@@ -37,7 +40,65 @@ class _AccountOnboardingState extends ConsumerState<AccountOnboardingScreen> {
     super.dispose();
   }
 
-  Future<void> _start() async {
+  /// The convenient default: open a browser, let GitHub authorize, and come back
+  /// automatically. The backend brokers GitHub's authorization-code flow; we only
+  /// ever hold a one-time exchange code (+ a PKCE verifier the backend never sees).
+  Future<void> _startWeb() async {
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    final api = ref.read(bridgeApiProvider);
+    final authenticator = ref.read(webAuthenticatorProvider);
+    final l10n = AppLocalizations.of(context);
+    String? failure;
+    try {
+      // Blank backend → the built-in default (lb7666.top); a self-deployed
+      // backend can be entered under "Advanced".
+      final override = _backend.text.trim();
+      final cb = webAuthCallback();
+      final start = await api.accountWebLoginStart(
+        redirectUri: cb.redirectUri,
+        backend: override.isEmpty ? null : override,
+      );
+      final result = await authenticator.authenticate(
+        url: start.authorizeUrl,
+        callbackUrlScheme: cb.callbackScheme,
+      );
+      final params = Uri.parse(result).queryParameters;
+      final err = params['error'];
+      final code = params['exchange_code'];
+      if (err != null && err.isNotEmpty) {
+        failure = err == 'access_denied' ? l10n.accountDenied : l10n.accountWebFailed;
+      } else if (params['state'] != start.state || code == null || code.isEmpty) {
+        // A mismatched state or missing code means the redirect wasn't ours.
+        failure = l10n.accountWebFailed;
+      } else {
+        await api.accountWebLoginExchange(
+          exchangeCode: code,
+          codeVerifier: start.codeVerifier,
+          backend: start.backend,
+        );
+        if (mounted) context.go('/');
+        return;
+      }
+    } on PlatformException catch (e) {
+      // The user dismissed the browser tab: a silent abort, no error banner.
+      if (e.code != 'CANCELED') failure = friendlyError(e);
+    } catch (e) {
+      failure = friendlyError(e);
+    }
+    if (mounted) {
+      setState(() {
+        _error = failure;
+        _busy = false;
+      });
+    }
+  }
+
+  /// Fallback for environments without a usable browser hand-off: show a code to
+  /// type at github.com/login/device, then poll until authorized.
+  Future<void> _startDevice() async {
     setState(() {
       _busy = true;
       _error = null;
@@ -167,13 +228,28 @@ class _AccountOnboardingState extends ConsumerState<AccountOnboardingScreen> {
                   ),
                   const SizedBox(height: 16),
                 ],
-                if (device == null)
+                if (device == null) ...[
                   FilledButton.icon(
-                    onPressed: _busy ? null : _start,
+                    onPressed: _busy ? null : _startWeb,
                     icon: const Icon(Icons.login),
                     label: Text(l10n.accountSignInButton),
-                  )
-                else ...[
+                  ),
+                  const SizedBox(height: 4),
+                  TextButton(
+                    onPressed: _busy ? null : _startDevice,
+                    child: Text(l10n.accountUseDeviceCode),
+                  ),
+                  if (_busy) ...[
+                    const SizedBox(height: 12),
+                    const Center(
+                      child: SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    ),
+                  ],
+                ] else ...[
                   Text(l10n.accountEnterCode, textAlign: TextAlign.center),
                   const SizedBox(height: 12),
                   SelectableText(

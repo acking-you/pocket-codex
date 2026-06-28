@@ -122,6 +122,33 @@ class FakeBridgeApi implements BridgeApi {
     );
   }
 
+  /// Records the last [accountWebLoginStart] redirectUri for assertions.
+  String? lastWebRedirectUri;
+
+  @override
+  Future<WebLoginStart> accountWebLoginStart({
+    required String redirectUri,
+    String? backend,
+  }) async {
+    lastWebRedirectUri = redirectUri;
+    return WebLoginStart(
+      authorizeUrl: 'https://github.com/login/oauth/authorize?state=s',
+      state: 'fake-state',
+      codeVerifier: 'fake-verifier',
+      backend: backend ?? 'https://backend.example',
+    );
+  }
+
+  @override
+  Future<AccountUser> accountWebLoginExchange({
+    required String exchangeCode,
+    required String codeVerifier,
+    required String backend,
+  }) async {
+    accountUser = const AccountUser(login: 'octocat', accountId: '42');
+    return accountUser!;
+  }
+
   @override
   Future<AccountUser?> accountCurrentUser() async => accountUser;
 

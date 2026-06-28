@@ -176,6 +176,18 @@ abstract class AppLocalizations {
   /// **'Sign in with GitHub'**
   String get accountSignInButton;
 
+  /// No description provided for @accountUseDeviceCode.
+  ///
+  /// In en, this message translates to:
+  /// **'Use a device code instead'**
+  String get accountUseDeviceCode;
+
+  /// No description provided for @accountWebFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Sign-in didn\'t complete. Please try again.'**
+  String get accountWebFailed;
+
   /// No description provided for @accountEnterCode.
   ///
   /// In en, this message translates to:

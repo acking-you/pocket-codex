@@ -250,8 +250,12 @@ jobs:
           sudo apt-get update -y
           # libayatana-appindicator3-dev: required by tray_manager's Linux build
           # (the plugin CMake errors out without an appindicator implementation).
+          # libwebkit2gtk-4.1-dev: required by desktop_webview_window, which
+          # flutter_web_auth_2 pulls in transitively for the web login. We use the
+          # loopback-server path (useWebview:false), so webkit is never invoked at
+          # runtime, but the plugin still compiles + links against it on Linux.
           sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev \
-            libayatana-appindicator3-dev \
+            libayatana-appindicator3-dev libwebkit2gtk-4.1-dev \
             file desktop-file-utils fakeroot zip
       - name: Activate desktop manifest (bundle Noto Sans SC)
         shell: bash
@@ -355,7 +359,7 @@ jobs:
           Priority: optional
           Architecture: amd64
           Maintainer: Pocket-Codex Contributors <noreply@github.com>
-          Depends: libgtk-3-0, libayatana-appindicator3-1
+          Depends: libgtk-3-0, libayatana-appindicator3-1, libwebkit2gtk-4.1-0
           Description: Pocket-Codex desktop app
            Remote-control your codex sessions from any device.
           CONTROL

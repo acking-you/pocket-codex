@@ -9,6 +9,7 @@ use serde::Deserialize;
 use crate::error::{AuthError, Result};
 
 const DEVICE_CODE_URL: &str = "https://github.com/login/device/code";
+const AUTHORIZE_URL: &str = "https://github.com/login/oauth/authorize";
 const ACCESS_TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
 const USER_URL: &str = "https://api.github.com/user";
 const DEVICE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
@@ -96,6 +97,54 @@ impl GitHub {
             Some(other) => Err(AuthError::Github(other.to_string())),
             None => Err(AuthError::Github("unexpected token response".to_string())),
         }
+    }
+
+    /// Build the browser authorization URL for the web (authorization-code)
+    /// flow. `redirect_uri` is the backend's own public callback (which must
+    /// exactly match the OAuth app's registered Authorization callback URL);
+    /// `state` is the CSRF token GitHub echoes back.
+    pub(crate) fn authorize_url(&self, scope: &str, redirect_uri: &str, state: &str) -> String {
+        let query = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("client_id", &self.client_id)
+            .append_pair("redirect_uri", redirect_uri)
+            .append_pair("scope", scope)
+            .append_pair("state", state)
+            .append_pair("allow_signup", "true")
+            .finish();
+        format!("{AUTHORIZE_URL}?{query}")
+    }
+
+    /// Exchange an authorization code for an access token (web flow). Unlike
+    /// the device flow this requires the OAuth app's `client_secret`, which
+    /// is held only on the backend.
+    pub(crate) async fn exchange_code(
+        &self,
+        client_secret: &str,
+        code: &str,
+        redirect_uri: &str,
+    ) -> Result<String> {
+        let resp = self
+            .http
+            .post(ACCESS_TOKEN_URL)
+            .header(reqwest::header::ACCEPT, "application/json")
+            .form(&[
+                ("client_id", self.client_id.as_str()),
+                ("client_secret", client_secret),
+                ("code", code),
+                ("redirect_uri", redirect_uri),
+                ("grant_type", "authorization_code"),
+            ])
+            .send()
+            .await?;
+        let body: serde_json::Value = resp.json().await?;
+        if let Some(token) = body.get("access_token").and_then(|v| v.as_str()) {
+            return Ok(token.to_string());
+        }
+        let err = body
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unexpected token response");
+        Err(AuthError::Github(err.to_string()))
     }
 
     /// Fetch the authenticated user's id + login.

@@ -16,9 +16,31 @@ import 'package:pocket_codex/src/screens/app_session_screen.dart';
 import 'package:pocket_codex/src/screens/app_service_screen.dart';
 import 'package:pocket_codex/src/screens/services_screen.dart';
 import 'package:pocket_codex/src/screens/settings_screen.dart';
+import 'package:pocket_codex/src/web_authenticator.dart';
 import 'package:pocket_codex/src/widgets/loading.dart';
 import 'package:pocket_codex/src/widgets/status_dots.dart';
 import 'fake_bridge_api.dart';
+
+/// Fake browser hand-off: returns a canned redirect URL (or throws) instead of
+/// driving the real platform-channel plugin.
+class _FakeWebAuthenticator implements WebAuthenticator {
+  _FakeWebAuthenticator(this.result, {this.error});
+
+  /// Redirect URL to return from [authenticate] on success.
+  final String result;
+
+  /// When set, [authenticate] throws this instead of returning.
+  final Object? error;
+
+  @override
+  Future<String> authenticate({
+    required String url,
+    required String callbackUrlScheme,
+  }) async {
+    if (error != null) throw error!;
+    return result;
+  }
+}
 
 /// Mount [child] with a fake bridge and localizations. Defaults to the
 /// Chinese locale so the existing zh assertions hold; pass [locale] to test
@@ -43,8 +65,9 @@ Widget _routerHost(
   BridgeApi api, {
   required String initial,
   required List<GoRoute> routes,
+  List<Override> overrides = const [],
 }) => ProviderScope(
-  overrides: [bridgeApiProvider.overrideWithValue(api)],
+  overrides: [bridgeApiProvider.overrideWithValue(api), ...overrides],
   child: MaterialApp.router(
     locale: const Locale('zh'),
     localizationsDelegates: AppLocalizations.localizationsDelegates,
@@ -554,10 +577,10 @@ void main() {
       ),
     );
     await t.pumpAndSettle(); // initial onboarding (no spinner yet)
-    await t.tap(find.text('使用 GitHub 登录')); // accountSignInButton (zh)
+    await t.tap(find.text('改用设备码登录')); // accountUseDeviceCode (zh): device flow
     // The polling spinner is a perpetual animation, so advance via bounded pumps
     // (pumpAndSettle would never settle while it spins).
-    await t.pump(); // _start: accountLoginStart resolves
+    await t.pump(); // _startDevice: accountLoginStart resolves
     await t.pump(); // setState shows the code + spinner
     expect(find.text('ABCD-1234'), findsOneWidget); // user code shown
     expect(find.text('打开 GitHub'), findsOneWidget); // accountOpenGitHub (zh)
@@ -586,7 +609,7 @@ void main() {
       ),
     );
     await t.pumpAndSettle(); // initial onboarding (no spinner yet)
-    await t.tap(find.text('使用 GitHub 登录'));
+    await t.tap(find.text('改用设备码登录')); // device-code fallback
     await t.pump(); // start resolves
     await t.pump(); // code + spinner show
     expect(find.text('ABCD-1234'), findsOneWidget);
@@ -598,6 +621,80 @@ void main() {
     expect(find.text('代码已过期,请重试。'), findsOneWidget); // accountCodeExpired (zh)
     expect(find.text('ABCD-1234'), findsNothing); // cleared, back to sign-in
     expect(find.text('HOME-ROUTE'), findsNothing); // did NOT navigate
+  });
+
+  testWidgets('onboarding: browser sign-in (default) exchanges and navigates '
+      'home', (t) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: '', hasKey: false),
+    );
+    await t.pumpWidget(
+      _routerHost(
+        api,
+        initial: '/onboarding',
+        routes: [
+          GoRoute(
+            path: '/onboarding',
+            builder: (_, _) => const AccountOnboardingScreen(),
+          ),
+          _stub('/', 'HOME-ROUTE'),
+        ],
+        // The browser hand-off returns a redirect whose state matches the fake
+        // bridge's started flow ('fake-state'), carrying a one-time code.
+        overrides: [
+          webAuthenticatorProvider.overrideWithValue(
+            _FakeWebAuthenticator(
+              'pocketcodex://auth?exchange_code=xc1&state=fake-state',
+            ),
+          ),
+        ],
+      ),
+    );
+    await t.pumpAndSettle();
+    // The PRIMARY button is the browser flow (the convenient default).
+    await t.tap(find.text('使用 GitHub 登录'));
+    await t
+        .pumpAndSettle(); // start → authenticate → exchange → context.go('/')
+    expect(find.text('HOME-ROUTE'), findsOneWidget); // navigated on success
+    expect(api.lastWebRedirectUri, isNotNull); // the web flow ran
+  });
+
+  testWidgets('onboarding: a cancelled browser sign-in shows no error', (
+    t,
+  ) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: '', hasKey: false),
+    );
+    await t.pumpWidget(
+      _routerHost(
+        api,
+        initial: '/onboarding',
+        routes: [
+          GoRoute(
+            path: '/onboarding',
+            builder: (_, _) => const AccountOnboardingScreen(),
+          ),
+          _stub('/', 'HOME-ROUTE'),
+        ],
+        overrides: [
+          webAuthenticatorProvider.overrideWithValue(
+            _FakeWebAuthenticator(
+              '',
+              error: PlatformException(code: 'CANCELED'),
+            ),
+          ),
+        ],
+      ),
+    );
+    await t.pumpAndSettle();
+    await t.tap(find.text('使用 GitHub 登录'));
+    await t.pumpAndSettle();
+    // A user-cancelled tab is a silent abort: still on onboarding, no error.
+    expect(find.text('HOME-ROUTE'), findsNothing);
+    expect(
+      find.text('使用 GitHub 登录'),
+      findsOneWidget,
+    ); // back on the sign-in button
   });
 
   testWidgets('settings: account sign-out clears the user and returns to '

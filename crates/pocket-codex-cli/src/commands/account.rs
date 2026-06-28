@@ -10,9 +10,13 @@ use std::{sync::Arc, time::Duration};
 
 use anyhow::{anyhow, bail, Context, Result};
 use base64::Engine as _;
-use pocket_codex_account_proto::http::{
-    DevicePollResponse, DevicePollStatus, DeviceStartRequest, DeviceStartResponse, LogoutRequest,
-    MeResponse, RefreshRequest, RefreshResponse, ServiceEntry, ServicesResponse,
+use pocket_codex_account_proto::{
+    http::{
+        DevicePollResponse, DevicePollStatus, DeviceStartRequest, DeviceStartResponse,
+        LogoutRequest, MeResponse, RefreshRequest, RefreshResponse, ServiceEntry, ServicesResponse,
+        WebExchangeRequest, WebExchangeResponse, WebStartRequest, WebStartResponse,
+    },
+    pkce,
 };
 use pocket_codex_broker_client::{BrokerError, BrokerStream, Connector, TokenProvider};
 use pocket_codex_core::{
@@ -72,9 +76,20 @@ pub(crate) fn broker_endpoint(backend: &str) -> Result<(String, u16)> {
     Ok((host, port))
 }
 
-/// `pocket-codex login`: run the GitHub device flow against the backend and
-/// persist the issued session.
-pub(crate) async fn login(backend_flag: Option<&str>) -> Result<()> {
+/// `pocket-codex login`: sign in against the backend and persist the session.
+/// Defaults to the GitHub device flow; `--web` (`web = true`) runs the
+/// browser-redirect authorization-code flow instead.
+pub(crate) async fn login(backend_flag: Option<&str>, web: bool) -> Result<()> {
+    if web {
+        login_web(backend_flag).await
+    } else {
+        login_device(backend_flag).await
+    }
+}
+
+/// The GitHub device flow: show a code to enter at github.com/login/device,
+/// then poll until authorized.
+async fn login_device(backend_flag: Option<&str>) -> Result<()> {
     let mut config = Config::load()?;
     let base = backend_base(backend_flag, &config);
     let client = reqwest::Client::new();
@@ -139,6 +154,188 @@ pub(crate) async fn login(backend_flag: Option<&str>) -> Result<()> {
                 bail!("device code expired; run `pocket-codex login` again")
             },
             DevicePollStatus::Denied => bail!("access denied on GitHub"),
+        }
+    }
+}
+
+/// The browser-redirect (authorization-code) flow: bind a loopback callback,
+/// open the browser to GitHub, capture the one-time exchange code on redirect,
+/// and trade it (with the PKCE verifier) for a session.
+async fn login_web(backend_flag: Option<&str>) -> Result<()> {
+    let mut config = Config::load()?;
+    let base = backend_base(backend_flag, &config);
+    let client = reqwest::Client::new();
+
+    // A loopback listener on an ephemeral port catches the final redirect. GitHub
+    // never sees this URL — only the backend's callback is registered there; the
+    // backend redirects the browser here at the end of the flow.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .context("binding loopback callback listener")?;
+    let port = listener
+        .local_addr()
+        .context("reading callback listener port")?
+        .port();
+    let redirect_uri = format!("http://127.0.0.1:{port}/callback");
+
+    let code_verifier = pkce::gen_verifier();
+    let state = pkce::gen_state();
+    let start: WebStartResponse = client
+        .post(format!("{base}/auth/web/start"))
+        .json(&WebStartRequest {
+            redirect_uri,
+            state: state.clone(),
+            code_challenge: pkce::challenge(&code_verifier),
+            device_label: Some(default_device_id()),
+        })
+        .send()
+        .await
+        .context("calling /auth/web/start")?
+        .error_for_status()
+        .context("/auth/web/start failed")?
+        .json()
+        .await
+        .context("parsing web start response")?;
+
+    ui::headline(ui::Tone::Action, "sign in with GitHub");
+    ui::field("url", &start.authorize_url);
+    // Try to open the browser; always show the URL so a headless user can copy it.
+    match open::that_detached(&start.authorize_url) {
+        Ok(()) => ui::code("a browser window should open — complete the sign-in there"),
+        Err(e) => {
+            tracing::debug!(error = %e, "failed to auto-open the browser");
+            ui::code("open the URL above to continue signing in");
+        },
+    }
+
+    // Wait for the browser redirect (bounded). The helper loops past empty
+    // preconnects and unrelated paths (e.g. /favicon.ico) so a stray first
+    // connection can't abort an otherwise-successful sign-in.
+    let exchange_code =
+        tokio::time::timeout(Duration::from_secs(300), await_web_callback(&listener, &state))
+            .await
+            .context("timed out waiting for the browser redirect")??;
+
+    let resp: WebExchangeResponse = client
+        .post(format!("{base}/auth/web/exchange"))
+        .json(&WebExchangeRequest {
+            exchange_code,
+            code_verifier,
+        })
+        .send()
+        .await
+        .context("calling /auth/web/exchange")?
+        .error_for_status()
+        .context("/auth/web/exchange failed")?
+        .json()
+        .await
+        .context("parsing web exchange response")?;
+    let cred = resp.credential;
+    if backend_flag.is_some() {
+        config.set_account_backend(&base);
+    }
+    config.set_account_session(
+        &cred.token,
+        &cred.refresh_token,
+        &cred.login,
+        cred.account_id.clone(),
+    );
+    config.save()?;
+    ui::headline(ui::Tone::Ok, "signed in");
+    ui::field("login", &cred.login);
+    Ok(())
+}
+
+/// Accept loopback connections until the browser delivers the OAuth redirect
+/// (one carrying `exchange_code` or `error`), skipping empty preconnects and
+/// unrelated paths (e.g. `/favicon.ico`) so a stray first connection can't
+/// abort an otherwise-successful sign-in. Validates the CSRF `state`, writes a
+/// closing page to the browser, and returns the one-time exchange code.
+async fn await_web_callback(
+    listener: &tokio::net::TcpListener,
+    expected_state: &str,
+) -> Result<String> {
+    use tokio::io::AsyncWriteExt as _;
+    loop {
+        let (mut stream, _) = listener
+            .accept()
+            .await
+            .context("accepting the browser redirect")?;
+        let Some(target) = read_request_target(&mut stream).await? else {
+            // Empty / speculative preconnect, or no request line: ignore it.
+            let _ = stream.shutdown().await;
+            continue;
+        };
+        let params: std::collections::HashMap<String, String> =
+            match url::Url::parse(&format!("http://127.0.0.1{target}")) {
+                Ok(url) => url.query_pairs().into_owned().collect(),
+                Err(_) => {
+                    let _ = stream.shutdown().await;
+                    continue;
+                },
+            };
+        // Only the real OAuth redirect carries these; ignore favicon / other GETs.
+        if !(params.contains_key("exchange_code") || params.contains_key("error")) {
+            let _ = stream
+                .write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n")
+                .await;
+            let _ = stream.shutdown().await;
+            continue;
+        }
+        let result: Result<String> = if let Some(err) = params.get("error") {
+            Err(anyhow!("GitHub sign-in failed: {err}"))
+        } else if params.get("state").map(String::as_str) != Some(expected_state) {
+            Err(anyhow!("redirect state mismatch — sign-in could not be verified"))
+        } else if let Some(code) = params.get("exchange_code") {
+            Ok(code.clone())
+        } else {
+            Err(anyhow!("redirect did not carry an exchange code"))
+        };
+        // Reply to the browser so the user sees a closing message either way.
+        let message = if result.is_ok() {
+            "Signed in. You can close this tab and return to the terminal."
+        } else {
+            "Sign-in could not be completed. You can close this tab and try again."
+        };
+        let body = format!(
+            "<!doctype html><meta charset=\"utf-8\"><title>Pocket-Codex</title><p \
+             style=\"font-family: system-ui, sans-serif; text-align:center; \
+             margin-top:4rem\">{message}</p>"
+        );
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: \
+             {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        let _ = stream.write_all(response.as_bytes()).await;
+        let _ = stream.shutdown().await;
+        return result;
+    }
+}
+
+/// Read from `stream` until the end of the HTTP request line (the first CRLF)
+/// and return its target (path + query), or `None` if the peer closed without
+/// sending one or the line is implausibly long (not an HTTP request).
+async fn read_request_target(stream: &mut tokio::net::TcpStream) -> Result<Option<String>> {
+    use tokio::io::AsyncReadExt as _;
+    let mut buf = Vec::with_capacity(1024);
+    let mut chunk = [0u8; 1024];
+    loop {
+        let n = stream
+            .read(&mut chunk)
+            .await
+            .context("reading the redirect request")?;
+        if n == 0 {
+            return Ok(None); // peer closed without a request line
+        }
+        buf.extend_from_slice(&chunk[..n]);
+        if let Some(pos) = buf.windows(2).position(|w| w == b"\r\n") {
+            let line = String::from_utf8_lossy(&buf[..pos]);
+            return Ok(line.split_whitespace().nth(1).map(str::to_string));
+        }
+        if buf.len() > 16 * 1024 {
+            return Ok(None); // runaway / not a well-formed request line
         }
     }
 }

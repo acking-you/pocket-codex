@@ -13,11 +13,12 @@ mod flows;
 mod models;
 mod tokens;
 mod users;
+mod web;
 
 use std::{str::FromStr, time::Duration};
 
 pub use error::{Result, StoreError};
-pub use models::{DeviceFlow, RefreshToken, User};
+pub use models::{DeviceFlow, RefreshToken, User, WebAuthFlow, WebExchangeCode};
 use sqlx::{
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions},
     SqlitePool,
@@ -164,5 +165,79 @@ mod tests {
         assert!(store.consume_device_flow("h1", 100).await.expect("consume"));
         // Second consume is a no-op (already consumed).
         assert!(!store.consume_device_flow("h1", 200).await.expect("consume"));
+    }
+
+    #[tokio::test]
+    async fn web_flow_consume_once_and_lookup_by_state() {
+        let store = mem_store().await;
+        store
+            .insert_web_flow(
+                "f1",
+                "state-abc",
+                "pocketcodex://auth",
+                "app-state-1",
+                "challenge-1",
+                Some("phone"),
+                0,
+                600,
+            )
+            .await
+            .expect("insert");
+        let f = store
+            .web_flow_by_state("state-abc")
+            .await
+            .expect("by state")
+            .expect("some");
+        assert_eq!(f.flow_id, "f1");
+        assert_eq!(f.redirect_uri, "pocketcodex://auth");
+        assert_eq!(f.app_state, "app-state-1");
+        assert_eq!(f.code_challenge, "challenge-1");
+        assert_eq!(f.device_label.as_deref(), Some("phone"));
+        assert!(f.consumed_at.is_none());
+        // Authorize-once: first consume wins, replay is a no-op.
+        assert!(store.consume_web_flow("f1", 100).await.expect("consume"));
+        assert!(!store.consume_web_flow("f1", 200).await.expect("consume"));
+    }
+
+    #[tokio::test]
+    async fn web_exchange_code_redeem_once_and_expiry() {
+        let store = mem_store().await;
+        let user = store.upsert_user(11, "u", 0).await.expect("user");
+        store
+            .insert_web_exchange("xc1", &user.id, Some("phone"), "challenge-1", 0, 300)
+            .await
+            .expect("insert");
+
+        // Active before expiry.
+        let got = store
+            .active_web_exchange("xc1", 100)
+            .await
+            .expect("lookup")
+            .expect("some");
+        assert_eq!(got.user_id, user.id);
+        assert_eq!(got.code_challenge, "challenge-1");
+
+        // Expired lookup misses.
+        assert!(store
+            .active_web_exchange("xc1", 400)
+            .await
+            .expect("lookup")
+            .is_none());
+
+        // Redeem-once.
+        assert!(store
+            .consume_web_exchange("xc1", 100)
+            .await
+            .expect("consume"));
+        assert!(!store
+            .consume_web_exchange("xc1", 100)
+            .await
+            .expect("consume"));
+        // Consumed → no longer active.
+        assert!(store
+            .active_web_exchange("xc1", 100)
+            .await
+            .expect("lookup")
+            .is_none());
     }
 }

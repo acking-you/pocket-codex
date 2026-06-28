@@ -223,6 +223,34 @@ class AccountUser {
   final String? accountId;
 }
 
+/// A started web (browser-redirect) login: open [authorizeUrl] in a browser,
+/// capture the redirect back to the app, check its `state` equals [state], then
+/// trade its `exchange_code` (with [codeVerifier]) via
+/// [BridgeApi.accountWebLoginExchange]. [state] and [codeVerifier] stay
+/// on-device — only the verifier's hashed challenge ever reaches the backend.
+class WebLoginStart {
+  /// Creates a started web login.
+  const WebLoginStart({
+    required this.authorizeUrl,
+    required this.state,
+    required this.codeVerifier,
+    required this.backend,
+  });
+
+  /// GitHub authorization URL to open in a browser.
+  final String authorizeUrl;
+
+  /// CSRF state to match against the redirect's `state` query param.
+  final String state;
+
+  /// PKCE verifier to pass to [BridgeApi.accountWebLoginExchange].
+  final String codeVerifier;
+
+  /// Resolved backend base URL to echo back to
+  /// [BridgeApi.accountWebLoginExchange].
+  final String backend;
+}
+
 /// One service in the account (the `pcxu:` prefix already stripped).
 class AccountService {
   /// Creates an account service.
@@ -578,6 +606,26 @@ abstract interface class BridgeApi {
   /// Poll a device flow once. On `authorized` the session is persisted and the
   /// app switches to account mode.
   Future<AccountPoll> accountLoginPoll(String pollHandle, String backend);
+
+  /// Begin a web (browser-redirect) GitHub login — the convenient default.
+  /// [redirectUri] is the platform-specific callback the browser is sent back to
+  /// (the app's `pocketcodex://` scheme on mobile/macOS, a `http://localhost:…`
+  /// loopback on Windows/Linux). [backend] overrides the configured / default
+  /// backend (remembered on a successful exchange). Open the returned
+  /// `authorizeUrl`, then call [accountWebLoginExchange].
+  Future<WebLoginStart> accountWebLoginStart({
+    required String redirectUri,
+    String? backend,
+  });
+
+  /// Redeem the one-time [exchangeCode] from the browser redirect (with its PKCE
+  /// [codeVerifier]) for a session. On success the session is persisted and the
+  /// app switches to account mode; returns the signed-in identity.
+  Future<AccountUser> accountWebLoginExchange({
+    required String exchangeCode,
+    required String codeVerifier,
+    required String backend,
+  });
 
   /// The signed-in user (verified against the backend), or `null` if not signed
   /// in.

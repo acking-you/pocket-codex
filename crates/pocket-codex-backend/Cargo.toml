@@ -32,7 +32,7 @@ tokio = { workspace = true }
 tokio-rustls = { workspace = true }
 rustls = { workspace = true }
 rustls-pemfile = { workspace = true }
-axum = { workspace = true, features = ["json"] }
+axum = { workspace = true, features = ["json", "query"] }
 tower-http = { workspace = true }
 hyper = { version = "1", features = ["server", "http1", "http2"] }
 hyper-util = { version = "0.1", features = ["server", "server-auto", "tokio", "service"] }

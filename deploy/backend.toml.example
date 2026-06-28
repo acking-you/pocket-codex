@@ -15,6 +15,14 @@ broker_listen = "0.0.0.0:7900"
 # GitHub OAuth scope requested at login.
 github_scope = "read:user"
 
+# Public base URL the browser reaches this backend at. ONLY needed to enable the
+# web (browser-redirect) login flow, and only together with
+# PCX_GITHUB_CLIENT_SECRET (backend.env). The OAuth callback is
+# `{public_url}/auth/web/callback`, which must EXACTLY match the GitHub OAuth
+# App's registered Authorization callback URL (scheme, host, port, path).
+# Uncomment + set when enabling web login:
+#public_url = "https://lb7666.top:8443"
+
 # Session lifetimes.
 jwt_ttl_secs = 3600
 refresh_ttl_secs = 2592000

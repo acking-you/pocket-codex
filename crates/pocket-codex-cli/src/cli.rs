@@ -28,7 +28,8 @@ pub struct Cli {
 /// Top-level subcommands.
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Sign in to a hosted Pocket-Codex account via GitHub device flow.
+    /// Sign in to a hosted Pocket-Codex account via GitHub (device code by
+    /// default, or `--web` for a browser redirect).
     Login(LoginArgs),
 
     /// Sign out of the hosted account (revoke + clear the local session).
@@ -88,6 +89,13 @@ pub struct LoginArgs {
     /// remembered for later commands.
     #[arg(long)]
     pub backend: Option<String>,
+
+    /// Sign in via a browser redirect (authorization-code flow) instead of the
+    /// device code. Opens the system browser and captures the result on a
+    /// loopback port; falls back to printing the URL when no browser opens.
+    /// Use the default device flow on headless / SSH sessions.
+    #[arg(long)]
+    pub web: bool,
 }
 
 /// Args for `pocket-codex init`.
@@ -624,6 +632,24 @@ mod tests {
 
         assert_eq!(args.key.as_deref(), Some("codex"));
         assert_eq!(args.role.map(PbRole::from), Some(PbRole::Subscribe));
+    }
+
+    #[test]
+    fn login_defaults_to_device_and_parses_web_flag() {
+        // Default: device flow (web = false).
+        let cli = Cli::parse_from(["pocket-codex", "login"]);
+        let Command::Login(args) = cli.command else {
+            panic!("expected login command");
+        };
+        assert!(!args.web);
+        assert!(args.backend.is_none());
+        // `--web` opts into the browser-redirect flow.
+        let cli = Cli::parse_from(["pocket-codex", "login", "--web", "--backend", "https://b"]);
+        let Command::Login(args) = cli.command else {
+            panic!("expected login command");
+        };
+        assert!(args.web);
+        assert_eq!(args.backend.as_deref(), Some("https://b"));
     }
 
     #[test]

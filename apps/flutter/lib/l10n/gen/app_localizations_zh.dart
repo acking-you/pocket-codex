@@ -49,6 +49,12 @@ class AppLocalizationsZh extends AppLocalizations {
   String get accountSignInButton => '使用 GitHub 登录';
 
   @override
+  String get accountUseDeviceCode => '改用设备码登录';
+
+  @override
+  String get accountWebFailed => '登录未完成,请重试。';
+
+  @override
   String get accountEnterCode => '在 GitHub 上输入此代码以完成登录:';
 
   @override

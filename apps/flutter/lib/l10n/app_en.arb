@@ -13,6 +13,8 @@
   "keyLengthError": "MSG_HEADER_KEY must be exactly 32 bytes",
   "accountSignInTitle": "Sign in",
   "accountSignInButton": "Sign in with GitHub",
+  "accountUseDeviceCode": "Use a device code instead",
+  "accountWebFailed": "Sign-in didn't complete. Please try again.",
   "accountEnterCode": "Enter this code on GitHub to finish signing in:",
   "accountCopyCode": "Copy code",
   "accountOpenGitHub": "Open GitHub",

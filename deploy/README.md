@@ -21,6 +21,13 @@ token; they never see the relay key and can never reach the relay directly.
 
 1. **GitHub OAuth App** with *Device Flow* enabled → its **client id**
    (`PCX_GITHUB_CLIENT_ID`). The device flow uses no client secret.
+   *Optional — to also enable the browser-redirect (web) login:* in the same
+   OAuth App, set the **Authorization callback URL** to
+   `https://<host:port>/auth/web/callback` (e.g.
+   `https://lb7666.top:8443/auth/web/callback`) and generate a **client secret**,
+   then set `PCX_GITHUB_CLIENT_SECRET` (backend.env) + `public_url` (backend.toml)
+   to that same base. One OAuth App + one client id serves both flows; leaving the
+   secret unset keeps the web flow off (device flow still works).
 2. A TLS certificate for the host clients connect to (e.g. `lb7666.top`). The
    simplest path is certbot:
    ```

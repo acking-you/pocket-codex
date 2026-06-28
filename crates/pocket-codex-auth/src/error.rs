@@ -18,6 +18,22 @@ pub enum AuthError {
     /// The presented refresh token is unknown, revoked or expired.
     #[error("invalid or expired refresh token")]
     BadRefresh,
+    /// The web (authorization-code) flow is not configured on this backend
+    /// (no GitHub client secret / public callback URL).
+    #[error("web login flow is not configured")]
+    WebDisabled,
+    /// A web-flow `redirect_uri` was not on the allowlist (custom scheme or
+    /// loopback http only).
+    #[error("redirect_uri is not allowed")]
+    BadRedirect,
+    /// The web-flow `state` was unknown, already consumed, or expired (a stale
+    /// or forged GitHub callback).
+    #[error("invalid or expired web login state")]
+    BadWebState,
+    /// The one-time exchange code was unknown, already redeemed, expired, or
+    /// its PKCE verifier did not match.
+    #[error("invalid or expired exchange code")]
+    BadExchange,
 }
 
 /// Convenience result alias for the auth layer.

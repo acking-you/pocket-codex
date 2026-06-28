@@ -40,6 +40,51 @@ pub struct RefreshToken {
     pub rotated_to: Option<String>,
 }
 
+/// A pending GitHub web (authorization-code) login flow. Tracks one in-flight
+/// browser round-trip; the GitHub `gh_state` keys the callback lookup.
+#[derive(Debug, Clone, PartialEq, Eq, FromRow)]
+pub struct WebAuthFlow {
+    /// Opaque flow id (primary key).
+    pub flow_id: String,
+    /// Random state echoed to GitHub and matched on the callback (CSRF).
+    pub gh_state: String,
+    /// Allow-listed redirect target (custom scheme or loopback http).
+    pub redirect_uri: String,
+    /// The client's own CSRF state, echoed back in the final redirect.
+    pub app_state: String,
+    /// base64url(SHA-256(code_verifier)) — PKCE binding for the app↔backend
+    /// leg.
+    pub code_challenge: String,
+    /// Optional client device label, carried onto the issued refresh token.
+    pub device_label: Option<String>,
+    /// Creation time (unix seconds).
+    pub created_at: i64,
+    /// Expiry time (unix seconds).
+    pub expires_at: i64,
+    /// When the GitHub callback consumed the flow, or `None`.
+    pub consumed_at: Option<i64>,
+}
+
+/// A one-time exchange code minted at the GitHub callback; the client trades it
+/// (with the PKCE verifier) for a session at `/auth/web/exchange`.
+#[derive(Debug, Clone, PartialEq, Eq, FromRow)]
+pub struct WebExchangeCode {
+    /// The opaque one-time code (primary key).
+    pub code: String,
+    /// Owning user id.
+    pub user_id: String,
+    /// Device label to carry onto the issued refresh token.
+    pub device_label: Option<String>,
+    /// PKCE challenge copied from the flow; verified against the verifier.
+    pub code_challenge: String,
+    /// Creation time (unix seconds).
+    pub created_at: i64,
+    /// Expiry time (unix seconds).
+    pub expires_at: i64,
+    /// When the code was redeemed, or `None` while live.
+    pub consumed_at: Option<i64>,
+}
+
 /// A pending GitHub device-flow authorization.
 #[derive(Debug, Clone, PartialEq, Eq, FromRow)]
 pub struct DeviceFlow {

@@ -42,6 +42,37 @@ class RustBridgeApi implements BridgeApi {
   }
 
   @override
+  Future<WebLoginStart> accountWebLoginStart({
+    required String redirectUri,
+    String? backend,
+  }) async {
+    final s = await frb.accountWebLoginStart(
+      redirectUri: redirectUri,
+      backend: backend,
+    );
+    return WebLoginStart(
+      authorizeUrl: s.authorizeUrl,
+      state: s.state,
+      codeVerifier: s.codeVerifier,
+      backend: s.backend,
+    );
+  }
+
+  @override
+  Future<AccountUser> accountWebLoginExchange({
+    required String exchangeCode,
+    required String codeVerifier,
+    required String backend,
+  }) async {
+    final u = await frb.accountWebLoginExchange(
+      exchangeCode: exchangeCode,
+      codeVerifier: codeVerifier,
+      backend: backend,
+    );
+    return AccountUser(login: u.login, accountId: u.accountId);
+  }
+
+  @override
   Future<AccountUser?> accountCurrentUser() async {
     final u = await frb.accountCurrentUser();
     return u == null ? null : AccountUser(login: u.login, accountId: u.accountId);

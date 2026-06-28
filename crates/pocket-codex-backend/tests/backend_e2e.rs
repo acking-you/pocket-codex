@@ -117,10 +117,12 @@ async fn backend_http_and_broker_end_to_end() {
     let auth = Arc::new(
         Auth::new(store, pocket_codex_auth::Config {
             github_client_id: "test-client".to_string(),
+            github_client_secret: None,
             github_scope: "read:user".to_string(),
             jwt_secret: JWT_SECRET.to_string(),
             jwt_ttl_secs: 3600,
             refresh_ttl_secs: 1000,
+            web_callback_url: None,
         })
         .expect("auth"),
     );
