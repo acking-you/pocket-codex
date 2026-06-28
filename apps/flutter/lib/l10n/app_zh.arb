@@ -15,6 +15,11 @@
   "accountSignInButton": "使用 GitHub 登录",
   "accountUseDeviceCode": "改用设备码登录",
   "accountWebFailed": "登录未完成,请重试。",
+  "accountSignedIn": "已登录",
+  "accountSignedInAs": "已登录为 @{login}",
+  "@accountSignedInAs": {
+    "placeholders": { "login": { "type": "String" } }
+  },
   "accountEnterCode": "在 GitHub 上输入此代码以完成登录:",
   "accountCopyCode": "复制代码",
   "accountOpenGitHub": "打开 GitHub",

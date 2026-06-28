@@ -55,6 +55,14 @@ class AppLocalizationsEn extends AppLocalizations {
   String get accountWebFailed => 'Sign-in didn\'t complete. Please try again.';
 
   @override
+  String get accountSignedIn => 'Signed in';
+
+  @override
+  String accountSignedInAs(String login) {
+    return 'Signed in as @$login';
+  }
+
+  @override
   String get accountEnterCode =>
       'Enter this code on GitHub to finish signing in:';
 

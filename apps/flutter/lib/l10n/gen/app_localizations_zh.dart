@@ -55,6 +55,14 @@ class AppLocalizationsZh extends AppLocalizations {
   String get accountWebFailed => '登录未完成,请重试。';
 
   @override
+  String get accountSignedIn => '已登录';
+
+  @override
+  String accountSignedInAs(String login) {
+    return '已登录为 @$login';
+  }
+
+  @override
   String get accountEnterCode => '在 GitHub 上输入此代码以完成登录:';
 
   @override

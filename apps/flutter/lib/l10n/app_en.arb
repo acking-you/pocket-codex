@@ -15,6 +15,11 @@
   "accountSignInButton": "Sign in with GitHub",
   "accountUseDeviceCode": "Use a device code instead",
   "accountWebFailed": "Sign-in didn't complete. Please try again.",
+  "accountSignedIn": "Signed in",
+  "accountSignedInAs": "Signed in as @{login}",
+  "@accountSignedInAs": {
+    "placeholders": { "login": { "type": "String" } }
+  },
   "accountEnterCode": "Enter this code on GitHub to finish signing in:",
   "accountCopyCode": "Copy code",
   "accountOpenGitHub": "Open GitHub",

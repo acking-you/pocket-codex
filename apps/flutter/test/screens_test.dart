@@ -653,10 +653,16 @@ void main() {
     await t.pumpAndSettle();
     // The PRIMARY button is the browser flow (the convenient default).
     await t.tap(find.text('使用 GitHub 登录'));
-    await t
-        .pumpAndSettle(); // start → authenticate → exchange → context.go('/')
+    // Flush the async chain (start → authenticate → exchange → toast + go) with
+    // bounded pumps; pumpAndSettle would advance past the toast's 3s auto-dismiss.
+    for (var i = 0; i < 8; i++) {
+      await t.pump(const Duration(milliseconds: 20));
+    }
     expect(find.text('HOME-ROUTE'), findsOneWidget); // navigated on success
     expect(api.lastWebRedirectUri, isNotNull); // the web flow ran
+    // Success toast (root ScaffoldMessenger) survives the navigation.
+    expect(find.textContaining('octocat'), findsOneWidget);
+    await t.pumpAndSettle(); // drain the SnackBar timer
   });
 
   testWidgets('onboarding: a cancelled browser sign-in shows no error', (
