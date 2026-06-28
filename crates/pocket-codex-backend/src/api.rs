@@ -18,10 +18,10 @@ use pocket_codex_account_proto::{
     },
     key::NamespacedServiceId,
 };
-use serde::Deserialize;
 use pocket_codex_auth::{Auth, AuthError, Claims};
 use pocket_codex_broker_server::BrokerServer;
 use pocket_codex_core::service::{ServiceId, ServiceKind};
+use serde::Deserialize;
 use tower_http::{limit::RequestBodyLimitLayer, timeout::TimeoutLayer, trace::TraceLayer};
 
 /// Shared state for the HTTP handlers.
@@ -160,8 +160,9 @@ async fn web_start(
     Ok(Json(resp))
 }
 
-/// Query params GitHub appends to the backend's OAuth callback. `code` + `state`
-/// on success; `error` (+ `state`) when the user denied or GitHub failed.
+/// Query params GitHub appends to the backend's OAuth callback. `code` +
+/// `state` on success; `error` (+ `state`) when the user denied or GitHub
+/// failed.
 #[derive(Debug, Deserialize)]
 struct WebCallbackQuery {
     code: Option<String>,
@@ -170,11 +171,14 @@ struct WebCallbackQuery {
 }
 
 /// GitHub's redirect lands here. We never return JSON to the browser: on a
-/// recognized flow we 302 the browser back to the app (custom scheme / loopback)
-/// with the one-time exchange code or an error; on an unknown/expired state (or
-/// when the flow is disabled) we render a generic page instead of redirecting
-/// somewhere unvalidated.
-async fn web_callback(State(state): State<AppState>, Query(q): Query<WebCallbackQuery>) -> Response {
+/// recognized flow we 302 the browser back to the app (custom scheme /
+/// loopback) with the one-time exchange code or an error; on an unknown/expired
+/// state (or when the flow is disabled) we render a generic page instead of
+/// redirecting somewhere unvalidated.
+async fn web_callback(
+    State(state): State<AppState>,
+    Query(q): Query<WebCallbackQuery>,
+) -> Response {
     let gh_state = q.state.unwrap_or_default();
     match state
         .auth
@@ -187,7 +191,9 @@ async fn web_callback(State(state): State<AppState>, Query(q): Query<WebCallback
         ),
         Err(e) => {
             tracing::error!(error = %e, "web callback failed");
-            web_callback_page("Something went wrong signing in. Return to Pocket-Codex and try again.")
+            web_callback_page(
+                "Something went wrong signing in. Return to Pocket-Codex and try again.",
+            )
         },
     }
 }
@@ -196,12 +202,11 @@ async fn web_callback(State(state): State<AppState>, Query(q): Query<WebCallback
 /// back into the app (unknown state, disabled flow, or an internal error).
 fn web_callback_page(message: &str) -> Response {
     let body = format!(
-        "<!doctype html><html><head><meta charset=\"utf-8\">\
-         <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
-         <title>Pocket-Codex</title></head>\
-         <body style=\"font-family: system-ui, sans-serif; max-width: 28rem; margin: 4rem auto; \
-         padding: 0 1.5rem; text-align: center; color: #1a1a1a;\">\
-         <h1 style=\"font-size: 1.25rem;\">Pocket-Codex</h1><p>{message}</p></body></html>"
+        "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" \
+         content=\"width=device-width, initial-scale=1\"><title>Pocket-Codex</title></head><body \
+         style=\"font-family: system-ui, sans-serif; max-width: 28rem; margin: 4rem auto; \
+         padding: 0 1.5rem; text-align: center; color: #1a1a1a;\"><h1 style=\"font-size: \
+         1.25rem;\">Pocket-Codex</h1><p>{message}</p></body></html>"
     );
     Html(body).into_response()
 }

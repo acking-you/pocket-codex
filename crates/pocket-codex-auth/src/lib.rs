@@ -72,7 +72,8 @@ pub struct Auth {
     jwt_ttl_secs: i64,
     refresh_ttl_secs: i64,
     scope: String,
-    /// Web-flow secrets, or `None` when the authorization-code flow is disabled.
+    /// Web-flow secrets, or `None` when the authorization-code flow is
+    /// disabled.
     web: Option<WebConfig>,
 }
 
@@ -216,9 +217,9 @@ impl Auth {
     /// Returns where to redirect the browser next (the client's `redirect_uri`
     /// with `?exchange_code=…&state=…`, or `?error=…&state=…`).
     ///
-    /// An unknown/expired/duplicate `state` yields [`AuthError::BadWebState`] so
-    /// the caller can render a generic page rather than redirect somewhere
-    /// unvalidated.
+    /// An unknown/expired/duplicate `state` yields [`AuthError::BadWebState`]
+    /// so the caller can render a generic page rather than redirect
+    /// somewhere unvalidated.
     pub async fn web_callback(
         &self,
         code: Option<&str>,
@@ -278,17 +279,14 @@ impl Auth {
                 now + WEB_EXCHANGE_TTL_SECS,
             )
             .await?;
-        Ok(WebCallbackRedirect::success(
-            &flow.redirect_uri,
-            &flow.app_state,
-            &exchange_code,
-        ))
+        Ok(WebCallbackRedirect::success(&flow.redirect_uri, &flow.app_state, &exchange_code))
     }
 
     /// Redeem a one-time exchange code (with its PKCE verifier) for a session,
-    /// the same credential the device flow issues. The verifier must hash to the
-    /// challenge captured at `web_start`, so a party that only intercepted the
-    /// redirect (e.g. a custom-scheme hijacker) cannot redeem it.
+    /// the same credential the device flow issues. The verifier must hash to
+    /// the challenge captured at `web_start`, so a party that only
+    /// intercepted the redirect (e.g. a custom-scheme hijacker) cannot
+    /// redeem it.
     pub async fn web_exchange(
         &self,
         exchange_code: &str,
@@ -466,13 +464,14 @@ pub struct WebCallbackRedirect {
 }
 
 impl WebCallbackRedirect {
-    /// A success redirect carrying the one-time exchange code + the app's state.
+    /// A success redirect carrying the one-time exchange code + the app's
+    /// state.
     fn success(redirect_uri: &str, app_state: &str, exchange_code: &str) -> Self {
         Self {
-            location: build_redirect(
-                redirect_uri,
-                &[("exchange_code", exchange_code), ("state", app_state)],
-            ),
+            location: build_redirect(redirect_uri, &[
+                ("exchange_code", exchange_code),
+                ("state", app_state),
+            ]),
         }
     }
 
@@ -645,7 +644,9 @@ mod tests {
         let disabled = Auth::new(store, cfg(false)).expect("auth");
         assert!(!disabled.web_enabled());
         assert!(matches!(
-            disabled.web_start("pocketcodex://auth", "s", "c", None, 0).await,
+            disabled
+                .web_start("pocketcodex://auth", "s", "c", None, 0)
+                .await,
             Err(AuthError::WebDisabled)
         ));
 
@@ -655,7 +656,9 @@ mod tests {
         let enabled = Auth::new(store, cfg(true)).expect("auth");
         assert!(enabled.web_enabled());
         assert!(matches!(
-            enabled.web_start("https://evil.example/cb", "s", "c", None, 0).await,
+            enabled
+                .web_start("https://evil.example/cb", "s", "c", None, 0)
+                .await,
             Err(AuthError::BadRedirect)
         ));
     }

@@ -940,13 +940,14 @@ pub struct WebLoginStartDto {
     pub state: String,
     /// PKCE verifier to pass back to [`account_web_login_exchange`].
     pub code_verifier: String,
-    /// Resolved backend base URL to echo back to [`account_web_login_exchange`].
+    /// Resolved backend base URL to echo back to
+    /// [`account_web_login_exchange`].
     pub backend: String,
 }
 
 /// Begin a web (browser-redirect) GitHub login. `redirect_uri` is the
-/// platform-specific callback the browser returns to (the app's custom scheme on
-/// mobile, a loopback URL on desktop). `backend` overrides the configured /
+/// platform-specific callback the browser returns to (the app's custom scheme
+/// on mobile, a loopback URL on desktop). `backend` overrides the configured /
 /// default backend (and is remembered on a successful exchange).
 pub fn account_web_login_start(
     redirect_uri: String,
@@ -967,8 +968,8 @@ pub fn account_web_login_start(
 }
 
 /// Redeem the one-time `exchange_code` (with its PKCE `code_verifier`) from the
-/// browser redirect. On success the session is persisted and the app switches to
-/// account mode. Returns the signed-in identity.
+/// browser redirect. On success the session is persisted and the app switches
+/// to account mode. Returns the signed-in identity.
 pub fn account_web_login_exchange(
     exchange_code: String,
     code_verifier: String,

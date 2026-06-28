@@ -27,9 +27,9 @@ pub struct ServerConfig {
     /// GitHub OAuth app client id (Device Flow enabled).
     pub github_client_id: String,
     /// GitHub OAuth app client secret. Required ONLY for the web
-    /// (authorization-code / browser-redirect) login flow; the device flow needs
-    /// none. Leave unset to keep the web flow disabled (its endpoints then return
-    /// 503 while the device flow keeps working).
+    /// (authorization-code / browser-redirect) login flow; the device flow
+    /// needs none. Leave unset to keep the web flow disabled (its endpoints
+    /// then return 503 while the device flow keeps working).
     #[serde(default)]
     pub github_client_secret: Option<String>,
     /// Public base URL the browser reaches this backend at (e.g.

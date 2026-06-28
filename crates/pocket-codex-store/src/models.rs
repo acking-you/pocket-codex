@@ -52,7 +52,8 @@ pub struct WebAuthFlow {
     pub redirect_uri: String,
     /// The client's own CSRF state, echoed back in the final redirect.
     pub app_state: String,
-    /// base64url(SHA-256(code_verifier)) — PKCE binding for the app↔backend leg.
+    /// base64url(SHA-256(code_verifier)) — PKCE binding for the app↔backend
+    /// leg.
     pub code_challenge: String,
     /// Optional client device label, carried onto the issued refresh token.
     pub device_label: Option<String>,

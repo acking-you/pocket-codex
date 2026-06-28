@@ -1,7 +1,7 @@
-//! Web (authorization-code) login-flow queries: the in-flight browser round-trip
-//! (`web_auth_flows`) and the single-use exchange codes (`web_exchange_codes`).
-//! Both enforce once-only consumption via a conditional UPDATE so a replayed
-//! callback / redeem is a no-op.
+//! Web (authorization-code) login-flow queries: the in-flight browser
+//! round-trip (`web_auth_flows`) and the single-use exchange codes
+//! (`web_exchange_codes`). Both enforce once-only consumption via a conditional
+//! UPDATE so a replayed callback / redeem is a no-op.
 
 use crate::{
     models::{WebAuthFlow, WebExchangeCode},
@@ -41,7 +41,8 @@ impl Store {
         Ok(())
     }
 
-    /// Fetch a web login flow by the GitHub `gh_state` returned on the callback.
+    /// Fetch a web login flow by the GitHub `gh_state` returned on the
+    /// callback.
     pub async fn web_flow_by_state(&self, gh_state: &str) -> Result<Option<WebAuthFlow>> {
         let flow = sqlx::query_as::<_, WebAuthFlow>(
             "SELECT flow_id, gh_state, redirect_uri, app_state, code_challenge, device_label, \
@@ -66,8 +67,8 @@ impl Store {
         Ok(res.rows_affected() > 0)
     }
 
-    /// Store a one-time exchange code for a user, carrying the PKCE challenge so
-    /// the redeem can verify the client's code verifier.
+    /// Store a one-time exchange code for a user, carrying the PKCE challenge
+    /// so the redeem can verify the client's code verifier.
     pub async fn insert_web_exchange(
         &self,
         code: &str,

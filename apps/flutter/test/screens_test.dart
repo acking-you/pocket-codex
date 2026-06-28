@@ -625,7 +625,9 @@ void main() {
 
   testWidgets('onboarding: browser sign-in (default) exchanges and navigates '
       'home', (t) async {
-    final api = FakeBridgeApi(config: const ConfigInfo(relay: '', hasKey: false));
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: '', hasKey: false),
+    );
     await t.pumpWidget(
       _routerHost(
         api,
@@ -651,7 +653,8 @@ void main() {
     await t.pumpAndSettle();
     // The PRIMARY button is the browser flow (the convenient default).
     await t.tap(find.text('使用 GitHub 登录'));
-    await t.pumpAndSettle(); // start → authenticate → exchange → context.go('/')
+    await t
+        .pumpAndSettle(); // start → authenticate → exchange → context.go('/')
     expect(find.text('HOME-ROUTE'), findsOneWidget); // navigated on success
     expect(api.lastWebRedirectUri, isNotNull); // the web flow ran
   });
@@ -659,7 +662,9 @@ void main() {
   testWidgets('onboarding: a cancelled browser sign-in shows no error', (
     t,
   ) async {
-    final api = FakeBridgeApi(config: const ConfigInfo(relay: '', hasKey: false));
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: '', hasKey: false),
+    );
     await t.pumpWidget(
       _routerHost(
         api,
@@ -686,7 +691,10 @@ void main() {
     await t.pumpAndSettle();
     // A user-cancelled tab is a silent abort: still on onboarding, no error.
     expect(find.text('HOME-ROUTE'), findsNothing);
-    expect(find.text('使用 GitHub 登录'), findsOneWidget); // back on the sign-in button
+    expect(
+      find.text('使用 GitHub 登录'),
+      findsOneWidget,
+    ); // back on the sign-in button
   });
 
   testWidgets('settings: account sign-out clears the user and returns to '

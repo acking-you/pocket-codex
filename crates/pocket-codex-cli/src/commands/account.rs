@@ -87,8 +87,8 @@ pub(crate) async fn login(backend_flag: Option<&str>, web: bool) -> Result<()> {
     }
 }
 
-/// The GitHub device flow: show a code to enter at github.com/login/device, then
-/// poll until authorized.
+/// The GitHub device flow: show a code to enter at github.com/login/device,
+/// then poll until authorized.
 async fn login_device(backend_flag: Option<&str>) -> Result<()> {
     let mut config = Config::load()?;
     let base = backend_base(backend_flag, &config);
@@ -211,12 +211,10 @@ async fn login_web(backend_flag: Option<&str>) -> Result<()> {
     // Wait for the browser redirect (bounded). The helper loops past empty
     // preconnects and unrelated paths (e.g. /favicon.ico) so a stray first
     // connection can't abort an otherwise-successful sign-in.
-    let exchange_code = tokio::time::timeout(
-        Duration::from_secs(300),
-        await_web_callback(&listener, &state),
-    )
-    .await
-    .context("timed out waiting for the browser redirect")??;
+    let exchange_code =
+        tokio::time::timeout(Duration::from_secs(300), await_web_callback(&listener, &state))
+            .await
+            .context("timed out waiting for the browser redirect")??;
 
     let resp: WebExchangeResponse = client
         .post(format!("{base}/auth/web/exchange"))
@@ -250,9 +248,9 @@ async fn login_web(backend_flag: Option<&str>) -> Result<()> {
 
 /// Accept loopback connections until the browser delivers the OAuth redirect
 /// (one carrying `exchange_code` or `error`), skipping empty preconnects and
-/// unrelated paths (e.g. `/favicon.ico`) so a stray first connection can't abort
-/// an otherwise-successful sign-in. Validates the CSRF `state`, writes a closing
-/// page to the browser, and returns the one-time exchange code.
+/// unrelated paths (e.g. `/favicon.ico`) so a stray first connection can't
+/// abort an otherwise-successful sign-in. Validates the CSRF `state`, writes a
+/// closing page to the browser, and returns the one-time exchange code.
 async fn await_web_callback(
     listener: &tokio::net::TcpListener,
     expected_state: &str,
@@ -300,13 +298,13 @@ async fn await_web_callback(
             "Sign-in could not be completed. You can close this tab and try again."
         };
         let body = format!(
-            "<!doctype html><meta charset=\"utf-8\"><title>Pocket-Codex</title>\
-             <p style=\"font-family: system-ui, sans-serif; text-align:center; margin-top:4rem\">\
-             {message}</p>"
+            "<!doctype html><meta charset=\"utf-8\"><title>Pocket-Codex</title><p \
+             style=\"font-family: system-ui, sans-serif; text-align:center; \
+             margin-top:4rem\">{message}</p>"
         );
         let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\n\
-             Connection: close\r\n\r\n{}",
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: \
+             {}\r\nConnection: close\r\n\r\n{}",
             body.len(),
             body
         );

@@ -114,9 +114,9 @@ impl GitHub {
         format!("{AUTHORIZE_URL}?{query}")
     }
 
-    /// Exchange an authorization code for an access token (web flow). Unlike the
-    /// device flow this requires the OAuth app's `client_secret`, which is held
-    /// only on the backend.
+    /// Exchange an authorization code for an access token (web flow). Unlike
+    /// the device flow this requires the OAuth app's `client_secret`, which
+    /// is held only on the backend.
     pub(crate) async fn exchange_code(
         &self,
         client_secret: &str,

@@ -72,14 +72,14 @@ pub struct DevicePollResponse {
 pub struct WebStartRequest {
     /// Where the backend sends the browser at the end of the flow: the app's
     /// custom-scheme deep link (`pocketcodex://…`) or a loopback `http://` URL.
-    /// The backend rejects anything else so the one-time exchange code can never
-    /// be redirected off-device.
+    /// The backend rejects anything else so the one-time exchange code can
+    /// never be redirected off-device.
     pub redirect_uri: String,
     /// The client's own CSRF state; echoed back in the final redirect so the
     /// client can confirm the response matches its request.
     pub state: String,
-    /// PKCE `base64url(SHA-256(code_verifier))`. Binds the eventual exchange code
-    /// to this client (which alone holds the verifier).
+    /// PKCE `base64url(SHA-256(code_verifier))`. Binds the eventual exchange
+    /// code to this client (which alone holds the verifier).
     pub code_challenge: String,
     /// Optional human label for the session (e.g. hostname), carried onto the
     /// issued refresh token.

@@ -30,8 +30,8 @@ pub enum AuthError {
     /// or forged GitHub callback).
     #[error("invalid or expired web login state")]
     BadWebState,
-    /// The one-time exchange code was unknown, already redeemed, expired, or its
-    /// PKCE verifier did not match.
+    /// The one-time exchange code was unknown, already redeemed, expired, or
+    /// its PKCE verifier did not match.
     #[error("invalid or expired exchange code")]
     BadExchange,
 }

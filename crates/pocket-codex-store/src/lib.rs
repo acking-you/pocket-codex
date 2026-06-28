@@ -225,8 +225,14 @@ mod tests {
             .is_none());
 
         // Redeem-once.
-        assert!(store.consume_web_exchange("xc1", 100).await.expect("consume"));
-        assert!(!store.consume_web_exchange("xc1", 100).await.expect("consume"));
+        assert!(store
+            .consume_web_exchange("xc1", 100)
+            .await
+            .expect("consume"));
+        assert!(!store
+            .consume_web_exchange("xc1", 100)
+            .await
+            .expect("consume"));
         // Consumed → no longer active.
         assert!(store
             .active_web_exchange("xc1", 100)
