@@ -36,7 +36,10 @@
   "appServerServices": "App-server services",
   "navApi": "API",
   "navAppServer": "App-server",
+  "navSessions": "Sessions",
   "navHosting": "Hosting",
+  "sessionsHostLabel": "Host",
+  "sessionsNoHost": "Connect an app-server first, then its sessions show here.",
   "appServerSubtitle": "{device} · remote control",
   "@appServerSubtitle": {
     "placeholders": { "device": { "type": "String" } }

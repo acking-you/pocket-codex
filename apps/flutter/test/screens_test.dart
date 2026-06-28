@@ -121,6 +121,49 @@ void main() {
     expect(find.byKey(const Key('svc-pcx:lb7666:app:default')), findsOneWidget);
   });
 
+  testWidgets('Sessions tab: picks a host and lists its remote sessions', (
+    t,
+  ) async {
+    // Account mode shows the Sessions tab; one app-server host is connectable.
+    final api =
+        FakeBridgeApi(
+            config: const ConfigInfo(
+              relay: '',
+              hasKey: false,
+              mode: 'account',
+              accountLogin: 'acking-you',
+            ),
+            services: const [
+              ServiceEntry(
+                device: 'lb7666',
+                kind: 'app',
+                name: 'default',
+                key: 'pcx:lb7666:app:default',
+              ),
+            ],
+          )
+          ..localSessions = const [
+            LocalSession(
+              threadId: 't-remote',
+              preview: 'hello from the host',
+              updatedAt: 0,
+              turnState: 'completed',
+              heldOpen: false,
+              safety: 'resumable',
+              allowsResume: true,
+              requiresTakeover: false,
+            ),
+          ];
+    await t.pumpWidget(_host(const ServicesScreen(), api));
+    await t.pumpAndSettle();
+    await _selectSection(t, '会话'); // Sessions tab (zh)
+    // Host picker at the top + the picked host's session over its meta tunnel.
+    expect(find.byKey(const Key('sessions-host-picker')), findsOneWidget);
+    expect(find.text('hello from the host'), findsOneWidget);
+    // The resume action targets the meta service (the host resumes itself).
+    expect(find.byKey(const Key('resume-t-remote')), findsOneWidget);
+  });
+
   testWidgets('Services shows error state with retry', (t) async {
     final api = FakeBridgeApi(
       config: const ConfigInfo(relay: 'r:1', hasKey: true),

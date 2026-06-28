@@ -58,6 +58,7 @@ GoRouter buildRouter({
         threadId: s.uri.queryParameters['tid']!,
         cwd: s.uri.queryParameters['cwd'],
         preview: s.uri.queryParameters['preview'],
+        serviceKey: s.uri.queryParameters['svc'],
       ),
     ),
     GoRoute(

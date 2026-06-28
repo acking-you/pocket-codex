@@ -111,7 +111,16 @@ class AppLocalizationsZh extends AppLocalizations {
   String get navAppServer => 'App-server';
 
   @override
+  String get navSessions => '会话';
+
+  @override
   String get navHosting => '托管';
+
+  @override
+  String get sessionsHostLabel => '主机';
+
+  @override
+  String get sessionsNoHost => '请先连接一个 app-server，其会话会显示在这里。';
 
   @override
   String appServerSubtitle(String device) {

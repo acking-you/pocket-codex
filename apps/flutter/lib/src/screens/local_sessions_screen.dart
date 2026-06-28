@@ -11,16 +11,59 @@ import 'package:pocket_codex/src/time_ago.dart';
 import 'package:pocket_codex/src/widgets/loading.dart';
 import 'package:pocket_codex/src/widgets/status_dots.dart';
 
-/// Lists codex sessions under the shared `CODEX_HOME` — including ones created
-/// by the desktop app / CLI / VS Code extension — annotated with whether each
-/// is safe to resume, and lets the user force-take-over a finished session that
+/// Where a sessions view reads from: this machine's `CODEX_HOME` directly
+/// ([SessionSource.local]), or a (possibly remote) host's CODEX_HOME over its
+/// meta tunnel, keyed by that host's app-server [serviceKey]
+/// ([SessionSource.remote]). The remote source is what makes a desktop host's
+/// sessions viewable + resumable from a phone (and, since a meta tunnel hosted
+/// by this app is served over loopback, the same path covers local hosting).
+class SessionSource {
+  /// Read this machine's sessions directly.
+  const SessionSource.local() : serviceKey = null;
+
+  /// Read the host behind [key]'s sessions over its meta tunnel.
+  const SessionSource.remote(String key) : serviceKey = key;
+
+  /// The app-server service key whose host to read, or null for local.
+  final String? serviceKey;
+
+  /// Whether this reads a (possibly remote) host over the meta tunnel.
+  bool get isRemote => serviceKey != null;
+
+  /// List the source's sessions.
+  Future<List<LocalSession>> list(BridgeApi b) =>
+      serviceKey == null ? b.appLocalSessions() : b.metaSessions(serviceKey!);
+
+  /// One session's liveness from the source.
+  Future<SessionLiveness> liveness(BridgeApi b, String threadId) =>
+      serviceKey == null
+      ? b.appSessionLiveness(threadId)
+      : b.metaSessionLiveness(serviceKey!, threadId);
+
+  /// One session's read-only transcript from the source.
+  Future<List<ThreadItem>> transcript(BridgeApi b, String threadId) =>
+      serviceKey == null
+      ? b.appLocalSessionTranscript(threadId)
+      : b.metaSessionTranscript(serviceKey!, threadId);
+}
+
+/// Lists codex sessions under a host's `CODEX_HOME` — including ones created by
+/// the desktop app / CLI / VS Code extension — annotated with whether each is
+/// safe to resume, and lets the user force-take-over a finished session that
 /// another process still holds open.
 ///
-/// The listing and liveness reads run locally (no app-server connection
-/// needed); the actual resume targets the first connected app-server service.
+/// With the default [SessionSource.local] it reads this machine directly (the
+/// standalone `/sessions` screen). With a [SessionSource.remote] it reads a
+/// (possibly remote) host over its meta tunnel — the Sessions tab embeds it that
+/// way, one instance per picked host.
 class LocalSessionsScreen extends ConsumerStatefulWidget {
   /// Default constructor.
-  const LocalSessionsScreen({super.key, this.clock});
+  const LocalSessionsScreen({
+    super.key,
+    this.clock,
+    this.source = const SessionSource.local(),
+    this.embedded = false,
+  });
 
   /// Clock used to bucket sessions by activity time (今天 / 更早) and to render
   /// relative times. Defaults to [DateTime.now]; injectable so tests can pin
@@ -28,6 +71,13 @@ class LocalSessionsScreen extends ConsumerStatefulWidget {
   /// suite runs just after midnight (UTC): minutes-ago "today" timestamps fall
   /// into the previous calendar day and the 今天 group renders empty.
   final DateTime Function()? clock;
+
+  /// Where to read sessions from (local machine vs a host's meta tunnel).
+  final SessionSource source;
+
+  /// When true, render only the body (no Scaffold/AppBar) so a parent screen
+  /// (the Sessions tab) can host it under its own chrome.
+  final bool embedded;
 
   @override
   ConsumerState<LocalSessionsScreen> createState() => _LocalSessionsState();
@@ -51,7 +101,7 @@ class _LocalSessionsState extends ConsumerState<LocalSessionsScreen> {
       _error = null;
     });
     try {
-      final sessions = await ref.read(bridgeApiProvider).appLocalSessions();
+      final sessions = await widget.source.list(ref.read(bridgeApiProvider));
       if (!mounted) return;
       setState(() {
         _sessions = sessions;
@@ -72,9 +122,10 @@ class _LocalSessionsState extends ConsumerState<LocalSessionsScreen> {
     var holders = const <Holder>[];
     if (session.requiresTakeover) {
       try {
-        final liveness = await ref
-            .read(bridgeApiProvider)
-            .appSessionLiveness(session.threadId);
+        final liveness = await widget.source.liveness(
+          ref.read(bridgeApiProvider),
+          session.threadId,
+        );
         holders = liveness.holders;
       } catch (_) {
         // Best-effort; the dialog still warns, just without names.
@@ -88,12 +139,20 @@ class _LocalSessionsState extends ConsumerState<LocalSessionsScreen> {
       cwd: session.cwd,
       requiresTakeover: session.requiresTakeover,
       holders: holders,
+      source: widget.source,
     );
   }
 
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
+    final body = AnimatedSwitcher(
+      duration: const Duration(milliseconds: 250),
+      child: _buildBody(l10n),
+    );
+    // Embedded in the Sessions tab: the parent provides the chrome, so render
+    // the body only (refresh is pull-to-refresh + the host picker's button).
+    if (widget.embedded) return body;
     return Scaffold(
       appBar: AppBar(
         title: Text(l10n.localSessionsTitle),
@@ -106,10 +165,7 @@ class _LocalSessionsState extends ConsumerState<LocalSessionsScreen> {
           ),
         ],
       ),
-      body: AnimatedSwitcher(
-        duration: const Duration(milliseconds: 250),
-        child: _buildBody(l10n),
-      ),
+      body: body,
     );
   }
 
@@ -189,7 +245,12 @@ class _LocalSessionsState extends ConsumerState<LocalSessionsScreen> {
       rows.add(_sectionLabel(label));
       rows.addAll(
         items.map(
-          (s) => _SessionRow(session: s, now: now, onResume: _onResume),
+          (s) => _SessionRow(
+            session: s,
+            now: now,
+            onResume: _onResume,
+            serviceKey: widget.source.serviceKey,
+          ),
         ),
       );
     }
@@ -273,11 +334,16 @@ class _SessionRow extends StatelessWidget {
     required this.session,
     required this.now,
     required this.onResume,
+    this.serviceKey,
   });
 
   final LocalSession session;
   final DateTime now;
   final Future<void> Function(LocalSession) onResume;
+
+  /// The remote host's app-server key, carried into the viewer route so it reads
+  /// the transcript over the meta tunnel; null for the local source.
+  final String? serviceKey;
 
   @override
   Widget build(BuildContext context) {
@@ -304,6 +370,7 @@ class _SessionRow extends StatelessWidget {
           if (session.cwd != null && session.cwd!.trim().isNotEmpty)
             'cwd=${Uri.encodeComponent(session.cwd!.trim())}',
           if (preview.isNotEmpty) 'preview=${Uri.encodeComponent(preview)}',
+          if (serviceKey != null) 'svc=${Uri.encodeComponent(serviceKey!)}',
         ];
         context.push('/sessions/view?${q.join('&')}');
       },
@@ -422,13 +489,22 @@ Future<void> resumeLocalSession(
   String? cwd,
   required bool requiresTakeover,
   List<Holder> holders = const [],
+  SessionSource source = const SessionSource.local(),
 }) async {
   final l10n = AppLocalizations.of(context);
   final messenger = ScaffoldMessenger.of(context);
-  // Ensure a live app-server to resume into (connect one if needed) rather than
-  // requiring the user to have opened an app-server first.
-  final target = await ensureResumeTarget(ref);
-  if (!context.mounted) return;
+  // Resolve the app-server to resume into. For a remote host that IS the host
+  // behind the source key: it evicts + resumes into its own colocated
+  // app-server, so the target is simply that key. For the local source, ensure
+  // a live app-server (connect one if needed) rather than requiring the user to
+  // have opened one first.
+  final String? target;
+  if (source.isRemote) {
+    target = source.serviceKey;
+  } else {
+    target = await ensureResumeTarget(ref);
+    if (!context.mounted) return;
+  }
 
   if (requiresTakeover) {
     final confirmed = await showDialog<bool>(
@@ -445,7 +521,12 @@ Future<void> resumeLocalSession(
 
   ForceResumeReport report;
   try {
-    report = await ref.read(bridgeApiProvider).appForceResume(target, threadId);
+    final bridge = ref.read(bridgeApiProvider);
+    // Remote: the host does the eviction + resume over loopback into its own
+    // app-server. Local: we evict + resume into the resolved target ourselves.
+    report = source.isRemote
+        ? await bridge.metaForceResume(target, threadId)
+        : await bridge.appForceResume(target, threadId);
   } catch (e) {
     messenger.showSnackBar(SnackBar(content: Text(friendlyError(e))));
     return;

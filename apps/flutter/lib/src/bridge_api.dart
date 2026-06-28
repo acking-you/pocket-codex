@@ -885,7 +885,10 @@ abstract interface class BridgeApi {
   Future<List<LocalSession>> metaSessions(String serviceKey);
 
   /// Remote analogue of [appSessionLiveness].
-  Future<SessionLiveness> metaSessionLiveness(String serviceKey, String threadId);
+  Future<SessionLiveness> metaSessionLiveness(
+    String serviceKey,
+    String threadId,
+  );
 
   /// Remote analogue of [appLocalSessionTranscript].
   Future<List<ThreadItem>> metaSessionTranscript(
