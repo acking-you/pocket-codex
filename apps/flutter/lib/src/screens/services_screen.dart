@@ -76,6 +76,34 @@ class _ServicesScreenState extends ConsumerState<ServicesScreen>
     final servicesAsync = ref.watch(servicesProvider);
     final config = ref.watch(configProvider).valueOrNull;
     final selectedKey = ref.watch(selectedApiKeyProvider);
+    final wide = MediaQuery.of(context).size.width >= 600;
+    final account = config?.mode == 'account';
+
+    // Sections shown as responsive tabs. Local hosting only where it's supported
+    // (desktop) + in account mode, so the tab set differs by platform — we drive
+    // the nav off this stable list and a section ENUM (not a raw index) so a
+    // hidden section never mis-selects.
+    final sections = <ServicesSection>[
+      ServicesSection.api,
+      ServicesSection.appServer,
+      if (_hostingSupported && account) ServicesSection.hosting,
+    ];
+    var section = ref.watch(servicesSectionProvider);
+    if (!sections.contains(section)) section = ServicesSection.api;
+    final selectedIndex = sections.indexOf(section);
+    void selectIndex(int i) =>
+        ref.read(servicesSectionProvider.notifier).state = sections[i];
+    IconData iconFor(ServicesSection s) => switch (s) {
+      ServicesSection.api => Icons.api,
+      ServicesSection.appServer => Icons.smart_toy_outlined,
+      ServicesSection.hosting => Icons.dns_outlined,
+    };
+    String labelFor(ServicesSection s) => switch (s) {
+      ServicesSection.api => l10n.navApi,
+      ServicesSection.appServer => l10n.navAppServer,
+      ServicesSection.hosting => l10n.navHosting,
+    };
+
     return Scaffold(
       appBar: AppBar(
         title: Row(
@@ -117,6 +145,21 @@ class _ServicesScreenState extends ConsumerState<ServicesScreen>
           ),
         ],
       ),
+      // Mobile: bottom tab bar. Desktop uses a side rail in the body (below).
+      bottomNavigationBar: wide
+          ? null
+          : NavigationBar(
+              key: const Key('services-nav-bar'),
+              selectedIndex: selectedIndex,
+              onDestinationSelected: selectIndex,
+              destinations: [
+                for (final s in sections)
+                  NavigationDestination(
+                    icon: Icon(iconFor(s)),
+                    label: labelFor(s),
+                  ),
+              ],
+            ),
       body: AnimatedSwitcher(
         duration: const Duration(milliseconds: 250),
         child: servicesAsync.when(
@@ -129,69 +172,84 @@ class _ServicesScreenState extends ConsumerState<ServicesScreen>
               onRetry: () => ref.invalidate(servicesProvider),
             ),
           ),
-          data: (services) => RefreshIndicator(
-            key: const ValueKey('svc-data'),
-            onRefresh: () async => ref.invalidate(servicesProvider),
-            child: LayoutBuilder(
-              builder: (context, c) {
-                final wide = c.maxWidth >= 600;
-                final apiServices = services
-                    .where((s) => s.kind == 'api')
-                    .toList();
-                final selected =
-                    apiServices
-                        .where((s) => s.key == selectedKey)
-                        .firstOrNull ??
-                    apiServices.firstOrNull;
-                final list = _ServiceList(
-                  relay: config?.relay,
-                  accountLogin: config?.mode == 'account'
-                      ? config?.accountLogin
-                      : null,
-                  services: services,
-                  // Only the inline detail pane has a "current" service worth
-                  // highlighting; in narrow mode tapping pushes a route instead.
-                  highlightKey: wide ? selected?.key : null,
-                  onTapApi: (key) {
-                    if (wide) {
-                      ref.read(selectedApiKeyProvider.notifier).state = key;
-                    } else {
-                      context.push('/api/$key');
-                    }
-                  },
-                  // App-server sessions are a full-screen chat; always push a
-                  // route (no embedded pane) regardless of layout width.
-                  onTapApp: (key) =>
-                      context.push('/app/${Uri.encodeComponent(key)}'),
-                );
-                if (!wide) return list;
-                return Row(
-                  children: [
-                    SizedBox(width: 360, child: list),
-                    const VerticalDivider(width: 1),
-                    Expanded(
-                      child: selected == null
-                          ? Center(child: Text(l10n.selectApiService))
-                          // Keep the detail readable instead of stretching the
-                          // form across a wide pane: a centred, capped column.
-                          : Center(
-                              child: ConstrainedBox(
-                                constraints: const BoxConstraints(
-                                  maxWidth: 460,
-                                ),
-                                child: ApiServiceScreen(
-                                  key: ValueKey(selected.key),
-                                  serviceKey: selected.key,
-                                  embedded: true,
+          data: (services) {
+            final apiServices = services.where((s) => s.kind == 'api').toList();
+            final selected =
+                apiServices.where((s) => s.key == selectedKey).firstOrNull ??
+                apiServices.firstOrNull;
+            final list = _ServiceList(
+              section: section,
+              relay: config?.relay,
+              accountLogin: account ? config?.accountLogin : null,
+              services: services,
+              // Only the inline API detail pane (desktop, API tab) has a
+              // "current" service worth highlighting; narrow taps push a route.
+              highlightKey: (wide && section == ServicesSection.api)
+                  ? selected?.key
+                  : null,
+              onTapApi: (key) {
+                if (wide) {
+                  ref.read(selectedApiKeyProvider.notifier).state = key;
+                } else {
+                  context.push('/api/$key');
+                }
+              },
+              // App-server sessions are a full-screen chat; always push a route.
+              onTapApp: (key) =>
+                  context.push('/app/${Uri.encodeComponent(key)}'),
+            );
+            // Desktop API tab keeps the master-detail (list + inline detail);
+            // every other tab is just the section list, full width.
+            final Widget content = wide && section == ServicesSection.api
+                ? Row(
+                    children: [
+                      SizedBox(width: 360, child: list),
+                      const VerticalDivider(width: 1),
+                      Expanded(
+                        child: selected == null
+                            ? Center(child: Text(l10n.selectApiService))
+                            : Center(
+                                child: ConstrainedBox(
+                                  constraints: const BoxConstraints(
+                                    maxWidth: 460,
+                                  ),
+                                  child: ApiServiceScreen(
+                                    key: ValueKey(selected.key),
+                                    serviceKey: selected.key,
+                                    embedded: true,
+                                  ),
                                 ),
                               ),
+                      ),
+                    ],
+                  )
+                : list;
+            final scrollable = RefreshIndicator(
+              onRefresh: () async => ref.invalidate(servicesProvider),
+              child: content,
+            );
+            final body = wide
+                ? Row(
+                    children: [
+                      NavigationRail(
+                        selectedIndex: selectedIndex,
+                        onDestinationSelected: selectIndex,
+                        labelType: NavigationRailLabelType.all,
+                        destinations: [
+                          for (final s in sections)
+                            NavigationRailDestination(
+                              icon: Icon(iconFor(s)),
+                              label: Text(labelFor(s)),
                             ),
-                    ),
-                  ],
-                );
-              },
-            ),
-          ),
+                        ],
+                      ),
+                      const VerticalDivider(width: 1),
+                      Expanded(child: scrollable),
+                    ],
+                  )
+                : scrollable;
+            return KeyedSubtree(key: const ValueKey('svc-data'), child: body);
+          },
         ),
       ),
     );
@@ -200,6 +258,7 @@ class _ServicesScreenState extends ConsumerState<ServicesScreen>
 
 class _ServiceList extends ConsumerWidget {
   const _ServiceList({
+    required this.section,
     required this.relay,
     required this.accountLogin,
     required this.services,
@@ -207,6 +266,10 @@ class _ServiceList extends ConsumerWidget {
     required this.onTapApp,
     this.highlightKey,
   });
+
+  /// Which section's cards this list renders (the selected responsive tab). The
+  /// relay/account banner shows on every section.
+  final ServicesSection section;
   final String? relay;
 
   /// The signed-in GitHub login in account mode (null in self-host mode), shown
@@ -331,6 +394,112 @@ class _ServiceList extends ConsumerWidget {
           );
     }
 
+    Widget apiCard(ServiceEntry s) {
+      final (status, reason) = apiStatus(s);
+      return _ServiceCard(
+        key: Key('svc-${s.key}'),
+        icon: Icons.api,
+        iconBg: scheme.secondaryContainer,
+        iconFg: scheme.onSecondaryContainer,
+        title: s.name,
+        subtitle: s.device,
+        selected: s.key == highlightKey,
+        reason: reason,
+        status: status,
+        onTap: () => onTapApi(s.key),
+        onDeregister: () => _confirmDeregister(
+          context,
+          ref,
+          s,
+          localTunnel: localTunnels[s.key],
+        ),
+      );
+    }
+
+    Widget appCard(ServiceEntry s) {
+      // An app-server we host locally also shows here (to drive it); label it
+      // "本地托管" with the host icon instead of "远程控制", so it reads as the
+      // same instance the 本地托管 section manages, not a separate one.
+      final isLocal = localTunnels.containsKey(s.key);
+      final connected = bridge.appIsConnected(s.key);
+      // "Registered on the relay" is NOT "reachable": a pb-register worker can
+      // outlive the codex app-server it forwards to, leaving a hollow
+      // registration. Probe the real backend so a dead one reads "unreachable"
+      // instead of a false green "online".
+      final reach = ref.watch(appReachableProvider(s.key));
+      // `reason` is non-null only when unreachable: the backend probe failed even
+      // though the relay still lists the registration, so spell out that the dead
+      // link is the remote app-server, not the relay.
+      final (Color statusColor, String statusLabel, String? reason) = connected
+          ? (online, l10n.statusConnected, null)
+          : reach.when(
+              data: (ok) => ok
+                  ? (online, l10n.statusOnline, null)
+                  : (
+                      scheme.error,
+                      l10n.statusUnreachable,
+                      l10n.unreachableReason,
+                    ),
+              loading: () => (scheme.outline, l10n.statusChecking, null),
+              error: (_, _) => (
+                scheme.error,
+                l10n.statusUnreachable,
+                l10n.unreachableReason,
+              ),
+            );
+      return _ServiceCard(
+        key: Key('svc-${s.key}'),
+        icon: isLocal ? Icons.dns : Icons.computer,
+        iconBg: scheme.tertiaryContainer,
+        iconFg: scheme.onTertiaryContainer,
+        title: s.name,
+        subtitle: isLocal
+            ? l10n.appServerSubtitleLocal(s.device)
+            : l10n.appServerSubtitle(s.device),
+        reason: reason,
+        chevron: true,
+        status: StatusChip(
+          color: statusColor,
+          label: statusLabel,
+          filled: true,
+        ),
+        onTap: () => onTapApp(s.key),
+        onDeregister: () => _confirmDeregister(
+          context,
+          ref,
+          s,
+          localTunnel: localTunnels[s.key],
+        ),
+      );
+    }
+
+    Widget emptyHint(String text) => Padding(
+      padding: const EdgeInsets.all(32),
+      child: Center(child: Text(text)),
+    );
+
+    // Render only the selected section (the responsive tab); the banner shows on
+    // every one.
+    final sectionChildren = switch (section) {
+      ServicesSection.api =>
+        api.isEmpty
+            ? [emptyHint(l10n.noServicesFound)]
+            : api.map(apiCard).toList(),
+      ServicesSection.appServer =>
+        app.isEmpty
+            ? [emptyHint(l10n.noServicesFound)]
+            : app.map(appCard).toList(),
+      // Desktop + account mode: host this machine's codex app-server(s) from the
+      // app (the in-app equivalent of `pocket-codex serve`); several can run at
+      // once. The "+ host another" card doubles as the empty state.
+      ServicesSection.hosting => [
+        ...localHosts.map(
+          (h) => _LocalHostCard(key: Key('local-host-${h.name}'), host: h),
+        ),
+        const _AddLocalHostCard(),
+      ],
+    };
+
     return ListView(
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 16),
       children: [
@@ -339,105 +508,7 @@ class _ServiceList extends ConsumerWidget {
           accountLogin: accountLogin,
           online: online,
         ),
-        if (api.isNotEmpty) _SectionHeader(l10n.apiServicesSection),
-        ...api.map((s) {
-          final (status, reason) = apiStatus(s);
-          return _ServiceCard(
-            key: Key('svc-${s.key}'),
-            icon: Icons.api,
-            iconBg: scheme.secondaryContainer,
-            iconFg: scheme.onSecondaryContainer,
-            title: s.name,
-            subtitle: s.device,
-            selected: s.key == highlightKey,
-            reason: reason,
-            status: status,
-            onTap: () => onTapApi(s.key),
-            onDeregister: () => _confirmDeregister(
-              context,
-              ref,
-              s,
-              localTunnel: localTunnels[s.key],
-            ),
-          );
-        }),
-        if (app.isNotEmpty) _SectionHeader(l10n.appServerServices),
-        ...app.map((s) {
-          // An app-server we host locally also shows here (to drive it); label
-          // it "本地托管" with the host icon instead of "远程控制", so it reads
-          // as the same instance the 本地托管 section manages, not a separate one.
-          final isLocal = localTunnels.containsKey(s.key);
-          final connected = bridge.appIsConnected(s.key);
-          // "Registered on the relay" is NOT "reachable": a pb-register worker
-          // can outlive the codex app-server it forwards to, leaving a hollow
-          // registration. Probe the real backend so a dead one reads
-          // "unreachable" instead of a false green "online".
-          final reach = ref.watch(appReachableProvider(s.key));
-          // `reason` is non-null only when unreachable: the backend probe failed
-          // even though the relay still lists the registration, so spell out
-          // that the dead link is the remote app-server, not the relay.
-          final (
-            Color statusColor,
-            String statusLabel,
-            String? reason,
-          ) = connected
-              ? (online, l10n.statusConnected, null)
-              : reach.when(
-                  data: (ok) => ok
-                      ? (online, l10n.statusOnline, null)
-                      : (
-                          scheme.error,
-                          l10n.statusUnreachable,
-                          l10n.unreachableReason,
-                        ),
-                  loading: () => (scheme.outline, l10n.statusChecking, null),
-                  error: (_, _) => (
-                    scheme.error,
-                    l10n.statusUnreachable,
-                    l10n.unreachableReason,
-                  ),
-                );
-          return _ServiceCard(
-            key: Key('svc-${s.key}'),
-            icon: isLocal ? Icons.dns : Icons.computer,
-            iconBg: scheme.tertiaryContainer,
-            iconFg: scheme.onTertiaryContainer,
-            title: s.name,
-            subtitle: isLocal
-                ? l10n.appServerSubtitleLocal(s.device)
-                : l10n.appServerSubtitle(s.device),
-            reason: reason,
-            chevron: true,
-            status: StatusChip(
-              color: statusColor,
-              label: statusLabel,
-              filled: true,
-            ),
-            onTap: () => onTapApp(s.key),
-            onDeregister: () => _confirmDeregister(
-              context,
-              ref,
-              s,
-              localTunnel: localTunnels[s.key],
-            ),
-          );
-        }),
-        // Desktop + account mode: host this machine's codex app-server(s) from
-        // the app (the in-app equivalent of `pocket-codex serve`). Several can
-        // run at once. Hidden on mobile (no local codex) and in self-host mode
-        // (account-only for now).
-        if (_hostingSupported && accountLogin != null) ...[
-          _SectionHeader(l10n.localHostingSection),
-          ...localHosts.map(
-            (h) => _LocalHostCard(key: Key('local-host-${h.name}'), host: h),
-          ),
-          const _AddLocalHostCard(),
-        ],
-        if (services.isEmpty)
-          Padding(
-            padding: const EdgeInsets.all(32),
-            child: Center(child: Text(l10n.noServicesFound)),
-          ),
+        ...sectionChildren,
       ],
     );
   }
@@ -734,22 +805,6 @@ class _IconBadge extends StatelessWidget {
   );
 }
 
-class _SectionHeader extends StatelessWidget {
-  const _SectionHeader(this.text);
-  final String text;
-  @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.fromLTRB(6, 16, 6, 6),
-    child: Text(
-      text,
-      style: Theme.of(context).textTheme.labelMedium?.copyWith(
-        letterSpacing: .5,
-        color: Theme.of(context).colorScheme.onSurfaceVariant,
-      ),
-    ),
-  );
-}
-
 /// One locally-hosted host: a codex app-server + an in-app API proxy, each
 /// published through its own tunnel. The card shows codex's liveness and both
 /// tunnels' publish state, with a per-tunnel 注销 / 重新注册 toggle. Tapping the
@@ -1016,15 +1071,26 @@ class _LocalHostDialogState extends ConsumerState<_LocalHostDialog> {
     super.initState();
     if (_isExisting) return;
     // Auto-detect codex: when found we just show "available" (with a "change
-    // path" override); when not, the user picks a path (persisted on start).
-    Future.microtask(() async {
-      final found = await ref.read(bridgeApiProvider).codexLocate();
-      if (!mounted) return;
-      setState(() {
-        _codexPath = found;
-        _codexChecked = true;
-        if (found != null) _path.text = found; // prefill the override field
-      });
+    // path" override); when not, the user picks a path (persisted on start) or
+    // installs codex and taps "re-detect".
+    Future.microtask(_detectCodex);
+  }
+
+  /// (Re-)resolve codex from PATH + persisted config. Safe to call again from a
+  /// "re-detect" button: a user who hadn't installed codex yet can install it,
+  /// tap re-detect, and have it picked up — no need to type a full path.
+  Future<void> _detectCodex() async {
+    if (!mounted) return;
+    setState(() => _codexChecked = false); // show the progress indicator
+    final found = await ref.read(bridgeApiProvider).codexLocate();
+    if (!mounted) return;
+    setState(() {
+      _codexPath = found;
+      _codexChecked = true;
+      if (found != null) {
+        _path.text = found; // prefill the override field
+        _overridePath = false; // a fresh detection supersedes a manual override
+      }
     });
   }
 
@@ -1177,7 +1243,23 @@ class _LocalHostDialogState extends ConsumerState<_LocalHostDialog> {
         if (!_codexFound) {
           children
             ..add(
-              Text(l10n.codexNotFound, style: TextStyle(color: scheme.error)),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      l10n.codexNotFound,
+                      style: TextStyle(color: scheme.error),
+                    ),
+                  ),
+                  // Installed codex just now? Re-detect instead of typing a path.
+                  TextButton.icon(
+                    key: const Key('redetect-codex-btn'),
+                    onPressed: _busy ? null : _detectCodex,
+                    icon: const Icon(Icons.refresh, size: 16),
+                    label: Text(l10n.codexRedetect),
+                  ),
+                ],
+              ),
             )
             ..add(const SizedBox(height: 8));
         }

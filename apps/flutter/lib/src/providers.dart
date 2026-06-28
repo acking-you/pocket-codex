@@ -172,6 +172,26 @@ final runningThreadsProvider = StreamProvider.family<Set<String>, String>((
 /// a detail route instead.
 final selectedApiKeyProvider = StateProvider<String?>((ref) => null);
 
+/// Selected home-screen section, as a stable key (not an index, so adding/hiding
+/// a section — e.g. Local hosting only on desktop — never mis-selects). Rendered
+/// as a bottom `NavigationBar` on mobile and a side `NavigationRail` on desktop.
+/// `sessions` is wired up in Phase 2 (remote-viewable host sessions).
+enum ServicesSection {
+  /// Responses-API proxy services.
+  api,
+
+  /// App-server (remote codex control) services.
+  appServer,
+
+  /// This machine's locally-hosted codex servers (desktop + account only).
+  hosting,
+}
+
+/// The currently-selected home-screen section tab.
+final servicesSectionProvider = StateProvider<ServicesSection>(
+  (ref) => ServicesSection.api,
+);
+
 /// Active UI locale (`null` = follow system). Seeded at boot from the
 /// persisted config via a ProviderScope override, then changed by the
 /// settings language picker (which also persists through `setLocale`).

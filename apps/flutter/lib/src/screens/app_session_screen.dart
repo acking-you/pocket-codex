@@ -1281,7 +1281,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
       // On phones the sessions list is a slide-in drawer (hamburger); on wider
       // screens it's an inline collapsible pane (see the body).
       drawer: isMobile
-          ? Drawer(child: SafeArea(child: _sessionsPane(l10n)))
+          ? Drawer(child: SafeArea(child: _sessionsPane(l10n, inDrawer: true)))
           : null,
       // Widen the edge-swipe-to-open zone (default ~20px). The narrow default
       // sits under Android's system back-gesture strip, so a left-edge swipe
@@ -1290,12 +1290,22 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
       // (Swipe-to-close already works once the drawer is open.)
       drawerEdgeDragWidth: isMobile ? 56 : null,
       appBar: AppBar(
-        // Back to the project / session picker (AppServiceScreen).
-        leading: IconButton(
-          tooltip: l10n.backToProjects,
-          icon: const Icon(Icons.arrow_back),
-          onPressed: _backToProjects,
-        ),
+        // Mobile: the leading button OPENS the sessions list (drawer); "back to
+        // projects" lives inside that drawer. Desktop: leading is back-to-projects
+        // (the sessions pane is inline, toggled via the action button).
+        leading: isMobile
+            ? Builder(
+                builder: (ctx) => IconButton(
+                  tooltip: l10n.conversationsSection,
+                  icon: const Icon(Icons.menu),
+                  onPressed: () => Scaffold.of(ctx).openDrawer(),
+                ),
+              )
+            : IconButton(
+                tooltip: l10n.backToProjects,
+                icon: const Icon(Icons.arrow_back),
+                onPressed: _backToProjects,
+              ),
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -1310,20 +1320,14 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
           ],
         ),
         actions: [
-          // Toggle the sessions pane (desktop) / open the drawer (mobile).
-          Builder(
-            builder: (ctx) => IconButton(
+          // Desktop only: toggle the inline sessions pane. On mobile the leading
+          // button opens the drawer instead, so this is omitted there.
+          if (!isMobile)
+            IconButton(
               tooltip: l10n.conversationsSection,
-              icon: Icon(isMobile || !_leftOpen ? Icons.menu : Icons.menu_open),
-              onPressed: () {
-                if (isMobile) {
-                  Scaffold.of(ctx).openDrawer();
-                } else {
-                  setState(() => _leftOpen = !_leftOpen);
-                }
-              },
+              icon: Icon(_leftOpen ? Icons.menu_open : Icons.menu),
+              onPressed: () => setState(() => _leftOpen = !_leftOpen),
             ),
-          ),
           if (_ctx != null)
             _ContextGauge(
               status: _ctx!,
@@ -1764,7 +1768,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
   /// [Builder] so the callbacks get a context *under* the Scaffold (a bare
   /// `context` here is the State's, which is above the Scaffold this build
   /// returns — `Scaffold.of` on it would throw).
-  Widget _sessionsPane(AppLocalizations l10n) {
+  Widget _sessionsPane(AppLocalizations l10n, {bool inDrawer = false}) {
     final scheme = Theme.of(context).colorScheme;
     // Live set of running threads for this service, so other sessions show a
     // pulsing badge here too (not just the open one's status bar).
@@ -1825,6 +1829,22 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            // In the mobile drawer, "back to projects" lives here (the AppBar's
+            // leading button opens this drawer instead). Desktop shows it as the
+            // AppBar leading, so the inline pane omits it.
+            if (inDrawer) ...[
+              ListTile(
+                key: const Key('drawer-back-to-projects'),
+                dense: true,
+                leading: const Icon(Icons.arrow_back),
+                title: Text(l10n.backToProjects),
+                onTap: () {
+                  closeDrawerIfOpen(ctx);
+                  _backToProjects();
+                },
+              ),
+              const Divider(height: 1),
+            ],
             // Header: title + a circular "new conversation" button (echoes the
             // composer's send button).
             Padding(

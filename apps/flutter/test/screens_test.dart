@@ -81,8 +81,19 @@ GoRoute _stub(String path, String label) => GoRoute(
   builder: (_, _) => Scaffold(body: Text(label)),
 );
 
+/// Tap a home-screen section tab by its label and settle. The desktop
+/// NavigationRail and the mobile NavigationBar share the destination label text,
+/// so one helper drives both layouts.
+Future<void> _selectSection(WidgetTester t, String label) async {
+  // The nav destination's label sits early in the tree (the rail/bar precedes
+  // the section content), so the first match is the tappable destination even
+  // when a section's content happens to repeat the word.
+  await t.tap(find.text(label).first);
+  await t.pumpAndSettle();
+}
+
 void main() {
-  testWidgets('Services groups api + app and shows relay', (t) async {
+  testWidgets('Services shows api/app cards by tab + the relay', (t) async {
     final api = FakeBridgeApi(
       config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
       services: const [
@@ -102,10 +113,12 @@ void main() {
     );
     await t.pumpWidget(_host(const ServicesScreen(), api));
     await t.pumpAndSettle();
-    expect(find.text('API 服务'), findsOneWidget);
-    expect(find.text('App-server 服务'), findsOneWidget);
+    // Default tab = API: its card + the relay banner.
     expect(find.byKey(const Key('svc-pcx:lb7666:api:default')), findsOneWidget);
     expect(find.text('lb7666.top:7666'), findsOneWidget);
+    // The App-server tab shows the app-server card.
+    await _selectSection(t, 'App-server');
+    expect(find.byKey(const Key('svc-pcx:lb7666:app:default')), findsOneWidget);
   });
 
   testWidgets('Services shows error state with retry', (t) async {
@@ -212,7 +225,8 @@ void main() {
     addTearDown(t.view.reset);
 
     await t.pumpWidget(_host(const ServicesScreen(), api));
-    await t.pumpAndSettle(); // let the reachability probe resolve
+    await t.pumpAndSettle();
+    await _selectSection(t, 'App-server'); // probe runs when the card builds
 
     // The probe says the backend is dead → honest "不可达" on the app-server.
     expect(find.text('不可达'), findsOneWidget); // statusUnreachable (zh)
@@ -268,6 +282,7 @@ void main() {
       final api = accountFake();
       await t.pumpWidget(_host(const ServicesScreen(), api));
       await t.pumpAndSettle();
+      await _selectSection(t, '托管'); // Local hosting tab
 
       // No hosts yet → only the "host another" entry (desktop + account mode).
       expect(find.byKey(const Key('add-local-host-card')), findsOneWidget);
@@ -301,6 +316,7 @@ void main() {
       final api = accountFake();
       await t.pumpWidget(_host(const ServicesScreen(), api));
       await t.pumpAndSettle();
+      await _selectSection(t, '托管'); // Local hosting tab
       await t.tap(find.byKey(const Key('add-local-host-card')));
       await t.pumpAndSettle();
       // The proxy field shows by default (proxy is mandatory); toggle it off.
@@ -325,6 +341,7 @@ void main() {
       final api = accountFake(); // codexLocate returns a path → "found"
       await t.pumpWidget(_host(const ServicesScreen(), api));
       await t.pumpAndSettle();
+      await _selectSection(t, '托管'); // Local hosting tab
       await t.tap(find.byKey(const Key('add-local-host-card')));
       await t.pumpAndSettle();
       // Found → no path field, but a "change path" override is offered.
@@ -344,6 +361,7 @@ void main() {
       final api = accountFake();
       await t.pumpWidget(_host(const ServicesScreen(), api));
       await t.pumpAndSettle();
+      await _selectSection(t, '托管'); // Local hosting tab
 
       // First host "default".
       await t.tap(find.byKey(const Key('add-local-host-card')));
@@ -390,16 +408,19 @@ void main() {
       );
       await t.pumpWidget(_host(const ServicesScreen(), api));
       await t.pumpAndSettle();
-      // Before hosting it's a plain remote app-server.
+      // Before hosting it's a plain remote app-server (on the App-server tab).
+      await _selectSection(t, 'App-server');
       expect(find.text('local · 远程控制'), findsOneWidget);
 
-      // Host "default" locally → its key matches the discovered service.
+      // Host "default" locally (Hosting tab) → its key matches the service.
+      await _selectSection(t, '托管');
       await t.tap(find.byKey(const Key('add-local-host-card')));
       await t.pumpAndSettle();
       await t.tap(find.byKey(const Key('start-hosting-btn')));
       await t.pumpAndSettle();
 
       // The same App-server card now reads as locally hosted.
+      await _selectSection(t, 'App-server');
       expect(find.text('local · 本地托管'), findsOneWidget);
       expect(find.text('local · 远程控制'), findsNothing);
     } finally {
@@ -415,6 +436,7 @@ void main() {
       final api = accountFake();
       await t.pumpWidget(_host(const ServicesScreen(), api));
       await t.pumpAndSettle();
+      await _selectSection(t, '托管'); // Local hosting tab
       // Host one server → it publishes both an app and an api tunnel.
       await t.tap(find.byKey(const Key('add-local-host-card')));
       await t.pumpAndSettle();
@@ -545,7 +567,8 @@ void main() {
     addTearDown(t.view.reset);
 
     await t.pumpWidget(_host(const ServicesScreen(), api));
-    await t.pumpAndSettle(); // initial probe resolves
+    await t.pumpAndSettle();
+    await _selectSection(t, 'App-server'); // probe runs when the card builds
     expect(find.text('不可达'), findsOneWidget); // honest dead status
 
     // The remote app-server comes back up out from under us...
@@ -2173,6 +2196,7 @@ void main() {
     );
     await t.pumpWidget(_host(const ServicesScreen(), api));
     await t.pumpAndSettle();
+    await _selectSection(t, 'App-server');
     // Service rows are tappable cards now; the row is enabled iff its InkWell
     // carries an onTap (a disabled row would have a null callback). The card's
     // own InkWell is the first descendant (the deregister overflow menu adds its
@@ -2204,9 +2228,10 @@ void main() {
       _host(const ServicesScreen(), api, locale: const Locale('en')),
     );
     await t.pumpAndSettle();
-    // English ARB values, proving the locale switch changes strings.
-    expect(find.text('API services'), findsOneWidget);
-    expect(find.text('API 服务'), findsNothing);
+    // English ARB values, proving the locale switch changes strings. The relay
+    // banner's status pill reads "Online" (en) rather than "在线" (zh).
+    expect(find.text('Online'), findsWidgets);
+    expect(find.text('在线'), findsNothing);
   });
 
   testWidgets('Stop button interrupts the running turn with its turn id', (
@@ -2583,6 +2608,7 @@ void main() {
 
     await t.pumpWidget(_host(const ServicesScreen(), api));
     await t.pumpAndSettle();
+    await _selectSection(t, 'App-server');
     expect(find.text('default'), findsOneWidget);
 
     // Tapping refresh re-discovers (skeleton flashes, then data) without error.
@@ -2689,8 +2715,9 @@ void main() {
     // First frame: discovery future hasn't resolved → skeleton.
     expect(find.byType(ListLoadingSkeleton), findsOneWidget);
     await t.pumpAndSettle();
-    // Data arrived → skeleton gone, the service is listed.
+    // Data arrived → skeleton gone, the service is listed (App-server tab).
     expect(find.byType(ListLoadingSkeleton), findsNothing);
+    await _selectSection(t, 'App-server');
     expect(find.text('default'), findsOneWidget);
   });
 

@@ -284,6 +284,24 @@ abstract class AppLocalizations {
   /// **'App-server services'**
   String get appServerServices;
 
+  /// No description provided for @navApi.
+  ///
+  /// In en, this message translates to:
+  /// **'API'**
+  String get navApi;
+
+  /// No description provided for @navAppServer.
+  ///
+  /// In en, this message translates to:
+  /// **'App-server'**
+  String get navAppServer;
+
+  /// No description provided for @navHosting.
+  ///
+  /// In en, this message translates to:
+  /// **'Hosting'**
+  String get navHosting;
+
   /// No description provided for @appServerSubtitle.
   ///
   /// In en, this message translates to:
@@ -1403,8 +1421,14 @@ abstract class AppLocalizations {
   /// No description provided for @codexNotFound.
   ///
   /// In en, this message translates to:
-  /// **'codex wasn\'t found on PATH — enter its full path below.'**
+  /// **'codex wasn\'t found on PATH — enter its full path below, or install it and tap Re-detect.'**
   String get codexNotFound;
+
+  /// No description provided for @codexRedetect.
+  ///
+  /// In en, this message translates to:
+  /// **'Re-detect'**
+  String get codexRedetect;
 
   /// No description provided for @localHostDialogTitle.
   ///
