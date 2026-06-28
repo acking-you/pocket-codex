@@ -115,7 +115,9 @@ async fn list_sessions() -> Result<Json<SessionsResponse>, ApiError> {
     let sessions = tokio::task::spawn_blocking(sessions::list)
         .await
         .context("session-scan task panicked")??;
-    Ok(Json(SessionsResponse { sessions }))
+    Ok(Json(SessionsResponse {
+        sessions,
+    }))
 }
 
 async fn session_liveness(
@@ -139,13 +141,13 @@ struct TranscriptResponse {
     items: Vec<sessions::TranscriptItem>,
 }
 
-async fn session_transcript(
-    Path(id): Path<String>,
-) -> Result<Json<TranscriptResponse>, ApiError> {
+async fn session_transcript(Path(id): Path<String>) -> Result<Json<TranscriptResponse>, ApiError> {
     let items = tokio::task::spawn_blocking(move || sessions::transcript(&id))
         .await
         .context("transcript task panicked")??;
-    Ok(Json(TranscriptResponse { items }))
+    Ok(Json(TranscriptResponse {
+        items,
+    }))
 }
 
 async fn session_resume(

@@ -10,9 +10,20 @@
 
 use std::{collections::BTreeMap, path::PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
+use pocket_codex_codex::rollout;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
+
+/// The default config-store path: a file under `CODEX_HOME`, so per-thread
+/// config lives alongside the sessions it annotates and is shared by every host
+/// on this machine (app or CLI, any service name) — they share one
+/// `CODEX_HOME`, so they share one config map.
+pub fn default_db_path() -> Result<PathBuf> {
+    let home =
+        rollout::codex_home().map_err(|e| anyhow!("resolving CODEX_HOME for config store: {e}"))?;
+    Ok(home.join("pocket-codex-threads.json"))
+}
 
 /// Persisted per-thread session config. Every field is optional: an unset field
 /// means "no stored preference", so the client falls back to its own default.
@@ -39,9 +50,10 @@ pub struct ConfigStore {
 }
 
 impl ConfigStore {
-    /// Open the store at `path`, loading existing entries. A missing file starts
-    /// empty; an unreadable/corrupt file also starts empty (logged) rather than
-    /// wedging hosting — config is convenience state, not a hard dependency.
+    /// Open the store at `path`, loading existing entries. A missing file
+    /// starts empty; an unreadable/corrupt file also starts empty (logged)
+    /// rather than wedging hosting — config is convenience state, not a
+    /// hard dependency.
     pub async fn open(path: PathBuf) -> Result<Self> {
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent)
@@ -123,13 +135,10 @@ mod tests {
         {
             let store = ConfigStore::open(path.clone()).await.expect("open");
             store
-                .put(
-                    "t2",
-                    ThreadConfig {
-                        model: Some("gpt-5.5".to_string()),
-                        ..Default::default()
-                    },
-                )
+                .put("t2", ThreadConfig {
+                    model: Some("gpt-5.5".to_string()),
+                    ..Default::default()
+                })
                 .await
                 .expect("put");
         }
@@ -142,7 +151,9 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("threads.json");
         tokio::fs::write(&path, b"{ not json").await.expect("seed");
-        let store = ConfigStore::open(path).await.expect("open tolerates corruption");
+        let store = ConfigStore::open(path)
+            .await
+            .expect("open tolerates corruption");
         assert_eq!(store.get("anything").await, ThreadConfig::default());
     }
 }

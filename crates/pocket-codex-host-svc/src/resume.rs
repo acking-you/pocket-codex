@@ -45,13 +45,14 @@ pub fn protected_pids(app_ws_addr: SocketAddr) -> Vec<u32> {
     pids
 }
 
-/// Evict every live holder of `thread_id`'s rollout (except the protected pids),
-/// then `thread/resume` it into the app-server at `app_ws_addr` over loopback.
+/// Evict every live holder of `thread_id`'s rollout (except the protected
+/// pids), then `thread/resume` it into the app-server at `app_ws_addr` over
+/// loopback.
 ///
-/// Re-checks liveness against the freshest state right before acting and refuses
-/// to resume a rollout whose turn is running right now (that would make two
-/// writers append to one file). The caller is responsible for gating on user
-/// confirmation.
+/// Re-checks liveness against the freshest state right before acting and
+/// refuses to resume a rollout whose turn is running right now (that would make
+/// two writers append to one file). The caller is responsible for gating on
+/// user confirmation.
 pub async fn force_resume(app_ws_addr: SocketAddr, thread_id: &str) -> Result<ForceResumeOutcome> {
     let tid = thread_id.to_string();
     // Inspect + evict touch the filesystem and process table (force_release

@@ -2079,6 +2079,7 @@ dependencies = [
  "pocket-codex-broker-client",
  "pocket-codex-codex",
  "pocket-codex-core",
+ "pocket-codex-host-svc",
  "pocket-codex-pb",
  "reqwest",
  "rustls",

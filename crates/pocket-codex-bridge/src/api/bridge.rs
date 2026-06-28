@@ -915,10 +915,7 @@ pub fn meta_sessions(service_key: String) -> Result<Vec<LocalSessionDto>> {
 }
 
 /// Remote analogue of [`app_session_liveness`].
-pub fn meta_session_liveness(
-    service_key: String,
-    thread_id: String,
-) -> Result<SessionLivenessDto> {
+pub fn meta_session_liveness(service_key: String, thread_id: String) -> Result<SessionLivenessDto> {
     let v = meta::session_liveness(&service_key, &thread_id)?;
     Ok(SessionLivenessDto {
         thread_id: v.thread_id,
@@ -950,10 +947,7 @@ pub fn meta_session_transcript(
 /// Remote analogue of [`app_force_resume`]: the host evicts the rollout's live
 /// holders and resumes it into its colocated app-server over loopback. The UI
 /// must gate this on explicit confirmation and not offer it while a turn runs.
-pub fn meta_force_resume(
-    service_key: String,
-    thread_id: String,
-) -> Result<ForceResumeReportDto> {
+pub fn meta_force_resume(service_key: String, thread_id: String) -> Result<ForceResumeReportDto> {
     let o = meta::force_resume(&service_key, &thread_id)?;
     Ok(ForceResumeReportDto {
         killed: o.killed.into_iter().map(meta_holder_dto).collect(),
@@ -965,10 +959,7 @@ pub fn meta_force_resume(
 }
 
 /// Read a thread's persisted config from the host behind `service_key`.
-pub fn meta_thread_config_get(
-    service_key: String,
-    thread_id: String,
-) -> Result<ThreadConfigDto> {
+pub fn meta_thread_config_get(service_key: String, thread_id: String) -> Result<ThreadConfigDto> {
     Ok(thread_config_dto(meta::config_get(&service_key, &thread_id)?))
 }
 

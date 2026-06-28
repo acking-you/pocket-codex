@@ -37,7 +37,8 @@ fn client() -> &'static Client {
     })
 }
 
-/// The `meta` service key for any pocket-codex service key (same device + name).
+/// The `meta` service key for any pocket-codex service key (same device +
+/// name).
 fn meta_key_of(service_key: &str) -> Result<String> {
     let id = ServiceId::parse_key(service_key)
         .ok_or_else(|| anyhow!("not a pocket-codex service key: {service_key}"))?;
@@ -125,7 +126,11 @@ pub fn transcript(service_key: &str, thread_id: &str) -> Result<Vec<TranscriptIt
 pub fn force_resume(service_key: &str, thread_id: &str) -> Result<ForceResumeOutcome> {
     let url = endpoint(service_key, &["sessions", thread_id, "resume"])?;
     runtime::runtime().block_on(async move {
-        let resp = client().post(url).send().await.context("meta POST resume")?;
+        let resp = client()
+            .post(url)
+            .send()
+            .await
+            .context("meta POST resume")?;
         ensure_ok(resp)
             .await?
             .json()

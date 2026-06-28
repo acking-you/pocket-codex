@@ -5,14 +5,15 @@
 //! reuses its login (`~/.codex/auth.json`) for the API proxy.
 //!
 //! One `serve_start` publishes **three** relay tunnels under the same name:
-//! `app:<name>` (codex app-server, remote control), `api:<name>` (the in-process
-//! Responses API proxy), and `meta:<name>` (the in-process host meta service —
-//! remote session inventory + per-thread config). The register tunnels are
-//! independent: [`serve_deregister`] takes one off the relay (an *unpublish*)
-//! without stopping codex or the in-process servers, and [`serve_reregister`]
-//! re-publishes it instantly. [`serve_stop`] is the full teardown (all tunnels +
-//! codex + proxy + meta service); [`serve_stop_all`] (app quit) stops every host
-//! so a real quit leaves no orphan — closing to the tray keeps hosting alive.
+//! `app:<name>` (codex app-server, remote control), `api:<name>` (the
+//! in-process Responses API proxy), and `meta:<name>` (the in-process host meta
+//! service — remote session inventory + per-thread config). The register
+//! tunnels are independent: [`serve_deregister`] takes one off the relay (an
+//! *unpublish*) without stopping codex or the in-process servers, and
+//! [`serve_reregister`] re-publishes it instantly. [`serve_stop`] is the full
+//! teardown (all tunnels + codex + proxy + meta service); [`serve_stop_all`]
+//! (app quit) stops every host so a real quit leaves no orphan — closing to the
+//! tray keeps hosting alive.
 //!
 //! The codex spawn/watchdog mirrors
 //! `crates/pocket-codex-cli/src/commands/serve.rs`; the API proxy is the shared
@@ -153,15 +154,16 @@ fn client_instance_id() -> String {
 /// The process-global per-thread config store, shared by every local meta
 /// service: all hosts on this machine share one `CODEX_HOME` and therefore one
 /// config map, so they must write through one serialized store. Opened once,
-/// lazily; a store-open failure is fatal to hosting (it means the support dir is
-/// unwritable), which the caller surfaces.
+/// lazily; a store-open failure is fatal to hosting (it means the support dir
+/// is unwritable), which the caller surfaces.
 fn config_store() -> Arc<pocket_codex_host_svc::store::ConfigStore> {
     static STORE: OnceCell<Arc<pocket_codex_host_svc::store::ConfigStore>> = OnceCell::new();
     STORE
         .get_or_init(|| {
-            let path = runtime::support_dir()
-                .map(|d| d.join("host-meta").join("threads.json"))
-                .unwrap_or_else(|_| PathBuf::from("host-meta-threads.json"));
+            // Co-locate the config store with the sessions it annotates (under
+            // CODEX_HOME) so every host on this machine shares one map.
+            let path = pocket_codex_host_svc::store::default_db_path()
+                .unwrap_or_else(|_| PathBuf::from("pocket-codex-threads.json"));
             Arc::new(
                 runtime::runtime()
                     .block_on(pocket_codex_host_svc::store::ConfigStore::open(path))
@@ -631,8 +633,8 @@ pub fn serve_stop_all() {
 }
 
 /// Abort a host's background tasks (all register tunnels, watchdog, API proxy,
-/// meta service) and stop its codex. Does not touch the relay (callers that need
-/// an immediate relay drop force-deregister separately).
+/// meta service) and stop its codex. Does not touch the relay (callers that
+/// need an immediate relay drop force-deregister separately).
 fn stop_host_tasks(ls: LocalServe) {
     if let Some(h) = ls.app_register {
         h.abort();
@@ -678,12 +680,12 @@ fn listen_addr_open(listen_addr: &str) -> bool {
 }
 
 /// Keep an in-process service alive on `addr`. Runs `serve` and, if it ever
-/// exits (a transient auth/IO error, or an `axum::serve` accept error), re-binds
-/// the SAME loopback port and restarts it with backoff — so the registered
-/// tunnel keeps forwarding to a live server instead of a dead socket. `first` is
-/// the listener already bound in [`serve_start`] (so the port is reserved);
-/// later restarts re-bind it. `label` names the service in logs. Aborting this
-/// task (on `serve_stop`) drops the listener.
+/// exits (a transient auth/IO error, or an `axum::serve` accept error),
+/// re-binds the SAME loopback port and restarts it with backoff — so the
+/// registered tunnel keeps forwarding to a live server instead of a dead
+/// socket. `first` is the listener already bound in [`serve_start`] (so the
+/// port is reserved); later restarts re-bind it. `label` names the service in
+/// logs. Aborting this task (on `serve_stop`) drops the listener.
 async fn supervise<F, Fut>(label: &str, addr: SocketAddr, first: std::net::TcpListener, serve: F)
 where
     F: Fn(tokio::net::TcpListener) -> Fut,
@@ -734,7 +736,11 @@ where
 }
 
 /// Supervise the in-process Responses API proxy (forwards to chatgpt.com).
-async fn api_proxy_supervisor(addr: SocketAddr, first: std::net::TcpListener, proxy: Option<String>) {
+async fn api_proxy_supervisor(
+    addr: SocketAddr,
+    first: std::net::TcpListener,
+    proxy: Option<String>,
+) {
     supervise("the in-app API proxy", addr, first, move |listener| {
         let proxy = proxy.clone();
         async move { pocket_codex_api_proxy::serve(listener, proxy).await }
