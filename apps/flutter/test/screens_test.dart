@@ -93,6 +93,12 @@ Future<void> _selectSection(WidgetTester t, String label) async {
 }
 
 void main() {
+  // AppSessionScreen keeps per-thread plan/effort memory in process-wide static
+  // maps (so a reopened thread restores its mode before the persisted config
+  // lands). Reset it between tests so memory from one test can't leak into
+  // another that reuses a thread id.
+  setUp(AppSessionScreen.debugResetThreadMemory);
+
   testWidgets('Services shows api/app cards by tab + the relay', (t) async {
     final api = FakeBridgeApi(
       config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
@@ -1570,6 +1576,56 @@ void main() {
     expect(api.lastTurnText, '请按上面的计划开始实现。');
     // Once a new turn runs, the plan is no longer trailing → choice goes away.
     expect(find.byKey(const Key('implement-btn')), findsNothing);
+  });
+
+  testWidgets('Implement bar survives a screen rebuild via in-memory cache '
+      'when the persisted config is unavailable', (t) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+
+    // Screen A: a new plan-mode conversation. Sending creates thread-0 and
+    // records its plan mode in the process-wide static cache.
+    await t.pumpWidget(
+      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+    );
+    await t.pumpAndSettle();
+    await t.tap(find.text('计划'));
+    await t.pump();
+    await t.enterText(find.byType(TextField), 'plan it');
+    await t.pump();
+    await t.tap(find.byKey(const Key('send-btn')));
+    await t.pumpAndSettle();
+
+    // Tear the screen down (like going back to the session list) so reopening
+    // builds a fresh State, and drop the persisted config to simulate the PUT
+    // not having landed yet (the race behind "switching session hides the bar").
+    await t.pumpWidget(const SizedBox());
+    await t.pumpAndSettle();
+    api.threadConfigs.clear();
+
+    // Reopen thread-0. The server exposes no collaborationMode and there is no
+    // persisted config, so the implement bar can only come from the static
+    // cache populated by the send above.
+    api.readResult = const ThreadHistory(
+      items: [
+        ThreadItem(id: 'u1', itemType: 'userMessage', title: '', text: 'plan it'),
+        ThreadItem(id: 'p1', itemType: 'plan', title: '', text: '# Step 1'),
+      ],
+      running: false,
+    );
+    await t.pumpWidget(
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          threadId: 'thread-0',
+        ),
+        api,
+      ),
+    );
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('implement-btn')), findsOneWidget);
   });
 
   testWidgets('Plan mode read from the server can be turned off', (t) async {

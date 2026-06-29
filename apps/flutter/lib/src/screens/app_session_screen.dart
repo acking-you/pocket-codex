@@ -53,6 +53,16 @@ class AppSessionScreen extends ConsumerStatefulWidget {
 
   @override
   ConsumerState<AppSessionScreen> createState() => _AppSessionState();
+
+  /// Clears the process-wide per-thread plan/effort memory. Test-only: these
+  /// static caches intentionally survive screen teardown/rebuild in the running
+  /// app (so a reopened thread keeps its mode before the persisted config
+  /// lands), but must be reset between widget tests to avoid cross-test leakage.
+  @visibleForTesting
+  static void debugResetThreadMemory() {
+    _AppSessionState._planByThread.clear();
+    _AppSessionState._effortByThread.clear();
+  }
 }
 
 /// One timeline entry: a message (user/agent) or a tool/activity item. The UI
@@ -117,7 +127,12 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
   // Per-thread plan-mode memory, so switching/resuming a conversation restores
   // its true mode (thread/read doesn't expose collaborationMode, and the model's
   // last item often isn't a `plan` — the old heuristic left plan mode stuck on).
-  final Map<String, bool> _planByThread = {};
+  // STATIC so it survives this screen being torn down + rebuilt (e.g. going back
+  // to the session list and reopening a thread creates a fresh State). Without
+  // this, reopening a just-planned thread before its async per-thread config
+  // PUT lands leaves _planActive with no source → the implement bar vanishes.
+  // The persisted meta config remains the cross-restart source of truth.
+  static final Map<String, bool> _planByThread = {};
   // True when the user tapped the plan chip since the last send, so the next
   // turn explicitly carries the chosen mode (lets a stuck thread be turned off).
   bool _planToggledByUser = false;
@@ -132,9 +147,11 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
   // top-level effort field when a collaborationMode is also sent). Effort can be
   // raised/lowered but not "un-set" — there is no model-default reset on the wire.
   // _effortByThread restores _effortActive when switching threads in place.
+  // STATIC for the same reason as _planByThread: survive screen teardown/rebuild
+  // so a reopened thread keeps its effort even before the persisted config lands.
   ReasoningEffort? _effort;
   ReasoningEffort? _effortActive;
-  final Map<String, ReasoningEffort?> _effortByThread = {};
+  static final Map<String, ReasoningEffort?> _effortByThread = {};
 
   /// The effort the next turn will run with: a pending pick, else the thread's
   /// current effort. Drives the composer chip and what's sent on every turn.
