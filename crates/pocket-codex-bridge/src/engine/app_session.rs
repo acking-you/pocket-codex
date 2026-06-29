@@ -740,7 +740,10 @@ pub fn respond_approval(service_key: &str, request_id: &str, decision: &str) -> 
 /// the user's choice, so this is a dedicated path.
 pub fn respond_user_input(service_key: &str, request_id: &str, answers_json: &str) -> Result<()> {
     let client = client_for(service_key)?;
-    let by_question: serde_json::Map<String, Value> = serde_json::from_str(answers_json)
+    // Parse into the concrete shape so a malformed value (anything that isn't a
+    // JSON array of strings) is rejected here, rather than passed through to
+    // break the upstream deserialize of the whole `ToolRequestUserInputResponse`.
+    let by_question: HashMap<String, Vec<String>> = serde_json::from_str(answers_json)
         .map_err(|e| anyhow!("parsing user-input answers `{answers_json}`: {e}"))?;
     let mut answers = serde_json::Map::new();
     for (qid, list) in by_question {

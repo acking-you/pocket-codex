@@ -153,6 +153,11 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
   ReasoningEffort? _effortActive;
   static final Map<String, ReasoningEffort?> _effortByThread = {};
 
+  /// Composite key for the process-wide per-thread caches. Scoped by service so
+  /// two hosts can't collide on a shared thread id (matching how the persisted
+  /// config is keyed per service); neither segment contains a space.
+  String _threadKey(String threadId) => '${widget.serviceKey} $threadId';
+
   /// The effort the next turn will run with: a pending pick, else the thread's
   /// current effort. Drives the composer chip and what's sent on every turn.
   ReasoningEffort? get _effectiveEffort => _effort ?? _effortActive;
@@ -566,7 +571,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
           // text, nothing between) — the artifact of a dropped-but-committed
           // send recorded twice. A genuine re-ask has the model's reply in
           // between, so it is preserved. (The retry-safety guard in _send is the
-          // primary fix; this protects any other double-commit source.)
+          // primary fix; this protects any other double-commit source.) Accepted
+          // edge: an identical re-ask after a turn that produced zero items would
+          // also collapse — vanishingly rare and only cosmetic (same text).
           if (i.itemType == 'userMessage' &&
               _items.isNotEmpty &&
               _items.last.type == 'userMessage' &&
@@ -612,7 +619,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
         final restored = serverMode != null
             ? serverMode == 'plan'
             : (persisted.planMode ??
-                  (tid != null && (_planByThread[tid] ?? false)));
+                  (tid != null && (_planByThread[_threadKey(tid)] ?? false)));
         final hadPendingToggle = _plan != _planActive;
         _planActive = restored;
         if (!hadPendingToggle) _plan = _planActive;
@@ -624,7 +631,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
         _effortActive =
             serverEffort ??
             ReasoningEffort.fromWire(persisted.reasoningEffort) ??
-            (tid != null ? _effortByThread[tid] : null);
+            (tid != null ? _effortByThread[_threadKey(tid)] : null);
         // Drop a restored effort the restored model can't run (mirrors the guard
         // in _pickModel/_seedDefaults) so a stale persisted pairing never asserts
         // an unsupported level on the next turn.
@@ -841,6 +848,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
     // Block sends while reconnecting — a reconnect reloads history and would
     // wipe an optimistic message added mid-flight.
     if (text.isEmpty || _sending || _reconnecting) return;
+    // Take the send lock up front, before the retry probe's await below, so the
+    // composer can't start a second send during that round-trip (re-entrancy).
+    setState(() => _sending = true);
     // Retry safety: a send can commit server-side just before the socket drops
     // (we reconnect with reload:false to keep the optimistic bubble for a
     // one-tap retry). Re-sending a committed turn records the prompt twice —
@@ -849,11 +859,11 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
     // if this prompt is already the latest user turn, just reload its (possibly
     // in-progress) history instead of sending again.
     if (retry && await _turnAlreadyCommitted(text)) {
+      if (mounted) setState(() => _sending = false);
       await _resumeAndLoad();
       return;
     }
     setState(() {
-      _sending = true;
       _error = null;
       _retry = null;
       _lastUserText = text;
@@ -961,8 +971,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
         });
         // Remember this thread's mode + effort so resuming/switching restores it.
         if (_threadId != null) {
-          _planByThread[_threadId!] = _plan;
-          _effortByThread[_threadId!] = effort;
+          _planByThread[_threadKey(_threadId!)] = _plan;
+          _effortByThread[_threadKey(_threadId!)] = effort;
         }
         // Persist the config now that the thread has an id — covers a brand-new
         // conversation whose settings were chosen before its first turn.
@@ -1003,6 +1013,12 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
   /// dropped-but-committed turn isn't sent (and recorded) twice. Returns false
   /// if the host can't be reached, so an indeterminate case falls through to a
   /// normal re-send (the prior, less-safe behaviour) rather than losing the turn.
+  ///
+  /// Idempotency here is text-only: if the user deliberately re-asks an
+  /// identical prompt and *that* send drops before committing, the latest
+  /// committed user turn still matches, so the retry reloads instead of
+  /// resending. Accepted edge — avoiding a duplicate (costly) turn is preferred
+  /// over re-sending a rare identical consecutive prompt.
   Future<bool> _turnAlreadyCommitted(String text) async {
     final tid = _threadId;
     if (tid == null) return false;
@@ -1855,11 +1871,21 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
         // an interactive question card (the model is asking the user, not
         // requesting permission); everything else is a command/file/permission
         // approval.
+        // Keyed by request id so State follows the right prompt if more than one
+        // server request is pending and one is answered/removed out of order.
         for (final a in _approvals)
           if (a.kind == 'item/tool/requestUserInput')
-            _UserInputCard(prompt: a, onAnswer: _answerUserInput)
+            _UserInputCard(
+              key: ValueKey(a.requestId),
+              prompt: a,
+              onAnswer: _answerUserInput,
+            )
           else
-            _ApprovalCard(prompt: a, onDecide: _decide),
+            _ApprovalCard(
+              key: ValueKey(a.requestId),
+              prompt: a,
+              onDecide: _decide,
+            ),
         // After a plan-mode turn, offer to implement the plan (persists across
         // restart since it's derived from the trailing plan item).
         if (_planReady) _implementBar(l10n),
@@ -2844,7 +2870,7 @@ class _UiQuestion {
 /// field; `isSecret` obscures it. Submitting sends one answer per question id;
 /// cancel sends an empty answer set so the turn proceeds without input.
 class _UserInputCard extends StatefulWidget {
-  const _UserInputCard({required this.prompt, required this.onAnswer});
+  const _UserInputCard({super.key, required this.prompt, required this.onAnswer});
   final AppEvent prompt;
   final Future<void> Function(AppEvent, Map<String, List<String>>) onAnswer;
 
@@ -2854,7 +2880,7 @@ class _UserInputCard extends StatefulWidget {
 
 class _UserInputCardState extends State<_UserInputCard> {
   // Sentinel "choice" meaning the free-text 其他 field for a question.
-  static const _other = ' other';
+  static const _other = '\u0000other';
   late final List<_UiQuestion> _questions = _parse(widget.prompt.raw);
   final Map<String, String> _choice = {}; // qid -> option label or _other
   final Map<String, TextEditingController> _otherCtrls = {};
@@ -2905,6 +2931,11 @@ class _UserInputCardState extends State<_UserInputCard> {
       _otherCtrls.putIfAbsent(qid, TextEditingController.new);
 
   String? _answer(_UiQuestion q) {
+    // No options → pure free-text; an explicit "其他" pick → free-text too.
+    if (q.options.isEmpty) {
+      final t = _ctrl(q.id).text.trim();
+      return t.isEmpty ? null : t;
+    }
     final c = _choice[q.id];
     if (c == null) return null;
     if (c == _other) {
@@ -3019,32 +3050,35 @@ class _UserInputCardState extends State<_UserInputCard> {
               child: Text(q.question, style: const TextStyle(fontSize: 13.5)),
             ),
           const SizedBox(height: 6),
-          Wrap(
-            spacing: 8,
-            runSpacing: 6,
-            children: [
-              for (final o in q.options)
-                ChoiceChip(
-                  label: Text(o.label),
-                  tooltip: (o.description != null && o.description!.isNotEmpty)
-                      ? o.description
-                      : null,
-                  selected: _choice[q.id] == o.label,
-                  onSelected: _submitting
-                      ? null
-                      : (_) => setState(() => _choice[q.id] = o.label),
-                ),
-              if (q.isOther)
-                ChoiceChip(
-                  label: Text(l10n.userInputOther),
-                  selected: _choice[q.id] == _other,
-                  onSelected: _submitting
-                      ? null
-                      : (_) => setState(() => _choice[q.id] = _other),
-                ),
-            ],
-          ),
-          if (q.isOther && _choice[q.id] == _other)
+          // A question with no options is a pure free-text prompt; otherwise show
+          // the option chips (+ an "其他" chip when free text is also allowed).
+          if (q.options.isNotEmpty)
+            Wrap(
+              spacing: 8,
+              runSpacing: 6,
+              children: [
+                for (final o in q.options)
+                  ChoiceChip(
+                    label: Text(o.label),
+                    tooltip: (o.description != null && o.description!.isNotEmpty)
+                        ? o.description
+                        : null,
+                    selected: _choice[q.id] == o.label,
+                    onSelected: _submitting
+                        ? null
+                        : (_) => setState(() => _choice[q.id] = o.label),
+                  ),
+                if (q.isOther)
+                  ChoiceChip(
+                    label: Text(l10n.userInputOther),
+                    selected: _choice[q.id] == _other,
+                    onSelected: _submitting
+                        ? null
+                        : (_) => setState(() => _choice[q.id] = _other),
+                  ),
+              ],
+            ),
+          if (q.options.isEmpty || (q.isOther && _choice[q.id] == _other))
             Padding(
               padding: const EdgeInsets.only(top: 6),
               child: TextField(
@@ -3065,7 +3099,7 @@ class _UserInputCardState extends State<_UserInputCard> {
 }
 
 class _ApprovalCard extends StatelessWidget {
-  const _ApprovalCard({required this.prompt, required this.onDecide});
+  const _ApprovalCard({super.key, required this.prompt, required this.onDecide});
   final AppEvent prompt;
   final Future<void> Function(AppEvent, String) onDecide;
 

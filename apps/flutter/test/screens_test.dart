@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -1434,6 +1436,44 @@ void main() {
     expect(find.byKey(const Key('user-input-card')), findsNothing);
   });
 
+  testWidgets('request_user_input with no options renders an answerable '
+      'free-text field', (t) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    await t.pumpWidget(
+      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+    );
+    await t.pumpAndSettle();
+
+    // A question with no options must stay answerable as free text (not a card
+    // with a permanently-disabled Submit).
+    api.pushEvent(
+      'pcx:lb7666:app:default',
+      const AppEvent(
+        kind: 'item/tool/requestUserInput',
+        requestId: '9',
+        raw:
+            '{"questions":[{"id":"title","header":"标题","question":"取个标题？",'
+            '"isOther":false,"isSecret":false,"options":[]}]}',
+      ),
+    );
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('user-input-card')), findsOneWidget);
+
+    final field = find.descendant(
+      of: find.byKey(const Key('user-input-card')),
+      matching: find.byType(TextField),
+    );
+    expect(field, findsOneWidget);
+    await t.enterText(field, '春日');
+    await t.pump();
+    await t.tap(find.byKey(const Key('user-input-submit')));
+    await t.pumpAndSettle();
+    expect(api.lastUserInputAnswers, '{"title":["春日"]}');
+  });
+
   testWidgets('Plan-mode turn ending on prose still offers to implement', (
     t,
   ) async {
@@ -1871,6 +1911,115 @@ void main() {
     await t.pumpAndSettle();
     expect(api.lastCollaborationMode, 'plan');
     expect(api.lastReasoningEffort, 'high');
+  });
+
+  testWidgets('A reasoning-effort pick made mid-turn is not reverted (R4)', (
+    t,
+  ) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    api.readResult = const ThreadHistory(items: [], running: false);
+    await t.pumpWidget(
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          threadId: 't1',
+        ),
+        api,
+      ),
+    );
+    await t.pumpAndSettle();
+
+    // Pick xhigh, then send a turn that we hold in-flight via the gate.
+    await t.ensureVisible(find.textContaining('思考强度'));
+    await t.tap(find.textContaining('思考强度'));
+    await t.pumpAndSettle();
+    await t.tap(find.text('极高'));
+    await t.pumpAndSettle();
+    api.turnStartGate = Completer<void>();
+    await t.enterText(find.byType(TextField), 'one');
+    await t.pump();
+    await t.tap(find.byKey(const Key('send-btn')));
+    await t.pump(); // _send is now suspended awaiting the gate (turn in flight)
+    expect(api.lastReasoningEffort, 'xhigh');
+
+    // While the turn is in flight, change effort to High.
+    await t.ensureVisible(find.textContaining('思考强度'));
+    await t.tap(find.textContaining('思考强度'));
+    await t.pumpAndSettle();
+    await t.tap(find.text('高'));
+    await t.pumpAndSettle();
+
+    // Let the in-flight turn finish. Post-turn reconciliation must NOT revert the
+    // mid-turn pick (the R4 guard keeps the pending effort = High, not xhigh).
+    api.turnStartGate!.complete();
+    await t.pumpAndSettle();
+    api.turnStartGate = null;
+
+    // The next turn carries the mid-turn pick, proving it survived.
+    await t.enterText(find.byType(TextField), 'two');
+    await t.pump();
+    await t.tap(find.byKey(const Key('send-btn')));
+    await t.pumpAndSettle();
+    expect(api.lastReasoningEffort, 'high');
+  });
+
+  testWidgets('Resume collapses a back-to-back duplicate user message', (
+    t,
+  ) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    // The artifact of a dropped-but-committed send recorded twice.
+    api.readResult = const ThreadHistory(
+      items: [
+        ThreadItem(id: 'u1', itemType: 'userMessage', title: '', text: 'do it'),
+        ThreadItem(id: 'u2', itemType: 'userMessage', title: '', text: 'do it'),
+      ],
+      running: false,
+    );
+    await t.pumpWidget(
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          threadId: 't1',
+        ),
+        api,
+      ),
+    );
+    await t.pumpAndSettle();
+    expect(find.text('do it'), findsOneWidget);
+  });
+
+  testWidgets('Resume keeps a genuine re-ask (a reply sits between)', (
+    t,
+  ) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    api.readResult = const ThreadHistory(
+      items: [
+        ThreadItem(id: 'u1', itemType: 'userMessage', title: '', text: 'do it'),
+        ThreadItem(id: 'a1', itemType: 'agentMessage', title: '', text: 'ok'),
+        ThreadItem(id: 'u2', itemType: 'userMessage', title: '', text: 'do it'),
+      ],
+      running: false,
+    );
+    await t.pumpWidget(
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          threadId: 't1',
+        ),
+        api,
+      ),
+    );
+    await t.pumpAndSettle();
+    expect(find.text('do it'), findsNWidgets(2));
   });
 
   testWidgets('An unsent effort pick does not leak across threads', (t) async {
