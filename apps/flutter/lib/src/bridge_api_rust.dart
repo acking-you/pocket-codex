@@ -411,6 +411,17 @@ class RustBridgeApi implements BridgeApi {
     decision: decision,
   );
 
+  @override
+  Future<void> appRespondUserInput(
+    String serviceKey,
+    String requestId,
+    String answersJson,
+  ) => frb.appRespondUserInput(
+    serviceKey: serviceKey,
+    requestId: requestId,
+    answersJson: answersJson,
+  );
+
   // --- Local session takeover ---
 
   @override

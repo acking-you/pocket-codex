@@ -728,6 +728,28 @@ pub fn respond_approval(service_key: &str, request_id: &str, decision: &str) -> 
     Ok(())
 }
 
+/// Answer an `item/tool/requestUserInput` elicitation (the model asking the user
+/// structured questions — distinct from a command/file approval). `answers_json`
+/// is a JSON object mapping each question id to the list of chosen answer
+/// strings (option labels and/or free-text), e.g.
+/// `{"theme":["山水抒怀"],"style":["雅正含蓄"]}`. An empty object `{}` cancels —
+/// the server treats absent answers as "no input" and the turn continues. This
+/// sends the protocol's `ToolRequestUserInputResponse` shape
+/// `{"answers":{<id>:{"answers":[...]}}}`; sending a plain `{decision}` here (the
+/// approval shape) would fail to deserialize upstream and silently drop the
+/// user's choice, so this is a dedicated path.
+pub fn respond_user_input(service_key: &str, request_id: &str, answers_json: &str) -> Result<()> {
+    let client = client_for(service_key)?;
+    let by_question: serde_json::Map<String, Value> = serde_json::from_str(answers_json)
+        .map_err(|e| anyhow!("parsing user-input answers `{answers_json}`: {e}"))?;
+    let mut answers = serde_json::Map::new();
+    for (qid, list) in by_question {
+        answers.insert(qid, json!({ "answers": list }));
+    }
+    runtime::runtime().block_on(client.respond(request_id, json!({ "answers": answers })))?;
+    Ok(())
+}
+
 /// Build the JSON-RPC result for an approval response. `pending` is the cached
 /// requested `permissions` when this was a `item/permissions/requestApproval`
 /// (`None` for command / file-change approvals, which just carry the decision).

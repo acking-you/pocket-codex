@@ -1387,6 +1387,89 @@ void main() {
     expect(find.byKey(const Key('approval-card')), findsNothing);
   });
 
+  testWidgets('request_user_input renders an interactive question card, not an '
+      'approval prompt', (t) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    await t.pumpWidget(
+      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+    );
+    await t.pumpAndSettle();
+
+    // The model asks a structured multiple-choice question (NOT a command to
+    // approve). It must render as an answerable question, not 智能体请求执行命令.
+    api.pushEvent(
+      'pcx:lb7666:app:default',
+      const AppEvent(
+        kind: 'item/tool/requestUserInput',
+        requestId: '9',
+        raw:
+            '{"questions":[{"id":"theme","header":"题旨","question":"主题落在哪一类？",'
+            '"isOther":false,"isSecret":false,"options":['
+            '{"label":"山水抒怀","description":"d1"},'
+            '{"label":"怀古咏史","description":"d2"}]}]}',
+      ),
+    );
+    await t.pumpAndSettle();
+
+    expect(find.byKey(const Key('user-input-card')), findsOneWidget);
+    expect(find.byKey(const Key('approval-card')), findsNothing);
+    expect(find.text('主题落在哪一类？'), findsOneWidget);
+    expect(find.text('山水抒怀'), findsOneWidget);
+
+    // Pick an option and submit → the answer is sent in the protocol shape.
+    await t.tap(find.text('山水抒怀'));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('user-input-submit')));
+    await t.pumpAndSettle();
+    expect(api.lastUserInputAnswers, '{"theme":["山水抒怀"]}');
+    expect(find.byKey(const Key('user-input-card')), findsNothing);
+  });
+
+  testWidgets('Plan-mode turn ending on prose still offers to implement', (
+    t,
+  ) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    // A plan-mode turn: the plan checklist is followed by the model's prose plan
+    // summary (目标/约束/假设) — so the plan is NOT the last item. The implement
+    // choice must still appear (the bug was keying on "last item is a plan").
+    api.readResult = const ThreadHistory(
+      items: [
+        ThreadItem(
+          id: 'u1',
+          itemType: 'userMessage',
+          title: '',
+          text: '规划写一篇古诗文',
+        ),
+        ThreadItem(id: 'p1', itemType: 'plan', title: '', text: '# Step 1'),
+        ThreadItem(
+          id: 'a1',
+          itemType: 'agentMessage',
+          title: '',
+          text: '目标：……',
+        ),
+      ],
+      running: false,
+      collaborationMode: 'plan',
+    );
+    await t.pumpWidget(
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          threadId: 'thread-plan-prose',
+        ),
+        api,
+      ),
+    );
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('implement-btn')), findsOneWidget);
+  });
+
   testWidgets('App session surfaces a turn failure with retry', (t) async {
     final api = FakeBridgeApi(
       config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
@@ -1896,6 +1979,9 @@ void main() {
           ThreadItem(id: 'p1', itemType: 'plan', title: '', text: '# Step 1'),
         ],
         running: false,
+        // The implement choice only shows for a genuine plan-mode thread (a
+        // plan checklist in a normal turn must not trigger it).
+        collaborationMode: 'plan',
       );
       await t.pumpWidget(
         _host(

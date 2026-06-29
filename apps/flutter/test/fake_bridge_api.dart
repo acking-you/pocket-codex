@@ -494,6 +494,16 @@ class FakeBridgeApi implements BridgeApi {
     String decision,
   ) async => lastApprovalDecision = decision;
 
+  /// Records the last answers JSON passed to [appRespondUserInput].
+  String? lastUserInputAnswers;
+
+  @override
+  Future<void> appRespondUserInput(
+    String serviceKey,
+    String requestId,
+    String answersJson,
+  ) async => lastUserInputAnswers = answersJson;
+
   // --- Local session takeover ---
 
   /// Seedable local sessions returned by [appLocalSessions].

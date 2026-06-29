@@ -189,18 +189,28 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
   Timer? _healthTimer;
   String? _lastUserText;
 
-  /// Whether to offer the "implement this plan" choice. A plan-mode turn ends
-  /// on its `plan` item (the plan IS the deliverable), so a trailing plan item
-  /// on a finished turn means the model planned and is waiting to implement.
-  /// Normal multi-step turns also emit `plan` items, but they continue with
-  /// commands/edits/a message afterwards, so the plan is never the last item.
-  /// Derived from the timeline, so it persists across leave/restart (the
-  /// resumed history ends on the same plan item) until the user acts.
-  bool get _planReady =>
-      !_streaming &&
-      !_implementDismissed &&
-      _items.isNotEmpty &&
-      _items.last.type == 'plan';
+  /// Whether to offer the "implement this plan" choice. A plan-mode turn does
+  /// NOT end on its `plan` item — the model appends its prose plan (目标/约束/假设)
+  /// and/or reasoning items after it — so keying on "the last item is a plan"
+  /// would never fire. Instead: the thread is in plan mode (`_planActive`) AND
+  /// the most-recent `plan` item has no later user message (the user hasn't yet
+  /// implemented or steered past it). Normal multi-step turns also emit `plan`
+  /// checklists, but they run in default mode (`_planActive` false), so they
+  /// don't trigger this. Scanning the timeline (rather than requiring the plan
+  /// to be literally last) makes it survive trailing prose, a stray reasoning
+  /// item, or a leftover duplicate user message, and persist across leave/
+  /// restart until the user acts.
+  bool get _planReady {
+    if (_streaming || _implementDismissed || !_planActive || _items.isEmpty) {
+      return false;
+    }
+    final lastPlan = _items.lastIndexWhere((it) => it.type == 'plan');
+    if (lastPlan < 0) return false;
+    for (var i = lastPlan + 1; i < _items.length; i++) {
+      if (_items[i].type == 'userMessage') return false;
+    }
+    return true;
+  }
 
   /// Show the "typing" indicator while a turn runs and the model hasn't begun
   /// streaming its text reply yet (tool steps may still be appearing above).
@@ -535,6 +545,17 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
         _items.clear();
         _itemIndex.clear();
         for (final i in history.items) {
+          // Defensively collapse a back-to-back duplicate user message (same
+          // text, nothing between) — the artifact of a dropped-but-committed
+          // send recorded twice. A genuine re-ask has the model's reply in
+          // between, so it is preserved. (The retry-safety guard in _send is the
+          // primary fix; this protects any other double-commit source.)
+          if (i.itemType == 'userMessage' &&
+              _items.isNotEmpty &&
+              _items.last.type == 'userMessage' &&
+              _items.last.text.trim() == i.text.trim()) {
+            continue;
+          }
           _itemIndex[i.id] = _items.length;
           _items.add(
             _Item(id: i.id, type: i.itemType, title: i.title, text: i.text),
@@ -803,6 +824,17 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
     // Block sends while reconnecting — a reconnect reloads history and would
     // wipe an optimistic message added mid-flight.
     if (text.isEmpty || _sending || _reconnecting) return;
+    // Retry safety: a send can commit server-side just before the socket drops
+    // (we reconnect with reload:false to keep the optimistic bubble for a
+    // one-tap retry). Re-sending a committed turn records the prompt twice —
+    // which both shows a duplicate user bubble and leaves a trailing duplicate
+    // that hides the plan-implement choice. So on retry, ask the server first;
+    // if this prompt is already the latest user turn, just reload its (possibly
+    // in-progress) history instead of sending again.
+    if (retry && await _turnAlreadyCommitted(text)) {
+      await _resumeAndLoad();
+      return;
+    }
     setState(() {
       _sending = true;
       _error = null;
@@ -902,9 +934,13 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
         setState(() {
           _planActive = _plan;
           _planToggledByUser = false;
-          // The pending pick (if any) is now the thread's active effort.
+          // The effort this turn ran with is now the thread's active effort.
           _effortActive = effort;
-          _effort = null;
+          // Clear the pending pick ONLY if the user hasn't chosen a NEWER effort
+          // while this turn was being sent. A mid-send `_pickEffort` sets
+          // `_effort` (and persists it) for the next turn; blindly nulling it
+          // here would silently revert that change (R4).
+          if (_effort == effort) _effort = null;
         });
         // Remember this thread's mode + effort so resuming/switching restores it.
         if (_threadId != null) {
@@ -943,6 +979,28 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
         });
       }
     }
+  }
+
+  /// Whether the server already recorded [text] as the latest user turn — i.e.
+  /// a send committed before the socket dropped. Makes retry idempotent so a
+  /// dropped-but-committed turn isn't sent (and recorded) twice. Returns false
+  /// if the host can't be reached, so an indeterminate case falls through to a
+  /// normal re-send (the prior, less-safe behaviour) rather than losing the turn.
+  Future<bool> _turnAlreadyCommitted(String text) async {
+    final tid = _threadId;
+    if (tid == null) return false;
+    try {
+      final api = ref.read(bridgeApiProvider);
+      await api.appThreadResume(widget.serviceKey, tid);
+      final history = await api.appThreadRead(widget.serviceKey, tid);
+      final want = text.trim();
+      for (final i in history.items.reversed) {
+        if (i.itemType == 'userMessage') return i.text.trim() == want;
+      }
+    } catch (_) {
+      // Indeterminate (host unreachable) — fall through to a normal re-send.
+    }
+    return false;
   }
 
   /// Carry out the plan the model just produced: leave plan mode and start a
@@ -1195,6 +1253,23 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
     await ref
         .read(bridgeApiProvider)
         .appRespondApproval(widget.serviceKey, prompt.requestId!, decision);
+  }
+
+  /// Answer a `request_user_input` elicitation. `answers` maps each question id
+  /// to the chosen answer string(s); an empty map cancels (the turn proceeds
+  /// without an answer). Sends the codex `ToolRequestUserInputResponse` shape.
+  Future<void> _answerUserInput(
+    AppEvent prompt,
+    Map<String, List<String>> answers,
+  ) async {
+    setState(() => _approvals.remove(prompt));
+    await ref
+        .read(bridgeApiProvider)
+        .appRespondUserInput(
+          widget.serviceKey,
+          prompt.requestId!,
+          jsonEncode(answers),
+        );
   }
 
   /// Scroll to the latest message. Auto-follow only when already pinned to the
@@ -1759,8 +1834,15 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
                   ),
           ),
         ),
-        // Inline command-approval prompts (errors/prompts stay actionable).
-        for (final a in _approvals) _ApprovalCard(prompt: a, onDecide: _decide),
+        // Inline server requests: a `request_user_input` elicitation renders as
+        // an interactive question card (the model is asking the user, not
+        // requesting permission); everything else is a command/file/permission
+        // approval.
+        for (final a in _approvals)
+          if (a.kind == 'item/tool/requestUserInput')
+            _UserInputCard(prompt: a, onAnswer: _answerUserInput)
+          else
+            _ApprovalCard(prompt: a, onDecide: _decide),
         // After a plan-mode turn, offer to implement the plan (persists across
         // restart since it's derived from the trailing plan item).
         if (_planReady) _implementBar(l10n),
@@ -2720,6 +2802,251 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
 /// (`accept`/`decline`/`acceptForSession`). The request stays pending on the
 /// host until answered — even across app restarts (replayed on resume) — so
 /// the user can always come back and decide.
+/// One question parsed from a `request_user_input` elicitation.
+class _UiQuestion {
+  const _UiQuestion({
+    required this.id,
+    required this.header,
+    required this.question,
+    required this.isOther,
+    required this.isSecret,
+    required this.options,
+  });
+  final String id;
+  final String header;
+  final String question;
+  final bool isOther;
+  final bool isSecret;
+  final List<({String label, String? description})> options;
+}
+
+/// Interactive card for an `item/tool/requestUserInput` elicitation: the model
+/// is asking the user structured questions (NOT requesting permission to run a
+/// command, so "完全放行" does not — and should not — suppress it). Each
+/// question's options render as selectable chips; `isOther` adds a free-text
+/// field; `isSecret` obscures it. Submitting sends one answer per question id;
+/// cancel sends an empty answer set so the turn proceeds without input.
+class _UserInputCard extends StatefulWidget {
+  const _UserInputCard({required this.prompt, required this.onAnswer});
+  final AppEvent prompt;
+  final Future<void> Function(AppEvent, Map<String, List<String>>) onAnswer;
+
+  @override
+  State<_UserInputCard> createState() => _UserInputCardState();
+}
+
+class _UserInputCardState extends State<_UserInputCard> {
+  // Sentinel "choice" meaning the free-text 其他 field for a question.
+  static const _other = ' other';
+  late final List<_UiQuestion> _questions = _parse(widget.prompt.raw);
+  final Map<String, String> _choice = {}; // qid -> option label or _other
+  final Map<String, TextEditingController> _otherCtrls = {};
+  bool _submitting = false;
+
+  @override
+  void dispose() {
+    for (final c in _otherCtrls.values) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
+  static List<_UiQuestion> _parse(String raw) {
+    try {
+      final m = jsonDecode(raw) as Map<String, dynamic>;
+      final qs = (m['questions'] as List?) ?? const [];
+      final out = <_UiQuestion>[];
+      for (final q in qs) {
+        if (q is! Map<String, dynamic>) continue;
+        final id = q['id'] as String?;
+        if (id == null || id.isEmpty) continue;
+        final opts = <({String label, String? description})>[];
+        for (final o in (q['options'] as List?) ?? const []) {
+          if (o is! Map<String, dynamic>) continue;
+          final label = o['label'] as String?;
+          if (label == null || label.isEmpty) continue;
+          opts.add((label: label, description: o['description'] as String?));
+        }
+        out.add(
+          _UiQuestion(
+            id: id,
+            header: (q['header'] as String?) ?? '',
+            question: (q['question'] as String?) ?? '',
+            isOther: (q['isOther'] as bool?) ?? false,
+            isSecret: (q['isSecret'] as bool?) ?? false,
+            options: opts,
+          ),
+        );
+      }
+      return out;
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  TextEditingController _ctrl(String qid) =>
+      _otherCtrls.putIfAbsent(qid, TextEditingController.new);
+
+  String? _answer(_UiQuestion q) {
+    final c = _choice[q.id];
+    if (c == null) return null;
+    if (c == _other) {
+      final t = _ctrl(q.id).text.trim();
+      return t.isEmpty ? null : t;
+    }
+    return c;
+  }
+
+  bool get _complete =>
+      _questions.isNotEmpty && _questions.every((q) => _answer(q) != null);
+
+  Future<void> _submit() async {
+    final answers = <String, List<String>>{};
+    for (final q in _questions) {
+      final a = _answer(q);
+      if (a != null) answers[q.id] = [a];
+    }
+    setState(() => _submitting = true);
+    await widget.onAnswer(widget.prompt, answers);
+  }
+
+  Future<void> _cancel() async {
+    setState(() => _submitting = true);
+    await widget.onAnswer(widget.prompt, const {});
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      key: const Key('user-input-card'),
+      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHigh,
+        border: Border.all(color: scheme.outlineVariant, width: 0.5),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.help_outline, size: 18, color: scheme.primary),
+                const SizedBox(width: 9),
+                Expanded(
+                  child: Text(
+                    l10n.userInputTitle,
+                    style: TextStyle(
+                      color: scheme.onSurface,
+                      fontWeight: FontWeight.w500,
+                      fontSize: 14,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            if (_questions.isEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: SelectableText(
+                  widget.prompt.raw,
+                  style: const TextStyle(fontSize: 12),
+                ),
+              )
+            else
+              for (final q in _questions) _questionBlock(context, q, scheme),
+            const SizedBox(height: 6),
+            Wrap(
+              alignment: WrapAlignment.end,
+              spacing: 8,
+              children: [
+                TextButton(
+                  onPressed: _submitting ? null : _cancel,
+                  child: Text(l10n.cancel),
+                ),
+                FilledButton(
+                  key: const Key('user-input-submit'),
+                  onPressed: (_complete && !_submitting) ? _submit : null,
+                  child: Text(l10n.userInputSubmit),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _questionBlock(BuildContext context, _UiQuestion q, ColorScheme scheme) {
+    final l10n = AppLocalizations.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(top: 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (q.header.isNotEmpty)
+            Text(
+              q.header,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: scheme.onSurfaceVariant,
+              ),
+            ),
+          if (q.question.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: Text(q.question, style: const TextStyle(fontSize: 13.5)),
+            ),
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 8,
+            runSpacing: 6,
+            children: [
+              for (final o in q.options)
+                ChoiceChip(
+                  label: Text(o.label),
+                  tooltip: (o.description != null && o.description!.isNotEmpty)
+                      ? o.description
+                      : null,
+                  selected: _choice[q.id] == o.label,
+                  onSelected: _submitting
+                      ? null
+                      : (_) => setState(() => _choice[q.id] = o.label),
+                ),
+              if (q.isOther)
+                ChoiceChip(
+                  label: Text(l10n.userInputOther),
+                  selected: _choice[q.id] == _other,
+                  onSelected: _submitting
+                      ? null
+                      : (_) => setState(() => _choice[q.id] = _other),
+                ),
+            ],
+          ),
+          if (q.isOther && _choice[q.id] == _other)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: TextField(
+                controller: _ctrl(q.id),
+                obscureText: q.isSecret,
+                onChanged: (_) => setState(() {}),
+                style: const TextStyle(fontSize: 13),
+                decoration: const InputDecoration(
+                  isDense: true,
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
 class _ApprovalCard extends StatelessWidget {
   const _ApprovalCard({required this.prompt, required this.onDecide});
   final AppEvent prompt;

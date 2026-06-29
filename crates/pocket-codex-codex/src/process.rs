@@ -355,6 +355,23 @@ fn build_command(
         }
     }
 
+    // Windows: `codex` is typically an npm shim (codex.cmd → node), and a
+    // windowless GUI parent (the Flutter desktop app) launching a console child
+    // makes Windows allocate a visible black console window that stays open for
+    // the child's lifetime — and closing it would kill codex. CREATE_NO_WINDOW
+    // suppresses that console while leaving the child fully functional; its
+    // stdout/stderr are already redirected to the log file by the caller, so no
+    // output is lost. `creation_flags` is a safe call (no `unsafe` needed), so
+    // the crate's `#![forbid(unsafe_code)]` still holds. This is the single
+    // command-construction site, so every spawn path (in-app host, watchdog
+    // respawn, CLI serve) inherits the fix.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+
     command
 }
 

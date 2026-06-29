@@ -586,6 +586,20 @@ pub fn app_respond_approval(
     app_session::respond_approval(&service_key, &request_id, &decision)
 }
 
+/// Answer an `item/tool/requestUserInput` elicitation (the model asking the user
+/// structured questions, NOT a command/file approval). `answers_json` is a JSON
+/// object mapping each question id to its chosen answer string(s) (option labels
+/// and/or free-text), e.g. `{"theme":["山水抒怀"]}`; an empty object `{}` cancels.
+/// The session layer wraps it into the protocol's `ToolRequestUserInputResponse`
+/// so the model actually receives the user's selections.
+pub fn app_respond_user_input(
+    service_key: String,
+    request_id: String,
+    answers_json: String,
+) -> Result<()> {
+    app_session::respond_user_input(&service_key, &request_id, &answers_json)
+}
+
 /// Resume an existing thread (load it into the session) before reading it or
 /// sending turns; otherwise the server reports "thread not found".
 pub fn app_thread_resume(service_key: String, thread_id: String) -> Result<()> {

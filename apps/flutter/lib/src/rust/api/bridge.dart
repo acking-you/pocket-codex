@@ -192,6 +192,22 @@ Future<void> appRespondApproval({
   decision: decision,
 );
 
+/// Answer an `item/tool/requestUserInput` elicitation (the model asking the user
+/// structured questions, NOT a command/file approval). `answers_json` is a JSON
+/// object mapping each question id to its chosen answer string(s) (option labels
+/// and/or free-text), e.g. `{"theme":["山水抒怀"]}`; an empty object `{}` cancels.
+/// The session layer wraps it into the protocol's `ToolRequestUserInputResponse`
+/// so the model actually receives the user's selections.
+Future<void> appRespondUserInput({
+  required String serviceKey,
+  required String requestId,
+  required String answersJson,
+}) => RustLib.instance.api.crateApiBridgeAppRespondUserInput(
+  serviceKey: serviceKey,
+  requestId: requestId,
+  answersJson: answersJson,
+);
+
 /// Resume an existing thread (load it into the session) before reading it or
 /// sending turns; otherwise the server reports "thread not found".
 Future<void> appThreadResume({
