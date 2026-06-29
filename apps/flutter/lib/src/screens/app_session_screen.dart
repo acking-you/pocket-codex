@@ -421,6 +421,16 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
       _error = null;
       _retry = null;
       _planActive = false;
+      // Reset the per-thread settings to neutral defaults too: an existing
+      // thread restores model / permission / plan / effort from its persisted
+      // config (+ server) in _resumeAndLoad, and a new one re-seeds below.
+      // Without this, switching to a thread with no (or unreachable) persisted
+      // config would inherit — and then re-persist — the previous thread's
+      // model + permission mode (which the server never restores).
+      _model = null;
+      _mode = PermissionMode.auto;
+      _plan = false;
+      _planToggledByUser = false;
       // Drop the previous thread's effort (pending pick + active) so an unsent
       // pick on the old thread can't leak into this one; _resumeAndLoad re-seeds
       // _effortActive from the server / per-thread memory.
@@ -461,7 +471,15 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
     _sub = ref
         .read(bridgeApiProvider)
         .appEvents(widget.serviceKey)
-        .listen(_onEvent, onDone: _onStreamClosed);
+        // onError as well as onDone: the bridge errors the stream (rather than
+        // closing it) when the service isn't connected yet, so treat both as a
+        // dropped connection and auto-reconnect instead of waiting for the
+        // periodic health check.
+        .listen(
+          _onEvent,
+          onError: (_) => _onStreamClosed(),
+          onDone: _onStreamClosed,
+        );
   }
 
   void _onStreamClosed() {
@@ -569,6 +587,20 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
             serverEffort ??
             ReasoningEffort.fromWire(persisted.reasoningEffort) ??
             (tid != null ? _effortByThread[tid] : null);
+        // Drop a restored effort the restored model can't run (mirrors the guard
+        // in _pickModel/_seedDefaults) so a stale persisted pairing never asserts
+        // an unsupported level on the next turn.
+        final restoredModel = _model;
+        final restoredEffort = _effortActive;
+        if (restoredModel != null &&
+            restoredEffort != null &&
+            !restoredModel.supportedReasoningEfforts.contains(
+              restoredEffort.wire,
+            )) {
+          _effortActive = ReasoningEffort.fromWire(
+            restoredModel.defaultReasoningEffort,
+          );
+        }
         // Seed the status gauge + branch chip + cwd from the thread metadata.
         // _cwd may be null if the thread was opened without it (e.g. a default
         // folder that codex resolved to a real path) — adopt the resolved cwd
@@ -845,6 +877,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
           });
         }
         _loadThreads();
+        // Persist this new thread's config now that it has a server-side id, so
+        // it's stored even if the first turn/start below fails.
+        _persistThreadConfig();
       }
       // Pass the current model + permission + collaboration mode every turn:
       // turn/start overrides apply to this and subsequent turns, so switching
@@ -2533,6 +2568,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
 
   Future<void> _pickModel() async {
     final l10n = AppLocalizations.of(context);
+    final startTid = _threadId;
     final models = await _ensureModels();
     if (!mounted) return;
     final chosen = await _optionSheet<ModelInfo?>(
@@ -2553,6 +2589,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
           ),
       ],
     );
+    // Guard a thread switch during the sheet, so the pick + persist target the
+    // thread the user was actually looking at.
+    if (!mounted || _threadId != startTid) return;
     if (chosen != null || models.isNotEmpty) {
       setState(() {
         _model = chosen;
@@ -2573,6 +2612,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
 
   Future<void> _pickMode() async {
     final l10n = AppLocalizations.of(context);
+    final startTid = _threadId;
     final chosen = await _optionSheet<PermissionMode>(
       title: l10n.permissionLabel,
       isSelected: (v) => v == _mode,
@@ -2586,6 +2626,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
           ),
       ],
     );
+    if (!mounted || _threadId != startTid) return;
     if (chosen != null) {
       setState(() => _mode = chosen);
       _rememberDefaults();
@@ -2605,6 +2646,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
 
   Future<void> _pickEffort() async {
     final l10n = AppLocalizations.of(context);
+    final startTid = _threadId;
     // Offer only the levels the active model supports (the selected model, else
     // the default/first) — codex models differ (some support xhigh/minimal but
     // not low/high). Fall back to all known levels if the model lists none.
@@ -2633,6 +2675,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
           ),
       ],
     );
+    if (!mounted || _threadId != startTid) return;
     if (chosen != null) {
       setState(() => _effort = chosen);
       _rememberDefaults();

@@ -307,5 +307,6 @@
   "deregisterFailed": "Couldn't deregister the service",
   "tunnelAppLabel": "App-server",
   "tunnelApiLabel": "API",
+  "tunnelMetaLabel": "Sessions (meta)",
   "tunnelOffline": "Offline"
 }

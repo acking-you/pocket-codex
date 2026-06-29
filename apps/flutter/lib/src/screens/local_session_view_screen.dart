@@ -138,7 +138,10 @@ class _LocalSessionViewState extends ConsumerState<LocalSessionViewScreen> {
       holders: live.holders,
       source: _source,
     );
-    if (mounted) {
+    // Only re-arm the poll when this viewer is still the visible route. On a
+    // successful resume it pushed the live conversation on top of us, and
+    // polling a backgrounded screen every 3s is wasted work.
+    if (mounted && (ModalRoute.of(context)?.isCurrent ?? true)) {
       _poll = Timer.periodic(_pollInterval, (_) => _load());
     }
   }

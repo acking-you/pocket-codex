@@ -904,15 +904,21 @@ class _LocalHostCard extends ConsumerWidget {
 
   /// Synthesize the discovery entry for one of this host's tunnels, so the
   /// shared [_confirmDeregister] flow (confirm + optimistic hide) can run.
+  String _keyFor(String kind) => switch (kind) {
+    'api' => host.apiServiceKey,
+    'meta' => host.metaServiceKey,
+    _ => host.appServiceKey,
+  };
+
   ServiceEntry _entry(String kind) => ServiceEntry(
     device: host.device,
     kind: kind,
     name: host.name,
-    key: kind == 'api' ? host.apiServiceKey : host.appServiceKey,
+    key: _keyFor(kind),
   );
 
   Future<void> _reregister(WidgetRef ref, String kind) async {
-    final key = kind == 'api' ? host.apiServiceKey : host.appServiceKey;
+    final key = _keyFor(kind);
     await ref
         .read(bridgeApiProvider)
         .appServeReregister(name: host.name, kind: kind);
@@ -1017,6 +1023,19 @@ class _LocalHostCard extends ConsumerWidget {
                     localTunnel: (name: host.name, kind: 'api'),
                   ),
                   onReregister: () => _reregister(ref, 'api'),
+                ),
+                Divider(height: 1, color: scheme.outlineVariant),
+                _TunnelRow(
+                  label: l10n.tunnelMetaLabel,
+                  addr: host.metaListenAddr,
+                  registered: host.metaRegistered,
+                  onDeregister: () => _confirmDeregister(
+                    context,
+                    ref,
+                    _entry('meta'),
+                    localTunnel: (name: host.name, kind: 'meta'),
+                  ),
+                  onReregister: () => _reregister(ref, 'meta'),
                 ),
               ],
             ),

@@ -23,7 +23,6 @@
 use std::{
     collections::HashMap,
     net::{SocketAddr, TcpStream},
-    path::PathBuf,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -154,23 +153,23 @@ fn client_instance_id() -> String {
 /// The process-global per-thread config store, shared by every local meta
 /// service: all hosts on this machine share one `CODEX_HOME` and therefore one
 /// config map, so they must write through one serialized store. Opened once,
-/// lazily; a store-open failure is fatal to hosting (it means the support dir
-/// is unwritable), which the caller surfaces.
-fn config_store() -> Arc<pocket_codex_host_svc::store::ConfigStore> {
+/// lazily, and the success cached; a store-open failure (an unresolvable /
+/// unwritable `CODEX_HOME`) is returned as an `Err` for the caller to surface
+/// as a hosting error rather than panicking the process (the bridge builds with
+/// `panic = "abort"`, so an `expect` here would take the whole app down).
+fn config_store() -> Result<Arc<pocket_codex_host_svc::store::ConfigStore>> {
     static STORE: OnceCell<Arc<pocket_codex_host_svc::store::ConfigStore>> = OnceCell::new();
     STORE
-        .get_or_init(|| {
+        .get_or_try_init(|| -> Result<Arc<pocket_codex_host_svc::store::ConfigStore>> {
             // Co-locate the config store with the sessions it annotates (under
             // CODEX_HOME) so every host on this machine shares one map.
-            let path = pocket_codex_host_svc::store::default_db_path()
-                .unwrap_or_else(|_| PathBuf::from("pocket-codex-threads.json"));
-            Arc::new(
-                runtime::runtime()
-                    .block_on(pocket_codex_host_svc::store::ConfigStore::open(path))
-                    .expect("opening the host meta config store"),
-            )
+            let path = pocket_codex_host_svc::store::default_db_path()?;
+            let store = runtime::runtime()
+                .block_on(pocket_codex_host_svc::store::ConfigStore::open(path))
+                .context("opening the host meta config store")?;
+            Ok(Arc::new(store))
         })
-        .clone()
+        .map(Arc::clone)
 }
 
 /// The resolved codex binary path (explicit override → persisted config →
@@ -341,6 +340,11 @@ pub fn serve_start(
         .block_on(pocket_codex_api_proxy::check_auth())
         .context("hosting needs a codex login; run `codex login` first")?;
 
+    // Open the (process-global) meta config store before spawning anything, so an
+    // unwritable CODEX_HOME surfaces as a hosting error here instead of after a
+    // codex child is already running (or via a panic in the supervisor).
+    let config_store = config_store()?;
+
     // Spawn codex. Runs on the flutter_rust_bridge worker thread (not the UI
     // thread), so the port-resolve poll inside `spawn` is fine.
     let spawn_opts = SpawnOptions {
@@ -397,7 +401,7 @@ pub fn serve_start(
         meta_local,
         meta_std,
         app_local,
-        config_store(),
+        config_store,
     ));
 
     // Pin the watchdog's respawn to the resolved codex port.
@@ -518,6 +522,9 @@ pub fn serve_deregister(name: &str, kind: &str) -> Result<()> {
                     h.abort();
                 }
             },
+            // `kind` came from FromStr, which never yields Unknown; arm exists
+            // only to keep the match exhaustive.
+            ServiceKind::Unknown => {},
         }
         (ls.device.clone(), ls.name.clone())
     };
@@ -594,6 +601,8 @@ pub fn serve_reregister(name: &str, kind: &str) -> Result<()> {
                 ));
             }
         },
+        // `kind` came from FromStr, which never yields Unknown.
+        ServiceKind::Unknown => {},
     }
     Ok(())
 }
@@ -611,7 +620,19 @@ pub fn serve_stop(name: &str) -> Result<()> {
             runtime::runtime().block_on(async {
                 let _ = account::deregister_service(&support, &device, "app", &svc_name).await;
                 let _ = account::deregister_service(&support, &device, "api", &svc_name).await;
-                let _ = account::deregister_service(&support, &device, "meta", &svc_name).await;
+                // Log the meta drop specifically: a backend not yet rebuilt with
+                // the `meta` kind rejects it, which is worth surfacing (the key
+                // then lingers until its lease expires).
+                if let Err(e) =
+                    account::deregister_service(&support, &device, "meta", &svc_name).await
+                {
+                    tracing::warn!(
+                        error = %format!("{e:#}"),
+                        service = %svc_name,
+                        "force-dropping the meta relay key on stop failed (older backend?); it \
+                         lingers until lease expiry"
+                    );
+                }
             });
         }
     }

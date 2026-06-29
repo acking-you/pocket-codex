@@ -501,6 +501,22 @@ Future<void> resumeLocalSession(
   final String? target;
   if (source.isRemote) {
     target = source.serviceKey;
+    // The Sessions tab / viewer reach the host only over the meta tunnel, so the
+    // app-server session isn't connected yet. Connect it now (mirroring the
+    // local path's ensureResumeTarget) — otherwise the conversation we open
+    // below resolves to "not connected" and shows an error after the success.
+    final bridge = ref.read(bridgeApiProvider);
+    if (target != null && !bridge.appIsConnected(target)) {
+      try {
+        await bridge.appConnect(target, appLocalPort);
+      } catch (e) {
+        if (context.mounted) {
+          messenger.showSnackBar(SnackBar(content: Text(friendlyError(e))));
+        }
+        return;
+      }
+    }
+    if (!context.mounted) return;
   } else {
     target = await ensureResumeTarget(ref);
     if (!context.mounted) return;

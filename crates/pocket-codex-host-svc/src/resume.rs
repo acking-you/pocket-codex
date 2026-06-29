@@ -115,3 +115,16 @@ async fn resume_into(app_ws_addr: SocketAddr, thread_id: &str) -> Result<()> {
         .context("thread/resume")?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn protected_pids_always_shields_this_process() {
+        // Whatever else it finds, the takeover must never be able to kill the
+        // process that's about to resume the rollout.
+        let addr: SocketAddr = "127.0.0.1:9".parse().expect("addr");
+        assert!(protected_pids(addr).contains(&std::process::id()));
+    }
+}

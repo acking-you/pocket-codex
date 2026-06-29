@@ -791,5 +791,8 @@ class AppLocalizationsZh extends AppLocalizations {
   String get tunnelApiLabel => 'API';
 
   @override
+  String get tunnelMetaLabel => '会话（meta）';
+
+  @override
   String get tunnelOffline => '已下架';
 }

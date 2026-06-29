@@ -91,7 +91,20 @@ struct ApiError(anyhow::Error);
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        (StatusCode::INTERNAL_SERVER_ERROR, format!("{:#}", self.0)).into_response()
+        let msg = format!("{:#}", self.0);
+        // Map the two well-known client-input conditions to their proper status
+        // (a missing session → 404, a turn running elsewhere → 409) so the
+        // contract is correct; everything else is a genuine 500. Matched on the
+        // message because the underlying ops return `anyhow` — these substrings
+        // are fixed strings in `sessions`/`resume` (keep them in sync).
+        let status = if msg.contains("no rollout found") {
+            StatusCode::NOT_FOUND
+        } else if msg.contains("running in another client") {
+            StatusCode::CONFLICT
+        } else {
+            StatusCode::INTERNAL_SERVER_ERROR
+        };
+        (status, msg).into_response()
     }
 }
 
@@ -170,6 +183,8 @@ async fn put_config(
     Path(id): Path<String>,
     Json(config): Json<ThreadConfig>,
 ) -> Result<Json<ThreadConfig>, ApiError> {
-    state.store.put(&id, config.clone()).await?;
-    Ok(Json(config))
+    state.store.put(&id, config).await?;
+    // Echo what is actually stored (re-read), not the request body, so the
+    // response reflects the persisted state.
+    Ok(Json(state.store.get(&id).await))
 }

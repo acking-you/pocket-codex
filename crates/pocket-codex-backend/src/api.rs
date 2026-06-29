@@ -272,6 +272,12 @@ async fn services(
         .into_iter()
         .filter(|k| k.starts_with(&prefix))
         .filter_map(|k| NamespacedServiceId::parse_key(&k))
+        // Only surface the kinds clients consume directly. The meta service is a
+        // colocated implementation detail (clients derive its key from the app
+        // key), and an unrecognised kind must never be sent — an older client
+        // can't deserialize a kind it doesn't know and would fail the whole
+        // listing, so omit both here.
+        .filter(|nsid| matches!(nsid.service.kind, ServiceKind::App | ServiceKind::Api))
         .map(|nsid| ServiceEntry {
             device: nsid.service.device,
             kind: nsid.service.kind,

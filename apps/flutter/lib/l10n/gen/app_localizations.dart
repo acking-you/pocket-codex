@@ -1580,6 +1580,12 @@ abstract class AppLocalizations {
   /// **'API'**
   String get tunnelApiLabel;
 
+  /// No description provided for @tunnelMetaLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Sessions (meta)'**
+  String get tunnelMetaLabel;
+
   /// No description provided for @tunnelOffline.
   ///
   /// In en, this message translates to:

@@ -49,14 +49,18 @@ fn meta_key_of(service_key: &str) -> Result<String> {
 /// by THIS app is served on loopback directly (no relay hop); any other is
 /// reached by subscribing to its broker tunnel (account mode).
 fn base_url(service_key: &str) -> Result<Url> {
-    let meta_key = meta_key_of(service_key)?;
+    // Loopback short-circuit only when THIS process actually hosts the viewed
+    // app-server — match its app key, not just the derived meta key, so a remote
+    // host that happens to share this device id + instance name can't misroute
+    // to our local loopback meta service.
     let base = if let Some(addr) = serve::serve_status()
         .into_iter()
-        .find(|s| s.meta_service_key == meta_key)
+        .find(|s| s.app_service_key == service_key)
         .map(|s| s.meta_listen_addr)
     {
         format!("http://{addr}")
     } else {
+        let meta_key = meta_key_of(service_key)?;
         let dir = runtime::support_dir()?;
         let sub = runtime::subscribe_account(meta_key, 0, &dir)
             .context("subscribing to the host meta tunnel")?;
@@ -165,4 +169,19 @@ pub fn config_put(
             .await
             .context("decoding config response")
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn meta_key_derives_from_any_pocket_codex_key() {
+        // app / api / meta all map to the same-device, same-name meta key.
+        assert_eq!(meta_key_of("pcx:dev:app:work").unwrap(), "pcx:dev:meta:work");
+        assert_eq!(meta_key_of("pcx:dev:api:x").unwrap(), "pcx:dev:meta:x");
+        assert_eq!(meta_key_of("pcx:dev:meta:y").unwrap(), "pcx:dev:meta:y");
+        // A non-pocket-codex key is rejected rather than silently mis-derived.
+        assert!(meta_key_of("not-a-key").is_err());
+    }
 }

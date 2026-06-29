@@ -87,15 +87,34 @@ impl ConfigStore {
             .unwrap_or_default()
     }
 
-    /// Upsert `thread_id`'s config and persist the whole map atomically. The
-    /// lock is held across the write so concurrent puts cannot interleave temp
-    /// files or lose an update.
+    /// Upsert `thread_id`'s config and persist the whole map atomically (temp +
+    /// rename). The in-memory lock serializes writes within this process;
+    /// before writing it re-reads the on-disk map so a concurrent write
+    /// from another host process sharing this `CODEX_HOME` (an app host + a
+    /// CLI host on one machine) is merged rather than clobbered — each
+    /// write lands on top of the freshest on-disk state. (A true
+    /// sub-write-window cross-process race is not fully prevented without
+    /// an OS file lock; it is an accepted edge for this convenience state.
+    /// No fsync is issued, so an unclean shutdown may lose the last write —
+    /// but the rename keeps the file from ever being partial.)
     pub async fn put(&self, thread_id: &str, config: ThreadConfig) -> Result<()> {
         let mut guard = self.inner.lock().await;
+        // Re-read the on-disk map under the lock so another process's entries
+        // survive — apply our change on top of the freshest state, not a stale
+        // in-memory snapshot.
+        if let Ok(bytes) = tokio::fs::read(&self.path).await {
+            if let Ok(on_disk) = serde_json::from_slice::<BTreeMap<String, ThreadConfig>>(&bytes) {
+                *guard = on_disk;
+            }
+        }
         guard.insert(thread_id.to_string(), config);
         let bytes =
             serde_json::to_vec_pretty(&*guard).context("serializing thread-config store")?;
-        let tmp = self.path.with_extension("json.tmp");
+        // A per-process temp name so two host processes writing concurrently
+        // can't corrupt each other's temp file before the atomic rename.
+        let tmp = self
+            .path
+            .with_extension(format!("{}.tmp", std::process::id()));
         tokio::fs::write(&tmp, &bytes)
             .await
             .with_context(|| format!("writing thread-config temp {}", tmp.display()))?;

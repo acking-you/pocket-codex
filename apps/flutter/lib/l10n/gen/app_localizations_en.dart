@@ -810,5 +810,8 @@ class AppLocalizationsEn extends AppLocalizations {
   String get tunnelApiLabel => 'API';
 
   @override
+  String get tunnelMetaLabel => 'Sessions (meta)';
+
+  @override
   String get tunnelOffline => 'Offline';
 }

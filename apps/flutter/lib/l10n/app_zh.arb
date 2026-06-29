@@ -274,5 +274,6 @@
   "deregisterFailed": "注销失败",
   "tunnelAppLabel": "App-server",
   "tunnelApiLabel": "API",
+  "tunnelMetaLabel": "会话（meta）",
   "tunnelOffline": "已下架"
 }

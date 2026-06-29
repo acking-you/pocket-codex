@@ -78,3 +78,33 @@ per-host bearer secret is a possible future hardening for the local-loopback leg
 **deployed backend must be rebuilt with the `Meta` variant** before a remote
 `meta` tunnel is accepted (`app`/`api` are unaffected; the local-loopback path
 works regardless). That redeploy is part of the Phase 2 rollout.
+
+Forward/backward compatibility: `ServiceKind` has a `#[serde(other)] Unknown`
+fallback, so a client never fails to parse a wire payload that carries a kind a
+newer peer introduced. The backend additionally omits `meta` (and any unknown
+kind) from `GET /v1/services`, so an **already-shipped** pre-Phase-2 app — which
+can't deserialize `meta` — is not broken by the rollout; the meta key is derived
+client-side from the app key and never needs to appear in that listing.
+
+## Known limitations
+
+* **Windows force-resume blast radius.** A force takeover on Windows can't name
+  the exact rollout holder, so it evicts from the whole `codex app-server`
+  process pool (minus the protected pids). A host running several unrelated codex
+  app-servers may therefore have one evicted by a remote force-resume. This is
+  inherited from the local takeover (`pocket_codex_codex::takeover`); the
+  killed/survived processes are reported back in the resume outcome.
+* **Cross-process config store.** When two host processes share one `CODEX_HOME`
+  (e.g. an app host and a CLI host at once), `put` re-reads + merges the on-disk
+  map under its lock so writes aren't clobbered, but a true sub-write-window race
+  is not fully prevented without an OS file lock — an accepted edge for this
+  convenience state. No `fsync`, so an unclean shutdown may lose the last write
+  (the atomic rename still guarantees the file is never partial).
+* **Idle meta subscription.** A remote viewer keeps its `meta:` broker
+  subscription registered (reused across re-opens, not a growing leak) until the
+  app exits; it self-heals if torn down. A `meta` disconnect-on-teardown is a
+  possible future tidy-up.
+* **Supervisor liveness.** The in-process api-proxy / meta supervisors restart
+  their inner server forever, so the only way a supervisor *task* ends is a
+  panic; the host-reuse path re-registers tunnels but does not re-spawn a
+  panicked supervisor (treated as a should-not-happen).
