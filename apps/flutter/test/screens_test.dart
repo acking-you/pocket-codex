@@ -1610,7 +1610,12 @@ void main() {
     // cache populated by the send above.
     api.readResult = const ThreadHistory(
       items: [
-        ThreadItem(id: 'u1', itemType: 'userMessage', title: '', text: 'plan it'),
+        ThreadItem(
+          id: 'u1',
+          itemType: 'userMessage',
+          title: '',
+          text: 'plan it',
+        ),
         ThreadItem(id: 'p1', itemType: 'plan', title: '', text: '# Step 1'),
       ],
       running: false,
