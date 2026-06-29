@@ -33,12 +33,19 @@ class RustBridgeApi implements BridgeApi {
   }
 
   @override
-  Future<AccountPoll> accountLoginPoll(String pollHandle, String backend) async {
+  Future<AccountPoll> accountLoginPoll(
+    String pollHandle,
+    String backend,
+  ) async {
     final p = await frb.accountLoginPoll(
       pollHandle: pollHandle,
       backend: backend,
     );
-    return AccountPoll(status: p.status, login: p.login, accountId: p.accountId);
+    return AccountPoll(
+      status: p.status,
+      login: p.login,
+      accountId: p.accountId,
+    );
   }
 
   @override
@@ -75,7 +82,9 @@ class RustBridgeApi implements BridgeApi {
   @override
   Future<AccountUser?> accountCurrentUser() async {
     final u = await frb.accountCurrentUser();
-    return u == null ? null : AccountUser(login: u.login, accountId: u.accountId);
+    return u == null
+        ? null
+        : AccountUser(login: u.login, accountId: u.accountId);
   }
 
   @override
@@ -118,6 +127,8 @@ class RustBridgeApi implements BridgeApi {
       appListenAddr: r.appListenAddr,
       apiServiceKey: r.apiServiceKey,
       apiListenAddr: r.apiListenAddr,
+      metaServiceKey: r.metaServiceKey,
+      metaListenAddr: r.metaListenAddr,
       pid: r.pid,
       reused: r.reused,
     );
@@ -139,6 +150,9 @@ class RustBridgeApi implements BridgeApi {
             apiListenAddr: s.apiListenAddr,
             apiServiceKey: s.apiServiceKey,
             apiRegistered: s.apiRegistered,
+            metaListenAddr: s.metaListenAddr,
+            metaServiceKey: s.metaServiceKey,
+            metaRegistered: s.metaRegistered,
           ),
         )
         .toList();
@@ -469,4 +483,127 @@ class RustBridgeApi implements BridgeApi {
         )
         .toList();
   }
+
+  // --- Remote (meta service) sessions + per-thread config ---
+
+  @override
+  Future<List<LocalSession>> metaSessions(String serviceKey) async {
+    final list = await frb.metaSessions(serviceKey: serviceKey);
+    return list
+        .map(
+          (s) => LocalSession(
+            threadId: s.threadId,
+            cwd: s.cwd,
+            preview: s.preview,
+            source: s.source,
+            updatedAt: s.updatedAt.toInt(),
+            turnState: s.turnState,
+            heldOpen: s.heldOpen,
+            safety: s.safety,
+            allowsResume: s.allowsResume,
+            requiresTakeover: s.requiresTakeover,
+          ),
+        )
+        .toList();
+  }
+
+  @override
+  Future<SessionLiveness> metaSessionLiveness(
+    String serviceKey,
+    String threadId,
+  ) async {
+    final v = await frb.metaSessionLiveness(
+      serviceKey: serviceKey,
+      threadId: threadId,
+    );
+    return SessionLiveness(
+      threadId: v.threadId,
+      turnState: v.turnState,
+      heldOpen: v.heldOpen,
+      safety: v.safety,
+      allowsResume: v.allowsResume,
+      requiresTakeover: v.requiresTakeover,
+      holders: v.holders
+          .map((h) => Holder(pid: h.pid.toInt(), name: h.name))
+          .toList(),
+    );
+  }
+
+  @override
+  Future<List<ThreadItem>> metaSessionTranscript(
+    String serviceKey,
+    String threadId,
+  ) async {
+    final items = await frb.metaSessionTranscript(
+      serviceKey: serviceKey,
+      threadId: threadId,
+    );
+    return items
+        .map(
+          (i) => ThreadItem(
+            id: i.id,
+            itemType: i.itemType,
+            title: i.title,
+            text: i.text,
+          ),
+        )
+        .toList();
+  }
+
+  @override
+  Future<ForceResumeReport> metaForceResume(
+    String serviceKey,
+    String threadId,
+  ) async {
+    final r = await frb.metaForceResume(
+      serviceKey: serviceKey,
+      threadId: threadId,
+    );
+    Holder map(frb.HolderDto h) => Holder(pid: h.pid.toInt(), name: h.name);
+    return ForceResumeReport(
+      killed: r.killed.map(map).toList(),
+      survived: r.survived.map(map).toList(),
+      stillHeld: r.stillHeld,
+      resumed: r.resumed,
+      resumeError: r.resumeError,
+    );
+  }
+
+  @override
+  Future<ThreadConfig> metaThreadConfigGet(
+    String serviceKey,
+    String threadId,
+  ) async {
+    final c = await frb.metaThreadConfigGet(
+      serviceKey: serviceKey,
+      threadId: threadId,
+    );
+    return _threadConfig(c);
+  }
+
+  @override
+  Future<ThreadConfig> metaThreadConfigSet(
+    String serviceKey,
+    String threadId,
+    ThreadConfig config,
+  ) async {
+    final c = await frb.metaThreadConfigSet(
+      serviceKey: serviceKey,
+      threadId: threadId,
+      config: frb.ThreadConfigDto(
+        model: config.model,
+        reasoningEffort: config.reasoningEffort,
+        permissionMode: config.permissionMode,
+        planMode: config.planMode,
+      ),
+    );
+    return _threadConfig(c);
+  }
+
+  ThreadConfig _threadConfig(frb.ThreadConfigDto c) => ThreadConfig(
+    model: c.model,
+    reasoningEffort: c.reasoningEffort,
+    permissionMode: c.permissionMode,
+    planMode: c.planMode,
+  );
 }

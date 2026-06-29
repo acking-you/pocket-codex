@@ -172,20 +172,23 @@ pub fn scan_sessions() -> Result<Vec<SessionInfo>> {
 
 /// Locate the rollout file for a given `thread_id`.
 ///
-/// The thread id is embedded verbatim in the rollout filename
-/// (`rollout-<timestamp>-<thread_id>.jsonl`), so this matches by
-/// filename substring. Returns `None` when no rollout exists for the id.
+/// The thread id is embedded verbatim at the end of the rollout filename
+/// (`rollout-<timestamp>-<thread_id>.jsonl`), so this anchors the match to that
+/// exact suffix — a bare `contains` would let one id match another whose id (or
+/// timestamp) merely contains it, resolving the wrong session. Returns `None`
+/// when no rollout exists for the id.
 pub fn rollout_path_for_thread(thread_id: &str) -> Result<Option<PathBuf>> {
     if thread_id.is_empty() {
         return Ok(None);
     }
+    let suffix = format!("-{thread_id}.jsonl");
     let dir = sessions_dir()?;
     let mut files = Vec::new();
     collect_jsonl(&dir, &mut files)?;
     Ok(files.into_iter().find(|p| {
         p.file_name()
             .and_then(|n| n.to_str())
-            .is_some_and(|n| n.contains(thread_id))
+            .is_some_and(|n| n.ends_with(&suffix))
     }))
 }
 

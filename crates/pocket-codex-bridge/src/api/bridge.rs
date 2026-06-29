@@ -8,7 +8,7 @@ use flutter_rust_bridge::frb;
 use pocket_codex_core::config::Mode;
 
 use crate::{
-    engine::{account, app_session, config, discovery, runtime, serve, sessions},
+    engine::{account, app_session, config, discovery, meta, runtime, serve, sessions},
     frb_generated::StreamSink,
 };
 
@@ -233,6 +233,10 @@ pub struct AppServeDto {
     pub api_service_key: String,
     /// Loopback `host:port` the in-app Responses API proxy is listening on.
     pub api_listen_addr: String,
+    /// `pcx:<device>:meta:<name>` key (the host meta service tunnel).
+    pub meta_service_key: String,
+    /// Loopback `host:port` the in-app meta service is listening on.
+    pub meta_listen_addr: String,
     /// The codex process id.
     pub pid: u32,
     /// Whether an already-running host was reused instead of freshly spawned.
@@ -262,6 +266,12 @@ pub struct AppServeStatusDto {
     pub api_service_key: String,
     /// The api tunnel is currently published.
     pub api_registered: bool,
+    /// Loopback `host:port` the meta service listens on.
+    pub meta_listen_addr: String,
+    /// `pcx:<device>:meta:<name>` key.
+    pub meta_service_key: String,
+    /// The meta tunnel is currently published.
+    pub meta_registered: bool,
 }
 
 /// Start hosting a local codex app-server **and** Responses API proxy under the
@@ -283,6 +293,8 @@ pub fn app_serve_start(
         app_listen_addr: r.app_listen_addr,
         api_service_key: r.api_service_key,
         api_listen_addr: r.api_listen_addr,
+        meta_service_key: r.meta_service_key,
+        meta_listen_addr: r.meta_listen_addr,
         pid: r.pid,
         reused: r.reused,
     })
@@ -303,19 +315,22 @@ pub fn app_serve_status() -> Vec<AppServeStatusDto> {
             api_listen_addr: s.api_listen_addr,
             api_service_key: s.api_service_key,
             api_registered: s.api_registered,
+            meta_listen_addr: s.meta_listen_addr,
+            meta_service_key: s.meta_service_key,
+            meta_registered: s.meta_registered,
         })
         .collect()
 }
 
-/// Take one tunnel (`kind` = `"app"`/`"api"`) of a local host off the relay
-/// without stopping the host — a reversible unpublish. The codex / API proxy
-/// keep running; [`app_serve_reregister`] re-publishes it instantly.
+/// Take one tunnel (`kind` = `"app"`/`"api"`/`"meta"`) of a local host off the
+/// relay without stopping the host — a reversible unpublish. The codex / API
+/// proxy / meta service keep running; [`app_serve_reregister`] re-publishes it.
 pub fn app_serve_deregister(name: String, kind: String) -> Result<()> {
     serve::serve_deregister(&name, &kind)
 }
 
-/// Re-publish a previously deregistered tunnel (`kind` = `"app"`/`"api"`) of a
-/// still-running local host.
+/// Re-publish a previously deregistered tunnel (`kind` = `"app"`/`"api"`/
+/// `"meta"`) of a still-running local host.
 pub fn app_serve_reregister(name: String, kind: String) -> Result<()> {
     serve::serve_reregister(&name, &kind)
 }
@@ -824,6 +839,142 @@ pub fn app_force_resume(service_key: String, thread_id: String) -> Result<ForceR
         resumed: outcome.resumed,
         resume_error: outcome.resume_error,
     })
+}
+
+// ---------------------------------------------------------------------------
+// Remote (meta service) sessions + per-thread config
+//
+// The same session inventory / transcript / force-resume as the `app_local_*`
+// functions above, but served by the *host's* meta service over its `meta:`
+// tunnel — so a phone can view and resume a desktop host's sessions, and so
+// per-thread config persists on the host and is shared across devices. Each
+// takes the app-server `service_key` being viewed; the matching meta key is
+// derived internally. When the host is this app, the meta service is reached
+// over loopback; otherwise through the account broker.
+// ---------------------------------------------------------------------------
+
+fn meta_holder_dto(h: pocket_codex_host_svc::sessions::Holder) -> HolderDto {
+    HolderDto {
+        pid: i64::from(h.pid),
+        name: h.name,
+    }
+}
+
+/// Per-thread session config persisted on the host (mirrored for Dart). Every
+/// field is optional: `None`/null means "no stored preference", so the UI falls
+/// back to its own default.
+pub struct ThreadConfigDto {
+    /// Selected model id, when pinned for this thread.
+    pub model: Option<String>,
+    /// Reasoning-effort tag (`minimal`/`low`/`medium`/`high`), when set.
+    pub reasoning_effort: Option<String>,
+    /// Permission / approval mode tag, when set.
+    pub permission_mode: Option<String>,
+    /// Whether plan mode is on for this thread, when set.
+    pub plan_mode: Option<bool>,
+}
+
+fn thread_config_dto(c: pocket_codex_host_svc::store::ThreadConfig) -> ThreadConfigDto {
+    ThreadConfigDto {
+        model: c.model,
+        reasoning_effort: c.reasoning_effort,
+        permission_mode: c.permission_mode,
+        plan_mode: c.plan_mode,
+    }
+}
+
+fn thread_config_from_dto(c: ThreadConfigDto) -> pocket_codex_host_svc::store::ThreadConfig {
+    pocket_codex_host_svc::store::ThreadConfig {
+        model: c.model,
+        reasoning_effort: c.reasoning_effort,
+        permission_mode: c.permission_mode,
+        plan_mode: c.plan_mode,
+    }
+}
+
+/// Remote analogue of [`app_local_sessions`]: list the sessions of the host
+/// behind `service_key` via its meta tunnel (loopback when this app is the
+/// host, broker when remote). Lets a phone see a desktop host's sessions —
+/// including those owned by another codex client.
+pub fn meta_sessions(service_key: String) -> Result<Vec<LocalSessionDto>> {
+    Ok(meta::sessions(&service_key)?
+        .into_iter()
+        .map(|s| LocalSessionDto {
+            thread_id: s.thread_id,
+            cwd: s.cwd,
+            preview: s.preview,
+            source: s.source,
+            updated_at: s.updated_at,
+            turn_state: s.turn_state,
+            held_open: s.held_open,
+            safety: s.safety,
+            allows_resume: s.allows_resume,
+            requires_takeover: s.requires_takeover,
+        })
+        .collect())
+}
+
+/// Remote analogue of [`app_session_liveness`].
+pub fn meta_session_liveness(service_key: String, thread_id: String) -> Result<SessionLivenessDto> {
+    let v = meta::session_liveness(&service_key, &thread_id)?;
+    Ok(SessionLivenessDto {
+        thread_id: v.thread_id,
+        turn_state: v.turn_state,
+        held_open: v.held_open,
+        safety: v.safety,
+        allows_resume: v.allows_resume,
+        requires_takeover: v.requires_takeover,
+        holders: v.holders.into_iter().map(meta_holder_dto).collect(),
+    })
+}
+
+/// Remote analogue of [`app_local_session_transcript`].
+pub fn meta_session_transcript(
+    service_key: String,
+    thread_id: String,
+) -> Result<Vec<ThreadItemDto>> {
+    Ok(meta::transcript(&service_key, &thread_id)?
+        .into_iter()
+        .map(|i| ThreadItemDto {
+            id: i.id,
+            item_type: i.item_type,
+            title: i.title,
+            text: i.text,
+        })
+        .collect())
+}
+
+/// Remote analogue of [`app_force_resume`]: the host evicts the rollout's live
+/// holders and resumes it into its colocated app-server over loopback. The UI
+/// must gate this on explicit confirmation and not offer it while a turn runs.
+pub fn meta_force_resume(service_key: String, thread_id: String) -> Result<ForceResumeReportDto> {
+    let o = meta::force_resume(&service_key, &thread_id)?;
+    Ok(ForceResumeReportDto {
+        killed: o.killed.into_iter().map(meta_holder_dto).collect(),
+        survived: o.survived.into_iter().map(meta_holder_dto).collect(),
+        still_held: o.still_held,
+        resumed: o.resumed,
+        resume_error: o.resume_error,
+    })
+}
+
+/// Read a thread's persisted config from the host behind `service_key`.
+pub fn meta_thread_config_get(service_key: String, thread_id: String) -> Result<ThreadConfigDto> {
+    Ok(thread_config_dto(meta::config_get(&service_key, &thread_id)?))
+}
+
+/// Persist a thread's config on the host behind `service_key`; returns the
+/// stored value.
+pub fn meta_thread_config_set(
+    service_key: String,
+    thread_id: String,
+    config: ThreadConfigDto,
+) -> Result<ThreadConfigDto> {
+    Ok(thread_config_dto(meta::config_put(
+        &service_key,
+        &thread_id,
+        thread_config_from_dto(config),
+    )?))
 }
 
 // ---------------------------------------------------------------------------

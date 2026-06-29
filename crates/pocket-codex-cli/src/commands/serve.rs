@@ -188,6 +188,33 @@ async fn serve_account(
     ui::headline(ui::Tone::Ok, "account register");
     ui::field("backend", backend);
     ui::field("service", &format!("{device}/app/{name}"));
+
+    // Expose the host meta service alongside the app tunnel so a CLI-hosted
+    // server's sessions are remote-viewable (#5) and its per-thread config
+    // persists (#2) — parity with the in-app host. Best-effort: a meta failure
+    // must not stop the app-server from serving.
+    match spawn_meta_service(local).await {
+        Ok(meta_local) => {
+            let connector = connector.clone();
+            let tokens = tokens.clone();
+            let dev = device.to_string();
+            let nm = name.to_string();
+            tokio::spawn(async move {
+                run_register(connector, tokens, RegisterConfig {
+                    device: dev,
+                    kind: ServiceKind::Meta,
+                    name: nm,
+                    client_instance_id: account::client_instance_id(),
+                    local_addr: meta_local,
+                    idle: ACCOUNT_DATA_IDLE,
+                })
+                .await;
+            });
+            ui::field("meta", &format!("{device}/meta/{name}"));
+        },
+        Err(e) => ui::warn(&format!("host meta service unavailable: {e:#}")),
+    }
+
     ui::headline(ui::Tone::Action, "exposing — keep this running, Ctrl-C to stop");
 
     run_register(connector, tokens, RegisterConfig {
@@ -200,6 +227,33 @@ async fn serve_account(
     })
     .await;
     Ok(())
+}
+
+/// Bind a loopback listener for the host meta service, start it (resuming into
+/// the colocated app-server at `app_ws` and persisting per-thread config under
+/// `CODEX_HOME`), and return its bound address so the caller can register a
+/// `meta:` tunnel for it. The task lives for the lifetime of this foreground
+/// `serve`; process exit on Ctrl-C tears it down.
+async fn spawn_meta_service(app_ws: SocketAddr) -> Result<SocketAddr> {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .context("binding the host meta service listener")?;
+    let addr = listener
+        .local_addr()
+        .context("reading the meta service listener address")?;
+    let db_path = pocket_codex_host_svc::store::default_db_path()
+        .context("resolving the meta config store path")?;
+    let store = Arc::new(
+        pocket_codex_host_svc::store::ConfigStore::open(db_path)
+            .await
+            .context("opening the meta config store")?,
+    );
+    tokio::spawn(async move {
+        if let Err(e) = pocket_codex_host_svc::serve(listener, app_ws, store).await {
+            ui::warn(&format!("host meta service exited: {e:#}"));
+        }
+    });
+    Ok(addr)
 }
 
 fn print_serve_summary(

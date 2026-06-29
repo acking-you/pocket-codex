@@ -113,7 +113,17 @@ class AppLocalizationsEn extends AppLocalizations {
   String get navAppServer => 'App-server';
 
   @override
+  String get navSessions => 'Sessions';
+
+  @override
   String get navHosting => 'Hosting';
+
+  @override
+  String get sessionsHostLabel => 'Host';
+
+  @override
+  String get sessionsNoHost =>
+      'Connect an app-server first, then its sessions show here.';
 
   @override
   String appServerSubtitle(String device) {
@@ -798,6 +808,9 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get tunnelApiLabel => 'API';
+
+  @override
+  String get tunnelMetaLabel => 'Sessions (meta)';
 
   @override
   String get tunnelOffline => 'Offline';

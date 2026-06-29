@@ -10,6 +10,7 @@ import 'package:pocket_codex/src/bridge_api.dart';
 import 'package:pocket_codex/src/error_format.dart';
 import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/screens/api_service_screen.dart';
+import 'package:pocket_codex/src/screens/local_sessions_screen.dart';
 import 'package:pocket_codex/src/widgets/brand_logo.dart';
 import 'package:pocket_codex/src/widgets/loading.dart';
 import 'package:pocket_codex/src/widgets/status_dots.dart';
@@ -86,6 +87,10 @@ class _ServicesScreenState extends ConsumerState<ServicesScreen>
     final sections = <ServicesSection>[
       ServicesSection.api,
       ServicesSection.appServer,
+      // Remote-viewable host sessions are an account-mode feature (the meta
+      // tunnel rides the account broker; a host hosted by this app is reached
+      // over loopback).
+      if (account) ServicesSection.sessions,
       if (_hostingSupported && account) ServicesSection.hosting,
     ];
     var section = ref.watch(servicesSectionProvider);
@@ -96,11 +101,13 @@ class _ServicesScreenState extends ConsumerState<ServicesScreen>
     IconData iconFor(ServicesSection s) => switch (s) {
       ServicesSection.api => Icons.api,
       ServicesSection.appServer => Icons.smart_toy_outlined,
+      ServicesSection.sessions => Icons.forum_outlined,
       ServicesSection.hosting => Icons.dns_outlined,
     };
     String labelFor(ServicesSection s) => switch (s) {
       ServicesSection.api => l10n.navApi,
       ServicesSection.appServer => l10n.navAppServer,
+      ServicesSection.sessions => l10n.navSessions,
       ServicesSection.hosting => l10n.navHosting,
     };
 
@@ -198,9 +205,12 @@ class _ServicesScreenState extends ConsumerState<ServicesScreen>
               onTapApp: (key) =>
                   context.push('/app/${Uri.encodeComponent(key)}'),
             );
-            // Desktop API tab keeps the master-detail (list + inline detail);
-            // every other tab is just the section list, full width.
-            final Widget content = wide && section == ServicesSection.api
+            // The Sessions tab is its own widget (host picker + that host's
+            // remote sessions); the desktop API tab keeps the master-detail
+            // (list + inline detail); every other tab is just the section list.
+            final Widget content = section == ServicesSection.sessions
+                ? _SessionsTab(services: services)
+                : wide && section == ServicesSection.api
                 ? Row(
                     children: [
                       SizedBox(width: 360, child: list),
@@ -252,6 +262,81 @@ class _ServicesScreenState extends ConsumerState<ServicesScreen>
           },
         ),
       ),
+    );
+  }
+}
+
+/// The Sessions tab: pick a connected host, then browse that host's CODEX_HOME
+/// sessions over its meta tunnel (loopback when this app hosts it, broker when
+/// remote). Read-only transcripts + force-resume per session, via an embedded
+/// [LocalSessionsScreen] in remote mode.
+class _SessionsTab extends ConsumerWidget {
+  const _SessionsTab({required this.services});
+
+  final List<ServiceEntry> services;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final l10n = AppLocalizations.of(context);
+    final hosts = services.where((s) => s.kind == 'app').toList();
+    if (hosts.isEmpty) {
+      return Center(
+        key: const ValueKey('sessions-no-host'),
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Text(l10n.sessionsNoHost, textAlign: TextAlign.center),
+        ),
+      );
+    }
+    final selected = ref.watch(sessionsHostKeyProvider);
+    final activeKey = hosts.any((h) => h.key == selected)
+        ? selected!
+        : hosts.first.key;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+          child: Row(
+            children: [
+              const Icon(Icons.dns_outlined, size: 18),
+              const SizedBox(width: 10),
+              Text(l10n.sessionsHostLabel),
+              const SizedBox(width: 12),
+              Expanded(
+                child: DropdownButton<String>(
+                  key: const Key('sessions-host-picker'),
+                  isExpanded: true,
+                  value: activeKey,
+                  items: [
+                    for (final h in hosts)
+                      DropdownMenuItem(
+                        value: h.key,
+                        child: Text(
+                          '${h.device} · ${h.name}',
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                  ],
+                  onChanged: (k) {
+                    if (k != null) {
+                      ref.read(sessionsHostKeyProvider.notifier).state = k;
+                    }
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+        const Divider(height: 1),
+        Expanded(
+          child: LocalSessionsScreen(
+            key: ValueKey('remote-sessions-$activeKey'),
+            source: SessionSource.remote(activeKey),
+            embedded: true,
+          ),
+        ),
+      ],
     );
   }
 }
@@ -498,6 +583,9 @@ class _ServiceList extends ConsumerWidget {
         ),
         const _AddLocalHostCard(),
       ],
+      // The Sessions tab is rendered by [_SessionsTab], not this list, so it is
+      // never passed here; the arm exists only to keep the switch exhaustive.
+      ServicesSection.sessions => const <Widget>[],
     };
 
     return ListView(
@@ -816,15 +904,21 @@ class _LocalHostCard extends ConsumerWidget {
 
   /// Synthesize the discovery entry for one of this host's tunnels, so the
   /// shared [_confirmDeregister] flow (confirm + optimistic hide) can run.
+  String _keyFor(String kind) => switch (kind) {
+    'api' => host.apiServiceKey,
+    'meta' => host.metaServiceKey,
+    _ => host.appServiceKey,
+  };
+
   ServiceEntry _entry(String kind) => ServiceEntry(
     device: host.device,
     kind: kind,
     name: host.name,
-    key: kind == 'api' ? host.apiServiceKey : host.appServiceKey,
+    key: _keyFor(kind),
   );
 
   Future<void> _reregister(WidgetRef ref, String kind) async {
-    final key = kind == 'api' ? host.apiServiceKey : host.appServiceKey;
+    final key = _keyFor(kind);
     await ref
         .read(bridgeApiProvider)
         .appServeReregister(name: host.name, kind: kind);
@@ -929,6 +1023,19 @@ class _LocalHostCard extends ConsumerWidget {
                     localTunnel: (name: host.name, kind: 'api'),
                   ),
                   onReregister: () => _reregister(ref, 'api'),
+                ),
+                Divider(height: 1, color: scheme.outlineVariant),
+                _TunnelRow(
+                  label: l10n.tunnelMetaLabel,
+                  addr: host.metaListenAddr,
+                  registered: host.metaRegistered,
+                  onDeregister: () => _confirmDeregister(
+                    context,
+                    ref,
+                    _entry('meta'),
+                    localTunnel: (name: host.name, kind: 'meta'),
+                  ),
+                  onReregister: () => _reregister(ref, 'meta'),
                 ),
               ],
             ),

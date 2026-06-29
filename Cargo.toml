@@ -5,6 +5,7 @@ members = [
     "crates/pocket-codex-codex",
     "crates/pocket-codex-pb",
     "crates/pocket-codex-api-proxy",
+    "crates/pocket-codex-host-svc",
     "crates/pocket-codex-cli",
     "crates/pocket-codex-bridge",
     "crates/pocket-codex-account-proto",
@@ -49,6 +50,7 @@ pocket-codex-account-proto = { path = "crates/pocket-codex-account-proto" }
 pocket-codex-codex = { path = "crates/pocket-codex-codex" }
 pocket-codex-pb = { path = "crates/pocket-codex-pb" }
 pocket-codex-api-proxy = { path = "crates/pocket-codex-api-proxy" }
+pocket-codex-host-svc = { path = "crates/pocket-codex-host-svc" }
 
 # Async runtime
 tokio = { version = "1.40", features = ["full"] }

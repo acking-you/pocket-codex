@@ -91,23 +91,27 @@ class ChatLoadingSkeleton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    Widget bubble({required bool me, required double w, int lines = 1}) => Align(
-      alignment: me ? Alignment.centerRight : Alignment.centerLeft,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 9),
-        child: Column(
-          crossAxisAlignment: me
-              ? CrossAxisAlignment.end
-              : CrossAxisAlignment.start,
-          children: [
-            for (var i = 0; i < lines; i++) ...[
-              SkeletonBox(width: w * (i == lines - 1 ? 0.55 : 1), height: 12),
-              if (i < lines - 1) const SizedBox(height: 7),
-            ],
-          ],
-        ),
-      ),
-    );
+    Widget bubble({required bool me, required double w, int lines = 1}) =>
+        Align(
+          alignment: me ? Alignment.centerRight : Alignment.centerLeft,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 9),
+            child: Column(
+              crossAxisAlignment: me
+                  ? CrossAxisAlignment.end
+                  : CrossAxisAlignment.start,
+              children: [
+                for (var i = 0; i < lines; i++) ...[
+                  SkeletonBox(
+                    width: w * (i == lines - 1 ? 0.55 : 1),
+                    height: 12,
+                  ),
+                  if (i < lines - 1) const SizedBox(height: 7),
+                ],
+              ],
+            ),
+          ),
+        );
 
     return Shimmer(
       child: Center(

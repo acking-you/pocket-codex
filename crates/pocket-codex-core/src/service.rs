@@ -6,7 +6,7 @@
 //!                      │      │          │        └── instance name
 //!                      │      │          │            (e.g. "default", "work")
 //!                      │      │          └─────────── ServiceKind::as_key_segment
-//!                      │      │                       ("app" | "api")
+//!                      │      │                       ("app" | "api" | "meta")
 //!                      │      └────────────────────── sanitised host id
 //!                      │                              (default: hostname)
 //!                      └───────────────────────────── SERVICE_KEY_PREFIX
@@ -40,6 +40,17 @@ pub enum ServiceKind {
     App,
     /// Responses API proxy service.
     Api,
+    /// Host-side meta service (session inventory + per-thread config), exposed
+    /// alongside an `app`/`api` host so its local sessions are remote-viewable.
+    Meta,
+    /// A service kind this build does not recognise — e.g. one a newer peer
+    /// introduced. Only ever produced by **deserialization**
+    /// (`#[serde(other)]`), so an older client tolerates a future kind in a
+    /// wire payload (it ignores the entry) instead of failing to parse the
+    /// whole message. Never constructed for our own keys; not produced by
+    /// [`FromStr`] (key parsing stays strict).
+    #[serde(other)]
+    Unknown,
 }
 
 impl ServiceKind {
@@ -48,6 +59,8 @@ impl ServiceKind {
         match self {
             Self::App => "app",
             Self::Api => "api",
+            Self::Meta => "meta",
+            Self::Unknown => "unknown",
         }
     }
 }
@@ -65,6 +78,7 @@ impl FromStr for ServiceKind {
         match raw {
             "app" => Ok(Self::App),
             "api" => Ok(Self::Api),
+            "meta" => Ok(Self::Meta),
             _ => Err(()),
         }
     }
@@ -169,6 +183,31 @@ mod tests {
         assert_eq!(id.device, "studio");
         assert_eq!(id.kind, ServiceKind::Api);
         assert_eq!(id.name, "default");
+    }
+
+    #[test]
+    fn service_kind_meta_round_trips_on_the_wire() {
+        assert_eq!(serde_json::to_string(&ServiceKind::Meta).expect("ser"), "\"meta\"");
+        assert_eq!(serde_json::from_str::<ServiceKind>("\"meta\"").expect("de"), ServiceKind::Meta);
+        assert_eq!(
+            ServiceId::parse_key("pcx:dev:meta:default")
+                .expect("parse")
+                .kind,
+            ServiceKind::Meta
+        );
+    }
+
+    #[test]
+    fn unknown_service_kind_deserializes_instead_of_erroring() {
+        // Forward-compat: a future kind a newer peer sends must deserialize to
+        // `Unknown` (the older client ignores the entry) rather than failing the
+        // whole payload.
+        assert_eq!(
+            serde_json::from_str::<ServiceKind>("\"phase3\"").expect("forward-compat de"),
+            ServiceKind::Unknown
+        );
+        // Key parsing stays strict: an unknown kind is not a valid pcx key.
+        assert!(ServiceId::parse_key("pcx:dev:phase3:default").is_none());
     }
 
     #[test]

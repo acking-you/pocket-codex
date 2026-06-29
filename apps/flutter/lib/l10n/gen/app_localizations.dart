@@ -296,11 +296,29 @@ abstract class AppLocalizations {
   /// **'App-server'**
   String get navAppServer;
 
+  /// No description provided for @navSessions.
+  ///
+  /// In en, this message translates to:
+  /// **'Sessions'**
+  String get navSessions;
+
   /// No description provided for @navHosting.
   ///
   /// In en, this message translates to:
   /// **'Hosting'**
   String get navHosting;
+
+  /// No description provided for @sessionsHostLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Host'**
+  String get sessionsHostLabel;
+
+  /// No description provided for @sessionsNoHost.
+  ///
+  /// In en, this message translates to:
+  /// **'Connect an app-server first, then its sessions show here.'**
+  String get sessionsNoHost;
 
   /// No description provided for @appServerSubtitle.
   ///
@@ -1561,6 +1579,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'API'**
   String get tunnelApiLabel;
+
+  /// No description provided for @tunnelMetaLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Sessions (meta)'**
+  String get tunnelMetaLabel;
 
   /// No description provided for @tunnelOffline.
   ///

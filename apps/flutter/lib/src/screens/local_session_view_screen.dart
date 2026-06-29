@@ -9,7 +9,7 @@ import 'package:pocket_codex/src/error_format.dart';
 import 'package:pocket_codex/src/fonts.dart';
 import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/screens/local_sessions_screen.dart'
-    show resumeLocalSession;
+    show SessionSource, resumeLocalSession;
 import 'package:pocket_codex/src/widgets/loading.dart';
 import 'package:super_sliver_list/super_sliver_list.dart';
 
@@ -29,6 +29,7 @@ class LocalSessionViewScreen extends ConsumerStatefulWidget {
     required this.threadId,
     this.cwd,
     this.preview,
+    this.serviceKey,
   });
 
   /// The session/thread to view.
@@ -40,6 +41,10 @@ class LocalSessionViewScreen extends ConsumerStatefulWidget {
 
   /// First-user-message preview, used as the screen title.
   final String? preview;
+
+  /// The app-server key of the host that owns this session, when viewing a
+  /// (possibly remote) host over its meta tunnel; null for the local machine.
+  final String? serviceKey;
 
   @override
   ConsumerState<LocalSessionViewScreen> createState() =>
@@ -58,6 +63,11 @@ class _LocalSessionViewState extends ConsumerState<LocalSessionViewScreen> {
   String? _error;
   Timer? _poll;
   final _scroll = ScrollController();
+
+  /// Where this viewer reads from (local machine vs the host's meta tunnel).
+  SessionSource get _source => widget.serviceKey == null
+      ? const SessionSource.local()
+      : SessionSource.remote(widget.serviceKey!);
 
   @override
   void initState() {
@@ -82,8 +92,8 @@ class _LocalSessionViewState extends ConsumerState<LocalSessionViewScreen> {
     }
     final bridge = ref.read(bridgeApiProvider);
     try {
-      final items = await bridge.appLocalSessionTranscript(widget.threadId);
-      final live = await bridge.appSessionLiveness(widget.threadId);
+      final items = await _source.transcript(bridge, widget.threadId);
+      final live = await _source.liveness(bridge, widget.threadId);
       if (!mounted) return;
       // Auto-follow the tail if the reader is already near the bottom, so a
       // session being driven elsewhere streams in like a live conversation.
@@ -126,8 +136,12 @@ class _LocalSessionViewState extends ConsumerState<LocalSessionViewScreen> {
       cwd: widget.cwd,
       requiresTakeover: live.requiresTakeover,
       holders: live.holders,
+      source: _source,
     );
-    if (mounted) {
+    // Only re-arm the poll when this viewer is still the visible route. On a
+    // successful resume it pushed the live conversation on top of us, and
+    // polling a backgrounded screen every 3s is wasted work.
+    if (mounted && (ModalRoute.of(context)?.isCurrent ?? true)) {
       _poll = Timer.periodic(_pollInterval, (_) => _load());
     }
   }

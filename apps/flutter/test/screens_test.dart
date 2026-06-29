@@ -121,6 +121,49 @@ void main() {
     expect(find.byKey(const Key('svc-pcx:lb7666:app:default')), findsOneWidget);
   });
 
+  testWidgets('Sessions tab: picks a host and lists its remote sessions', (
+    t,
+  ) async {
+    // Account mode shows the Sessions tab; one app-server host is connectable.
+    final api =
+        FakeBridgeApi(
+            config: const ConfigInfo(
+              relay: '',
+              hasKey: false,
+              mode: 'account',
+              accountLogin: 'acking-you',
+            ),
+            services: const [
+              ServiceEntry(
+                device: 'lb7666',
+                kind: 'app',
+                name: 'default',
+                key: 'pcx:lb7666:app:default',
+              ),
+            ],
+          )
+          ..localSessions = const [
+            LocalSession(
+              threadId: 't-remote',
+              preview: 'hello from the host',
+              updatedAt: 0,
+              turnState: 'completed',
+              heldOpen: false,
+              safety: 'resumable',
+              allowsResume: true,
+              requiresTakeover: false,
+            ),
+          ];
+    await t.pumpWidget(_host(const ServicesScreen(), api));
+    await t.pumpAndSettle();
+    await _selectSection(t, '会话'); // Sessions tab (zh)
+    // Host picker at the top + the picked host's session over its meta tunnel.
+    expect(find.byKey(const Key('sessions-host-picker')), findsOneWidget);
+    expect(find.text('hello from the host'), findsOneWidget);
+    // The resume action targets the meta service (the host resumes itself).
+    expect(find.byKey(const Key('resume-t-remote')), findsOneWidget);
+  });
+
   testWidgets('Services shows error state with retry', (t) async {
     final api = FakeBridgeApi(
       config: const ConfigInfo(relay: 'r:1', hasKey: true),
@@ -1287,6 +1330,31 @@ void main() {
     expect(find.text('earlier question'), findsOneWidget);
     expect(find.byKey(const Key('stop-btn')), findsOneWidget);
     expect(find.byKey(const Key('send-btn')), findsNothing);
+  });
+
+  testWidgets('#2: a thread restores its persisted config on open', (t) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    api.readResult = const ThreadHistory(items: [], running: false);
+    // The host persisted a non-default model for this thread; the server does
+    // not restore the model, so without persistence it would reset to default.
+    api.threadConfigs['thread-cfg'] = const ThreadConfig(model: 'gpt-5');
+    await t.pumpWidget(
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          threadId: 'thread-cfg',
+        ),
+        api,
+      ),
+    );
+    await t.pumpAndSettle();
+    // The screen fetched this thread's persisted config and applied the stored
+    // model to the composer chip (instead of the default).
+    expect(api.lastConfigGetThread, 'thread-cfg');
+    expect(find.text('GPT-5'), findsOneWidget);
   });
 
   testWidgets('App session answers an approval prompt interactively', (

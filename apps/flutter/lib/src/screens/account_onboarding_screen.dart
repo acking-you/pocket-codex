@@ -69,8 +69,12 @@ class _AccountOnboardingState extends ConsumerState<AccountOnboardingScreen> {
       final err = params['error'];
       final code = params['exchange_code'];
       if (err != null && err.isNotEmpty) {
-        failure = err == 'access_denied' ? l10n.accountDenied : l10n.accountWebFailed;
-      } else if (params['state'] != start.state || code == null || code.isEmpty) {
+        failure = err == 'access_denied'
+            ? l10n.accountDenied
+            : l10n.accountWebFailed;
+      } else if (params['state'] != start.state ||
+          code == null ||
+          code.isEmpty) {
         // A mismatched state or missing code means the redirect wasn't ours.
         failure = l10n.accountWebFailed;
       } else {
@@ -89,7 +93,9 @@ class _AccountOnboardingState extends ConsumerState<AccountOnboardingScreen> {
       // the user closes the tab and we get CANCELED. Don't fail silently —
       // point them at the device code, which reaches GitHub through the backend
       // and stays reliable when the in-app browser can't.
-      failure = e.code == 'CANCELED' ? l10n.accountWebTrouble : friendlyError(e);
+      failure = e.code == 'CANCELED'
+          ? l10n.accountWebTrouble
+          : friendlyError(e);
     } catch (e) {
       failure = friendlyError(e);
     }
@@ -284,9 +290,8 @@ class _AccountOnboardingState extends ConsumerState<AccountOnboardingScreen> {
                   ),
                   const SizedBox(height: 4),
                   TextButton.icon(
-                    onPressed: () => Clipboard.setData(
-                      ClipboardData(text: device.userCode),
-                    ),
+                    onPressed: () =>
+                        Clipboard.setData(ClipboardData(text: device.userCode)),
                     icon: const Icon(Icons.copy, size: 16),
                     label: Text(l10n.accountCopyCode),
                   ),

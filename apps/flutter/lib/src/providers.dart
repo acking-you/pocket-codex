@@ -175,7 +175,6 @@ final selectedApiKeyProvider = StateProvider<String?>((ref) => null);
 /// Selected home-screen section, as a stable key (not an index, so adding/hiding
 /// a section — e.g. Local hosting only on desktop — never mis-selects). Rendered
 /// as a bottom `NavigationBar` on mobile and a side `NavigationRail` on desktop.
-/// `sessions` is wired up in Phase 2 (remote-viewable host sessions).
 enum ServicesSection {
   /// Responses-API proxy services.
   api,
@@ -183,9 +182,18 @@ enum ServicesSection {
   /// App-server (remote codex control) services.
   appServer,
 
+  /// Remote-viewable host sessions (pick a connected app-server, then browse its
+  /// host's CODEX_HOME sessions over the meta tunnel).
+  sessions,
+
   /// This machine's locally-hosted codex servers (desktop + account only).
   hosting,
 }
+
+/// The app-server service key selected in the Sessions tab's host picker (null =
+/// fall back to the first connected app-server). Its host's sessions are listed
+/// over that service's meta tunnel.
+final sessionsHostKeyProvider = StateProvider<String?>((ref) => null);
 
 /// The currently-selected home-screen section tab.
 final servicesSectionProvider = StateProvider<ServicesSection>(

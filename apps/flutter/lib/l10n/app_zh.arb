@@ -36,7 +36,10 @@
   "appServerServices": "App-server 服务",
   "navApi": "API",
   "navAppServer": "App-server",
+  "navSessions": "会话",
   "navHosting": "托管",
+  "sessionsHostLabel": "主机",
+  "sessionsNoHost": "请先连接一个 app-server，其会话会显示在这里。",
   "appServerSubtitle": "{device} · 远程控制",
   "@appServerSubtitle": {
     "placeholders": { "device": { "type": "String" } }
@@ -271,5 +274,6 @@
   "deregisterFailed": "注销失败",
   "tunnelAppLabel": "App-server",
   "tunnelApiLabel": "API",
+  "tunnelMetaLabel": "会话（meta）",
   "tunnelOffline": "已下架"
 }

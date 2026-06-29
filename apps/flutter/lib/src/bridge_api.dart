@@ -55,6 +55,8 @@ class AppServeResult {
     required this.appListenAddr,
     required this.apiServiceKey,
     required this.apiListenAddr,
+    required this.metaServiceKey,
+    required this.metaListenAddr,
     required this.pid,
     required this.reused,
   });
@@ -76,6 +78,12 @@ class AppServeResult {
 
   /// Loopback `host:port` the in-app Responses API proxy is listening on.
   final String apiListenAddr;
+
+  /// `pcx:<device>:meta:<name>` key (the host meta service tunnel).
+  final String metaServiceKey;
+
+  /// Loopback `host:port` the in-app meta service is listening on.
+  final String metaListenAddr;
 
   /// The codex process id.
   final int pid;
@@ -99,6 +107,9 @@ class AppServeStatus {
     this.apiListenAddr = '',
     this.apiServiceKey = '',
     this.apiRegistered = false,
+    this.metaListenAddr = '',
+    this.metaServiceKey = '',
+    this.metaRegistered = false,
   });
 
   /// Service instance name.
@@ -130,6 +141,15 @@ class AppServeStatus {
 
   /// The api tunnel is currently published.
   final bool apiRegistered;
+
+  /// Loopback `host:port` the meta service listens on.
+  final String metaListenAddr;
+
+  /// `pcx:<device>:meta:<name>` key.
+  final String metaServiceKey;
+
+  /// The meta tunnel is currently published.
+  final bool metaRegistered;
 }
 
 /// View of persisted config (relay/key presence, locale, account state).
@@ -562,6 +582,51 @@ class ForceResumeReport {
   final String? resumeError;
 }
 
+/// Per-thread session config persisted on the host (model / reasoning effort /
+/// permission mode / plan mode). Every field is nullable: null means "no stored
+/// preference", so the UI falls back to its own default.
+class ThreadConfig {
+  /// Creates a thread config.
+  const ThreadConfig({
+    this.model,
+    this.reasoningEffort,
+    this.permissionMode,
+    this.planMode,
+  });
+
+  /// Selected model id, when pinned for this thread.
+  final String? model;
+
+  /// Reasoning-effort tag (`minimal`/`low`/`medium`/`high`), when set.
+  final String? reasoningEffort;
+
+  /// Permission / approval mode tag, when set.
+  final String? permissionMode;
+
+  /// Whether plan mode is on for this thread, when set.
+  final bool? planMode;
+
+  /// Whether every field is unset (no stored preference at all).
+  bool get isEmpty =>
+      model == null &&
+      reasoningEffort == null &&
+      permissionMode == null &&
+      planMode == null;
+
+  /// A copy with the given fields overridden.
+  ThreadConfig copyWith({
+    String? model,
+    String? reasoningEffort,
+    String? permissionMode,
+    bool? planMode,
+  }) => ThreadConfig(
+    model: model ?? this.model,
+    reasoningEffort: reasoningEffort ?? this.reasoningEffort,
+    permissionMode: permissionMode ?? this.permissionMode,
+    planMode: planMode ?? this.planMode,
+  );
+}
+
 /// The whole engine surface the UI is allowed to touch. One real impl wraps
 /// flutter_rust_bridge; a fake backs widget tests.
 abstract interface class BridgeApi {
@@ -807,4 +872,44 @@ abstract interface class BridgeApi {
   /// [appSessionLiveness] to follow a running session and notice when it goes
   /// idle (resume-eligible).
   Future<List<ThreadItem>> appLocalSessionTranscript(String threadId);
+
+  // --- Remote (meta service) sessions + per-thread config ---
+  //
+  // The same inventory / transcript / force-resume as the `appLocal*` methods,
+  // but for a (possibly remote) host reached over its `meta:` tunnel. Each
+  // takes the app-server [serviceKey] being viewed; the meta key is derived
+  // internally. Lets a phone view + resume a desktop host's sessions, and
+  // persists per-thread config on the host (shared across devices).
+
+  /// Remote analogue of [appLocalSessions] for the host behind [serviceKey].
+  Future<List<LocalSession>> metaSessions(String serviceKey);
+
+  /// Remote analogue of [appSessionLiveness].
+  Future<SessionLiveness> metaSessionLiveness(
+    String serviceKey,
+    String threadId,
+  );
+
+  /// Remote analogue of [appLocalSessionTranscript].
+  Future<List<ThreadItem>> metaSessionTranscript(
+    String serviceKey,
+    String threadId,
+  );
+
+  /// Remote analogue of [appForceResume]: the host evicts the rollout's holders
+  /// and resumes it into its colocated app-server. Gate on explicit
+  /// confirmation; do not call while a turn is actively running.
+  Future<ForceResumeReport> metaForceResume(String serviceKey, String threadId);
+
+  /// Read a thread's persisted config from the host behind [serviceKey]
+  /// (all-null when none stored).
+  Future<ThreadConfig> metaThreadConfigGet(String serviceKey, String threadId);
+
+  /// Persist a thread's config on the host behind [serviceKey]; returns the
+  /// stored value.
+  Future<ThreadConfig> metaThreadConfigSet(
+    String serviceKey,
+    String threadId,
+    ThreadConfig config,
+  );
 }

@@ -25,6 +25,7 @@ pocket-codex-pb = { workspace = true }
 pocket-codex-account-proto = { workspace = true }
 pocket-codex-broker-client = { workspace = true }
 pocket-codex-api-proxy = { workspace = true }
+pocket-codex-host-svc = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true }
 serde = { workspace = true }

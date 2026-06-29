@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
 import 'package:pocket_codex/src/providers.dart';
@@ -130,6 +131,63 @@ void main() {
     await t.pumpWidget(_host(const LocalSessionsScreen(), api));
     await t.pumpAndSettle();
     expect(find.text('没有本地会话'), findsOneWidget); // noLocalSessions (zh)
+  });
+
+  testWidgets('remote resume connects the host app-server before navigating', (
+    t,
+  ) async {
+    // A remote host viewed over its meta tunnel: the app-server session is NOT
+    // connected on this device. Resuming must connect it before opening the
+    // conversation, or the conversation resolves to "not connected".
+    const appKey = 'pcx:lb7666:app:default';
+    final api = FakeBridgeApi();
+    expect(api.appIsConnected(appKey), isFalse);
+
+    final router = GoRouter(
+      initialLocation: '/',
+      routes: [
+        GoRoute(
+          path: '/',
+          builder: (ctx, _) => Scaffold(
+            body: Consumer(
+              builder: (ctx, ref, _) => TextButton(
+                onPressed: () => resumeLocalSession(
+                  ctx,
+                  ref,
+                  threadId: 't-remote',
+                  requiresTakeover: false,
+                  source: const SessionSource.remote(appKey),
+                ),
+                child: const Text('go'),
+              ),
+            ),
+          ),
+        ),
+        GoRoute(
+          path: '/app/:key/session',
+          builder: (ctx, _) => const Scaffold(body: Text('conversation')),
+        ),
+      ],
+    );
+    await t.pumpWidget(
+      ProviderScope(
+        overrides: [bridgeApiProvider.overrideWithValue(api)],
+        child: MaterialApp.router(
+          locale: const Locale('zh'),
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          routerConfig: router,
+        ),
+      ),
+    );
+    await t.tap(find.text('go'));
+    await t.pumpAndSettle();
+
+    // The host force-resumed, AND the client connected the app-server before
+    // navigating, so the opened conversation isn't "not connected".
+    expect(api.lastMetaResumedThread, 't-remote');
+    expect(api.appIsConnected(appKey), isTrue);
+    expect(find.text('conversation'), findsOneWidget);
   });
 
   testWidgets('resume connects a reachable app-server when none is connected', (

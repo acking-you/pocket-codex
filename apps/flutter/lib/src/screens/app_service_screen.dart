@@ -422,9 +422,9 @@ class _AppServiceState extends ConsumerState<AppServiceScreen> {
           if (time.isNotEmpty)
             Text(
               time,
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: scheme.onSurfaceVariant,
-              ),
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
             ),
           if (isRunning) ...[
             const SizedBox(width: 8),

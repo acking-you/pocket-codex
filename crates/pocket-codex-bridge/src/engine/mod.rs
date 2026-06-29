@@ -4,6 +4,7 @@ pub mod account;
 pub mod app_session;
 pub mod config;
 pub mod discovery;
+pub mod meta;
 pub mod runtime;
 pub mod serve;
 pub mod sessions;

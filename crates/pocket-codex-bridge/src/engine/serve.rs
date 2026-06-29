@@ -4,14 +4,16 @@
 //! Desktop only: it spawns the user's `codex` binary as a child process and
 //! reuses its login (`~/.codex/auth.json`) for the API proxy.
 //!
-//! One `serve_start` publishes **two** relay tunnels under the same name:
-//! `app:<name>` (codex app-server, remote control) and `api:<name>` (the
-//! in-process Responses API proxy). The two register tunnels are independent:
-//! [`serve_deregister`] takes one off the relay (an *unpublish*) without
-//! stopping codex or the proxy, and [`serve_reregister`] re-publishes it
-//! instantly. [`serve_stop`] is the full teardown (both tunnels + codex +
-//! proxy); [`serve_stop_all`] (app quit) stops every host so a real quit
-//! leaves no orphan — closing to the tray keeps hosting alive.
+//! One `serve_start` publishes **three** relay tunnels under the same name:
+//! `app:<name>` (codex app-server, remote control), `api:<name>` (the
+//! in-process Responses API proxy), and `meta:<name>` (the in-process host meta
+//! service — remote session inventory + per-thread config). The register
+//! tunnels are independent: [`serve_deregister`] takes one off the relay (an
+//! *unpublish*) without stopping codex or the in-process servers, and
+//! [`serve_reregister`] re-publishes it instantly. [`serve_stop`] is the full
+//! teardown (all tunnels + codex + proxy + meta service); [`serve_stop_all`]
+//! (app quit) stops every host so a real quit leaves no orphan — closing to the
+//! tray keeps hosting alive.
 //!
 //! The codex spawn/watchdog mirrors
 //! `crates/pocket-codex-cli/src/commands/serve.rs`; the API proxy is the shared
@@ -72,6 +74,13 @@ struct LocalServe {
     api_proxy: JoinHandle<()>,
     /// `Some` while the api tunnel is published; `None` once deregistered.
     api_register: Option<JoinHandle<()>>,
+    // host-side meta service: makes this host's local sessions remote-viewable
+    // and persists per-thread config, published as a third `meta:<name>` tunnel.
+    meta_key: String,
+    meta_local: SocketAddr,
+    meta_svc: JoinHandle<()>,
+    /// `Some` while the meta tunnel is published; `None` once deregistered.
+    meta_register: Option<JoinHandle<()>>,
 }
 
 /// Result of [`serve_start`], surfaced to the UI.
@@ -89,6 +98,10 @@ pub struct ServeReport {
     pub api_service_key: String,
     /// Loopback `host:port` the in-app Responses API proxy is listening on.
     pub api_listen_addr: String,
+    /// `pcx:<device>:meta:<name>` key — the host meta service tunnel.
+    pub meta_service_key: String,
+    /// Loopback `host:port` the in-app meta service is listening on.
+    pub meta_listen_addr: String,
     /// The codex process id.
     pub pid: u32,
     /// Whether an already-running host was reused rather than freshly spawned.
@@ -118,6 +131,12 @@ pub struct ServeStatus {
     pub api_service_key: String,
     /// The api tunnel is published (register task live).
     pub api_registered: bool,
+    /// Loopback `host:port` the meta service listens on.
+    pub meta_listen_addr: String,
+    /// `pcx:<device>:meta:<name>` key.
+    pub meta_service_key: String,
+    /// The meta tunnel is published (register task live).
+    pub meta_registered: bool,
 }
 
 fn hosts() -> &'static Mutex<HashMap<String, LocalServe>> {
@@ -129,6 +148,28 @@ fn hosts() -> &'static Mutex<HashMap<String, LocalServe>> {
 /// broker treats a new instance with the same key as a takeover).
 fn client_instance_id() -> String {
     format!("app-{}", std::process::id())
+}
+
+/// The process-global per-thread config store, shared by every local meta
+/// service: all hosts on this machine share one `CODEX_HOME` and therefore one
+/// config map, so they must write through one serialized store. Opened once,
+/// lazily, and the success cached; a store-open failure (an unresolvable /
+/// unwritable `CODEX_HOME`) is returned as an `Err` for the caller to surface
+/// as a hosting error rather than panicking the process (the bridge builds with
+/// `panic = "abort"`, so an `expect` here would take the whole app down).
+fn config_store() -> Result<Arc<pocket_codex_host_svc::store::ConfigStore>> {
+    static STORE: OnceCell<Arc<pocket_codex_host_svc::store::ConfigStore>> = OnceCell::new();
+    STORE
+        .get_or_try_init(|| -> Result<Arc<pocket_codex_host_svc::store::ConfigStore>> {
+            // Co-locate the config store with the sessions it annotates (under
+            // CODEX_HOME) so every host on this machine shares one map.
+            let path = pocket_codex_host_svc::store::default_db_path()?;
+            let store = runtime::runtime()
+                .block_on(pocket_codex_host_svc::store::ConfigStore::open(path))
+                .context("opening the host meta config store")?;
+            Ok(Arc::new(store))
+        })
+        .map(Arc::clone)
 }
 
 /// The resolved codex binary path (explicit override → persisted config →
@@ -213,6 +254,7 @@ pub fn serve_start(
         .unwrap_or_else(|| "default".to_string());
     let app_key = ServiceId::new(&device, ServiceKind::App, &name).key();
     let api_key = ServiceId::new(&device, ServiceKind::Api, &name).key();
+    let meta_key = ServiceId::new(&device, ServiceKind::Meta, &name).key();
 
     // Resolve the upstream proxy once (validated when explicit).
     let proxy = proxy
@@ -237,6 +279,7 @@ pub fn serve_start(
                 let nm = ls.name.clone();
                 let app_local = ls.app_local;
                 let api_local = ls.api_local;
+                let meta_local = ls.meta_local;
                 if tunnel_down(&ls.app_register) {
                     ls.app_register = Some(spawn_register(
                         connector.clone(),
@@ -249,12 +292,22 @@ pub fn serve_start(
                 }
                 if tunnel_down(&ls.api_register) {
                     ls.api_register = Some(spawn_register(
-                        connector,
-                        tokens,
+                        connector.clone(),
+                        tokens.clone(),
                         &dev,
                         ServiceKind::Api,
                         &nm,
                         api_local,
+                    ));
+                }
+                if tunnel_down(&ls.meta_register) {
+                    ls.meta_register = Some(spawn_register(
+                        connector,
+                        tokens,
+                        &dev,
+                        ServiceKind::Meta,
+                        &nm,
+                        meta_local,
                     ));
                 }
                 return Ok(ServeReport {
@@ -264,6 +317,8 @@ pub fn serve_start(
                     app_listen_addr: app_local.to_string(),
                     api_service_key: ls.api_key.clone(),
                     api_listen_addr: api_local.to_string(),
+                    meta_service_key: ls.meta_key.clone(),
+                    meta_listen_addr: meta_local.to_string(),
                     pid: ls.pid,
                     reused: true,
                 });
@@ -284,6 +339,11 @@ pub fn serve_start(
     runtime::runtime()
         .block_on(pocket_codex_api_proxy::check_auth())
         .context("hosting needs a codex login; run `codex login` first")?;
+
+    // Open the (process-global) meta config store before spawning anything, so an
+    // unwritable CODEX_HOME surfaces as a hosting error here instead of after a
+    // codex child is already running (or via a panic in the supervisor).
+    let config_store = config_store()?;
 
     // Spawn codex. Runs on the flutter_rust_bridge worker thread (not the UI
     // thread), so the port-resolve poll inside `spawn` is fine.
@@ -324,6 +384,26 @@ pub fn serve_start(
     let api_proxy =
         runtime::runtime().spawn(api_proxy_supervisor(api_local, api_std, proxy.clone()));
 
+    // Reserve an ephemeral loopback port for the in-process meta service the
+    // same way, and keep it alive under a supervisor so the registered
+    // `meta:<name>` tunnel always forwards to a live server. It resumes into the
+    // codex we just spawned (`app_local`) and shares the host-global config
+    // store.
+    let meta_std = std::net::TcpListener::bind("127.0.0.1:0")
+        .context("binding the in-app meta service listener")?;
+    meta_std
+        .set_nonblocking(true)
+        .context("setting the meta service listener non-blocking")?;
+    let meta_local: SocketAddr = meta_std
+        .local_addr()
+        .context("reading the meta service listener address")?;
+    let meta_svc = runtime::runtime().spawn(meta_svc_supervisor(
+        meta_local,
+        meta_std,
+        app_local,
+        config_store,
+    ));
+
     // Pin the watchdog's respawn to the resolved codex port.
     let mut watchdog_opts = spawn_opts;
     watchdog_opts.listen = ListenSpec::WebSocket {
@@ -340,8 +420,16 @@ pub fn serve_start(
         &name,
         app_local,
     ));
-    let api_register =
-        Some(spawn_register(connector, tokens, &device, ServiceKind::Api, &name, api_local));
+    let api_register = Some(spawn_register(
+        connector.clone(),
+        tokens.clone(),
+        &device,
+        ServiceKind::Api,
+        &name,
+        api_local,
+    ));
+    let meta_register =
+        Some(spawn_register(connector, tokens, &device, ServiceKind::Meta, &name, meta_local));
     let watchdog = runtime::runtime().spawn(health_watchdog(app_local.to_string(), watchdog_opts));
 
     hosts()
@@ -359,6 +447,10 @@ pub fn serve_start(
             api_local,
             api_proxy,
             api_register,
+            meta_key: meta_key.clone(),
+            meta_local,
+            meta_svc,
+            meta_register,
         });
 
     Ok(ServeReport {
@@ -368,6 +460,8 @@ pub fn serve_start(
         app_listen_addr: app_local.to_string(),
         api_service_key: api_key,
         api_listen_addr: api_local.to_string(),
+        meta_service_key: meta_key,
+        meta_listen_addr: meta_local.to_string(),
         pid: report.info.pid,
         reused: report.reused,
     })
@@ -389,15 +483,18 @@ pub fn serve_status() -> Vec<ServeStatus> {
             api_listen_addr: ls.api_local.to_string(),
             api_service_key: ls.api_key.clone(),
             api_registered: !tunnel_down(&ls.api_register),
+            meta_listen_addr: ls.meta_local.to_string(),
+            meta_service_key: ls.meta_key.clone(),
+            meta_registered: !tunnel_down(&ls.meta_register),
         })
         .collect();
     out.sort_by(|a, b| a.name.cmp(&b.name));
     out
 }
 
-/// Take one tunnel (`kind` = `"app"`/`"api"`) off the relay without stopping
-/// the host: abort its register task (so it won't reconnect) and force the
-/// backend to drop the relay key now (aborting alone waits out the lease).
+/// Take one tunnel (`kind` = `"app"`/`"api"`/`"meta"`) off the relay without
+/// stopping the host: abort its register task (so it won't reconnect) and force
+/// the backend to drop the relay key now (aborting alone waits out the lease).
 /// Reversible via [`serve_reregister`].
 pub fn serve_deregister(name: &str, kind: &str) -> Result<()> {
     let kind: ServiceKind = kind
@@ -420,6 +517,14 @@ pub fn serve_deregister(name: &str, kind: &str) -> Result<()> {
                     h.abort();
                 }
             },
+            ServiceKind::Meta => {
+                if let Some(h) = ls.meta_register.take() {
+                    h.abort();
+                }
+            },
+            // `kind` came from FromStr, which never yields Unknown; arm exists
+            // only to keep the match exhaustive.
+            ServiceKind::Unknown => {},
         }
         (ls.device.clone(), ls.name.clone())
     };
@@ -483,13 +588,28 @@ pub fn serve_reregister(name: &str, kind: &str) -> Result<()> {
                 ));
             }
         },
+        ServiceKind::Meta => {
+            if tunnel_down(&ls.meta_register) {
+                let local = ls.meta_local;
+                ls.meta_register = Some(spawn_register(
+                    connector,
+                    tokens,
+                    &device,
+                    ServiceKind::Meta,
+                    &svc_name,
+                    local,
+                ));
+            }
+        },
+        // `kind` came from FromStr, which never yields Unknown.
+        ServiceKind::Unknown => {},
     }
     Ok(())
 }
 
-/// Fully stop one host by name: abort both register tunnels + watchdog + the
-/// API proxy task, stop its codex, and force the relay to drop both keys now.
-/// Best-effort + idempotent (no-op when that name isn't hosting).
+/// Fully stop one host by name: abort all register tunnels + watchdog + the
+/// API proxy + meta service tasks, stop its codex, and force the relay to drop
+/// all keys now. Best-effort + idempotent (no-op when that name isn't hosting).
 pub fn serve_stop(name: &str) -> Result<()> {
     let removed = hosts().lock().expect("serve hosts poisoned").remove(name);
     if let Some(ls) = removed {
@@ -500,6 +620,19 @@ pub fn serve_stop(name: &str) -> Result<()> {
             runtime::runtime().block_on(async {
                 let _ = account::deregister_service(&support, &device, "app", &svc_name).await;
                 let _ = account::deregister_service(&support, &device, "api", &svc_name).await;
+                // Log the meta drop specifically: a backend not yet rebuilt with
+                // the `meta` kind rejects it, which is worth surfacing (the key
+                // then lingers until its lease expires).
+                if let Err(e) =
+                    account::deregister_service(&support, &device, "meta", &svc_name).await
+                {
+                    tracing::warn!(
+                        error = %format!("{e:#}"),
+                        service = %svc_name,
+                        "force-dropping the meta relay key on stop failed (older backend?); it \
+                         lingers until lease expiry"
+                    );
+                }
             });
         }
     }
@@ -520,9 +653,9 @@ pub fn serve_stop_all() {
     }
 }
 
-/// Abort a host's background tasks (both register tunnels, watchdog, API proxy)
-/// and stop its codex. Does not touch the relay (callers that need an immediate
-/// relay drop force-deregister separately).
+/// Abort a host's background tasks (all register tunnels, watchdog, API proxy,
+/// meta service) and stop its codex. Does not touch the relay (callers that
+/// need an immediate relay drop force-deregister separately).
 fn stop_host_tasks(ls: LocalServe) {
     if let Some(h) = ls.app_register {
         h.abort();
@@ -530,8 +663,12 @@ fn stop_host_tasks(ls: LocalServe) {
     if let Some(h) = ls.api_register {
         h.abort();
     }
+    if let Some(h) = ls.meta_register {
+        h.abort();
+    }
     ls.watchdog.abort();
     ls.api_proxy.abort();
+    ls.meta_svc.abort();
     stop_codex_at(&ls.app_local.to_string());
 }
 
@@ -563,18 +700,18 @@ fn listen_addr_open(listen_addr: &str) -> bool {
     }
 }
 
-/// Keep the in-process Responses API proxy alive on `addr`. Runs
-/// [`pocket_codex_api_proxy::serve`] and, if it ever exits (a transient auth/IO
-/// error, or an `axum::serve` accept error), re-binds the SAME loopback port
-/// and restarts it with backoff — so the registered `api:<name>` tunnel keeps
-/// forwarding to a live proxy instead of a dead socket. `first` is the listener
-/// already bound in [`serve_start`] (so the port is reserved); later restarts
-/// re-bind it. Aborting this task (on `serve_stop`) drops the listener.
-async fn api_proxy_supervisor(
-    addr: SocketAddr,
-    first: std::net::TcpListener,
-    proxy: Option<String>,
-) {
+/// Keep an in-process service alive on `addr`. Runs `serve` and, if it ever
+/// exits (a transient auth/IO error, or an `axum::serve` accept error),
+/// re-binds the SAME loopback port and restarts it with backoff — so the
+/// registered tunnel keeps forwarding to a live server instead of a dead
+/// socket. `first` is the listener already bound in [`serve_start`] (so the
+/// port is reserved); later restarts re-bind it. `label` names the service in
+/// logs. Aborting this task (on `serve_stop`) drops the listener.
+async fn supervise<F, Fut>(label: &str, addr: SocketAddr, first: std::net::TcpListener, serve: F)
+where
+    F: Fn(tokio::net::TcpListener) -> Fut,
+    Fut: std::future::Future<Output = Result<()>>,
+{
     let mut reserved = Some(first);
     let mut failures: u32 = 0;
     loop {
@@ -586,7 +723,7 @@ async fn api_proxy_supervisor(
                     listener
                 },
                 Err(e) => {
-                    tracing::warn!(error = %e, %addr, "re-binding the in-app API proxy failed");
+                    tracing::warn!(error = %e, %addr, "re-binding {label} failed");
                     failures = failures.saturating_add(1);
                     tokio::time::sleep(proxy_restart_backoff(failures)).await;
                     continue;
@@ -596,20 +733,18 @@ async fn api_proxy_supervisor(
         let listener = match tokio::net::TcpListener::from_std(std_listener) {
             Ok(listener) => listener,
             Err(e) => {
-                tracing::warn!(error = %e, "adopting the in-app API proxy listener failed");
+                tracing::warn!(error = %e, "adopting {label} listener failed");
                 failures = failures.saturating_add(1);
                 tokio::time::sleep(proxy_restart_backoff(failures)).await;
                 continue;
             },
         };
         let started = Instant::now();
-        match pocket_codex_api_proxy::serve(listener, proxy.clone()).await {
-            Ok(()) => tracing::warn!("in-app API proxy server returned; restarting"),
-            Err(e) => {
-                tracing::warn!(error = %format!("{e:#}"), "in-app API proxy exited; restarting")
-            },
+        match serve(listener).await {
+            Ok(()) => tracing::warn!("{label} returned; restarting"),
+            Err(e) => tracing::warn!(error = %format!("{e:#}"), "{label} exited; restarting"),
         }
-        // A proxy that ran a while then died hit a transient fault — reset the
+        // A server that ran a while then died hit a transient fault — reset the
         // backoff; one that fails fast (e.g. a persistently missing login) backs
         // off progressively.
         failures = if started.elapsed() > Duration::from_secs(60) {
@@ -621,7 +756,35 @@ async fn api_proxy_supervisor(
     }
 }
 
-/// Backoff before restarting the API proxy: 2s, doubling, capped at
+/// Supervise the in-process Responses API proxy (forwards to chatgpt.com).
+async fn api_proxy_supervisor(
+    addr: SocketAddr,
+    first: std::net::TcpListener,
+    proxy: Option<String>,
+) {
+    supervise("the in-app API proxy", addr, first, move |listener| {
+        let proxy = proxy.clone();
+        async move { pocket_codex_api_proxy::serve(listener, proxy).await }
+    })
+    .await
+}
+
+/// Supervise the in-process host meta service. It resumes into the colocated
+/// codex at `app_ws_addr` and shares the host-global `store`.
+async fn meta_svc_supervisor(
+    addr: SocketAddr,
+    first: std::net::TcpListener,
+    app_ws_addr: SocketAddr,
+    store: Arc<pocket_codex_host_svc::store::ConfigStore>,
+) {
+    supervise("the in-app meta service", addr, first, move |listener| {
+        let store = store.clone();
+        async move { pocket_codex_host_svc::serve(listener, app_ws_addr, store).await }
+    })
+    .await
+}
+
+/// Backoff before restarting a supervised service: 2s, doubling, capped at
 /// [`MAX_RESTART_BACKOFF`].
 fn proxy_restart_backoff(failures: u32) -> Duration {
     Duration::from_secs(2)
