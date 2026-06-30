@@ -225,6 +225,7 @@ async fn run_embedded_supervised(listen_url: String) {
                 tracing::warn!(%listen_url, "embedded codex app-server exited; restarting")
             },
             Err(e) => {
+                eprintln!("[embedded codex] failed on {listen_url}: {e:#}; restarting");
                 tracing::error!(%listen_url, "embedded codex app-server failed: {e:#}; restarting")
             },
         }

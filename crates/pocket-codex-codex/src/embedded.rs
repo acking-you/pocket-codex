@@ -29,8 +29,18 @@ pub async fn run(listen_url: &str) -> Result<()> {
     let transport: AppServerTransport = listen_url
         .parse()
         .with_context(|| format!("parsing embedded app-server listen URL `{listen_url}`"))?;
+    // codex re-execs this path for its sandbox/exec helper modes and refuses to
+    // start without it. In-process we are the host app (pocket_codex), not a
+    // codex multi-call binary, so we hand it our own exe to satisfy startup and
+    // bind the listener. Running *sandboxed commands* additionally needs arg0
+    // dispatch so codex's helper invocation re-enters codex instead of a second
+    // app window — tracked as a follow-up; model turns work without it.
+    let arg0_paths = Arg0DispatchPaths {
+        codex_self_exe: std::env::current_exe().ok(),
+        ..Default::default()
+    };
     run_main_with_transport_options(
-        Arg0DispatchPaths::default(),
+        arg0_paths,
         CliConfigOverrides::default(),
         LoaderOverrides::default(),
         /* strict_config */ false,

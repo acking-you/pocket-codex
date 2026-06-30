@@ -54,6 +54,11 @@ pub struct SubStatusDto {
 /// Initialise the engine with the platform app-support dir (from Dart's
 /// path_provider). Must be called once after `RustLib.init()`.
 pub fn init_bridge(support_dir: String) -> Result<()> {
+    // With the embedded-codex feature, codex pulls in `aws-lc-rs` alongside our
+    // `ring`, so rustls can no longer auto-select a process-level crypto
+    // provider and panics on first TLS use. Pin it to `ring` (our configured
+    // provider) before any TLS happens. Idempotent / no-op without the feature.
+    let _ = rustls::crypto::ring::default_provider().install_default();
     runtime::init(PathBuf::from(support_dir))
 }
 
