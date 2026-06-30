@@ -1,3 +1,5 @@
+import 'dart:ui' show PlatformDispatcher;
+
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -12,6 +14,16 @@ import 'package:pocket_codex/src/rust/frb_generated.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // A transient bridge error must never take down the whole app. Uncaught async
+  // errors (e.g. a host dropping mid-session, or any stream-setup error that
+  // flutter_rust_bridge delivers on an unawaited Future) reach the platform
+  // dispatcher unhandled, which is fatal on desktop. Log and swallow them — the
+  // affected screen already surfaces its own error / reconnect UI.
+  PlatformDispatcher.instance.onError = (error, stack) {
+    debugPrint('Uncaught async error (ignored, app kept alive): $error');
+    return true;
+  };
 
   // Web is unsupported: the browser sandbox has no path_provider support dir
   // and no raw TCP, so the bridge (config.toml persistence + pb-mapper
