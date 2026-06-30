@@ -240,6 +240,15 @@ class AppLocalizationsZh extends AppLocalizations {
   String get deny => '拒绝';
 
   @override
+  String get userInputTitle => '智能体需要你补充信息';
+
+  @override
+  String get userInputSubmit => '提交';
+
+  @override
+  String get userInputOther => '其他…';
+
+  @override
   String get planMode => '计划';
 
   @override

@@ -548,6 +548,24 @@ abstract class AppLocalizations {
   /// **'Deny'**
   String get deny;
 
+  /// No description provided for @userInputTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'The agent needs your input'**
+  String get userInputTitle;
+
+  /// No description provided for @userInputSubmit.
+  ///
+  /// In en, this message translates to:
+  /// **'Submit'**
+  String get userInputSubmit;
+
+  /// No description provided for @userInputOther.
+  ///
+  /// In en, this message translates to:
+  /// **'Other…'**
+  String get userInputOther;
+
   /// No description provided for @planMode.
   ///
   /// In en, this message translates to:

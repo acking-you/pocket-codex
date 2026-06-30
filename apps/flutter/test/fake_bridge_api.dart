@@ -436,6 +436,15 @@ class FakeBridgeApi implements BridgeApi {
   /// Last reasoning effort passed to [appTurnStart] ("low"/"medium"/"high"/null).
   String? lastReasoningEffort;
 
+  /// Count of [appTurnStart] calls, so a test can assert a retry did NOT start a
+  /// second server-side turn (the retry-safety guard reloaded instead).
+  int turnStartCount = 0;
+
+  /// When set, [appTurnStart] records its params then awaits this gate before
+  /// emitting turn events / returning — so a test can act (e.g. change effort)
+  /// while a turn is "in flight". Complete it to let the turn finish.
+  Completer<void>? turnStartGate;
+
   /// Echoes a streamed agent reply so widget tests can assert rendering.
   @override
   Future<void> appTurnStart(
@@ -448,12 +457,14 @@ class FakeBridgeApi implements BridgeApi {
     String? collaborationMode,
     String? reasoningEffort,
   }) async {
+    turnStartCount++;
     lastTurnModel = model;
     lastTurnText = text;
     lastApproval = approvalPolicy;
     lastSandbox = sandbox;
     lastCollaborationMode = collaborationMode;
     lastReasoningEffort = reasoningEffort;
+    if (turnStartGate != null) await turnStartGate!.future;
     final c = _appEvents[serviceKey];
     if (c == null) return;
     c.add(AppEvent(kind: 'turn/started', threadId: threadId, raw: '{}'));
@@ -493,6 +504,16 @@ class FakeBridgeApi implements BridgeApi {
     String requestId,
     String decision,
   ) async => lastApprovalDecision = decision;
+
+  /// Records the last answers JSON passed to [appRespondUserInput].
+  String? lastUserInputAnswers;
+
+  @override
+  Future<void> appRespondUserInput(
+    String serviceKey,
+    String requestId,
+    String answersJson,
+  ) async => lastUserInputAnswers = answersJson;
 
   // --- Local session takeover ---
 

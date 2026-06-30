@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -93,6 +95,12 @@ Future<void> _selectSection(WidgetTester t, String label) async {
 }
 
 void main() {
+  // AppSessionScreen keeps per-thread plan/effort memory in process-wide static
+  // maps (so a reopened thread restores its mode before the persisted config
+  // lands). Reset it between tests so memory from one test can't leak into
+  // another that reuses a thread id.
+  setUp(AppSessionScreen.debugResetThreadMemory);
+
   testWidgets('Services shows api/app cards by tab + the relay', (t) async {
     final api = FakeBridgeApi(
       config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
@@ -1387,6 +1395,127 @@ void main() {
     expect(find.byKey(const Key('approval-card')), findsNothing);
   });
 
+  testWidgets('request_user_input renders an interactive question card, not an '
+      'approval prompt', (t) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    await t.pumpWidget(
+      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+    );
+    await t.pumpAndSettle();
+
+    // The model asks a structured multiple-choice question (NOT a command to
+    // approve). It must render as an answerable question, not 智能体请求执行命令.
+    api.pushEvent(
+      'pcx:lb7666:app:default',
+      const AppEvent(
+        kind: 'item/tool/requestUserInput',
+        requestId: '9',
+        raw:
+            '{"questions":[{"id":"theme","header":"题旨","question":"主题落在哪一类？",'
+            '"isOther":false,"isSecret":false,"options":['
+            '{"label":"山水抒怀","description":"d1"},'
+            '{"label":"怀古咏史","description":"d2"}]}]}',
+      ),
+    );
+    await t.pumpAndSettle();
+
+    expect(find.byKey(const Key('user-input-card')), findsOneWidget);
+    expect(find.byKey(const Key('approval-card')), findsNothing);
+    expect(find.text('主题落在哪一类？'), findsOneWidget);
+    expect(find.text('山水抒怀'), findsOneWidget);
+
+    // Pick an option and submit → the answer is sent in the protocol shape.
+    await t.tap(find.text('山水抒怀'));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('user-input-submit')));
+    await t.pumpAndSettle();
+    expect(api.lastUserInputAnswers, '{"theme":["山水抒怀"]}');
+    expect(find.byKey(const Key('user-input-card')), findsNothing);
+  });
+
+  testWidgets('request_user_input with no options renders an answerable '
+      'free-text field', (t) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    await t.pumpWidget(
+      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+    );
+    await t.pumpAndSettle();
+
+    // A question with no options must stay answerable as free text (not a card
+    // with a permanently-disabled Submit).
+    api.pushEvent(
+      'pcx:lb7666:app:default',
+      const AppEvent(
+        kind: 'item/tool/requestUserInput',
+        requestId: '9',
+        raw:
+            '{"questions":[{"id":"title","header":"标题","question":"取个标题？",'
+            '"isOther":false,"isSecret":false,"options":[]}]}',
+      ),
+    );
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('user-input-card')), findsOneWidget);
+
+    final field = find.descendant(
+      of: find.byKey(const Key('user-input-card')),
+      matching: find.byType(TextField),
+    );
+    expect(field, findsOneWidget);
+    await t.enterText(field, '春日');
+    await t.pump();
+    await t.tap(find.byKey(const Key('user-input-submit')));
+    await t.pumpAndSettle();
+    expect(api.lastUserInputAnswers, '{"title":["春日"]}');
+  });
+
+  testWidgets('Plan-mode turn ending on prose still offers to implement', (
+    t,
+  ) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    // A plan-mode turn: the plan checklist is followed by the model's prose plan
+    // summary (目标/约束/假设) — so the plan is NOT the last item. The implement
+    // choice must still appear (the bug was keying on "last item is a plan").
+    api.readResult = const ThreadHistory(
+      items: [
+        ThreadItem(
+          id: 'u1',
+          itemType: 'userMessage',
+          title: '',
+          text: '规划写一篇古诗文',
+        ),
+        ThreadItem(id: 'p1', itemType: 'plan', title: '', text: '# Step 1'),
+        ThreadItem(
+          id: 'a1',
+          itemType: 'agentMessage',
+          title: '',
+          text: '目标：……',
+        ),
+      ],
+      running: false,
+      collaborationMode: 'plan',
+    );
+    await t.pumpWidget(
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          threadId: 'thread-plan-prose',
+        ),
+        api,
+      ),
+    );
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('implement-btn')), findsOneWidget);
+  });
+
   testWidgets('App session surfaces a turn failure with retry', (t) async {
     final api = FakeBridgeApi(
       config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
@@ -1487,6 +1616,61 @@ void main() {
     expect(api.lastTurnText, '请按上面的计划开始实现。');
     // Once a new turn runs, the plan is no longer trailing → choice goes away.
     expect(find.byKey(const Key('implement-btn')), findsNothing);
+  });
+
+  testWidgets('Implement bar survives a screen rebuild via in-memory cache '
+      'when the persisted config is unavailable', (t) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+
+    // Screen A: a new plan-mode conversation. Sending creates thread-0 and
+    // records its plan mode in the process-wide static cache.
+    await t.pumpWidget(
+      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+    );
+    await t.pumpAndSettle();
+    await t.tap(find.text('计划'));
+    await t.pump();
+    await t.enterText(find.byType(TextField), 'plan it');
+    await t.pump();
+    await t.tap(find.byKey(const Key('send-btn')));
+    await t.pumpAndSettle();
+
+    // Tear the screen down (like going back to the session list) so reopening
+    // builds a fresh State, and drop the persisted config to simulate the PUT
+    // not having landed yet (the race behind "switching session hides the bar").
+    await t.pumpWidget(const SizedBox());
+    await t.pumpAndSettle();
+    api.threadConfigs.clear();
+
+    // Reopen thread-0. The server exposes no collaborationMode and there is no
+    // persisted config, so the implement bar can only come from the static
+    // cache populated by the send above.
+    api.readResult = const ThreadHistory(
+      items: [
+        ThreadItem(
+          id: 'u1',
+          itemType: 'userMessage',
+          title: '',
+          text: 'plan it',
+        ),
+        ThreadItem(id: 'p1', itemType: 'plan', title: '', text: '# Step 1'),
+      ],
+      running: false,
+    );
+    await t.pumpWidget(
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          threadId: 'thread-0',
+        ),
+        api,
+      ),
+    );
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('implement-btn')), findsOneWidget);
   });
 
   testWidgets('Plan mode read from the server can be turned off', (t) async {
@@ -1729,6 +1913,115 @@ void main() {
     expect(api.lastReasoningEffort, 'high');
   });
 
+  testWidgets('A reasoning-effort pick made mid-turn is not reverted (R4)', (
+    t,
+  ) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    api.readResult = const ThreadHistory(items: [], running: false);
+    await t.pumpWidget(
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          threadId: 't1',
+        ),
+        api,
+      ),
+    );
+    await t.pumpAndSettle();
+
+    // Pick xhigh, then send a turn that we hold in-flight via the gate.
+    await t.ensureVisible(find.textContaining('思考强度'));
+    await t.tap(find.textContaining('思考强度'));
+    await t.pumpAndSettle();
+    await t.tap(find.text('极高'));
+    await t.pumpAndSettle();
+    api.turnStartGate = Completer<void>();
+    await t.enterText(find.byType(TextField), 'one');
+    await t.pump();
+    await t.tap(find.byKey(const Key('send-btn')));
+    await t.pump(); // _send is now suspended awaiting the gate (turn in flight)
+    expect(api.lastReasoningEffort, 'xhigh');
+
+    // While the turn is in flight, change effort to High.
+    await t.ensureVisible(find.textContaining('思考强度'));
+    await t.tap(find.textContaining('思考强度'));
+    await t.pumpAndSettle();
+    await t.tap(find.text('高'));
+    await t.pumpAndSettle();
+
+    // Let the in-flight turn finish. Post-turn reconciliation must NOT revert the
+    // mid-turn pick (the R4 guard keeps the pending effort = High, not xhigh).
+    api.turnStartGate!.complete();
+    await t.pumpAndSettle();
+    api.turnStartGate = null;
+
+    // The next turn carries the mid-turn pick, proving it survived.
+    await t.enterText(find.byType(TextField), 'two');
+    await t.pump();
+    await t.tap(find.byKey(const Key('send-btn')));
+    await t.pumpAndSettle();
+    expect(api.lastReasoningEffort, 'high');
+  });
+
+  testWidgets('Resume collapses a back-to-back duplicate user message', (
+    t,
+  ) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    // The artifact of a dropped-but-committed send recorded twice.
+    api.readResult = const ThreadHistory(
+      items: [
+        ThreadItem(id: 'u1', itemType: 'userMessage', title: '', text: 'do it'),
+        ThreadItem(id: 'u2', itemType: 'userMessage', title: '', text: 'do it'),
+      ],
+      running: false,
+    );
+    await t.pumpWidget(
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          threadId: 't1',
+        ),
+        api,
+      ),
+    );
+    await t.pumpAndSettle();
+    expect(find.text('do it'), findsOneWidget);
+  });
+
+  testWidgets('Resume keeps a genuine re-ask (a reply sits between)', (
+    t,
+  ) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    api.readResult = const ThreadHistory(
+      items: [
+        ThreadItem(id: 'u1', itemType: 'userMessage', title: '', text: 'do it'),
+        ThreadItem(id: 'a1', itemType: 'agentMessage', title: '', text: 'ok'),
+        ThreadItem(id: 'u2', itemType: 'userMessage', title: '', text: 'do it'),
+      ],
+      running: false,
+    );
+    await t.pumpWidget(
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          threadId: 't1',
+        ),
+        api,
+      ),
+    );
+    await t.pumpAndSettle();
+    expect(find.text('do it'), findsNWidgets(2));
+  });
+
   testWidgets('An unsent effort pick does not leak across threads', (t) async {
     final api = FakeBridgeApi(
       config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
@@ -1896,6 +2189,9 @@ void main() {
           ThreadItem(id: 'p1', itemType: 'plan', title: '', text: '# Step 1'),
         ],
         running: false,
+        // The implement choice only shows for a genuine plan-mode thread (a
+        // plan checklist in a normal turn must not trigger it).
+        collaborationMode: 'plan',
       );
       await t.pumpWidget(
         _host(

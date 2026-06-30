@@ -245,6 +245,15 @@ class AppLocalizationsEn extends AppLocalizations {
   String get deny => 'Deny';
 
   @override
+  String get userInputTitle => 'The agent needs your input';
+
+  @override
+  String get userInputSubmit => 'Submit';
+
+  @override
+  String get userInputOther => 'Other…';
+
+  @override
   String get planMode => 'Plan';
 
   @override

@@ -847,6 +847,17 @@ abstract interface class BridgeApi {
     String decision,
   );
 
+  /// Answer an `item/tool/requestUserInput` elicitation — the model asking
+  /// structured questions (NOT a command/file approval). [requestId] is from the
+  /// `item/tool/requestUserInput` [AppEvent]; [answersJson] is a JSON object
+  /// mapping each question id to its chosen answer string(s)
+  /// (e.g. `{"theme":["山水抒怀"]}`); an empty object `{}` cancels.
+  Future<void> appRespondUserInput(
+    String serviceKey,
+    String requestId,
+    String answersJson,
+  );
+
   // --- Local session takeover (shared CODEX_HOME) ---
 
   /// List every codex session under the shared `CODEX_HOME`, newest first,
