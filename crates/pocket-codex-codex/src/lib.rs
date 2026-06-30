@@ -37,6 +37,11 @@ pub mod liveness;
 /// implement force takeover of a held-open session.
 pub mod takeover;
 
+/// Desktop self-contained mode: run codex's app-server in-process (compiled in)
+/// instead of spawning an external binary. Only built with `embedded-codex`.
+#[cfg(feature = "embedded-codex")]
+pub mod embedded;
+
 pub use process::{
     locate_binary, spawn, status, stop, ListenSpec, SpawnOptions, SpawnReport, StatusReport,
     StopOutcome,

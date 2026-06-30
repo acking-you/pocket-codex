@@ -50,3 +50,12 @@ tokio-rustls = { workspace = true }
 webpki-roots = "0.26"
 once_cell = { workspace = true }
 tracing = { workspace = true }
+
+# Desktop only: pull codex's app-server IN-PROCESS so the app can self-host
+# without an external codex install (the `embedded-codex` feature compiles
+# codex-core into the bridge). Target-gated, so mobile (android/ios) and the
+# plain `cargo test -p pocket-codex-codex` never compile it. The runtime still
+# chooses external-vs-embedded per host; this just makes the embedded path
+# available on desktop.
+[target.'cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))'.dependencies]
+pocket-codex-codex = { workspace = true, features = ["embedded-codex"] }
