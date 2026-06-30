@@ -1560,6 +1560,41 @@ void main() {
     expect(find.byKey(const Key('implement-btn')), findsOneWidget);
   });
 
+  testWidgets('A <proposed_plan> message renders without the wrapper tags', (
+    t,
+  ) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    api.readResult = const ThreadHistory(
+      items: [
+        ThreadItem(
+          id: 'a1',
+          itemType: 'agentMessage',
+          title: '',
+          text: '<proposed_plan>\n# English Plan\nStep one.\n</proposed_plan>',
+        ),
+      ],
+      running: false,
+    );
+    await t.pumpWidget(
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          threadId: 't1',
+        ),
+        api,
+      ),
+    );
+    await t.pumpAndSettle();
+    // The rendered markdown shows the plan content but not the wrapper tags.
+    final md = t
+        .widgetList<MarkdownBody>(find.byType(MarkdownBody))
+        .firstWhere((w) => w.data.contains('English Plan'));
+    expect(md.data.contains('proposed_plan'), isFalse);
+  });
+
   testWidgets('App session surfaces a turn failure with retry', (t) async {
     final api = FakeBridgeApi(
       config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),

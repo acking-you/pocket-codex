@@ -3496,6 +3496,21 @@ class _DiffFileTile extends StatelessWidget {
   }
 }
 
+/// In plan mode the model wraps its proposal in `<proposed_plan>…</proposed_plan>`
+/// and codex doesn't always strip the tags, so they leak into the rendered
+/// message. Detect them and return the text without the wrapper tags plus an
+/// `isPlan` flag the UI uses to badge the message as a plan. Streaming-safe:
+/// strips whichever tag has arrived so far (the open tag leads the content).
+({bool isPlan, String text}) _readProposedPlan(String raw) {
+  final open = RegExp(r'<\s*proposed_plan\s*>', caseSensitive: false);
+  if (!open.hasMatch(raw)) return (isPlan: false, text: raw);
+  final close = RegExp(r'<\s*/\s*proposed_plan\s*>', caseSensitive: false);
+  return (
+    isPlan: true,
+    text: raw.replaceAll(open, '').replaceAll(close, '').trim(),
+  );
+}
+
 /// Renders one timeline entry. Messages render Gemini-style (user = soft
 /// right bubble, agent = full-width Markdown); tool/activity items render as a
 /// collapsible [_ActivityCard]. Message copy fades in on hover (desktop);
@@ -3523,7 +3538,10 @@ class _MessageViewState extends State<_MessageView> {
 
   void _copy() {
     final l10n = AppLocalizations.of(context);
-    Clipboard.setData(ClipboardData(text: widget.item.text));
+    // Copy what's shown — without the <proposed_plan> wrapper tags.
+    Clipboard.setData(
+      ClipboardData(text: _readProposedPlan(widget.item.text).text),
+    );
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(l10n.copied),
@@ -3565,6 +3583,11 @@ class _MessageViewState extends State<_MessageView> {
 
     final scheme = Theme.of(context).colorScheme;
     final isUser = item.isUser;
+    // A plan-mode proposal streams in wrapped in `<proposed_plan>…</proposed_plan>`
+    // tags that codex doesn't strip. Remove them at the display layer and badge
+    // the message as a plan, so the UI perceives it as a plan instead of leaking
+    // the raw markup. The stored item text is untouched (display-only).
+    final proposal = _readProposedPlan(item.text);
     final Widget content = isUser
         ? Container(
             constraints: const BoxConstraints(maxWidth: 600),
@@ -3581,15 +3604,42 @@ class _MessageViewState extends State<_MessageView> {
               ).textTheme.bodyLarge?.copyWith(height: 1.45),
             ),
           )
-        : SizedBox(
-            width: double.infinity,
-            child: MarkdownBody(
-              data: autolinkifyMarkdown(item.text),
-              selectable: false,
-              styleSheet: _markdownStyle(context),
-              onTapLink: (text, href, title) =>
-                  onTapMarkdownLink(context, text, href, title),
-            ),
+        : Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (proposal.isPlan) ...[
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.checklist_rounded,
+                      size: 16,
+                      color: scheme.primary,
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      AppLocalizations.of(context).toolPlan,
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: scheme.primary,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+              ],
+              SizedBox(
+                width: double.infinity,
+                child: MarkdownBody(
+                  data: autolinkifyMarkdown(proposal.text),
+                  selectable: false,
+                  styleSheet: _markdownStyle(context),
+                  onTapLink: (text, href, title) =>
+                      onTapMarkdownLink(context, text, href, title),
+                ),
+              ),
+            ],
           );
 
     final showActions = !item.streaming;
