@@ -1516,6 +1516,50 @@ void main() {
     expect(find.byKey(const Key('implement-btn')), findsOneWidget);
   });
 
+  testWidgets('A re-plan after "keep planning" still offers to implement, even '
+      'as a plain message', (t) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    // The user got a plan, tapped "keep planning", steered ("in English"), and
+    // the re-plan arrived as a PLAIN agent message (no typed `plan` item — codex
+    // sometimes surfaces literal <proposed_plan> tags). The earlier `plan` item
+    // now has the steering message after it; the implement choice must still
+    // appear (the bug keyed on the last `plan` item).
+    api.readResult = const ThreadHistory(
+      items: [
+        ThreadItem(id: 'u1', itemType: 'userMessage', title: '', text: 'plan'),
+        ThreadItem(id: 'p1', itemType: 'plan', title: '', text: '# v1'),
+        ThreadItem(
+          id: 'u2',
+          itemType: 'userMessage',
+          title: '',
+          text: 'in English',
+        ),
+        ThreadItem(
+          id: 'a1',
+          itemType: 'agentMessage',
+          title: '',
+          text: '<proposed_plan> English plan … </proposed_plan>',
+        ),
+      ],
+      running: false,
+      collaborationMode: 'plan',
+    );
+    await t.pumpWidget(
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          threadId: 'thread-replan',
+        ),
+        api,
+      ),
+    );
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('implement-btn')), findsOneWidget);
+  });
+
   testWidgets('App session surfaces a turn failure with retry', (t) async {
     final api = FakeBridgeApi(
       config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
