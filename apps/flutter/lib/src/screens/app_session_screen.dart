@@ -211,27 +211,30 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
   Timer? _healthTimer;
   String? _lastUserText;
 
-  /// Whether to offer the "implement this plan" choice. A plan-mode turn does
-  /// NOT end on its `plan` item — the model appends its prose plan (目标/约束/假设)
-  /// and/or reasoning items after it — so keying on "the last item is a plan"
-  /// would never fire. Instead: the thread is in plan mode (`_planActive`) AND
-  /// the most-recent `plan` item has no later user message (the user hasn't yet
-  /// implemented or steered past it). Normal multi-step turns also emit `plan`
-  /// checklists, but they run in default mode (`_planActive` false), so they
-  /// don't trigger this. Scanning the timeline (rather than requiring the plan
-  /// to be literally last) makes it survive trailing prose, a stray reasoning
-  /// item, or a leftover duplicate user message, and persist across leave/
-  /// restart until the user acts.
+  /// Whether to offer the "implement this plan" choice — shown after a plan-mode
+  /// turn has produced its proposal, until the user implements or steers past it.
+  ///
+  /// We deliberately do NOT key on a typed `plan` item: codex delivers the
+  /// proposal inconsistently — sometimes a `plan` item, sometimes a plain agent
+  /// message (it can even surface literal `<proposed_plan>` tags), and a re-plan
+  /// after "keep planning" typically arrives as a plain message. Keying on the
+  /// last `plan` item then points at a stale earlier plan with the new steering
+  /// message after it, so the choice never re-appears. Instead: the thread is in
+  /// plan mode (`_planActive`), no turn is running, the user hasn't dismissed,
+  /// and the latest content item is the model's — i.e. the user hasn't steered
+  /// since (the last non-reasoning item isn't their message). Normal multi-step
+  /// turns also emit `plan` checklists but run in default mode (`_planActive`
+  /// false), so they never trigger this. Derived from the timeline, so it
+  /// survives leave/restart until the user acts.
   bool get _planReady {
     if (_streaming || _implementDismissed || !_planActive || _items.isEmpty) {
       return false;
     }
-    final lastPlan = _items.lastIndexWhere((it) => it.type == 'plan');
-    if (lastPlan < 0) return false;
-    for (var i = lastPlan + 1; i < _items.length; i++) {
-      if (_items[i].type == 'userMessage') return false;
+    for (final it in _items.reversed) {
+      if (it.type == 'reasoning') continue; // trailing reasoning isn't a steer
+      return it.type != 'userMessage';
     }
-    return true;
+    return false;
   }
 
   /// Show the "typing" indicator while a turn runs and the model hasn't begun
@@ -3493,6 +3496,21 @@ class _DiffFileTile extends StatelessWidget {
   }
 }
 
+/// In plan mode the model wraps its proposal in `<proposed_plan>…</proposed_plan>`
+/// and codex doesn't always strip the tags, so they leak into the rendered
+/// message. Detect them and return the text without the wrapper tags plus an
+/// `isPlan` flag the UI uses to badge the message as a plan. Streaming-safe:
+/// strips whichever tag has arrived so far (the open tag leads the content).
+({bool isPlan, String text}) _readProposedPlan(String raw) {
+  final open = RegExp(r'<\s*proposed_plan\s*>', caseSensitive: false);
+  if (!open.hasMatch(raw)) return (isPlan: false, text: raw);
+  final close = RegExp(r'<\s*/\s*proposed_plan\s*>', caseSensitive: false);
+  return (
+    isPlan: true,
+    text: raw.replaceAll(open, '').replaceAll(close, '').trim(),
+  );
+}
+
 /// Renders one timeline entry. Messages render Gemini-style (user = soft
 /// right bubble, agent = full-width Markdown); tool/activity items render as a
 /// collapsible [_ActivityCard]. Message copy fades in on hover (desktop);
@@ -3520,7 +3538,10 @@ class _MessageViewState extends State<_MessageView> {
 
   void _copy() {
     final l10n = AppLocalizations.of(context);
-    Clipboard.setData(ClipboardData(text: widget.item.text));
+    // Copy what's shown — without the <proposed_plan> wrapper tags.
+    Clipboard.setData(
+      ClipboardData(text: _readProposedPlan(widget.item.text).text),
+    );
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(l10n.copied),
@@ -3562,6 +3583,11 @@ class _MessageViewState extends State<_MessageView> {
 
     final scheme = Theme.of(context).colorScheme;
     final isUser = item.isUser;
+    // A plan-mode proposal streams in wrapped in `<proposed_plan>…</proposed_plan>`
+    // tags that codex doesn't strip. Remove them at the display layer and badge
+    // the message as a plan, so the UI perceives it as a plan instead of leaking
+    // the raw markup. The stored item text is untouched (display-only).
+    final proposal = _readProposedPlan(item.text);
     final Widget content = isUser
         ? Container(
             constraints: const BoxConstraints(maxWidth: 600),
@@ -3578,15 +3604,42 @@ class _MessageViewState extends State<_MessageView> {
               ).textTheme.bodyLarge?.copyWith(height: 1.45),
             ),
           )
-        : SizedBox(
-            width: double.infinity,
-            child: MarkdownBody(
-              data: autolinkifyMarkdown(item.text),
-              selectable: false,
-              styleSheet: _markdownStyle(context),
-              onTapLink: (text, href, title) =>
-                  onTapMarkdownLink(context, text, href, title),
-            ),
+        : Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (proposal.isPlan) ...[
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.checklist_rounded,
+                      size: 16,
+                      color: scheme.primary,
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      AppLocalizations.of(context).toolPlan,
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: scheme.primary,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+              ],
+              SizedBox(
+                width: double.infinity,
+                child: MarkdownBody(
+                  data: autolinkifyMarkdown(proposal.text),
+                  selectable: false,
+                  styleSheet: _markdownStyle(context),
+                  onTapLink: (text, href, title) =>
+                      onTapMarkdownLink(context, text, href, title),
+                ),
+              ),
+            ],
           );
 
     final showActions = !item.streaming;
