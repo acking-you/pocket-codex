@@ -332,11 +332,17 @@ fn build_command(
     proxy: Option<&str>,
 ) -> Command {
     let mut command = Command::new(binary);
-    command
-        .arg("app-server")
-        .arg("--listen")
-        .arg(listen_url)
-        .args(extra_args);
+    // The bundled binary IS the app-server (`codex-app-server --listen …`),
+    // whereas an external `codex` exposes it as a subcommand (`codex app-server
+    // --listen …`). Distinguish by file name so either can be spawned uniformly.
+    let is_standalone = binary
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .is_some_and(|s| s.starts_with("codex-app-server"));
+    if !is_standalone {
+        command.arg("app-server");
+    }
+    command.arg("--listen").arg(listen_url).args(extra_args);
 
     if let Some(raw) = proxy {
         // Set both cases so platforms/libraries that read either form agree.
@@ -490,6 +496,27 @@ mod tests {
         // A blank override is treated as "not given" → PATH lookup (which may or
         // may not find codex on the test host); assert only that it doesn't panic.
         let _ = locate_binary(Some("   "));
+    }
+
+    #[test]
+    fn build_command_omits_subcommand_for_bundled_app_server() {
+        let args = |bin: &str| -> Vec<String> {
+            build_command(Path::new(bin), "ws://127.0.0.1:1", &[], None)
+                .get_args()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect()
+        };
+        // External `codex` exposes app-server as a subcommand.
+        assert_eq!(args("codex"), ["app-server", "--listen", "ws://127.0.0.1:1"]);
+        // The bundled standalone binary IS the app-server — no subcommand.
+        assert_eq!(
+            args("codex-app-server"),
+            ["--listen", "ws://127.0.0.1:1"]
+        );
+        assert_eq!(
+            args("codex-app-server.exe"),
+            ["--listen", "ws://127.0.0.1:1"]
+        );
     }
 
     #[test]
