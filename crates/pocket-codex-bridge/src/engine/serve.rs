@@ -68,6 +68,9 @@ struct LocalServe {
     /// `Some` while the app tunnel is published; `None` once deregistered.
     app_register: Option<JoinHandle<()>>,
     watchdog: JoinHandle<()>,
+    /// The in-process codex app-server task (embedded mode). `None` for an
+    /// external (spawned-binary) host. Aborted on stop.
+    embedded: Option<JoinHandle<()>>,
     // in-process Responses API proxy.
     api_key: String,
     api_local: SocketAddr,
@@ -211,11 +214,71 @@ fn tunnel_down(handle: &Option<JoinHandle<()>>) -> bool {
 /// Re-hosting a name whose codex is still alive just re-registers any dropped
 /// tunnels (no restart). `proxy` is the upstream proxy both codex and the API
 /// proxy use to reach chatgpt.com (`None` = inherit the app's environment).
+/// Run codex's app-server in-process on `listen_url`, restarting it if it ever
+/// exits, until the task is aborted on stop. This is the embedded-mode
+/// equivalent of the spawned `codex` binary plus its health watchdog.
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+async fn run_embedded_supervised(listen_url: String) {
+    loop {
+        match pocket_codex_codex::embedded::run(&listen_url).await {
+            Ok(()) => {
+                tracing::warn!(%listen_url, "embedded codex app-server exited; restarting")
+            },
+            Err(e) => {
+                tracing::error!(%listen_url, "embedded codex app-server failed: {e:#}; restarting")
+            },
+        }
+        tokio::time::sleep(Duration::from_millis(800)).await;
+    }
+}
+
+/// Block until `host:port` accepts a TCP connection (the embedded WS listener is
+/// up) or `timeout` elapses.
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+fn wait_for_listener(host: &str, port: u16, timeout: Duration) -> Result<()> {
+    let deadline = std::time::Instant::now() + timeout;
+    while std::time::Instant::now() < deadline {
+        if tcp_port_open(host, port) {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    bail!("embedded codex app-server never listened on {host}:{port} within {timeout:?}")
+}
+
+/// Reserve a free loopback port (for embedded mode when the caller passed 0).
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+fn free_loopback_port() -> Result<u16> {
+    let l = std::net::TcpListener::bind("127.0.0.1:0").context("reserving a loopback port")?;
+    Ok(l.local_addr()?.port())
+}
+
+/// Make the host's proxy visible to in-process codex via the process
+/// environment (a spawned child gets it via its command env instead). Loopback
+/// is kept direct so codex's own WS and our local services aren't proxied.
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+#[allow(
+    deprecated_safe_2024,
+    reason = "set_var is safe in edition 2021; called once at host start before concurrent env use"
+)]
+fn set_proxy_env(proxy: &str) {
+    for key in
+        ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"]
+    {
+        std::env::set_var(key, proxy);
+    }
+    if std::env::var_os("NO_PROXY").is_none() && std::env::var_os("no_proxy").is_none() {
+        std::env::set_var("NO_PROXY", "localhost,127.0.0.1,::1");
+        std::env::set_var("no_proxy", "localhost,127.0.0.1,::1");
+    }
+}
+
 pub fn serve_start(
     port: u16,
     binary_override: Option<String>,
     name: Option<String>,
     proxy: Option<String>,
+    embedded: bool,
 ) -> Result<ServeReport> {
     let support = runtime::support_dir()?;
     let mut config = load_config(&support)?;
@@ -223,29 +286,36 @@ pub fn serve_start(
         bail!("sign in with GitHub before hosting a local app-server");
     }
 
-    // Resolve the binary: explicit override → persisted config → `$PATH`.
-    let override_trimmed = binary_override
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
-    let candidate = override_trimmed
-        .map(str::to_string)
-        .or_else(|| config.codex.binary.clone());
-    let binary = locate_binary(candidate.as_deref()).ok_or_else(|| {
-        anyhow!(
-            "could not find the codex binary{}; install codex or set its path",
-            candidate
-                .as_deref()
-                .map(|c| format!(" at `{c}`"))
-                .unwrap_or_default()
-        )
-    })?;
-    if let Some(ov) = override_trimmed {
-        if config.codex.binary.as_deref() != Some(ov) {
-            config.codex.binary = Some(ov.to_string());
-            save_config(&support, &config)?;
+    // Resolve the codex binary for the external path: explicit override →
+    // persisted config → `$PATH`. Embedded mode runs codex in-process, so there
+    // is no binary to locate.
+    let binary = if embedded {
+        None
+    } else {
+        let override_trimmed = binary_override
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let candidate = override_trimmed
+            .map(str::to_string)
+            .or_else(|| config.codex.binary.clone());
+        let resolved = locate_binary(candidate.as_deref()).ok_or_else(|| {
+            anyhow!(
+                "could not find the codex binary{}; install codex or set its path",
+                candidate
+                    .as_deref()
+                    .map(|c| format!(" at `{c}`"))
+                    .unwrap_or_default()
+            )
+        })?;
+        if let Some(ov) = override_trimmed {
+            if config.codex.binary.as_deref() != Some(ov) {
+                config.codex.binary = Some(ov.to_string());
+                save_config(&support, &config)?;
+            }
         }
-    }
+        Some(resolved)
+    };
 
     let device = default_device_id();
     let name = name
@@ -345,28 +415,72 @@ pub fn serve_start(
     // codex child is already running (or via a panic in the supervisor).
     let config_store = config_store()?;
 
-    // Spawn codex. Runs on the flutter_rust_bridge worker thread (not the UI
-    // thread), so the port-resolve poll inside `spawn` is fine.
-    let spawn_opts = SpawnOptions {
-        binary: Some(binary),
-        listen: ListenSpec::WebSocket {
-            host: "127.0.0.1".to_string(),
-            port,
-        },
-        extra_args: Vec::new(),
-        log_file: None,
-        proxy: proxy.clone(),
+    // Bring up codex serving 127.0.0.1:<port>: in-process (embedded) or as a
+    // spawned child binary. Both yield the local app-server socket, a pid (our
+    // own for embedded), the embedded task handle (`None` for external), and a
+    // watchdog keeping codex alive. Runs on the flutter_rust_bridge worker
+    // thread, so the blocking port poll is fine.
+    let (app_local, pid, embedded_task, watchdog): (
+        SocketAddr,
+        u32,
+        Option<JoinHandle<()>>,
+        JoinHandle<()>,
+    ) = if embedded {
+        #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+        {
+            let p = if port == 0 { free_loopback_port()? } else { port };
+            // In-process codex reaches chatgpt via the host's proxy from the
+            // process environment (the spawned child gets it via its command env).
+            if let Some(px) = proxy.as_deref() {
+                set_proxy_env(px);
+            }
+            let listen_url = format!("ws://127.0.0.1:{p}");
+            let task = runtime::runtime().spawn(run_embedded_supervised(listen_url));
+            wait_for_listener("127.0.0.1", p, Duration::from_secs(30))?;
+            let app_local: SocketAddr =
+                format!("127.0.0.1:{p}").parse().expect("loopback socket addr");
+            // The supervisor self-restarts codex, so there is no separate
+            // process-respawn watchdog; a never-ending task fills the slot.
+            let watchdog = runtime::runtime().spawn(std::future::pending::<()>());
+            (app_local, std::process::id(), Some(task), watchdog)
+        }
+        #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+        {
+            bail!("this build has no embedded codex; use an external codex binary");
+        }
+    } else {
+        let spawn_opts = SpawnOptions {
+            binary,
+            listen: ListenSpec::WebSocket {
+                host: "127.0.0.1".to_string(),
+                port,
+            },
+            extra_args: Vec::new(),
+            log_file: None,
+            proxy: proxy.clone(),
+        };
+        let report = spawn(spawn_opts.clone()).context("spawning codex app-server")?;
+        let listen_addr = report
+            .info
+            .listen
+            .strip_prefix("ws://")
+            .map(str::to_string)
+            .ok_or_else(|| {
+                anyhow!("codex listen `{}` is not a ws:// address", report.info.listen)
+            })?;
+        let app_local: SocketAddr = listen_addr
+            .parse()
+            .with_context(|| format!("codex listen `{listen_addr}` is not a socket address"))?;
+        // Pin the watchdog's respawn to the resolved codex port.
+        let mut watchdog_opts = spawn_opts;
+        watchdog_opts.listen = ListenSpec::WebSocket {
+            host: app_local.ip().to_string(),
+            port: app_local.port(),
+        };
+        let watchdog =
+            runtime::runtime().spawn(health_watchdog(app_local.to_string(), watchdog_opts));
+        (app_local, report.info.pid, None, watchdog)
     };
-    let report = spawn(spawn_opts.clone()).context("spawning codex app-server")?;
-    let listen_addr = report
-        .info
-        .listen
-        .strip_prefix("ws://")
-        .map(str::to_string)
-        .ok_or_else(|| anyhow!("codex listen `{}` is not a ws:// address", report.info.listen))?;
-    let app_local: SocketAddr = listen_addr
-        .parse()
-        .with_context(|| format!("codex listen `{listen_addr}` is not a socket address"))?;
 
     // Reserve an ephemeral loopback port for the in-process API proxy and learn
     // it (so we can register that port). A supervisor task keeps the proxy alive
@@ -404,13 +518,6 @@ pub fn serve_start(
         config_store,
     ));
 
-    // Pin the watchdog's respawn to the resolved codex port.
-    let mut watchdog_opts = spawn_opts;
-    watchdog_opts.listen = ListenSpec::WebSocket {
-        host: app_local.ip().to_string(),
-        port: app_local.port(),
-    };
-
     let (connector, tokens) = account::broker_transport(&support)?;
     let app_register = Some(spawn_register(
         connector.clone(),
@@ -430,7 +537,6 @@ pub fn serve_start(
     ));
     let meta_register =
         Some(spawn_register(connector, tokens, &device, ServiceKind::Meta, &name, meta_local));
-    let watchdog = runtime::runtime().spawn(health_watchdog(app_local.to_string(), watchdog_opts));
 
     hosts()
         .lock()
@@ -440,9 +546,10 @@ pub fn serve_start(
             name: name.clone(),
             app_key: app_key.clone(),
             app_local,
-            pid: report.info.pid,
+            pid,
             app_register,
             watchdog,
+            embedded: embedded_task,
             api_key: api_key.clone(),
             api_local,
             api_proxy,
@@ -462,8 +569,8 @@ pub fn serve_start(
         api_listen_addr: api_local.to_string(),
         meta_service_key: meta_key,
         meta_listen_addr: meta_local.to_string(),
-        pid: report.info.pid,
-        reused: report.reused,
+        pid,
+        reused: false,
     })
 }
 
@@ -669,7 +776,14 @@ fn stop_host_tasks(ls: LocalServe) {
     ls.watchdog.abort();
     ls.api_proxy.abort();
     ls.meta_svc.abort();
-    stop_codex_at(&ls.app_local.to_string());
+    if let Some(h) = ls.embedded {
+        // Embedded codex is an in-process task: abort it (its supervisor stops
+        // and the WS listener closes). Skip the port-targeted process kill — the
+        // listener is our own process.
+        h.abort();
+    } else {
+        stop_codex_at(&ls.app_local.to_string());
+    }
 }
 
 /// Stop the codex app-server listening on `listen_addr` — graceful SIGTERM,

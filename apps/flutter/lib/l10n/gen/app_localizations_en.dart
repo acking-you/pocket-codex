@@ -739,6 +739,16 @@ class AppLocalizationsEn extends AppLocalizations {
   String get codexRedetect => 'Re-detect';
 
   @override
+  String get codexSourceExternal => 'External codex';
+
+  @override
+  String get codexSourceBuiltin => 'Built-in';
+
+  @override
+  String get codexBuiltinNote =>
+      'Runs the app\'s built-in codex in-process — no install needed.';
+
+  @override
   String get localHostDialogTitle => 'Host a local app-server';
 
   @override

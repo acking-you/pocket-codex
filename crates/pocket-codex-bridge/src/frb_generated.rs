@@ -1060,6 +1060,7 @@ fn wire__crate__api__bridge__app_serve_start_impl(
             let api_binary_override = <Option<String>>::sse_decode(&mut deserializer);
             let api_name = <Option<String>>::sse_decode(&mut deserializer);
             let api_proxy = <Option<String>>::sse_decode(&mut deserializer);
+            let api_embedded = <bool>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
@@ -1069,6 +1070,7 @@ fn wire__crate__api__bridge__app_serve_start_impl(
                             api_binary_override,
                             api_name,
                             api_proxy,
+                            api_embedded,
                         )?;
                         Ok(output_ok)
                     })(),

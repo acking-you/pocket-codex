@@ -64,17 +64,21 @@ Future<List<SubStatusDto>> subscriptions() =>
 /// signed-in account, publishing both `app:<name>` and `api:<name>`. Re-hosting
 /// a name whose codex is still alive just re-registers any dropped tunnels.
 /// `proxy` is the upstream proxy both use to reach chatgpt.com (`None` =
-/// inherit env). Desktop only.
+/// inherit env). `embedded` runs codex's app-server in-process (the compiled-in
+/// `embedded-codex`) instead of spawning an external binary — desktop only; the
+/// `binary_override` is ignored when `embedded` is set. Desktop only.
 Future<AppServeDto> appServeStart({
   required int port,
   String? binaryOverride,
   String? name,
   String? proxy,
+  required bool embedded,
 }) => RustLib.instance.api.crateApiBridgeAppServeStart(
   port: port,
   binaryOverride: binaryOverride,
   name: name,
   proxy: proxy,
+  embedded: embedded,
 );
 
 /// Snapshot of every local host (for the status cards + periodic re-probe).
@@ -192,12 +196,13 @@ Future<void> appRespondApproval({
   decision: decision,
 );
 
-/// Answer an `item/tool/requestUserInput` elicitation (the model asking the user
-/// structured questions, NOT a command/file approval). `answers_json` is a JSON
-/// object mapping each question id to its chosen answer string(s) (option labels
-/// and/or free-text), e.g. `{"theme":["山水抒怀"]}`; an empty object `{}` cancels.
-/// The session layer wraps it into the protocol's `ToolRequestUserInputResponse`
-/// so the model actually receives the user's selections.
+/// Answer an `item/tool/requestUserInput` elicitation (the model asking the
+/// user structured questions, NOT a command/file approval). `answers_json` is a
+/// JSON object mapping each question id to its chosen answer string(s) (option
+/// labels and/or free-text), e.g. `{"theme":["山水抒怀"]}`; an empty object
+/// `{}` cancels. The session layer wraps it into the protocol's
+/// `ToolRequestUserInputResponse` so the model actually receives the user's
+/// selections.
 Future<void> appRespondUserInput({
   required String serviceKey,
   required String requestId,
