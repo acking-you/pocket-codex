@@ -217,7 +217,7 @@ fn tunnel_down(handle: &Option<JoinHandle<()>>) -> bool {
 /// Run codex's app-server in-process on `listen_url`, restarting it if it ever
 /// exits, until the task is aborted on stop. This is the embedded-mode
 /// equivalent of the spawned `codex` binary plus its health watchdog.
-#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 async fn run_embedded_supervised(listen_url: String) {
     loop {
         match pocket_codex_codex::embedded::run(&listen_url).await {
@@ -235,7 +235,7 @@ async fn run_embedded_supervised(listen_url: String) {
 
 /// Block until `host:port` accepts a TCP connection (the embedded WS listener
 /// is up) or `timeout` elapses.
-#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 fn wait_for_listener(host: &str, port: u16, timeout: Duration) -> Result<()> {
     let deadline = std::time::Instant::now() + timeout;
     while std::time::Instant::now() < deadline {
@@ -248,7 +248,7 @@ fn wait_for_listener(host: &str, port: u16, timeout: Duration) -> Result<()> {
 }
 
 /// Reserve a free loopback port (for embedded mode when the caller passed 0).
-#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 fn free_loopback_port() -> Result<u16> {
     let l = std::net::TcpListener::bind("127.0.0.1:0").context("reserving a loopback port")?;
     Ok(l.local_addr()?.port())
@@ -257,7 +257,7 @@ fn free_loopback_port() -> Result<u16> {
 /// Make the host's proxy visible to in-process codex via the process
 /// environment (a spawned child gets it via its command env instead). Loopback
 /// is kept direct so codex's own WS and our local services aren't proxied.
-#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 #[allow(
     deprecated_safe_2024,
     reason = "set_var is safe in edition 2021; called once at host start before concurrent env use"
@@ -426,7 +426,7 @@ pub fn serve_start(
         Option<JoinHandle<()>>,
         JoinHandle<()>,
     ) = if embedded {
-        #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
         {
             let p = if port == 0 { free_loopback_port()? } else { port };
             // In-process codex reaches chatgpt via the host's proxy from the
@@ -445,7 +445,7 @@ pub fn serve_start(
             let watchdog = runtime::runtime().spawn(std::future::pending::<()>());
             (app_local, std::process::id(), Some(task), watchdog)
         }
-        #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
         {
             bail!("this build has no embedded codex; use an external codex binary");
         }

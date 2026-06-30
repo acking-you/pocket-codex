@@ -1176,9 +1176,9 @@ class _LocalHostDialogState extends ConsumerState<_LocalHostDialog> {
 
   bool get _isExisting => widget.existing != null;
   bool get _codexFound => _codexPath != null;
-  // The built-in (in-process) codex ships only in desktop builds.
-  bool get _embeddedAvailable =>
-      Platform.isWindows || Platform.isMacOS || Platform.isLinux;
+  // The built-in (in-process) codex ships only in the Windows + macOS desktop
+  // builds (Linux desktop uses the external path — see the bridge's target-cfg).
+  bool get _embeddedAvailable => Platform.isWindows || Platform.isMacOS;
 
   @override
   void initState() {
