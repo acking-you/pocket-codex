@@ -233,8 +233,8 @@ async fn run_embedded_supervised(listen_url: String) {
     }
 }
 
-/// Block until `host:port` accepts a TCP connection (the embedded WS listener is
-/// up) or `timeout` elapses.
+/// Block until `host:port` accepts a TCP connection (the embedded WS listener
+/// is up) or `timeout` elapses.
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 fn wait_for_listener(host: &str, port: u16, timeout: Duration) -> Result<()> {
     let deadline = std::time::Instant::now() + timeout;
@@ -263,8 +263,7 @@ fn free_loopback_port() -> Result<u16> {
     reason = "set_var is safe in edition 2021; called once at host start before concurrent env use"
 )]
 fn set_proxy_env(proxy: &str) {
-    for key in
-        ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"]
+    for key in ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"]
     {
         std::env::set_var(key, proxy);
     }
@@ -438,8 +437,9 @@ pub fn serve_start(
             let listen_url = format!("ws://127.0.0.1:{p}");
             let task = runtime::runtime().spawn(run_embedded_supervised(listen_url));
             wait_for_listener("127.0.0.1", p, Duration::from_secs(30))?;
-            let app_local: SocketAddr =
-                format!("127.0.0.1:{p}").parse().expect("loopback socket addr");
+            let app_local: SocketAddr = format!("127.0.0.1:{p}")
+                .parse()
+                .expect("loopback socket addr");
             // The supervisor self-restarts codex, so there is no separate
             // process-respawn watchdog; a never-ending task fills the slot.
             let watchdog = runtime::runtime().spawn(std::future::pending::<()>());

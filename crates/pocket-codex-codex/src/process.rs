@@ -509,14 +509,8 @@ mod tests {
         // External `codex` exposes app-server as a subcommand.
         assert_eq!(args("codex"), ["app-server", "--listen", "ws://127.0.0.1:1"]);
         // The bundled standalone binary IS the app-server — no subcommand.
-        assert_eq!(
-            args("codex-app-server"),
-            ["--listen", "ws://127.0.0.1:1"]
-        );
-        assert_eq!(
-            args("codex-app-server.exe"),
-            ["--listen", "ws://127.0.0.1:1"]
-        );
+        assert_eq!(args("codex-app-server"), ["--listen", "ws://127.0.0.1:1"]);
+        assert_eq!(args("codex-app-server.exe"), ["--listen", "ws://127.0.0.1:1"]);
     }
 
     #[test]

@@ -2,10 +2,10 @@
 //!
 //! Compiled only under the `embedded-codex` feature (the desktop self-contained
 //! mode). Instead of spawning an external `codex` binary, we run codex's own
-//! app-server as a task in our process, listening on `ws://127.0.0.1:<port>`, so
-//! the rest of the bridge — which connects to a `ws://` app-server and tunnels
-//! it — works unchanged, with no codex install required. The `external` (spawn)
-//! path stays available and is the default.
+//! app-server as a task in our process, listening on `ws://127.0.0.1:<port>`,
+//! so the rest of the bridge — which connects to a `ws://` app-server and
+//! tunnels it — works unchanged, with no codex install required. The `external`
+//! (spawn) path stays available and is the default.
 
 use anyhow::{Context, Result};
 use codex_app_server::{
@@ -43,8 +43,10 @@ pub async fn run(listen_url: &str) -> Result<()> {
         arg0_paths,
         CliConfigOverrides::default(),
         LoaderOverrides::default(),
-        /* strict_config */ false,
-        /* default_analytics_enabled */ false,
+        // strict_config
+        false,
+        // default_analytics_enabled
+        false,
         transport,
         SessionSource::default(),
         AppServerWebsocketAuthSettings::default(),
