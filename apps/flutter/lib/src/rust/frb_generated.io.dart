@@ -28,6 +28,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  RustStreamSink<LogLineDto> dco_decode_StreamSink_log_line_dto_Sse(
+    dynamic raw,
+  );
+
+  @protected
   String dco_decode_String(dynamic raw);
 
   @protected
@@ -118,6 +123,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   LocalSessionDto dco_decode_local_session_dto(dynamic raw);
 
   @protected
+  LogLineDto dco_decode_log_line_dto(dynamic raw);
+
+  @protected
   ModelInfoDto dco_decode_model_info_dto(dynamic raw);
 
   @protected
@@ -179,6 +187,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   RustStreamSink<AppEventDto> sse_decode_StreamSink_app_event_dto_Sse(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  RustStreamSink<LogLineDto> sse_decode_StreamSink_log_line_dto_Sse(
     SseDeserializer deserializer,
   );
 
@@ -299,6 +312,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   LocalSessionDto sse_decode_local_session_dto(SseDeserializer deserializer);
 
   @protected
+  LogLineDto sse_decode_log_line_dto(SseDeserializer deserializer);
+
+  @protected
   ModelInfoDto sse_decode_model_info_dto(SseDeserializer deserializer);
 
   @protected
@@ -371,6 +387,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_StreamSink_app_event_dto_Sse(
     RustStreamSink<AppEventDto> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_StreamSink_log_line_dto_Sse(
+    RustStreamSink<LogLineDto> self,
     SseSerializer serializer,
   );
 
@@ -520,6 +542,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
     LocalSessionDto self,
     SseSerializer serializer,
   );
+
+  @protected
+  void sse_encode_log_line_dto(LogLineDto self, SseSerializer serializer);
 
   @protected
   void sse_encode_model_info_dto(ModelInfoDto self, SseSerializer serializer);

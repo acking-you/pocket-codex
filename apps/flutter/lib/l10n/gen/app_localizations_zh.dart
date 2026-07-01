@@ -813,4 +813,41 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get tunnelOffline => '已下架';
+
+  @override
+  String get logsTitle => '运行日志';
+
+  @override
+  String get logsLevel => '级别';
+
+  @override
+  String get logsLevelAll => '全部';
+
+  @override
+  String get logsKeyword => '关键词';
+
+  @override
+  String get logsKeywordHint => 'error、host、tunnel…';
+
+  @override
+  String get logsCopy => '复制可见日志';
+
+  @override
+  String get logsClear => '清空日志';
+
+  @override
+  String get logsScrollBottom => '滚动到底部';
+
+  @override
+  String get logsEmpty => '暂无日志';
+
+  @override
+  String logsVisible(int visible, int total) {
+    return '已显示 $visible/$total';
+  }
+
+  @override
+  String logsCopied(int count) {
+    return '已复制 $count 行日志';
+  }
 }

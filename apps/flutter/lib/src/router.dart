@@ -5,6 +5,7 @@ import 'package:pocket_codex/src/screens/app_session_screen.dart';
 import 'package:pocket_codex/src/screens/local_session_view_screen.dart';
 import 'package:pocket_codex/src/screens/account_onboarding_screen.dart';
 import 'package:pocket_codex/src/screens/local_sessions_screen.dart';
+import 'package:pocket_codex/src/screens/log_view_screen.dart';
 import 'package:pocket_codex/src/screens/onboarding_screen.dart';
 import 'package:pocket_codex/src/screens/services_screen.dart';
 import 'package:pocket_codex/src/screens/settings_screen.dart';
@@ -51,6 +52,7 @@ GoRouter buildRouter({
     ),
     GoRoute(path: '/', builder: (c, s) => const ServicesScreen()),
     GoRoute(path: '/settings', builder: (c, s) => const SettingsScreen()),
+    GoRoute(path: '/logs', builder: (c, s) => const LogViewScreen()),
     GoRoute(path: '/sessions', builder: (c, s) => const LocalSessionsScreen()),
     GoRoute(
       path: '/sessions/view',

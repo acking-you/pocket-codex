@@ -314,5 +314,22 @@
   "tunnelAppLabel": "App-server",
   "tunnelApiLabel": "API",
   "tunnelMetaLabel": "Sessions (meta)",
-  "tunnelOffline": "Offline"
+  "tunnelOffline": "Offline",
+  "logsTitle": "Runtime logs",
+  "logsLevel": "Level",
+  "logsLevelAll": "All",
+  "logsKeyword": "Keyword",
+  "logsKeywordHint": "error, host, tunnel…",
+  "logsCopy": "Copy visible logs",
+  "logsClear": "Clear logs",
+  "logsScrollBottom": "Scroll to bottom",
+  "logsEmpty": "No logs yet",
+  "logsVisible": "{visible}/{total} shown",
+  "@logsVisible": {
+    "placeholders": { "visible": { "type": "int" }, "total": { "type": "int" } }
+  },
+  "logsCopied": "Copied {count} log lines",
+  "@logsCopied": {
+    "placeholders": { "count": { "type": "int" } }
+  }
 }

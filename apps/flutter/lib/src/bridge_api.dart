@@ -335,6 +335,29 @@ class AppEvent {
   final String raw;
 }
 
+/// One captured runtime log line for the in-app log viewer.
+class LogLine {
+  /// Creates a log line.
+  const LogLine({
+    required this.level,
+    required this.target,
+    required this.message,
+    required this.timestampMs,
+  });
+
+  /// `TRACE` / `DEBUG` / `INFO` / `WARN` / `ERROR`.
+  final String level;
+
+  /// Event target (crate / module path).
+  final String target;
+
+  /// The rendered message plus any structured fields.
+  final String message;
+
+  /// Capture time, unix milliseconds.
+  final int timestampMs;
+}
+
 /// Summary metadata for one app-server thread.
 class ThreadMeta {
   /// Creates thread metadata.
@@ -776,6 +799,10 @@ abstract interface class BridgeApi {
 
   /// Live event stream for [serviceKey] (turn/item notifications).
   Stream<AppEvent> appEvents(String serviceKey);
+
+  /// Captured `tracing` events for the in-app log viewer: retained recent
+  /// history (oldest first) followed by every new event live.
+  Stream<LogLine> logEvents();
 
   /// List threads known to the app-server.
   Future<List<ThreadMeta>> appThreadList(String serviceKey);

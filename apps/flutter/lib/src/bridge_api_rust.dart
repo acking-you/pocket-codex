@@ -279,6 +279,16 @@ class RustBridgeApi implements BridgeApi {
       );
 
   @override
+  Stream<LogLine> logEvents() => frb.logEvents().map(
+    (l) => LogLine(
+      level: l.level,
+      target: l.target,
+      message: l.message,
+      timestampMs: l.timestampMs,
+    ),
+  );
+
+  @override
   Future<List<ThreadMeta>> appThreadList(String serviceKey) async {
     final list = await frb.appThreadList(serviceKey: serviceKey);
     return list

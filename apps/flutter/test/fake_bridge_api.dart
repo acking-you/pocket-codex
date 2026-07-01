@@ -326,6 +326,15 @@ class FakeBridgeApi implements BridgeApi {
       .putIfAbsent(serviceKey, StreamController<AppEvent>.broadcast)
       .stream;
 
+  final StreamController<LogLine> _logEvents =
+      StreamController<LogLine>.broadcast();
+
+  @override
+  Stream<LogLine> logEvents() => _logEvents.stream;
+
+  /// Inject a log line into the live stream (test helper).
+  void pushLog(LogLine line) => _logEvents.add(line);
+
   /// Inject a server event into [serviceKey]'s stream (test helper).
   void pushEvent(String serviceKey, AppEvent event) =>
       _appEvents[serviceKey]?.add(event);
