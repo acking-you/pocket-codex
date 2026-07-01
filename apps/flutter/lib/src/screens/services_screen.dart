@@ -400,16 +400,31 @@ class _ServiceList extends ConsumerWidget {
       if (stillHidden.length != current.length) {
         ref.read(pendingRemovalProvider.notifier).state = stillHidden;
       }
-      // Prune dismissals for keys the relay no longer lists (truly gone): a
-      // later fresh registration under the same key should surface again.
-      final hidden = ref.read(dismissedServicesProvider).valueOrNull;
-      if (hidden != null) {
-        final absent = hidden.difference(present);
-        if (absent.isNotEmpty) {
-          ref.read(dismissedServicesProvider.notifier).restore(absent);
-        }
-      }
     });
+    // Un-hide a dismissed entry once it is REACHABLE again — the service
+    // recovered in place (a hollow orphan whose backend came back, still
+    // relay-registered the whole time) or a fresh reachable host re-registered
+    // the same key. Reachability, not discovery-absence, is the signal: an
+    // orphan never leaves the relay listing, so absence would strand a
+    // recovered service forever. The probes refresh on the screen's periodic
+    // re-probe, so recovery is picked up within a tick.
+    if (dismissed.isNotEmpty) {
+      final recovered = <String>[
+        for (final s in services)
+          if (dismissed.contains(s.key) &&
+              (s.kind == 'app'
+                          ? ref.watch(appReachableProvider(s.key))
+                          : ref.watch(apiReachableProvider(s.key)))
+                      .valueOrNull ==
+                  true)
+            s.key,
+      ];
+      if (recovered.isNotEmpty) {
+        final notifier = ref.read(dismissedServicesProvider.notifier);
+        // Defer: never mutate a provider during build.
+        Future.microtask(() => notifier.restore(recovered));
+      }
+    }
     final api = services
         .where(
           (s) =>
@@ -713,7 +728,19 @@ Future<void> _confirmDeregister(
       // drop it. Durably dismiss it so it leaves this device's list and stays
       // gone; still best-effort ask the backend to drop it (swallow errors — the
       // dismissal already achieved the user-visible removal).
-      await ref.read(dismissedServicesProvider.notifier).dismiss(s.key);
+      //
+      // Re-check reachability at confirm time: it may have recovered while the
+      // dialog was open. If it's live again, don't hide it — only best-effort
+      // drop — so a now-working service isn't stranded off the list.
+      final reachableNow =
+          (s.kind == 'app'
+                  ? ref.read(appReachableProvider(s.key))
+                  : ref.read(apiReachableProvider(s.key)))
+              .valueOrNull ==
+          true;
+      if (!reachableNow) {
+        ref.read(dismissedServicesProvider.notifier).dismiss(s.key);
+      }
       try {
         await ref
             .read(bridgeApiProvider)

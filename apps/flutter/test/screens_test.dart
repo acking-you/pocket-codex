@@ -613,6 +613,48 @@ void main() {
     expect(find.text('orphan'), findsNothing);
   });
 
+  testWidgets('a dismissed entry re-appears once it is reachable again '
+      '(recovered in place)', (t) async {
+    final api =
+        FakeBridgeApi(
+            config: const ConfigInfo(
+              relay: '',
+              hasKey: false,
+              mode: 'account',
+              accountLogin: 'acking-you',
+            ),
+            services: const [
+              ServiceEntry(
+                device: 'otherdev',
+                kind: 'api',
+                name: 'orphan',
+                key: 'pcx:otherdev:api:orphan',
+              ),
+            ],
+          )
+          ..reachable['pcx:otherdev:api:orphan'] = false
+          ..keepOnDeregister = true;
+    await t.pumpWidget(_host(const ServicesScreen(), api));
+    await t.pumpAndSettle();
+
+    // Dismiss the unreachable orphan.
+    await t.tap(find.byIcon(Icons.more_vert).first);
+    await t.pumpAndSettle();
+    await t.tap(find.text('注销'));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('deregister-confirm-btn')));
+    await t.pumpAndSettle();
+    expect(find.text('orphan'), findsNothing);
+
+    // The backend recovers behind the still-registered key. A re-probe lifts the
+    // durable dismissal — reachability, not discovery-absence, is the un-hide
+    // signal, so a recovered-in-place service is never stranded.
+    api.reachable['pcx:otherdev:api:orphan'] = true;
+    await t.tap(find.byKey(const Key('refresh-btn')));
+    await t.pumpAndSettle();
+    expect(find.text('orphan'), findsOneWidget);
+  });
+
   testWidgets('a registered-but-dead API proxy reads "unreachable", not '
       '"online"', (t) async {
     final api = FakeBridgeApi(

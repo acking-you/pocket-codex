@@ -17,12 +17,29 @@ import 'package:path_provider/path_provider.dart';
 /// app-support dir so the dismissal survives an app restart (an in-memory hide
 /// would let the stale entry reappear — the user's original complaint).
 ///
-/// Reachable/foreign services are never dismissed here: those are legitimately
-/// live, so hiding them would strand a working service off the list. And a
-/// dismissed key is pruned once discovery confirms it truly ABSENT (see
-/// [restore]), so a later fresh registration under the same key shows again.
+/// This notifier is pure storage: it does NOT know about discovery or
+/// reachability. The un-hide POLICY lives at the call site (the services list),
+/// which [restore]s a dismissed key once it is REACHABLE again — the correct
+/// signal, because a hollow orphan stays relay-registered the whole time, so
+/// keying un-hide on discovery-absence would strand a recovered service forever.
+/// Reachable/foreign services are therefore never left dismissed once they come
+/// back to life, and a live service is never stranded off the list.
 class DismissedServices extends AsyncNotifier<Set<String>> {
   File? _cachedFile;
+
+  /// False until the initial file load has landed. While false, mutations do
+  /// NOT write to disk — a write then would race the in-flight read AND persist
+  /// a partial set (state hasn't merged the file yet), silently clobbering
+  /// already-persisted keys on the next restart. [build] persists the
+  /// reconciled union once the load completes, so a mutation that raced the
+  /// load still reaches disk.
+  bool _loaded = false;
+
+  /// Serial write chain: each persist runs after the previous completes, so
+  /// concurrent dismiss/restore calls can't interleave (corrupting the JSON) or
+  /// land out of order (leaving stale content). Each link carries its own
+  /// snapshot, so the last enqueued — the latest state — is written last.
+  Future<void> _writes = Future<void>.value();
 
   Future<File> _file() async {
     final cached = _cachedFile;
@@ -35,6 +52,19 @@ class DismissedServices extends AsyncNotifier<Set<String>> {
 
   @override
   Future<Set<String>> build() async {
+    final loaded = await _load();
+    // Union in any dismissal that landed WHILE the file was loading — it set
+    // state to AsyncData before this returned, so merge it rather than let this
+    // return silently clobber it (the init-race the review flagged). Its write
+    // was deferred (see [_loaded]), so persist the reconciled set here — else
+    // the raced dismissal (or the file's prior keys) would be lost on restart.
+    final union = {...loaded, ...?state.valueOrNull};
+    _loaded = true;
+    if (union.length != loaded.length) _enqueueWrite(union);
+    return union;
+  }
+
+  Future<Set<String>> _load() async {
     try {
       final file = await _file();
       if (!await file.exists()) return <String>{};
@@ -50,37 +80,44 @@ class DismissedServices extends AsyncNotifier<Set<String>> {
     }
   }
 
-  // Persistence is fire-and-forget so the user-facing action never blocks on
-  // disk I/O. Reads `state` at write time (not a snapshot), so if two writes
-  // race the file still ends up matching the latest in-memory set.
-  Future<void> _persist() async {
-    try {
-      final file = await _file();
-      final keys = state.valueOrNull ?? const <String>{};
-      await file.writeAsString(jsonEncode(keys.toList()));
-    } catch (_) {
-      // Best-effort: an unwritable support dir just means the dismissal doesn't
-      // outlive this run, not a crash.
-    }
+  /// Persist [keys] on the serial write chain. Fire-and-forget (the caller
+  /// never blocks on disk I/O); best-effort (an unwritable dir just means the
+  /// dismissal doesn't outlive this run, not a crash). Deferred while the
+  /// initial load is still in flight (see [_loaded]); [build] persists the
+  /// reconciled set instead.
+  void _enqueueWrite(Set<String> keys) {
+    if (!_loaded) return;
+    _writes = _writes.then((_) async {
+      try {
+        final file = await _file();
+        await file.writeAsString(jsonEncode(keys.toList()));
+      } catch (_) {
+        // swallow — see doc above.
+      }
+    });
   }
 
-  /// Durably hide [key] from the service lists. No-op if already dismissed.
-  Future<void> dismiss(String key) async {
+  /// Durably hide [key] from the service lists. No-op if already dismissed. A
+  /// dismissal that races the initial load is preserved by build()'s union, so
+  /// it isn't clobbered when the load lands.
+  void dismiss(String key) {
     final current = state.valueOrNull ?? const <String>{};
     if (current.contains(key)) return;
-    state = AsyncData({...current, key});
-    unawaited(_persist());
+    final next = {...current, key};
+    state = AsyncData(next);
+    _enqueueWrite(next);
   }
 
-  /// Stop hiding [keys] — they're gone from discovery, so a fresh registration
-  /// under the same key should be visible again. No-op for keys not dismissed.
-  Future<void> restore(Iterable<String> keys) async {
-    final current = state.valueOrNull;
-    if (current == null || current.isEmpty) return;
+  /// Stop hiding [keys] — the service is reachable again (recovered in place, or
+  /// a fresh reachable registration under the same key), so it should show. No-op
+  /// for keys not currently dismissed.
+  void restore(Iterable<String> keys) {
+    final current = state.valueOrNull ?? const <String>{};
+    if (current.isEmpty) return;
     final next = current.difference(keys.toSet());
     if (next.length == current.length) return;
     state = AsyncData(next);
-    unawaited(_persist());
+    _enqueueWrite(next);
   }
 }
 
