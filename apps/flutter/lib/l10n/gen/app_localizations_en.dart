@@ -833,4 +833,41 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get tunnelOffline => 'Offline';
+
+  @override
+  String get logsTitle => 'Runtime logs';
+
+  @override
+  String get logsLevel => 'Level';
+
+  @override
+  String get logsLevelAll => 'All';
+
+  @override
+  String get logsKeyword => 'Keyword';
+
+  @override
+  String get logsKeywordHint => 'error, host, tunnel…';
+
+  @override
+  String get logsCopy => 'Copy visible logs';
+
+  @override
+  String get logsClear => 'Clear logs';
+
+  @override
+  String get logsScrollBottom => 'Scroll to bottom';
+
+  @override
+  String get logsEmpty => 'No logs yet';
+
+  @override
+  String logsVisible(int visible, int total) {
+    return '$visible/$total shown';
+  }
+
+  @override
+  String logsCopied(int count) {
+    return 'Copied $count log lines';
+  }
 }

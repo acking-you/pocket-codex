@@ -5,7 +5,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
+import 'package:pocket_codex/src/bridge_api_rust.dart';
 import 'package:pocket_codex/src/desktop_tray.dart';
+import 'package:pocket_codex/src/log_manager.dart';
 import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/router.dart';
 import 'package:pocket_codex/src/theme.dart';
@@ -37,6 +39,11 @@ Future<void> main() async {
   await RustLib.init();
   final dir = await getApplicationSupportDirectory();
   await frb.initBridge(supportDir: dir.path);
+
+  // Start buffering the bridge's runtime logs as early as possible (right after
+  // init_bridge installs the tracing layer) so the in-app log viewer shows
+  // history from boot even when opened later.
+  LogManager.instance.initialize(const RustBridgeApi());
 
   // Desktop only: bring up the system tray and make the window close-to-tray.
   // No-op on mobile (DesktopTray.init guards on the platform). The menu labels

@@ -171,6 +171,12 @@ pub struct SpawnReport {
     /// starting a new one. When `true`, any spawn-time options (such as
     /// [`SpawnOptions::proxy`]) had no effect on the live process.
     pub reused: bool,
+
+    /// Byte offset in [`CodexProcessInfo::log_file`] just before this spawn —
+    /// the point from which this run's log lines begin (the file is opened
+    /// in append mode and shared across runs). A log tailer starts here to
+    /// show this process's output without replaying earlier runs.
+    pub log_offset: u64,
 }
 
 /// Spawn `codex app-server`, persist the resulting state and return a
@@ -188,6 +194,10 @@ pub fn spawn(opts: SpawnOptions) -> pocket_codex_core::Result<SpawnReport> {
         .clone()
         .map(Ok)
         .unwrap_or_else(paths::codex_log_file)?;
+    // The byte offset where this run's log lines will begin (the file is opened
+    // in append mode and shared across runs). A tailer starts here to show only
+    // this process's output, not earlier runs'.
+    let log_offset = std::fs::metadata(&log_file).map(|m| m.len()).unwrap_or(0);
 
     // Reuse an app-server that is already serving the listen port. For a
     // websocket transport "is it up" is decided by the *port*, not a recorded
@@ -230,6 +240,7 @@ pub fn spawn(opts: SpawnOptions) -> pocket_codex_core::Result<SpawnReport> {
             return Ok(SpawnReport {
                 info,
                 reused: true,
+                log_offset,
             });
         },
         // Unix-socket transport has no TCP port to probe — keep PID-based
@@ -241,6 +252,7 @@ pub fn spawn(opts: SpawnOptions) -> pocket_codex_core::Result<SpawnReport> {
                     return Ok(SpawnReport {
                         info: existing,
                         reused: true,
+                        log_offset,
                     });
                 }
                 warn!(stale_pid = existing.pid, "previous codex process is gone, restarting");
@@ -309,6 +321,7 @@ pub fn spawn(opts: SpawnOptions) -> pocket_codex_core::Result<SpawnReport> {
     Ok(SpawnReport {
         info,
         reused: false,
+        log_offset,
     })
 }
 

@@ -6,7 +6,7 @@
 import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `apply_key`, `current_relay`, `holder_dto`, `meta_holder_dto`, `thread_config_dto`, `thread_config_from_dto`
+// These functions are ignored because they are not marked as `pub`: `apply_key`, `current_relay`, `holder_dto`, `meta_holder_dto`, `thread_config_dto`, `thread_config_from_dto`, `to_log_dto`
 
 /// Initialise the engine with the platform app-support dir (from Dart's
 /// path_provider). Must be called once after `RustLib.init()`.
@@ -151,6 +151,14 @@ Future<bool> appProbe({required String serviceKey}) =>
 /// call), then tears it down.
 Future<bool> apiProbe({required String serviceKey}) =>
     RustLib.instance.api.crateApiBridgeApiProbe(serviceKey: serviceKey);
+
+/// Stream captured `tracing` events for the in-app log viewer: the retained
+/// recent history (oldest first) followed by every new event live, until the
+/// Dart side drops the stream. Subscribes before replaying history so nothing is
+/// missed in between (a line captured right at that boundary may appear twice —
+/// harmless for a log tail).
+Stream<LogLineDto> logEvents() =>
+    RustLib.instance.api.crateApiBridgeLogEvents();
 
 /// Stream live app-server events (turn/item notifications) for `service_key`.
 /// The Dart side receives one [`AppEventDto`] per notification until the
@@ -1034,6 +1042,45 @@ class LocalSessionDto {
           safety == other.safety &&
           allowsResume == other.allowsResume &&
           requiresTakeover == other.requiresTakeover;
+}
+
+/// One captured runtime log line for the in-app log viewer.
+class LogLineDto {
+  /// `TRACE` / `DEBUG` / `INFO` / `WARN` / `ERROR`.
+  final String level;
+
+  /// Event target (crate / module path).
+  final String target;
+
+  /// The rendered message + any structured fields.
+  final String message;
+
+  /// Capture time, unix milliseconds.
+  final PlatformInt64 timestampMs;
+
+  const LogLineDto({
+    required this.level,
+    required this.target,
+    required this.message,
+    required this.timestampMs,
+  });
+
+  @override
+  int get hashCode =>
+      level.hashCode ^
+      target.hashCode ^
+      message.hashCode ^
+      timestampMs.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is LogLineDto &&
+          runtimeType == other.runtimeType &&
+          level == other.level &&
+          target == other.target &&
+          message == other.message &&
+          timestampMs == other.timestampMs;
 }
 
 /// One model offered by the app-server, mirrored for Dart.

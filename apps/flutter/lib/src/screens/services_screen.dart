@@ -147,6 +147,12 @@ class _ServicesScreenState extends ConsumerState<ServicesScreen>
             onPressed: () => context.push('/sessions'),
           ),
           IconButton(
+            key: const Key('logs-btn'),
+            icon: const Icon(Icons.article_outlined),
+            tooltip: l10n.logsTitle,
+            onPressed: () => context.push('/logs'),
+          ),
+          IconButton(
             key: const Key('settings-btn'),
             icon: const Icon(Icons.settings),
             onPressed: () => context.push('/settings'),

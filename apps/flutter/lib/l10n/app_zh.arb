@@ -281,5 +281,22 @@
   "tunnelAppLabel": "App-server",
   "tunnelApiLabel": "API",
   "tunnelMetaLabel": "会话（meta）",
-  "tunnelOffline": "已下架"
+  "tunnelOffline": "已下架",
+  "logsTitle": "运行日志",
+  "logsLevel": "级别",
+  "logsLevelAll": "全部",
+  "logsKeyword": "关键词",
+  "logsKeywordHint": "error、host、tunnel…",
+  "logsCopy": "复制可见日志",
+  "logsClear": "清空日志",
+  "logsScrollBottom": "滚动到底部",
+  "logsEmpty": "暂无日志",
+  "logsVisible": "已显示 {visible}/{total}",
+  "@logsVisible": {
+    "placeholders": { "visible": { "type": "int" }, "total": { "type": "int" } }
+  },
+  "logsCopied": "已复制 {count} 行日志",
+  "@logsCopied": {
+    "placeholders": { "count": { "type": "int" } }
+  }
 }

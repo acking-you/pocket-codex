@@ -1627,6 +1627,72 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Offline'**
   String get tunnelOffline;
+
+  /// No description provided for @logsTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Runtime logs'**
+  String get logsTitle;
+
+  /// No description provided for @logsLevel.
+  ///
+  /// In en, this message translates to:
+  /// **'Level'**
+  String get logsLevel;
+
+  /// No description provided for @logsLevelAll.
+  ///
+  /// In en, this message translates to:
+  /// **'All'**
+  String get logsLevelAll;
+
+  /// No description provided for @logsKeyword.
+  ///
+  /// In en, this message translates to:
+  /// **'Keyword'**
+  String get logsKeyword;
+
+  /// No description provided for @logsKeywordHint.
+  ///
+  /// In en, this message translates to:
+  /// **'error, host, tunnel…'**
+  String get logsKeywordHint;
+
+  /// No description provided for @logsCopy.
+  ///
+  /// In en, this message translates to:
+  /// **'Copy visible logs'**
+  String get logsCopy;
+
+  /// No description provided for @logsClear.
+  ///
+  /// In en, this message translates to:
+  /// **'Clear logs'**
+  String get logsClear;
+
+  /// No description provided for @logsScrollBottom.
+  ///
+  /// In en, this message translates to:
+  /// **'Scroll to bottom'**
+  String get logsScrollBottom;
+
+  /// No description provided for @logsEmpty.
+  ///
+  /// In en, this message translates to:
+  /// **'No logs yet'**
+  String get logsEmpty;
+
+  /// No description provided for @logsVisible.
+  ///
+  /// In en, this message translates to:
+  /// **'{visible}/{total} shown'**
+  String logsVisible(int visible, int total);
+
+  /// No description provided for @logsCopied.
+  ///
+  /// In en, this message translates to:
+  /// **'Copied {count} log lines'**
+  String logsCopied(int count);
 }
 
 class _AppLocalizationsDelegate

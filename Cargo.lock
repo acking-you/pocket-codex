@@ -8778,6 +8778,7 @@ dependencies = [
  "tokio-rustls",
  "toml 0.8.23",
  "tracing",
+ "tracing-subscriber",
  "webpki-roots 0.26.11",
 ]
 

@@ -8,7 +8,7 @@ use flutter_rust_bridge::frb;
 use pocket_codex_core::config::Mode;
 
 use crate::{
-    engine::{account, app_session, config, discovery, meta, runtime, serve, sessions},
+    engine::{account, app_session, config, discovery, logging, meta, runtime, serve, sessions},
     frb_generated::StreamSink,
 };
 
@@ -59,6 +59,10 @@ pub fn init_bridge(support_dir: String) -> Result<()> {
     // provider and panics on first TLS use. Pin it to `ring` (our configured
     // provider) before any TLS happens. Idempotent / no-op without the feature.
     let _ = rustls::crypto::ring::default_provider().install_default();
+    // Start capturing `tracing` events for the in-app log viewer. First so our
+    // layer becomes the global subscriber (codex's later `try_init` is a no-op,
+    // and its events flow through ours too).
+    logging::init();
     runtime::init(PathBuf::from(support_dir))
 }
 
@@ -508,6 +512,58 @@ pub fn api_probe(service_key: String) -> Result<bool> {
     apply_key()?;
     let relay = current_relay()?;
     Ok(app_session::probe_api(service_key, relay))
+}
+
+/// One captured runtime log line for the in-app log viewer.
+pub struct LogLineDto {
+    /// `TRACE` / `DEBUG` / `INFO` / `WARN` / `ERROR`.
+    pub level: String,
+    /// Event target (crate / module path).
+    pub target: String,
+    /// The rendered message + any structured fields.
+    pub message: String,
+    /// Capture time, unix milliseconds.
+    pub timestamp_ms: i64,
+}
+
+fn to_log_dto(l: logging::LogLine) -> LogLineDto {
+    LogLineDto {
+        level: l.level,
+        target: l.target,
+        message: l.message,
+        timestamp_ms: l.timestamp_ms,
+    }
+}
+
+/// Stream captured `tracing` events for the in-app log viewer: the retained
+/// recent history (oldest first) followed by every new event live, until the
+/// Dart side drops the stream. Subscribes before replaying history so nothing
+/// is missed in between (a line captured right at that boundary may appear
+/// twice — harmless for a log tail).
+pub fn log_events(sink: StreamSink<LogLineDto>) -> Result<()> {
+    runtime::runtime().spawn(async move {
+        let Some(mut rx) = logging::subscribe() else {
+            return;
+        };
+        for line in logging::snapshot() {
+            if sink.add(to_log_dto(line)).is_err() {
+                return;
+            }
+        }
+        loop {
+            match rx.recv().await {
+                Ok(line) => {
+                    if sink.add(to_log_dto(line)).is_err() {
+                        break;
+                    }
+                },
+                // Dropped some lines under load — keep streaming the rest.
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    });
+    Ok(())
 }
 
 /// Stream live app-server events (turn/item notifications) for `service_key`.

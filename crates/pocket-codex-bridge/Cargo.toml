@@ -50,6 +50,7 @@ tokio-rustls = { workspace = true }
 webpki-roots = "0.26"
 once_cell = { workspace = true }
 tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 # Windows + macOS only: pull codex's app-server IN-PROCESS so the app can
 # self-host without an external codex install (the `embedded-codex` feature
