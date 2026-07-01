@@ -310,6 +310,12 @@
   "@deregisterLocalWarning": {
     "placeholders": { "name": { "type": "String" } }
   },
+  "deregisterOrphanTitle": "Remove this unreachable service?",
+  "deregisterOrphanWarning": "“{name}” isn't responding — its registration is lingering on the relay with no reachable host. This removes it from your list (and keeps it hidden even if the stale registration lingers), and asks the backend to drop it.",
+  "@deregisterOrphanWarning": {
+    "placeholders": { "name": { "type": "String" } }
+  },
+  "remove": "Remove",
   "deregisterFailed": "Couldn't deregister the service",
   "tunnelAppLabel": "App-server",
   "tunnelApiLabel": "API",

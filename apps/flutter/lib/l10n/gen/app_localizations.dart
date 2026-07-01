@@ -1598,6 +1598,24 @@ abstract class AppLocalizations {
   /// **'Take “{name}” off the relay. codex and the API proxy keep running — re-register it from the Local hosting card anytime.'**
   String deregisterLocalWarning(String name);
 
+  /// No description provided for @deregisterOrphanTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove this unreachable service?'**
+  String get deregisterOrphanTitle;
+
+  /// No description provided for @deregisterOrphanWarning.
+  ///
+  /// In en, this message translates to:
+  /// **'“{name}” isn\'t responding — its registration is lingering on the relay with no reachable host. This removes it from your list (and keeps it hidden even if the stale registration lingers), and asks the backend to drop it.'**
+  String deregisterOrphanWarning(String name);
+
+  /// No description provided for @remove.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove'**
+  String get remove;
+
   /// No description provided for @deregisterFailed.
   ///
   /// In en, this message translates to:

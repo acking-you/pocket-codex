@@ -820,6 +820,17 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
+  String get deregisterOrphanTitle => 'Remove this unreachable service?';
+
+  @override
+  String deregisterOrphanWarning(String name) {
+    return '“$name” isn\'t responding — its registration is lingering on the relay with no reachable host. This removes it from your list (and keeps it hidden even if the stale registration lingers), and asks the backend to drop it.';
+  }
+
+  @override
+  String get remove => 'Remove';
+
+  @override
   String get deregisterFailed => 'Couldn\'t deregister the service';
 
   @override
