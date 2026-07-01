@@ -113,12 +113,14 @@ class RustBridgeApi implements BridgeApi {
     String? binaryOverride,
     String? name,
     String? proxy,
+    required bool embedded,
   }) async {
     final r = await frb.appServeStart(
       port: port,
       binaryOverride: binaryOverride,
       name: name,
       proxy: proxy,
+      embedded: embedded,
     );
     return AppServeResult(
       device: r.device,

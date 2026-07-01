@@ -1466,6 +1466,24 @@ abstract class AppLocalizations {
   /// **'Re-detect'**
   String get codexRedetect;
 
+  /// No description provided for @codexSourceExternal.
+  ///
+  /// In en, this message translates to:
+  /// **'External codex'**
+  String get codexSourceExternal;
+
+  /// No description provided for @codexSourceBuiltin.
+  ///
+  /// In en, this message translates to:
+  /// **'Built-in'**
+  String get codexSourceBuiltin;
+
+  /// No description provided for @codexBuiltinNote.
+  ///
+  /// In en, this message translates to:
+  /// **'Runs the app\'s built-in codex in-process — no install needed.'**
+  String get codexBuiltinNote;
+
   /// No description provided for @localHostDialogTitle.
   ///
   /// In en, this message translates to:

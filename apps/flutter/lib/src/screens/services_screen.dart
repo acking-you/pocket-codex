@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/foundation.dart';
@@ -1167,11 +1168,17 @@ class _LocalHostDialogState extends ConsumerState<_LocalHostDialog> {
   bool _overridePath = false; // user chose to customize the codex path
   String? _codexPath; // auto-detected codex (config → PATH), null = not found
   bool _codexChecked = false;
+  // Codex source: false = external codex (auto-detect/path, the default);
+  // true = the app's built-in in-process app-server (desktop self-contained).
+  bool _embedded = false;
   bool _busy = false;
   String? _error;
 
   bool get _isExisting => widget.existing != null;
   bool get _codexFound => _codexPath != null;
+  // The built-in (in-process) codex ships only in the Windows + macOS desktop
+  // builds (Linux desktop uses the external path — see the bridge's target-cfg).
+  bool get _embeddedAvailable => Platform.isWindows || Platform.isMacOS;
 
   @override
   void initState() {
@@ -1224,13 +1231,18 @@ class _LocalHostDialogState extends ConsumerState<_LocalHostDialog> {
       setState(() => _error = l10n.localHostPort);
       return;
     }
-    // codex: auto-detected and not overridden → let the bridge resolve it;
-    // otherwise the path the user typed / picked.
-    final manual = !_codexFound || _overridePath;
-    final override = manual ? _path.text.trim() : '';
-    if (manual && override.isEmpty) {
-      setState(() => _error = l10n.codexPathRequired);
-      return;
+    // codex source. Built-in (in-process) needs no binary. External: auto-
+    // detected and not overridden → let the bridge resolve it; otherwise the
+    // path the user typed / picked.
+    String? override;
+    if (!_embedded) {
+      final manual = !_codexFound || _overridePath;
+      final o = manual ? _path.text.trim() : '';
+      if (manual && o.isEmpty) {
+        setState(() => _error = l10n.codexPathRequired);
+        return;
+      }
+      override = o.isEmpty ? null : o;
     }
     // A proxy is mandatory unless the user explicitly turned it off.
     final proxy = _useProxy ? _proxy.text.trim() : null;
@@ -1248,9 +1260,10 @@ class _LocalHostDialogState extends ConsumerState<_LocalHostDialog> {
           .read(bridgeApiProvider)
           .appServeStart(
             port: port,
-            binaryOverride: override.isEmpty ? null : override,
+            binaryOverride: override,
             name: name.isEmpty ? null : name,
             proxy: proxy,
+            embedded: _embedded,
           );
       ref.invalidate(localServeListProvider);
       ref.invalidate(servicesProvider);
@@ -1320,8 +1333,41 @@ class _LocalHostDialogState extends ConsumerState<_LocalHostDialog> {
         );
     } else {
       children.add(const SizedBox(height: 16));
-      // --- codex availability ---
-      if (!_codexChecked) {
+      // --- codex source: built-in (in-process) vs external (desktop only) ---
+      if (_embeddedAvailable) {
+        children
+          ..add(
+            SegmentedButton<bool>(
+              segments: [
+                ButtonSegment(
+                  value: false,
+                  label: Text(l10n.codexSourceExternal),
+                ),
+                ButtonSegment(
+                  value: true,
+                  label: Text(l10n.codexSourceBuiltin),
+                ),
+              ],
+              selected: {_embedded},
+              onSelectionChanged: _busy
+                  ? null
+                  : (s) => setState(() => _embedded = s.first),
+            ),
+          )
+          ..add(const SizedBox(height: 12));
+      }
+      // --- codex availability (external only) ---
+      if (_embedded) {
+        children.add(
+          Row(
+            children: [
+              Icon(Icons.bolt, size: 18, color: scheme.primary),
+              const SizedBox(width: 6),
+              Expanded(child: Text(l10n.codexBuiltinNote, style: small)),
+            ],
+          ),
+        );
+      } else if (!_codexChecked) {
         children.add(const LinearProgressIndicator());
       } else if (_codexFound && !_overridePath) {
         children.add(

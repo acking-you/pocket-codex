@@ -54,6 +54,11 @@ pub struct SubStatusDto {
 /// Initialise the engine with the platform app-support dir (from Dart's
 /// path_provider). Must be called once after `RustLib.init()`.
 pub fn init_bridge(support_dir: String) -> Result<()> {
+    // With the embedded-codex feature, codex pulls in `aws-lc-rs` alongside our
+    // `ring`, so rustls can no longer auto-select a process-level crypto
+    // provider and panics on first TLS use. Pin it to `ring` (our configured
+    // provider) before any TLS happens. Idempotent / no-op without the feature.
+    let _ = rustls::crypto::ring::default_provider().install_default();
     runtime::init(PathBuf::from(support_dir))
 }
 
@@ -278,14 +283,17 @@ pub struct AppServeStatusDto {
 /// signed-in account, publishing both `app:<name>` and `api:<name>`. Re-hosting
 /// a name whose codex is still alive just re-registers any dropped tunnels.
 /// `proxy` is the upstream proxy both use to reach chatgpt.com (`None` =
-/// inherit env). Desktop only.
+/// inherit env). `embedded` runs codex's app-server in-process (the compiled-in
+/// `embedded-codex`) instead of spawning an external binary — desktop only; the
+/// `binary_override` is ignored when `embedded` is set. Desktop only.
 pub fn app_serve_start(
     port: u16,
     binary_override: Option<String>,
     name: Option<String>,
     proxy: Option<String>,
+    embedded: bool,
 ) -> Result<AppServeDto> {
-    let r = serve::serve_start(port, binary_override, name, proxy)?;
+    let r = serve::serve_start(port, binary_override, name, proxy, embedded)?;
     Ok(AppServeDto {
         device: r.device,
         name: r.name,

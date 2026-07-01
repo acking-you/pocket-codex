@@ -28,3 +28,25 @@ sysinfo = { workspace = true }
 nix = { workspace = true }
 chrono = { workspace = true }
 directories = { workspace = true }
+
+# Optional: compile codex's app-server IN-PROCESS for the desktop self-contained
+# mode — run codex's own app-server over a localhost WS (no spawned binary).
+# Heavy (pulls codex-core) and pinned to codex's toolchain/deps, so it is OFF by
+# default — mobile and non-embedded builds (and ordinary CI) never compile it.
+# Desktop builds opt in with `--features embedded-codex`.
+codex-app-server = { path = "../../deps/codex/codex-rs/app-server", optional = true }
+codex-arg0 = { path = "../../deps/codex/codex-rs/arg0", optional = true }
+codex-config = { path = "../../deps/codex/codex-rs/config", optional = true }
+codex-utils-cli = { path = "../../deps/codex/codex-rs/utils/cli", optional = true }
+codex-protocol = { path = "../../deps/codex/codex-rs/protocol", optional = true }
+
+[features]
+# Self-contained desktop: run codex in-process. External-codex (spawn) stays the
+# default path and is unaffected by this feature.
+embedded-codex = [
+    "dep:codex-app-server",
+    "dep:codex-arg0",
+    "dep:codex-config",
+    "dep:codex-utils-cli",
+    "dep:codex-protocol",
+]

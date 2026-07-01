@@ -723,6 +723,7 @@ abstract interface class BridgeApi {
     String? binaryOverride,
     String? name,
     String? proxy,
+    required bool embedded,
   });
 
   /// Snapshot of every local host (for the status cards + periodic re-probe).

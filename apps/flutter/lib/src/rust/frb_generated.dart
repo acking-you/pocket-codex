@@ -185,6 +185,7 @@ abstract class RustLibApi extends BaseApi {
     String? binaryOverride,
     String? name,
     String? proxy,
+    required bool embedded,
   });
 
   Future<List<AppServeStatusDto>> crateApiBridgeAppServeStatus();
@@ -1180,6 +1181,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     String? binaryOverride,
     String? name,
     String? proxy,
+    required bool embedded,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -1189,6 +1191,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_opt_String(binaryOverride, serializer);
           sse_encode_opt_String(name, serializer);
           sse_encode_opt_String(proxy, serializer);
+          sse_encode_bool(embedded, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -1201,7 +1204,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: sse_decode_AnyhowException,
         ),
         constMeta: kCrateApiBridgeAppServeStartConstMeta,
-        argValues: [port, binaryOverride, name, proxy],
+        argValues: [port, binaryOverride, name, proxy, embedded],
         apiImpl: this,
       ),
     );
@@ -1210,7 +1213,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiBridgeAppServeStartConstMeta =>
       const TaskConstMeta(
         debugName: "app_serve_start",
-        argNames: ["port", "binaryOverride", "name", "proxy"],
+        argNames: ["port", "binaryOverride", "name", "proxy", "embedded"],
       );
 
   @override

@@ -722,6 +722,15 @@ class AppLocalizationsZh extends AppLocalizations {
   String get codexRedetect => '重新检测';
 
   @override
+  String get codexSourceExternal => '外接 codex';
+
+  @override
+  String get codexSourceBuiltin => '自带';
+
+  @override
+  String get codexBuiltinNote => '进程内运行 app 自带的 codex，无需安装。';
+
+  @override
   String get localHostDialogTitle => '托管本地 app-server';
 
   @override

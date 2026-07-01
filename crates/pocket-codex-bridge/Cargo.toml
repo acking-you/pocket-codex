@@ -50,3 +50,15 @@ tokio-rustls = { workspace = true }
 webpki-roots = "0.26"
 once_cell = { workspace = true }
 tracing = { workspace = true }
+
+# Windows + macOS only: pull codex's app-server IN-PROCESS so the app can
+# self-host without an external codex install (the `embedded-codex` feature
+# compiles codex into the bridge). Target-gated, so mobile (android/ios) never
+# compiles it — and, deliberately, neither does Linux: CI's clippy/test run on
+# Linux, where compiling all of codex under `-D warnings` is slow and trips on
+# codex's own lints. Linux desktop therefore uses the external (外接) path only
+# for now; embedded Linux is a follow-up (cap codex's lints / opt-in feature).
+# The runtime still chooses external-vs-embedded per host; this just makes the
+# embedded path available where it's compiled in.
+[target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
+pocket-codex-codex = { workspace = true, features = ["embedded-codex"] }

@@ -181,6 +181,7 @@ class FakeBridgeApi implements BridgeApi {
   /// Records the last [appServeStart] args for assertions.
   int? lastServePort;
   String? lastServeBinary, lastServeName, lastServeProxy;
+  bool? lastServeEmbedded;
 
   /// Path returned by [codexLocate] (set null to simulate "codex not found").
   String? codexPath = '/usr/local/bin/codex';
@@ -191,11 +192,13 @@ class FakeBridgeApi implements BridgeApi {
     String? binaryOverride,
     String? name,
     String? proxy,
+    required bool embedded,
   }) async {
     lastServePort = port;
     lastServeBinary = binaryOverride;
     lastServeName = name;
     lastServeProxy = proxy;
+    lastServeEmbedded = embedded;
     final n = name ?? 'default';
     const device = 'local';
     final appKey = 'pcx:$device:app:$n';
