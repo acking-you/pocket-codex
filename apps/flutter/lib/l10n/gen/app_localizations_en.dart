@@ -158,6 +158,41 @@ class AppLocalizationsEn extends AppLocalizations {
   String get send => 'Send';
 
   @override
+  String get attachImage => 'Attach image';
+
+  @override
+  String get removeImage => 'Remove image';
+
+  @override
+  String get imagePickFailed => 'Couldn\'t read the selected image';
+
+  @override
+  String imageTooMany(int count) {
+    return 'At most $count images per message';
+  }
+
+  @override
+  String get imageSave => 'Save image';
+
+  @override
+  String imageSaved(String path) {
+    return 'Saved to $path';
+  }
+
+  @override
+  String imageSaveFailed(String error) {
+    return 'Couldn\'t save the image: $error';
+  }
+
+  @override
+  String imageOnHost(String path) {
+    return 'Image file on the host machine: $path';
+  }
+
+  @override
+  String get imageOnlyMessage => '[Image]';
+
+  @override
   String get interrupt => 'Interrupt';
 
   @override

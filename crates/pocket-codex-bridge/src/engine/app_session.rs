@@ -13,7 +13,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use once_cell::sync::OnceCell;
 use pocket_codex_codex::client::{AppClient, Inbound};
 use serde_json::{json, Value};
@@ -43,6 +43,10 @@ pub struct AppEvent {
     pub title: Option<String>,
     /// Text payload: a streaming delta or an item's body/detail.
     pub text: Option<String>,
+    /// Image URLs attached to a `userMessage` item: `data:image/...` URLs
+    /// render inline; anything else (a host-local path from a `localImage`
+    /// input) renders as a filename chip. Empty for every other item kind.
+    pub images: Vec<String>,
     /// Opaque token to answer a server request (e.g. an approval prompt) via
     /// [`respond_approval`]; `None` for ordinary notifications.
     pub request_id: Option<String>,
@@ -91,6 +95,10 @@ pub struct ThreadItem {
     pub title: String,
     /// Body / detail text (message content, command output, tool result…).
     pub text: String,
+    /// Image URLs attached to a `userMessage`: `data:image/...` URLs render
+    /// inline; a host-local path (from a `localImage` input) renders as a
+    /// filename chip. Empty for every other item kind.
+    pub images: Vec<String>,
 }
 
 struct Session {
@@ -297,6 +305,7 @@ fn buffer_item(transcript: &Mutex<HashMap<String, Vec<ThreadItem>>>, inbound: &I
             item_type: "plan".to_string(),
             title: String::new(),
             text: encode_plan(params),
+            images: Vec::new(),
         }
     } else {
         let Some(parsed) = params.get("item").and_then(parse_item) else {
@@ -1032,16 +1041,46 @@ pub fn compact(service_key: &str, thread_id: &str) -> Result<()> {
     Ok(())
 }
 
-/// Send a user text message, starting a model turn. `model`, `approval_policy`
-/// and `sandbox` are optional per-turn overrides (they apply to this turn *and
-/// subsequent turns*, so the UI can switch model / permission
-/// mid-conversation). The reply streams back as events; this returns once the
-/// turn is accepted.
+/// Build a `turn/start` `input` array from message text plus attached images.
+/// The text (when non-empty) leads as a `text` item; each image follows as an
+/// `image` item whose `url` must be a `data:image/...` base64 URL — the only
+/// form that works for BOTH local and relay-tunneled remote app-servers (a
+/// `localImage` path would resolve on the host's filesystem, which the
+/// controlling device can't reach). At least one item must result.
+fn build_turn_input(text: &str, images: &[String]) -> Result<Value> {
+    let mut input: Vec<Value> = Vec::with_capacity(images.len() + 1);
+    if !text.is_empty() {
+        input.push(json!({ "type": "text", "text": text }));
+    }
+    for url in images {
+        if !url.starts_with("data:image/") {
+            bail!("attached image must be a data:image/... URL (got `{}…`)", truncate(url, 32));
+        }
+        input.push(json!({ "type": "image", "url": url }));
+    }
+    if input.is_empty() {
+        bail!("a turn needs text or at least one image");
+    }
+    Ok(Value::Array(input))
+}
+
+/// First `n` chars of `s` (for error messages; never splits a char).
+fn truncate(s: &str, n: usize) -> String {
+    s.chars().take(n).collect()
+}
+
+/// Send a user message (text and/or attached images), starting a model turn.
+/// `model`, `approval_policy` and `sandbox` are optional per-turn overrides
+/// (they apply to this turn *and subsequent turns*, so the UI can switch
+/// model / permission mid-conversation). `images` are `data:image/...` URLs
+/// (see [`build_turn_input`]). The reply streams back as events; this returns
+/// once the turn is accepted.
 #[allow(clippy::too_many_arguments)]
 pub fn turn_start(
     service_key: &str,
     thread_id: &str,
     text: String,
+    images: Vec<String>,
     model: Option<String>,
     approval_policy: Option<String>,
     sandbox: Option<String>,
@@ -1051,7 +1090,7 @@ pub fn turn_start(
     let client = client_for(service_key)?;
     let mut params = serde_json::Map::new();
     params.insert("threadId".into(), json!(thread_id));
-    params.insert("input".into(), json!([{ "type": "text", "text": text }]));
+    params.insert("input".into(), build_turn_input(&text, &images)?);
     if let Some(m) = &model {
         params.insert("model".into(), json!(m));
     }
@@ -1202,6 +1241,7 @@ fn map_event(inbound: Inbound) -> AppEvent {
             item_type: Some("plan".to_string()),
             title: None,
             text: Some(encode_plan(&params)),
+            images: Vec::new(),
             request_id: inbound.request_id,
             raw: params.to_string(),
         };
@@ -1250,6 +1290,7 @@ fn map_event(inbound: Inbound) -> AppEvent {
         item_type,
         title,
         text,
+        images: item.map(item_images).unwrap_or_default(),
         request_id: inbound.request_id,
         raw: params.to_string(),
     }
@@ -1288,6 +1329,7 @@ fn parse_item(item: &Value) -> Option<ThreadItem> {
         item_type,
         title,
         text,
+        images: item_images(item),
     })
 }
 
@@ -1461,6 +1503,30 @@ fn summarize_item(item: &Value) -> (String, String, String) {
     (item_type, title, text)
 }
 
+/// Image URLs attached to a `userMessage` item's `content` array. A v2
+/// `{"type":"image"}` input carries the renderable `url` (a `data:image/...`
+/// base64 URL for anything sent by this app); a `{"type":"localImage"}` input
+/// (a host-side codex client attached a file) carries only the HOST filesystem
+/// `path`, which the UI renders as a filename chip rather than pixels. Every
+/// other item kind has no images.
+fn item_images(item: &Value) -> Vec<String> {
+    if item.get("type").and_then(Value::as_str) != Some("userMessage") {
+        return Vec::new();
+    }
+    item.get("content")
+        .and_then(Value::as_array)
+        .map(|c| {
+            c.iter()
+                .filter_map(|p| match p.get("type").and_then(Value::as_str) {
+                    Some("image") => p.get("url").and_then(Value::as_str).map(str::to_string),
+                    Some("localImage") => p.get("path").and_then(Value::as_str).map(str::to_string),
+                    _ => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn recursive_text(v: &Value) -> Option<String> {
     match v {
         Value::Object(m) => {
@@ -1526,6 +1592,83 @@ mod tests {
         let ev = map_event(plan("completed"));
         assert_eq!(ev.item_id.as_deref(), Some("plan-turn-9"));
         assert_eq!(ev.item_type.as_deref(), Some("plan"));
+    }
+
+    #[test]
+    fn builds_turn_input_from_text_and_images() {
+        // Text-only: the single text item, exactly as before images existed.
+        let v = build_turn_input("hi", &[]).expect("text only");
+        assert_eq!(v, json!([{ "type": "text", "text": "hi" }]));
+
+        // Text + images: text leads, each image follows as a v2 `image` item
+        // whose `url` carries the data URL (works local AND tunneled-remote).
+        let img = "data:image/jpeg;base64,AAAA".to_string();
+        let v = build_turn_input("look", std::slice::from_ref(&img)).expect("text+image");
+        assert_eq!(
+            v,
+            json!([
+                { "type": "text", "text": "look" },
+                { "type": "image", "url": img },
+            ])
+        );
+
+        // Image-only: a legal turn (no empty text item is emitted).
+        let v = build_turn_input("", std::slice::from_ref(&img)).expect("image only");
+        assert_eq!(v, json!([{ "type": "image", "url": img }]));
+
+        // A non-data URL is refused: a host filesystem path would silently
+        // resolve on the wrong machine for a tunneled remote app-server.
+        assert!(build_turn_input("x", &["C:/pic.png".to_string()]).is_err());
+        // Fully empty input is refused.
+        assert!(build_turn_input("", &[]).is_err());
+    }
+
+    #[test]
+    fn extracts_user_message_images() {
+        // thread/read echoes a user message's full content array; `image`
+        // items carry the renderable url, `localImage` only a host path.
+        let item = json!({"type":"userMessage","id":"u1","content":[
+            {"type":"text","text":"see: "},
+            {"type":"image","url":"data:image/png;base64,BBBB"},
+            {"type":"localImage","path":"/home/u/shot.png"},
+        ]});
+        let (ty, _, text) = summarize_item(&item);
+        assert_eq!(ty, "userMessage");
+        assert_eq!(text, "see: ");
+        assert_eq!(item_images(&item), vec![
+            "data:image/png;base64,BBBB".to_string(),
+            "/home/u/shot.png".to_string()
+        ]);
+        let parsed = parse_item(&item).expect("parses");
+        assert_eq!(parsed.images.len(), 2);
+
+        // Image-only user message: empty text, images intact.
+        let item = json!({"type":"userMessage","id":"u2","content":[
+            {"type":"image","url":"data:image/jpeg;base64,CCCC"},
+        ]});
+        let parsed = parse_item(&item).expect("parses");
+        assert_eq!(parsed.text, "");
+        assert_eq!(parsed.images, vec!["data:image/jpeg;base64,CCCC".to_string()]);
+
+        // Non-userMessage items never report images.
+        let cmd = json!({"type":"commandExecution","id":"c1","command":"ls"});
+        assert!(item_images(&cmd).is_empty());
+    }
+
+    #[test]
+    fn maps_user_message_event_images() {
+        let inbound = Inbound {
+            method: "item/completed".into(),
+            params: Some(json!({"threadId":"t1","item":{
+            "type":"userMessage","id":"u1","content":[
+                {"type":"text","text":"hi"},
+                {"type":"image","url":"data:image/png;base64,DDDD"},
+            ]}})),
+            request_id: None,
+        };
+        let ev = map_event(inbound);
+        assert_eq!(ev.item_type.as_deref(), Some("userMessage"));
+        assert_eq!(ev.images, vec!["data:image/png;base64,DDDD".to_string()]);
     }
 
     #[test]

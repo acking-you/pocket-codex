@@ -155,6 +155,41 @@ class AppLocalizationsZh extends AppLocalizations {
   String get send => '发送';
 
   @override
+  String get attachImage => '附加图片';
+
+  @override
+  String get removeImage => '移除图片';
+
+  @override
+  String get imagePickFailed => '无法读取所选图片';
+
+  @override
+  String imageTooMany(int count) {
+    return '每条消息最多附加 $count 张图片';
+  }
+
+  @override
+  String get imageSave => '保存图片';
+
+  @override
+  String imageSaved(String path) {
+    return '已保存到 $path';
+  }
+
+  @override
+  String imageSaveFailed(String error) {
+    return '保存图片失败:$error';
+  }
+
+  @override
+  String imageOnHost(String path) {
+    return '主机上的图片文件:$path';
+  }
+
+  @override
+  String get imageOnlyMessage => '[图片]';
+
+  @override
   String get interrupt => '打断';
 
   @override

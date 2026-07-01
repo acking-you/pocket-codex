@@ -1435,6 +1435,7 @@ fn wire__crate__api__bridge__app_turn_start_impl(
             let api_service_key = <String>::sse_decode(&mut deserializer);
             let api_thread_id = <String>::sse_decode(&mut deserializer);
             let api_text = <String>::sse_decode(&mut deserializer);
+            let api_images = <Vec<String>>::sse_decode(&mut deserializer);
             let api_model = <Option<String>>::sse_decode(&mut deserializer);
             let api_approval_policy = <Option<String>>::sse_decode(&mut deserializer);
             let api_sandbox = <Option<String>>::sse_decode(&mut deserializer);
@@ -1448,6 +1449,7 @@ fn wire__crate__api__bridge__app_turn_start_impl(
                             api_service_key,
                             api_thread_id,
                             api_text,
+                            api_images,
                             api_model,
                             api_approval_policy,
                             api_sandbox,
@@ -2252,6 +2254,7 @@ impl SseDecode for crate::api::bridge::AppEventDto {
         let mut var_itemType = <Option<String>>::sse_decode(deserializer);
         let mut var_title = <Option<String>>::sse_decode(deserializer);
         let mut var_text = <Option<String>>::sse_decode(deserializer);
+        let mut var_images = <Vec<String>>::sse_decode(deserializer);
         let mut var_requestId = <Option<String>>::sse_decode(deserializer);
         let mut var_raw = <String>::sse_decode(deserializer);
         return crate::api::bridge::AppEventDto {
@@ -2261,6 +2264,7 @@ impl SseDecode for crate::api::bridge::AppEventDto {
             item_type: var_itemType,
             title: var_title,
             text: var_text,
+            images: var_images,
             request_id: var_requestId,
             raw: var_raw,
         };
@@ -2761,11 +2765,13 @@ impl SseDecode for crate::api::bridge::ThreadItemDto {
         let mut var_itemType = <String>::sse_decode(deserializer);
         let mut var_title = <String>::sse_decode(deserializer);
         let mut var_text = <String>::sse_decode(deserializer);
+        let mut var_images = <Vec<String>>::sse_decode(deserializer);
         return crate::api::bridge::ThreadItemDto {
             id: var_id,
             item_type: var_itemType,
             title: var_title,
             text: var_text,
+            images: var_images,
         };
     }
 }
@@ -3041,6 +3047,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::bridge::AppEventDto {
             self.item_type.into_into_dart().into_dart(),
             self.title.into_into_dart().into_dart(),
             self.text.into_into_dart().into_dart(),
+            self.images.into_into_dart().into_dart(),
             self.request_id.into_into_dart().into_dart(),
             self.raw.into_into_dart().into_dart(),
         ]
@@ -3414,6 +3421,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::bridge::ThreadItemDto {
             self.item_type.into_into_dart().into_dart(),
             self.title.into_into_dart().into_dart(),
             self.text.into_into_dart().into_dart(),
+            self.images.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -3543,6 +3551,7 @@ impl SseEncode for crate::api::bridge::AppEventDto {
         <Option<String>>::sse_encode(self.item_type, serializer);
         <Option<String>>::sse_encode(self.title, serializer);
         <Option<String>>::sse_encode(self.text, serializer);
+        <Vec<String>>::sse_encode(self.images, serializer);
         <Option<String>>::sse_encode(self.request_id, serializer);
         <String>::sse_encode(self.raw, serializer);
     }
@@ -3900,6 +3909,7 @@ impl SseEncode for crate::api::bridge::ThreadItemDto {
         <String>::sse_encode(self.item_type, serializer);
         <String>::sse_encode(self.title, serializer);
         <String>::sse_encode(self.text, serializer);
+        <Vec<String>>::sse_encode(self.images, serializer);
     }
 }
 

@@ -11,6 +11,7 @@ import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/screens/local_sessions_screen.dart'
     show SessionSource, resumeLocalSession;
 import 'package:pocket_codex/src/widgets/loading.dart';
+import 'package:pocket_codex/src/widgets/message_images.dart';
 import 'package:super_sliver_list/super_sliver_list.dart';
 
 /// Read-only viewer for a local codex session's transcript, parsed straight from
@@ -64,6 +65,23 @@ class _LocalSessionViewState extends ConsumerState<LocalSessionViewScreen> {
   Timer? _poll;
   final _scroll = ScrollController();
 
+  // Resolved (base64-decoded) attachments cached by item id: rows rebuild on
+  // every 3s poll, and re-decoding each image every tick would churn CPU and
+  // memory. Ids are stable rollout line indexes; re-resolve only if an item's
+  // image count changes (a live writer appending to the same message id).
+  final Map<String, ({int count, List<ResolvedImage> images})> _imageCache = {};
+
+  List<ResolvedImage> _imagesFor(ThreadItem item) {
+    if (item.images.isEmpty) return const [];
+    final cached = _imageCache[item.id];
+    if (cached != null && cached.count == item.images.length) {
+      return cached.images;
+    }
+    final resolved = resolveImageUrls(item.images);
+    _imageCache[item.id] = (count: item.images.length, images: resolved);
+    return resolved;
+  }
+
   /// Where this viewer reads from (local machine vs the host's meta tunnel).
   SessionSource get _source => widget.serviceKey == null
       ? const SessionSource.local()
@@ -92,8 +110,20 @@ class _LocalSessionViewState extends ConsumerState<LocalSessionViewScreen> {
     }
     final bridge = ref.read(bridgeApiProvider);
     try {
-      final items = await _source.transcript(bridge, widget.threadId);
+      // Liveness first (a tiny probe). The full transcript — which now embeds
+      // every attachment's base64 data URL — is re-fetched on a poll tick ONLY
+      // while a live writer holds the rollout (it can change) or on the tick
+      // right after it lets go (to pick up the final append). An idle
+      // session's rollout is immutable, and re-shipping megabytes of images
+      // over the relay every 3s for an unchanged transcript would burn a
+      // phone's metered data for nothing.
       final live = await _source.liveness(bridge, widget.threadId);
+      final wasHeld = _live?.heldOpen ?? false;
+      final fetchTranscript =
+          initial || _items.isEmpty || live.heldOpen || wasHeld;
+      final items = fetchTranscript
+          ? await _source.transcript(bridge, widget.threadId)
+          : _items;
       if (!mounted) return;
       // Auto-follow the tail if the reader is already near the bottom, so a
       // session being driven elsewhere streams in like a live conversation.
@@ -106,7 +136,7 @@ class _LocalSessionViewState extends ConsumerState<LocalSessionViewScreen> {
         _loading = false;
         _error = null;
       });
-      if (atBottom) {
+      if (fetchTranscript && atBottom) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (_scroll.hasClients) {
             _scroll.jumpTo(_scroll.position.maxScrollExtent);
@@ -251,8 +281,11 @@ class _LocalSessionViewState extends ConsumerState<LocalSessionViewScreen> {
             controller: _scroll,
             padding: EdgeInsets.fromLTRB(pad, 12, pad, 12),
             itemCount: _items.length,
-            itemBuilder: (context, i) =>
-                _TranscriptRow(key: ValueKey(_items[i].id), item: _items[i]),
+            itemBuilder: (context, i) => _TranscriptRow(
+              key: ValueKey(_items[i].id),
+              item: _items[i],
+              images: _imagesFor(_items[i]),
+            ),
           );
         },
       ),
@@ -309,9 +342,13 @@ class _LocalSessionViewState extends ConsumerState<LocalSessionViewScreen> {
 /// One read-only transcript row: user bubble, agent markdown, a reasoning note,
 /// or a command + output block.
 class _TranscriptRow extends StatelessWidget {
-  const _TranscriptRow({super.key, required this.item});
+  const _TranscriptRow({super.key, required this.item, this.images = const []});
 
   final ThreadItem item;
+
+  /// The item's attachments, resolved once by the screen (cached across the
+  /// 3s transcript polls).
+  final List<ResolvedImage> images;
 
   @override
   Widget build(BuildContext context) {
@@ -332,7 +369,16 @@ class _TranscriptRow extends StatelessWidget {
                 color: scheme.primaryContainer,
                 borderRadius: BorderRadius.circular(14),
               ),
-              child: Text(item.text),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  if (images.isNotEmpty) MessageImagesView(images: images),
+                  if (images.isNotEmpty && item.text.isNotEmpty)
+                    const SizedBox(height: 8),
+                  if (item.text.isNotEmpty) Text(item.text),
+                ],
+              ),
             ),
           ),
         );

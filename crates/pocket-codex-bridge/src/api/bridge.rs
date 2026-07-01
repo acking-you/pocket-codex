@@ -387,6 +387,10 @@ pub struct AppEventDto {
     pub title: Option<String>,
     /// Text payload (a streaming delta or an item's body/detail).
     pub text: Option<String>,
+    /// Image URLs attached to a `userMessage` item: `data:image/...` URLs
+    /// render inline; a host-local path (from a `localImage` input) renders as
+    /// a filename chip. Empty for every other event.
+    pub images: Vec<String>,
     /// Token to answer a server approval request via [`app_respond_approval`];
     /// `None` for ordinary notifications.
     pub request_id: Option<String>,
@@ -432,6 +436,10 @@ pub struct ThreadItemDto {
     pub title: String,
     /// Body / detail text.
     pub text: String,
+    /// Image URLs attached to a `userMessage`: `data:image/...` URLs render
+    /// inline; a host-local path (from a `localImage` input) renders as a
+    /// filename chip. Empty for every other item kind.
+    pub images: Vec<String>,
 }
 
 /// A thread's recovered history + whether a turn is still running, plus the
@@ -593,6 +601,7 @@ pub fn app_events(service_key: String, sink: StreamSink<AppEventDto>) -> Result<
                         item_type: ev.item_type,
                         title: ev.title,
                         text: ev.text,
+                        images: ev.images,
                         request_id: ev.request_id,
                         raw: ev.raw,
                     };
@@ -695,6 +704,7 @@ pub fn app_thread_read(service_key: String, thread_id: String) -> Result<ThreadH
                 item_type: i.item_type,
                 title: i.title,
                 text: i.text,
+                images: i.images,
             })
             .collect(),
         running: h.running,
@@ -725,7 +735,11 @@ pub fn app_compact(service_key: String, thread_id: String) -> Result<()> {
     app_session::compact(&service_key, &thread_id)
 }
 
-/// Send a user message, starting a model turn. `model` / `approval_policy` /
+/// Send a user message (text and/or attached images), starting a model turn.
+/// `images` are `data:image/...;base64,...` URLs — the wire form that reaches
+/// BOTH local and relay-tunneled remote app-servers (a host filesystem path
+/// would not); pass an empty list for a text-only turn, and text may be empty
+/// when at least one image is attached. `model` / `approval_policy` /
 /// `sandbox` are optional per-turn overrides (apply to this and subsequent
 /// turns) so model and permission can change mid-conversation.
 /// `collaboration_mode` ("plan" / "default", or null to leave unchanged) is
@@ -738,6 +752,7 @@ pub fn app_turn_start(
     service_key: String,
     thread_id: String,
     text: String,
+    images: Vec<String>,
     model: Option<String>,
     approval_policy: Option<String>,
     sandbox: Option<String>,
@@ -748,6 +763,7 @@ pub fn app_turn_start(
         &service_key,
         &thread_id,
         text,
+        images,
         model,
         approval_policy,
         sandbox,
@@ -907,6 +923,7 @@ pub fn app_local_session_transcript(thread_id: String) -> Result<Vec<ThreadItemD
             item_type: i.item_type,
             title: i.title,
             text: i.text,
+            images: i.images,
         })
         .collect())
 }
@@ -1030,6 +1047,7 @@ pub fn meta_session_transcript(
             item_type: i.item_type,
             title: i.title,
             text: i.text,
+            images: i.images,
         })
         .collect())
 }

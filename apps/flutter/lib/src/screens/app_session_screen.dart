@@ -1,11 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:super_sliver_list/super_sliver_list.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/app_modes.dart';
@@ -14,9 +16,11 @@ import 'package:pocket_codex/src/context_status.dart';
 import 'package:pocket_codex/src/error_format.dart';
 import 'package:pocket_codex/src/fonts.dart';
 import 'package:pocket_codex/src/git_diff.dart';
+import 'package:pocket_codex/src/image_attachments.dart';
 import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/widgets/links.dart';
 import 'package:pocket_codex/src/widgets/loading.dart';
+import 'package:pocket_codex/src/widgets/message_images.dart';
 import 'package:pocket_codex/src/widgets/status_dots.dart';
 
 /// Local port for the app-server ws tunnel (shared with the service screen).
@@ -73,12 +77,21 @@ class _Item {
     required this.type,
     this.title = '',
     this.text = '',
+    this.images = const [],
+    this.imageUrls = const [],
     this.streaming = false,
   });
   final String id;
   String type; // userMessage | agentMessage | commandExecution | webSearch | …
   String title;
   String text;
+  // Image attachments of a user message, resolved once (data URLs decoded to
+  // bytes; host-only paths kept as chips) so rebuilds never re-decode base64.
+  List<ResolvedImage> images;
+  // The same attachments' raw wire URLs, kept for CONTENT comparisons (the
+  // duplicate-collapse guard): image-only messages all have empty text, so
+  // only the URLs distinguish two different photos.
+  List<String> imageUrls;
   bool streaming;
 
   bool get isUser => type == 'userMessage';
@@ -88,6 +101,15 @@ class _Item {
   /// Standalone system notices (compaction / stopped) that render as a centered
   /// divider and must never be folded into a tool-call group.
   bool get isNotice => type == 'contextCompaction' || type == 'interrupted';
+}
+
+/// One composer attachment: picked image bytes being processed (EXIF-bake /
+/// downscale / re-encode in a background isolate), then ready to send.
+class _Attachment {
+  _Attachment({required this.id, required this.name});
+  final int id;
+  final String name;
+  ProcessedImage? processed; // null while the isolate is still working
 }
 
 /// One entry in an option-picker bottom sheet (model / permission / effort).
@@ -210,6 +232,14 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
   DateTime? _lastReconnectAt; // debounce rapid retriggers (flapping socket)
   Timer? _healthTimer;
   String? _lastUserText;
+  // Images (data URLs) sent with the last user message, kept alongside
+  // _lastUserText so a one-tap retry after a dropped send re-sends the same
+  // attachments.
+  List<String> _lastUserImages = const [];
+  // Composer attachments not yet sent; an entry with `processed == null` is
+  // still being downscaled/re-encoded in a background isolate.
+  final List<_Attachment> _attachments = [];
+  int _attachSeq = 0; // ids for attachment list entries
 
   /// Whether to offer the "implement this plan" choice — shown after a plan-mode
   /// turn has produced its proposal, until the user implements or steers past it.
@@ -473,6 +503,12 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
       _effortActive = null;
       _implementDismissed = false;
       _input.clear();
+      // Pending attachments are drafts of the previous thread's message —
+      // clear them with the input (and the retry snapshot, which references a
+      // turn on the previous thread).
+      _attachments.clear();
+      _lastUserText = null;
+      _lastUserImages = const [];
       // A brand-new conversation inherits the user's last-chosen settings; an
       // existing one is restored from the server by _resumeAndLoad below.
       if (tid == null) _seedDefaults();
@@ -580,12 +616,20 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
           if (i.itemType == 'userMessage' &&
               _items.isNotEmpty &&
               _items.last.type == 'userMessage' &&
-              _items.last.text.trim() == i.text.trim()) {
+              _items.last.text.trim() == i.text.trim() &&
+              listEquals(_items.last.imageUrls, i.images)) {
             continue;
           }
           _itemIndex[i.id] = _items.length;
           _items.add(
-            _Item(id: i.id, type: i.itemType, title: i.title, text: i.text),
+            _Item(
+              id: i.id,
+              type: i.itemType,
+              title: i.title,
+              text: i.text,
+              images: resolveImageUrls(i.images),
+              imageUrls: i.images,
+            ),
           );
         }
         // Restore the "thinking" state if a turn was still running when we
@@ -848,9 +892,28 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
     final text = retry
         ? (_lastUserText ?? '')
         : (overrideText ?? _input.text.trim());
+    // Attachments ride an ordinary composer send only: a programmatic send
+    // (e.g. "implement the plan") must not consume them, and a retry re-sends
+    // the snapshot taken at the original send.
+    final images = retry
+        ? _lastUserImages
+        : overrideText != null
+        ? const <String>[]
+        : [
+            for (final a in _attachments)
+              if (a.processed != null) a.processed!.dataUrl,
+          ];
     // Block sends while reconnecting — a reconnect reloads history and would
     // wipe an optimistic message added mid-flight.
-    if (text.isEmpty || _sending || _reconnecting) return;
+    if ((text.isEmpty && images.isEmpty) || _sending || _reconnecting) return;
+    // Never send while an attachment is still processing — the message would
+    // silently ship without it. (The send button is disabled too; this also
+    // guards the Enter-to-send path.)
+    if (!retry &&
+        overrideText == null &&
+        _attachments.any((a) => a.processed == null)) {
+      return;
+    }
     // Take the send lock up front, before the retry probe's await below, so the
     // composer can't start a second send during that round-trip (re-entrancy).
     setState(() => _sending = true);
@@ -861,7 +924,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
     // that hides the plan-implement choice. So on retry, ask the server first;
     // if this prompt is already the latest user turn, just reload its (possibly
     // in-progress) history instead of sending again.
-    if (retry && await _turnAlreadyCommitted(text)) {
+    if (retry && await _turnAlreadyCommitted(text, images)) {
       if (mounted) setState(() => _sending = false);
       await _resumeAndLoad();
       return;
@@ -870,13 +933,25 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
       _error = null;
       _retry = null;
       _lastUserText = text;
+      _lastUserImages = images;
       if (!retry) {
         final id = 'local-user-${_localSeq++}';
         _itemIndex[id] = _items.length;
-        _items.add(_Item(id: id, type: 'userMessage', text: text));
+        _items.add(
+          _Item(
+            id: id,
+            type: 'userMessage',
+            text: text,
+            images: resolveImageUrls(images),
+            imageUrls: images,
+          ),
+        );
         // Don't clear the composer for a programmatic send (e.g. "implement
         // the plan") — the user may have text in progress there.
-        if (overrideText == null) _input.clear();
+        if (overrideText == null) {
+          _input.clear();
+          _attachments.clear();
+        }
       }
     });
     _scrollToEnd(force: true);
@@ -933,7 +1008,15 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
         if (mounted && !_threads.any((t) => t.id == tid)) {
           setState(() {
             _threads = [
-              ThreadMeta(id: tid, preview: text, cwd: _cwd ?? '', updatedAt: 0),
+              ThreadMeta(
+                id: tid,
+                // An image-only first message has no text to preview.
+                preview: text.isEmpty
+                    ? AppLocalizations.of(context).imageOnlyMessage
+                    : text,
+                cwd: _cwd ?? '',
+                updatedAt: 0,
+              ),
               ..._threads,
             ];
           });
@@ -950,6 +1033,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
         widget.serviceKey,
         _threadId!,
         text,
+        images: images,
         model: modelId,
         approvalPolicy: _mode.approval,
         sandbox: _mode.sandbox,
@@ -1017,12 +1101,16 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
   /// if the host can't be reached, so an indeterminate case falls through to a
   /// normal re-send (the prior, less-safe behaviour) rather than losing the turn.
   ///
-  /// Idempotency here is text-only: if the user deliberately re-asks an
-  /// identical prompt and *that* send drops before committing, the latest
-  /// committed user turn still matches, so the retry reloads instead of
-  /// resending. Accepted edge — avoiding a duplicate (costly) turn is preferred
-  /// over re-sending a rare identical consecutive prompt.
-  Future<bool> _turnAlreadyCommitted(String text) async {
+  /// Idempotency compares the full message content — text AND the image URL
+  /// list (history echoes the data URLs we sent verbatim): if the user
+  /// deliberately re-asks an identical prompt and *that* send drops before
+  /// committing, the latest committed user turn still matches, so the retry
+  /// reloads instead of resending. Comparing URLs (not just a count) matters
+  /// for image-only messages, which ALL have empty text — a count-only match
+  /// would swallow a retry of a *different* photo. Accepted edge — avoiding a
+  /// duplicate (costly) turn is preferred over re-sending a rare identical
+  /// consecutive prompt.
+  Future<bool> _turnAlreadyCommitted(String text, List<String> images) async {
     final tid = _threadId;
     if (tid == null) return false;
     try {
@@ -1031,7 +1119,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
       final history = await api.appThreadRead(widget.serviceKey, tid);
       final want = text.trim();
       for (final i in history.items.reversed) {
-        if (i.itemType == 'userMessage') return i.text.trim() == want;
+        if (i.itemType == 'userMessage') {
+          return i.text.trim() == want && listEquals(i.images, images);
+        }
       }
     } catch (_) {
       // Indeterminate (host unreachable) — fall through to a normal re-send.
@@ -2409,6 +2499,146 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
   /// A single rounded composer surface: borderless multiline input on top, a
   /// row of compact setting pills + a circular send button below — modelled on
   /// common AI-chat composers rather than a bare TextField.
+  /// Pick images to attach (photo library on Android/iOS via the system
+  /// picker — no permission prompt; a file dialog on desktop). Each pick is
+  /// processed (EXIF-bake / downscale / JPEG re-encode) on a background
+  /// isolate before it becomes sendable, showing a spinner chip meanwhile.
+  Future<void> _pickImages() async {
+    final l10n = AppLocalizations.of(context);
+    final messenger = ScaffoldMessenger.of(context);
+    final remaining = kMaxImagesPerMessage - _attachments.length;
+    if (remaining <= 0) {
+      messenger.showSnackBar(
+        SnackBar(content: Text(l10n.imageTooMany(kMaxImagesPerMessage))),
+      );
+      return;
+    }
+    List<XFile> picked;
+    try {
+      // pickMultiImage's `limit` must be ≥ 2; fall back to the single picker
+      // when only one slot is left.
+      if (remaining == 1) {
+        final one = await ImagePicker().pickImage(source: ImageSource.gallery);
+        picked = [?one];
+      } else {
+        picked = await ImagePicker().pickMultiImage(limit: remaining);
+      }
+    } catch (_) {
+      if (mounted) {
+        messenger.showSnackBar(SnackBar(content: Text(l10n.imagePickFailed)));
+      }
+      return;
+    }
+    if (picked.isEmpty || !mounted) return;
+    if (picked.length > remaining) {
+      // Some platforms ignore the picker's limit; enforce ours.
+      picked = picked.sublist(0, remaining);
+      messenger.showSnackBar(
+        SnackBar(content: Text(l10n.imageTooMany(kMaxImagesPerMessage))),
+      );
+    }
+    setState(() {
+      for (final file in picked) {
+        final att = _Attachment(id: _attachSeq++, name: file.name);
+        _attachments.add(att);
+        unawaited(_processAttachment(att, file));
+      }
+    });
+  }
+
+  Future<void> _processAttachment(_Attachment att, XFile file) async {
+    try {
+      final bytes = await file.readAsBytes();
+      final processed = await processImage(bytes);
+      if (!mounted || !_attachments.contains(att)) return; // removed via ×
+      setState(() => att.processed = processed);
+    } catch (_) {
+      if (!mounted || !_attachments.contains(att)) return;
+      setState(() => _attachments.remove(att));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(AppLocalizations.of(context).imagePickFailed)),
+      );
+    }
+  }
+
+  /// Horizontal strip of pending attachments above the composer input: a
+  /// thumbnail (or a spinner while processing) with a remove button each.
+  Widget _attachmentStrip(AppLocalizations l10n) {
+    final scheme = Theme.of(context).colorScheme;
+    final scale = MediaQuery.of(context).devicePixelRatio;
+    return SizedBox(
+      height: 72,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        itemCount: _attachments.length,
+        separatorBuilder: (_, _) => const SizedBox(width: 8),
+        itemBuilder: (context, i) {
+          final att = _attachments[i];
+          final bytes = att.processed?.bytes;
+          return SizedBox(
+            key: Key('attachment-${att.id}'),
+            width: 72,
+            height: 72,
+            child: Stack(
+              children: [
+                Container(
+                  width: 72,
+                  height: 72,
+                  clipBehavior: Clip.antiAlias,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(12),
+                    color: scheme.surfaceContainerHighest,
+                    border: Border.all(color: scheme.outlineVariant),
+                  ),
+                  child: bytes == null
+                      ? const Center(
+                          child: SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                        )
+                      : Image.memory(
+                          bytes,
+                          fit: BoxFit.cover,
+                          // 2× the box so a landscape image's SHORT edge
+                          // reaches the square cover box without upscaling.
+                          cacheWidth: (72 * scale * 2).round(),
+                          gaplessPlayback: true,
+                        ),
+                ),
+                Positioned(
+                  top: 2,
+                  right: 2,
+                  child: Tooltip(
+                    message: l10n.removeImage,
+                    child: InkWell(
+                      key: Key('attachment-remove-${att.id}'),
+                      onTap: () => setState(() => _attachments.remove(att)),
+                      customBorder: const CircleBorder(),
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: scheme.scrim.withValues(alpha: 0.55),
+                          shape: BoxShape.circle,
+                        ),
+                        padding: const EdgeInsets.all(3),
+                        child: Icon(
+                          Icons.close,
+                          size: 13,
+                          color: scheme.surface,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+
   Widget _composer(AppLocalizations l10n) {
     final scheme = Theme.of(context).colorScheme;
     return SafeArea(
@@ -2426,6 +2656,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              if (_attachments.isNotEmpty) ...[
+                _attachmentStrip(l10n),
+                const SizedBox(height: 8),
+              ],
               TextField(
                 controller: _input,
                 focusNode: _inputFocus,
@@ -2444,6 +2678,20 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
               Row(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
+                  // Attach an image to this message (photo library on mobile,
+                  // file dialog on desktop).
+                  IconButton(
+                    key: const Key('attach-btn'),
+                    tooltip: l10n.attachImage,
+                    visualDensity: VisualDensity.compact,
+                    icon: Icon(
+                      Icons.add_photo_alternate_outlined,
+                      size: 20,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                    onPressed: _sending ? null : _pickImages,
+                  ),
+                  const SizedBox(width: 2),
                   // Settings pills wrap onto extra rows on narrow screens so
                   // none get clipped (a horizontal scroll left the last pill
                   // half-cut on mobile); the send button stays bottom-right.
@@ -2529,7 +2777,13 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
     return ValueListenableBuilder<TextEditingValue>(
       valueListenable: _input,
       builder: (context, value, _) {
-        final canSend = !_sending && value.text.trim().isNotEmpty;
+        // Sendable with text and/or attachments — but never while an
+        // attachment is still processing (the message would ship without it).
+        final processing = _attachments.any((a) => a.processed == null);
+        final canSend =
+            !_sending &&
+            !processing &&
+            (value.text.trim().isNotEmpty || _attachments.isNotEmpty);
         return IconButton.filled(
           key: const Key('send-btn'),
           onPressed: canSend ? () => _send() : null,
@@ -2885,7 +3139,11 @@ class _UiQuestion {
 /// field; `isSecret` obscures it. Submitting sends one answer per question id;
 /// cancel sends an empty answer set so the turn proceeds without input.
 class _UserInputCard extends StatefulWidget {
-  const _UserInputCard({super.key, required this.prompt, required this.onAnswer});
+  const _UserInputCard({
+    super.key,
+    required this.prompt,
+    required this.onAnswer,
+  });
   final AppEvent prompt;
   final Future<void> Function(AppEvent, Map<String, List<String>>) onAnswer;
 
@@ -3043,7 +3301,11 @@ class _UserInputCardState extends State<_UserInputCard> {
     );
   }
 
-  Widget _questionBlock(BuildContext context, _UiQuestion q, ColorScheme scheme) {
+  Widget _questionBlock(
+    BuildContext context,
+    _UiQuestion q,
+    ColorScheme scheme,
+  ) {
     final l10n = AppLocalizations.of(context);
     return Padding(
       padding: const EdgeInsets.only(top: 10),
@@ -3075,7 +3337,8 @@ class _UserInputCardState extends State<_UserInputCard> {
                 for (final o in q.options)
                   ChoiceChip(
                     label: Text(o.label),
-                    tooltip: (o.description != null && o.description!.isNotEmpty)
+                    tooltip:
+                        (o.description != null && o.description!.isNotEmpty)
                         ? o.description
                         : null,
                     selected: _choice[q.id] == o.label,
@@ -3114,7 +3377,11 @@ class _UserInputCardState extends State<_UserInputCard> {
 }
 
 class _ApprovalCard extends StatelessWidget {
-  const _ApprovalCard({super.key, required this.prompt, required this.onDecide});
+  const _ApprovalCard({
+    super.key,
+    required this.prompt,
+    required this.onDecide,
+  });
   final AppEvent prompt;
   final Future<void> Function(AppEvent, String) onDecide;
 
@@ -3608,12 +3875,24 @@ class _MessageViewState extends State<_MessageView> {
               color: scheme.surfaceContainerHigh,
               borderRadius: BorderRadius.circular(20),
             ),
-            child: linkifyText(
-              context,
-              item.text,
-              style: Theme.of(
-                context,
-              ).textTheme.bodyLarge?.copyWith(height: 1.45),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                // Attached images render above the text; tap for fullscreen.
+                if (item.images.isNotEmpty)
+                  MessageImagesView(images: item.images),
+                if (item.images.isNotEmpty && item.text.isNotEmpty)
+                  const SizedBox(height: 8),
+                if (item.text.isNotEmpty)
+                  linkifyText(
+                    context,
+                    item.text,
+                    style: Theme.of(
+                      context,
+                    ).textTheme.bodyLarge?.copyWith(height: 1.45),
+                  ),
+              ],
             ),
           )
         : Column(
@@ -3654,7 +3933,9 @@ class _MessageViewState extends State<_MessageView> {
             ],
           );
 
-    final showActions = !item.streaming;
+    // No copy for an image-only message (empty text) — it would clobber the
+    // clipboard with an empty string while confirming "copied".
+    final showActions = !item.streaming && item.text.trim().isNotEmpty;
     // Only this subtree rebuilds on hover; `content` above is built once.
     final actions = SizedBox(
       height: 30,

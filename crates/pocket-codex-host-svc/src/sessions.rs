@@ -96,6 +96,10 @@ pub struct TranscriptItem {
     pub title: String,
     /// Body text: message markdown, reasoning summary, or command output.
     pub text: String,
+    /// Image data URLs attached to a user message. `#[serde(default)]` so a
+    /// response from an older host (no field) still deserializes.
+    #[serde(default)]
+    pub images: Vec<String>,
 }
 
 impl From<rollout::TranscriptItem> for TranscriptItem {
@@ -105,6 +109,7 @@ impl From<rollout::TranscriptItem> for TranscriptItem {
             item_type: t.item_type,
             title: t.title,
             text: t.text,
+            images: t.images,
         }
     }
 }

@@ -53,6 +53,27 @@
   "untitledThread": "(untitled)",
   "messageHint": "Message…",
   "send": "Send",
+  "attachImage": "Attach image",
+  "removeImage": "Remove image",
+  "imagePickFailed": "Couldn't read the selected image",
+  "imageTooMany": "At most {count} images per message",
+  "@imageTooMany": {
+    "placeholders": { "count": { "type": "int" } }
+  },
+  "imageSave": "Save image",
+  "imageSaved": "Saved to {path}",
+  "@imageSaved": {
+    "placeholders": { "path": { "type": "String" } }
+  },
+  "imageSaveFailed": "Couldn't save the image: {error}",
+  "@imageSaveFailed": {
+    "placeholders": { "error": { "type": "String" } }
+  },
+  "imageOnHost": "Image file on the host machine: {path}",
+  "@imageOnHost": {
+    "placeholders": { "path": { "type": "String" } }
+  },
+  "imageOnlyMessage": "[Image]",
   "interrupt": "Interrupt",
   "thinking": "Thinking…",
   "emptyConversation": "Send a message to start the conversation",

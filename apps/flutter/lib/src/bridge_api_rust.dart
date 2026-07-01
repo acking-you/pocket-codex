@@ -273,6 +273,7 @@ class RustBridgeApi implements BridgeApi {
           itemType: e.itemType,
           title: e.title,
           text: e.text,
+          images: e.images,
           requestId: e.requestId,
           raw: e.raw,
         ),
@@ -355,6 +356,7 @@ class RustBridgeApi implements BridgeApi {
               itemType: i.itemType,
               title: i.title,
               text: i.text,
+              images: i.images,
             ),
           )
           .toList(),
@@ -385,6 +387,7 @@ class RustBridgeApi implements BridgeApi {
     String serviceKey,
     String threadId,
     String text, {
+    List<String> images = const [],
     String? model,
     String? approvalPolicy,
     String? sandbox,
@@ -394,6 +397,7 @@ class RustBridgeApi implements BridgeApi {
     serviceKey: serviceKey,
     threadId: threadId,
     text: text,
+    images: images,
     model: model,
     approvalPolicy: approvalPolicy,
     sandbox: sandbox,
@@ -502,6 +506,7 @@ class RustBridgeApi implements BridgeApi {
             itemType: i.itemType,
             title: i.title,
             text: i.text,
+            images: i.images,
           ),
         )
         .toList();
@@ -568,6 +573,7 @@ class RustBridgeApi implements BridgeApi {
             itemType: i.itemType,
             title: i.title,
             text: i.text,
+            images: i.images,
           ),
         )
         .toList();

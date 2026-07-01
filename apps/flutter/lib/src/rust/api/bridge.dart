@@ -154,9 +154,9 @@ Future<bool> apiProbe({required String serviceKey}) =>
 
 /// Stream captured `tracing` events for the in-app log viewer: the retained
 /// recent history (oldest first) followed by every new event live, until the
-/// Dart side drops the stream. Subscribes before replaying history so nothing is
-/// missed in between (a line captured right at that boundary may appear twice —
-/// harmless for a log tail).
+/// Dart side drops the stream. Subscribes before replaying history so nothing
+/// is missed in between (a line captured right at that boundary may appear
+/// twice — harmless for a log tail).
 Stream<LogLineDto> logEvents() =>
     RustLib.instance.api.crateApiBridgeLogEvents();
 
@@ -264,7 +264,11 @@ Future<void> appCompact({
   threadId: threadId,
 );
 
-/// Send a user message, starting a model turn. `model` / `approval_policy` /
+/// Send a user message (text and/or attached images), starting a model turn.
+/// `images` are `data:image/...;base64,...` URLs — the wire form that reaches
+/// BOTH local and relay-tunneled remote app-servers (a host filesystem path
+/// would not); pass an empty list for a text-only turn, and text may be empty
+/// when at least one image is attached. `model` / `approval_policy` /
 /// `sandbox` are optional per-turn overrides (apply to this and subsequent
 /// turns) so model and permission can change mid-conversation.
 /// `collaboration_mode` ("plan" / "default", or null to leave unchanged) is
@@ -276,6 +280,7 @@ Future<void> appTurnStart({
   required String serviceKey,
   required String threadId,
   required String text,
+  required List<String> images,
   String? model,
   String? approvalPolicy,
   String? sandbox,
@@ -285,6 +290,7 @@ Future<void> appTurnStart({
   serviceKey: serviceKey,
   threadId: threadId,
   text: text,
+  images: images,
   model: model,
   approvalPolicy: approvalPolicy,
   sandbox: sandbox,
@@ -579,6 +585,11 @@ class AppEventDto {
   /// Text payload (a streaming delta or an item's body/detail).
   final String? text;
 
+  /// Image URLs attached to a `userMessage` item: `data:image/...` URLs
+  /// render inline; a host-local path (from a `localImage` input) renders as
+  /// a filename chip. Empty for every other event.
+  final List<String> images;
+
   /// Token to answer a server approval request via [`app_respond_approval`];
   /// `None` for ordinary notifications.
   final String? requestId;
@@ -593,6 +604,7 @@ class AppEventDto {
     this.itemType,
     this.title,
     this.text,
+    required this.images,
     this.requestId,
     required this.raw,
   });
@@ -605,6 +617,7 @@ class AppEventDto {
       itemType.hashCode ^
       title.hashCode ^
       text.hashCode ^
+      images.hashCode ^
       requestId.hashCode ^
       raw.hashCode;
 
@@ -619,6 +632,7 @@ class AppEventDto {
           itemType == other.itemType &&
           title == other.title &&
           text == other.text &&
+          images == other.images &&
           requestId == other.requestId &&
           raw == other.raw;
 }
@@ -1377,16 +1391,26 @@ class ThreadItemDto {
   /// Body / detail text.
   final String text;
 
+  /// Image URLs attached to a `userMessage`: `data:image/...` URLs render
+  /// inline; a host-local path (from a `localImage` input) renders as a
+  /// filename chip. Empty for every other item kind.
+  final List<String> images;
+
   const ThreadItemDto({
     required this.id,
     required this.itemType,
     required this.title,
     required this.text,
+    required this.images,
   });
 
   @override
   int get hashCode =>
-      id.hashCode ^ itemType.hashCode ^ title.hashCode ^ text.hashCode;
+      id.hashCode ^
+      itemType.hashCode ^
+      title.hashCode ^
+      text.hashCode ^
+      images.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -1396,7 +1420,8 @@ class ThreadItemDto {
           id == other.id &&
           itemType == other.itemType &&
           title == other.title &&
-          text == other.text;
+          text == other.text &&
+          images == other.images;
 }
 
 /// Thread summary mirrored for Dart.

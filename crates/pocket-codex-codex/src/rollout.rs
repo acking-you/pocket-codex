@@ -229,6 +229,10 @@ pub struct TranscriptItem {
     pub title: String,
     /// Body text: message markdown, reasoning summary, or command output.
     pub text: String,
+    /// Image URLs attached to a user message (`data:image/...;base64,...` —
+    /// codex inlines attachments into the model request, so that is what the
+    /// rollout records). Empty for every other item kind.
+    pub images: Vec<String>,
 }
 
 /// Parse a rollout's FULL transcript into displayable [`TranscriptItem`]s so
@@ -268,8 +272,10 @@ pub fn read_transcript(path: &Path) -> Result<Vec<TranscriptItem>> {
         let id = format!("t{idx}");
         match payload.get("type").and_then(Value::as_str) {
             Some("message") => {
-                let text = message_text(payload);
-                if text.trim().is_empty() {
+                let (text, images) = split_message_content(payload);
+                // Keep image-only user messages (empty text, ≥1 image) — they
+                // are real turns; only fully empty messages are noise.
+                if text.trim().is_empty() && images.is_empty() {
                     continue;
                 }
                 let is_user = payload.get("role").and_then(Value::as_str) == Some("user");
@@ -278,6 +284,7 @@ pub fn read_transcript(path: &Path) -> Result<Vec<TranscriptItem>> {
                     item_type: if is_user { "userMessage" } else { "agentMessage" }.to_string(),
                     title: String::new(),
                     text,
+                    images,
                 });
             },
             Some("function_call") => {
@@ -287,6 +294,7 @@ pub fn read_transcript(path: &Path) -> Result<Vec<TranscriptItem>> {
                     item_type: "commandExecution".to_string(),
                     title,
                     text: String::new(),
+                    images: Vec::new(),
                 });
                 if let Some(call_id) = payload.get("call_id").and_then(Value::as_str) {
                     pending.insert(call_id.to_string(), out.len() - 1);
@@ -307,6 +315,7 @@ pub fn read_transcript(path: &Path) -> Result<Vec<TranscriptItem>> {
                         item_type: "commandExecution".to_string(),
                         title: String::new(),
                         text: output,
+                        images: Vec::new(),
                     }),
                 }
             },
@@ -318,6 +327,7 @@ pub fn read_transcript(path: &Path) -> Result<Vec<TranscriptItem>> {
                         item_type: "reasoning".to_string(),
                         title: String::new(),
                         text: summary,
+                        images: Vec::new(),
                     });
                 }
             },
@@ -327,21 +337,47 @@ pub fn read_transcript(path: &Path) -> Result<Vec<TranscriptItem>> {
     Ok(out)
 }
 
-/// Concatenate a `message` payload's `content[].text` (codex uses
-/// `input_text` for user turns and `output_text` for assistant turns; both
-/// carry the text under `text`).
-fn message_text(payload: &Value) -> String {
-    payload
-        .get("content")
-        .and_then(Value::as_array)
-        .map(|parts| {
-            parts
-                .iter()
-                .filter_map(|p| p.get("text").and_then(Value::as_str))
-                .collect::<Vec<_>>()
-                .join("")
-        })
-        .unwrap_or_default()
+/// Split a `message` payload's `content` array into (typed text, image data
+/// URLs). codex uses `input_text` / `output_text` parts for text (both carry
+/// it under `text`) and `input_image` parts for inlined attachments — every
+/// attachment (including `localImage` paths) is converted into a
+/// `data:image/...;base64,...` URL when the model request is built, so the
+/// rollout records renderable URLs.
+///
+/// The `<image>` / `<image name=…>` / `</image>` marker texts codex wraps
+/// around each inlined image are wire framing, not something the user typed —
+/// but a marker is stripped ONLY when it is actually adjacent to an
+/// `input_image` part (mirroring codex's own `parse_user_message`), so a user
+/// who literally typed "<image>" keeps their text.
+fn split_message_content(payload: &Value) -> (String, Vec<String>) {
+    let Some(parts) = payload.get("content").and_then(Value::as_array) else {
+        return (String::new(), Vec::new());
+    };
+    let is_image = |p: Option<&Value>| {
+        p.and_then(|p| p.get("type")).and_then(Value::as_str) == Some("input_image")
+    };
+    let mut text = String::new();
+    let mut images = Vec::new();
+    for (idx, part) in parts.iter().enumerate() {
+        if is_image(Some(part)) {
+            if let Some(url) = part.get("image_url").and_then(Value::as_str) {
+                images.push(url.to_string());
+            }
+            continue;
+        }
+        let Some(t) = part.get("text").and_then(Value::as_str) else {
+            continue;
+        };
+        let open = t == "<image>" || (t.starts_with("<image name=") && t.ends_with('>'));
+        let close = t == "</image>";
+        if (open && is_image(parts.get(idx + 1)))
+            || (close && idx > 0 && is_image(parts.get(idx - 1)))
+        {
+            continue;
+        }
+        text.push_str(t);
+    }
+    (text, images)
 }
 
 /// One-line title for a `function_call`: the shell command when present,
@@ -614,17 +650,15 @@ fn user_text(value: &Value) -> Option<String> {
     }
     // `content` is either a plain string (`"content":"hi"`) or the structured
     // array of parts (`[{"type":"input_text","text":"hi"}]`). Handle both so the
-    // preview isn't lost for string-content sessions.
+    // preview isn't lost for string-content sessions. The array form goes
+    // through [`split_message_content`] so an attachment's `<image>` wire
+    // markers never leak into the preview.
     let content = payload.get("content")?;
     if let Some(s) = content.as_str() {
         return (!s.trim().is_empty()).then(|| s.to_string());
     }
-    let collected: String = content
-        .as_array()?
-        .iter()
-        .filter_map(|part| part.get("text").and_then(Value::as_str))
-        .collect::<Vec<_>>()
-        .join("");
+    content.as_array()?;
+    let (collected, _images) = split_message_content(payload);
     (!collected.trim().is_empty()).then_some(collected)
 }
 
@@ -904,5 +938,67 @@ mod tests {
         assert_eq!(items[1].text, "[32mhi[0m");
         assert_eq!(items[2].item_type, "agentMessage");
         assert_eq!(items[2].text, "done");
+    }
+
+    #[test]
+    fn read_transcript_extracts_user_message_images() {
+        // codex inlines an attached image into the model request as an
+        // `input_image` data URL wrapped in `<image>` marker texts; a
+        // local-file attachment gets a `<image name=[Image #1]>` open tag.
+        let lines = [
+            r#"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"look: "},{"type":"input_text","text":"<image>"},{"type":"input_image","image_url":"data:image/png;base64,AAAA"},{"type":"input_text","text":"</image>"}]}}"#,
+            r#"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<image name=[Image #1]>"},{"type":"input_image","image_url":"data:image/jpeg;base64,BBBB"},{"type":"input_text","text":"</image>"}]}}"#,
+        ];
+        let path = std::env::temp_dir().join(format!(
+            "pcx-transcript-{}-{}.jsonl",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::write(&path, lines.join("\n")).expect("write transcript fixture");
+        let items = read_transcript(&path).expect("read transcript");
+        std::fs::remove_file(&path).ok();
+
+        assert_eq!(items.len(), 2, "{items:?}");
+        // Marker texts are wire framing, not typed text — stripped.
+        assert_eq!(items[0].text, "look: ");
+        assert_eq!(items[0].images, vec!["data:image/png;base64,AAAA".to_string()]);
+        // An image-only message (all its text was markers) is KEPT: it is a
+        // real user turn, previously dropped by the empty-text skip.
+        assert_eq!(items[1].item_type, "userMessage");
+        assert_eq!(items[1].text, "");
+        assert_eq!(items[1].images, vec!["data:image/jpeg;base64,BBBB".to_string()]);
+    }
+
+    #[test]
+    fn image_markers_are_stripped_only_next_to_an_image() {
+        // A user who literally typed "<image>" (no adjacent input_image) keeps
+        // their text — stripping is adjacency-gated like codex's own parser.
+        let payload: Value = serde_json::from_str(
+            r#"{"type":"message","role":"user","content":[{"type":"input_text","text":"<image>"}]}"#,
+        )
+        .expect("parse literal-tag message");
+        let (text, images) = split_message_content(&payload);
+        assert_eq!(text, "<image>");
+        assert!(images.is_empty());
+
+        // …while a real wrapped attachment still strips its markers.
+        let payload: Value = serde_json::from_str(
+            r#"{"type":"message","role":"user","content":[
+                {"type":"input_text","text":"<image>"},
+                {"type":"input_image","image_url":"data:image/png;base64,CC"},
+                {"type":"input_text","text":"</image>"}]}"#,
+        )
+        .expect("parse wrapped-image message");
+        let (text, images) = split_message_content(&payload);
+        assert_eq!(text, "");
+        assert_eq!(images, vec!["data:image/png;base64,CC".to_string()]);
+    }
+
+    #[test]
+    fn preview_skips_image_wire_markers() {
+        // The sessions-list preview must not leak "<image></image>" framing
+        // for a first message that carried an attachment.
+        let line = r#"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"look: "},{"type":"input_text","text":"<image>"},{"type":"input_image","image_url":"data:image/png;base64,AA"},{"type":"input_text","text":"</image>"}]}}"#;
+        assert_eq!(extract_preview(line), "look:");
     }
 }

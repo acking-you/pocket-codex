@@ -380,6 +380,60 @@ abstract class AppLocalizations {
   /// **'Send'**
   String get send;
 
+  /// No description provided for @attachImage.
+  ///
+  /// In en, this message translates to:
+  /// **'Attach image'**
+  String get attachImage;
+
+  /// No description provided for @removeImage.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove image'**
+  String get removeImage;
+
+  /// No description provided for @imagePickFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Couldn\'t read the selected image'**
+  String get imagePickFailed;
+
+  /// No description provided for @imageTooMany.
+  ///
+  /// In en, this message translates to:
+  /// **'At most {count} images per message'**
+  String imageTooMany(int count);
+
+  /// No description provided for @imageSave.
+  ///
+  /// In en, this message translates to:
+  /// **'Save image'**
+  String get imageSave;
+
+  /// No description provided for @imageSaved.
+  ///
+  /// In en, this message translates to:
+  /// **'Saved to {path}'**
+  String imageSaved(String path);
+
+  /// No description provided for @imageSaveFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Couldn\'t save the image: {error}'**
+  String imageSaveFailed(String error);
+
+  /// No description provided for @imageOnHost.
+  ///
+  /// In en, this message translates to:
+  /// **'Image file on the host machine: {path}'**
+  String imageOnHost(String path);
+
+  /// No description provided for @imageOnlyMessage.
+  ///
+  /// In en, this message translates to:
+  /// **'[Image]'**
+  String get imageOnlyMessage;
+
   /// No description provided for @interrupt.
   ///
   /// In en, this message translates to:
