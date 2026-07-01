@@ -161,6 +161,12 @@ class FakeBridgeApi implements BridgeApi {
   /// Records the last [accountDeregisterService] call for assertions.
   String? lastDeregistered;
 
+  /// When true, [accountDeregisterService] records the call but does NOT drop
+  /// the entry from discovery — mirroring an orphaned/hollow relay key the
+  /// backend can't force off. Lets tests exercise the durable client-side
+  /// dismiss (which must hide it anyway).
+  bool keepOnDeregister = false;
+
   @override
   Future<void> accountDeregisterService({
     required String device,
@@ -168,6 +174,7 @@ class FakeBridgeApi implements BridgeApi {
     required String name,
   }) async {
     lastDeregistered = 'pcx:$device:$kind:$name';
+    if (keepOnDeregister) return;
     _services.removeWhere(
       (s) => s.device == device && s.kind == kind && s.name == name,
     );

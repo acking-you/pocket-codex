@@ -800,6 +800,17 @@ class AppLocalizationsZh extends AppLocalizations {
   }
 
   @override
+  String get deregisterOrphanTitle => '移除该不可达服务？';
+
+  @override
+  String deregisterOrphanWarning(String name) {
+    return '「$name」没有响应——它的注册残留在中继上、但没有可达的主机。此操作会把它从你的列表中移除（即使残留注册仍在也会保持隐藏），并请求后端将其丢弃。';
+  }
+
+  @override
+  String get remove => '移除';
+
+  @override
   String get deregisterFailed => '注销失败';
 
   @override

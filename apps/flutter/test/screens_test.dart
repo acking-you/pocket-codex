@@ -571,6 +571,48 @@ void main() {
     expect(find.text('default'), findsNothing);
   });
 
+  testWidgets('注销 on an unreachable remote entry dismisses it, staying '
+      'hidden even while the relay still lists it', (t) async {
+    final api =
+        FakeBridgeApi(
+            config: const ConfigInfo(
+              relay: '',
+              hasKey: false,
+              mode: 'account',
+              accountLogin: 'acking-you',
+            ),
+            services: const [
+              ServiceEntry(
+                device: 'otherdev',
+                kind: 'api',
+                name: 'orphan',
+                key: 'pcx:otherdev:api:orphan',
+              ),
+            ],
+          )
+          // Unreachable => the honest "remove" path; and the backend can't drop it
+          // (the key lingers on the relay even after the DELETE).
+          ..reachable['pcx:otherdev:api:orphan'] = false
+          ..keepOnDeregister = true;
+    await t.pumpWidget(_host(const ServicesScreen(), api));
+    await t.pumpAndSettle();
+    expect(find.text('orphan'), findsOneWidget);
+
+    // Overflow → 注销 → the honest "remove unreachable" dialog → confirm.
+    await t.tap(find.byIcon(Icons.more_vert).first);
+    await t.pumpAndSettle();
+    await t.tap(find.text('注销'));
+    await t.pumpAndSettle();
+    expect(find.text('移除该不可达服务？'), findsOneWidget);
+    await t.tap(find.byKey(const Key('deregister-confirm-btn')));
+    await t.pumpAndSettle();
+
+    // Best-effort backend drop still attempted; and even though discovery STILL
+    // lists the key, the durable dismiss keeps it hidden from the list.
+    expect(api.lastDeregistered, 'pcx:otherdev:api:orphan');
+    expect(find.text('orphan'), findsNothing);
+  });
+
   testWidgets('a registered-but-dead API proxy reads "unreachable", not '
       '"online"', (t) async {
     final api = FakeBridgeApi(

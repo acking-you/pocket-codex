@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
+import 'package:pocket_codex/src/dismissed_services.dart';
 import 'package:pocket_codex/src/error_format.dart';
 import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/screens/api_service_screen.dart';
@@ -385,6 +386,11 @@ class _ServiceList extends ConsumerWidget {
     // gone) — keys still present stay hidden, so a deregister that the relay
     // hasn't finished processing doesn't flicker back as 不可达.
     final pending = ref.watch(pendingRemovalProvider);
+    // Durably-dismissed unreachable/orphaned entries (persisted across
+    // restarts). Empty while the store loads — a dismissed entry may flash for
+    // a frame on cold start, then hides once loaded.
+    final dismissed =
+        ref.watch(dismissedServicesProvider).valueOrNull ?? const <String>{};
     ref.listen(servicesProvider, (_, next) {
       final data = next.valueOrNull;
       if (data == null) return;
@@ -394,12 +400,31 @@ class _ServiceList extends ConsumerWidget {
       if (stillHidden.length != current.length) {
         ref.read(pendingRemovalProvider.notifier).state = stillHidden;
       }
+      // Prune dismissals for keys the relay no longer lists (truly gone): a
+      // later fresh registration under the same key should surface again.
+      final hidden = ref.read(dismissedServicesProvider).valueOrNull;
+      if (hidden != null) {
+        final absent = hidden.difference(present);
+        if (absent.isNotEmpty) {
+          ref.read(dismissedServicesProvider.notifier).restore(absent);
+        }
+      }
     });
     final api = services
-        .where((s) => s.kind == 'api' && !pending.contains(s.key))
+        .where(
+          (s) =>
+              s.kind == 'api' &&
+              !pending.contains(s.key) &&
+              !dismissed.contains(s.key),
+        )
         .toList();
     final app = services
-        .where((s) => s.kind == 'app' && !pending.contains(s.key))
+        .where(
+          (s) =>
+              s.kind == 'app' &&
+              !pending.contains(s.key) &&
+              !dismissed.contains(s.key),
+        )
         .toList();
     // Tunnels this machine hosts itself (its own `serve`): each host publishes
     // an app + an api tunnel. Used to relabel their discovery cards as 本地托管
@@ -504,6 +529,7 @@ class _ServiceList extends ConsumerWidget {
           ref,
           s,
           localTunnel: localTunnels[s.key],
+          unreachable: reason != null,
         ),
       );
     }
@@ -561,6 +587,7 @@ class _ServiceList extends ConsumerWidget {
           ref,
           s,
           localTunnel: localTunnels[s.key],
+          unreachable: reason != null,
         ),
       );
     }
@@ -622,23 +649,36 @@ bool get _hostingSupported =>
 /// else's service it asks the backend to force-drop the relay key (best-effort —
 /// a still-running host re-registers). The key is hidden at once via
 /// [pendingRemovalProvider].
+///
+/// [unreachable] marks a non-local entry whose backend isn't responding — an
+/// orphaned/hollow registration lingering on the relay. The backend can't drop
+/// such a key (nothing live holds it to cancel), so we ALSO durably dismiss it
+/// via [dismissedServicesProvider], making "注销" actually remove it from this
+/// device's list and keep it gone across restarts.
 Future<void> _confirmDeregister(
   BuildContext context,
   WidgetRef ref,
   ServiceEntry s, {
   ({String name, String kind})? localTunnel,
+  bool unreachable = false,
 }) async {
   final l10n = AppLocalizations.of(context);
   final scheme = Theme.of(context).colorScheme;
   final isLocal = localTunnel != null;
+  // A non-local entry that isn't responding is orphaned: use the honest
+  // "remove from your list" wording instead of the "stop that host" wording,
+  // which doesn't apply when no reachable host exists.
+  final isOrphan = unreachable && !isLocal;
   final ok = await showDialog<bool>(
     context: context,
     builder: (_) => AlertDialog(
       key: const Key('deregister-dialog'),
-      title: Text(l10n.deregisterTitle),
+      title: Text(isOrphan ? l10n.deregisterOrphanTitle : l10n.deregisterTitle),
       content: Text(
         isLocal
             ? l10n.deregisterLocalWarning(s.name)
+            : isOrphan
+            ? l10n.deregisterOrphanWarning(s.name)
             : l10n.deregisterWarning(s.name),
       ),
       actions: [
@@ -650,7 +690,7 @@ Future<void> _confirmDeregister(
           key: const Key('deregister-confirm-btn'),
           style: FilledButton.styleFrom(backgroundColor: scheme.error),
           onPressed: () => Navigator.of(context).pop(true),
-          child: Text(l10n.deregister),
+          child: Text(isOrphan ? l10n.remove : l10n.deregister),
         ),
       ],
     ),
@@ -668,9 +708,26 @@ Future<void> _confirmDeregister(
           .read(pendingRemovalProvider.notifier)
           .update((set) => {...set, s.key});
       ref.invalidate(localServeListProvider);
+    } else if (isOrphan) {
+      // Orphaned/hollow: nothing live holds the relay key, so the backend can't
+      // drop it. Durably dismiss it so it leaves this device's list and stays
+      // gone; still best-effort ask the backend to drop it (swallow errors — the
+      // dismissal already achieved the user-visible removal).
+      await ref.read(dismissedServicesProvider.notifier).dismiss(s.key);
+      try {
+        await ref
+            .read(bridgeApiProvider)
+            .accountDeregisterService(
+              device: s.device,
+              kind: s.kind,
+              name: s.name,
+            );
+      } catch (_) {
+        // Best-effort — the entry is already hidden from the list.
+      }
     } else {
-      // Someone else's service: best-effort ask the backend to drop the relay
-      // key. Do NOT optimistically hide it — a still-running host re-registers
+      // Someone else's LIVE service: best-effort ask the backend to drop the
+      // relay key. Do NOT durably hide it — a still-running host re-registers
       // within seconds, and hiding would strand a live service off the list.
       await ref
           .read(bridgeApiProvider)
