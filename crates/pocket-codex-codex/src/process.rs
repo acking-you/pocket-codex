@@ -172,10 +172,10 @@ pub struct SpawnReport {
     /// [`SpawnOptions::proxy`]) had no effect on the live process.
     pub reused: bool,
 
-    /// Byte offset in [`CodexProcessInfo::log_file`] just before this spawn — the
-    /// point from which this run's log lines begin (the file is opened in append
-    /// mode and shared across runs). A log tailer starts here to show this
-    /// process's output without replaying earlier runs.
+    /// Byte offset in [`CodexProcessInfo::log_file`] just before this spawn —
+    /// the point from which this run's log lines begin (the file is opened
+    /// in append mode and shared across runs). A log tailer starts here to
+    /// show this process's output without replaying earlier runs.
     pub log_offset: u64,
 }
 

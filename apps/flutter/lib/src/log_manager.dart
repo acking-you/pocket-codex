@@ -38,6 +38,7 @@ class LogManager {
   final StreamController<List<LogLine>> _controller =
       StreamController<List<LogLine>>.broadcast();
   StreamSubscription<LogLine>? _sub;
+  Timer? _emitTimer;
   bool _initialized = false;
 
   /// Emits the full buffer on every change (a fresh unmodifiable snapshot).
@@ -58,10 +59,14 @@ class LogManager {
     _emit();
   }
 
-  /// Stop capturing (test teardown).
+  /// Stop capturing + reset (test teardown). Clears the buffer so a later
+  /// [initialize] doesn't replay the ring on top of retained history.
   void dispose() {
     _sub?.cancel();
     _sub = null;
+    _emitTimer?.cancel();
+    _emitTimer = null;
+    _lines.clear();
     _initialized = false;
   }
 
@@ -70,7 +75,17 @@ class LogManager {
     if (_lines.length > maxLines) {
       _lines.removeRange(0, _lines.length - maxLines);
     }
-    _emit();
+    _scheduleEmit();
+  }
+
+  // Coalesce a burst of lines into one snapshot per window: each snapshot copies
+  // the whole buffer, so emitting per line would be O(n²) under a log storm.
+  void _scheduleEmit() {
+    if (_controller.isClosed) return;
+    _emitTimer ??= Timer(const Duration(milliseconds: 100), () {
+      _emitTimer = null;
+      _emit();
+    });
   }
 
   void _emit() {
@@ -99,7 +114,9 @@ class LogManager {
     final t = _priority[normalizeLevel(threshold)];
     final e = _priority[normalizeLevel(entry)];
     if (t == null) return true;
-    if (e == null) return false;
+    // An unknown-level line is shown rather than hidden by any threshold — a
+    // viewer should never silently drop logs it can't classify.
+    if (e == null) return true;
     return e >= t;
   }
 

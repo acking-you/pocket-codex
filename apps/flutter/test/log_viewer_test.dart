@@ -79,6 +79,26 @@ void main() {
       LogManager.instance.clear();
       expect(LogManager.instance.count, 0);
     });
+
+    test('dispose clears the buffer (no duplication on re-init)', () async {
+      final fake = FakeBridgeApi();
+      LogManager.instance.initialize(fake);
+      fake.pushLog(_line('INFO', 'a'));
+      await Future<void>.delayed(Duration.zero);
+      expect(LogManager.instance.count, 1);
+      LogManager.instance.dispose();
+      expect(LogManager.instance.count, 0);
+    });
+
+    test('an unknown-level line is shown under any level threshold', () async {
+      final fake = FakeBridgeApi();
+      LogManager.instance.initialize(fake);
+      fake.pushLog(_line('NOTICE', 'odd level'));
+      await Future<void>.delayed(Duration.zero);
+      expect(LogManager.instance.filter(level: 'ERROR').map((l) => l.message), [
+        'odd level',
+      ]);
+    });
   });
 
   group('LogViewScreen', () {
@@ -100,7 +120,8 @@ void main() {
           home: const LogViewScreen(),
         ),
       );
-      await t.pump(); // flush the streamed line into the list
+      // Past the LogManager emit-coalesce window so the streamed line renders.
+      await t.pump(const Duration(milliseconds: 150));
 
       expect(find.textContaining('tunnel down'), findsOneWidget);
     });

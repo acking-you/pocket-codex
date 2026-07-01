@@ -51,9 +51,11 @@ class _LogViewScreenState extends State<LogViewScreen> {
     if (!mounted) return;
     setState(() => _filtered = next);
     if (scrollToTail && _followTail) {
-      WidgetsBinding.instance.addPostFrameCallback(
-        (_) => _scrollToBottom(jump: true),
-      );
+      // Guard `mounted`: a post-frame callback isn't cancelled on dispose, and
+      // _scrollToBottom would touch the disposed ScrollController.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _scrollToBottom(jump: true);
+      });
     }
   }
 
@@ -203,16 +205,21 @@ class _LogViewScreenState extends State<LogViewScreen> {
               hintText: l10n.logsKeywordHint,
               prefixIcon: const Icon(Icons.search),
               isDense: true,
-              suffixIcon: _keyword.isEmpty
-                  ? null
-                  : IconButton(
-                      icon: const Icon(Icons.clear),
-                      onPressed: () {
-                        _keywordCtrl.clear();
-                        _keyword = '';
-                        _applyFilters();
-                      },
-                    ),
+              // Track the live controller text, not the debounced `_keyword`, so
+              // the clear button appears/disappears immediately as you type.
+              suffixIcon: ValueListenableBuilder<TextEditingValue>(
+                valueListenable: _keywordCtrl,
+                builder: (_, value, _) => value.text.isEmpty
+                    ? const SizedBox.shrink()
+                    : IconButton(
+                        icon: const Icon(Icons.clear),
+                        onPressed: () {
+                          _keywordCtrl.clear();
+                          _keyword = '';
+                          _applyFilters();
+                        },
+                      ),
+              ),
               border: const OutlineInputBorder(),
             ),
           ),

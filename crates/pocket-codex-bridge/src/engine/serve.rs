@@ -71,9 +71,9 @@ struct LocalServe {
     /// The in-process codex app-server task (embedded mode). `None` for an
     /// external (spawned-binary) host. Aborted on stop.
     embedded: Option<JoinHandle<()>>,
-    /// Tails an external codex's log file into the in-app log viewer. `Some` for
-    /// an external host, `None` for embedded (whose logs already stream through
-    /// the in-process tracing layer). Aborted on stop.
+    /// Tails an external codex's log file into the in-app log viewer. `Some`
+    /// for an external host, `None` for embedded (whose logs already stream
+    /// through the in-process tracing layer). Aborted on stop.
     log_tail: Option<JoinHandle<()>>,
     // in-process Responses API proxy.
     api_key: String,
@@ -258,17 +258,36 @@ fn free_loopback_port() -> Result<u16> {
     Ok(l.local_addr()?.port())
 }
 
-/// Tail an external codex process's log file (its own `tracing` output) into the
-/// in-app log stream, so the viewer shows a spawned (外接) app-server's logs the
-/// same way the in-process (自带) one already does. Starts at the file's current
-/// end (this host's fresh output only), polls for appended content, and emits
+/// This host's own codex log file (each external host gets its own, so one
+/// tailer never picks up another host's — or an earlier run's — interleaved
+/// output from the shared default file).
+fn per_host_log_file(name: &str) -> Result<std::path::PathBuf> {
+    let safe: String = name
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .collect();
+    Ok(runtime::support_dir()?
+        .join("codex-logs")
+        .join(format!("codex-{safe}.log")))
+}
+
+/// Tail an external codex process's log file (its own `tracing` output) into
+/// the in-app log stream, so the viewer shows a spawned (外接) app-server's
+/// logs the same way the in-process (自带) one already does. Starts at
+/// `start_pos` (this run's first byte), polls for appended content, and emits
 /// each complete new line under a `codex(<name>)` target. Aborted on stop.
 fn tail_codex_log(log_file: std::path::PathBuf, start_pos: u64, name: String) -> JoinHandle<()> {
     use tokio::io::{AsyncReadExt, AsyncSeekExt};
+    // Flush a runaway partial line so a newline-less blob can't grow `carry`
+    // without bound.
+    const CARRY_CAP: usize = 64 * 1024;
     let target = format!("codex({name})");
     runtime::runtime().spawn(async move {
         let mut pos = start_pos;
-        let mut carry = String::new();
+        // Bytes, not a String: a multi-byte UTF-8 char split across a read
+        // boundary must be held intact until its line completes, then decoded —
+        // decoding the partial chunk would corrupt it into replacement chars.
+        let mut carry: Vec<u8> = Vec::new();
         loop {
             tokio::time::sleep(Duration::from_millis(500)).await;
             let Ok(meta) = tokio::fs::metadata(&log_file).await else {
@@ -276,8 +295,9 @@ fn tail_codex_log(log_file: std::path::PathBuf, start_pos: u64, name: String) ->
             };
             let len = meta.len();
             if len < pos {
-                // Truncated / rotated — start over from the top.
-                pos = 0;
+                // Truncated / rotated — resync to the new end (don't replay the
+                // whole file).
+                pos = len;
                 carry.clear();
             }
             if len == pos {
@@ -294,14 +314,25 @@ fn tail_codex_log(log_file: std::path::PathBuf, start_pos: u64, name: String) ->
                 continue;
             }
             pos = len;
-            carry.push_str(&String::from_utf8_lossy(&buf));
-            // Emit complete lines; hold any trailing partial line for next round.
-            while let Some(nl) = carry.find('\n') {
-                let line: String = carry.drain(..=nl).collect();
-                let line = line.trim_end();
-                if !line.is_empty() {
-                    logging::push_external(&target, line);
+            carry.extend_from_slice(&buf);
+            // Emit complete lines; keep any trailing partial (possibly mid-char)
+            // bytes for next round. `from_utf8_lossy` runs on a whole line, so no
+            // char is ever split.
+            while let Some(nl) = carry.iter().position(|&b| b == b'\n') {
+                let line: Vec<u8> = carry.drain(..=nl).collect();
+                let text = String::from_utf8_lossy(&line);
+                let text = text.trim_end();
+                if !text.is_empty() {
+                    logging::push_external(&target, text);
                 }
+            }
+            if carry.len() > CARRY_CAP {
+                let text = String::from_utf8_lossy(&carry);
+                let text = text.trim_end();
+                if !text.is_empty() {
+                    logging::push_external(&target, text);
+                }
+                carry.clear();
             }
         }
     })
@@ -471,8 +502,12 @@ pub fn serve_start(
     // Bring up codex serving 127.0.0.1:<port>: in-process (embedded) or as a
     // spawned child binary. Both yield the local app-server socket, a pid (our
     // own for embedded), the embedded task handle (`None` for external), and a
-    // watchdog keeping codex alive. Runs on the flutter_rust_bridge worker
-    // thread, so the blocking port poll is fine.
+    // watchdog keeping codex alive, and (external only) a log-file tailer. Runs
+    // on the flutter_rust_bridge worker thread, so the blocking port poll is fine.
+    #[allow(
+        clippy::type_complexity,
+        reason = "a local bring-up tuple immediately destructured into named bindings"
+    )]
     let (app_local, pid, embedded_task, watchdog, log_tail): (
         SocketAddr,
         u32,
@@ -513,7 +548,9 @@ pub fn serve_start(
                 port,
             },
             extra_args: Vec::new(),
-            log_file: None,
+            // A per-host log file so this host's tailer captures only its own
+            // codex's output, never another host's from the shared default file.
+            log_file: Some(per_host_log_file(&name)?),
             proxy: proxy.clone(),
         };
         let report = spawn(spawn_opts.clone()).context("spawning codex app-server")?;
@@ -538,7 +575,8 @@ pub fn serve_start(
             runtime::runtime().spawn(health_watchdog(app_local.to_string(), watchdog_opts));
         // Surface the spawned codex's own logs in the in-app viewer by tailing
         // the file its stdout/stderr are redirected to, from this run's offset.
-        let log_tail = tail_codex_log(report.info.log_file.clone(), report.log_offset, name.clone());
+        let log_tail =
+            tail_codex_log(report.info.log_file.clone(), report.log_offset, name.clone());
         (app_local, report.info.pid, None, watchdog, Some(log_tail))
     };
 

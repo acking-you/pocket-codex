@@ -3,8 +3,9 @@
 //! Installs a `tracing` layer as the process-global subscriber. Every event is
 //! formatted into a [`LogLine`], kept in a bounded ring buffer (so a viewer
 //! opened later still sees recent history), and broadcast to any live
-//! subscribers. The bridge exposes this to Dart as a snapshot + a live stream
-//! (see `api::bridge::log_snapshot` / `log_events`).
+//! subscribers. The bridge exposes this to Dart as one stream (see
+//! `api::bridge::log_events`) that replays the retained history then streams
+//! live.
 //!
 //! codex, when hosted in-process, calls `tracing_subscriber` `try_init()` too —
 //! but ours runs first (from `init_bridge`), so its call is a no-op and codex's
@@ -77,10 +78,10 @@ pub fn subscribe() -> Option<broadcast::Receiver<LogLine>> {
     CHANNEL.get().map(broadcast::Sender::subscribe)
 }
 
-/// Feed a log line from an EXTERNAL source into the same stream — used to tail a
-/// spawned (外接) codex process's own log file, so the viewer shows its logs the
-/// way the in-process (自带) one already does. The level is a best-effort parse
-/// of the raw line (for coloring); the raw line itself is the message.
+/// Feed a log line from an EXTERNAL source into the same stream — used to tail
+/// a spawned (外接) codex process's own log file, so the viewer shows its logs
+/// the way the in-process (自带) one already does. The level is a best-effort
+/// parse of the raw line (for coloring); the raw line itself is the message.
 pub fn push_external(target: &str, raw: &str) {
     emit(LogLine {
         level: parse_level(raw).to_string(),
@@ -90,9 +91,9 @@ pub fn push_external(target: &str, raw: &str) {
     });
 }
 
-/// Best-effort level from a formatted log line (codex writes `<ts> LEVEL target:
-/// msg`), scanning the first few tokens so a later "error" in the message body
-/// doesn't mis-color the line.
+/// Best-effort level from a formatted log line (codex writes `<ts> LEVEL
+/// target: msg`), scanning the first few tokens so a later "error" in the
+/// message body doesn't mis-color the line.
 fn parse_level(raw: &str) -> &'static str {
     for tok in raw.split_whitespace().take(4) {
         match tok
@@ -105,7 +106,7 @@ fn parse_level(raw: &str) -> &'static str {
             "INFO" => return "INFO",
             "DEBUG" => return "DEBUG",
             "TRACE" => return "TRACE",
-            _ => {}
+            _ => {},
         }
     }
     "INFO"
