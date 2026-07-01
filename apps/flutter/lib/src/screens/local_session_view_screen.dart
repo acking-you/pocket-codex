@@ -71,6 +71,17 @@ class _LocalSessionViewState extends ConsumerState<LocalSessionViewScreen> {
   // image count changes (a live writer appending to the same message id).
   final Map<String, ({int count, List<ResolvedImage> images})> _imageCache = {};
 
+  @override
+  void didUpdateWidget(LocalSessionViewScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Ids are line indexes (`t0`, `t1`, …) — they collide ACROSS threads, so a
+    // reused State showing a different thread must drop the previous thread's
+    // cache or its images would render under the new thread's ids.
+    if (oldWidget.threadId != widget.threadId) {
+      _imageCache.clear();
+    }
+  }
+
   List<ResolvedImage> _imagesFor(ThreadItem item) {
     if (item.images.isEmpty) return const [];
     final cached = _imageCache[item.id];
