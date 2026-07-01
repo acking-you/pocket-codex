@@ -1286,9 +1286,15 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
 
   Future<void> _decide(AppEvent prompt, String decision) async {
     setState(() => _approvals.remove(prompt));
-    await ref
-        .read(bridgeApiProvider)
-        .appRespondApproval(widget.serviceKey, prompt.requestId!, decision);
+    try {
+      await ref
+          .read(bridgeApiProvider)
+          .appRespondApproval(widget.serviceKey, prompt.requestId!, decision);
+    } catch (e) {
+      // The host may have dropped between the prompt and the answer; swallow so a
+      // dead connection can't surface an uncaught async error.
+      debugPrint('appRespondApproval failed: $e');
+    }
   }
 
   /// Answer a `request_user_input` elicitation. `answers` maps each question id
@@ -1299,13 +1305,19 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
     Map<String, List<String>> answers,
   ) async {
     setState(() => _approvals.remove(prompt));
-    await ref
-        .read(bridgeApiProvider)
-        .appRespondUserInput(
-          widget.serviceKey,
-          prompt.requestId!,
-          jsonEncode(answers),
-        );
+    try {
+      await ref
+          .read(bridgeApiProvider)
+          .appRespondUserInput(
+            widget.serviceKey,
+            prompt.requestId!,
+            jsonEncode(answers),
+          );
+    } catch (e) {
+      // A dropped host between the elicitation and the answer must not surface an
+      // uncaught async error.
+      debugPrint('appRespondUserInput failed: $e');
+    }
   }
 
   /// Scroll to the latest message. Auto-follow only when already pinned to the

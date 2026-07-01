@@ -514,8 +514,19 @@ pub fn api_probe(service_key: String) -> Result<bool> {
 /// The Dart side receives one [`AppEventDto`] per notification until the
 /// session is disconnected.
 pub fn app_events(service_key: String, sink: StreamSink<AppEventDto>) -> Result<()> {
-    let mut rx = app_session::subscribe_events(&service_key)?;
+    // Subscribe *inside* the task and always return `Ok` at setup. If the service
+    // isn't connected, the task returns immediately and dropping `sink` closes the
+    // Dart stream (`onDone`), which the UI's reconnect path already handles.
+    // Returning the error from here instead would be worse: flutter_rust_bridge
+    // delivers a stream function's setup `Err` on an *unawaited* Future, so it
+    // surfaces as an uncaught async error on the Dart side — fatal on desktop
+    // (no global handler) — rather than a catchable stream `onError`/`onDone`.
     runtime::runtime().spawn(async move {
+        let mut rx = match app_session::subscribe_events(&service_key) {
+            Ok(rx) => rx,
+            // Not connected: close the stream so Dart sees `onDone`.
+            Err(_) => return,
+        };
         loop {
             match rx.recv().await {
                 Ok(ev) => {
