@@ -85,6 +85,7 @@ void main() {
       serviceKey: key,
       threadId: threadId,
       text: 'Reply with exactly one word: remote-ui-ok',
+      images: const [],
       collaborationMode: null,
     );
 

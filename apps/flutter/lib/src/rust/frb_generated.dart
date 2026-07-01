@@ -230,6 +230,7 @@ abstract class RustLibApi extends BaseApi {
     required String serviceKey,
     required String threadId,
     required String text,
+    required List<String> images,
     String? model,
     String? approvalPolicy,
     String? sandbox,
@@ -1519,6 +1520,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     required String serviceKey,
     required String threadId,
     required String text,
+    required List<String> images,
     String? model,
     String? approvalPolicy,
     String? sandbox,
@@ -1532,6 +1534,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_String(serviceKey, serializer);
           sse_encode_String(threadId, serializer);
           sse_encode_String(text, serializer);
+          sse_encode_list_String(images, serializer);
           sse_encode_opt_String(model, serializer);
           sse_encode_opt_String(approvalPolicy, serializer);
           sse_encode_opt_String(sandbox, serializer);
@@ -1553,6 +1556,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           serviceKey,
           threadId,
           text,
+          images,
           model,
           approvalPolicy,
           sandbox,
@@ -1570,6 +1574,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       "serviceKey",
       "threadId",
       "text",
+      "images",
       "model",
       "approvalPolicy",
       "sandbox",
@@ -2234,8 +2239,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   AppEventDto dco_decode_app_event_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 8)
-      throw Exception('unexpected arr length: expect 8 but see ${arr.length}');
+    if (arr.length != 9)
+      throw Exception('unexpected arr length: expect 9 but see ${arr.length}');
     return AppEventDto(
       kind: dco_decode_String(arr[0]),
       threadId: dco_decode_opt_String(arr[1]),
@@ -2243,8 +2248,9 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       itemType: dco_decode_opt_String(arr[3]),
       title: dco_decode_opt_String(arr[4]),
       text: dco_decode_opt_String(arr[5]),
-      requestId: dco_decode_opt_String(arr[6]),
-      raw: dco_decode_String(arr[7]),
+      images: dco_decode_list_String(arr[6]),
+      requestId: dco_decode_opt_String(arr[7]),
+      raw: dco_decode_String(arr[8]),
     );
   }
 
@@ -2617,13 +2623,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ThreadItemDto dco_decode_thread_item_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 4)
-      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
+    if (arr.length != 5)
+      throw Exception('unexpected arr length: expect 5 but see ${arr.length}');
     return ThreadItemDto(
       id: dco_decode_String(arr[0]),
       itemType: dco_decode_String(arr[1]),
       title: dco_decode_String(arr[2]),
       text: dco_decode_String(arr[3]),
+      images: dco_decode_list_String(arr[4]),
     );
   }
 
@@ -2760,6 +2767,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_itemType = sse_decode_opt_String(deserializer);
     var var_title = sse_decode_opt_String(deserializer);
     var var_text = sse_decode_opt_String(deserializer);
+    var var_images = sse_decode_list_String(deserializer);
     var var_requestId = sse_decode_opt_String(deserializer);
     var var_raw = sse_decode_String(deserializer);
     return AppEventDto(
@@ -2769,6 +2777,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       itemType: var_itemType,
       title: var_title,
       text: var_text,
+      images: var_images,
       requestId: var_requestId,
       raw: var_raw,
     );
@@ -3302,11 +3311,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_itemType = sse_decode_String(deserializer);
     var var_title = sse_decode_String(deserializer);
     var var_text = sse_decode_String(deserializer);
+    var var_images = sse_decode_list_String(deserializer);
     return ThreadItemDto(
       id: var_id,
       itemType: var_itemType,
       title: var_title,
       text: var_text,
+      images: var_images,
     );
   }
 
@@ -3467,6 +3478,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_opt_String(self.itemType, serializer);
     sse_encode_opt_String(self.title, serializer);
     sse_encode_opt_String(self.text, serializer);
+    sse_encode_list_String(self.images, serializer);
     sse_encode_opt_String(self.requestId, serializer);
     sse_encode_String(self.raw, serializer);
   }
@@ -3893,6 +3905,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_String(self.itemType, serializer);
     sse_encode_String(self.title, serializer);
     sse_encode_String(self.text, serializer);
+    sse_encode_list_String(self.images, serializer);
   }
 
   @protected

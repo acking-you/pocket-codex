@@ -449,6 +449,9 @@ class FakeBridgeApi implements BridgeApi {
   /// Last prompt text passed to [appTurnStart].
   String? lastTurnText;
 
+  /// Last image data URLs passed to [appTurnStart].
+  List<String> lastTurnImages = const [];
+
   /// Last collaboration mode passed to [appTurnStart] ("plan"/"default"/null).
   String? lastCollaborationMode;
 
@@ -470,6 +473,7 @@ class FakeBridgeApi implements BridgeApi {
     String serviceKey,
     String threadId,
     String text, {
+    List<String> images = const [],
     String? model,
     String? approvalPolicy,
     String? sandbox,
@@ -479,6 +483,7 @@ class FakeBridgeApi implements BridgeApi {
     turnStartCount++;
     lastTurnModel = model;
     lastTurnText = text;
+    lastTurnImages = images;
     lastApproval = approvalPolicy;
     lastSandbox = sandbox;
     lastCollaborationMode = collaborationMode;

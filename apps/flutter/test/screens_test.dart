@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
@@ -9,11 +10,15 @@ import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
+import 'package:image/image.dart' as img;
+import 'package:image_picker_platform_interface/image_picker_platform_interface.dart';
+import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
 import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/screens/account_onboarding_screen.dart';
 import 'package:pocket_codex/src/screens/api_service_screen.dart';
+import 'package:pocket_codex/src/image_attachments.dart';
 import 'package:pocket_codex/src/screens/app_session_screen.dart';
 import 'package:pocket_codex/src/screens/app_service_screen.dart';
 import 'package:pocket_codex/src/screens/services_screen.dart';
@@ -43,6 +48,35 @@ class _FakeWebAuthenticator implements WebAuthenticator {
     return result;
   }
 }
+
+/// Fake image picker: returns canned [XFile]s instead of driving the real
+/// platform-channel picker (which can't run headless).
+class _FakeImagePicker extends ImagePickerPlatform
+    with MockPlatformInterfaceMixin {
+  /// Files the next pick returns; empty = user cancelled.
+  List<XFile> files = [];
+
+  @override
+  Future<List<XFile>> getMultiImageWithOptions({
+    MultiImagePickerOptions options = const MultiImagePickerOptions(),
+  }) async => files;
+
+  @override
+  Future<XFile?> getImageFromSource({
+    required ImageSource source,
+    ImagePickerOptions options = const ImagePickerOptions(),
+  }) async => files.isEmpty ? null : files.first;
+}
+
+/// A tiny in-memory PNG for attachment fixtures.
+Uint8List _tinyPng() {
+  final im = img.Image(width: 6, height: 4);
+  img.fill(im, color: img.ColorRgb8(200, 40, 40));
+  return img.encodePng(im);
+}
+
+/// The same PNG as the `data:` URL history/echo would carry.
+String _tinyPngDataUrl() => 'data:image/png;base64,${base64Encode(_tinyPng())}';
 
 /// Mount [child] with a fake bridge and localizations. Defaults to the
 /// Chinese locale so the existing zh assertions hold; pass [locale] to test
@@ -952,6 +986,177 @@ void main() {
       find.textContaining('echo: hello', findRichText: true),
       findsOneWidget,
     );
+  });
+
+  group('image attachments', () {
+    late _FakeImagePicker picker;
+    setUp(() {
+      // compute() spawns a real isolate whose completion never lands under the
+      // fake test clock — run the processing pipeline inline instead.
+      processImageImpl = (bytes) async => processImageBytes(bytes);
+      picker = _FakeImagePicker();
+      ImagePickerPlatform.instance = picker;
+    });
+    tearDown(() {
+      processImageImpl = (bytes) => compute(processImageBytes, bytes);
+    });
+
+    Future<FakeBridgeApi> pumpSession(
+      WidgetTester t, {
+      String? threadId,
+    }) async {
+      final api = FakeBridgeApi(
+        config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+      );
+      await api.appConnect('pcx:lb7666:app:default', 28080);
+      // Narrow so the sessions pane is a hidden drawer (single TextField).
+      t.view.devicePixelRatio = 1.0;
+      t.view.physicalSize = const Size(400, 800);
+      addTearDown(t.view.reset);
+      await t.pumpWidget(
+        _host(
+          AppSessionScreen(
+            serviceKey: 'pcx:lb7666:app:default',
+            threadId: threadId,
+          ),
+          api,
+        ),
+      );
+      await t.pumpAndSettle();
+      return api;
+    }
+
+    testWidgets('attach shows a preview chip; send carries data URLs and '
+        'renders bubble thumbnails', (t) async {
+      final api = await pumpSession(t);
+      picker.files = [XFile.fromData(_tinyPng(), name: 'shot.png')];
+
+      await t.tap(find.byKey(const Key('attach-btn')));
+      await t.pumpAndSettle();
+      expect(find.byKey(const Key('attachment-0')), findsOneWidget);
+
+      await t.enterText(find.byType(TextField), 'what is this?');
+      await t.pump();
+      await t.tap(find.byKey(const Key('send-btn')));
+      await t.pumpAndSettle();
+
+      // The turn carried the processed image as a data URL…
+      expect(api.lastTurnText, 'what is this?');
+      expect(api.lastTurnImages, hasLength(1));
+      expect(api.lastTurnImages.single, startsWith('data:image/png;base64,'));
+      // …the optimistic bubble shows the thumbnail, and the composer strip
+      // has been cleared for the next message.
+      expect(find.byKey(const Key('msg-image-0')), findsOneWidget);
+      expect(find.byKey(const Key('attachment-0')), findsNothing);
+    });
+
+    testWidgets('an image-only message can be sent (no text)', (t) async {
+      final api = await pumpSession(t);
+      picker.files = [XFile.fromData(_tinyPng(), name: 'shot.png')];
+
+      await t.tap(find.byKey(const Key('attach-btn')));
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(const Key('send-btn')));
+      await t.pumpAndSettle();
+
+      expect(api.lastTurnText, '');
+      expect(api.lastTurnImages, hasLength(1));
+      expect(find.byKey(const Key('msg-image-0')), findsOneWidget);
+    });
+
+    testWidgets('removing the pending attachment disables an image-only send', (
+      t,
+    ) async {
+      await pumpSession(t);
+      picker.files = [XFile.fromData(_tinyPng(), name: 'shot.png')];
+
+      await t.tap(find.byKey(const Key('attach-btn')));
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(const Key('attachment-remove-0')));
+      await t.pumpAndSettle();
+
+      expect(find.byKey(const Key('attachment-0')), findsNothing);
+      final btn = t.widget<IconButton>(find.byKey(const Key('send-btn')));
+      expect(btn.onPressed, isNull, reason: 'nothing left to send');
+    });
+
+    testWidgets('history restores image thumbnails and tap opens the '
+        'fullscreen viewer', (t) async {
+      final api = FakeBridgeApi(
+        config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+      );
+      await api.appConnect('pcx:lb7666:app:default', 28080);
+      api.readResult = ThreadHistory(
+        items: [
+          ThreadItem(
+            id: 'u1',
+            itemType: 'userMessage',
+            title: '',
+            text: 'look at this',
+            images: [_tinyPngDataUrl()],
+          ),
+        ],
+        running: false,
+      );
+      t.view.devicePixelRatio = 1.0;
+      t.view.physicalSize = const Size(400, 800);
+      addTearDown(t.view.reset);
+      await t.pumpWidget(
+        _host(
+          const AppSessionScreen(
+            serviceKey: 'pcx:lb7666:app:default',
+            threadId: 'thread-7',
+          ),
+          api,
+        ),
+      );
+      await t.pumpAndSettle();
+
+      expect(find.text('look at this'), findsOneWidget);
+      expect(find.byKey(const Key('msg-image-0')), findsOneWidget);
+
+      await t.tap(find.byKey(const Key('msg-image-0')));
+      await t.pumpAndSettle();
+      expect(find.byKey(const Key('image-viewer-0')), findsOneWidget);
+    });
+
+    testWidgets('a host-only image (localImage path) renders a filename chip', (
+      t,
+    ) async {
+      final api = FakeBridgeApi(
+        config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+      );
+      await api.appConnect('pcx:lb7666:app:default', 28080);
+      api.readResult = const ThreadHistory(
+        items: [
+          ThreadItem(
+            id: 'u1',
+            itemType: 'userMessage',
+            title: '',
+            text: '',
+            images: ['/home/user/screenshots/error.png'],
+          ),
+        ],
+        running: false,
+      );
+      t.view.devicePixelRatio = 1.0;
+      t.view.physicalSize = const Size(400, 800);
+      addTearDown(t.view.reset);
+      await t.pumpWidget(
+        _host(
+          const AppSessionScreen(
+            serviceKey: 'pcx:lb7666:app:default',
+            threadId: 'thread-7',
+          ),
+          api,
+        ),
+      );
+      await t.pumpAndSettle();
+
+      // No pixels crossed the wire — an honest basename chip instead.
+      expect(find.text('error.png'), findsOneWidget);
+      expect(find.byKey(const Key('msg-image-0')), findsNothing);
+    });
   });
 
   testWidgets('Messages are copyable (copy button puts text on clipboard)', (

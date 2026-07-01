@@ -11,7 +11,7 @@ name: pocket_codex
 description: "Pocket-Codex Flutter front-end. Drives codex app-server through flutter_rust_bridge."
 publish_to: 'none'
 
-version: 0.0.8+8
+version: 0.0.9+9
 
 # Flutter SDK is locked at the project level via FVM (`.fvmrc`) and at
 # the language level via `environment.flutter`. CI uses
@@ -80,6 +80,16 @@ dependencies:
   # (desktop only). Must mirror pubspec.yaml or the desktop release build can't
   # resolve package:file_selector.
   file_selector: ^1.1.0
+  # Message image attachments: pick from the photo library on Android/iOS
+  # (PHPicker / system Photo Picker — no runtime permission needed) and a
+  # file dialog on desktop (delegates to file_selector). Camera is not used,
+  # so no camera permission strings are required.
+  image_picker: ^1.2.0
+  # Decode → EXIF-bake → downscale → JPEG-re-encode picked images in a
+  # background isolate before sending, so a 12 MP photo doesn't ship
+  # multi-MB base64 through the relay tunnel and the model context. Pure
+  # Dart. (Also used by test/gen_icon_test.dart for icon generation.)
+  image: ^4.9.1
 
 dev_dependencies:
   flutter_test:
@@ -87,13 +97,17 @@ dev_dependencies:
   flutter_lints: ^6.0.0
   integration_test:
     sdk: flutter
+  # Widget tests swap ImagePickerPlatform.instance for a fake (the real picker
+  # is a platform channel that can't run headless). Both are already in the
+  # dependency graph via image_picker; declared so tests may import them.
+  image_picker_platform_interface: ^2.11.0
+  plugin_platform_interface: ^2.1.8
   flutter_launcher_icons: ^0.14.2
   flutter_native_splash: ^2.4.3
   # Mirrors pubspec.yaml: test/gen_icon_test.dart rasterises the brand/tray SVGs
   # (flutter_svg) and encodes the Windows tray .ico (image). Kept in sync so the
   # icon-regen test compiles when this desktop manifest is the active pubspec.
   flutter_svg: ^2.0.10
-  image: ^4.9.1
 
 flutter:
   uses-material-design: true

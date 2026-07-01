@@ -303,6 +303,7 @@ class AppEvent {
     this.itemType,
     this.title,
     this.text,
+    this.images = const [],
     this.requestId,
     required this.raw,
   });
@@ -327,6 +328,11 @@ class AppEvent {
 
   /// Text payload (a streaming delta or an item's body/detail).
   final String? text;
+
+  /// Image URLs attached to a `userMessage` item: `data:image/...` URLs
+  /// render inline; a host-local path renders as a filename chip. Empty for
+  /// every other event.
+  final List<String> images;
 
   /// Token to answer a server approval request via [BridgeApi.appRespondApproval].
   final String? requestId;
@@ -460,6 +466,7 @@ class ThreadItem {
     required this.itemType,
     required this.title,
     required this.text,
+    this.images = const [],
   });
 
   /// Item id.
@@ -474,6 +481,11 @@ class ThreadItem {
 
   /// Body / detail text.
   final String text;
+
+  /// Image URLs attached to a `userMessage`: `data:image/...` URLs render
+  /// inline; a host-local path renders as a filename chip. Empty for every
+  /// other item kind.
+  final List<String> images;
 }
 
 /// A process holding a session's rollout file open — a would-be force-takeover
@@ -841,7 +853,10 @@ abstract interface class BridgeApi {
   /// running, so re-opening an in-flight thread restores its live state.
   Future<ThreadHistory> appThreadRead(String serviceKey, String threadId);
 
-  /// Send a user message, starting a model turn. [model] / [approvalPolicy] /
+  /// Send a user message (text and/or attached images), starting a model
+  /// turn. [images] are `data:image/...;base64,...` URLs — the wire form that
+  /// reaches BOTH local and relay-tunneled remote app-servers; [text] may be
+  /// empty when at least one image is attached. [model] / [approvalPolicy] /
   /// [sandbox] are optional per-turn overrides (apply to this and subsequent
   /// turns) so model and permission can change mid-conversation.
   /// [collaborationMode] ("plan" / "default", or null to leave unchanged) is
@@ -852,6 +867,7 @@ abstract interface class BridgeApi {
     String serviceKey,
     String threadId,
     String text, {
+    List<String> images = const [],
     String? model,
     String? approvalPolicy,
     String? sandbox,
