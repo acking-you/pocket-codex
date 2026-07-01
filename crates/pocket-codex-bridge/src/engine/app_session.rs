@@ -264,10 +264,20 @@ fn establish(service_key: String, local_addr: &str) -> Result<()> {
     Ok(())
 }
 
+/// Stable per-turn id for the synthesized `plan` item. The evolving plan
+/// streams as a `turn/plan/updated` notification (not a thread item), so it's
+/// keyed off the turn. Shared by `map_event` (live) and `buffer_item` (resume)
+/// so the two reconcile by id — no duplicate plan card after a re-open.
+fn plan_item_id(params: &Value) -> String {
+    let turn_id = params.get("turnId").and_then(Value::as_str).unwrap_or("");
+    format!("plan-{turn_id}")
+}
+
 /// Buffer a full item snapshot from an `item/*` notification into the
 /// per-thread transcript, upserted by id in stream order. Deltas (no
 /// `params.item`) are skipped — they are transient and re-derived from the
-/// eventual completed item.
+/// eventual completed item. The `turn/plan/updated` notification is
+/// special-cased (it has no `params.item`) so the plan card survives resume.
 fn buffer_item(transcript: &Mutex<HashMap<String, Vec<ThreadItem>>>, inbound: &Inbound) {
     let Some(params) = inbound.params.as_ref() else {
         return;
@@ -275,8 +285,24 @@ fn buffer_item(transcript: &Mutex<HashMap<String, Vec<ThreadItem>>>, inbound: &I
     let Some(thread_id) = params.get("threadId").and_then(Value::as_str) else {
         return;
     };
-    let Some(parsed) = params.get("item").and_then(parse_item) else {
-        return;
+    // The evolving plan streams as a `turn/plan/updated` notification
+    // (`params.plan`, no `params.item`), which the generic item path below
+    // skips — so without this a resumed thread loses its plan card and the
+    // proposal message re-reads as a misplaced plan. Buffer the same singleton
+    // `plan` item `map_event` builds (stable id per turn) so `thread_read`
+    // restores it at the tail, where it lived.
+    let parsed = if inbound.method == "turn/plan/updated" {
+        ThreadItem {
+            id: plan_item_id(params),
+            item_type: "plan".to_string(),
+            title: String::new(),
+            text: encode_plan(params),
+        }
+    } else {
+        let Some(parsed) = params.get("item").and_then(parse_item) else {
+            return;
+        };
+        parsed
     };
     if parsed.id.is_empty() {
         return;
@@ -1166,14 +1192,13 @@ fn map_event(inbound: Inbound) -> AppEvent {
     // Synthesize a per-turn singleton `plan` item (stable id keyed on the turn)
     // so the plan card + implement-prompt render it exactly like thread history.
     if inbound.method == "turn/plan/updated" {
-        let turn_id = params.get("turnId").and_then(Value::as_str).unwrap_or("");
         return AppEvent {
             kind: inbound.method.clone(),
             thread_id: params
                 .get("threadId")
                 .and_then(Value::as_str)
                 .map(str::to_string),
-            item_id: Some(format!("plan-{turn_id}")),
+            item_id: Some(plan_item_id(&params)),
             item_type: Some("plan".to_string()),
             title: None,
             text: Some(encode_plan(&params)),
@@ -1467,6 +1492,40 @@ mod tests {
         assert_eq!(ev.thread_id.as_deref(), Some("t1"));
         assert_eq!(ev.item_type.as_deref(), Some("agentMessage"));
         assert_eq!(ev.text.as_deref(), Some("hel"));
+    }
+
+    #[test]
+    fn buffers_synthesized_plan_item_for_resume() {
+        // A `turn/plan/updated` notification (params.plan, no params.item) must be
+        // buffered as a `plan` item so a resumed thread restores the plan card at
+        // the tail. Otherwise the card is lost on re-open and the proposal message
+        // re-reads as a misplaced plan (the plan-jumps-earlier-on-switch bug).
+        let transcript: Mutex<HashMap<String, Vec<ThreadItem>>> = Mutex::new(HashMap::new());
+        let plan = |status: &str| Inbound {
+            method: "turn/plan/updated".into(),
+            params: Some(json!({
+                "threadId": "t1",
+                "turnId": "turn-9",
+                "plan": [{"step": "do the thing", "status": status}],
+            })),
+            request_id: None,
+        };
+        buffer_item(&transcript, &plan("pending"));
+        // A later snapshot of the same turn's plan upserts in place — one card.
+        buffer_item(&transcript, &plan("completed"));
+        {
+            let items = transcript.lock().unwrap();
+            let t1 = items.get("t1").expect("plan buffered under its thread");
+            assert_eq!(t1.len(), 1, "plan updates upsert into a single item");
+            assert_eq!(t1[0].item_type, "plan");
+            assert_eq!(t1[0].id, "plan-turn-9");
+            assert!(t1[0].text.contains("[x] do the thing"), "latest snapshot wins");
+        }
+        // The buffered id matches what map_event synthesizes live, so a resumed
+        // thread reconciles the two by id (no duplicate plan card).
+        let ev = map_event(plan("completed"));
+        assert_eq!(ev.item_id.as_deref(), Some("plan-turn-9"));
+        assert_eq!(ev.item_type.as_deref(), Some("plan"));
     }
 
     #[test]
