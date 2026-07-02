@@ -229,7 +229,7 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get sandboxHelperUnavailable =>
-      '此自带会话无法启动命令沙箱,因此智能体在这里无法执行命令或读取文件。请切换到「完全访问」模式(不使用沙箱运行),或连接到外部/远程 codex 主机。';
+      '此自带会话无法启动命令沙箱,因此智能体在这里无法执行命令或读取文件。请切换到「完全放行」模式(不使用沙箱运行),或连接到外部/远程 codex 主机。';
 
   @override
   String get disconnect => '断开连接';

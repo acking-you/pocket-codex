@@ -29,18 +29,27 @@ String friendlyError(Object error) {
 }
 
 /// True when a turn-failure message is the Windows sandbox helper failing to
-/// start — an embedded (自带) host that can't spawn `codex-windows-sandbox-setup`
-/// / `codex-command-runner` for a sandboxed turn. The UI rewrites this into
-/// actionable guidance (switch to no-sandbox Full mode, or use an external
-/// host) instead of showing the raw "windows sandbox: spawn setup refresh".
+/// LAUNCH — an embedded (自带) host that can't spawn its bundled
+/// `codex-windows-sandbox-setup` / `codex-command-runner` exes for a sandboxed
+/// turn. The UI rewrites this into actionable guidance (switch to no-sandbox
+/// Full mode, or use an external host) instead of the raw
+/// "windows sandbox: spawn setup refresh".
+///
+/// Deliberately narrow: it matches only the *cannot-launch-the-exe* signal, not
+/// any message mentioning "setup". A properly-installed (usually external) host
+/// can fail a sandboxed turn with a genuinely different, still-actionable
+/// remedy — e.g. "Windows sandbox setup is missing or out of date; rerun the
+/// sandbox setup with elevation" or a setup-marker version mismatch — and those
+/// must reach the user verbatim rather than be replaced with "switch to Full".
 bool isSandboxHelperFailure(String message) {
   final lower = message.toLowerCase();
   final mentionsWindowsSandbox =
       lower.contains('windows sandbox') || lower.contains('windows-sandbox');
-  final looksLikeSpawnFailure =
-      lower.contains('setup') ||
-      lower.contains('spawn') ||
-      lower.contains('command-runner') ||
-      lower.contains('program not found');
-  return mentionsWindowsSandbox && looksLikeSpawnFailure;
+  // The exe couldn't be launched at all — the embedded "no bundled helpers"
+  // case. `spawn setup` is the exact `.context()` on the failing spawn.
+  final cannotLaunchHelper =
+      lower.contains('program not found') ||
+      lower.contains('failed to spawn') ||
+      lower.contains('spawn setup');
+  return mentionsWindowsSandbox && cannotLaunchHelper;
 }
