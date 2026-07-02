@@ -1,0 +1,34 @@
+PODS:
+  - desktop_webview_window (0.0.1):
+    - FlutterMacOS
+  - flutter_web_auth_2 (3.0.0):
+    - FlutterMacOS
+  - FlutterMacOS (1.0.0)
+  - pocket_codex_bridge (0.0.1):
+    - FlutterMacOS
+
+DEPENDENCIES:
+  - desktop_webview_window (from `Flutter/ephemeral/.symlinks/plugins/desktop_webview_window/macos`)
+  - flutter_web_auth_2 (from `Flutter/ephemeral/.symlinks/plugins/flutter_web_auth_2/macos`)
+  - FlutterMacOS (from `Flutter/ephemeral`)
+  - pocket_codex_bridge (from `Flutter/ephemeral/.symlinks/plugins/pocket_codex_bridge/macos`)
+
+EXTERNAL SOURCES:
+  desktop_webview_window:
+    :path: Flutter/ephemeral/.symlinks/plugins/desktop_webview_window/macos
+  flutter_web_auth_2:
+    :path: Flutter/ephemeral/.symlinks/plugins/flutter_web_auth_2/macos
+  FlutterMacOS:
+    :path: Flutter/ephemeral
+  pocket_codex_bridge:
+    :path: Flutter/ephemeral/.symlinks/plugins/pocket_codex_bridge/macos
+
+SPEC CHECKSUMS:
+  desktop_webview_window: 7e37af677d6d19294cb433d9b1d878ef78dffa4d
+  flutter_web_auth_2: 62b08da29f15a20fa63f144234622a1488d45b65
+  FlutterMacOS: d0db08ddef1a9af05a5ec4b724367152bb0500b1
+  pocket_codex_bridge: d6d9c490ad6f4a6bdeefc82ae6ad56c79c4e7e3e
+
+PODFILE CHECKSUM: 54d867c82ac51cbd61b565781b9fada492027009
+
+COCOAPODS: 1.16.2

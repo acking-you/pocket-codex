@@ -29,3 +29,8 @@ pb-mapper = { path = "../../deps/pb-mapper" }
 # providers from `uni-stream`. We import the same path-pinned fork the
 # workspace [patch] table redirects to.
 uni-stream = { path = "../../deps/uni-stream" }
+
+[dev-dependencies]
+# Lets the connect-timeout test build a loopback listener with a tiny,
+# saturated backlog so a TCP connect hangs without real network access.
+socket2 = "0.6"

@@ -202,11 +202,42 @@ mod tests {
         assert!(set_msg_header_key(Some("short")).is_err());
     }
 
+    /// Loopback listener with a backlog of one, saturated so the next TCP
+    /// connect hangs in SYN retransmission instead of completing. Unlike a
+    /// "black-holed" public address (RFC 5737 TEST-NET-1), this stays
+    /// correct on hosts where a TUN-mode proxy/VPN answers every outbound
+    /// SYN locally — keep both the socket and the filler connections alive
+    /// for as long as the connect must keep hanging.
+    fn saturated_listener() -> (socket2::Socket, Vec<std::net::TcpStream>, SocketAddr) {
+        let listener = socket2::Socket::new(socket2::Domain::IPV4, socket2::Type::STREAM, None)
+            .expect("create loopback socket");
+        let bind_addr: SocketAddr = "127.0.0.1:0".parse().expect("loopback addr");
+        listener
+            .bind(&bind_addr.into())
+            .expect("bind loopback socket");
+        listener.listen(1).expect("listen with backlog 1");
+        let addr = listener
+            .local_addr()
+            .expect("local addr")
+            .as_socket()
+            .expect("inet addr");
+
+        // Fill the accept queue: connects succeed instantly until the
+        // backlog is full, then the kernel drops the SYN and the attempt
+        // times out — at that point every later connect hangs too.
+        let mut fillers = Vec::new();
+        while let Ok(stream) =
+            std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(250))
+        {
+            fillers.push(stream);
+            assert!(fillers.len() <= 16, "backlog never saturated");
+        }
+        (listener, fillers, addr)
+    }
+
     #[tokio::test]
-    async fn connect_relay_errors_fast_on_unreachable_addr() {
-        // 192.0.2.1 is RFC 5737 TEST-NET-1: routable-looking but black-holed,
-        // so connect() neither succeeds nor RSTs quickly. Bound it ourselves.
-        let addr: SocketAddr = "192.0.2.1:7666".parse().expect("addr");
+    async fn connect_relay_errors_fast_when_connect_hangs() {
+        let (_listener, _fillers, addr) = saturated_listener();
         let result = tokio::time::timeout(
             Duration::from_secs(3),
             connect_relay(addr, Duration::from_millis(200)),
