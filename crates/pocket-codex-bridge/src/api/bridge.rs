@@ -464,6 +464,41 @@ pub struct ThreadHistoryDto {
     /// show the "thinking level" the thread runs with (from the resume
     /// response).
     pub reasoning_effort: Option<String>,
+    /// The effective model id the thread runs with, per the server. `None`
+    /// when the server never reported it (older servers).
+    pub model: Option<String>,
+    /// Provider of the effective model (e.g. `openai`), when reported.
+    pub model_provider: Option<String>,
+    /// The effective approval policy (`untrusted`/`on-failure`/`on-request`/
+    /// `never`/`granular`), when reported.
+    pub approval_policy: Option<String>,
+    /// The effective sandbox mode (`read-only`/`workspace-write`/
+    /// `danger-full-access`/`external-sandbox`), when reported.
+    pub sandbox_mode: Option<String>,
+    /// Whether a live `thread/settings/updated` notification has confirmed
+    /// this config (vs only a start/resume snapshot).
+    pub config_confirmed: bool,
+}
+
+/// The server-reported runtime configuration of a thread — what its turns
+/// actually run with. Mirrors the engine cache fed by `thread/start` /
+/// `thread/resume` responses and live `thread/settings/updated` notifications;
+/// every field is `None` when the server hasn't said (never a guess).
+pub struct ThreadRuntimeConfigDto {
+    /// Effective model id.
+    pub model: Option<String>,
+    /// Provider of the effective model.
+    pub model_provider: Option<String>,
+    /// Effective reasoning effort.
+    pub reasoning_effort: Option<String>,
+    /// Effective approval policy.
+    pub approval_policy: Option<String>,
+    /// Effective sandbox mode (kebab wire string).
+    pub sandbox_mode: Option<String>,
+    /// Effective collaboration mode (`plan`/`default`), when reported.
+    pub collaboration_mode: Option<String>,
+    /// True once a live settings update confirmed this config.
+    pub confirmed_by_update: bool,
 }
 
 /// Connect to an app-server service: subscribe on `127.0.0.1:<local_port>`,
@@ -714,6 +749,31 @@ pub fn app_thread_read(service_key: String, thread_id: String) -> Result<ThreadH
         context_window: h.context_window,
         collaboration_mode: h.collaboration_mode,
         reasoning_effort: h.reasoning_effort,
+        model: h.model,
+        model_provider: h.model_provider,
+        approval_policy: h.approval_policy,
+        sandbox_mode: h.sandbox_mode,
+        config_confirmed: h.config_confirmed,
+    })
+}
+
+/// The latest server-reported runtime config for a thread (from its
+/// start/resume response, kept fresh by live `thread/settings/updated`
+/// notifications), or `None` when the server hasn't reported any. Reads the
+/// engine cache only — no RPC — so the UI can poll it cheaply after a send.
+#[frb(sync)]
+pub fn app_thread_runtime_config(
+    service_key: String,
+    thread_id: String,
+) -> Option<ThreadRuntimeConfigDto> {
+    app_session::thread_runtime_config(&service_key, &thread_id).map(|c| ThreadRuntimeConfigDto {
+        model: c.model,
+        model_provider: c.model_provider,
+        reasoning_effort: c.reasoning_effort,
+        approval_policy: c.approval_policy,
+        sandbox_mode: c.sandbox_mode,
+        collaboration_mode: c.collaboration_mode,
+        confirmed_by_update: c.confirmed_by_update,
     })
 }
 

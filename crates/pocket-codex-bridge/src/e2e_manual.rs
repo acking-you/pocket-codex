@@ -81,7 +81,10 @@ fn file_turn_round_trips_through_a_real_host() {
     use crate::api::bridge as api;
     let name = format!("e2e-file-{}", std::process::id());
     let host = init_and_host(&name, false);
-    let result = std::panic::catch_unwind(|| run_file_turn(&host.app_service_key, "read-only"));
+    // An external codex may predate thread/settings/updated — don't assert it.
+    let result = std::panic::catch_unwind(|| {
+        run_file_turn(&host.app_service_key, "read-only", /* expect_settings_update */ false)
+    });
     let _ = api::app_serve_stop(name);
     if let Err(p) = result {
         std::panic::resume_unwind(p);
@@ -101,8 +104,14 @@ fn embedded_file_turn_no_sandbox_round_trips() {
     use crate::api::bridge as api;
     let name = format!("e2e-file-emb-{}", std::process::id());
     let host = init_and_host(&name, true);
-    let result =
-        std::panic::catch_unwind(|| run_file_turn(&host.app_service_key, "danger-full-access"));
+    let result = std::panic::catch_unwind(|| {
+        run_file_turn(
+            &host.app_service_key,
+            "danger-full-access",
+            // expect_settings_update
+            true,
+        )
+    });
     let _ = api::app_serve_stop(name);
     if let Err(p) = result {
         std::panic::resume_unwind(p);
@@ -163,7 +172,9 @@ fn embedded_file_turn_sandboxed_with_staged_helpers() {
     stage_windows_sandbox_helpers();
     let name = format!("e2e-file-sbx-{}", std::process::id());
     let host = init_and_host(&name, true);
-    let result = std::panic::catch_unwind(|| run_file_turn(&host.app_service_key, "read-only"));
+    let result = std::panic::catch_unwind(|| {
+        run_file_turn(&host.app_service_key, "read-only", /* expect_settings_update */ true)
+    });
     let _ = api::app_serve_stop(name);
     if let Err(p) = result {
         std::panic::resume_unwind(p);
@@ -188,7 +199,7 @@ fn connect_with_retry(key: &str) {
     }
 }
 
-fn run_file_turn(key: &str, sandbox: &str) {
+fn run_file_turn(key: &str, sandbox: &str, expect_settings_update: bool) {
     use crate::api::bridge as api;
 
     const SENTINEL: &str = "pocket-codex-e2e-sentinel-7429";
@@ -216,13 +227,48 @@ fn run_file_turn(key: &str, sandbox: &str) {
     )
     .expect("app_thread_start");
 
+    // The thread/start response reports the runtime config the thread actually
+    // runs with — the ground truth the UI's active-model indicator shows.
+    let runtime = api::app_thread_runtime_config(key.to_string(), tid.clone())
+        .expect("runtime config cached from the thread/start response");
+    println!(
+        "RUNTIME CONFIG: model={:?} provider={:?} effort={:?} approval={:?} sandbox={:?}",
+        runtime.model,
+        runtime.model_provider,
+        runtime.reasoning_effort,
+        runtime.approval_policy,
+        runtime.sandbox_mode
+    );
+    assert!(
+        runtime.model.as_deref().is_some_and(|m| !m.is_empty()),
+        "thread/start must report the effective model"
+    );
+    assert_eq!(
+        runtime.sandbox_mode.as_deref(),
+        Some(sandbox),
+        "thread/start must echo the effective sandbox mode"
+    );
+
     // The exact text shape the Flutter composer sends (attachment_refs.dart).
+    // The explicit effort override exercises the settings round-trip: newer
+    // servers apply it and push `thread/settings/updated`, which the engine
+    // caches as the CONFIRMED runtime config (asserted after the turn).
     let text = format!(
         "Read the attached file and reply with the exact magic word it contains.\n\n## Attached \
          files (read them from this machine's filesystem):\n- \"{host_path}\""
     );
-    api::app_turn_start(key.to_string(), tid, text, Vec::new(), None, None, None, None, None)
-        .expect("app_turn_start");
+    api::app_turn_start(
+        key.to_string(),
+        tid.clone(),
+        text,
+        Vec::new(),
+        None,
+        None,
+        None,
+        None,
+        Some("low".into()),
+    )
+    .expect("app_turn_start");
 
     let deadline = Instant::now() + Duration::from_secs(300);
     let mut reply = String::new();
@@ -253,6 +299,29 @@ fn run_file_turn(key: &str, sandbox: &str) {
         reply.contains(SENTINEL),
         "the agent must have READ the uploaded file to know the sentinel; reply: {reply}"
     );
+
+    // The effort override must be visible as SERVER-confirmed runtime config:
+    // the vendored app-server pushes `thread/settings/updated` when a turn's
+    // overrides change the thread settings, and the engine's forwarder caches
+    // it. (An older external codex may not notify — then this stays a
+    // best-effort print above rather than an assertion.)
+    let after = api::app_thread_runtime_config(key.to_string(), tid)
+        .expect("runtime config still cached after the turn");
+    println!(
+        "RUNTIME AFTER TURN: model={:?} effort={:?} confirmed_by_update={}",
+        after.model, after.reasoning_effort, after.confirmed_by_update
+    );
+    if expect_settings_update {
+        assert!(
+            after.confirmed_by_update,
+            "the server should push thread/settings/updated for the effort override"
+        );
+        assert_eq!(
+            after.reasoning_effort.as_deref(),
+            Some("low"),
+            "the confirmed runtime config must carry the overridden effort"
+        );
+    }
 }
 
 fn run_image_turn(key: &str) {

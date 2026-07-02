@@ -168,6 +168,26 @@
   "@completedAt": {
     "placeholders": { "time": { "type": "String" } }
   },
+  "activeModelTooltip": "Active model & settings — tap for details",
+  "runtimeSheetTitle": "Runtime configuration",
+  "runtimeEffortModelDefault": "Model default",
+  "runtimeCollabDefault": "Default",
+  "runtimeConfirmedAt": "Confirmed by the server · {time}",
+  "@runtimeConfirmedAt": {
+    "placeholders": { "time": { "type": "String" } }
+  },
+  "runtimeFromSnapshot": "From the server's session snapshot · {time}",
+  "@runtimeFromSnapshot": {
+    "placeholders": { "time": { "type": "String" } }
+  },
+  "runtimeUnavailable": "This server doesn't report runtime settings; showing what the app sends.",
+  "runtimeConfirmed": "Confirmed by the server",
+  "runtimeUnconfirmed": "As sent by the app — the server didn't report back",
+  "turnHandledBy": "Handled by {model}",
+  "@turnHandledBy": {
+    "placeholders": { "model": { "type": "String" } }
+  },
+  "modelReroutedNote": "The server switched to this model mid-turn",
   "refreshStatus": "Refresh status",
   "statusOnline": "Online",
   "statusConnected": "Connected",

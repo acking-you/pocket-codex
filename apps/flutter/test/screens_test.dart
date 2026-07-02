@@ -1021,6 +1021,147 @@ void main() {
     );
   });
 
+  group('runtime config visibility', () {
+    const key = 'pcx:lb7666:app:default';
+
+    testWidgets('resume adopts the server-reported model + permissions: the '
+        'active-model chip and the pills show server truth', (t) async {
+      final api = FakeBridgeApi(
+        config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+      );
+      await api.appConnect(key, 28080);
+      // The resume response reported what this thread actually runs with.
+      api.readResult = const ThreadHistory(
+        items: [],
+        running: false,
+        model: 'gpt-5',
+        modelProvider: 'openai',
+        approvalPolicy: 'never',
+        sandboxMode: 'danger-full-access',
+        reasoningEffort: 'high',
+      );
+      await t.pumpWidget(
+        _host(const AppSessionScreen(serviceKey: key, threadId: 'th-1'), api),
+      );
+      await t.pumpAndSettle();
+      // Status bar carries the active-model chip, resolved to its display name.
+      final chip = find.byKey(const Key('active-model-chip'));
+      expect(chip, findsOneWidget);
+      expect(
+        find.descendant(of: chip, matching: find.text('GPT-5')),
+        findsOneWidget,
+      );
+      // The permission pill followed the server (never + danger-full-access =
+      // 完全放行), not the local default (对话确认).
+      expect(find.text('完全放行'), findsOneWidget);
+      // The effort pill shows the server's sticky effort.
+      expect(find.text('思考强度 · 高'), findsOneWidget);
+      // The details sheet reports snapshot provenance (no live update yet).
+      await t.tap(chip);
+      await t.pumpAndSettle();
+      expect(find.text('运行时配置'), findsOneWidget);
+      expect(find.textContaining('来自服务器会话快照'), findsOneWidget);
+    });
+
+    testWidgets('a thread/settings/updated notification confirms a switch: '
+        'chip, plan state and effort follow the server', (t) async {
+      final api = FakeBridgeApi(
+        config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+      );
+      await api.appConnect(key, 28080);
+      api.readResult = const ThreadHistory(items: [], running: false);
+      await t.pumpWidget(
+        _host(const AppSessionScreen(serviceKey: key, threadId: 'th-2'), api),
+      );
+      await t.pumpAndSettle();
+      // Nothing reported yet → no chip (never guess).
+      expect(find.byKey(const Key('active-model-chip')), findsNothing);
+      api.pushEvent(
+        key,
+        AppEvent(
+          kind: 'thread/settings/updated',
+          threadId: 'th-2',
+          raw: jsonEncode({
+            'threadId': 'th-2',
+            'threadSettings': {
+              'model': 'gpt-5.5-codex',
+              'modelProvider': 'openai',
+              'effort': 'xhigh',
+              'approvalPolicy': 'never',
+              'sandboxPolicy': {'type': 'dangerFullAccess'},
+              'collaborationMode': {
+                'mode': 'plan',
+                'settings': {'model': 'gpt-5.5-codex'},
+              },
+            },
+          }),
+        ),
+      );
+      await t.pumpAndSettle();
+      // The chip appears with the server-confirmed model (raw id — it isn't in
+      // the cached model list, and a raw id is still truthful)...
+      final chip = find.byKey(const Key('active-model-chip'));
+      expect(chip, findsOneWidget);
+      expect(
+        find.descendant(of: chip, matching: find.text('gpt-5.5-codex')),
+        findsOneWidget,
+      );
+      // ...the status chip flips to the server-reported plan mode...
+      expect(find.text('计划模式'), findsOneWidget);
+      // ...and the effort pill follows the server's sticky effort.
+      expect(find.text('思考强度 · 极高'), findsOneWidget);
+      // The details sheet reports live confirmation.
+      await t.tap(chip);
+      await t.pumpAndSettle();
+      expect(find.textContaining('服务器已确认'), findsOneWidget);
+    });
+
+    testWidgets('each completed turn is stamped with the model that actually '
+        'handled it', (t) async {
+      final api = FakeBridgeApi(
+        config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+      );
+      await api.appConnect(key, 28080);
+      t.view.devicePixelRatio = 1.0;
+      t.view.physicalSize = const Size(400, 800);
+      addTearDown(t.view.reset);
+      await t.pumpWidget(_host(const AppSessionScreen(serviceKey: key), api));
+      await t.pumpAndSettle();
+      // Turn 1: the server never reported and nothing explicit was sent → the
+      // footnote carries no stamp (honest absence beats a guess).
+      await t.enterText(find.byType(TextField), 'hello');
+      await t.pump();
+      await t.tap(find.byKey(const Key('send-btn')));
+      await t.pumpAndSettle();
+      expect(find.textContaining('gpt-5.5-codex'), findsNothing);
+      // The server then confirms the thread's effective settings...
+      final tid = api.appThreads.first.id;
+      api.pushEvent(
+        key,
+        AppEvent(
+          kind: 'thread/settings/updated',
+          threadId: tid,
+          raw: jsonEncode({
+            'threadId': tid,
+            'threadSettings': {
+              'model': 'gpt-5.5-codex',
+              'effort': 'high',
+              'approvalPolicy': 'on-failure',
+              'sandboxPolicy': {'type': 'workspaceWrite'},
+            },
+          }),
+        ),
+      );
+      await t.pumpAndSettle();
+      // ...and the next turn's footnote records what handled it.
+      await t.enterText(find.byType(TextField), 'again');
+      await t.pump();
+      await t.tap(find.byKey(const Key('send-btn')));
+      await t.pumpAndSettle();
+      expect(find.textContaining('gpt-5.5-codex · 高'), findsOneWidget);
+    });
+  });
+
   group('image attachments', () {
     late _FakeImagePicker picker;
     setUp(() {

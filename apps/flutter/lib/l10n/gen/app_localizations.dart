@@ -890,6 +890,72 @@ abstract class AppLocalizations {
   /// **'Completed at {time}'**
   String completedAt(String time);
 
+  /// No description provided for @activeModelTooltip.
+  ///
+  /// In en, this message translates to:
+  /// **'Active model & settings — tap for details'**
+  String get activeModelTooltip;
+
+  /// No description provided for @runtimeSheetTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Runtime configuration'**
+  String get runtimeSheetTitle;
+
+  /// No description provided for @runtimeEffortModelDefault.
+  ///
+  /// In en, this message translates to:
+  /// **'Model default'**
+  String get runtimeEffortModelDefault;
+
+  /// No description provided for @runtimeCollabDefault.
+  ///
+  /// In en, this message translates to:
+  /// **'Default'**
+  String get runtimeCollabDefault;
+
+  /// No description provided for @runtimeConfirmedAt.
+  ///
+  /// In en, this message translates to:
+  /// **'Confirmed by the server · {time}'**
+  String runtimeConfirmedAt(String time);
+
+  /// No description provided for @runtimeFromSnapshot.
+  ///
+  /// In en, this message translates to:
+  /// **'From the server\'s session snapshot · {time}'**
+  String runtimeFromSnapshot(String time);
+
+  /// No description provided for @runtimeUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'This server doesn\'t report runtime settings; showing what the app sends.'**
+  String get runtimeUnavailable;
+
+  /// No description provided for @runtimeConfirmed.
+  ///
+  /// In en, this message translates to:
+  /// **'Confirmed by the server'**
+  String get runtimeConfirmed;
+
+  /// No description provided for @runtimeUnconfirmed.
+  ///
+  /// In en, this message translates to:
+  /// **'As sent by the app — the server didn\'t report back'**
+  String get runtimeUnconfirmed;
+
+  /// No description provided for @turnHandledBy.
+  ///
+  /// In en, this message translates to:
+  /// **'Handled by {model}'**
+  String turnHandledBy(String model);
+
+  /// No description provided for @modelReroutedNote.
+  ///
+  /// In en, this message translates to:
+  /// **'The server switched to this model mid-turn'**
+  String get modelReroutedNote;
+
   /// No description provided for @refreshStatus.
   ///
   /// In en, this message translates to:

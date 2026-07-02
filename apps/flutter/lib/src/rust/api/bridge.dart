@@ -241,6 +241,18 @@ Future<ThreadHistoryDto> appThreadRead({
   threadId: threadId,
 );
 
+/// The latest server-reported runtime config for a thread (from its
+/// start/resume response, kept fresh by live `thread/settings/updated`
+/// notifications), or `None` when the server hasn't reported any. Reads the
+/// engine cache only — no RPC — so the UI can poll it cheaply after a send.
+ThreadRuntimeConfigDto? appThreadRuntimeConfig({
+  required String serviceKey,
+  required String threadId,
+}) => RustLib.instance.api.crateApiBridgeAppThreadRuntimeConfig(
+  serviceKey: serviceKey,
+  threadId: threadId,
+);
+
 /// Read the account rate-limit / quota snapshot as raw JSON (5h + weekly
 /// windows). Parsed on the Dart side since the shape is nested and volatile.
 Future<String> appRateLimits({required String serviceKey}) =>
@@ -1355,6 +1367,25 @@ class ThreadHistoryDto {
   /// response).
   final String? reasoningEffort;
 
+  /// The effective model id the thread runs with, per the server. `None`
+  /// when the server never reported it (older servers).
+  final String? model;
+
+  /// Provider of the effective model (e.g. `openai`), when reported.
+  final String? modelProvider;
+
+  /// The effective approval policy (`untrusted`/`on-failure`/`on-request`/
+  /// `never`/`granular`), when reported.
+  final String? approvalPolicy;
+
+  /// The effective sandbox mode (`read-only`/`workspace-write`/
+  /// `danger-full-access`/`external-sandbox`), when reported.
+  final String? sandboxMode;
+
+  /// Whether a live `thread/settings/updated` notification has confirmed
+  /// this config (vs only a start/resume snapshot).
+  final bool configConfirmed;
+
   const ThreadHistoryDto({
     required this.items,
     required this.running,
@@ -1364,6 +1395,11 @@ class ThreadHistoryDto {
     this.contextWindow,
     this.collaborationMode,
     this.reasoningEffort,
+    this.model,
+    this.modelProvider,
+    this.approvalPolicy,
+    this.sandboxMode,
+    required this.configConfirmed,
   });
 
   @override
@@ -1375,7 +1411,12 @@ class ThreadHistoryDto {
       tokensUsed.hashCode ^
       contextWindow.hashCode ^
       collaborationMode.hashCode ^
-      reasoningEffort.hashCode;
+      reasoningEffort.hashCode ^
+      model.hashCode ^
+      modelProvider.hashCode ^
+      approvalPolicy.hashCode ^
+      sandboxMode.hashCode ^
+      configConfirmed.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -1389,7 +1430,12 @@ class ThreadHistoryDto {
           tokensUsed == other.tokensUsed &&
           contextWindow == other.contextWindow &&
           collaborationMode == other.collaborationMode &&
-          reasoningEffort == other.reasoningEffort;
+          reasoningEffort == other.reasoningEffort &&
+          model == other.model &&
+          modelProvider == other.modelProvider &&
+          approvalPolicy == other.approvalPolicy &&
+          sandboxMode == other.sandboxMode &&
+          configConfirmed == other.configConfirmed;
 }
 
 /// One materialised conversation item mirrored for Dart.
@@ -1474,6 +1520,66 @@ class ThreadMetaDto {
           preview == other.preview &&
           cwd == other.cwd &&
           updatedAt == other.updatedAt;
+}
+
+/// The server-reported runtime configuration of a thread — what its turns
+/// actually run with. Mirrors the engine cache fed by `thread/start` /
+/// `thread/resume` responses and live `thread/settings/updated` notifications;
+/// every field is `None` when the server hasn't said (never a guess).
+class ThreadRuntimeConfigDto {
+  /// Effective model id.
+  final String? model;
+
+  /// Provider of the effective model.
+  final String? modelProvider;
+
+  /// Effective reasoning effort.
+  final String? reasoningEffort;
+
+  /// Effective approval policy.
+  final String? approvalPolicy;
+
+  /// Effective sandbox mode (kebab wire string).
+  final String? sandboxMode;
+
+  /// Effective collaboration mode (`plan`/`default`), when reported.
+  final String? collaborationMode;
+
+  /// True once a live settings update confirmed this config.
+  final bool confirmedByUpdate;
+
+  const ThreadRuntimeConfigDto({
+    this.model,
+    this.modelProvider,
+    this.reasoningEffort,
+    this.approvalPolicy,
+    this.sandboxMode,
+    this.collaborationMode,
+    required this.confirmedByUpdate,
+  });
+
+  @override
+  int get hashCode =>
+      model.hashCode ^
+      modelProvider.hashCode ^
+      reasoningEffort.hashCode ^
+      approvalPolicy.hashCode ^
+      sandboxMode.hashCode ^
+      collaborationMode.hashCode ^
+      confirmedByUpdate.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ThreadRuntimeConfigDto &&
+          runtimeType == other.runtimeType &&
+          model == other.model &&
+          modelProvider == other.modelProvider &&
+          reasoningEffort == other.reasoningEffort &&
+          approvalPolicy == other.approvalPolicy &&
+          sandboxMode == other.sandboxMode &&
+          collaborationMode == other.collaborationMode &&
+          confirmedByUpdate == other.confirmedByUpdate;
 }
 
 /// A started web (authorization-code) login, mirrored for Dart. The caller

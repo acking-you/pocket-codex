@@ -369,6 +369,32 @@ class RustBridgeApi implements BridgeApi {
       contextWindow: h.contextWindow?.toInt(),
       collaborationMode: h.collaborationMode,
       reasoningEffort: h.reasoningEffort,
+      model: h.model,
+      modelProvider: h.modelProvider,
+      approvalPolicy: h.approvalPolicy,
+      sandboxMode: h.sandboxMode,
+      configConfirmed: h.configConfirmed,
+    );
+  }
+
+  @override
+  ThreadRuntimeConfig? appThreadRuntimeConfig(
+    String serviceKey,
+    String threadId,
+  ) {
+    final c = frb.appThreadRuntimeConfig(
+      serviceKey: serviceKey,
+      threadId: threadId,
+    );
+    if (c == null) return null;
+    return ThreadRuntimeConfig(
+      model: c.model,
+      modelProvider: c.modelProvider,
+      reasoningEffort: c.reasoningEffort,
+      approvalPolicy: c.approvalPolicy,
+      sandboxMode: c.sandboxMode,
+      collaborationMode: c.collaborationMode,
+      confirmedByUpdate: c.confirmedByUpdate,
     );
   }
 

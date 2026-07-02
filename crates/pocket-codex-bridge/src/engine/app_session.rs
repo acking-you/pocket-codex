@@ -111,12 +111,15 @@ struct Session {
     /// always supply it (e.g. opening a thread that was already running, or
     /// switching sessions), so the engine tracks it authoritatively here.
     active_turns: Arc<Mutex<HashMap<String, Value>>>,
-    /// Latest reasoning effort ("thinking level") per `threadId`, captured from
-    /// the `thread/resume` response (which carries a top-level
-    /// `reasoningEffort`; `thread/read` does not expose it). Lets
-    /// [`thread_read`] surface the effort a re-opened thread will run with
-    /// so the UI can display it.
-    reasoning_effort: Arc<Mutex<HashMap<String, String>>>,
+    /// Latest server-reported runtime configuration per `threadId` — the
+    /// ground truth for what model / effort / permissions the thread actually
+    /// runs with. Seeded from `thread/start` / `thread/resume` responses
+    /// (`thread/read` exposes none of it) and kept fresh by the forwarder from
+    /// `thread/settings/updated` notifications, which newer servers emit with
+    /// the full effective snapshot whenever a turn's overrides change the
+    /// thread's settings. Lets the UI *verify* a model switch took effect
+    /// instead of guessing from what it sent.
+    runtime_config: Arc<Mutex<HashMap<String, ThreadRuntimeConfig>>>,
     /// Requested `permissions` of any in-flight
     /// `item/permissions/requestApproval` request, keyed by its
     /// `request_id`. A permissions approval answers with a
@@ -239,11 +242,18 @@ fn establish(service_key: String, local_addr: &str) -> Result<()> {
     let transcript: Arc<Mutex<HashMap<String, Vec<ThreadItem>>>> =
         Arc::new(Mutex::new(HashMap::new()));
     let transcript_for_forwarder = Arc::clone(&transcript);
+    let runtime_config: Arc<Mutex<HashMap<String, ThreadRuntimeConfig>>> =
+        Arc::new(Mutex::new(HashMap::new()));
+    let config_for_forwarder = Arc::clone(&runtime_config);
     let forwarder = runtime::runtime().spawn(async move {
         while let Some(inbound) = notify_rx.recv().await {
             // Learn the active turnId per thread before mapping, so interrupt
             // works even when the UI never saw the turn/started event.
             track_active_turn(&turns_for_forwarder, &inbound);
+            // Capture the effective thread settings the server reports, so the
+            // UI can show the runtime config even when no screen was attached
+            // when the notification streamed by.
+            track_runtime_config(&config_for_forwarder, &inbound);
             // Remember a permissions request's grant so its protocol-specific
             // response can be built when the user answers.
             track_pending_approval(&approvals_for_forwarder, &inbound);
@@ -265,7 +275,7 @@ fn establish(service_key: String, local_addr: &str) -> Result<()> {
             events: events_tx,
             forwarder,
             active_turns,
-            reasoning_effort: Arc::new(Mutex::new(HashMap::new())),
+            runtime_config,
             pending_approvals,
             transcript,
         });
@@ -521,42 +531,170 @@ fn record_active_turn(service_key: &str, thread_id: &str, turn_id: Value) {
     }
 }
 
-/// Cache the reasoning effort `thread/resume` reported for `thread_id` (no-op
-/// if the session is gone). Read back by [`thread_read`] to display current
-/// effort. `None` (or empty) clears the entry, so an effort cleared on the
-/// thread (e.g. by another client) isn't served stale from a previous resume.
-fn record_reasoning_effort(service_key: &str, thread_id: &str, effort: Option<&str>) {
+/// The server-reported runtime configuration of a thread: what model /
+/// effort / permissions its turns actually run with. All fields are optional
+/// because servers of different vintages expose different subsets — absent
+/// means "the server didn't say", never a guess.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ThreadRuntimeConfig {
+    /// Effective model id (e.g. `gpt-5.5-codex`).
+    pub model: Option<String>,
+    /// Provider of the effective model (e.g. `openai`).
+    pub model_provider: Option<String>,
+    /// Effective reasoning effort (`low`/`medium`/`high`/…); `None` = model
+    /// default.
+    pub reasoning_effort: Option<String>,
+    /// Effective approval policy (`untrusted`/`on-failure`/`on-request`/
+    /// `never`/`granular`).
+    pub approval_policy: Option<String>,
+    /// Effective sandbox mode, normalized to the kebab wire strings the UI
+    /// already speaks (`read-only`/`workspace-write`/`danger-full-access`/
+    /// `external-sandbox`).
+    pub sandbox_mode: Option<String>,
+    /// Effective collaboration mode (`plan`/`default`). Only ever reported by
+    /// `thread/settings/updated` — start/resume responses don't carry it.
+    pub collaboration_mode: Option<String>,
+    /// True once a live `thread/settings/updated` notification has been seen
+    /// for this thread — the strongest confirmation the server applied a
+    /// switch (vs. only the snapshot a start/resume response gave us).
+    pub confirmed_by_update: bool,
+}
+
+/// Parse the runtime config out of a `thread/start` / `thread/resume`
+/// response: top-level `model`, `modelProvider`, `reasoningEffort`,
+/// `approvalPolicy` and `sandbox` (camelCase, v2 protocol). Absent fields stay
+/// `None` so older servers degrade gracefully.
+fn runtime_config_from_response(res: &Value) -> ThreadRuntimeConfig {
+    ThreadRuntimeConfig {
+        model: nonempty_str(res.get("model")),
+        model_provider: nonempty_str(res.get("modelProvider")),
+        reasoning_effort: nonempty_str(res.get("reasoningEffort")),
+        approval_policy: parse_approval_policy(res.get("approvalPolicy")),
+        sandbox_mode: parse_sandbox_mode(res.get("sandbox")),
+        collaboration_mode: None,
+        confirmed_by_update: false,
+    }
+}
+
+/// Parse the runtime config out of a `thread/settings/updated` notification's
+/// `threadSettings` object: `model`, `modelProvider`, `effort`,
+/// `approvalPolicy`, `sandboxPolicy` and `collaborationMode`.
+fn runtime_config_from_settings(settings: &Value) -> ThreadRuntimeConfig {
+    ThreadRuntimeConfig {
+        model: nonempty_str(settings.get("model")),
+        model_provider: nonempty_str(settings.get("modelProvider")),
+        reasoning_effort: nonempty_str(settings.get("effort")),
+        approval_policy: parse_approval_policy(settings.get("approvalPolicy")),
+        sandbox_mode: parse_sandbox_mode(settings.get("sandboxPolicy")),
+        collaboration_mode: parse_collaboration_mode(settings.get("collaborationMode")),
+        confirmed_by_update: true,
+    }
+}
+
+/// A non-empty string field, else `None`.
+fn nonempty_str(v: Option<&Value>) -> Option<String> {
+    v.and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+/// An approval policy value: the plain wire string (`never`, `on-request`, …),
+/// or the tag of the externally-tagged object form (`{"granular": {…}}` →
+/// `granular`).
+fn parse_approval_policy(v: Option<&Value>) -> Option<String> {
+    let v = v?;
+    if let Some(s) = v.as_str() {
+        return Some(s.to_string()).filter(|s| !s.is_empty());
+    }
+    v.as_object()?.keys().next().cloned()
+}
+
+/// A sandbox policy value, normalized to the kebab strings the UI speaks. The
+/// v2 protocol sends a camelCase-tagged object (`{"type": "readOnly", …}`);
+/// tolerate a legacy kebab tag or a bare string too, and pass unknown tags
+/// through verbatim (forward-compat).
+fn parse_sandbox_mode(v: Option<&Value>) -> Option<String> {
+    let v = v?;
+    let tag = v
+        .as_str()
+        .or_else(|| v.get("type").and_then(Value::as_str))
+        .filter(|s| !s.is_empty())?;
+    Some(
+        match tag {
+            "readOnly" => "read-only",
+            "workspaceWrite" => "workspace-write",
+            "dangerFullAccess" => "danger-full-access",
+            "externalSandbox" => "external-sandbox",
+            other => other,
+        }
+        .to_string(),
+    )
+}
+
+/// A collaboration mode value: the `mode` field of the `{mode, settings}`
+/// object (`plan`/`default`), or a bare string.
+fn parse_collaboration_mode(v: Option<&Value>) -> Option<String> {
+    let v = v?;
+    v.as_str()
+        .or_else(|| v.get("mode").and_then(Value::as_str))
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+/// Update the per-thread runtime config from a live `thread/settings/updated`
+/// notification (the full effective snapshot — replace wholesale).
+fn track_runtime_config(configs: &Mutex<HashMap<String, ThreadRuntimeConfig>>, inbound: &Inbound) {
+    if inbound.method != "thread/settings/updated" {
+        return;
+    }
+    let Some(params) = inbound.params.as_ref() else {
+        return;
+    };
+    let Some(thread_id) = params.get("threadId").and_then(Value::as_str) else {
+        return;
+    };
+    let Some(settings) = params.get("threadSettings") else {
+        return;
+    };
+    configs
+        .lock()
+        .expect("runtime_config poisoned")
+        .insert(thread_id.to_string(), runtime_config_from_settings(settings));
+}
+
+/// Record the runtime config a `thread/start` / `thread/resume` response
+/// reported for `thread_id` (no-op if the session is gone). The response
+/// doesn't carry the collaboration mode, so a previously learned one (from a
+/// live settings update) is preserved rather than wiped; every field the
+/// response *does* speak to is taken verbatim — including nulls, so an effort
+/// cleared on the thread (e.g. by another client) isn't served stale.
+fn record_runtime_config(service_key: &str, thread_id: &str, res: &Value) {
     if let Some(s) = sessions()
         .lock()
         .expect("sessions poisoned")
         .get(service_key)
     {
-        let mut map = s
-            .reasoning_effort
-            .lock()
-            .expect("reasoning_effort poisoned");
-        match effort.filter(|e| !e.is_empty()) {
-            Some(e) => {
-                map.insert(thread_id.to_string(), e.to_string());
-            },
-            None => {
-                map.remove(thread_id);
-            },
+        let mut cfg = runtime_config_from_response(res);
+        let mut map = s.runtime_config.lock().expect("runtime_config poisoned");
+        if let Some(prev) = map.get(thread_id) {
+            cfg.collaboration_mode = prev.collaboration_mode.clone();
+            cfg.confirmed_by_update = prev.confirmed_by_update;
         }
+        map.insert(thread_id.to_string(), cfg);
     }
 }
 
-/// The reasoning effort last seen for `thread_id` (from a prior
-/// `thread/resume`).
-fn cached_reasoning_effort(service_key: &str, thread_id: &str) -> Option<String> {
+/// The runtime config last seen for `thread_id` (from a start/resume response
+/// or a live settings update).
+pub fn thread_runtime_config(service_key: &str, thread_id: &str) -> Option<ThreadRuntimeConfig> {
     sessions()
         .lock()
         .expect("sessions poisoned")
         .get(service_key)
         .and_then(|s| {
-            s.reasoning_effort
+            s.runtime_config
                 .lock()
-                .expect("reasoning_effort poisoned")
+                .expect("runtime_config poisoned")
                 .get(thread_id)
                 .cloned()
         })
@@ -727,11 +865,17 @@ pub fn thread_start(
         params.insert("sandbox".into(), json!(s));
     }
     let res = runtime::runtime().block_on(client.request("thread/start", Value::Object(params)))?;
-    res.get("thread")
+    let thread_id = res
+        .get("thread")
         .and_then(|t| t.get("id"))
         .and_then(Value::as_str)
         .map(str::to_string)
-        .ok_or_else(|| anyhow!("thread/start: missing thread id in response"))
+        .ok_or_else(|| anyhow!("thread/start: missing thread id in response"))?;
+    // The response reports the effective model / effort / permissions the new
+    // thread actually starts with — cache it so the UI can show server truth
+    // from the very first turn.
+    record_runtime_config(service_key, &thread_id, &res);
+    Ok(thread_id)
 }
 
 /// Answer a server approval request (token from an [`AppEvent::request_id`]).
@@ -840,16 +984,13 @@ pub fn thread_resume(service_key: &str, thread_id: &str) -> Result<()> {
     let client = client_for(service_key)?;
     let res = runtime::runtime()
         .block_on(client.request("thread/resume", json!({ "threadId": thread_id })))?;
-    // The resume response carries the thread's current reasoning effort as a
-    // top-level `reasoningEffort` (thread/read does NOT expose it anywhere).
-    // Refresh the cache unconditionally — the server sends `reasoningEffort:
-    // null` when no effort is set, which must clear any prior cached value (e.g.
-    // after another client cleared it) rather than leave it stale.
-    record_reasoning_effort(
-        service_key,
-        thread_id,
-        res.get("reasoningEffort").and_then(Value::as_str),
-    );
+    // The resume response carries the thread's effective runtime config —
+    // model, modelProvider, reasoningEffort, approvalPolicy, sandbox — none of
+    // which `thread/read` exposes. Refresh the cache unconditionally: the
+    // server sends `reasoningEffort: null` when no effort is set, which must
+    // clear any prior cached value (e.g. after another client cleared it)
+    // rather than leave it stale.
+    record_runtime_config(service_key, thread_id, &res);
     Ok(())
 }
 
@@ -879,6 +1020,19 @@ pub struct ThreadHistory {
     /// Sourced from the cached `thread/resume` response (see
     /// [`thread_resume`]).
     pub reasoning_effort: Option<String>,
+    /// The effective model id the thread runs with, per the server (from the
+    /// cached start/resume response or a live settings update). `None` when
+    /// the server never said.
+    pub model: Option<String>,
+    /// Provider of the effective model (e.g. `openai`), when reported.
+    pub model_provider: Option<String>,
+    /// The effective approval policy, when reported.
+    pub approval_policy: Option<String>,
+    /// The effective sandbox mode (kebab wire string), when reported.
+    pub sandbox_mode: Option<String>,
+    /// Whether a live `thread/settings/updated` has confirmed this config (vs
+    /// only a start/resume snapshot).
+    pub config_confirmed: bool,
 }
 
 /// Read a thread's materialised conversation items (oldest first) and whether
@@ -943,24 +1097,27 @@ pub fn thread_read(service_key: &str, thread_id: &str) -> Result<ThreadHistory> 
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
         .map(str::to_string);
-    // Current `thread/read` responses don't expose the sticky collaboration
-    // mode (it's not on the thread, its status, or the turns), so this is null
-    // in practice today — kept as a forward-compatible read in case a future
-    // server version surfaces it. The UI falls back to its own per-thread plan
-    // memory when this is absent.
-    let collaboration_mode = thread
-        .and_then(|t| {
-            t.get("collaborationMode")
-                .or_else(|| t.get("status").and_then(|s| s.get("collaborationMode")))
-                .or_else(|| t.get("settings").and_then(|s| s.get("collaborationMode")))
-        })
-        .and_then(Value::as_str)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string);
-    // Reasoning effort isn't on the thread/read response either; it's captured
-    // from the thread/resume response (cached). Fall back to a forward-compat
-    // read of the response in case a future server version surfaces it here.
-    let reasoning_effort = cached_reasoning_effort(service_key, thread_id).or_else(|| {
+    // The runtime config (model / effort / permissions / collaboration mode)
+    // isn't on the thread/read response — it comes from the cached start/resume
+    // response, kept fresh by live `thread/settings/updated` notifications.
+    let runtime = thread_runtime_config(service_key, thread_id).unwrap_or_default();
+    // Collaboration mode: the cache only ever learns it from a live settings
+    // update; keep the forward-compatible read of the response in case a future
+    // server version surfaces it here. The UI falls back to its own per-thread
+    // plan memory when both are absent.
+    let collaboration_mode = runtime.collaboration_mode.clone().or_else(|| {
+        thread
+            .and_then(|t| {
+                t.get("collaborationMode")
+                    .or_else(|| t.get("status").and_then(|s| s.get("collaborationMode")))
+                    .or_else(|| t.get("settings").and_then(|s| s.get("collaborationMode")))
+            })
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    });
+    // Reasoning effort: from the cache, with the same forward-compat fallback.
+    let reasoning_effort = runtime.reasoning_effort.clone().or_else(|| {
         thread
             .and_then(|t| t.get("reasoningEffort"))
             .or_else(|| res.get("reasoningEffort"))
@@ -977,6 +1134,11 @@ pub fn thread_read(service_key: &str, thread_id: &str) -> Result<ThreadHistory> 
         context_window,
         collaboration_mode,
         reasoning_effort,
+        model: runtime.model,
+        model_provider: runtime.model_provider,
+        approval_policy: runtime.approval_policy,
+        sandbox_mode: runtime.sandbox_mode,
+        config_confirmed: runtime.confirmed_by_update,
     })
 }
 
@@ -1759,6 +1921,107 @@ mod tests {
         // Other threads remain tracked.
         assert_eq!(turns.lock().unwrap().get("t3"), Some(&json!("turn-3")));
         assert_eq!(turns.lock().unwrap().get("t4"), Some(&json!(42)));
+    }
+
+    #[test]
+    fn parses_runtime_config_from_a_start_or_resume_response() {
+        let res = json!({
+            "thread": {"id": "t1"},
+            "model": "gpt-5.5-codex",
+            "modelProvider": "openai",
+            "reasoningEffort": "high",
+            "approvalPolicy": "on-request",
+            "sandbox": {"type": "workspaceWrite", "networkAccess": false},
+        });
+        let cfg = runtime_config_from_response(&res);
+        assert_eq!(cfg.model.as_deref(), Some("gpt-5.5-codex"));
+        assert_eq!(cfg.model_provider.as_deref(), Some("openai"));
+        assert_eq!(cfg.reasoning_effort.as_deref(), Some("high"));
+        assert_eq!(cfg.approval_policy.as_deref(), Some("on-request"));
+        assert_eq!(cfg.sandbox_mode.as_deref(), Some("workspace-write"));
+        assert_eq!(cfg.collaboration_mode, None);
+        assert!(!cfg.confirmed_by_update);
+        // Absent / null fields stay None (older servers say less; never guess).
+        let sparse =
+            runtime_config_from_response(&json!({"thread": {"id": "t"}, "reasoningEffort": null}));
+        assert_eq!(sparse, ThreadRuntimeConfig::default());
+    }
+
+    #[test]
+    fn tracks_runtime_config_from_settings_updates() {
+        let configs = Mutex::new(HashMap::new());
+        track_runtime_config(&configs, &Inbound {
+            method: "thread/settings/updated".into(),
+            params: Some(json!({
+                "threadId": "t1",
+                "threadSettings": {
+                    "model": "gpt-5.5",
+                    "modelProvider": "openai",
+                    "effort": "xhigh",
+                    "approvalPolicy": "never",
+                    "sandboxPolicy": {"type": "dangerFullAccess"},
+                    "collaborationMode": {"mode": "plan", "settings": {"model": "gpt-5.5"}},
+                },
+            })),
+            request_id: None,
+        });
+        let cfg = configs.lock().unwrap().get("t1").cloned().expect("tracked");
+        assert_eq!(cfg.model.as_deref(), Some("gpt-5.5"));
+        assert_eq!(cfg.reasoning_effort.as_deref(), Some("xhigh"));
+        assert_eq!(cfg.approval_policy.as_deref(), Some("never"));
+        assert_eq!(cfg.sandbox_mode.as_deref(), Some("danger-full-access"));
+        assert_eq!(cfg.collaboration_mode.as_deref(), Some("plan"));
+        assert!(cfg.confirmed_by_update);
+        // Unrelated notifications don't touch the map.
+        track_runtime_config(&configs, &Inbound {
+            method: "turn/started".into(),
+            params: Some(json!({"threadId": "t1", "turnId": "x"})),
+            request_id: None,
+        });
+        assert!(configs.lock().unwrap().contains_key("t1"));
+    }
+
+    #[test]
+    fn approval_and_sandbox_parsers_tolerate_wire_variants() {
+        // Approval: plain strings pass through; the externally-tagged granular
+        // object maps to its tag.
+        assert_eq!(
+            parse_approval_policy(Some(&json!("on-failure"))).as_deref(),
+            Some("on-failure")
+        );
+        assert_eq!(
+            parse_approval_policy(Some(&json!({"granular": {"rules": true}}))).as_deref(),
+            Some("granular")
+        );
+        assert_eq!(parse_approval_policy(Some(&json!(""))), None);
+        assert_eq!(parse_approval_policy(None), None);
+        // Sandbox: v2 camelCase tags normalize to the kebab strings the UI
+        // speaks; bare/kebab strings and unknown tags pass through.
+        assert_eq!(
+            parse_sandbox_mode(Some(&json!({"type": "readOnly"}))).as_deref(),
+            Some("read-only")
+        );
+        assert_eq!(
+            parse_sandbox_mode(Some(&json!({"type": "workspaceWrite", "writableRoots": []})))
+                .as_deref(),
+            Some("workspace-write")
+        );
+        assert_eq!(
+            parse_sandbox_mode(Some(&json!("danger-full-access"))).as_deref(),
+            Some("danger-full-access")
+        );
+        assert_eq!(
+            parse_sandbox_mode(Some(&json!({"type": "futureMode"}))).as_deref(),
+            Some("futureMode")
+        );
+        assert_eq!(parse_sandbox_mode(Some(&json!({}))), None);
+        // Collaboration mode: `{mode}` object or bare string.
+        assert_eq!(
+            parse_collaboration_mode(Some(&json!({"mode": "plan"}))).as_deref(),
+            Some("plan")
+        );
+        assert_eq!(parse_collaboration_mode(Some(&json!("default"))).as_deref(), Some("default"));
+        assert_eq!(parse_collaboration_mode(Some(&json!({}))), None);
     }
 
     #[test]

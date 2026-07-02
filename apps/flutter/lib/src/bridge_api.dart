@@ -402,6 +402,11 @@ class ThreadHistory {
     this.contextWindow,
     this.collaborationMode,
     this.reasoningEffort,
+    this.model,
+    this.modelProvider,
+    this.approvalPolicy,
+    this.sandboxMode,
+    this.configConfirmed = false,
   });
 
   /// Conversation items, oldest first.
@@ -430,6 +435,63 @@ class ThreadHistory {
   /// can display the "thinking level" the thread runs with. Sourced from the
   /// thread/resume response (thread/read doesn't expose it).
   final String? reasoningEffort;
+
+  /// The effective model id the thread runs with, per the server (from the
+  /// start/resume response, kept fresh by `thread/settings/updated`). Null
+  /// when the server never reported it (older servers).
+  final String? model;
+
+  /// Provider of the effective model (e.g. `openai`), when reported.
+  final String? modelProvider;
+
+  /// The effective approval policy (`untrusted`/`on-failure`/`on-request`/
+  /// `never`/`granular`), when reported.
+  final String? approvalPolicy;
+
+  /// The effective sandbox mode (`read-only`/`workspace-write`/
+  /// `danger-full-access`/`external-sandbox`), when reported.
+  final String? sandboxMode;
+
+  /// Whether a live `thread/settings/updated` notification has confirmed this
+  /// config (vs only a start/resume snapshot).
+  final bool configConfirmed;
+}
+
+/// The server-reported runtime configuration of a thread — what its turns
+/// actually run with. Every field is null when the server hasn't said (never
+/// a guess), so the UI can distinguish "server default" from "unknown".
+class ThreadRuntimeConfig {
+  /// Creates a runtime config snapshot.
+  const ThreadRuntimeConfig({
+    this.model,
+    this.modelProvider,
+    this.reasoningEffort,
+    this.approvalPolicy,
+    this.sandboxMode,
+    this.collaborationMode,
+    this.confirmedByUpdate = false,
+  });
+
+  /// Effective model id.
+  final String? model;
+
+  /// Provider of the effective model.
+  final String? modelProvider;
+
+  /// Effective reasoning effort.
+  final String? reasoningEffort;
+
+  /// Effective approval policy.
+  final String? approvalPolicy;
+
+  /// Effective sandbox mode (kebab wire string).
+  final String? sandboxMode;
+
+  /// Effective collaboration mode (`plan`/`default`), when reported.
+  final String? collaborationMode;
+
+  /// True once a live `thread/settings/updated` confirmed this config.
+  final bool confirmedByUpdate;
 }
 
 /// One model offered by the app-server.
@@ -854,6 +916,15 @@ abstract interface class BridgeApi {
   /// Read a thread's history (items oldest first) and whether a turn is still
   /// running, so re-opening an in-flight thread restores its live state.
   Future<ThreadHistory> appThreadRead(String serviceKey, String threadId);
+
+  /// The latest server-reported runtime config for a thread (from its
+  /// start/resume response, kept fresh by `thread/settings/updated`
+  /// notifications), or null when the server hasn't reported any. Reads the
+  /// bridge's cache only — no RPC — so it's cheap to call after a send.
+  ThreadRuntimeConfig? appThreadRuntimeConfig(
+    String serviceKey,
+    String threadId,
+  );
 
   /// Send a user message (text and/or attached images), starting a model
   /// turn. [images] are `data:image/...;base64,...` URLs — the wire form that

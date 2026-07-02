@@ -444,6 +444,15 @@ class FakeBridgeApi implements BridgeApi {
     String threadId,
   ) async => readResult;
 
+  /// Seedable runtime config for the status-bar model indicator tests.
+  ThreadRuntimeConfig? runtimeConfig;
+
+  @override
+  ThreadRuntimeConfig? appThreadRuntimeConfig(
+    String serviceKey,
+    String threadId,
+  ) => runtimeConfig;
+
   /// Per-turn override of the model recorded for assertions.
   String? lastTurnModel;
 

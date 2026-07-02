@@ -82,6 +82,10 @@ class _Item {
     this.images = const [],
     this.imageUrls = const [],
     this.streaming = false,
+    this.model,
+    this.effortWire,
+    this.modelConfirmed = false,
+    this.modelRerouted = false,
   });
   final String id;
   String type; // userMessage | agentMessage | commandExecution | webSearch | …
@@ -95,6 +99,13 @@ class _Item {
   // only the URLs distinguish two different photos.
   List<String> imageUrls;
   bool streaming;
+  // For a `turnDuration` footnote: the model/effort stamp of the turn it
+  // closes (what the turn actually ran with), whether the server confirmed
+  // it, and whether the server rerouted the model mid-turn. Local-only.
+  String? model;
+  String? effortWire;
+  bool modelConfirmed;
+  bool modelRerouted;
 
   bool get isUser => type == 'userMessage';
   bool get isAgent => type == 'agentMessage';
@@ -152,6 +163,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
   String? _threadId;
   String? _cwd;
   ModelInfo? _model;
+  // True while the user holds a model pick that hasn't been sent yet, so a
+  // server-confirmed model (thread/settings/updated) doesn't clobber it.
+  bool _modelPickPending = false;
   PermissionMode _mode = PermissionMode.auto;
   bool _plan = false; // plan mode: the agent plans before implementing
   // Whether the thread is currently in plan mode server-side. Collaboration
@@ -186,6 +200,34 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
   ReasoningEffort? _effort;
   ReasoningEffort? _effortActive;
   static final Map<String, ReasoningEffort?> _effortByThread = {};
+
+  // The SERVER-reported runtime config: what this thread's turns actually run
+  // with, per the server itself. Seeded from the thread/start・thread/resume
+  // response (via thread/read + the bridge cache) and kept fresh by live
+  // `thread/settings/updated` notifications. This is ground truth — distinct
+  // from the pills above, which are what the user *selected* — and drives the
+  // status-bar model indicator so a switch is verifiable, not assumed.
+  ThreadRuntimeConfig? _runtime;
+  // When _runtime last changed (for the provenance line in the details sheet).
+  DateTime? _runtimeAt;
+
+  // Per-turn model stamp: what the CURRENT turn runs with. Captured at
+  // turn/started from the freshest server truth — a settings update arrives
+  // just before turn/started when a switch happened — falling back to what
+  // this app actually sent (turn params override thread defaults, so on older
+  // servers that never notify, the sent value IS the effective one).
+  // `_turnStampConfirmed` records which source won; `_turnRerouted` flips when
+  // the server reports it substituted the model mid-turn (model/rerouted).
+  // Embedded into the turn's duration footnote at turn end.
+  String? _turnStampModel;
+  String? _turnStampEffort;
+  bool _turnStampConfirmed = false;
+  bool _turnRerouted = false;
+  // What the last send put on the wire, the stamp's fallback for servers
+  // that never notify settings (turn params override thread defaults, so the
+  // sent values ARE the effective ones there).
+  String? _sentModel;
+  String? _sentEffort;
 
   /// Composite key for the process-wide per-thread caches. Scoped by service so
   /// two hosts can't collide on a shared thread id (matching how the persisted
@@ -401,6 +443,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
   void _seedDefaults() {
     final d = ref.read(sessionDefaultsProvider(widget.serviceKey));
     _model = d.model;
+    _modelPickPending = false;
     _mode = d.mode;
     _plan = d.plan;
     _planActive = false; // a new thread hasn't been told a mode yet
@@ -460,6 +503,110 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
     );
   }
 
+  /// Parse a `thread/settings/updated` notification's raw params into a
+  /// runtime config. The payload's `threadSettings` carries the full effective
+  /// snapshot: `model`, `modelProvider`, `effort`, `approvalPolicy`,
+  /// `sandboxPolicy` (camelCase-tagged object) and `collaborationMode`
+  /// (`{mode, settings}`). Null on any shape surprise — never guess.
+  static ThreadRuntimeConfig? _parseSettingsUpdate(String raw) {
+    try {
+      final params = jsonDecode(raw) as Map<String, dynamic>;
+      final s = params['threadSettings'];
+      if (s is! Map<String, dynamic>) return null;
+      String? str(Object? v) => (v is String && v.isNotEmpty) ? v : null;
+      // Sandbox: `{"type": "readOnly"}` → the kebab wire string the app speaks.
+      String? sandbox;
+      final sp = s['sandboxPolicy'];
+      final tag = sp is Map<String, dynamic> ? str(sp['type']) : str(sp);
+      if (tag != null) {
+        sandbox = switch (tag) {
+          'readOnly' => 'read-only',
+          'workspaceWrite' => 'workspace-write',
+          'dangerFullAccess' => 'danger-full-access',
+          'externalSandbox' => 'external-sandbox',
+          _ => tag,
+        };
+      }
+      // Approval: a plain string, or the externally-tagged granular object.
+      final ap = s['approvalPolicy'];
+      final approval = ap is Map<String, dynamic>
+          ? (ap.keys.isEmpty ? null : ap.keys.first)
+          : str(ap);
+      // Collaboration mode: `{mode: "plan"|"default", …}` or a bare string.
+      final cm = s['collaborationMode'];
+      final collab = cm is Map<String, dynamic> ? str(cm['mode']) : str(cm);
+      return ThreadRuntimeConfig(
+        model: str(s['model']),
+        modelProvider: str(s['modelProvider']),
+        reasoningEffort: str(s['effort']),
+        approvalPolicy: approval,
+        sandboxMode: sandbox,
+        collaborationMode: collab,
+        confirmedByUpdate: true,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Adopt a server-reported runtime config. A snapshot from a live
+  /// `thread/settings/updated` ([ThreadRuntimeConfig.confirmedByUpdate]) is
+  /// authoritative for the sticky selection state too — effort, plan mode and
+  /// the model pill sync to it so the composer can never drift from the
+  /// server. A start/resume snapshot only refreshes the indicator: it may
+  /// predate settings this app already sent (older servers never notify), so
+  /// it must not roll the selections back.
+  void _applyRuntime(ThreadRuntimeConfig cfg) {
+    if (!mounted) return;
+    setState(() {
+      _runtime = cfg;
+      _runtimeAt = DateTime.now();
+      if (!cfg.confirmedByUpdate) return;
+      _effortActive = ReasoningEffort.fromWire(cfg.reasoningEffort);
+      final collab = cfg.collaborationMode;
+      if (collab != null) {
+        _planActive = collab == 'plan';
+        if (!_planToggledByUser) _plan = _planActive;
+      }
+      // Reflect the confirmed model onto the model pill — unless the user is
+      // holding a different, not-yet-sent pick. An id missing from the model
+      // list (e.g. an unlisted config default) still shows via the status-bar
+      // indicator, which renders the raw id.
+      final m = cfg.model;
+      if (m != null && !_modelPickPending && _model?.id != m) {
+        final resolved = _models.where((x) => x.id == m).firstOrNull;
+        if (resolved != null) _model = resolved;
+      }
+    });
+    if (!cfg.confirmedByUpdate) return;
+    // Keep the per-thread memory on server truth so reopening restores it.
+    final tid = _threadId;
+    if (tid != null) {
+      _effortByThread[_threadKey(tid)] = _effortActive;
+      if (cfg.collaborationMode != null) {
+        _planByThread[_threadKey(tid)] = _planActive;
+      }
+    }
+  }
+
+  /// Pull the bridge's cached runtime config (fed by start/resume responses
+  /// and live settings notifications) — cheap, no RPC. Covers the gaps events
+  /// can't: the thread/start response of a brand-new conversation, and
+  /// notifications that streamed by while no screen was attached.
+  void _refreshRuntimeFromCache() {
+    final tid = _threadId;
+    if (tid == null) return;
+    ThreadRuntimeConfig? cfg;
+    try {
+      cfg = ref
+          .read(bridgeApiProvider)
+          .appThreadRuntimeConfig(widget.serviceKey, tid);
+    } catch (_) {
+      return; // best-effort
+    }
+    if (cfg != null) _applyRuntime(cfg);
+  }
+
   /// Load a thread's persisted config from the host. Best-effort: returns an
   /// all-unset config when the host meta tunnel is unreachable, so the caller
   /// falls back to the server / in-memory restore.
@@ -505,6 +652,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
       // config would inherit — and then re-persist — the previous thread's
       // model + permission mode (which the server never restores).
       _model = null;
+      _modelPickPending = false;
       _mode = PermissionMode.auto;
       _plan = false;
       _planToggledByUser = false;
@@ -513,6 +661,15 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
       // _effortActive from the server / per-thread memory.
       _effort = null;
       _effortActive = null;
+      // The runtime config and turn stamps describe the previous thread.
+      _runtime = null;
+      _runtimeAt = null;
+      _turnStampModel = null;
+      _turnStampEffort = null;
+      _turnStampConfirmed = false;
+      _turnRerouted = false;
+      _sentModel = null;
+      _sentEffort = null;
       _implementDismissed = false;
       _input.clear();
       // Pending attachments are drafts of the previous thread's message —
@@ -597,15 +754,17 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
       final persistedFuture = _loadPersistedConfig(startTid);
       final history = await historyFuture;
       final persisted = await persistedFuture;
-      // The server restores neither the model nor the permission mode, so the
-      // persisted store is their only source across re-opens; resolve a stored
-      // model id against this service's model list.
-      ModelInfo? persistedModel;
-      if (persisted.model != null) {
+      // Restore the model from the server's own report first (the resume
+      // response says what the thread actually runs with); fall back to the
+      // persisted pick for older servers that don't report one. Resolve the id
+      // against this service's model list.
+      final restoredModelId = history.model ?? persisted.model;
+      ModelInfo? restoredModel;
+      if (restoredModelId != null) {
         try {
           final models = await _ensureModels();
-          persistedModel = models
-              .where((m) => m.id == persisted.model)
+          restoredModel = models
+              .where((m) => m.id == restoredModelId)
               .firstOrNull;
         } catch (_) {
           // Model list unavailable — leave the model unchanged.
@@ -664,19 +823,47 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
         // usually isn't a plan item — which left plan mode stuck on.) Don't
         // clobber a pending toggle the user set before a drop/reload.
         final tid = _threadId;
-        // Permission mode + model: restored from the persisted store (the
-        // server tracks neither, so without this they'd reset to defaults on
-        // every re-open).
+        // The server-reported runtime config (model / effort / permissions the
+        // thread actually runs with) — ground truth for the status-bar model
+        // indicator. Absent on older servers that don't report it.
+        if (history.model != null ||
+            history.approvalPolicy != null ||
+            history.sandboxMode != null ||
+            history.reasoningEffort != null) {
+          _runtime = ThreadRuntimeConfig(
+            model: history.model,
+            modelProvider: history.modelProvider,
+            reasoningEffort: history.reasoningEffort,
+            approvalPolicy: history.approvalPolicy,
+            sandboxMode: history.sandboxMode,
+            collaborationMode: history.collaborationMode,
+            confirmedByUpdate: history.configConfirmed,
+          );
+          _runtimeAt = DateTime.now();
+        }
+        // Permission mode: the server's reported approval+sandbox pair wins
+        // when it maps onto one of our presets; else the persisted pick (an
+        // unmapped server combo still shows raw in the runtime sheet).
+        final serverPreset = (history.approvalPolicy == null)
+            ? null
+            : PermissionMode.values
+                  .where(
+                    (m) =>
+                        m.approval == history.approvalPolicy &&
+                        m.sandbox == history.sandboxMode,
+                  )
+                  .firstOrNull;
         final persistedMode = persisted.permissionMode == null
             ? null
             : PermissionMode.values
                   .where((m) => m.name == persisted.permissionMode)
                   .firstOrNull;
-        if (persistedMode != null) _mode = persistedMode;
-        if (persistedModel != null) _model = persistedModel;
-        final serverMode = history.collaborationMode;
-        final restored = serverMode != null
-            ? serverMode == 'plan'
+        final restoredMode = serverPreset ?? persistedMode;
+        if (restoredMode != null) _mode = restoredMode;
+        if (restoredModel != null) _model = restoredModel;
+        final serverCollab = history.collaborationMode;
+        final restored = serverCollab != null
+            ? serverCollab == 'plan'
             : (persisted.planMode ??
                   (tid != null && (_planByThread[_threadKey(tid)] ?? false)));
         final hadPendingToggle = _plan != _planActive;
@@ -694,15 +881,13 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
         // Drop a restored effort the restored model can't run (mirrors the guard
         // in _pickModel/_seedDefaults) so a stale persisted pairing never asserts
         // an unsupported level on the next turn.
-        final restoredModel = _model;
-        final restoredEffort = _effortActive;
-        if (restoredModel != null &&
-            restoredEffort != null &&
-            !restoredModel.supportedReasoningEfforts.contains(
-              restoredEffort.wire,
-            )) {
+        final guardModel = _model;
+        final guardEffort = _effortActive;
+        if (guardModel != null &&
+            guardEffort != null &&
+            !guardModel.supportedReasoningEfforts.contains(guardEffort.wire)) {
           _effortActive = ReasoningEffort.fromWire(
-            restoredModel.defaultReasoningEffort,
+            guardModel.defaultReasoningEffort,
           );
         }
         // Seed the status gauge + branch chip + cwd from the thread metadata.
@@ -761,6 +946,35 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
       }
       return;
     }
+    // The server applied new effective thread settings — the authoritative
+    // confirmation that a model / effort / permission / plan switch took
+    // effect (possibly one this app just sent). Newer servers emit this with
+    // the full snapshot whenever a turn's overrides change the settings.
+    if (e.kind == 'thread/settings/updated') {
+      final cfg = _parseSettingsUpdate(e.raw);
+      if (cfg != null) _applyRuntime(cfg);
+      return;
+    }
+    // The server substituted the model mid-turn (e.g. a policy or capacity
+    // reroute): reflect it on the current turn's stamp so the transcript
+    // records what actually handled the request.
+    if (e.kind == 'model/rerouted') {
+      String? to;
+      try {
+        final m = jsonDecode(e.raw) as Map<String, dynamic>;
+        to = (m['toModel'] as String?)?.trim();
+      } catch (_) {
+        to = null;
+      }
+      if (to != null && to.isNotEmpty) {
+        setState(() {
+          _turnStampModel = to;
+          _turnStampConfirmed = true;
+          _turnRerouted = true;
+        });
+      }
+      return;
+    }
     // The agent edited files: refresh the working-tree-vs-main diff badge.
     if (e.kind == 'turn/diff/updated') {
       _loadGit();
@@ -782,6 +996,22 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
           _implementDismissed = false;
           _pendingInterrupt = false;
           _elapsedSecs = 0;
+          // Stamp what this turn runs with. A server that notifies settings
+          // does so BEFORE turn/started, so a confirmed runtime is already
+          // current here; otherwise fall back to what this app actually sent
+          // (turn params override thread defaults, so on servers that never
+          // notify, the sent value IS the effective one).
+          final rt = _runtime;
+          final confirmedRt = rt != null && rt.confirmedByUpdate;
+          _turnStampModel = confirmedRt
+              ? (rt.model ?? _sentModel)
+              : (_sentModel ?? rt?.model);
+          _turnStampEffort = confirmedRt
+              ? rt.reasoningEffort
+              : (_sentEffort ?? rt?.reasoningEffort);
+          _turnStampConfirmed =
+              _turnStampModel != null && _turnStampModel == rt?.model;
+          _turnRerouted = false;
         });
         _startElapsedTicker();
         _scrollToEnd();
@@ -1061,6 +1291,12 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
         // it's stored even if the first turn/start below fails.
         _persistThreadConfig();
       }
+      // Record what this turn puts on the wire BEFORE sending: turn/started
+      // (and the stamp it takes) can arrive while the await below is still in
+      // flight. Turn params override thread defaults, so on servers that never
+      // notify settings these ARE the effective values.
+      _sentModel = modelId;
+      _sentEffort = effort?.wire;
       // Pass the current model + permission + collaboration mode every turn:
       // turn/start overrides apply to this and subsequent turns, so switching
       // works mid-conversation.
@@ -1083,6 +1319,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
         setState(() {
           _planActive = _plan;
           _planToggledByUser = false;
+          // The user's model pick (if any) is now on the wire; server
+          // confirmations may sync the pill again.
+          _modelPickPending = false;
           // The effort this turn ran with is now the thread's active effort.
           _effortActive = effort;
           // Clear the pending pick ONLY if the user hasn't chosen a NEWER effort
@@ -1099,6 +1338,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
         // Persist the config now that the thread has an id — covers a brand-new
         // conversation whose settings were chosen before its first turn.
         _persistThreadConfig();
+        // Adopt the bridge's cached runtime config: for a brand-new thread the
+        // start response reported the effective model/permissions, and any
+        // settings notification that raced the send is folded in too.
+        _refreshRuntimeFromCache();
       }
     } catch (e) {
       final msg = friendlyError(e);
@@ -1220,7 +1463,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
   }
 
   /// Stop the elapsed ticker and append a per-turn duration footnote (用时 X,
-  /// hover → 完成于 HH:MM:SS). Local-only; call inside a `setState`.
+  /// hover → 完成于 HH:MM:SS), stamped with the model/effort the turn actually
+  /// ran with so a switch is verifiable per response. Local-only; call inside
+  /// a `setState`.
   void _finishTurn() {
     _elapsedTicker?.cancel();
     _elapsedTicker = null;
@@ -1236,6 +1481,12 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
         type: 'turnDuration',
         title: _fmtElapsed(now.difference(started).inSeconds),
         text: _fmtClock(now),
+        // Resolve to the display name now (the cached list can change later);
+        // an unlisted id stays raw — still truthful.
+        model: _modelDisplayLabel(_turnStampModel),
+        effortWire: _turnStampEffort,
+        modelConfirmed: _turnStampConfirmed,
+        modelRerouted: _turnRerouted,
       ),
     );
   }
@@ -1771,13 +2022,41 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
     );
   }
 
+  /// Display name for a model id, falling back to the raw id when it isn't in
+  /// the cached list (e.g. an unlisted config default). Null for null/empty.
+  String? _modelDisplayLabel(String? id) {
+    if (id == null || id.isEmpty) return null;
+    return _models.where((m) => m.id == id).firstOrNull?.displayName ?? id;
+  }
+
+  /// The model actively serving this thread, per the best truth available:
+  /// a server-confirmed runtime first; else what the app last sent (turn
+  /// params override thread defaults, so on servers that never notify the
+  /// sent value IS the effective one); else the server's start/resume
+  /// snapshot. Deliberately NOT the user's unsent selection — that's the
+  /// composer pill's job; this indicator only ever claims engaged state.
+  /// `confirmed` is true only when the shown id matches the server's report.
+  ({String id, bool confirmed})? _activeModelStatus() {
+    final rt = _runtime;
+    final String? id;
+    if (rt != null && rt.confirmedByUpdate) {
+      id = rt.model ?? _sentModel;
+    } else {
+      id = _sentModel ?? rt?.model;
+    }
+    if (id == null || id.isEmpty) return null;
+    final rtModel = rt?.model;
+    return (id: id, confirmed: rtModel != null && id == rtModel);
+  }
+
   /// A thin, always-visible status bar: a colored state chip (plan / working /
-  /// ready / disconnected) + the git branch, so the session's true state is
-  /// glanceable and consistent with the chat.
+  /// ready / disconnected) + the active model + the git branch, so the
+  /// session's true state is glanceable and consistent with the chat.
   Widget _statusBar(AppLocalizations l10n) {
     final scheme = Theme.of(context).colorScheme;
     final st = _sessionState(l10n);
     final d = _diff;
+    final activeModel = _activeModelStatus();
     return Container(
       width: double.infinity,
       color: st.color.withValues(alpha: 0.10),
@@ -1795,6 +2074,58 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
             ),
           ),
           const Spacer(),
+          // The model actively handling this thread's requests — server truth
+          // when confirmed (✓), else the best-known effective value. Tap for
+          // the full runtime configuration, so a model switch is verifiable.
+          if (activeModel != null) ...[
+            Tooltip(
+              message: l10n.activeModelTooltip,
+              child: InkWell(
+                key: const Key('active-model-chip'),
+                onTap: _showRuntimeSheet,
+                borderRadius: BorderRadius.circular(20),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 2,
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.auto_awesome,
+                        size: 12,
+                        color: scheme.onSurfaceVariant,
+                      ),
+                      const SizedBox(width: 4),
+                      ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 180),
+                        child: Text(
+                          _modelDisplayLabel(activeModel.id)!,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: scheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 3),
+                      Icon(
+                        activeModel.confirmed
+                            ? Icons.check_circle_outline
+                            : Icons.hourglass_empty,
+                        size: 11,
+                        color: activeModel.confirmed
+                            ? Colors.green.shade600
+                            : scheme.onSurfaceVariant,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+          ],
           // Live elapsed clock for the running turn — ticks each second next to
           // the working state, frozen + dropped into the transcript on turn end.
           if (_streaming) ...[
@@ -2914,7 +3245,15 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
                       children: [
                         _pill(
                           icon: Icons.auto_awesome,
-                          label: _model?.displayName ?? l10n.modelDefault,
+                          // With no explicit pick, show the model the server
+                          // actually runs (thread default) instead of an
+                          // opaque "default" — the pill stays the selection
+                          // control, but never misrepresents what will serve
+                          // the next turn.
+                          label:
+                              _model?.displayName ??
+                              _modelDisplayLabel(_runtime?.model) ??
+                              l10n.modelDefault,
                           onTap: _pickModel,
                         ),
                         _pill(
@@ -3202,6 +3541,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
     if (chosen != null || models.isNotEmpty) {
       setState(() {
         _model = chosen;
+        // Hold this pick against server-confirmed syncs until it's sent.
+        _modelPickPending = true;
         // If the new model doesn't support the current effort, fall back to its
         // default (or unset) so we never send a level the model rejects.
         final eff = _effectiveEffort;
@@ -3288,6 +3629,136 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
       _rememberDefaults();
       _persistThreadConfig();
     }
+  }
+
+  /// The full runtime configuration, opened from the status-bar model chip: a
+  /// read-only sheet of what this thread's turns actually run with — model,
+  /// reasoning effort, permissions, plan mode — with a provenance line saying
+  /// whether the server confirmed it (thread/settings/updated), it came from
+  /// the session's start/resume snapshot, or the server never reported and
+  /// the values shown are what this app sends.
+  void _showRuntimeSheet() {
+    final l10n = AppLocalizations.of(context);
+    final rt = _runtime;
+    final active = _activeModelStatus();
+    // Effort mirrors _activeModelStatus's precedence: confirmed server value
+    // (null = the model's default), else the app's effective pick, else the
+    // snapshot value.
+    final String effortText;
+    if (rt != null && rt.confirmedByUpdate) {
+      effortText = rt.reasoningEffort == null
+          ? l10n.runtimeEffortModelDefault
+          : ReasoningEffort(rt.reasoningEffort!).label(l10n);
+    } else {
+      final eff = _effectiveEffort?.wire ?? rt?.reasoningEffort;
+      effortText = eff == null
+          ? l10n.runtimeEffortModelDefault
+          : ReasoningEffort(eff).label(l10n);
+    }
+    // Permissions: the server-reported approval+sandbox pair (as a preset
+    // label when it maps onto one), else the mode the app sends every turn.
+    final String permText;
+    final approval = rt?.approvalPolicy;
+    final sandbox = rt?.sandboxMode;
+    if (approval != null || sandbox != null) {
+      final preset = PermissionMode.values
+          .where((m) => m.approval == approval && m.sandbox == sandbox)
+          .firstOrNull;
+      permText =
+          preset?.label(l10n) ?? '${approval ?? '—'} · ${sandbox ?? '—'}';
+    } else {
+      permText = _mode.label(l10n);
+    }
+    final collab = rt?.collaborationMode;
+    final planText = (collab ?? (_planActive ? 'plan' : 'default')) == 'plan'
+        ? l10n.statePlanMode
+        : l10n.runtimeCollabDefault;
+    final String provenance;
+    if (rt == null) {
+      provenance = l10n.runtimeUnavailable;
+    } else {
+      final at = _runtimeAt;
+      final time = at == null ? '' : _fmtClock(at);
+      provenance = rt.confirmedByUpdate
+          ? l10n.runtimeConfirmedAt(time)
+          : l10n.runtimeFromSnapshot(time);
+    }
+    final modelLabel = active == null ? '—' : _modelDisplayLabel(active.id)!;
+    final modelSub = <String>[
+      if (active != null && modelLabel != active.id) active.id,
+      if (rt?.modelProvider != null) rt!.modelProvider!,
+    ].join(' · ');
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (c) {
+        final scheme = Theme.of(c).colorScheme;
+        Widget row(IconData icon, String label, String value, {String? sub}) =>
+            ListTile(
+              dense: true,
+              leading: Icon(icon, size: 20, color: scheme.primary),
+              title: Text(label, style: const TextStyle(fontSize: 12)),
+              subtitle: Text(
+                sub == null || sub.isEmpty ? value : '$value\n$sub',
+                style: TextStyle(fontSize: 14, color: scheme.onSurface),
+              ),
+            );
+        return SafeArea(
+          // Scrollable so the rows never overflow a short sheet (small phones,
+          // landscape).
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 4),
+                  child: Text(
+                    l10n.runtimeSheetTitle,
+                    style: Theme.of(c).textTheme.titleMedium,
+                  ),
+                ),
+                row(
+                  Icons.auto_awesome,
+                  l10n.modelLabel,
+                  modelLabel,
+                  sub: modelSub,
+                ),
+                row(Icons.psychology_outlined, l10n.effort, effortText),
+                row(_modeIcon(), l10n.permissionLabel, permText),
+                row(Icons.checklist_rtl, l10n.planMode, planText),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
+                  child: Row(
+                    children: [
+                      Icon(
+                        rt != null && rt.confirmedByUpdate
+                            ? Icons.verified_outlined
+                            : Icons.info_outline,
+                        size: 14,
+                        color: rt != null && rt.confirmedByUpdate
+                            ? Colors.green.shade600
+                            : scheme.onSurfaceVariant,
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          provenance,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: scheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
   }
 
   Future<void> _pickProject() async {
@@ -4064,6 +4535,10 @@ class _MessageViewState extends State<_MessageView> {
         'turnDuration' => _TurnDurationFooter(
           duration: item.title,
           completedAt: item.text,
+          model: item.model,
+          effortWire: item.effortWire,
+          confirmed: item.modelConfirmed,
+          rerouted: item.modelRerouted,
         ),
         _ => _ActivityCard(item: item),
       };
@@ -4239,26 +4714,51 @@ class _SystemNotice extends StatelessWidget {
   }
 }
 
-/// A per-turn duration footnote dropped in after a turn ends: a subtle
-/// `用时 m:ss` tag whose tooltip (hover on desktop, long-press on mobile)
-/// reveals the wall-clock completion time `完成于 HH:MM:SS`.
+/// A per-turn footnote dropped in after a turn ends: a subtle `用时 m:ss` tag
+/// plus the model (and effort) that actually handled the turn, so a mid-chat
+/// model switch is verifiable per response. The tooltip (hover on desktop,
+/// long-press on mobile) reveals the wall-clock completion time and the
+/// stamp's provenance — server-confirmed vs as-sent-by-the-app — and flags a
+/// mid-turn server reroute.
 class _TurnDurationFooter extends StatelessWidget {
   const _TurnDurationFooter({
     required this.duration,
     required this.completedAt,
+    this.model,
+    this.effortWire,
+    this.confirmed = false,
+    this.rerouted = false,
   });
 
   final String duration;
   final String completedAt;
+  final String? model;
+  final String? effortWire;
+  final bool confirmed;
+  final bool rerouted;
 
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
     final muted = Theme.of(context).colorScheme.onSurfaceVariant;
+    final effort = ReasoningEffort.fromWire(effortWire);
+    final modelText = model == null
+        ? null
+        : effort == null
+        ? model!
+        : '$model · ${effort.label(l10n)}';
+    final tooltip = [
+      l10n.completedAt(completedAt),
+      if (model != null) l10n.turnHandledBy(model!),
+      if (rerouted)
+        l10n.modelReroutedNote
+      else if (model != null)
+        confirmed ? l10n.runtimeConfirmed : l10n.runtimeUnconfirmed,
+    ].join('\n');
     return Align(
       alignment: Alignment.centerLeft,
       child: Tooltip(
-        message: l10n.completedAt(completedAt),
+        message: tooltip,
         child: Padding(
           padding: const EdgeInsets.only(left: 6, top: 2, bottom: 4),
           child: Row(
@@ -4274,6 +4774,27 @@ class _TurnDurationFooter extends StatelessWidget {
                   fontFeatures: const [FontFeature.tabularFigures()],
                 ),
               ),
+              if (modelText != null) ...[
+                const SizedBox(width: 8),
+                Icon(Icons.auto_awesome, size: 11, color: muted),
+                const SizedBox(width: 4),
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 260),
+                  child: Text(
+                    modelText,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: 11.5, color: muted),
+                  ),
+                ),
+                if (rerouted) ...[
+                  const SizedBox(width: 3),
+                  Icon(
+                    Icons.sync_problem,
+                    size: 11,
+                    color: Colors.amber.shade800,
+                  ),
+                ],
+              ],
             ],
           ),
         ),
