@@ -801,9 +801,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
           if (_pendingInterrupt) {
             _addStoppedMarker();
           } else if (failure != null) {
-            _error = failure.isNotEmpty
-                ? failure
-                : AppLocalizations.of(context).turnFailed;
+            _error = _humanizeTurnError(failure);
             _retry = () => _send(retry: true);
           }
         });
@@ -821,13 +819,25 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
           if (_pendingInterrupt) {
             _addStoppedMarker();
           } else {
-            _error = e.text ?? AppLocalizations.of(context).turnFailed;
+            _error = _humanizeTurnError(e.text);
             _retry = () => _send(retry: true);
           }
         });
       default:
         _handleItemEvent(e);
     }
+  }
+
+  /// Turn a raw turn-failure string into what the user sees. An empty/absent
+  /// message falls back to the generic notice; a Windows-sandbox helper failure
+  /// (an embedded/自带 host that can't spawn its command sandbox) is rewritten
+  /// into actionable guidance — switch to no-sandbox Full mode, or use an
+  /// external host — instead of the raw "windows sandbox: spawn setup refresh".
+  String _humanizeTurnError(String? message) {
+    final l10n = AppLocalizations.of(context);
+    final text = message?.trim() ?? '';
+    if (text.isEmpty) return l10n.turnFailed;
+    return isSandboxHelperFailure(text) ? l10n.sandboxHelperUnavailable : text;
   }
 
   /// If a `turn/completed` event actually represents a FAILED turn (v2 reports

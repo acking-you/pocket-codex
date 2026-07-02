@@ -231,6 +231,10 @@ class AppLocalizationsEn extends AppLocalizations {
       'Turn didn\'t finish — the connection dropped or the remote codex failed. Retry, or check codex on the host machine (it may need to be logged in again).';
 
   @override
+  String get sandboxHelperUnavailable =>
+      'This built-in (自带) session can\'t start its command sandbox, so the agent can\'t run commands or read files here. Switch to \"Full access\" mode to run without a sandbox, or connect to an external/remote codex host.';
+
+  @override
   String get disconnect => 'Disconnect';
 
   @override

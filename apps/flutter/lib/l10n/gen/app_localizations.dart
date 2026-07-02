@@ -500,6 +500,12 @@ abstract class AppLocalizations {
   /// **'Turn didn\'t finish — the connection dropped or the remote codex failed. Retry, or check codex on the host machine (it may need to be logged in again).'**
   String get turnFailed;
 
+  /// Shown when an embedded (in-process) codex turn fails because the OS sandbox helpers aren't available; guides the user to the no-sandbox Full mode or an external host.
+  ///
+  /// In en, this message translates to:
+  /// **'This built-in (自带) session can\'t start its command sandbox, so the agent can\'t run commands or read files here. Switch to \"Full access\" mode to run without a sandbox, or connect to an external/remote codex host.'**
+  String get sandboxHelperUnavailable;
+
   /// No description provided for @disconnect.
   ///
   /// In en, this message translates to:

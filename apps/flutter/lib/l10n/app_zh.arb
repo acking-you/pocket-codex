@@ -73,6 +73,7 @@
   "thinking": "思考中…",
   "emptyConversation": "发送消息开始对话",
   "turnFailed": "本轮未完成 —— 连接中断或远程 codex 异常。请重试,或检查主机上的 codex(可能需重新登录)。",
+  "sandboxHelperUnavailable": "此自带会话无法启动命令沙箱,因此智能体在这里无法执行命令或读取文件。请切换到「完全放行」模式(不使用沙箱运行),或连接到外部/远程 codex 主机。",
   "disconnect": "断开连接",
   "connectionLost": "连接已断开",
   "reconnect": "重新连接",
