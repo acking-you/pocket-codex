@@ -31,11 +31,11 @@ fn init_and_host(name: &str, embedded: bool) -> crate::api::bridge::AppServeDto 
     api::init_bridge(support).expect("init_bridge");
     // Host a codex under a dedicated name; the caller stops it. Embedded
     // (自带) hosts CAN run the agent's tools: with a `danger-full-access`
-    // (no-sandbox) turn nothing extra is needed, and with a real sandbox they
-    // need the two Windows helper exes staged next to the binary (see
-    // `stage_windows_sandbox_helpers`) plus an *unelevated* level
-    // (`POCKET_CODEX_CODEX_CONFIG=windows.sandbox=unelevated`) so setup needs no
-    // admin. Both are proven by the embedded_file_turn_* tests below.
+    // (no-sandbox) turn nothing extra is needed, and with a real sandbox it is
+    // enough to stage the two Windows helper exes next to the binary (see
+    // `stage_windows_sandbox_helpers`) — the app then auto-selects the unelevated
+    // (no-admin) restricted-token level. Both are proven by the
+    // embedded_file_turn_* tests below.
     //
     // POCKET_CODEX_E2E_PORT: adopt a codex you started yourself on that port
     // (`codex app-server --listen ws://127.0.0.1:<port>`) instead of spawning
@@ -109,32 +109,39 @@ fn embedded_file_turn_no_sandbox_round_trips() {
     }
 }
 
-/// Stage the two Windows sandbox helper exes next to the CURRENT binary so an
-/// embedded codex resolves them the same way external `codex.exe` finds its
-/// bundled `codex-resources/` siblings. This is the exact mechanism the desktop
-/// release bundles for real users (follow-up); here it lets the embedded
-/// sandboxed-mode test run. Copies from `target/<profile>/` (build them first:
-/// `cargo build -p codex-windows-sandbox --bin codex-windows-sandbox-setup
-/// --bin codex-command-runner`). No-op off Windows / when sources are absent.
+/// Stage the two Windows sandbox helper exes into `<test-exe
+/// dir>/codex-resources/` — the exact layout the desktop release bundles and
+/// that both codex (`find_setup_exe` / `resolve_helper_for_launch`) and our own
+/// `embedded_config_overrides` look for next to the running binary. Build them
+/// first: `cargo build [--release] -p codex-windows-sandbox
+/// --bin codex-windows-sandbox-setup --bin codex-command-runner`. Searches both
+/// `target/debug` and `target/release`. No-op off Windows / when sources
+/// absent.
 #[cfg(target_os = "windows")]
 fn stage_windows_sandbox_helpers() {
     let exe = std::env::current_exe().expect("current exe");
-    // Test binary lives at target/<profile>/deps/<name>.exe; the built helper
-    // bins are at target/<profile>/<name>.exe (deps' parent).
+    // Test binary lives at target/<profile>/deps/<name>.exe; helper bins are at
+    // target/<profile>/<name>.exe, i.e. under the target dir (deps' grandparent).
     let deps_dir = exe.parent().expect("exe dir");
-    let profile_dir = deps_dir.parent().expect("profile dir");
-    // find_setup_exe / resolve_helper_for_launch check `<dir>/codex-resources/`.
+    let target_dir = deps_dir
+        .parent()
+        .and_then(|p| p.parent())
+        .expect("target dir");
+    // embedded resolves helpers from `<exe dir>/codex-resources/`.
     let resources = deps_dir.join("codex-resources");
     std::fs::create_dir_all(&resources).expect("create codex-resources");
     for name in ["codex-windows-sandbox-setup.exe", "codex-command-runner.exe"] {
-        let src = profile_dir.join(name);
-        if !src.is_file() {
-            println!("helper source missing (build it first): {}", src.display());
+        let src = ["release", "debug"]
+            .into_iter()
+            .map(|profile| target_dir.join(profile).join(name))
+            .find(|p| p.is_file());
+        let Some(src) = src else {
+            println!("helper source missing (build it first): {name}");
             continue;
-        }
+        };
         let dst = resources.join(name);
         match std::fs::copy(&src, &dst) {
-            Ok(_) => println!("staged helper: {}", dst.display()),
+            Ok(_) => println!("staged helper: {} -> {}", src.display(), dst.display()),
             // A prior sandboxed run can leave the helper open briefly.
             Err(e) if dst.exists() => println!("kept staged helper {}: {e}", dst.display()),
             Err(e) => panic!("staging {}: {e}", dst.display()),
@@ -142,11 +149,12 @@ fn stage_windows_sandbox_helpers() {
     }
 }
 
-/// EMBEDDED codex with a real OS sandbox (`read-only`), proving the helper-exe
-/// mechanism: with the two helpers staged next to the binary, the in-process
-/// host runs the sandboxed shell tool and reads the file. Honors the host
-/// `~/.codex` `[windows] sandbox` level (elevated may need admin/UAC; set
-/// `-c windows.sandbox=unelevated` there to use the no-admin restricted token).
+/// EMBEDDED codex with a real OS sandbox (`read-only`) — the packaged desktop
+/// behavior. Staging the two helpers into `codex-resources/` is all it takes:
+/// `embedded_config_overrides` sees them and auto-selects the unelevated
+/// restricted-token sandbox (no `POCKET_CODEX_CODEX_CONFIG`, no admin/UAC),
+/// then the in-process host runs the sandboxed shell tool and reads the file.
+/// This exercises exactly what the release bundle ships.
 #[cfg(target_os = "windows")]
 #[test]
 #[ignore = "manual e2e: needs a signed-in account, staged sandbox helpers, spends a real model call"]

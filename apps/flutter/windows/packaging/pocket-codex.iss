@@ -53,6 +53,9 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Additional icons:"
 
 [Files]
+; recursesubdirs also ships build\...\Release\codex-resources\ — codex's Windows
+; sandbox helper exes the release workflow stages there for the embedded codex.
+; No separate entry: a second glob would double-include them.
 Source: "{#BuildDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
 
 [Icons]

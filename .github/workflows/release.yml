@@ -198,6 +198,24 @@ jobs:
         run: |
           flutter pub get
           flutter build windows --release
+      # Bundle codex's Windows sandbox helper exes next to the app. The
+      # in-process (自带) codex resolves them from codex-resources/ and, seeing
+      # them there, defaults to the UNELEVATED restricted-token sandbox
+      # (embedded.rs) — so the agent's shell/file tools run sandboxed on the
+      # normal modes without the user switching to Full access or needing admin.
+      # They ship automatically: the installer's [Files] glob and the portable
+      # zip both recurse the Release dir.
+      - name: Bundle Windows sandbox helpers (embedded codex)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          cargo build --release -p codex-windows-sandbox `
+            --bin codex-windows-sandbox-setup --bin codex-command-runner
+          $res = "apps/flutter/build/windows/x64/runner/Release/codex-resources"
+          New-Item -ItemType Directory -Force $res | Out-Null
+          Copy-Item "target/release/codex-windows-sandbox-setup.exe" $res -Force
+          Copy-Item "target/release/codex-command-runner.exe" $res -Force
+          Get-ChildItem $res | Format-Table Name, Length
       - name: Package (installer + portable zip)
         shell: pwsh
         working-directory: apps/flutter
