@@ -41,4 +41,11 @@ A new Flutter FFI plugin project.
     'EXCLUDED_ARCHS[sdk=iphonesimulator*]' => 'i386',
     'OTHER_LDFLAGS' => '-force_load ${BUILT_PRODUCTS_DIR}/libpocket_codex_bridge.a',
   }
+  # System libraries the Rust staticlib expects at final link:
+  #  - z/bz2/lzma: flate2, bzip2 and xz2 (via codex-core-plugins -> zip)
+  #    bind the platform copies instead of vendoring C sources.
+  #  - SystemConfiguration: proxy/interface discovery pulled in through
+  #    hyper-util's `system-configuration` backend (codex-aws-auth).
+  s.libraries = 'z', 'bz2', 'lzma'
+  s.frameworks = 'SystemConfiguration'
 end
