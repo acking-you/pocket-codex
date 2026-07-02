@@ -1,0 +1,16 @@
+# Cargokit (flutter_rust_bridge build glue) options for this crate, read
+# by `apps/flutter/rust_builder/cargokit` when Flutter builds the bridge.
+#
+# Debug (`flutter run` / `flutter build --debug`) staticlibs of this crate
+# archive the whole codex + pb-mapper dependency tree with full debuginfo
+# and exceed 4 GiB on Apple targets. `lipo -create`, which cargokit always
+# runs to assemble the universal library, stores member sizes in 32-bit
+# `struct fat_arch` fields and aborts on such archives. Trimming dependency
+# debuginfo to line tables keeps file:line backtraces while staying far
+# under the limit (and also shrinks Android/Windows/Linux debug builds).
+# Release builds are unaffected.
+cargo:
+  debug:
+    extra_flags:
+      - "--config"
+      - profile.dev.debug="line-tables-only"
