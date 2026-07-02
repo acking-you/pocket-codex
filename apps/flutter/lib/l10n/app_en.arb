@@ -74,6 +74,19 @@
     "placeholders": { "path": { "type": "String" } }
   },
   "imageOnlyMessage": "[Image]",
+  "attachFile": "Attach file",
+  "removeFile": "Remove file",
+  "filePickFailed": "Couldn't read the selected file",
+  "fileTooMany": "At most {count} files per message",
+  "@fileTooMany": {
+    "placeholders": { "count": { "type": "int" } }
+  },
+  "fileTooLarge": "File exceeds the {mb} MB limit",
+  "@fileTooLarge": {
+    "placeholders": { "mb": { "type": "int" } }
+  },
+  "fileUploadFailed": "Couldn't upload the file to the host",
+  "fileOnlyMessage": "[File]",
   "interrupt": "Interrupt",
   "thinking": "Thinking…",
   "emptyConversation": "Send a message to start the conversation",

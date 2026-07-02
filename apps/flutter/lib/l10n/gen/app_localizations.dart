@@ -434,6 +434,48 @@ abstract class AppLocalizations {
   /// **'[Image]'**
   String get imageOnlyMessage;
 
+  /// No description provided for @attachFile.
+  ///
+  /// In en, this message translates to:
+  /// **'Attach file'**
+  String get attachFile;
+
+  /// No description provided for @removeFile.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove file'**
+  String get removeFile;
+
+  /// No description provided for @filePickFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Couldn\'t read the selected file'**
+  String get filePickFailed;
+
+  /// No description provided for @fileTooMany.
+  ///
+  /// In en, this message translates to:
+  /// **'At most {count} files per message'**
+  String fileTooMany(int count);
+
+  /// No description provided for @fileTooLarge.
+  ///
+  /// In en, this message translates to:
+  /// **'File exceeds the {mb} MB limit'**
+  String fileTooLarge(int mb);
+
+  /// No description provided for @fileUploadFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Couldn\'t upload the file to the host'**
+  String get fileUploadFailed;
+
+  /// No description provided for @fileOnlyMessage.
+  ///
+  /// In en, this message translates to:
+  /// **'[File]'**
+  String get fileOnlyMessage;
+
   /// No description provided for @interrupt.
   ///
   /// In en, this message translates to:

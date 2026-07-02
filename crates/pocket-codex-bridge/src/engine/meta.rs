@@ -126,6 +126,42 @@ pub fn transcript(service_key: &str, thread_id: &str) -> Result<Vec<TranscriptIt
     Ok(resp.items)
 }
 
+/// A stored attachment upload, echoed by the host. (The response also carries
+/// a `size` field; the caller already knows the byte count it sent, so only
+/// the path is modelled.)
+#[derive(Deserialize)]
+pub struct UploadedFile {
+    /// Absolute HOST filesystem path where the file landed.
+    pub path: String,
+}
+
+/// Big documents over a slow relay hop can outlive [`META_TIMEOUT`]; uploads
+/// get their own generous per-request bound instead.
+const UPLOAD_TIMEOUT: Duration = Duration::from_secs(180);
+
+/// Upload a document/file attachment to the host behind `service_key`,
+/// returning where it landed on the HOST filesystem. The turn text then
+/// references that path so the agent reads the file with its own tools —
+/// codex's native host-file workflow (its input protocol has no document
+/// slot; only images travel inline).
+pub fn upload_file(service_key: &str, file_name: &str, bytes: Vec<u8>) -> Result<UploadedFile> {
+    let url = endpoint(service_key, &["uploads", file_name])?;
+    runtime::runtime().block_on(async move {
+        let resp = client()
+            .post(url)
+            .timeout(UPLOAD_TIMEOUT)
+            .body(bytes)
+            .send()
+            .await
+            .context("meta POST upload")?;
+        ensure_ok(resp)
+            .await?
+            .json()
+            .await
+            .context("decoding upload response")
+    })
+}
+
 /// Force-resume a remote session into its host's colocated app-server.
 pub fn force_resume(service_key: &str, thread_id: &str) -> Result<ForceResumeOutcome> {
     let url = endpoint(service_key, &["sessions", thread_id, "resume"])?;

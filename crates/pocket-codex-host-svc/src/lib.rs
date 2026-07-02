@@ -20,9 +20,9 @@ pub mod store;
 
 use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use axum::{
-    extract::{Path, State},
+    extract::{DefaultBodyLimit, Path, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -78,6 +78,12 @@ pub async fn serve(
         .route("/sessions/{id}/transcript", get(session_transcript))
         .route("/sessions/{id}/resume", post(session_resume))
         .route("/threads/{id}/config", get(get_config).put(put_config))
+        // Attachment uploads carry whole files; raise the 2 MB default body cap
+        // on this route only.
+        .route(
+            "/uploads/{name}",
+            post(upload_file).layer(DefaultBodyLimit::max(UPLOAD_BODY_LIMIT)),
+        )
         .with_state(state);
     axum::serve(listener, app)
         .await
@@ -187,4 +193,155 @@ async fn put_config(
     // Echo what is actually stored (re-read), not the request body, so the
     // response reflects the persisted state.
     Ok(Json(state.store.get(&id).await))
+}
+
+/// Per-file cap for `/uploads/{name}` bodies. Generous for documents while
+/// keeping a runaway request bounded (the tunnel itself has no practical cap).
+const UPLOAD_BODY_LIMIT: usize = 64 * 1024 * 1024;
+
+/// `{ "path": ..., "size": ... }` — where an uploaded attachment landed.
+#[derive(Serialize)]
+struct UploadResponse {
+    /// Absolute host filesystem path of the stored file.
+    path: String,
+    /// Stored size in bytes.
+    size: u64,
+}
+
+/// Store an uploaded attachment under `$CODEX_HOME/pocket-codex-uploads/` and
+/// return its absolute host path. The controller then references that path in
+/// the turn text, and the agent reads it with its own tools — codex's native
+/// host-file workflow (its input protocol has no document slot). Only the
+/// authenticated account owner can reach this tunnel; the filename is
+/// sanitized to a single path component regardless.
+async fn upload_file(
+    Path(name): Path<String>,
+    body: axum::body::Bytes,
+) -> Result<Json<UploadResponse>, ApiError> {
+    let home = pocket_codex_codex::rollout::codex_home().context("resolving CODEX_HOME")?;
+    let dir = home.join("pocket-codex-uploads");
+    tokio::fs::create_dir_all(&dir)
+        .await
+        .with_context(|| format!("creating uploads dir {}", dir.display()))?;
+    let path = save_upload(&dir, &name, &body).await?;
+    Ok(Json(UploadResponse {
+        path: path.display().to_string(),
+        size: body.len() as u64,
+    }))
+}
+
+/// Write `bytes` into a fresh per-upload subdirectory of `dir` under the
+/// sanitized client-provided `name`; returns the final path. A subdirectory
+/// (millisecond timestamp, counter-bumped on collision) rather than a name
+/// prefix keeps the file's BASENAME exactly what the user attached — the path
+/// is quoted into the prompt and rendered as a chip, so `report.pdf` must not
+/// become `1735689…-report.pdf`.
+async fn save_upload(
+    dir: &std::path::Path,
+    name: &str,
+    bytes: &[u8],
+) -> Result<PathBuf, anyhow::Error> {
+    let safe = sanitize_file_name(name)?;
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    // CLAIM the subdirectory atomically with `create_dir` (which errors on an
+    // existing dir) — a check-then-create would let two same-millisecond
+    // uploads share one subdir and silently overwrite same-named files.
+    let mut n = 0u32;
+    let sub = loop {
+        let cand =
+            if n == 0 { dir.join(format!("{millis}")) } else { dir.join(format!("{millis}-{n}")) };
+        match tokio::fs::create_dir(&cand).await {
+            Ok(()) => break cand,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => n += 1,
+            Err(e) => {
+                return Err(e).with_context(|| format!("creating upload dir {}", cand.display()));
+            },
+        }
+    };
+    let path = sub.join(safe);
+    tokio::fs::write(&path, bytes)
+        .await
+        .with_context(|| format!("writing upload {}", path.display()))?;
+    Ok(path)
+}
+
+/// Reduce a client-supplied filename to one safe path component: strips
+/// directory separators and traversal, drops characters Windows forbids,
+/// trims TRAILING dots/spaces (the Windows-compat problem — leading dots are
+/// meaningful dotfile names and survive), sidesteps Windows reserved device
+/// names, and caps the length. Errors only when nothing usable remains.
+fn sanitize_file_name(name: &str) -> Result<String, anyhow::Error> {
+    let cleaned: String = name
+        .chars()
+        .filter(|c| !matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|'))
+        .filter(|c| !c.is_control())
+        .collect();
+    let trimmed = cleaned.trim_start_matches(' ').trim_end_matches([' ', '.']);
+    if trimmed.is_empty() {
+        return Err(anyhow!("filename `{name}` has no usable characters"));
+    }
+    let capped: String = trimmed.chars().take(120).collect();
+    // `CON`/`NUL`/`COM1`… (bare or with any extension) open DOS devices instead
+    // of files on Windows hosts — the write would vanish into the device.
+    // Prefix them so the bytes land on disk.
+    let stem = capped.split('.').next().unwrap_or("").to_ascii_uppercase();
+    let reserved = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || (stem.len() == 4
+            && (stem.starts_with("COM") || stem.starts_with("LPT"))
+            && stem[3..].chars().all(|c| c.is_ascii_digit() && c != '0'));
+    if reserved {
+        return Ok(format!("_{capped}"));
+    }
+    Ok(capped)
+}
+
+#[cfg(test)]
+mod upload_tests {
+    use super::*;
+
+    #[test]
+    fn sanitize_strips_traversal_and_separators() {
+        let clean = |n: &str| sanitize_file_name(n).expect("sanitizable name");
+        assert_eq!(clean("report.pdf"), "report.pdf");
+        // Traversal never escapes the uploads dir: separators are removed and
+        // what remains is one path component (leading dots are harmless there).
+        assert_eq!(clean("../../etc/passwd"), "....etcpasswd");
+        assert_eq!(clean(r"..\..\boot.ini"), "....boot.ini");
+        assert_eq!(clean("a:b*c?d\"e<f>g|h.txt"), "abcdefgh.txt");
+        // CJK names survive.
+        assert_eq!(clean("报告.md"), "报告.md");
+        // Dotfiles keep their leading dot (only TRAILING dots/spaces are the
+        // Windows-compat problem) — '.env' must not become 'env'.
+        assert_eq!(clean(".env"), ".env");
+        assert_eq!(clean("notes.txt.  "), "notes.txt");
+        // Windows reserved device names are defused with a prefix.
+        assert_eq!(clean("nul.txt"), "_nul.txt");
+        assert_eq!(clean("COM1"), "_COM1");
+        assert_eq!(clean("common.txt"), "common.txt"); // not COM<digit>
+                                                       // Nothing usable → error.
+        assert!(sanitize_file_name("../..").is_err());
+        assert!(sanitize_file_name("").is_err());
+    }
+
+    #[tokio::test]
+    async fn save_upload_writes_and_never_overwrites() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let a = save_upload(dir.path(), "notes.txt", b"one")
+            .await
+            .expect("first");
+        let b = save_upload(dir.path(), "notes.txt", b"two")
+            .await
+            .expect("second");
+        assert_ne!(a, b, "same name must not overwrite");
+        assert_eq!(std::fs::read(&a).expect("read a"), b"one");
+        assert_eq!(std::fs::read(&b).expect("read b"), b"two");
+        assert!(a.starts_with(dir.path()) && b.starts_with(dir.path()));
+        // The basename stays exactly what was attached — it is quoted into the
+        // prompt and rendered as a chip.
+        assert_eq!(a.file_name().and_then(|n| n.to_str()), Some("notes.txt"));
+        assert_eq!(b.file_name().and_then(|n| n.to_str()), Some("notes.txt"));
+    }
 }

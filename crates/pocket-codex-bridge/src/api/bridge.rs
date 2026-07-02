@@ -1066,6 +1066,16 @@ pub fn meta_force_resume(service_key: String, thread_id: String) -> Result<Force
     })
 }
 
+/// Upload a document/file attachment to the host behind `service_key` (over
+/// its meta tunnel — loopback when this app is the host), returning the
+/// absolute HOST filesystem path where it was stored. The turn text then
+/// references that path so the agent reads the file with its own tools —
+/// codex's native host-file workflow (its input protocol carries only text
+/// and images inline; there is no document slot).
+pub fn meta_upload_file(service_key: String, file_name: String, bytes: Vec<u8>) -> Result<String> {
+    Ok(meta::upload_file(&service_key, &file_name, bytes)?.path)
+}
+
 /// Read a thread's persisted config from the host behind `service_key`.
 pub fn meta_thread_config_get(service_key: String, thread_id: String) -> Result<ThreadConfigDto> {
     Ok(thread_config_dto(meta::config_get(&service_key, &thread_id)?))

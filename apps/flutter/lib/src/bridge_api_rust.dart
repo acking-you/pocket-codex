@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:pocket_codex/src/bridge_api.dart';
 import 'package:pocket_codex/src/rust/api/bridge.dart' as frb;
 
@@ -597,6 +599,17 @@ class RustBridgeApi implements BridgeApi {
       resumeError: r.resumeError,
     );
   }
+
+  @override
+  Future<String> metaUploadFile(
+    String serviceKey,
+    String fileName,
+    Uint8List bytes,
+  ) => frb.metaUploadFile(
+    serviceKey: serviceKey,
+    fileName: fileName,
+    bytes: bytes,
+  );
 
   @override
   Future<ThreadConfig> metaThreadConfigGet(

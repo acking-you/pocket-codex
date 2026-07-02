@@ -4,6 +4,7 @@ import 'package:file_selector/file_selector.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
+import 'package:pocket_codex/src/attachment_refs.dart';
 import 'package:pocket_codex/src/image_attachments.dart';
 
 /// One message attachment resolved from its wire URL: either renderable
@@ -88,25 +89,25 @@ class MessageImagesView extends StatelessWidget {
       child: Stack(
         children: [
           Image.memory(
-          renderable[index],
-          key: Key('msg-image-$index'),
-          width: side,
-          height: side,
-          fit: BoxFit.cover,
-          // Decode near thumbnail resolution — full-res frames for every
-          // thumb would hold megabytes of pixels per message. 2× the box so a
-          // landscape image's SHORT edge still reaches the square cover box
-          // (cacheWidth alone would decode it too short and upscale blurry).
-          cacheWidth: (side * scale * 2).round(),
-          gaplessPlayback: true,
-          errorBuilder: (context, _, _) => SizedBox(
+            renderable[index],
+            key: Key('msg-image-$index'),
             width: side,
             height: side,
-            child: Icon(
-              Icons.broken_image_outlined,
-              color: Theme.of(context).colorScheme.outline,
+            fit: BoxFit.cover,
+            // Decode near thumbnail resolution — full-res frames for every
+            // thumb would hold megabytes of pixels per message. 2× the box so a
+            // landscape image's SHORT edge still reaches the square cover box
+            // (cacheWidth alone would decode it too short and upscale blurry).
+            cacheWidth: (side * scale * 2).round(),
+            gaplessPlayback: true,
+            errorBuilder: (context, _, _) => SizedBox(
+              width: side,
+              height: side,
+              child: Icon(
+                Icons.broken_image_outlined,
+                color: Theme.of(context).colorScheme.outline,
+              ),
             ),
-          ),
           ),
           // A local transparent Material ON TOP of the opaque image so the
           // tap ripple is actually visible (ink on the distant Scaffold
@@ -156,6 +157,61 @@ class MessageImagesView extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// Chips for a message's document attachments — host paths parsed back from
+/// the text's attached-files block (see `attachment_refs.dart`). Their bytes
+/// never crossed the wire; the chip names the file, the tooltip shows the
+/// full HOST path the agent was given.
+class FileRefChips extends StatelessWidget {
+  /// Creates chips for the parsed host [paths].
+  const FileRefChips({super.key, required this.paths});
+
+  /// Absolute host paths, in message order.
+  final List<String> paths;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Wrap(
+      spacing: 6,
+      runSpacing: 6,
+      children: [
+        for (final path in paths)
+          Tooltip(
+            message: path,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: scheme.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: scheme.outlineVariant),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.description_outlined,
+                    size: 16,
+                    color: scheme.onSurfaceVariant,
+                  ),
+                  const SizedBox(width: 6),
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 200),
+                    child: Text(
+                      hostPathBasename(path),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+      ],
     );
   }
 }

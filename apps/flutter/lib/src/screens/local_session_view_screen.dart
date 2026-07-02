@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
+import 'package:pocket_codex/src/attachment_refs.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
 import 'package:pocket_codex/src/error_format.dart';
 import 'package:pocket_codex/src/fonts.dart';
@@ -190,8 +191,10 @@ class _LocalSessionViewState extends ConsumerState<LocalSessionViewScreen> {
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
+    // A file-only first message's preview is the raw attached-files wire
+    // block — show the placeholder rather than header markup in the app bar.
     final title = (widget.preview != null && widget.preview!.trim().isNotEmpty)
-        ? widget.preview!.trim()
+        ? previewWithoutFileRefs(widget.preview!.trim(), l10n.fileOnlyMessage)
         : widget.threadId;
     return Scaffold(
       appBar: AppBar(
@@ -366,6 +369,9 @@ class _TranscriptRow extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     switch (item.itemType) {
       case 'userMessage':
+        // Document attachments ride the text as a trailing path-reference
+        // block; show them as chips and only the typed text (display-only).
+        final refs = splitFileRefs(item.text);
         // Cap the bubble to a fraction of the *content* width (the centred
         // column), not the whole screen — otherwise it stretches too wide on a
         // desktop window.
@@ -385,9 +391,13 @@ class _TranscriptRow extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
                   if (images.isNotEmpty) MessageImagesView(images: images),
-                  if (images.isNotEmpty && item.text.isNotEmpty)
+                  if (images.isNotEmpty &&
+                      (refs.text.isNotEmpty || refs.paths.isNotEmpty))
                     const SizedBox(height: 8),
-                  if (item.text.isNotEmpty) Text(item.text),
+                  if (refs.paths.isNotEmpty) FileRefChips(paths: refs.paths),
+                  if (refs.paths.isNotEmpty && refs.text.isNotEmpty)
+                    const SizedBox(height: 8),
+                  if (refs.text.isNotEmpty) Text(refs.text),
                 ],
               ),
             ),

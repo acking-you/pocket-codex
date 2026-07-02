@@ -97,10 +97,11 @@ dev_dependencies:
   flutter_lints: ^6.0.0
   integration_test:
     sdk: flutter
-  # Widget tests swap ImagePickerPlatform.instance for a fake (the real picker
-  # is a platform channel that can't run headless). Both are already in the
-  # dependency graph via image_picker; declared so tests may import them.
+  # Widget tests swap ImagePickerPlatform.instance / FileSelectorPlatform.instance
+  # for fakes (the real pickers are platform channels that can't run headless).
+  # All are already in the dependency graph; declared so tests may import them.
   image_picker_platform_interface: ^2.11.0
+  file_selector_platform_interface: ^2.6.0
   plugin_platform_interface: ^2.1.8
   flutter_launcher_icons: ^0.14.2
   flutter_native_splash: ^2.4.3

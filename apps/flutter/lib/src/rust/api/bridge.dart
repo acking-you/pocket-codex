@@ -394,6 +394,22 @@ Future<ForceResumeReportDto> metaForceResume({
   threadId: threadId,
 );
 
+/// Upload a document/file attachment to the host behind `service_key` (over
+/// its meta tunnel — loopback when this app is the host), returning the
+/// absolute HOST filesystem path where it was stored. The turn text then
+/// references that path so the agent reads the file with its own tools —
+/// codex's native host-file workflow (its input protocol carries only text
+/// and images inline; there is no document slot).
+Future<String> metaUploadFile({
+  required String serviceKey,
+  required String fileName,
+  required List<int> bytes,
+}) => RustLib.instance.api.crateApiBridgeMetaUploadFile(
+  serviceKey: serviceKey,
+  fileName: fileName,
+  bytes: bytes,
+);
+
 /// Read a thread's persisted config from the host behind `service_key`.
 Future<ThreadConfigDto> metaThreadConfigGet({
   required String serviceKey,

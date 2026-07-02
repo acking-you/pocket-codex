@@ -190,6 +190,31 @@ class AppLocalizationsZh extends AppLocalizations {
   String get imageOnlyMessage => '[图片]';
 
   @override
+  String get attachFile => '附加文件';
+
+  @override
+  String get removeFile => '移除文件';
+
+  @override
+  String get filePickFailed => '无法读取所选文件';
+
+  @override
+  String fileTooMany(int count) {
+    return '每条消息最多附加 $count 个文件';
+  }
+
+  @override
+  String fileTooLarge(int mb) {
+    return '文件超过 $mb MB 上限';
+  }
+
+  @override
+  String get fileUploadFailed => '上传文件到主机失败';
+
+  @override
+  String get fileOnlyMessage => '[文件]';
+
+  @override
   String get interrupt => '打断';
 
   @override
