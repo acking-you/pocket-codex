@@ -2,6 +2,8 @@
 /// UI and tests do not import generated bindings).
 library;
 
+import 'dart:typed_data';
+
 /// A discovered service on the relay.
 class ServiceEntry {
   /// Creates a service entry.
@@ -955,6 +957,18 @@ abstract interface class BridgeApi {
   /// and resumes it into its colocated app-server. Gate on explicit
   /// confirmation; do not call while a turn is actively running.
   Future<ForceResumeReport> metaForceResume(String serviceKey, String threadId);
+
+  /// Upload a document/file attachment to the host behind [serviceKey] (over
+  /// its meta tunnel — loopback when this app is the host). Returns the
+  /// absolute HOST filesystem path where it was stored; the turn text then
+  /// references that path so the agent reads the file with its own tools —
+  /// codex's native host-file workflow (its input protocol carries only text
+  /// and images inline; there is no document slot).
+  Future<String> metaUploadFile(
+    String serviceKey,
+    String fileName,
+    Uint8List bytes,
+  );
 
   /// Read a thread's persisted config from the host behind [serviceKey]
   /// (all-null when none stored).

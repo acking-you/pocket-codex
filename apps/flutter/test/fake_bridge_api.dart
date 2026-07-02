@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:pocket_codex/src/bridge_api.dart';
 
@@ -632,6 +633,27 @@ class FakeBridgeApi implements BridgeApi {
     lastMetaResumedKey = serviceKey;
     lastMetaResumedThread = threadId;
     return forceResumeResult;
+  }
+
+  /// Records the last [metaUploadFile] call for assertions.
+  String? lastUploadName;
+
+  /// Bytes passed to the last [metaUploadFile].
+  Uint8List? lastUploadBytes;
+
+  /// When set, [metaUploadFile] throws it instead of returning a path.
+  Object? uploadError;
+
+  @override
+  Future<String> metaUploadFile(
+    String serviceKey,
+    String fileName,
+    Uint8List bytes,
+  ) async {
+    if (uploadError != null) throw uploadError!;
+    lastUploadName = fileName;
+    lastUploadBytes = bytes;
+    return '/host/uploads/123/$fileName';
   }
 
   @override

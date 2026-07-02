@@ -193,6 +193,31 @@ class AppLocalizationsEn extends AppLocalizations {
   String get imageOnlyMessage => '[Image]';
 
   @override
+  String get attachFile => 'Attach file';
+
+  @override
+  String get removeFile => 'Remove file';
+
+  @override
+  String get filePickFailed => 'Couldn\'t read the selected file';
+
+  @override
+  String fileTooMany(int count) {
+    return 'At most $count files per message';
+  }
+
+  @override
+  String fileTooLarge(int mb) {
+    return 'File exceeds the $mb MB limit';
+  }
+
+  @override
+  String get fileUploadFailed => 'Couldn\'t upload the file to the host';
+
+  @override
+  String get fileOnlyMessage => '[File]';
+
+  @override
   String get interrupt => 'Interrupt';
 
   @override

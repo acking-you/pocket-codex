@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
+import 'package:pocket_codex/src/attachment_refs.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
 import 'package:pocket_codex/src/error_format.dart';
 import 'package:pocket_codex/src/providers.dart';
@@ -349,7 +350,12 @@ class _SessionRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
     final scheme = Theme.of(context).colorScheme;
-    final preview = session.preview.trim();
+    // A file-only first message's preview IS the raw attached-files wire
+    // block; show the placeholder instead of the header markup.
+    final preview = previewWithoutFileRefs(
+      session.preview.trim(),
+      l10n.fileOnlyMessage,
+    );
     // Running sessions read "运行中"; everything else gets a relative-time tag.
     final time = session.safety == 'ownedRunning'
         ? l10n.running

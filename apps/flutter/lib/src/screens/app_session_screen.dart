@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:file_selector/file_selector.dart' show openFiles;
 import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -11,6 +12,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:super_sliver_list/super_sliver_list.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/app_modes.dart';
+import 'package:pocket_codex/src/attachment_refs.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
 import 'package:pocket_codex/src/context_status.dart';
 import 'package:pocket_codex/src/error_format.dart';
@@ -103,13 +105,23 @@ class _Item {
   bool get isNotice => type == 'contextCompaction' || type == 'interrupted';
 }
 
-/// One composer attachment: picked image bytes being processed (EXIF-bake /
-/// downscale / re-encode in a background isolate), then ready to send.
+/// One composer attachment. An IMAGE is processed locally (EXIF-bake /
+/// downscale / re-encode in a background isolate) and travels inline as a
+/// data URL; a FILE is uploaded to the HOST over the meta tunnel and travels
+/// as a path reference in the turn text (codex's native document workflow —
+/// its input protocol has no document slot). Either kind shows a spinner chip
+/// until [ready].
 class _Attachment {
-  _Attachment({required this.id, required this.name});
+  _Attachment.image({required this.id, required this.name}) : isFile = false;
+  _Attachment.file({required this.id, required this.name}) : isFile = true;
   final int id;
   final String name;
-  ProcessedImage? processed; // null while the isolate is still working
+  final bool isFile;
+  ProcessedImage? processed; // image: null while the isolate is still working
+  String? hostPath; // file: null while the upload is still in flight
+
+  /// Whether this attachment is sendable.
+  bool get ready => isFile ? hostPath != null : processed != null;
 }
 
 /// One entry in an option-picker bottom sheet (model / permission / effort).
@@ -889,29 +901,39 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
   }
 
   Future<void> _send({bool retry = false, String? overrideText}) async {
-    final text = retry
+    final typed = retry
         ? (_lastUserText ?? '')
         : (overrideText ?? _input.text.trim());
     // Attachments ride an ordinary composer send only: a programmatic send
     // (e.g. "implement the plan") must not consume them, and a retry re-sends
     // the snapshot taken at the original send.
+    final ordinary = !retry && overrideText == null;
     final images = retry
         ? _lastUserImages
-        : overrideText != null
+        : !ordinary
         ? const <String>[]
         : [
             for (final a in _attachments)
-              if (a.processed != null) a.processed!.dataUrl,
+              if (!a.isFile) ?a.processed?.dataUrl,
           ];
+    // File attachments were already uploaded to the host at pick time; they
+    // travel as a path-reference block appended to the text (codex's native
+    // document workflow). On retry `typed` already contains the block, so no
+    // re-upload and no double-append.
+    final filePaths = ordinary
+        ? [
+            for (final a in _attachments)
+              if (a.isFile) ?a.hostPath,
+          ]
+        : const <String>[];
+    final text = appendFileRefs(typed, filePaths);
     // Block sends while reconnecting — a reconnect reloads history and would
     // wipe an optimistic message added mid-flight.
     if ((text.isEmpty && images.isEmpty) || _sending || _reconnecting) return;
-    // Never send while an attachment is still processing — the message would
-    // silently ship without it. (The send button is disabled too; this also
-    // guards the Enter-to-send path.)
-    if (!retry &&
-        overrideText == null &&
-        _attachments.any((a) => a.processed == null)) {
+    // Never send while an attachment is still processing/uploading — the
+    // message would silently ship without it. (The send button is disabled
+    // too; this also guards the Enter-to-send path.)
+    if (ordinary && _attachments.any((a) => !a.ready)) {
       return;
     }
     // Take the send lock up front, before the retry probe's await below, so the
@@ -1010,10 +1032,13 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
             _threads = [
               ThreadMeta(
                 id: tid,
-                // An image-only first message has no text to preview.
-                preview: text.isEmpty
-                    ? AppLocalizations.of(context).imageOnlyMessage
-                    : text,
+                // Preview the TYPED text (never the appended file-reference
+                // block); an attachment-only first message gets a placeholder.
+                preview: typed.isNotEmpty
+                    ? typed
+                    : filePaths.isNotEmpty
+                    ? AppLocalizations.of(context).fileOnlyMessage
+                    : AppLocalizations.of(context).imageOnlyMessage,
                 cwd: _cwd ?? '',
                 updatedAt: 0,
               ),
@@ -2352,9 +2377,15 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
+                        // Server previews are the first user message verbatim
+                        // — for a file-only message that is the raw wire
+                        // block; show the placeholder instead.
                         thread.preview.isEmpty
                             ? l10n.untitledThread
-                            : thread.preview,
+                            : previewWithoutFileRefs(
+                                thread.preview,
+                                l10n.fileOnlyMessage,
+                              ),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
@@ -2506,7 +2537,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
   Future<void> _pickImages() async {
     final l10n = AppLocalizations.of(context);
     final messenger = ScaffoldMessenger.of(context);
-    final remaining = kMaxImagesPerMessage - _attachments.length;
+    // Only IMAGE chips consume image slots — _attachments also holds document
+    // chips, which have their own kMaxFilesPerMessage budget.
+    final remaining =
+        kMaxImagesPerMessage - _attachments.where((a) => !a.isFile).length;
     if (remaining <= 0) {
       messenger.showSnackBar(
         SnackBar(content: Text(l10n.imageTooMany(kMaxImagesPerMessage))),
@@ -2539,7 +2573,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
     }
     setState(() {
       for (final file in picked) {
-        final att = _Attachment(id: _attachSeq++, name: file.name);
+        final att = _Attachment.image(id: _attachSeq++, name: file.name);
         _attachments.add(att);
         unawaited(_processAttachment(att, file));
       }
@@ -2561,6 +2595,128 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
     }
   }
 
+  /// Extensions the image pipeline can decode; a file picked with one of
+  /// these routes to the image path instead (mirrors the codex TUI, whose
+  /// `@file` mention attaches images and path-references everything else).
+  static const _imageExtensions = {'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'};
+
+  static bool _looksLikeImage(String name) {
+    final dot = name.lastIndexOf('.');
+    if (dot < 0 || dot == name.length - 1) return false;
+    return _imageExtensions.contains(name.substring(dot + 1).toLowerCase());
+  }
+
+  /// Pick document/file attachments (any type). Each is uploaded to the HOST
+  /// right away (spinner chip while in flight) and later travels as a path
+  /// reference in the turn text; image files route to the image pipeline.
+  Future<void> _pickFiles() async {
+    final l10n = AppLocalizations.of(context);
+    final messenger = ScaffoldMessenger.of(context);
+    final remaining =
+        kMaxFilesPerMessage - _attachments.where((a) => a.isFile).length;
+    if (remaining <= 0) {
+      messenger.showSnackBar(
+        SnackBar(content: Text(l10n.fileTooMany(kMaxFilesPerMessage))),
+      );
+      return;
+    }
+    List<XFile> picked;
+    try {
+      picked = await openFiles();
+    } catch (_) {
+      if (mounted) {
+        messenger.showSnackBar(SnackBar(content: Text(l10n.filePickFailed)));
+      }
+      return;
+    }
+    if (picked.isEmpty || !mounted) return;
+    var files = 0;
+    var filesDropped = 0;
+    var imagesDropped = 0;
+    setState(() {
+      for (final f in picked) {
+        // XFile.name is the path basename on dart:io and can be empty for
+        // synthetic files; the name reaches the host (and the chip label), so
+        // never let it be blank.
+        final name = f.name.isNotEmpty ? f.name : 'file';
+        if (_looksLikeImage(name)) {
+          if (_attachments.where((a) => !a.isFile).length <
+              kMaxImagesPerMessage) {
+            final att = _Attachment.image(id: _attachSeq++, name: name);
+            _attachments.add(att);
+            unawaited(_processAttachment(att, f));
+          } else {
+            imagesDropped++;
+          }
+        } else if (files < remaining) {
+          files++;
+          final att = _Attachment.file(id: _attachSeq++, name: name);
+          _attachments.add(att);
+          unawaited(_uploadAttachment(att, f));
+        } else {
+          filesDropped++;
+        }
+      }
+    });
+    // Over-cap picks must never vanish silently — the user would send a
+    // message believing everything they selected is attached.
+    if (filesDropped > 0) {
+      messenger.showSnackBar(
+        SnackBar(content: Text(l10n.fileTooMany(kMaxFilesPerMessage))),
+      );
+    }
+    if (imagesDropped > 0) {
+      messenger.showSnackBar(
+        SnackBar(content: Text(l10n.imageTooMany(kMaxImagesPerMessage))),
+      );
+    }
+  }
+
+  Future<void> _uploadAttachment(_Attachment att, XFile file) async {
+    final l10n = AppLocalizations.of(context);
+    final messenger = ScaffoldMessenger.of(context);
+    void rejectTooLarge() {
+      setState(() => _attachments.remove(att));
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(l10n.fileTooLarge(kMaxFileBytes ~/ (1024 * 1024))),
+        ),
+      );
+    }
+
+    try {
+      // Enforce the cap BEFORE buffering: readAsBytes on a multi-GB pick
+      // would materialize the whole file (OOM-killing a phone) just to be
+      // rejected.
+      final size = await file.length();
+      if (!mounted || !_attachments.contains(att)) return; // removed via ×
+      if (size > kMaxFileBytes) {
+        rejectTooLarge();
+        return;
+      }
+      final bytes = await file.readAsBytes();
+      if (!mounted || !_attachments.contains(att)) return;
+      if (bytes.length > kMaxFileBytes) {
+        // Belt-and-braces: length() can be stale/absent for synthetic files.
+        rejectTooLarge();
+        return;
+      }
+      final path = await ref
+          .read(bridgeApiProvider)
+          .metaUploadFile(widget.serviceKey, att.name, bytes);
+      if (!mounted || !_attachments.contains(att)) return;
+      setState(() => att.hostPath = path);
+    } catch (e) {
+      if (!mounted || !_attachments.contains(att)) return;
+      setState(() => _attachments.remove(att));
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('${l10n.fileUploadFailed}: ${friendlyError(e)}'),
+        ),
+      );
+    }
+  }
+
   /// Horizontal strip of pending attachments above the composer input: a
   /// thumbnail (or a spinner while processing) with a remove button each.
   Widget _attachmentStrip(AppLocalizations l10n) {
@@ -2574,7 +2730,55 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
         separatorBuilder: (_, _) => const SizedBox(width: 8),
         itemBuilder: (context, i) {
           final att = _attachments[i];
-          final bytes = att.processed?.bytes;
+          final Widget body;
+          if (!att.ready) {
+            body = const Center(
+              child: SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            );
+          } else if (att.isFile) {
+            // Uploaded document: icon + filename tile.
+            body = Tooltip(
+              message: att.name,
+              child: Padding(
+                padding: const EdgeInsets.all(6),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      Icons.description_outlined,
+                      size: 22,
+                      color: scheme.onSurfaceVariant,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      att.name,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(fontSize: 9),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          } else if (att.processed case final processed?) {
+            body = Image.memory(
+              processed.bytes,
+              fit: BoxFit.cover,
+              // 2× the box so a landscape image's SHORT edge reaches the
+              // square cover box without upscaling.
+              cacheWidth: (72 * scale * 2).round(),
+              gaplessPlayback: true,
+            );
+          } else {
+            // Unreachable: an image attachment is `ready` iff processed is
+            // set — kept bang-free per repo style.
+            body = const SizedBox.shrink();
+          }
           return SizedBox(
             key: Key('attachment-${att.id}'),
             width: 72,
@@ -2590,28 +2794,13 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
                     color: scheme.surfaceContainerHighest,
                     border: Border.all(color: scheme.outlineVariant),
                   ),
-                  child: bytes == null
-                      ? const Center(
-                          child: SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          ),
-                        )
-                      : Image.memory(
-                          bytes,
-                          fit: BoxFit.cover,
-                          // 2× the box so a landscape image's SHORT edge
-                          // reaches the square cover box without upscaling.
-                          cacheWidth: (72 * scale * 2).round(),
-                          gaplessPlayback: true,
-                        ),
+                  child: body,
                 ),
                 Positioned(
                   top: 2,
                   right: 2,
                   child: Tooltip(
-                    message: l10n.removeImage,
+                    message: att.isFile ? l10n.removeFile : l10n.removeImage,
                     child: InkWell(
                       key: Key('attachment-remove-${att.id}'),
                       onTap: () => setState(() => _attachments.remove(att)),
@@ -2690,6 +2879,19 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
                       color: Theme.of(context).colorScheme.onSurfaceVariant,
                     ),
                     onPressed: _sending ? null : _pickImages,
+                  ),
+                  // Attach a document/file: uploaded to the host, referenced
+                  // by path in the turn so the agent reads it with its tools.
+                  IconButton(
+                    key: const Key('attach-file-btn'),
+                    tooltip: l10n.attachFile,
+                    visualDensity: VisualDensity.compact,
+                    icon: Icon(
+                      Icons.attach_file,
+                      size: 20,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                    onPressed: _sending ? null : _pickFiles,
                   ),
                   const SizedBox(width: 2),
                   // Settings pills wrap onto extra rows on narrow screens so
@@ -2778,8 +2980,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
       valueListenable: _input,
       builder: (context, value, _) {
         // Sendable with text and/or attachments — but never while an
-        // attachment is still processing (the message would ship without it).
-        final processing = _attachments.any((a) => a.processed == null);
+        // attachment is still processing/uploading (the message would ship
+        // without it).
+        final processing = _attachments.any((a) => !a.ready);
         final canSend =
             !_sending &&
             !processing &&
@@ -3867,6 +4070,12 @@ class _MessageViewState extends State<_MessageView> {
     // the message as a plan, so the UI perceives it as a plan instead of leaking
     // the raw markup. The stored item text is untouched (display-only).
     final proposal = _readProposedPlan(item.text);
+    // Document attachments ride the text as a trailing path-reference block
+    // (wire format); render them as chips and show only the typed text —
+    // display-only, the stored item text (and the copy action) keep the block.
+    final refs = isUser
+        ? splitFileRefs(item.text)
+        : (text: item.text, paths: const <String>[]);
     final Widget content = isUser
         ? Container(
             constraints: const BoxConstraints(maxWidth: 600),
@@ -3882,12 +4091,16 @@ class _MessageViewState extends State<_MessageView> {
                 // Attached images render above the text; tap for fullscreen.
                 if (item.images.isNotEmpty)
                   MessageImagesView(images: item.images),
-                if (item.images.isNotEmpty && item.text.isNotEmpty)
+                if (item.images.isNotEmpty &&
+                    (refs.text.isNotEmpty || refs.paths.isNotEmpty))
                   const SizedBox(height: 8),
-                if (item.text.isNotEmpty)
+                if (refs.paths.isNotEmpty) FileRefChips(paths: refs.paths),
+                if (refs.paths.isNotEmpty && refs.text.isNotEmpty)
+                  const SizedBox(height: 8),
+                if (refs.text.isNotEmpty)
                   linkifyText(
                     context,
-                    item.text,
+                    refs.text,
                     style: Theme.of(
                       context,
                     ).textTheme.bodyLarge?.copyWith(height: 1.45),

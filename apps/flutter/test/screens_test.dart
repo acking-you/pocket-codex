@@ -10,10 +10,13 @@ import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
+import 'package:file_selector_platform_interface/file_selector_platform_interface.dart'
+    as fsel;
 import 'package:image/image.dart' as img;
 import 'package:image_picker_platform_interface/image_picker_platform_interface.dart';
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
+import 'package:pocket_codex/src/attachment_refs.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
 import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/screens/account_onboarding_screen.dart';
@@ -66,6 +69,36 @@ class _FakeImagePicker extends ImagePickerPlatform
     required ImageSource source,
     ImagePickerOptions options = const ImagePickerOptions(),
   }) async => files.isEmpty ? null : files.first;
+}
+
+/// Fake file selector: returns canned [XFile]s instead of the native dialog.
+class _FakeFileSelector extends fsel.FileSelectorPlatform
+    with MockPlatformInterfaceMixin {
+  /// Files the next pick returns; empty = user cancelled.
+  List<XFile> files = [];
+
+  @override
+  Future<List<XFile>> openFiles({
+    List<fsel.XTypeGroup>? acceptedTypeGroups,
+    String? initialDirectory,
+    String? confirmButtonText,
+  }) async => files;
+}
+
+/// In-memory [XFile] for picker fixtures. `XFile.fromData` won't do: on
+/// dart:io it ignores `name` (path stays empty), and a real temp file's
+/// `readAsBytes` does real IO that never completes under the fake test clock.
+/// Using the name as the path makes `.name` work; the byte read is overridden
+/// to resolve in-memory.
+class _MemXFile extends XFile {
+  _MemXFile(this._bytes, String name) : super(name);
+  final Uint8List _bytes;
+
+  @override
+  Future<Uint8List> readAsBytes() async => _bytes;
+
+  @override
+  Future<int> length() async => _bytes.length;
 }
 
 /// A tiny in-memory PNG for attachment fixtures.
@@ -1156,6 +1189,160 @@ void main() {
       // No pixels crossed the wire — an honest basename chip instead.
       expect(find.text('error.png'), findsOneWidget);
       expect(find.byKey(const Key('msg-image-0')), findsNothing);
+    });
+  });
+
+  group('file attachments', () {
+    late _FakeFileSelector selector;
+    setUp(() {
+      // Inline image processing (see the image-attachments group) — a picked
+      // .png routes to the image pipeline even from the file picker.
+      processImageImpl = (bytes) async => processImageBytes(bytes);
+      selector = _FakeFileSelector();
+      fsel.FileSelectorPlatform.instance = selector;
+    });
+    tearDown(() {
+      processImageImpl = (bytes) => compute(processImageBytes, bytes);
+    });
+
+    XFile tmpFile(String name, List<int> bytes) =>
+        _MemXFile(Uint8List.fromList(bytes), name);
+
+    Future<FakeBridgeApi> pumpSession(WidgetTester t) async {
+      final api = FakeBridgeApi(
+        config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+      );
+      await api.appConnect('pcx:lb7666:app:default', 28080);
+      t.view.devicePixelRatio = 1.0;
+      t.view.physicalSize = const Size(400, 800);
+      addTearDown(t.view.reset);
+      await t.pumpWidget(
+        _host(
+          const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'),
+          api,
+        ),
+      );
+      await t.pumpAndSettle();
+      return api;
+    }
+
+    testWidgets('attach uploads to the host and the turn text carries the '
+        'path-reference block', (t) async {
+      final api = await pumpSession(t);
+      selector.files = [tmpFile('notes.txt', utf8.encode('sentinel-content'))];
+
+      await t.tap(find.byKey(const Key('attach-file-btn')));
+      await t.pumpAndSettle();
+      // Uploaded chip shows the filename.
+      expect(find.byKey(const Key('attachment-0')), findsOneWidget);
+      expect(find.text('notes.txt'), findsOneWidget);
+      expect(api.lastUploadName, 'notes.txt');
+      expect(utf8.decode(api.lastUploadBytes!), 'sentinel-content');
+
+      await t.enterText(find.byType(TextField), 'check this');
+      await t.pump();
+      await t.tap(find.byKey(const Key('send-btn')));
+      await t.pumpAndSettle();
+
+      // The wire text = typed text + the reference block with the HOST path.
+      expect(
+        api.lastTurnText,
+        appendFileRefs('check this', ['/host/uploads/123/notes.txt']),
+      );
+      expect(api.lastTurnImages, isEmpty);
+      // The bubble renders a chip + the typed text; the raw block is hidden.
+      expect(find.text('notes.txt'), findsOneWidget);
+      expect(find.text('check this'), findsOneWidget);
+      expect(find.textContaining(kAttachedFilesHeader), findsNothing);
+      // Composer strip cleared.
+      expect(find.byKey(const Key('attachment-0')), findsNothing);
+    });
+
+    testWidgets('a file-only message can be sent', (t) async {
+      final api = await pumpSession(t);
+      selector.files = [
+        tmpFile('data.bin', [1, 2, 3]),
+      ];
+      await t.tap(find.byKey(const Key('attach-file-btn')));
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(const Key('send-btn')));
+      await t.pumpAndSettle();
+
+      expect(
+        api.lastTurnText,
+        appendFileRefs('', ['/host/uploads/123/data.bin']),
+      );
+      expect(find.text('data.bin'), findsOneWidget); // bubble chip
+    });
+
+    testWidgets('a failed upload removes the chip and reports the error', (
+      t,
+    ) async {
+      final api = await pumpSession(t);
+      api.uploadError = StateError('relay down');
+      selector.files = [
+        tmpFile('x.log', [9]),
+      ];
+      await t.tap(find.byKey(const Key('attach-file-btn')));
+      await t.pumpAndSettle();
+
+      expect(find.byKey(const Key('attachment-0')), findsNothing);
+      expect(find.textContaining('上传文件到主机失败'), findsOneWidget);
+      // Nothing to send: the button stays disabled without text.
+      final btn = t.widget<IconButton>(find.byKey(const Key('send-btn')));
+      expect(btn.onPressed, isNull);
+    });
+
+    testWidgets('an image picked through the FILE picker routes to the image '
+        'pipeline', (t) async {
+      final api = await pumpSession(t);
+      selector.files = [tmpFile('shot.png', _tinyPng())];
+      await t.tap(find.byKey(const Key('attach-file-btn')));
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(const Key('send-btn')));
+      await t.pumpAndSettle();
+
+      expect(api.lastTurnImages, hasLength(1));
+      expect(api.lastTurnImages.single, startsWith('data:image/png;base64,'));
+      expect(api.lastUploadName, isNull, reason: 'images are not uploaded');
+      expect(api.lastTurnText, isEmpty);
+    });
+
+    testWidgets('history restores document chips from the reference block', (
+      t,
+    ) async {
+      final api = FakeBridgeApi(
+        config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+      );
+      await api.appConnect('pcx:lb7666:app:default', 28080);
+      api.readResult = ThreadHistory(
+        items: [
+          ThreadItem(
+            id: 'u1',
+            itemType: 'userMessage',
+            title: '',
+            text: appendFileRefs('review it', ['/host/uploads/9/report.pdf']),
+          ),
+        ],
+        running: false,
+      );
+      t.view.devicePixelRatio = 1.0;
+      t.view.physicalSize = const Size(400, 800);
+      addTearDown(t.view.reset);
+      await t.pumpWidget(
+        _host(
+          const AppSessionScreen(
+            serviceKey: 'pcx:lb7666:app:default',
+            threadId: 'thread-7',
+          ),
+          api,
+        ),
+      );
+      await t.pumpAndSettle();
+
+      expect(find.text('report.pdf'), findsOneWidget); // chip label
+      expect(find.text('review it'), findsOneWidget); // typed text
+      expect(find.textContaining(kAttachedFilesHeader), findsNothing);
     });
   });
 
