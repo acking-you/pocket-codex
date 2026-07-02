@@ -914,7 +914,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
         ? const <String>[]
         : [
             for (final a in _attachments)
-              if (!a.isFile && a.processed != null) a.processed!.dataUrl,
+              if (!a.isFile) ?a.processed?.dataUrl,
           ];
     // File attachments were already uploaded to the host at pick time; they
     // travel as a path-reference block appended to the text (codex's native
@@ -923,7 +923,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
     final filePaths = ordinary
         ? [
             for (final a in _attachments)
-              if (a.isFile && a.hostPath != null) a.hostPath!,
+              if (a.isFile) ?a.hostPath,
           ]
         : const <String>[];
     final text = appendFileRefs(typed, filePaths);
@@ -2730,7 +2730,6 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
         separatorBuilder: (_, _) => const SizedBox(width: 8),
         itemBuilder: (context, i) {
           final att = _attachments[i];
-          final bytes = att.processed?.bytes;
           final Widget body;
           if (!att.ready) {
             body = const Center(
@@ -2766,15 +2765,19 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
                 ),
               ),
             );
-          } else {
+          } else if (att.processed case final processed?) {
             body = Image.memory(
-              bytes!,
+              processed.bytes,
               fit: BoxFit.cover,
               // 2× the box so a landscape image's SHORT edge reaches the
               // square cover box without upscaling.
               cacheWidth: (72 * scale * 2).round(),
               gaplessPlayback: true,
             );
+          } else {
+            // Unreachable: an image attachment is `ready` iff processed is
+            // set — kept bang-free per repo style.
+            body = const SizedBox.shrink();
           }
           return SizedBox(
             key: Key('attachment-${att.id}'),
