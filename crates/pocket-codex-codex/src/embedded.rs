@@ -60,21 +60,36 @@ pub async fn run(listen_url: &str) -> Result<()> {
 /// Config overrides applied to the in-process app-server, equivalent to
 /// `codex -c key=value`. Sourced from `POCKET_CODEX_CODEX_CONFIG` — one
 /// `key=value` pair per LINE (values are parsed as TOML, falling back to a
-/// literal string). The host app uses this to steer the embedded codex without
-/// a `config.toml`; e.g. selecting the Windows sandbox level
-/// (`windows.sandbox=unelevated`) for a self-contained build that bundles the
-/// restricted-token helper exes but cannot request elevation. Empty/unset →
-/// codex's own defaults.
+/// literal string) — plus an automatic `windows.sandbox=unelevated` default
+/// when the bundled Windows sandbox helpers are present (see below). The host
+/// app uses the env var to steer the embedded codex without a `config.toml`.
+/// Empty/unset + no bundled helpers → codex's own defaults.
 ///
 /// Splitting is newline-only on purpose: `,` and `;` occur inside legitimate
 /// TOML values (arrays like `["a", "b"]`, inline tables, PATH-like strings), so
 /// using them as pair separators would shred a single override into fragments —
 /// erroring out embedded startup, or worse, silently applying a mangled value.
 fn embedded_config_overrides() -> CliConfigOverrides {
-    let raw_overrides = std::env::var("POCKET_CODEX_CODEX_CONFIG")
+    let mut raw_overrides = std::env::var("POCKET_CODEX_CODEX_CONFIG")
         .ok()
         .map(|raw| parse_override_lines(&raw))
         .unwrap_or_default();
+
+    // Self-contained desktop builds bundle codex's Windows sandbox helper exes
+    // (codex-resources/ next to the app). When they're present, default the
+    // in-process codex to the *unelevated* restricted-token sandbox so the
+    // agent's tools run sandboxed on the normal (workspace-write / read-only)
+    // modes without the user switching to Full access. Only when the host
+    // hasn't already picked a level, and never *elevated* — that needs admin/UAC
+    // and destabilizes the in-process server (proven in testing).
+    if bundled_windows_sandbox_helpers_present()
+        && !raw_overrides
+            .iter()
+            .any(|o| targets_windows_sandbox_level(o))
+    {
+        raw_overrides.push("windows.sandbox=unelevated".to_string());
+    }
+
     CliConfigOverrides {
         raw_overrides,
     }
@@ -91,9 +106,40 @@ fn parse_override_lines(raw: &str) -> Vec<String> {
         .collect()
 }
 
+/// Whether an override line sets the `windows.sandbox` level (so the bundled
+/// default must not clobber the host's explicit choice). Matches the key before
+/// the first `=`, e.g. `windows.sandbox=unelevated` or `windows.sandbox = "x"`.
+fn targets_windows_sandbox_level(override_line: &str) -> bool {
+    override_line
+        .split_once('=')
+        .map(|(key, _)| key.trim() == "windows.sandbox")
+        .unwrap_or(false)
+}
+
+/// True when codex's Windows sandbox helper exes are bundled next to the
+/// running binary (`<exe dir>/codex-resources/`), the layout the release
+/// packages ship and the e2e harness stages. Off Windows there is no such
+/// sandbox, so `false`.
+#[cfg(target_os = "windows")]
+fn bundled_windows_sandbox_helpers_present() -> bool {
+    let Ok(exe) = std::env::current_exe() else {
+        return false;
+    };
+    let Some(resources) = exe.parent().map(|dir| dir.join("codex-resources")) else {
+        return false;
+    };
+    resources.join("codex-windows-sandbox-setup.exe").is_file()
+        && resources.join("codex-command-runner.exe").is_file()
+}
+
+#[cfg(not(target_os = "windows"))]
+fn bundled_windows_sandbox_helpers_present() -> bool {
+    false
+}
+
 #[cfg(test)]
 mod tests {
-    use super::parse_override_lines;
+    use super::{parse_override_lines, targets_windows_sandbox_level};
 
     #[test]
     fn parses_one_override_per_line_and_preserves_commas() {
@@ -114,5 +160,17 @@ mod tests {
         );
         assert!(parse_override_lines("").is_empty());
         assert!(parse_override_lines("   \n  \n").is_empty());
+    }
+
+    #[test]
+    fn recognizes_an_explicit_windows_sandbox_level_override() {
+        // These mean the host already chose — the bundled default must defer.
+        assert!(targets_windows_sandbox_level("windows.sandbox=unelevated"));
+        assert!(targets_windows_sandbox_level("windows.sandbox=elevated"));
+        assert!(targets_windows_sandbox_level("  windows.sandbox = \"elevated\" "));
+        // Unrelated keys (incl. a different windows.* key) do NOT count.
+        assert!(!targets_windows_sandbox_level("model=gpt-5.5"));
+        assert!(!targets_windows_sandbox_level("windows.sandbox_private_desktop=true"));
+        assert!(!targets_windows_sandbox_level("no-equals-sign"));
     }
 }
