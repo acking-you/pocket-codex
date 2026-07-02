@@ -33,4 +33,33 @@ void main() {
     final e = AnyhowException('boom\nStack backtrace:\n   0: <unknown>');
     expect(friendlyError(e), 'boom');
   });
+
+  group('isSandboxHelperFailure', () {
+    test('detects the embedded Windows-sandbox helper spawn failures', () {
+      // The real shapes seen from an embedded host with no bundled helpers.
+      expect(
+        isSandboxHelperFailure(
+          'windows sandbox: spawn setup refresh: program not found',
+        ),
+        isTrue,
+      );
+      expect(
+        isSandboxHelperFailure(
+          'failed to spawn codex-windows-sandbox-setup.exe: program not found',
+        ),
+        isTrue,
+      );
+      expect(
+        isSandboxHelperFailure('Windows Sandbox setup failed with status 1'),
+        isTrue,
+      );
+    });
+
+    test('leaves unrelated turn failures alone', () {
+      expect(isSandboxHelperFailure('model overloaded'), isFalse);
+      expect(isSandboxHelperFailure('connection closed'), isFalse);
+      // Mentions a sandbox but not the Windows helper path — not our case.
+      expect(isSandboxHelperFailure('seatbelt sandbox denied write'), isFalse);
+    });
+  });
 }

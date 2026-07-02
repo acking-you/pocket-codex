@@ -29,12 +29,13 @@ fn init_and_host(name: &str, embedded: bool) -> crate::api::bridge::AppServeDto 
         format!("{appdata}\\io.github.acking_you\\pocket_codex")
     });
     api::init_bridge(support).expect("init_bridge");
-    // Host a codex under a dedicated name; the caller stops it. NOTE: turns
-    // that need the agent's TOOLS (shell/file reads) must use an EXTERNAL
-    // codex (embedded: false, resolved from the configured binary) — embedded
-    // codex inside a test binary can't arg0-dispatch its sandbox helper (the
-    // known embedded-exec follow-up), so tool calls fail with
-    // "windows sandbox: spawn setup refresh".
+    // Host a codex under a dedicated name; the caller stops it. Embedded
+    // (自带) hosts CAN run the agent's tools: with a `danger-full-access`
+    // (no-sandbox) turn nothing extra is needed, and with a real sandbox they
+    // need the two Windows helper exes staged next to the binary (see
+    // `stage_windows_sandbox_helpers`) plus an *unelevated* level
+    // (`POCKET_CODEX_CODEX_CONFIG=windows.sandbox=unelevated`) so setup needs no
+    // admin. Both are proven by the embedded_file_turn_* tests below.
     //
     // POCKET_CODEX_E2E_PORT: adopt a codex you started yourself on that port
     // (`codex app-server --listen ws://127.0.0.1:<port>`) instead of spawning
@@ -71,16 +72,90 @@ fn image_turn_round_trips_through_a_real_host() {
 /// the same code path a remote controller takes through the broker tunnel),
 /// reference its HOST path in the turn text, and require the agent to read the
 /// file's exact sentinel content back.
+///
+/// EXTERNAL codex with a `read-only` sandbox — the reference path: reading the
+/// file exercises the agent's shell tools inside the OS sandbox.
 #[test]
 #[ignore = "manual e2e: needs a signed-in account and spends a real model call"]
 fn file_turn_round_trips_through_a_real_host() {
     use crate::api::bridge as api;
-    // Per-run name — see image_turn. EXTERNAL codex: reading the referenced
-    // file exercises the agent's shell tools, which embedded codex can't
-    // spawn from a test binary (see init_and_host).
     let name = format!("e2e-file-{}", std::process::id());
     let host = init_and_host(&name, false);
-    let result = std::panic::catch_unwind(|| run_file_turn(&host.app_service_key));
+    let result = std::panic::catch_unwind(|| run_file_turn(&host.app_service_key, "read-only"));
+    let _ = api::app_serve_stop(name);
+    if let Err(p) = result {
+        std::panic::resume_unwind(p);
+    }
+}
+
+/// EMBEDDED (自带) codex reading an uploaded file — the follow-up this fixes.
+/// Uses the `danger-full-access` (no-sandbox) preset, which the app exposes as
+/// the explicit "full" permission mode: with no OS sandbox, codex runs the
+/// shell tool directly, so an in-process host needs neither the Windows sandbox
+/// helper exes nor arg0 self-dispatch. Sandboxed embedded modes (read-only /
+/// workspace-write) additionally need the helper exes staged next to the binary
+/// — shipped for desktop as a follow-up.
+#[test]
+#[ignore = "manual e2e: needs a signed-in account and spends a real model call"]
+fn embedded_file_turn_no_sandbox_round_trips() {
+    use crate::api::bridge as api;
+    let name = format!("e2e-file-emb-{}", std::process::id());
+    let host = init_and_host(&name, true);
+    let result =
+        std::panic::catch_unwind(|| run_file_turn(&host.app_service_key, "danger-full-access"));
+    let _ = api::app_serve_stop(name);
+    if let Err(p) = result {
+        std::panic::resume_unwind(p);
+    }
+}
+
+/// Stage the two Windows sandbox helper exes next to the CURRENT binary so an
+/// embedded codex resolves them the same way external `codex.exe` finds its
+/// bundled `codex-resources/` siblings. This is the exact mechanism the desktop
+/// release bundles for real users (follow-up); here it lets the embedded
+/// sandboxed-mode test run. Copies from `target/<profile>/` (build them first:
+/// `cargo build -p codex-windows-sandbox --bin codex-windows-sandbox-setup
+/// --bin codex-command-runner`). No-op off Windows / when sources are absent.
+#[cfg(target_os = "windows")]
+fn stage_windows_sandbox_helpers() {
+    let exe = std::env::current_exe().expect("current exe");
+    // Test binary lives at target/<profile>/deps/<name>.exe; the built helper
+    // bins are at target/<profile>/<name>.exe (deps' parent).
+    let deps_dir = exe.parent().expect("exe dir");
+    let profile_dir = deps_dir.parent().expect("profile dir");
+    // find_setup_exe / resolve_helper_for_launch check `<dir>/codex-resources/`.
+    let resources = deps_dir.join("codex-resources");
+    std::fs::create_dir_all(&resources).expect("create codex-resources");
+    for name in ["codex-windows-sandbox-setup.exe", "codex-command-runner.exe"] {
+        let src = profile_dir.join(name);
+        if !src.is_file() {
+            println!("helper source missing (build it first): {}", src.display());
+            continue;
+        }
+        let dst = resources.join(name);
+        match std::fs::copy(&src, &dst) {
+            Ok(_) => println!("staged helper: {}", dst.display()),
+            // A prior sandboxed run can leave the helper open briefly.
+            Err(e) if dst.exists() => println!("kept staged helper {}: {e}", dst.display()),
+            Err(e) => panic!("staging {}: {e}", dst.display()),
+        }
+    }
+}
+
+/// EMBEDDED codex with a real OS sandbox (`read-only`), proving the helper-exe
+/// mechanism: with the two helpers staged next to the binary, the in-process
+/// host runs the sandboxed shell tool and reads the file. Honors the host
+/// `~/.codex` `[windows] sandbox` level (elevated may need admin/UAC; set
+/// `-c windows.sandbox=unelevated` there to use the no-admin restricted token).
+#[cfg(target_os = "windows")]
+#[test]
+#[ignore = "manual e2e: needs a signed-in account, staged sandbox helpers, spends a real model call"]
+fn embedded_file_turn_sandboxed_with_staged_helpers() {
+    use crate::api::bridge as api;
+    stage_windows_sandbox_helpers();
+    let name = format!("e2e-file-sbx-{}", std::process::id());
+    let host = init_and_host(&name, true);
+    let result = std::panic::catch_unwind(|| run_file_turn(&host.app_service_key, "read-only"));
     let _ = api::app_serve_stop(name);
     if let Err(p) = result {
         std::panic::resume_unwind(p);
@@ -105,7 +180,7 @@ fn connect_with_retry(key: &str) {
     }
 }
 
-fn run_file_turn(key: &str) {
+fn run_file_turn(key: &str, sandbox: &str) {
     use crate::api::bridge as api;
 
     const SENTINEL: &str = "pocket-codex-e2e-sentinel-7429";
@@ -129,7 +204,7 @@ fn run_file_turn(key: &str) {
         None,
         Some(cwd.to_string_lossy().into_owned()),
         Some("never".into()),
-        Some("read-only".into()),
+        Some(sandbox.to_string()),
     )
     .expect("app_thread_start");
 

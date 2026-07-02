@@ -27,3 +27,20 @@ String friendlyError(Object error) {
 
   return text.trim();
 }
+
+/// True when a turn-failure message is the Windows sandbox helper failing to
+/// start — an embedded (自带) host that can't spawn `codex-windows-sandbox-setup`
+/// / `codex-command-runner` for a sandboxed turn. The UI rewrites this into
+/// actionable guidance (switch to no-sandbox Full mode, or use an external
+/// host) instead of showing the raw "windows sandbox: spawn setup refresh".
+bool isSandboxHelperFailure(String message) {
+  final lower = message.toLowerCase();
+  final mentionsWindowsSandbox =
+      lower.contains('windows sandbox') || lower.contains('windows-sandbox');
+  final looksLikeSpawnFailure =
+      lower.contains('setup') ||
+      lower.contains('spawn') ||
+      lower.contains('command-runner') ||
+      lower.contains('program not found');
+  return mentionsWindowsSandbox && looksLikeSpawnFailure;
+}

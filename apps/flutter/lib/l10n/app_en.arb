@@ -91,6 +91,10 @@
   "thinking": "Thinking…",
   "emptyConversation": "Send a message to start the conversation",
   "turnFailed": "Turn didn't finish — the connection dropped or the remote codex failed. Retry, or check codex on the host machine (it may need to be logged in again).",
+  "sandboxHelperUnavailable": "This built-in (自带) session can't start its command sandbox, so the agent can't run commands or read files here. Switch to \"Full access\" mode to run without a sandbox, or connect to an external/remote codex host.",
+  "@sandboxHelperUnavailable": {
+    "description": "Shown when an embedded (in-process) codex turn fails because the OS sandbox helpers aren't available; guides the user to the no-sandbox Full mode or an external host."
+  },
   "disconnect": "Disconnect",
   "connectionLost": "Connection lost",
   "reconnect": "Reconnect",

@@ -41,7 +41,7 @@ pub async fn run(listen_url: &str) -> Result<()> {
     };
     run_main_with_transport_options(
         arg0_paths,
-        CliConfigOverrides::default(),
+        embedded_config_overrides(),
         LoaderOverrides::default(),
         // strict_config
         false,
@@ -55,4 +55,28 @@ pub async fn run(listen_url: &str) -> Result<()> {
     .await
     .map_err(|e| anyhow::anyhow!("embedded codex app-server exited: {e}"))?;
     Ok(())
+}
+
+/// Config overrides applied to the in-process app-server, equivalent to
+/// `codex -c key=value`. Sourced from `POCKET_CODEX_CODEX_CONFIG` — a list of
+/// `key=value` pairs separated by newlines, semicolons, or commas (values are
+/// parsed as TOML, falling back to a literal string). The host app uses this to
+/// steer the embedded codex without a `config.toml`; e.g. selecting the Windows
+/// sandbox level (`windows.sandbox=unelevated`) for a self-contained build that
+/// bundles the restricted-token helper exes but cannot request elevation.
+/// Empty/unset → codex's own defaults.
+fn embedded_config_overrides() -> CliConfigOverrides {
+    let raw_overrides = std::env::var("POCKET_CODEX_CODEX_CONFIG")
+        .ok()
+        .map(|raw| {
+            raw.split(['\n', ';', ','])
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
+    CliConfigOverrides {
+        raw_overrides,
+    }
 }
