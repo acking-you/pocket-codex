@@ -430,6 +430,45 @@ class AppLocalizationsZh extends AppLocalizations {
   }
 
   @override
+  String get activeModelTooltip => '当前模型与设置 — 点按查看详情';
+
+  @override
+  String get runtimeSheetTitle => '运行时配置';
+
+  @override
+  String get runtimeEffortModelDefault => '模型默认';
+
+  @override
+  String get runtimeCollabDefault => '默认';
+
+  @override
+  String runtimeConfirmedAt(String time) {
+    return '服务器已确认 · $time';
+  }
+
+  @override
+  String runtimeFromSnapshot(String time) {
+    return '来自服务器会话快照 · $time';
+  }
+
+  @override
+  String get runtimeUnavailable => '该服务器不上报运行时配置；当前显示应用发送的设置。';
+
+  @override
+  String get runtimeConfirmed => '服务器已确认';
+
+  @override
+  String get runtimeUnconfirmed => '按应用发送值显示——服务器未反馈';
+
+  @override
+  String turnHandledBy(String model) {
+    return '本轮由 $model 处理';
+  }
+
+  @override
+  String get modelReroutedNote => '服务器在本轮中改用了此模型';
+
+  @override
   String get refreshStatus => '刷新状态';
 
   @override

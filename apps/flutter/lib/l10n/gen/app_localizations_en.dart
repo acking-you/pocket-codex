@@ -435,6 +435,47 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
+  String get activeModelTooltip => 'Active model & settings — tap for details';
+
+  @override
+  String get runtimeSheetTitle => 'Runtime configuration';
+
+  @override
+  String get runtimeEffortModelDefault => 'Model default';
+
+  @override
+  String get runtimeCollabDefault => 'Default';
+
+  @override
+  String runtimeConfirmedAt(String time) {
+    return 'Confirmed by the server · $time';
+  }
+
+  @override
+  String runtimeFromSnapshot(String time) {
+    return 'From the server\'s session snapshot · $time';
+  }
+
+  @override
+  String get runtimeUnavailable =>
+      'This server doesn\'t report runtime settings; showing what the app sends.';
+
+  @override
+  String get runtimeConfirmed => 'Confirmed by the server';
+
+  @override
+  String get runtimeUnconfirmed =>
+      'As sent by the app — the server didn\'t report back';
+
+  @override
+  String turnHandledBy(String model) {
+    return 'Handled by $model';
+  }
+
+  @override
+  String get modelReroutedNote => 'The server switched to this model mid-turn';
+
+  @override
   String get refreshStatus => 'Refresh status';
 
   @override

@@ -147,6 +147,26 @@
   "@completedAt": {
     "placeholders": { "time": { "type": "String" } }
   },
+  "activeModelTooltip": "当前模型与设置 — 点按查看详情",
+  "runtimeSheetTitle": "运行时配置",
+  "runtimeEffortModelDefault": "模型默认",
+  "runtimeCollabDefault": "默认",
+  "runtimeConfirmedAt": "服务器已确认 · {time}",
+  "@runtimeConfirmedAt": {
+    "placeholders": { "time": { "type": "String" } }
+  },
+  "runtimeFromSnapshot": "来自服务器会话快照 · {time}",
+  "@runtimeFromSnapshot": {
+    "placeholders": { "time": { "type": "String" } }
+  },
+  "runtimeUnavailable": "该服务器不上报运行时配置；当前显示应用发送的设置。",
+  "runtimeConfirmed": "服务器已确认",
+  "runtimeUnconfirmed": "按应用发送值显示——服务器未反馈",
+  "turnHandledBy": "本轮由 {model} 处理",
+  "@turnHandledBy": {
+    "placeholders": { "model": { "type": "String" } }
+  },
+  "modelReroutedNote": "服务器在本轮中改用了此模型",
   "refreshStatus": "刷新状态",
   "statusOnline": "在线",
   "statusConnected": "已连接",
