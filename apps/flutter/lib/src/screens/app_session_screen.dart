@@ -22,6 +22,7 @@ import 'package:pocket_codex/src/image_attachments.dart';
 import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/ui_prefs.dart';
 import 'package:pocket_codex/src/widgets/brand_logo.dart';
+import 'package:pocket_codex/src/widgets/folder_tree_picker.dart';
 import 'package:pocket_codex/src/widgets/links.dart';
 import 'package:pocket_codex/src/widgets/loading.dart';
 import 'package:pocket_codex/src/widgets/message_images.dart';
@@ -408,6 +409,12 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
     // A brand-new conversation inherits the user's last-chosen model / mode /
     // plan / effort instead of resetting to hard defaults.
     if (_threadId == null) _seedDefaults();
+    // ...and defaults its working folder to the host's configured default
+    // project when the caller didn't seed one (async; won't override a picked
+    // cwd — see the guard in _seedDefaultCwd).
+    if (_threadId == null && (_cwd == null || _cwd!.trim().isEmpty)) {
+      _seedDefaultCwd();
+    }
     _scroll.addListener(_onScroll);
     _subscribe();
     if (_threadId != null) _resumeAndLoad();
@@ -4188,20 +4195,85 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
     );
   }
 
+  /// Seed a brand-new conversation's working folder from the host's configured
+  /// default project. Best-effort + guarded: only sets `_cwd` while it is still
+  /// empty and the thread is still new, so it never overrides a folder the user
+  /// picked or a resumed thread's cwd.
+  Future<void> _seedDefaultCwd() async {
+    try {
+      final cfg = await ref
+          .read(bridgeApiProvider)
+          .metaProjectConfig(widget.serviceKey);
+      final def = cfg.defaultProject?.trim();
+      if (!mounted || def == null || def.isEmpty) return;
+      if (_threadId == null && (_cwd == null || _cwd!.trim().isEmpty)) {
+        setState(() => _cwd = def);
+      }
+    } catch (_) {
+      // No reachable meta / no default configured → keep the codex default.
+    }
+  }
+
   Future<void> _pickProject() async {
     final l10n = AppLocalizations.of(context);
+    // Does the host offer a project-folder tree to browse? Best-effort — a
+    // failure just means the manual path field (the fallback that always works,
+    // e.g. self-host with no roots configured).
+    var hasRoots = false;
+    try {
+      final cfg = await ref
+          .read(bridgeApiProvider)
+          .metaProjectConfig(widget.serviceKey);
+      hasRoots = cfg.hasRoots;
+    } catch (_) {
+      // No reachable meta / no config → manual entry only.
+    }
+    if (!mounted) return;
     final ctrl = TextEditingController(text: _cwd ?? '');
     final ok = await showDialog<bool>(
       context: context,
       builder: (c) => AlertDialog(
         title: Text(l10n.newProject),
-        content: TextField(
-          controller: ctrl,
-          autofocus: true,
-          decoration: InputDecoration(
-            labelText: l10n.remotePathLabel,
-            hintText: l10n.remotePathHint,
-            border: const OutlineInputBorder(),
+        content: StatefulBuilder(
+          builder: (c, setInner) => Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // Visual tree browse — the primary way on a phone. Confined to
+              // the host's configured project roots.
+              if (hasRoots) ...[
+                FilledButton.tonalIcon(
+                  key: const Key('browse-project-btn'),
+                  onPressed: () async {
+                    final picked = await showFolderPicker(
+                      c,
+                      serviceKey: widget.serviceKey,
+                      initialPath: ctrl.text.trim().isEmpty
+                          ? null
+                          : ctrl.text.trim(),
+                    );
+                    if (picked != null) setInner(() => ctrl.text = picked);
+                  },
+                  icon: const Icon(Icons.folder_open, size: 18),
+                  label: Text(l10n.browseProjectFolder),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  l10n.orEnterPathManually,
+                  style: Theme.of(c).textTheme.bodySmall,
+                ),
+                const SizedBox(height: 6),
+              ],
+              TextField(
+                controller: ctrl,
+                autofocus: !hasRoots,
+                decoration: InputDecoration(
+                  labelText: l10n.remotePathLabel,
+                  hintText: l10n.remotePathHint,
+                  border: const OutlineInputBorder(),
+                ),
+              ),
+            ],
           ),
         ),
         actions: [

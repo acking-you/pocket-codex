@@ -2017,6 +2017,96 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Couldn\'t reach that host — staying on the current one.'**
   String get switchServiceFailed;
+
+  /// No description provided for @pickFolderTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose a project folder'**
+  String get pickFolderTitle;
+
+  /// No description provided for @useThisFolder.
+  ///
+  /// In en, this message translates to:
+  /// **'Use this folder'**
+  String get useThisFolder;
+
+  /// No description provided for @folderUp.
+  ///
+  /// In en, this message translates to:
+  /// **'Up one level'**
+  String get folderUp;
+
+  /// No description provided for @folderPickerEmpty.
+  ///
+  /// In en, this message translates to:
+  /// **'No sub-folders here'**
+  String get folderPickerEmpty;
+
+  /// No description provided for @folderPickerNoRoots.
+  ///
+  /// In en, this message translates to:
+  /// **'No project folders are configured on this host yet. Add them on the computer under hosting settings.'**
+  String get folderPickerNoRoots;
+
+  /// No description provided for @gitRepoLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Git repository'**
+  String get gitRepoLabel;
+
+  /// No description provided for @browseProjectFolder.
+  ///
+  /// In en, this message translates to:
+  /// **'Browse project folders'**
+  String get browseProjectFolder;
+
+  /// No description provided for @orEnterPathManually.
+  ///
+  /// In en, this message translates to:
+  /// **'Or enter a path manually:'**
+  String get orEnterPathManually;
+
+  /// No description provided for @projectFolders.
+  ///
+  /// In en, this message translates to:
+  /// **'Project folders'**
+  String get projectFolders;
+
+  /// No description provided for @projectFoldersHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Folders your phone can browse to start a session in. Star one to make it the default for new conversations.'**
+  String get projectFoldersHint;
+
+  /// No description provided for @noProjectFolders.
+  ///
+  /// In en, this message translates to:
+  /// **'No project folders yet.'**
+  String get noProjectFolders;
+
+  /// No description provided for @addProjectFolder.
+  ///
+  /// In en, this message translates to:
+  /// **'Add folder'**
+  String get addProjectFolder;
+
+  /// No description provided for @defaultProjectFolder.
+  ///
+  /// In en, this message translates to:
+  /// **'Default folder'**
+  String get defaultProjectFolder;
+
+  /// No description provided for @setAsDefault.
+  ///
+  /// In en, this message translates to:
+  /// **'Set as default'**
+  String get setAsDefault;
+
+  /// No description provided for @removeProjectFolder.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove'**
+  String get removeProjectFolder;
 }
 
 class _AppLocalizationsDelegate

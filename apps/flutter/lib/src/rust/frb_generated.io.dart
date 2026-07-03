@@ -83,6 +83,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   DeviceCodeDto dco_decode_device_code_dto(dynamic raw);
 
   @protected
+  DirEntryDto dco_decode_dir_entry_dto(dynamic raw);
+
+  @protected
   ForceResumeReportDto dco_decode_force_resume_report_dto(dynamic raw);
 
   @protected
@@ -99,6 +102,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<AppServeStatusDto> dco_decode_list_app_serve_status_dto(dynamic raw);
+
+  @protected
+  List<DirEntryDto> dco_decode_list_dir_entry_dto(dynamic raw);
 
   @protected
   List<HolderDto> dco_decode_list_holder_dto(dynamic raw);
@@ -155,6 +161,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   int? dco_decode_opt_box_autoadd_u_32(dynamic raw);
+
+  @protected
+  ProjectConfigDto dco_decode_project_config_dto(dynamic raw);
 
   @protected
   ServiceIdDto dco_decode_service_id_dto(dynamic raw);
@@ -270,6 +279,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   DeviceCodeDto sse_decode_device_code_dto(SseDeserializer deserializer);
 
   @protected
+  DirEntryDto sse_decode_dir_entry_dto(SseDeserializer deserializer);
+
+  @protected
   ForceResumeReportDto sse_decode_force_resume_report_dto(
     SseDeserializer deserializer,
   );
@@ -292,6 +304,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<AppServeStatusDto> sse_decode_list_app_serve_status_dto(
     SseDeserializer deserializer,
   );
+
+  @protected
+  List<DirEntryDto> sse_decode_list_dir_entry_dto(SseDeserializer deserializer);
 
   @protected
   List<HolderDto> sse_decode_list_holder_dto(SseDeserializer deserializer);
@@ -362,6 +377,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   int? sse_decode_opt_box_autoadd_u_32(SseDeserializer deserializer);
+
+  @protected
+  ProjectConfigDto sse_decode_project_config_dto(SseDeserializer deserializer);
 
   @protected
   ServiceIdDto sse_decode_service_id_dto(SseDeserializer deserializer);
@@ -503,6 +521,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_device_code_dto(DeviceCodeDto self, SseSerializer serializer);
 
   @protected
+  void sse_encode_dir_entry_dto(DirEntryDto self, SseSerializer serializer);
+
+  @protected
   void sse_encode_force_resume_report_dto(
     ForceResumeReportDto self,
     SseSerializer serializer,
@@ -526,6 +547,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_list_app_serve_status_dto(
     List<AppServeStatusDto> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_dir_entry_dto(
+    List<DirEntryDto> self,
     SseSerializer serializer,
   );
 
@@ -618,6 +645,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_opt_box_autoadd_u_32(int? self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_project_config_dto(
+    ProjectConfigDto self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_service_id_dto(ServiceIdDto self, SseSerializer serializer);

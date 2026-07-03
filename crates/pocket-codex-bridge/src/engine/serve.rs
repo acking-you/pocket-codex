@@ -192,6 +192,22 @@ fn config_store() -> Result<Arc<pocket_codex_host_svc::store::ConfigStore>> {
         .map(Arc::clone)
 }
 
+/// The process-wide host-config store (project roots + default project), opened
+/// once and shared by every host — like [`config_store`], co-located under
+/// CODEX_HOME so all hosts on this machine share one host config.
+fn host_store() -> Result<Arc<pocket_codex_host_svc::store::HostStore>> {
+    static STORE: OnceCell<Arc<pocket_codex_host_svc::store::HostStore>> = OnceCell::new();
+    STORE
+        .get_or_try_init(|| -> Result<Arc<pocket_codex_host_svc::store::HostStore>> {
+            let path = pocket_codex_host_svc::store::default_host_config_path()?;
+            let store = runtime::runtime()
+                .block_on(pocket_codex_host_svc::store::HostStore::open(path))
+                .context("opening the host config store")?;
+            Ok(Arc::new(store))
+        })
+        .map(Arc::clone)
+}
+
 /// The resolved codex binary path (explicit override → persisted config →
 /// PATH), or `None` when none resolve so the UI can prompt for one.
 pub fn codex_locate() -> Option<String> {
@@ -531,6 +547,7 @@ pub fn serve_start(
     // unwritable CODEX_HOME surfaces as a hosting error here instead of after a
     // codex child is already running (or via a panic in the supervisor).
     let config_store = config_store()?;
+    let host_config_store = host_store()?;
 
     // Bring up codex serving 127.0.0.1:<port>: in-process (embedded) or as a
     // spawned child binary. Both yield the local app-server socket, a pid (our
@@ -647,6 +664,7 @@ pub fn serve_start(
         meta_std,
         app_local,
         config_store,
+        host_config_store,
     ));
 
     let (connector, tokens) = account::broker_transport(&support)?;
@@ -1019,16 +1037,18 @@ async fn api_proxy_supervisor(
 }
 
 /// Supervise the in-process host meta service. It resumes into the colocated
-/// codex at `app_ws_addr` and shares the host-global `store`.
+/// codex at `app_ws_addr` and shares the host-global `store` + `host` config.
 async fn meta_svc_supervisor(
     addr: SocketAddr,
     first: std::net::TcpListener,
     app_ws_addr: SocketAddr,
     store: Arc<pocket_codex_host_svc::store::ConfigStore>,
+    host: Arc<pocket_codex_host_svc::store::HostStore>,
 ) {
     supervise("the in-app meta service", addr, first, move |listener| {
         let store = store.clone();
-        async move { pocket_codex_host_svc::serve(listener, app_ws_addr, store).await }
+        let host = host.clone();
+        async move { pocket_codex_host_svc::serve(listener, app_ws_addr, store, host).await }
     })
     .await
 }

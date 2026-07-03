@@ -1155,6 +1155,68 @@ pub fn meta_thread_config_set(
     )?))
 }
 
+/// The host's project-folder config (mirrored for Dart): the roots a remote
+/// folder browser is confined to, and the default project new sessions open in.
+pub struct ProjectConfigDto {
+    /// Absolute host paths configured as project roots.
+    pub project_roots: Vec<String>,
+    /// Absolute host path new conversations default to (`None` = codex
+    /// default).
+    pub default_project: Option<String>,
+}
+
+fn project_config_dto(c: pocket_codex_host_svc::store::HostConfig) -> ProjectConfigDto {
+    ProjectConfigDto {
+        project_roots: c.project_roots,
+        default_project: c.default_project,
+    }
+}
+
+/// One browsable child directory of a host folder (mirrored for Dart).
+pub struct DirEntryDto {
+    /// The directory's own name (final path component).
+    pub name: String,
+    /// Absolute host path, ready to browse into or use as a session's cwd.
+    pub path: String,
+    /// Whether the directory is a git repository (a project hint).
+    pub is_git_repo: bool,
+}
+
+/// Read the project-folder config of the host behind `service_key`.
+pub fn meta_project_config(service_key: String) -> Result<ProjectConfigDto> {
+    Ok(project_config_dto(meta::project_config(&service_key)?))
+}
+
+/// Replace the project-folder config of the host behind `service_key`; returns
+/// the stored value. The desktop host edits this over its own loopback tunnel.
+pub fn meta_set_project_config(
+    service_key: String,
+    project_roots: Vec<String>,
+    default_project: Option<String>,
+) -> Result<ProjectConfigDto> {
+    Ok(project_config_dto(meta::set_project_config(
+        &service_key,
+        pocket_codex_host_svc::store::HostConfig {
+            project_roots,
+            default_project,
+        },
+    )?))
+}
+
+/// List the sub-directories of `path` on the host behind `service_key`, for the
+/// remote project-folder browser. Errors (with a `403`-carrying message) if
+/// `path` is outside the host's configured project roots.
+pub fn meta_list_dir(service_key: String, path: String) -> Result<Vec<DirEntryDto>> {
+    Ok(meta::list_dir(&service_key, &path)?
+        .into_iter()
+        .map(|e| DirEntryDto {
+            name: e.name,
+            path: e.path,
+            is_git_repo: e.is_git_repo,
+        })
+        .collect())
+}
+
 // ---------------------------------------------------------------------------
 // Hosted account (GitHub device-flow login)
 // ---------------------------------------------------------------------------

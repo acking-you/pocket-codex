@@ -15,9 +15,10 @@ use anyhow::{anyhow, Context, Result};
 use once_cell::sync::OnceCell;
 use pocket_codex_core::service::{ServiceId, ServiceKind};
 use pocket_codex_host_svc::{
+    fs::DirEntry,
     resume::ForceResumeOutcome,
     sessions::{LocalSession, SessionLiveness, TranscriptItem},
-    store::ThreadConfig,
+    store::{HostConfig, ThreadConfig},
 };
 use reqwest::{Client, Method, Url};
 use serde::{de::DeserializeOwned, Deserialize};
@@ -177,6 +178,48 @@ pub fn force_resume(service_key: &str, thread_id: &str) -> Result<ForceResumeOut
             .await
             .context("decoding resume response")
     })
+}
+
+/// Read the host's project-folder config (configured roots + default project)
+/// over its meta tunnel — what a new session's folder browser starts from.
+pub fn project_config(service_key: &str) -> Result<HostConfig> {
+    let url = endpoint(service_key, &["projects"])?;
+    runtime::runtime().block_on(get_json(url))
+}
+
+/// Replace the host's project-folder config; returns the stored value. The
+/// desktop host edits this over its own loopback meta tunnel.
+pub fn set_project_config(service_key: &str, config: HostConfig) -> Result<HostConfig> {
+    let url = endpoint(service_key, &["projects"])?;
+    runtime::runtime().block_on(async move {
+        let resp = client()
+            .request(Method::PUT, url)
+            .json(&config)
+            .send()
+            .await
+            .context("meta PUT projects")?;
+        ensure_ok(resp)
+            .await?
+            .json()
+            .await
+            .context("decoding projects response")
+    })
+}
+
+/// `{ "path": ..., "entries": [...] }` — one directory's browsable children.
+#[derive(Deserialize)]
+struct ListDirResponse {
+    entries: Vec<DirEntry>,
+}
+
+/// List the sub-directories of `path` on the host, for the remote
+/// project-folder browser. The host confines this to its configured roots, so
+/// a path outside them errors (surfaced as a `403` in the returned message).
+pub fn list_dir(service_key: &str, path: &str) -> Result<Vec<DirEntry>> {
+    let mut url = endpoint(service_key, &["fs", "list"])?;
+    url.query_pairs_mut().append_pair("path", path);
+    let resp: ListDirResponse = runtime::runtime().block_on(get_json(url))?;
+    Ok(resp.entries)
 }
 
 /// Read a remote thread's persisted config (all-unset when none stored).

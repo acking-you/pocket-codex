@@ -427,5 +427,20 @@
   "homeNoServiceMobileHint": "Open Pocket-Codex on your computer and start hosting (app-server); this screen will enter the chat automatically.",
   "homeNoServiceSelfHostHint": "Run `pocket-codex serve` on a machine with codex to publish an app-server on your relay, or sign in with an account to host from this app.",
   "homeAutoRetryNote": "Keeps checking for hosts automatically.",
-  "switchServiceFailed": "Couldn't reach that host — staying on the current one."
+  "switchServiceFailed": "Couldn't reach that host — staying on the current one.",
+  "pickFolderTitle": "Choose a project folder",
+  "useThisFolder": "Use this folder",
+  "folderUp": "Up one level",
+  "folderPickerEmpty": "No sub-folders here",
+  "folderPickerNoRoots": "No project folders are configured on this host yet. Add them on the computer under hosting settings.",
+  "gitRepoLabel": "Git repository",
+  "browseProjectFolder": "Browse project folders",
+  "orEnterPathManually": "Or enter a path manually:",
+  "projectFolders": "Project folders",
+  "projectFoldersHint": "Folders your phone can browse to start a session in. Star one to make it the default for new conversations.",
+  "noProjectFolders": "No project folders yet.",
+  "addProjectFolder": "Add folder",
+  "defaultProjectFolder": "Default folder",
+  "setAsDefault": "Set as default",
+  "removeProjectFolder": "Remove"
 }

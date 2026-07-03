@@ -674,4 +674,37 @@ class RustBridgeApi implements BridgeApi {
     permissionMode: c.permissionMode,
     planMode: c.planMode,
   );
+
+  @override
+  Future<ProjectConfig> metaProjectConfig(String serviceKey) async =>
+      _projectConfig(await frb.metaProjectConfig(serviceKey: serviceKey));
+
+  @override
+  Future<ProjectConfig> metaSetProjectConfig(
+    String serviceKey,
+    List<String> projectRoots,
+    String? defaultProject,
+  ) async => _projectConfig(
+    await frb.metaSetProjectConfig(
+      serviceKey: serviceKey,
+      projectRoots: projectRoots,
+      defaultProject: defaultProject,
+    ),
+  );
+
+  @override
+  Future<List<HostDirEntry>> metaListDir(String serviceKey, String path) async {
+    final entries = await frb.metaListDir(serviceKey: serviceKey, path: path);
+    return entries
+        .map(
+          (e) =>
+              HostDirEntry(name: e.name, path: e.path, isGitRepo: e.isGitRepo),
+        )
+        .toList(growable: false);
+  }
+
+  ProjectConfig _projectConfig(frb.ProjectConfigDto c) => ProjectConfig(
+    projectRoots: c.projectRoots,
+    defaultProject: c.defaultProject,
+  );
 }

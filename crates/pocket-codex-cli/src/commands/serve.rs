@@ -248,8 +248,15 @@ async fn spawn_meta_service(app_ws: SocketAddr) -> Result<SocketAddr> {
             .await
             .context("opening the meta config store")?,
     );
+    let host_config_path = pocket_codex_host_svc::store::default_host_config_path()
+        .context("resolving the host config store path")?;
+    let host = Arc::new(
+        pocket_codex_host_svc::store::HostStore::open(host_config_path)
+            .await
+            .context("opening the host config store")?,
+    );
     tokio::spawn(async move {
-        if let Err(e) = pocket_codex_host_svc::serve(listener, app_ws, store).await {
+        if let Err(e) = pocket_codex_host_svc::serve(listener, app_ws, store, host).await {
             ui::warn(&format!("host meta service exited: {e:#}"));
         }
     });

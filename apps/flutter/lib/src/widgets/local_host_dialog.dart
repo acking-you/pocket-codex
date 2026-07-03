@@ -8,6 +8,7 @@ import 'package:pocket_codex/src/bridge_api.dart';
 import 'package:pocket_codex/src/error_format.dart';
 import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/ui_prefs.dart';
+import 'package:pocket_codex/src/widgets/project_folders_editor.dart';
 
 /// Manage one local host. With [existing] set it shows that host's listen
 /// address + service key and a Stop button. Otherwise it's the "new host" form
@@ -215,7 +216,11 @@ class _LocalHostDialogState extends ConsumerState<LocalHostDialog> {
             existing.apiServiceKey,
             style: small?.copyWith(color: scheme.onSurfaceVariant),
           ),
-        );
+        )
+        // Project folders: the roots a phone's folder browser is confined to,
+        // and the default new conversations open in. Configured on the host.
+        ..add(const Divider(height: 24))
+        ..add(ProjectFoldersEditor(serviceKey: existing.appServiceKey));
     } else {
       children.add(const SizedBox(height: 16));
       // --- codex source: built-in (in-process) vs external (desktop only) ---
