@@ -6,7 +6,7 @@
 import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `apply_key`, `current_relay`, `holder_dto`, `meta_holder_dto`, `thread_config_dto`, `thread_config_from_dto`, `to_log_dto`
+// These functions are ignored because they are not marked as `pub`: `apply_key`, `current_relay`, `holder_dto`, `meta_holder_dto`, `project_config_dto`, `thread_config_dto`, `thread_config_from_dto`, `to_log_dto`
 
 /// Initialise the engine with the platform app-support dir (from Dart's
 /// path_provider). Must be called once after `RustLib.init()`.
@@ -441,6 +441,35 @@ Future<ThreadConfigDto> metaThreadConfigSet({
   serviceKey: serviceKey,
   threadId: threadId,
   config: config,
+);
+
+/// Read the project-folder config of the host behind `service_key`.
+Future<ProjectConfigDto> metaProjectConfig({required String serviceKey}) =>
+    RustLib.instance.api.crateApiBridgeMetaProjectConfig(
+      serviceKey: serviceKey,
+    );
+
+/// Replace the project-folder config of the host behind `service_key`; returns
+/// the stored value. The desktop host edits this over its own loopback tunnel.
+Future<ProjectConfigDto> metaSetProjectConfig({
+  required String serviceKey,
+  required List<String> projectRoots,
+  String? defaultProject,
+}) => RustLib.instance.api.crateApiBridgeMetaSetProjectConfig(
+  serviceKey: serviceKey,
+  projectRoots: projectRoots,
+  defaultProject: defaultProject,
+);
+
+/// List the sub-directories of `path` on the host behind `service_key`, for the
+/// remote project-folder browser. Errors (with a `403`-carrying message) if
+/// `path` is outside the host's configured project roots.
+Future<List<DirEntryDto>> metaListDir({
+  required String serviceKey,
+  required String path,
+}) => RustLib.instance.api.crateApiBridgeMetaListDir(
+  serviceKey: serviceKey,
+  path: path,
 );
 
 /// Begin a GitHub device-flow login. `backend` overrides the configured /
@@ -938,6 +967,36 @@ class DeviceCodeDto {
           backend == other.backend;
 }
 
+/// One browsable child directory of a host folder (mirrored for Dart).
+class DirEntryDto {
+  /// The directory's own name (final path component).
+  final String name;
+
+  /// Absolute host path, ready to browse into or use as a session's cwd.
+  final String path;
+
+  /// Whether the directory is a git repository (a project hint).
+  final bool isGitRepo;
+
+  const DirEntryDto({
+    required this.name,
+    required this.path,
+    required this.isGitRepo,
+  });
+
+  @override
+  int get hashCode => name.hashCode ^ path.hashCode ^ isGitRepo.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is DirEntryDto &&
+          runtimeType == other.runtimeType &&
+          name == other.name &&
+          path == other.path &&
+          isGitRepo == other.isGitRepo;
+}
+
 /// Outcome of a force-resume, mirrored for Dart.
 class ForceResumeReportDto {
   /// Holders that were successfully terminated.
@@ -1169,6 +1228,29 @@ class ModelInfoDto {
           description == other.description &&
           supportedReasoningEfforts == other.supportedReasoningEfforts &&
           defaultReasoningEffort == other.defaultReasoningEffort;
+}
+
+/// The host's project-folder config (mirrored for Dart): the roots a remote
+/// folder browser is confined to, and the default project new sessions open in.
+class ProjectConfigDto {
+  /// Absolute host paths configured as project roots.
+  final List<String> projectRoots;
+
+  /// Absolute host path new conversations default to (`None` = codex default).
+  final String? defaultProject;
+
+  const ProjectConfigDto({required this.projectRoots, this.defaultProject});
+
+  @override
+  int get hashCode => projectRoots.hashCode ^ defaultProject.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ProjectConfigDto &&
+          runtimeType == other.runtimeType &&
+          projectRoots == other.projectRoots &&
+          defaultProject == other.defaultProject;
 }
 
 /// A discovered service, mirrored for Dart.

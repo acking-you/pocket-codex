@@ -25,6 +25,91 @@ pub fn default_db_path() -> Result<PathBuf> {
     Ok(home.join("pocket-codex-threads.json"))
 }
 
+/// The default host-config path (project roots + default project): a file under
+/// `CODEX_HOME`, shared by every host on this machine like [`default_db_path`].
+pub fn default_host_config_path() -> Result<PathBuf> {
+    let home =
+        rollout::codex_home().map_err(|e| anyhow!("resolving CODEX_HOME for host config: {e}"))?;
+    Ok(home.join("pocket-codex-host.json"))
+}
+
+/// Host-level configuration shared across every device that reaches this host:
+/// the project roots a remote directory browser is confined to, and the default
+/// project new conversations start in.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostConfig {
+    /// Absolute host paths the user configured as project roots. The remote
+    /// directory browser lists only these and their subtrees, so a phone can
+    /// pick a working folder without free-roaming the host filesystem.
+    #[serde(default)]
+    pub project_roots: Vec<String>,
+    /// Absolute host path new conversations default their working directory to
+    /// (a configured root, or a folder within one). `None` = the codex default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_project: Option<String>,
+}
+
+/// A JSON-file store holding the singleton [`HostConfig`]. Mirrors
+/// [`ConfigStore`]'s robustness (async mutex, atomic temp+rename, corrupt file
+/// starts empty) — it shares the same `CODEX_HOME` and the same cross-host
+/// merge concern.
+pub struct HostStore {
+    path: PathBuf,
+    inner: Mutex<HostConfig>,
+}
+
+impl HostStore {
+    /// Open the store at `path`, loading the existing config. A missing or
+    /// corrupt file starts from defaults (logged) rather than wedging hosting.
+    pub async fn open(path: PathBuf) -> Result<Self> {
+        if let Some(parent) = path.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .with_context(|| format!("creating host-config dir {}", parent.display()))?;
+        }
+        let inner = match tokio::fs::read(&path).await {
+            Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_else(|e| {
+                tracing::warn!(
+                    error = %e,
+                    path = %path.display(),
+                    "host-config store unreadable; starting from defaults"
+                );
+                HostConfig::default()
+            }),
+            Err(_) => HostConfig::default(),
+        };
+        Ok(Self {
+            path,
+            inner: Mutex::new(inner),
+        })
+    }
+
+    /// The current host config.
+    pub async fn get(&self) -> HostConfig {
+        self.inner.lock().await.clone()
+    }
+
+    /// Replace the host config and persist it atomically (temp + rename).
+    /// Unlike the per-thread map this is a single record with no cross-host
+    /// merge to preserve — the last writer wins, which is the intended
+    /// semantics for a setting the user edits on the host itself.
+    pub async fn put(&self, config: HostConfig) -> Result<()> {
+        let mut guard = self.inner.lock().await;
+        let bytes = serde_json::to_vec_pretty(&config).context("serializing host config")?;
+        let tmp = self
+            .path
+            .with_extension(format!("{}.tmp", std::process::id()));
+        tokio::fs::write(&tmp, &bytes)
+            .await
+            .with_context(|| format!("writing host-config temp {}", tmp.display()))?;
+        tokio::fs::rename(&tmp, &self.path)
+            .await
+            .with_context(|| format!("replacing host-config store {}", self.path.display()))?;
+        *guard = config;
+        Ok(())
+    }
+}
+
 /// Persisted per-thread session config. Every field is optional: an unset field
 /// means "no stored preference", so the client falls back to its own default.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -174,5 +259,39 @@ mod tests {
             .await
             .expect("open tolerates corruption");
         assert_eq!(store.get("anything").await, ThreadConfig::default());
+    }
+
+    #[tokio::test]
+    async fn host_config_round_trips_and_persists() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("host.json");
+        {
+            let store = HostStore::open(path.clone()).await.expect("open");
+            assert_eq!(store.get().await, HostConfig::default());
+            store
+                .put(HostConfig {
+                    project_roots: vec!["/home/u/work".to_string(), "/srv/proj".to_string()],
+                    default_project: Some("/home/u/work".to_string()),
+                })
+                .await
+                .expect("put");
+        }
+        let reopened = HostStore::open(path).await.expect("reopen");
+        let cfg = reopened.get().await;
+        assert_eq!(cfg.project_roots.len(), 2);
+        assert_eq!(cfg.default_project.as_deref(), Some("/home/u/work"));
+    }
+
+    #[tokio::test]
+    async fn host_config_corrupt_starts_default() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("host.json");
+        tokio::fs::write(&path, b"not json at all")
+            .await
+            .expect("seed");
+        let store = HostStore::open(path)
+            .await
+            .expect("open tolerates corruption");
+        assert_eq!(store.get().await, HostConfig::default());
     }
 }

@@ -705,4 +705,36 @@ class FakeBridgeApi implements BridgeApi {
     threadConfigs[threadId] = config;
     return config;
   }
+
+  /// Seedable per-service project config returned by [metaProjectConfig];
+  /// [metaSetProjectConfig] writes here.
+  final Map<String, ProjectConfig> projectConfigs = {};
+
+  /// Seedable directory tree for [metaListDir], keyed by absolute host path →
+  /// its immediate sub-directories. A path with no entry lists empty.
+  final Map<String, List<HostDirEntry>> dirTree = {};
+
+  @override
+  Future<ProjectConfig> metaProjectConfig(String serviceKey) async =>
+      projectConfigs[serviceKey] ?? const ProjectConfig();
+
+  @override
+  Future<ProjectConfig> metaSetProjectConfig(
+    String serviceKey,
+    List<String> projectRoots,
+    String? defaultProject,
+  ) async {
+    final cfg = ProjectConfig(
+      projectRoots: projectRoots,
+      defaultProject: defaultProject,
+    );
+    projectConfigs[serviceKey] = cfg;
+    return cfg;
+  }
+
+  @override
+  Future<List<HostDirEntry>> metaListDir(
+    String serviceKey,
+    String path,
+  ) async => dirTree[path] ?? const [];
 }

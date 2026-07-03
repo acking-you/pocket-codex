@@ -1041,4 +1041,49 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get switchServiceFailed => '无法连接该主机，已保持当前主机不变。';
+
+  @override
+  String get pickFolderTitle => '选择项目文件夹';
+
+  @override
+  String get useThisFolder => '就用这个文件夹';
+
+  @override
+  String get folderUp => '上一级';
+
+  @override
+  String get folderPickerEmpty => '这里没有子文件夹';
+
+  @override
+  String get folderPickerNoRoots => '该主机还没有配置项目文件夹。请在电脑端的托管设置里添加。';
+
+  @override
+  String get gitRepoLabel => 'Git 仓库';
+
+  @override
+  String get browseProjectFolder => '浏览项目文件夹';
+
+  @override
+  String get orEnterPathManually => '或手动输入路径：';
+
+  @override
+  String get projectFolders => '项目文件夹';
+
+  @override
+  String get projectFoldersHint => '手机可浏览这些文件夹来开启会话。点亮星标即设为新会话的默认目录。';
+
+  @override
+  String get noProjectFolders => '还没有项目文件夹。';
+
+  @override
+  String get addProjectFolder => '添加文件夹';
+
+  @override
+  String get defaultProjectFolder => '默认目录';
+
+  @override
+  String get setAsDefault => '设为默认';
+
+  @override
+  String get removeProjectFolder => '移除';
 }

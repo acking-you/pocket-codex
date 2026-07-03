@@ -726,6 +726,44 @@ class ThreadConfig {
   );
 }
 
+/// A host's project-folder configuration: the roots the remote folder browser
+/// is confined to, and the default project new conversations open in. Both are
+/// host-side (shared to every device via the meta tunnel) so a phone starting a
+/// new session sees the same folders the desktop offers.
+class ProjectConfig {
+  /// Creates a project config.
+  const ProjectConfig({this.projectRoots = const [], this.defaultProject});
+
+  /// Absolute host paths the user configured as project roots.
+  final List<String> projectRoots;
+
+  /// Absolute host path new conversations default their cwd to (null = the
+  /// codex default). A configured root, or a folder within one.
+  final String? defaultProject;
+
+  /// Whether any project roots are configured (gates the tree browser).
+  bool get hasRoots => projectRoots.isNotEmpty;
+}
+
+/// One browsable child directory of a host folder, from [BridgeApi.metaListDir].
+class HostDirEntry {
+  /// Creates a directory entry.
+  const HostDirEntry({
+    required this.name,
+    required this.path,
+    this.isGitRepo = false,
+  });
+
+  /// The directory's own name (final path component).
+  final String name;
+
+  /// Absolute host path — browse into it, or use it as a session's cwd.
+  final String path;
+
+  /// Whether the directory is a git repository (a project hint).
+  final bool isGitRepo;
+}
+
 /// The whole engine surface the UI is allowed to touch. One real impl wraps
 /// flutter_rust_bridge; a fake backs widget tests.
 abstract interface class BridgeApi {
@@ -1052,4 +1090,21 @@ abstract interface class BridgeApi {
     String threadId,
     ThreadConfig config,
   );
+
+  /// Read the project-folder config (roots + default) of the host behind
+  /// [serviceKey] — what a new session's folder browser starts from.
+  Future<ProjectConfig> metaProjectConfig(String serviceKey);
+
+  /// Replace the project-folder config of the host behind [serviceKey]; returns
+  /// the stored value. The desktop host edits this over its own loopback tunnel.
+  Future<ProjectConfig> metaSetProjectConfig(
+    String serviceKey,
+    List<String> projectRoots,
+    String? defaultProject,
+  );
+
+  /// List the sub-directories of [path] on the host behind [serviceKey], for
+  /// the remote project-folder browser. Throws if [path] is outside the host's
+  /// configured project roots.
+  Future<List<HostDirEntry>> metaListDir(String serviceKey, String path);
 }

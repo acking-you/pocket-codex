@@ -8720,6 +8720,7 @@ dependencies = [
  "axum",
  "pocket-codex-codex",
  "pocket-codex-core",
+ "reqwest",
  "serde",
  "serde_json",
  "tempfile",

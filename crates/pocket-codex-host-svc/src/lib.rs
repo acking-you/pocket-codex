@@ -14,6 +14,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod fs;
 pub mod resume;
 pub mod sessions;
 pub mod store;
@@ -22,27 +23,33 @@ use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 
 use anyhow::{anyhow, Context, Result};
 use axum::{
-    extract::{DefaultBodyLimit, Path, State},
+    extract::{DefaultBodyLimit, Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
 
-use crate::store::{ConfigStore, ThreadConfig};
+use crate::store::{ConfigStore, HostConfig, HostStore, ThreadConfig};
 
 /// Shared handler state.
 struct AppState {
     app_ws_addr: SocketAddr,
     store: Arc<ConfigStore>,
+    host: Arc<HostStore>,
 }
 
 /// Bind `listen` and serve the meta service until the process is signalled,
 /// opening a fresh thread-config store at `db_path` (the CLI worker path, where
 /// there is a single host).
-pub async fn run(listen: String, app_ws_addr: SocketAddr, db_path: PathBuf) -> Result<()> {
+pub async fn run(
+    listen: String,
+    app_ws_addr: SocketAddr,
+    db_path: PathBuf,
+    host_config_path: PathBuf,
+) -> Result<()> {
     let addr: SocketAddr = listen
         .parse()
         .with_context(|| format!("parsing meta service listen address `{listen}`"))?;
@@ -54,7 +61,12 @@ pub async fn run(listen: String, app_ws_addr: SocketAddr, db_path: PathBuf) -> R
             .await
             .context("opening thread-config store")?,
     );
-    serve(listener, app_ws_addr, store).await
+    let host = Arc::new(
+        HostStore::open(host_config_path)
+            .await
+            .context("opening host-config store")?,
+    );
+    serve(listener, app_ws_addr, store, host).await
 }
 
 /// Serve the meta service on an already-bound `listener` until the task is
@@ -66,10 +78,12 @@ pub async fn serve(
     listener: TcpListener,
     app_ws_addr: SocketAddr,
     store: Arc<ConfigStore>,
+    host: Arc<HostStore>,
 ) -> Result<()> {
     let state = Arc::new(AppState {
         app_ws_addr,
         store,
+        host,
     });
     let app = Router::new()
         .route("/healthz", get(healthz))
@@ -78,6 +92,10 @@ pub async fn serve(
         .route("/sessions/{id}/transcript", get(session_transcript))
         .route("/sessions/{id}/resume", post(session_resume))
         .route("/threads/{id}/config", get(get_config).put(put_config))
+        // Project-folder browser: the configured roots + default, and a
+        // root-confined directory listing to drill the host's project tree.
+        .route("/projects", get(get_projects).put(put_projects))
+        .route("/fs/list", get(list_dir))
         // Attachment uploads carry whole files; raise the 2 MB default body cap
         // on this route only.
         .route(
@@ -107,6 +125,8 @@ impl IntoResponse for ApiError {
             StatusCode::NOT_FOUND
         } else if msg.contains("running in another client") {
             StatusCode::CONFLICT
+        } else if msg.contains("outside the configured project roots") {
+            StatusCode::FORBIDDEN
         } else {
             StatusCode::INTERNAL_SERVER_ERROR
         };
@@ -193,6 +213,58 @@ async fn put_config(
     // Echo what is actually stored (re-read), not the request body, so the
     // response reflects the persisted state.
     Ok(Json(state.store.get(&id).await))
+}
+
+/// `GET /projects` — the host's configured project roots + default project.
+async fn get_projects(State(state): State<Arc<AppState>>) -> Json<HostConfig> {
+    Json(state.host.get().await)
+}
+
+/// `PUT /projects` — replace the project roots + default. The desktop host
+/// edits this over its own loopback meta tunnel; the result is shared with
+/// every device (a phone reads it to seed a new session's folder browser).
+async fn put_projects(
+    State(state): State<Arc<AppState>>,
+    Json(config): Json<HostConfig>,
+) -> Result<Json<HostConfig>, ApiError> {
+    state.host.put(config).await?;
+    Ok(Json(state.host.get().await))
+}
+
+/// Query for `GET /fs/list`.
+#[derive(Deserialize)]
+struct ListDirQuery {
+    /// Absolute host path to list. Must be a configured root or inside one.
+    path: String,
+}
+
+/// `{ "path": ..., "entries": [...] }` — one directory's browsable children.
+#[derive(Serialize)]
+struct ListDirResponse {
+    path: String,
+    entries: Vec<fs::DirEntry>,
+}
+
+/// `GET /fs/list?path=<abs>` — the sub-directories of `path`, for the remote
+/// project-folder browser. Confined to the configured roots: a path that is
+/// not a root or inside one is refused (`403`) so the browser can never
+/// free-roam the host filesystem.
+async fn list_dir(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<ListDirQuery>,
+) -> Result<Json<ListDirResponse>, ApiError> {
+    let roots = state.host.get().await.project_roots;
+    let requested = std::path::PathBuf::from(&q.path);
+    if !fs::within_roots(&requested, &roots) {
+        return Err(ApiError(anyhow!("path is outside the configured project roots")));
+    }
+    let entries = tokio::task::spawn_blocking(move || fs::list_subdirs(&requested))
+        .await
+        .context("directory-listing task panicked")??;
+    Ok(Json(ListDirResponse {
+        path: q.path,
+        entries,
+    }))
 }
 
 /// Per-file cap for `/uploads/{name}` bodies. Generous for documents while

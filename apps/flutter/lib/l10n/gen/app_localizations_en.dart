@@ -1066,4 +1066,51 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get switchServiceFailed =>
       'Couldn\'t reach that host — staying on the current one.';
+
+  @override
+  String get pickFolderTitle => 'Choose a project folder';
+
+  @override
+  String get useThisFolder => 'Use this folder';
+
+  @override
+  String get folderUp => 'Up one level';
+
+  @override
+  String get folderPickerEmpty => 'No sub-folders here';
+
+  @override
+  String get folderPickerNoRoots =>
+      'No project folders are configured on this host yet. Add them on the computer under hosting settings.';
+
+  @override
+  String get gitRepoLabel => 'Git repository';
+
+  @override
+  String get browseProjectFolder => 'Browse project folders';
+
+  @override
+  String get orEnterPathManually => 'Or enter a path manually:';
+
+  @override
+  String get projectFolders => 'Project folders';
+
+  @override
+  String get projectFoldersHint =>
+      'Folders your phone can browse to start a session in. Star one to make it the default for new conversations.';
+
+  @override
+  String get noProjectFolders => 'No project folders yet.';
+
+  @override
+  String get addProjectFolder => 'Add folder';
+
+  @override
+  String get defaultProjectFolder => 'Default folder';
+
+  @override
+  String get setAsDefault => 'Set as default';
+
+  @override
+  String get removeProjectFolder => 'Remove';
 }

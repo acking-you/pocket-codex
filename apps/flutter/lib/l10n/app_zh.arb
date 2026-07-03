@@ -370,5 +370,20 @@
   "homeNoServiceMobileHint": "在电脑上打开 Pocket-Codex 并开启托管（app-server），这里就会自动进入对话。",
   "homeNoServiceSelfHostHint": "在装有 codex 的机器上运行 `pocket-codex serve` 把 app-server 发布到中转，或登录账号后直接在本应用内托管。",
   "homeAutoRetryNote": "会自动持续检测新主机。",
-  "switchServiceFailed": "无法连接该主机，已保持当前主机不变。"
+  "switchServiceFailed": "无法连接该主机，已保持当前主机不变。",
+  "pickFolderTitle": "选择项目文件夹",
+  "useThisFolder": "就用这个文件夹",
+  "folderUp": "上一级",
+  "folderPickerEmpty": "这里没有子文件夹",
+  "folderPickerNoRoots": "该主机还没有配置项目文件夹。请在电脑端的托管设置里添加。",
+  "gitRepoLabel": "Git 仓库",
+  "browseProjectFolder": "浏览项目文件夹",
+  "orEnterPathManually": "或手动输入路径：",
+  "projectFolders": "项目文件夹",
+  "projectFoldersHint": "手机可浏览这些文件夹来开启会话。点亮星标即设为新会话的默认目录。",
+  "noProjectFolders": "还没有项目文件夹。",
+  "addProjectFolder": "添加文件夹",
+  "defaultProjectFolder": "默认目录",
+  "setAsDefault": "设为默认",
+  "removeProjectFolder": "移除"
 }
