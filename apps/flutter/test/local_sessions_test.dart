@@ -344,6 +344,66 @@ void main() {
     await t.pumpWidget(const SizedBox()); // dispose → cancel the poll timer
   });
 
+  testWidgets('viewer captions each turn with the model that handled it', (
+    t,
+  ) async {
+    final api = FakeBridgeApi();
+    // The synthetic turnContext items the rollout parser emits at turn
+    // boundaries: title = model, text = compact JSON details.
+    api.transcripts['thr-model'] = const [
+      ThreadItem(
+        id: 't0',
+        itemType: 'turnContext',
+        title: 'gpt-5.5',
+        text:
+            '{"effort":"low","approvalPolicy":"never",'
+            '"sandboxMode":"danger-full-access","collaborationMode":"default"}',
+      ),
+      ThreadItem(id: 't1', itemType: 'userMessage', title: '', text: 'hello'),
+      ThreadItem(id: 't2', itemType: 'agentMessage', title: '', text: 'hi'),
+      // A later turn ran on another model in plan mode; details that aren't
+      // valid JSON must degrade to a model-only caption, never an error.
+      ThreadItem(
+        id: 't3',
+        itemType: 'turnContext',
+        title: 'o4-mini',
+        text: '{"effort":"xhigh","collaborationMode":"plan"}',
+      ),
+      ThreadItem(id: 't4', itemType: 'userMessage', title: '', text: 'again'),
+    ];
+    api.liveness['thr-model'] = const SessionLiveness(
+      threadId: 'thr-model',
+      turnState: 'completed',
+      heldOpen: false,
+      safety: 'free',
+      allowsResume: true,
+      requiresTakeover: false,
+      holders: [],
+    );
+    await t.pumpWidget(
+      _host(const LocalSessionViewScreen(threadId: 'thr-model'), api),
+    );
+    await _settle(t);
+
+    // Each turn boundary shows its model · effort caption (zh effort labels),
+    // and the plan-mode turn is badged.
+    expect(find.text('gpt-5.5 · 低'), findsOneWidget);
+    expect(find.text('o4-mini · 极高 · 计划模式'), findsOneWidget);
+    // The caption's tooltip carries the recorded permissions (preset label).
+    final tooltip = t
+        .widget<Tooltip>(
+          find.ancestor(
+            of: find.text('gpt-5.5 · 低'),
+            matching: find.byType(Tooltip),
+          ),
+        )
+        .message;
+    expect(tooltip, contains('本轮由 gpt-5.5 处理'));
+    expect(tooltip, contains('完全放行')); // never + danger-full-access preset
+
+    await t.pumpWidget(const SizedBox()); // dispose → cancel the poll timer
+  });
+
   testWidgets(
     'viewer stays read-only (no resume) while the session is actively '
     'running elsewhere',

@@ -1,9 +1,11 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
+import 'package:pocket_codex/src/app_modes.dart';
 import 'package:pocket_codex/src/attachment_refs.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
 import 'package:pocket_codex/src/error_format.dart';
@@ -420,9 +422,84 @@ class _TranscriptRow extends StatelessWidget {
             ),
           ),
         );
+      case 'turnContext':
+        return _TurnContextCaption(item: item);
       default: // commandExecution / tool activity
         return _CommandBlock(title: item.title, output: item.text);
     }
+  }
+}
+
+/// A subtle per-turn caption synthesized from the rollout's `turn_context`
+/// record: which model (and effort / plan mode) actually handled the turn
+/// that follows — the read-only analogue of the live conversation's per-turn
+/// model stamp. The tooltip carries the recorded permissions. `title` is the
+/// model id; `text` is a compact JSON object of the remaining settings
+/// (parsed defensively — a caption is never worth an error row).
+class _TurnContextCaption extends StatelessWidget {
+  const _TurnContextCaption({required this.item});
+
+  final ThreadItem item;
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    final muted = Theme.of(context).colorScheme.onSurfaceVariant;
+    Map<String, dynamic> details = const {};
+    try {
+      final decoded = jsonDecode(item.text);
+      if (decoded is Map<String, dynamic>) details = decoded;
+    } catch (_) {
+      // Not JSON (e.g. a future host packing something else) — model-only.
+    }
+    String? str(String key) {
+      final v = details[key];
+      return (v is String && v.isNotEmpty) ? v : null;
+    }
+
+    final effort = ReasoningEffort.fromWire(str('effort'));
+    final plan = str('collaborationMode') == 'plan';
+    final caption = [
+      item.title,
+      if (effort != null) effort.label(l10n),
+      if (plan) l10n.statePlanMode,
+    ].join(' · ');
+    // Permissions for the tooltip: the app's preset label when the recorded
+    // approval+sandbox pair maps onto one, else the raw wire tokens.
+    final approval = str('approvalPolicy');
+    final sandbox = str('sandboxMode');
+    final preset = PermissionMode.values
+        .where((m) => m.approval == approval && m.sandbox == sandbox)
+        .firstOrNull;
+    final permText = preset?.label(l10n) ?? [?approval, ?sandbox].join(' · ');
+    final tooltip = [
+      l10n.turnHandledBy(item.title),
+      if (permText.isNotEmpty) '${l10n.permissionLabel} · $permText',
+    ].join('\n');
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Tooltip(
+        message: tooltip,
+        child: Padding(
+          // Attach visually to the turn BELOW (the record precedes its turn).
+          padding: const EdgeInsets.only(left: 2, top: 10, bottom: 2),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.auto_awesome, size: 11, color: muted),
+              const SizedBox(width: 4),
+              Flexible(
+                child: Text(
+                  caption,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 11.5, color: muted),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
 
