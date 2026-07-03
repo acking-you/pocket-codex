@@ -1086,4 +1086,58 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get removeProjectFolder => '移除';
+
+  @override
+  String get welcomeTitle => '欢迎使用 Pocket-Codex';
+
+  @override
+  String get welcomeSubtitleDesktop => '只差一步：在本机开启托管，手机就能随时随地远程控制这台电脑上的 Codex。';
+
+  @override
+  String get welcomeSubtitleMobile =>
+      'Pocket-Codex 远程控制运行在你电脑上的 Codex。在电脑上完成一次托管配置即可开始。';
+
+  @override
+  String get welcomeStepHost => '在本机开启托管';
+
+  @override
+  String get welcomeStepHostDesc => '一键启动 codex app-server 并发布到你的账号，默认配置即可用。';
+
+  @override
+  String get welcomeHostRunning => '托管已开启';
+
+  @override
+  String get welcomeStepFolders => '配置项目文件夹（可选）';
+
+  @override
+  String get welcomeStepFoldersDesc => '手机可视化浏览这些文件夹，在正确的项目里开启会话。';
+
+  @override
+  String get welcomeFoldersLocked => '开启托管后即可配置。';
+
+  @override
+  String get welcomeMobileStep1 => '在电脑上安装并打开 Pocket-Codex';
+
+  @override
+  String get welcomeMobileStep2 => '登录同一个 GitHub 账号';
+
+  @override
+  String get welcomeMobileStep3 => '点击「开始托管」，一键完成配置';
+
+  @override
+  String get welcomeWaitingHost => '正在等待主机上线…';
+
+  @override
+  String welcomeHostFound(String label) {
+    return '已发现主机：$label';
+  }
+
+  @override
+  String get welcomeDownloadDesktop => '获取桌面版';
+
+  @override
+  String get welcomeEnterChat => '进入聊天';
+
+  @override
+  String get welcomeSkip => '跳过引导';
 }

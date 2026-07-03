@@ -442,5 +442,25 @@
   "addProjectFolder": "Add folder",
   "defaultProjectFolder": "Default folder",
   "setAsDefault": "Set as default",
-  "removeProjectFolder": "Remove"
+  "removeProjectFolder": "Remove",
+  "welcomeTitle": "Welcome to Pocket-Codex",
+  "welcomeSubtitleDesktop": "One step left: start hosting on this computer, and your phone can drive its Codex from anywhere.",
+  "welcomeSubtitleMobile": "Pocket-Codex remote-controls the Codex running on your computer. Set up hosting there once and you're ready.",
+  "welcomeStepHost": "Start hosting on this computer",
+  "welcomeStepHostDesc": "One click brings up a codex app-server and publishes it to your account — the defaults just work.",
+  "welcomeHostRunning": "Hosting is up",
+  "welcomeStepFolders": "Configure project folders (optional)",
+  "welcomeStepFoldersDesc": "Your phone browses these folders visually to start a session in the right project.",
+  "welcomeFoldersLocked": "Available once hosting is up.",
+  "welcomeMobileStep1": "Install and open Pocket-Codex on your computer",
+  "welcomeMobileStep2": "Sign in with the same GitHub account",
+  "welcomeMobileStep3": "Tap \"Start hosting\" — one click completes the setup",
+  "welcomeWaitingHost": "Watching for your host to come online…",
+  "welcomeHostFound": "Host found: {label}",
+  "@welcomeHostFound": {
+    "placeholders": { "label": { "type": "String" } }
+  },
+  "welcomeDownloadDesktop": "Get the desktop app",
+  "welcomeEnterChat": "Enter the chat",
+  "welcomeSkip": "Skip the guide"
 }

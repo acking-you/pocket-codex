@@ -20,6 +20,7 @@ class UiPrefs {
     this.lastServiceKey,
     this.lastThreadByService = const {},
     this.autoHost,
+    this.guideSeen = false,
   });
 
   /// Full relay key of the app service the user last chatted on.
@@ -33,6 +34,10 @@ class UiPrefs {
   /// desktop cold start.
   final AutoHostPrefs? autoHost;
 
+  /// Whether the first-run welcome guide has been shown on this device. Set
+  /// the first time it renders, so signing in ever again skips it.
+  final bool guideSeen;
+
   /// Copy with the given fields replaced. `clearAutoHost` removes the
   /// auto-host record (a plain null argument means "keep").
   UiPrefs copyWith({
@@ -40,10 +45,12 @@ class UiPrefs {
     Map<String, String>? lastThreadByService,
     AutoHostPrefs? autoHost,
     bool clearAutoHost = false,
+    bool? guideSeen,
   }) => UiPrefs(
     lastServiceKey: lastServiceKey ?? this.lastServiceKey,
     lastThreadByService: lastThreadByService ?? this.lastThreadByService,
     autoHost: clearAutoHost ? null : (autoHost ?? this.autoHost),
+    guideSeen: guideSeen ?? this.guideSeen,
   );
 
   /// Parse from JSON; any shape surprise degrades to defaults.
@@ -64,6 +71,7 @@ class UiPrefs {
       autoHost: rawHost is Map<String, dynamic>
           ? AutoHostPrefs.fromJson(rawHost)
           : null,
+      guideSeen: json['guideSeen'] == true,
     );
   }
 
@@ -73,6 +81,7 @@ class UiPrefs {
     if (lastThreadByService.isNotEmpty)
       'lastThreadByService': lastThreadByService,
     if (autoHost != null) 'autoHost': autoHost!.toJson(),
+    if (guideSeen) 'guideSeen': true,
   };
 }
 
@@ -159,6 +168,8 @@ class UiPrefsStore extends AsyncNotifier<UiPrefs> {
           ...raced.lastThreadByService,
         },
         autoHost: raced.autoHost ?? loaded.autoHost,
+        // Only ever flips false→true, so OR-merging is lossless.
+        guideSeen: raced.guideSeen || loaded.guideSeen,
       );
       _enqueueWrite(merged);
       return merged;
@@ -213,6 +224,14 @@ class UiPrefsStore extends AsyncNotifier<UiPrefs> {
       threads[serviceKey] = threadId;
     }
     final next = _current.copyWith(lastThreadByService: threads);
+    state = AsyncData(next);
+    _enqueueWrite(next);
+  }
+
+  /// Record that the first-run welcome guide has been shown on this device.
+  void markGuideSeen() {
+    if (_current.guideSeen) return;
+    final next = _current.copyWith(guideSeen: true);
     state = AsyncData(next);
     _enqueueWrite(next);
   }
