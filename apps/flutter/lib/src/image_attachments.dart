@@ -146,7 +146,10 @@ String? _decoderMime(img.Decoder decoder) => switch (decoder) {
 /// through). Used to suggest an honest filename when saving a viewed image.
 String sniffImageExtension(Uint8List bytes) {
   if (bytes.length > 8 && bytes[0] == 0x89 && bytes[1] == 0x50) return 'png';
-  if (bytes.length > 4 && bytes[0] == 0x47 && bytes[1] == 0x49 && bytes[2] == 0x46) {
+  if (bytes.length > 4 &&
+      bytes[0] == 0x47 &&
+      bytes[1] == 0x49 &&
+      bytes[2] == 0x46) {
     return 'gif';
   }
   if (bytes.length > 12 &&
