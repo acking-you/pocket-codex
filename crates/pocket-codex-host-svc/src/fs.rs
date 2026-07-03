@@ -8,7 +8,7 @@
 //! lives inside one. The confinement check ([`within_roots`]) canonicalises
 //! both sides so `..` traversal and symlinks can't escape a root.
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -28,17 +28,29 @@ pub struct DirEntry {
     pub is_git_repo: bool,
 }
 
-/// Canonicalise `p`, falling back to a lexical normalisation when the path does
-/// not exist on disk (so confinement checks still work for a not-yet-created
-/// path). Canonicalisation is what makes `..` and symlinks unable to escape.
+/// Canonicalise `p`, falling back to the raw path when it does not exist on
+/// disk. Canonicalisation resolves symlinks so they can't escape a root; the
+/// `..` case is handled separately in [`within_roots`] (see there) because a
+/// non-existent traversal path canonicalises to nothing useful.
 fn canonical(p: &Path) -> PathBuf {
     std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
 }
 
 /// Whether `path` is one of `roots` or lives inside one — the
-/// browse-confinement rule. Both sides are canonicalised so traversal/symlinks
-/// can't slip out.
+/// browse-confinement rule.
+///
+/// A `..` component is rejected outright: a non-existent traversal path (e.g.
+/// `root/sub/../../outside`) makes `canonicalize` fall back to the raw path
+/// with the `..` unresolved, and a plain `starts_with(root)` then wrongly
+/// matches on the leading `root` prefix (a real hole — reproduced on Linux
+/// where the fallback keeps the literal components). The browser only ever
+/// sends absolute paths straight from a listing, never a `..`, so rejecting
+/// them closes the escape without costing any legitimate path. Existing paths
+/// are then canonicalised so symlinks can't slip out either.
 pub fn within_roots(path: &Path, roots: &[String]) -> bool {
+    if path.components().any(|c| matches!(c, Component::ParentDir)) {
+        return false;
+    }
     let target = canonical(path);
     roots.iter().any(|root| {
         let root = canonical(Path::new(root));
