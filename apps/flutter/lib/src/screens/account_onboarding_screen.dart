@@ -8,6 +8,7 @@ import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
 import 'package:pocket_codex/src/error_format.dart';
 import 'package:pocket_codex/src/providers.dart';
+import 'package:pocket_codex/src/ui_prefs.dart';
 import 'package:pocket_codex/src/web_authenticator.dart';
 import 'package:pocket_codex/src/widgets/brand_logo.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -84,7 +85,7 @@ class _AccountOnboardingState extends ConsumerState<AccountOnboardingScreen> {
           backend: start.backend,
         );
         _showSignedIn(user.login);
-        if (mounted) context.go('/');
+        await _goAfterSignIn();
         return;
       }
     } on PlatformException catch (e) {
@@ -175,7 +176,7 @@ class _AccountOnboardingState extends ConsumerState<AccountOnboardingScreen> {
           case 'authorized':
             _polling = false;
             _showSignedIn(poll.login);
-            if (mounted) context.go('/');
+            await _goAfterSignIn();
             return;
           case 'slow_down':
             delay = interval + const Duration(seconds: 5);
@@ -205,6 +206,27 @@ class _AccountOnboardingState extends ConsumerState<AccountOnboardingScreen> {
         delay = interval;
       }
     }
+  }
+
+  /// Land the signed-in user: the first sign-in on this device gets the
+  /// focused welcome guide (one-click hosting setup on desktop / the
+  /// what-to-do-on-the-computer steps on a phone); every later sign-in goes
+  /// straight to the chat. Waits (bounded) for the prefs file when its load is
+  /// still in flight, degrading to "not seen" — showing the guide twice is a
+  /// far smaller cost than never showing it.
+  Future<void> _goAfterSignIn() async {
+    var seen = ref.read(uiPrefsProvider).valueOrNull?.guideSeen;
+    if (seen == null) {
+      try {
+        final prefs = await ref
+            .read(uiPrefsProvider.future)
+            .timeout(const Duration(seconds: 2));
+        seen = prefs.guideSeen;
+      } catch (_) {
+        seen = false;
+      }
+    }
+    if (mounted) context.go(seen ? '/' : '/welcome');
   }
 
   /// Confirm a successful sign-in with a toast. Shown via the root

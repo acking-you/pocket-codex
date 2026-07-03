@@ -19,6 +19,7 @@ import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/attachment_refs.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
 import 'package:pocket_codex/src/providers.dart';
+import 'package:pocket_codex/src/ui_prefs.dart';
 import 'package:pocket_codex/src/screens/account_onboarding_screen.dart';
 import 'package:pocket_codex/src/screens/api_service_screen.dart';
 import 'package:pocket_codex/src/image_attachments.dart';
@@ -891,8 +892,8 @@ void main() {
     expect(find.text('在线'), findsNWidgets(2)); // relay + app-server both online
   });
 
-  testWidgets('onboarding: sign in shows the code, then authorized navigates '
-      'home', (t) async {
+  testWidgets('onboarding: sign in shows the code, then authorized opens the '
+      'first-run guide', (t) async {
     final api = FakeBridgeApi(
       config: const ConfigInfo(relay: '', hasKey: false),
     )..accountPollStatus = 'authorized';
@@ -906,10 +907,18 @@ void main() {
             builder: (_, _) => const AccountOnboardingScreen(),
           ),
           _stub('/', 'HOME-ROUTE'),
+          _stub('/welcome', 'WELCOME-ROUTE'),
         ],
       ),
     );
     await t.pumpAndSettle(); // initial onboarding (no spinner yet)
+    // Warm the prefs snapshot so the post-sign-in routing decides
+    // synchronously (the real prefs file load never completes under the
+    // test's fake async, and waiting out its bounded timeout would also
+    // expire the success toast).
+    ProviderScope.containerOf(
+      t.element(find.byType(AccountOnboardingScreen)),
+    ).read(uiPrefsProvider.notifier).setLastService('seed');
     await t.tap(find.text('改用设备码登录')); // accountUseDeviceCode (zh): device flow
     // The polling spinner is a perpetual animation, so advance via bounded pumps
     // (pumpAndSettle would never settle while it spins).
@@ -918,9 +927,10 @@ void main() {
     expect(find.text('ABCD-1234'), findsOneWidget); // user code shown
     expect(find.text('打开 GitHub'), findsOneWidget); // accountOpenGitHub (zh)
     await t.pump(const Duration(seconds: 6)); // fire the 5s poll interval
-    await t.pump(); // accountLoginPoll resolves → context.go('/')
-    await t.pump(); // router rebuilds at '/'
-    expect(find.text('HOME-ROUTE'), findsOneWidget); // navigated on authorize
+    await t.pump(); // accountLoginPoll resolves → go('/welcome')
+    await t.pump(); // router rebuilds
+    // First sign-in on this device → the focused welcome guide, not the home.
+    expect(find.text('WELCOME-ROUTE'), findsOneWidget);
   });
 
   testWidgets('onboarding: an expired code clears and shows the expired '
@@ -971,6 +981,7 @@ void main() {
             builder: (_, _) => const AccountOnboardingScreen(),
           ),
           _stub('/', 'HOME-ROUTE'),
+          _stub('/welcome', 'WELCOME-ROUTE'),
         ],
         // The browser hand-off returns a redirect whose state matches the fake
         // bridge's started flow ('fake-state'), carrying a one-time code.
@@ -984,6 +995,11 @@ void main() {
       ),
     );
     await t.pumpAndSettle();
+    // Warm the prefs snapshot so the post-sign-in routing decides
+    // synchronously (see the device-code test above).
+    ProviderScope.containerOf(
+      t.element(find.byType(AccountOnboardingScreen)),
+    ).read(uiPrefsProvider.notifier).setLastService('seed');
     // The PRIMARY button is the browser flow (the convenient default).
     await t.tap(find.text('使用 GitHub 登录'));
     // Flush the async chain (start → authenticate → exchange → toast + go) with
@@ -991,11 +1007,47 @@ void main() {
     for (var i = 0; i < 8; i++) {
       await t.pump(const Duration(milliseconds: 20));
     }
-    expect(find.text('HOME-ROUTE'), findsOneWidget); // navigated on success
+    // First sign-in on this device → the focused welcome guide.
+    expect(find.text('WELCOME-ROUTE'), findsOneWidget);
     expect(api.lastWebRedirectUri, isNotNull); // the web flow ran
     // Success toast (root ScaffoldMessenger) survives the navigation.
     expect(find.textContaining('octocat'), findsOneWidget);
     await t.pumpAndSettle(); // drain the SnackBar timer
+  });
+
+  testWidgets('onboarding: a later sign-in on this device skips the guide', (
+    t,
+  ) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: '', hasKey: false),
+    )..accountPollStatus = 'authorized';
+    await t.pumpWidget(
+      _routerHost(
+        api,
+        initial: '/onboarding',
+        routes: [
+          GoRoute(
+            path: '/onboarding',
+            builder: (_, _) => const AccountOnboardingScreen(),
+          ),
+          _stub('/', 'HOME-ROUTE'),
+          _stub('/welcome', 'WELCOME-ROUTE'),
+        ],
+      ),
+    );
+    await t.pumpAndSettle();
+    // The guide was already seen on this device (e.g. sign-out → sign-in).
+    ProviderScope.containerOf(
+      t.element(find.byType(AccountOnboardingScreen)),
+    ).read(uiPrefsProvider.notifier).markGuideSeen();
+    await t.tap(find.text('改用设备码登录'));
+    await t.pump();
+    await t.pump();
+    await t.pump(const Duration(seconds: 6)); // fire the 5s poll interval
+    await t.pump();
+    await t.pump();
+    expect(find.text('HOME-ROUTE'), findsOneWidget); // straight to the chat
+    expect(find.text('WELCOME-ROUTE'), findsNothing);
   });
 
   testWidgets('onboarding: a cancelled browser sign-in guides to device code', (

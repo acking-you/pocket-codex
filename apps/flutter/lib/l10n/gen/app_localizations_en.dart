@@ -1113,4 +1113,63 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get removeProjectFolder => 'Remove';
+
+  @override
+  String get welcomeTitle => 'Welcome to Pocket-Codex';
+
+  @override
+  String get welcomeSubtitleDesktop =>
+      'One step left: start hosting on this computer, and your phone can drive its Codex from anywhere.';
+
+  @override
+  String get welcomeSubtitleMobile =>
+      'Pocket-Codex remote-controls the Codex running on your computer. Set up hosting there once and you\'re ready.';
+
+  @override
+  String get welcomeStepHost => 'Start hosting on this computer';
+
+  @override
+  String get welcomeStepHostDesc =>
+      'One click brings up a codex app-server and publishes it to your account — the defaults just work.';
+
+  @override
+  String get welcomeHostRunning => 'Hosting is up';
+
+  @override
+  String get welcomeStepFolders => 'Configure project folders (optional)';
+
+  @override
+  String get welcomeStepFoldersDesc =>
+      'Your phone browses these folders visually to start a session in the right project.';
+
+  @override
+  String get welcomeFoldersLocked => 'Available once hosting is up.';
+
+  @override
+  String get welcomeMobileStep1 =>
+      'Install and open Pocket-Codex on your computer';
+
+  @override
+  String get welcomeMobileStep2 => 'Sign in with the same GitHub account';
+
+  @override
+  String get welcomeMobileStep3 =>
+      'Tap \"Start hosting\" — one click completes the setup';
+
+  @override
+  String get welcomeWaitingHost => 'Watching for your host to come online…';
+
+  @override
+  String welcomeHostFound(String label) {
+    return 'Host found: $label';
+  }
+
+  @override
+  String get welcomeDownloadDesktop => 'Get the desktop app';
+
+  @override
+  String get welcomeEnterChat => 'Enter the chat';
+
+  @override
+  String get welcomeSkip => 'Skip the guide';
 }

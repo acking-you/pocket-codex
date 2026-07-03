@@ -385,5 +385,25 @@
   "addProjectFolder": "添加文件夹",
   "defaultProjectFolder": "默认目录",
   "setAsDefault": "设为默认",
-  "removeProjectFolder": "移除"
+  "removeProjectFolder": "移除",
+  "welcomeTitle": "欢迎使用 Pocket-Codex",
+  "welcomeSubtitleDesktop": "只差一步：在本机开启托管，手机就能随时随地远程控制这台电脑上的 Codex。",
+  "welcomeSubtitleMobile": "Pocket-Codex 远程控制运行在你电脑上的 Codex。在电脑上完成一次托管配置即可开始。",
+  "welcomeStepHost": "在本机开启托管",
+  "welcomeStepHostDesc": "一键启动 codex app-server 并发布到你的账号，默认配置即可用。",
+  "welcomeHostRunning": "托管已开启",
+  "welcomeStepFolders": "配置项目文件夹（可选）",
+  "welcomeStepFoldersDesc": "手机可视化浏览这些文件夹，在正确的项目里开启会话。",
+  "welcomeFoldersLocked": "开启托管后即可配置。",
+  "welcomeMobileStep1": "在电脑上安装并打开 Pocket-Codex",
+  "welcomeMobileStep2": "登录同一个 GitHub 账号",
+  "welcomeMobileStep3": "点击「开始托管」，一键完成配置",
+  "welcomeWaitingHost": "正在等待主机上线…",
+  "welcomeHostFound": "已发现主机：{label}",
+  "@welcomeHostFound": {
+    "placeholders": { "label": { "type": "String" } }
+  },
+  "welcomeDownloadDesktop": "获取桌面版",
+  "welcomeEnterChat": "进入聊天",
+  "welcomeSkip": "跳过引导"
 }

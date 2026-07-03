@@ -10,6 +10,7 @@ import 'package:pocket_codex/src/screens/log_view_screen.dart';
 import 'package:pocket_codex/src/screens/onboarding_screen.dart';
 import 'package:pocket_codex/src/screens/services_screen.dart';
 import 'package:pocket_codex/src/screens/settings_screen.dart';
+import 'package:pocket_codex/src/screens/welcome_guide_screen.dart';
 
 /// The live router instance, captured by [buildRouter] so code outside the
 /// widget tree — namely the desktop tray's "Settings" item — can navigate. Null
@@ -54,6 +55,8 @@ GoRouter buildRouter({
     // Chat-first home: resolves an app service + the latest conversation and
     // lands the user directly in the chat. All management moved to /manage.
     GoRoute(path: '/', builder: (c, s) => const HomeScreen()),
+    // First-run welcome guide, shown once per device after the first sign-in.
+    GoRoute(path: '/welcome', builder: (c, s) => const WelcomeGuideScreen()),
     GoRoute(path: '/manage', builder: (c, s) => const ServicesScreen()),
     GoRoute(path: '/settings', builder: (c, s) => const SettingsScreen()),
     GoRoute(path: '/logs', builder: (c, s) => const LogViewScreen()),

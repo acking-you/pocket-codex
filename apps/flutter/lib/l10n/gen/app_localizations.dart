@@ -2107,6 +2107,108 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Remove'**
   String get removeProjectFolder;
+
+  /// No description provided for @welcomeTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Welcome to Pocket-Codex'**
+  String get welcomeTitle;
+
+  /// No description provided for @welcomeSubtitleDesktop.
+  ///
+  /// In en, this message translates to:
+  /// **'One step left: start hosting on this computer, and your phone can drive its Codex from anywhere.'**
+  String get welcomeSubtitleDesktop;
+
+  /// No description provided for @welcomeSubtitleMobile.
+  ///
+  /// In en, this message translates to:
+  /// **'Pocket-Codex remote-controls the Codex running on your computer. Set up hosting there once and you\'re ready.'**
+  String get welcomeSubtitleMobile;
+
+  /// No description provided for @welcomeStepHost.
+  ///
+  /// In en, this message translates to:
+  /// **'Start hosting on this computer'**
+  String get welcomeStepHost;
+
+  /// No description provided for @welcomeStepHostDesc.
+  ///
+  /// In en, this message translates to:
+  /// **'One click brings up a codex app-server and publishes it to your account — the defaults just work.'**
+  String get welcomeStepHostDesc;
+
+  /// No description provided for @welcomeHostRunning.
+  ///
+  /// In en, this message translates to:
+  /// **'Hosting is up'**
+  String get welcomeHostRunning;
+
+  /// No description provided for @welcomeStepFolders.
+  ///
+  /// In en, this message translates to:
+  /// **'Configure project folders (optional)'**
+  String get welcomeStepFolders;
+
+  /// No description provided for @welcomeStepFoldersDesc.
+  ///
+  /// In en, this message translates to:
+  /// **'Your phone browses these folders visually to start a session in the right project.'**
+  String get welcomeStepFoldersDesc;
+
+  /// No description provided for @welcomeFoldersLocked.
+  ///
+  /// In en, this message translates to:
+  /// **'Available once hosting is up.'**
+  String get welcomeFoldersLocked;
+
+  /// No description provided for @welcomeMobileStep1.
+  ///
+  /// In en, this message translates to:
+  /// **'Install and open Pocket-Codex on your computer'**
+  String get welcomeMobileStep1;
+
+  /// No description provided for @welcomeMobileStep2.
+  ///
+  /// In en, this message translates to:
+  /// **'Sign in with the same GitHub account'**
+  String get welcomeMobileStep2;
+
+  /// No description provided for @welcomeMobileStep3.
+  ///
+  /// In en, this message translates to:
+  /// **'Tap \"Start hosting\" — one click completes the setup'**
+  String get welcomeMobileStep3;
+
+  /// No description provided for @welcomeWaitingHost.
+  ///
+  /// In en, this message translates to:
+  /// **'Watching for your host to come online…'**
+  String get welcomeWaitingHost;
+
+  /// No description provided for @welcomeHostFound.
+  ///
+  /// In en, this message translates to:
+  /// **'Host found: {label}'**
+  String welcomeHostFound(String label);
+
+  /// No description provided for @welcomeDownloadDesktop.
+  ///
+  /// In en, this message translates to:
+  /// **'Get the desktop app'**
+  String get welcomeDownloadDesktop;
+
+  /// No description provided for @welcomeEnterChat.
+  ///
+  /// In en, this message translates to:
+  /// **'Enter the chat'**
+  String get welcomeEnterChat;
+
+  /// No description provided for @welcomeSkip.
+  ///
+  /// In en, this message translates to:
+  /// **'Skip the guide'**
+  String get welcomeSkip;
 }
 
 class _AppLocalizationsDelegate
