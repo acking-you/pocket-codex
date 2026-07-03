@@ -699,26 +699,25 @@ pub fn serve_start(
     let meta_register =
         Some(spawn_register(connector, tokens, &device, ServiceKind::Meta, &name, meta_local));
 
-    hosts_locked()
-        .insert(name.clone(), LocalServe {
-            device: device.clone(),
-            name: name.clone(),
-            app_key: app_key.clone(),
-            app_local,
-            pid,
-            app_register,
-            watchdog,
-            embedded: embedded_task,
-            log_tail,
-            api_key: api_key.clone(),
-            api_local,
-            api_proxy,
-            api_register,
-            meta_key: meta_key.clone(),
-            meta_local,
-            meta_svc,
-            meta_register,
-        });
+    hosts_locked().insert(name.clone(), LocalServe {
+        device: device.clone(),
+        name: name.clone(),
+        app_key: app_key.clone(),
+        app_local,
+        pid,
+        app_register,
+        watchdog,
+        embedded: embedded_task,
+        log_tail,
+        api_key: api_key.clone(),
+        api_local,
+        api_proxy,
+        api_register,
+        meta_key: meta_key.clone(),
+        meta_local,
+        meta_svc,
+        meta_register,
+    });
 
     Ok(ServeReport {
         device,
