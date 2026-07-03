@@ -2,7 +2,11 @@
 // launcher-icon / splash / tray pipelines consume, so the single SVGs stay the
 // source of truth and every platform render is pixel-identical to them.
 //
-// Run: fvm flutter test test/gen_icon_test.dart
+// Regeneration is opt-in: PNG encoding is not byte-identical across platforms,
+// so writing on every `flutter test` run would dirty the checked-in assets.
+// Without REGEN_ICONS=1 these tests are skipped.
+//
+// Run: REGEN_ICONS=1 fvm flutter test test/gen_icon_test.dart
 // Outputs (app icon — icon/pocket_mark.svg):
 //   icon/icon_glyph.png          big, bare mark (iOS / desktop / web / legacy)
 //   icon/adaptive_foreground.png mark inside the Android adaptive safe zone
@@ -93,6 +97,12 @@ Future<Uint8List> compositeSvgs(
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
+  // Rasterisation output differs per platform, so regenerating unconditionally
+  // would leave the working tree dirty after a plain `flutter test`.
+  final skip = Platform.environment['REGEN_ICONS'] == '1'
+      ? false
+      : 'set REGEN_ICONS=1 to regenerate the checked-in icon assets';
+
   test('rasterise pocket mark into app-icon assets', () async {
     final svg = File('icon/pocket_mark.svg').readAsStringSync();
     await renderSvg(svg, 'icon/icon_glyph.png', 0.82);
@@ -101,7 +111,7 @@ void main() {
     expect(File('icon/icon_glyph.png').existsSync(), isTrue);
     expect(File('icon/adaptive_foreground.png').existsSync(), isTrue);
     expect(File('assets/logo/mark.png').existsSync(), isTrue);
-  });
+  }, skip: skip);
 
   test('rasterise mobile icon (brand tile + centred white glyph)', () async {
     final bg = File('icon/mobile_bg.svg').readAsStringSync();
@@ -123,7 +133,7 @@ void main() {
     expect(File('icon/icon_mobile.png').existsSync(), isTrue);
     expect(File('icon/icon_adaptive_bg.png').existsSync(), isTrue);
     expect(File('icon/icon_adaptive_fg.png').existsSync(), isTrue);
-  });
+  }, skip: skip);
 
   test('rasterise tray mark into tray assets (png + multi-size ico)', () async {
     final svg = File('icon/tray_mark.svg').readAsStringSync();
@@ -150,5 +160,5 @@ void main() {
 
     expect(File('assets/tray/tray.png').existsSync(), isTrue);
     expect(File('assets/tray/tray.ico').existsSync(), isTrue);
-  });
+  }, skip: skip);
 }
