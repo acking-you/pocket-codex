@@ -917,6 +917,36 @@ class AppLocalizationsZh extends AppLocalizations {
   String get deregisterFailed => '注销失败';
 
   @override
+  String get batchRemoveEnter => '清理不可达';
+
+  @override
+  String get batchRemoveHint => '点选要移除的不可达服务。';
+
+  @override
+  String get batchSelectAll => '全选';
+
+  @override
+  String get batchClear => '清空';
+
+  @override
+  String batchRemoveSelected(int count) {
+    return '移除（$count）';
+  }
+
+  @override
+  String get batchRemoveTitle => '移除这些不可达服务？';
+
+  @override
+  String batchRemoveWarning(int count) {
+    return '从此设备的列表中移除 $count 个不可达服务。若其中某个恢复，会重新出现。';
+  }
+
+  @override
+  String batchRemovedSnack(int count) {
+    return '已移除 $count 个服务';
+  }
+
+  @override
   String get tunnelAppLabel => 'App-server';
 
   @override

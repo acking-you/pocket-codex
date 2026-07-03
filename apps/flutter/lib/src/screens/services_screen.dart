@@ -462,6 +462,54 @@ class _ServiceList extends ConsumerWidget {
     };
     final bridge = ref.watch(bridgeApiProvider);
 
+    // Batch cleanup: only the API / app-server lists carry removable inactive
+    // entries. An entry is removable iff it is NOT one of our local tunnels AND
+    // its backend is confirmed unreachable (a subscribed-dead tunnel, or a
+    // probe that returned false / errored — never while a probe is still
+    // loading, and never a connected/alive one). This mirrors exactly what the
+    // single-entry 注销 dismisses, so a batch never removes anything a per-entry
+    // 注销 wouldn't.
+    bool removable(ServiceEntry s) {
+      if (localTunnels.containsKey(s.key)) return false;
+      if (s.kind == 'api') {
+        final sub = subs[s.key];
+        if (sub != null) return !sub.alive;
+        final r = ref.watch(apiReachableProvider(s.key));
+        return r.hasError || r.valueOrNull == false;
+      }
+      if (bridge.appIsConnected(s.key)) return false;
+      final r = ref.watch(appReachableProvider(s.key));
+      return r.hasError || r.valueOrNull == false;
+    }
+
+    final isSelectableSection =
+        section == ServicesSection.api || section == ServicesSection.appServer;
+    final sectionEntries = section == ServicesSection.api ? api : app;
+    final removableKeys = isSelectableSection
+        ? {
+            for (final s in sectionEntries)
+              if (removable(s)) s.key,
+          }
+        : const <String>{};
+    final selection = isSelectableSection
+        ? ref.watch(serviceSelectionProvider(section))
+        : const ServiceSelection();
+    // Keep the selection honest against live probes: exit select mode when
+    // nothing is removable any more, and drop ticks for entries that recovered
+    // (went reachable) since being selected. Deferred — never mutate a provider
+    // during build.
+    if (isSelectableSection && selection.active) {
+      final notifier = ref.read(serviceSelectionProvider(section).notifier);
+      if (removableKeys.isEmpty) {
+        Future.microtask(() => notifier.state = const ServiceSelection());
+      } else {
+        final stale = selection.keys.difference(removableKeys);
+        if (stale.isNotEmpty) {
+          Future.microtask(() => notifier.update((s) => s.without(stale)));
+        }
+      }
+    }
+
     // Per-API status. Subscribed → the live tunnel's alive/dropped flag.
     // Otherwise PROBE the proxy (like the app-server) so a registered-but-dead
     // api-proxy reads "unreachable" instead of a false green "online", with the
@@ -538,6 +586,12 @@ class _ServiceList extends ConsumerWidget {
         selected: s.key == highlightKey,
         reason: reason,
         status: status,
+        selecting: selection.active,
+        selectable: removableKeys.contains(s.key),
+        checked: selection.contains(s.key),
+        onToggle: () => ref
+            .read(serviceSelectionProvider(section).notifier)
+            .update((v) => v.toggled(s.key)),
         onTap: () => onTapApi(s.key),
         onDeregister: () => _confirmDeregister(
           context,
@@ -596,6 +650,12 @@ class _ServiceList extends ConsumerWidget {
           label: statusLabel,
           filled: true,
         ),
+        selecting: selection.active,
+        selectable: removableKeys.contains(s.key),
+        checked: selection.contains(s.key),
+        onToggle: () => ref
+            .read(serviceSelectionProvider(section).notifier)
+            .update((v) => v.toggled(s.key)),
         onTap: () => onTapApp(s.key),
         onDeregister: () => _confirmDeregister(
           context,
@@ -637,7 +697,13 @@ class _ServiceList extends ConsumerWidget {
       ServicesSection.sessions => const <Widget>[],
     };
 
-    return ListView(
+    final selNotifier = ref.read(serviceSelectionProvider(section).notifier);
+    // The "clean up unreachable" affordance appears ONLY when there's something
+    // to clean (≥1 removable inactive entry) and we're not already selecting —
+    // no clutter otherwise.
+    final showEnterButton =
+        isSelectableSection && !selection.active && removableKeys.isNotEmpty;
+    final listView = ListView(
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 16),
       children: [
         _RelayBanner(
@@ -645,9 +711,160 @@ class _ServiceList extends ConsumerWidget {
           accountLogin: accountLogin,
           online: online,
         ),
+        if (showEnterButton)
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton.icon(
+              key: const Key('batch-enter-btn'),
+              icon: const Icon(Icons.cleaning_services_outlined, size: 18),
+              label: Text(l10n.batchRemoveEnter),
+              onPressed: () =>
+                  selNotifier.state = const ServiceSelection(active: true),
+            ),
+          ),
+        if (isSelectableSection && selection.active)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(4, 4, 4, 8),
+            child: Text(
+              l10n.batchRemoveHint,
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+            ),
+          ),
         ...sectionChildren,
       ],
     );
+    if (!isSelectableSection || !selection.active) return listView;
+    // Selecting: pin a bottom action bar (cancel · select-all · remove(N)) so
+    // the batch action stays reachable while the list scrolls.
+    final selected = sectionEntries
+        .where((s) => selection.contains(s.key))
+        .toList();
+    final allSelected =
+        removableKeys.isNotEmpty &&
+        selection.keys.length == removableKeys.length;
+    return Column(
+      children: [
+        Expanded(child: listView),
+        Material(
+          elevation: 8,
+          color: scheme.surfaceContainerHigh,
+          child: SafeArea(
+            top: false,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+              child: Row(
+                children: [
+                  TextButton(
+                    key: const Key('batch-cancel-btn'),
+                    onPressed: () =>
+                        selNotifier.state = const ServiceSelection(),
+                    child: Text(l10n.cancel),
+                  ),
+                  const SizedBox(width: 4),
+                  TextButton(
+                    key: const Key('batch-select-all-btn'),
+                    onPressed: () => selNotifier.state = allSelected
+                        ? const ServiceSelection(active: true)
+                        : const ServiceSelection().withAll(removableKeys),
+                    child: Text(
+                      allSelected ? l10n.batchClear : l10n.batchSelectAll,
+                    ),
+                  ),
+                  const Spacer(),
+                  FilledButton.icon(
+                    key: const Key('batch-remove-btn'),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: scheme.error,
+                      foregroundColor: scheme.onError,
+                    ),
+                    onPressed: selected.isEmpty
+                        ? null
+                        : () => _batchRemove(context, ref, selected, section),
+                    icon: const Icon(Icons.delete_sweep_outlined, size: 18),
+                    label: Text(l10n.batchRemoveSelected(selected.length)),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Remove several unreachable/orphaned remote entries at once — the batch
+/// analogue of the orphan path in [_confirmDeregister]. Each still-unreachable
+/// key is durably dismissed (client-side, survives restart) plus a best-effort
+/// backend drop; any that recovered (went reachable) since selection are left
+/// untouched. One confirm covers the whole set. Reachable / local entries can
+/// never reach here (they're not selectable).
+Future<void> _batchRemove(
+  BuildContext context,
+  WidgetRef ref,
+  List<ServiceEntry> entries,
+  ServicesSection section,
+) async {
+  final l10n = AppLocalizations.of(context);
+  final scheme = Theme.of(context).colorScheme;
+  if (entries.isEmpty) return;
+  final ok = await showDialog<bool>(
+    context: context,
+    builder: (_) => AlertDialog(
+      key: const Key('batch-remove-dialog'),
+      title: Text(l10n.batchRemoveTitle),
+      content: Text(l10n.batchRemoveWarning(entries.length)),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(false),
+          child: Text(l10n.cancel),
+        ),
+        FilledButton(
+          key: const Key('batch-remove-confirm-btn'),
+          style: FilledButton.styleFrom(backgroundColor: scheme.error),
+          onPressed: () => Navigator.of(context).pop(true),
+          child: Text(l10n.remove),
+        ),
+      ],
+    ),
+  );
+  if (ok != true) return;
+  final dismiss = ref.read(dismissedServicesProvider.notifier);
+  final bridge = ref.read(bridgeApiProvider);
+  var removed = 0;
+  for (final s in entries) {
+    // Re-check reachability at confirm time (probes refresh every 15s): a key
+    // that recovered while the dialog was open must not be dismissed — that
+    // would strand a live service off the list.
+    final reachableNow =
+        (s.kind == 'app'
+                ? ref.read(appReachableProvider(s.key))
+                : ref.read(apiReachableProvider(s.key)))
+            .valueOrNull ==
+        true;
+    if (reachableNow) continue;
+    dismiss.dismiss(s.key);
+    removed++;
+    try {
+      await bridge.accountDeregisterService(
+        device: s.device,
+        kind: s.kind,
+        name: s.name,
+      );
+    } catch (_) {
+      // Best-effort — the entry is already hidden from the list.
+    }
+  }
+  // Leave select mode and refresh discovery so the list reflects the removals.
+  ref.read(serviceSelectionProvider(section).notifier).state =
+      const ServiceSelection();
+  ref.invalidate(servicesProvider);
+  if (context.mounted && removed > 0) {
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(l10n.batchRemovedSnack(removed))));
   }
 }
 
@@ -857,6 +1074,10 @@ class _ServiceCard extends StatelessWidget {
     this.chevron = false,
     this.selected = false,
     this.onDeregister,
+    this.selecting = false,
+    this.selectable = false,
+    this.checked = false,
+    this.onToggle,
   });
 
   final IconData icon;
@@ -876,87 +1097,114 @@ class _ServiceCard extends StatelessWidget {
   /// When set, an overflow menu offers a 注销 (deregister) action.
   final VoidCallback? onDeregister;
 
+  /// Batch multi-select mode is active: [selectable] cards show a checkbox and
+  /// tap-to-toggle instead of navigating; non-selectable cards (reachable /
+  /// local) dim out and ignore taps; the overflow menu is hidden throughout.
+  final bool selecting;
+  final bool selectable;
+  final bool checked;
+  final VoidCallback? onToggle;
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    // In select mode only removable cards are interactive (they toggle); others
+    // are shown dimmed and inert so it's obvious which entries a batch touches.
+    final dimmed = selecting && !selectable;
+    final effectiveTap = selecting ? (selectable ? onToggle : null) : onTap;
+    final highlight = selected || (selecting && selectable && checked);
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Material(
-        color: scheme.surfaceContainerLow,
-        borderRadius: BorderRadius.circular(14),
-        child: InkWell(
-          onTap: onTap,
+      child: Opacity(
+        opacity: dimmed ? 0.4 : 1,
+        child: Material(
+          color: scheme.surfaceContainerLow,
           borderRadius: BorderRadius.circular(14),
-          child: Container(
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(
-                color: selected ? scheme.primary : scheme.outlineVariant,
-                width: selected ? 2 : 1,
+          child: InkWell(
+            onTap: effectiveTap,
+            borderRadius: BorderRadius.circular(14),
+            child: Container(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                  color: highlight ? scheme.primary : scheme.outlineVariant,
+                  width: highlight ? 2 : 1,
+                ),
               ),
-            ),
-            padding: const EdgeInsets.all(12),
-            child: Row(
-              children: [
-                _IconBadge(icon: icon, bg: iconBg, fg: iconFg),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        title,
-                        style: Theme.of(context).textTheme.titleSmall,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        subtitle,
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: scheme.onSurfaceVariant,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      if (reason != null) ...[
-                        const SizedBox(height: 3),
+              padding: const EdgeInsets.all(12),
+              child: Row(
+                children: [
+                  if (selecting && selectable) ...[
+                    Checkbox(
+                      value: checked,
+                      onChanged: (_) => onToggle?.call(),
+                    ),
+                    const SizedBox(width: 4),
+                  ],
+                  _IconBadge(icon: icon, bg: iconBg, fg: iconFg),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
                         Text(
-                          reason!,
-                          style: Theme.of(
-                            context,
-                          ).textTheme.bodySmall?.copyWith(color: scheme.error),
+                          title,
+                          style: Theme.of(context).textTheme.titleSmall,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          subtitle,
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(color: scheme.onSurfaceVariant),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        if (reason != null) ...[
+                          const SizedBox(height: 3),
+                          Text(
+                            reason!,
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(color: scheme.error),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  status,
+                  if (chevron) ...[
+                    const SizedBox(width: 2),
+                    Icon(Icons.chevron_right, color: scheme.outline),
+                  ],
+                  // The per-entry 注销 menu is hidden while multi-selecting —
+                  // the bottom batch bar owns removal then.
+                  if (onDeregister != null && !selecting)
+                    PopupMenuButton<String>(
+                      icon: Icon(Icons.more_vert, color: scheme.outline),
+                      padding: EdgeInsets.zero,
+                      onSelected: (_) => onDeregister!(),
+                      itemBuilder: (context) => [
+                        PopupMenuItem(
+                          value: 'deregister',
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.link_off,
+                                size: 18,
+                                color: scheme.error,
+                              ),
+                              const SizedBox(width: 8),
+                              Text(AppLocalizations.of(context).deregister),
+                            ],
+                          ),
                         ),
                       ],
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 8),
-                status,
-                if (chevron) ...[
-                  const SizedBox(width: 2),
-                  Icon(Icons.chevron_right, color: scheme.outline),
+                    ),
                 ],
-                if (onDeregister != null)
-                  PopupMenuButton<String>(
-                    icon: Icon(Icons.more_vert, color: scheme.outline),
-                    padding: EdgeInsets.zero,
-                    onSelected: (_) => onDeregister!(),
-                    itemBuilder: (context) => [
-                      PopupMenuItem(
-                        value: 'deregister',
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.link_off, size: 18, color: scheme.error),
-                            const SizedBox(width: 8),
-                            Text(AppLocalizations.of(context).deregister),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-              ],
+              ),
             ),
           ),
         ),

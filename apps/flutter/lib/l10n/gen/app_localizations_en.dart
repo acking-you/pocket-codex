@@ -939,6 +939,37 @@ class AppLocalizationsEn extends AppLocalizations {
   String get deregisterFailed => 'Couldn\'t deregister the service';
 
   @override
+  String get batchRemoveEnter => 'Clean up unreachable';
+
+  @override
+  String get batchRemoveHint =>
+      'Tap the unreachable services you want to remove.';
+
+  @override
+  String get batchSelectAll => 'Select all';
+
+  @override
+  String get batchClear => 'Clear';
+
+  @override
+  String batchRemoveSelected(int count) {
+    return 'Remove ($count)';
+  }
+
+  @override
+  String get batchRemoveTitle => 'Remove these unreachable services?';
+
+  @override
+  String batchRemoveWarning(int count) {
+    return 'Remove $count unreachable services from this device\'s list. Any that recover will re-appear.';
+  }
+
+  @override
+  String batchRemovedSnack(int count) {
+    return 'Removed $count services';
+  }
+
+  @override
   String get tunnelAppLabel => 'App-server';
 
   @override

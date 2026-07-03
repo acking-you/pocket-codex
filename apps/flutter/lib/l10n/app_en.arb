@@ -375,6 +375,23 @@
   },
   "remove": "Remove",
   "deregisterFailed": "Couldn't deregister the service",
+  "batchRemoveEnter": "Clean up unreachable",
+  "batchRemoveHint": "Tap the unreachable services you want to remove.",
+  "batchSelectAll": "Select all",
+  "batchClear": "Clear",
+  "batchRemoveSelected": "Remove ({count})",
+  "@batchRemoveSelected": {
+    "placeholders": { "count": { "type": "int" } }
+  },
+  "batchRemoveTitle": "Remove these unreachable services?",
+  "batchRemoveWarning": "Remove {count} unreachable services from this device's list. Any that recover will re-appear.",
+  "@batchRemoveWarning": {
+    "placeholders": { "count": { "type": "int" } }
+  },
+  "batchRemovedSnack": "Removed {count} services",
+  "@batchRemovedSnack": {
+    "placeholders": { "count": { "type": "int" } }
+  },
   "tunnelAppLabel": "App-server",
   "tunnelApiLabel": "API",
   "tunnelMetaLabel": "Sessions (meta)",

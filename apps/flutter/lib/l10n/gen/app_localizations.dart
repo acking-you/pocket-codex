@@ -1790,6 +1790,54 @@ abstract class AppLocalizations {
   /// **'Couldn\'t deregister the service'**
   String get deregisterFailed;
 
+  /// No description provided for @batchRemoveEnter.
+  ///
+  /// In en, this message translates to:
+  /// **'Clean up unreachable'**
+  String get batchRemoveEnter;
+
+  /// No description provided for @batchRemoveHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Tap the unreachable services you want to remove.'**
+  String get batchRemoveHint;
+
+  /// No description provided for @batchSelectAll.
+  ///
+  /// In en, this message translates to:
+  /// **'Select all'**
+  String get batchSelectAll;
+
+  /// No description provided for @batchClear.
+  ///
+  /// In en, this message translates to:
+  /// **'Clear'**
+  String get batchClear;
+
+  /// No description provided for @batchRemoveSelected.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove ({count})'**
+  String batchRemoveSelected(int count);
+
+  /// No description provided for @batchRemoveTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove these unreachable services?'**
+  String get batchRemoveTitle;
+
+  /// No description provided for @batchRemoveWarning.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove {count} unreachable services from this device\'s list. Any that recover will re-appear.'**
+  String batchRemoveWarning(int count);
+
+  /// No description provided for @batchRemovedSnack.
+  ///
+  /// In en, this message translates to:
+  /// **'Removed {count} services'**
+  String batchRemovedSnack(int count);
+
   /// No description provided for @tunnelAppLabel.
   ///
   /// In en, this message translates to:

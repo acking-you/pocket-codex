@@ -162,6 +162,10 @@ class FakeBridgeApi implements BridgeApi {
   /// Records the last [accountDeregisterService] call for assertions.
   String? lastDeregistered;
 
+  /// Every key passed to [accountDeregisterService], in order — so a batch
+  /// removal can assert it dropped each selected key.
+  final List<String> deregistered = [];
+
   /// When true, [accountDeregisterService] records the call but does NOT drop
   /// the entry from discovery — mirroring an orphaned/hollow relay key the
   /// backend can't force off. Lets tests exercise the durable client-side
@@ -175,6 +179,7 @@ class FakeBridgeApi implements BridgeApi {
     required String name,
   }) async {
     lastDeregistered = 'pcx:$device:$kind:$name';
+    deregistered.add(lastDeregistered!);
     if (keepOnDeregister) return;
     _services.removeWhere(
       (s) => s.device == device && s.kind == kind && s.name == name,
