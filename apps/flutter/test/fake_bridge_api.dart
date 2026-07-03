@@ -24,6 +24,10 @@ class FakeBridgeApi implements BridgeApi {
   /// Make [discoverServices] throw, to exercise error states.
   Object? discoverError;
 
+  /// Mutable view of the discovery list, so a test can make a service appear
+  /// (or vanish) after construction — e.g. the home screen's auto-retry.
+  List<ServiceEntry> get services => _services;
+
   @override
   Future<ConfigInfo> getConfig() async => _config;
 
@@ -236,6 +240,18 @@ class FakeBridgeApi implements BridgeApi {
           metaRegistered: true,
         ),
       );
+    // Hosting registers on the relay, so discovery finds the new tunnels —
+    // mirror that (idempotently) for flows that re-discover after a start.
+    if (!_services.any((s) => s.key == appKey)) {
+      _services.add(
+        ServiceEntry(device: device, kind: 'app', name: n, key: appKey),
+      );
+    }
+    if (!_services.any((s) => s.key == apiKey)) {
+      _services.add(
+        ServiceEntry(device: device, kind: 'api', name: n, key: apiKey),
+      );
+    }
     return AppServeResult(
       device: device,
       name: n,

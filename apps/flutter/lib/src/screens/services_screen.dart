@@ -1,7 +1,5 @@
 import 'dart:async';
-import 'dart:io';
 
-import 'package:file_selector/file_selector.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -15,9 +13,13 @@ import 'package:pocket_codex/src/screens/api_service_screen.dart';
 import 'package:pocket_codex/src/screens/local_sessions_screen.dart';
 import 'package:pocket_codex/src/widgets/brand_logo.dart';
 import 'package:pocket_codex/src/widgets/loading.dart';
+import 'package:pocket_codex/src/widgets/local_host_dialog.dart';
 import 'package:pocket_codex/src/widgets/status_dots.dart';
 
-/// Home screen: lists discovered services on the configured relay.
+/// Management hub (`/manage`): lists discovered services on the configured
+/// relay, plus the Sessions browser and desktop local hosting. The chat-first
+/// [HomeScreen] replaced it at `/`; everything here is one tap away from the
+/// chat sidebar.
 class ServicesScreen extends ConsumerStatefulWidget {
   /// Default constructor.
   const ServicesScreen({super.key});
@@ -1235,7 +1237,7 @@ class _IconBadge extends StatelessWidget {
 /// One locally-hosted host: a codex app-server + an in-app API proxy, each
 /// published through its own tunnel. The card shows codex's liveness and both
 /// tunnels' publish state, with a per-tunnel 注销 / 重新注册 toggle. Tapping the
-/// header opens [_LocalHostDialog] for the full 停止托管 + details.
+/// header opens [LocalHostDialog] for the full 停止托管 + details.
 class _LocalHostCard extends ConsumerWidget {
   const _LocalHostCard({super.key, required this.host});
 
@@ -1290,7 +1292,7 @@ class _LocalHostCard extends ConsumerWidget {
           borderRadius: BorderRadius.circular(14),
           onTap: () => showDialog<void>(
             context: context,
-            builder: (_) => _LocalHostDialog(existing: host),
+            builder: (_) => LocalHostDialog(existing: host),
           ),
           child: Container(
             decoration: BoxDecoration(
@@ -1455,7 +1457,7 @@ class _TunnelRow extends StatelessWidget {
   }
 }
 
-/// The "+ host another" entry that opens [_LocalHostDialog] in new-host mode.
+/// The "+ host another" entry that opens [LocalHostDialog] in new-host mode.
 class _AddLocalHostCard extends StatelessWidget {
   const _AddLocalHostCard();
 
@@ -1468,7 +1470,7 @@ class _AddLocalHostCard extends StatelessWidget {
         key: const Key('add-local-host-card'),
         onPressed: () => showDialog<void>(
           context: context,
-          builder: (_) => const _LocalHostDialog(),
+          builder: (_) => const LocalHostDialog(),
         ),
         icon: const Icon(Icons.add),
         label: Text(l10n.addLocalHost),
@@ -1477,383 +1479,6 @@ class _AddLocalHostCard extends StatelessWidget {
           alignment: Alignment.centerLeft,
         ),
       ),
-    );
-  }
-}
-
-/// Manage one local host. With [existing] set it shows that host's listen
-/// address + service key and a Stop button. Otherwise it's the "new host" form
-/// (codex path, port, instance name, proxy) with a Start button. codex is
-/// auto-detected (with a "change path" override) or picked when not on PATH.
-class _LocalHostDialog extends ConsumerStatefulWidget {
-  const _LocalHostDialog({this.existing});
-
-  /// The running host this dialog manages, or null to host a new one.
-  final AppServeStatus? existing;
-
-  @override
-  ConsumerState<_LocalHostDialog> createState() => _LocalHostDialogState();
-}
-
-class _LocalHostDialogState extends ConsumerState<_LocalHostDialog> {
-  final _port = TextEditingController(text: '18080');
-  final _path = TextEditingController();
-  final _name = TextEditingController(text: 'default');
-  // Codex needs a proxy to reach chatgpt.com on most networks, so hosting
-  // defaults to a proxy (a local HTTP proxy on :11111) unless the user opts out.
-  final _proxy = TextEditingController(text: 'http://127.0.0.1:11111');
-  bool _useProxy = true;
-  bool _overridePath = false; // user chose to customize the codex path
-  String? _codexPath; // auto-detected codex (config → PATH), null = not found
-  bool _codexChecked = false;
-  // Codex source: false = external codex (auto-detect/path, the default);
-  // true = the app's built-in in-process app-server (desktop self-contained).
-  bool _embedded = false;
-  bool _busy = false;
-  String? _error;
-
-  bool get _isExisting => widget.existing != null;
-  bool get _codexFound => _codexPath != null;
-  // The built-in (in-process) codex ships only in the Windows + macOS desktop
-  // builds (Linux desktop uses the external path — see the bridge's target-cfg).
-  bool get _embeddedAvailable => Platform.isWindows || Platform.isMacOS;
-
-  @override
-  void initState() {
-    super.initState();
-    if (_isExisting) return;
-    // Auto-detect codex: when found we just show "available" (with a "change
-    // path" override); when not, the user picks a path (persisted on start) or
-    // installs codex and taps "re-detect".
-    Future.microtask(_detectCodex);
-  }
-
-  /// (Re-)resolve codex from PATH + persisted config. Safe to call again from a
-  /// "re-detect" button: a user who hadn't installed codex yet can install it,
-  /// tap re-detect, and have it picked up — no need to type a full path.
-  Future<void> _detectCodex() async {
-    if (!mounted) return;
-    setState(() => _codexChecked = false); // show the progress indicator
-    final found = await ref.read(bridgeApiProvider).codexLocate();
-    if (!mounted) return;
-    setState(() {
-      _codexPath = found;
-      _codexChecked = true;
-      if (found != null) {
-        _path.text = found; // prefill the override field
-        _overridePath = false; // a fresh detection supersedes a manual override
-      }
-    });
-  }
-
-  @override
-  void dispose() {
-    _port.dispose();
-    _path.dispose();
-    _name.dispose();
-    _proxy.dispose();
-    super.dispose();
-  }
-
-  Future<void> _browseCodex() async {
-    final file = await openFile();
-    if (file != null && mounted) setState(() => _path.text = file.path);
-  }
-
-  Future<void> _start() async {
-    final l10n = AppLocalizations.of(context);
-    final port = int.tryParse(_port.text.trim());
-    // 0 is allowed (the engine picks an ephemeral port); reject out-of-range,
-    // incl. negatives, which would otherwise wrap silently to a u16.
-    if (port == null || port < 0 || port > 65535) {
-      setState(() => _error = l10n.localHostPort);
-      return;
-    }
-    // codex source. Built-in (in-process) needs no binary. External: auto-
-    // detected and not overridden → let the bridge resolve it; otherwise the
-    // path the user typed / picked.
-    String? override;
-    if (!_embedded) {
-      final manual = !_codexFound || _overridePath;
-      final o = manual ? _path.text.trim() : '';
-      if (manual && o.isEmpty) {
-        setState(() => _error = l10n.codexPathRequired);
-        return;
-      }
-      override = o.isEmpty ? null : o;
-    }
-    // A proxy is mandatory unless the user explicitly turned it off.
-    final proxy = _useProxy ? _proxy.text.trim() : null;
-    if (_useProxy && (proxy == null || proxy.isEmpty)) {
-      setState(() => _error = l10n.proxyRequired);
-      return;
-    }
-    setState(() {
-      _busy = true;
-      _error = null;
-    });
-    try {
-      final name = _name.text.trim();
-      await ref
-          .read(bridgeApiProvider)
-          .appServeStart(
-            port: port,
-            binaryOverride: override,
-            name: name.isEmpty ? null : name,
-            proxy: proxy,
-            embedded: _embedded,
-          );
-      ref.invalidate(localServeListProvider);
-      ref.invalidate(servicesProvider);
-      if (mounted) Navigator.of(context).pop();
-    } catch (e) {
-      if (mounted) setState(() => _error = friendlyError(e));
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  Future<void> _stop() async {
-    setState(() {
-      _busy = true;
-      _error = null;
-    });
-    try {
-      final host = widget.existing!;
-      // Full stop: kills codex + the API proxy, aborts both tunnels, and
-      // force-drops both relay keys.
-      await ref.read(bridgeApiProvider).appServeStop(host.name);
-      // Optimistically hide both discovery entries so they leave at once.
-      ref
-          .read(pendingRemovalProvider.notifier)
-          .update((set) => {...set, host.appServiceKey, host.apiServiceKey});
-      ref.invalidate(localServeListProvider);
-      ref.invalidate(servicesProvider);
-      if (mounted) Navigator.of(context).pop();
-    } catch (e) {
-      if (mounted) setState(() => _error = friendlyError(e));
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final l10n = AppLocalizations.of(context);
-    final scheme = Theme.of(context).colorScheme;
-    final small = Theme.of(context).textTheme.bodySmall;
-    final existing = widget.existing;
-    final children = <Widget>[Text(l10n.localHostHint)];
-    if (existing != null) {
-      // Two tunnels under one name: show each kind's listen address + relay key.
-      children
-        ..add(const SizedBox(height: 12))
-        ..add(Text(l10n.tunnelAppLabel, style: small))
-        ..add(
-          Text(l10n.localHostListening(existing.appListenAddr), style: small),
-        )
-        ..add(
-          SelectableText(
-            existing.appServiceKey,
-            style: small?.copyWith(color: scheme.onSurfaceVariant),
-          ),
-        )
-        ..add(const SizedBox(height: 8))
-        ..add(Text(l10n.tunnelApiLabel, style: small))
-        ..add(
-          Text(l10n.localHostListening(existing.apiListenAddr), style: small),
-        )
-        ..add(
-          SelectableText(
-            existing.apiServiceKey,
-            style: small?.copyWith(color: scheme.onSurfaceVariant),
-          ),
-        );
-    } else {
-      children.add(const SizedBox(height: 16));
-      // --- codex source: built-in (in-process) vs external (desktop only) ---
-      if (_embeddedAvailable) {
-        children
-          ..add(
-            SegmentedButton<bool>(
-              segments: [
-                ButtonSegment(
-                  value: false,
-                  label: Text(l10n.codexSourceExternal),
-                ),
-                ButtonSegment(
-                  value: true,
-                  label: Text(l10n.codexSourceBuiltin),
-                ),
-              ],
-              selected: {_embedded},
-              onSelectionChanged: _busy
-                  ? null
-                  : (s) => setState(() => _embedded = s.first),
-            ),
-          )
-          ..add(const SizedBox(height: 12));
-      }
-      // --- codex availability (external only) ---
-      if (_embedded) {
-        children.add(
-          Row(
-            children: [
-              Icon(Icons.bolt, size: 18, color: scheme.primary),
-              const SizedBox(width: 6),
-              Expanded(child: Text(l10n.codexBuiltinNote, style: small)),
-            ],
-          ),
-        );
-      } else if (!_codexChecked) {
-        children.add(const LinearProgressIndicator());
-      } else if (_codexFound && !_overridePath) {
-        children.add(
-          Row(
-            children: [
-              Icon(Icons.check_circle, size: 18, color: Colors.green.shade600),
-              const SizedBox(width: 6),
-              Expanded(
-                child: Text(
-                  l10n.codexFoundAt(_codexPath!),
-                  style: small,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-              TextButton(
-                key: const Key('customize-codex-btn'),
-                onPressed: _busy
-                    ? null
-                    : () => setState(() => _overridePath = true),
-                child: Text(l10n.customizeCodexPath),
-              ),
-            ],
-          ),
-        );
-      } else {
-        if (!_codexFound) {
-          children
-            ..add(
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      l10n.codexNotFound,
-                      style: TextStyle(color: scheme.error),
-                    ),
-                  ),
-                  // Installed codex just now? Re-detect instead of typing a path.
-                  TextButton.icon(
-                    key: const Key('redetect-codex-btn'),
-                    onPressed: _busy ? null : _detectCodex,
-                    icon: const Icon(Icons.refresh, size: 16),
-                    label: Text(l10n.codexRedetect),
-                  ),
-                ],
-              ),
-            )
-            ..add(const SizedBox(height: 8));
-        }
-        children.add(
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Expanded(
-                child: TextField(
-                  key: const Key('codex-path-field'),
-                  controller: _path,
-                  decoration: InputDecoration(labelText: l10n.codexBinaryPath),
-                ),
-              ),
-              const SizedBox(width: 8),
-              OutlinedButton(
-                key: const Key('browse-codex-btn'),
-                onPressed: _busy ? null : _browseCodex,
-                child: Text(l10n.chooseCodexPath),
-              ),
-            ],
-          ),
-        );
-      }
-      // --- port + name ---
-      children
-        ..add(const SizedBox(height: 12))
-        ..add(
-          TextField(
-            controller: _port,
-            decoration: InputDecoration(labelText: l10n.localHostPort),
-            keyboardType: TextInputType.number,
-          ),
-        )
-        ..add(const SizedBox(height: 12))
-        ..add(
-          TextField(
-            controller: _name,
-            decoration: InputDecoration(labelText: l10n.localHostName),
-          ),
-        )
-        // --- proxy (mandatory unless turned off) ---
-        ..add(
-          SwitchListTile(
-            key: const Key('use-proxy-switch'),
-            contentPadding: EdgeInsets.zero,
-            title: Text(l10n.useProxy),
-            value: _useProxy,
-            onChanged: _busy ? null : (v) => setState(() => _useProxy = v),
-          ),
-        );
-      if (_useProxy) {
-        children.add(
-          TextField(
-            key: const Key('proxy-field'),
-            controller: _proxy,
-            decoration: InputDecoration(labelText: l10n.proxyLabel),
-          ),
-        );
-      } else {
-        children.add(
-          Text(
-            l10n.noProxyWarning,
-            style: TextStyle(color: Colors.orange.shade800),
-          ),
-        );
-      }
-    }
-    if (_error != null) {
-      children
-        ..add(const SizedBox(height: 12))
-        ..add(Text(_error!, style: TextStyle(color: scheme.error)));
-    }
-    return AlertDialog(
-      title: Text(l10n.localHostDialogTitle),
-      content: SizedBox(
-        width: 380,
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: children,
-          ),
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: _busy ? null : () => Navigator.of(context).pop(),
-          child: Text(l10n.cancel),
-        ),
-        if (existing != null)
-          FilledButton(
-            key: const Key('stop-hosting-btn'),
-            onPressed: _busy ? null : _stop,
-            child: Text(l10n.stopHosting),
-          )
-        else
-          FilledButton(
-            key: const Key('start-hosting-btn'),
-            onPressed: _busy ? null : _start,
-            child: Text(l10n.startHosting),
-          ),
-      ],
     );
   }
 }

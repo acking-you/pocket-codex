@@ -20,6 +20,8 @@ import 'package:pocket_codex/src/fonts.dart';
 import 'package:pocket_codex/src/git_diff.dart';
 import 'package:pocket_codex/src/image_attachments.dart';
 import 'package:pocket_codex/src/providers.dart';
+import 'package:pocket_codex/src/ui_prefs.dart';
+import 'package:pocket_codex/src/widgets/brand_logo.dart';
 import 'package:pocket_codex/src/widgets/links.dart';
 import 'package:pocket_codex/src/widgets/loading.dart';
 import 'package:pocket_codex/src/widgets/message_images.dart';
@@ -46,6 +48,9 @@ class AppSessionScreen extends ConsumerStatefulWidget {
     required this.serviceKey,
     this.threadId,
     this.cwd,
+    this.home = false,
+    this.services = const [],
+    this.onSwitchService,
   });
 
   /// Full `pcx:<device>:app:<name>` key of the connected service.
@@ -56,6 +61,20 @@ class AppSessionScreen extends ConsumerStatefulWidget {
 
   /// Remote working directory to seed a new conversation with.
   final String? cwd;
+
+  /// True when this screen IS the app's home (embedded by [HomeScreen]): the
+  /// sessions pane lists every conversation (not just the current project's),
+  /// gains a service switcher + management shortcuts, and there is no "back"
+  /// destination. False for the classic pushed route (`/app/:key/session`),
+  /// which keeps its project-scoped pane and back button.
+  final bool home;
+
+  /// Connectable app services for the home-mode service switcher (label +
+  /// key). Ignored unless [home].
+  final List<ServiceEntry> services;
+
+  /// Called when the user picks another service in the home-mode switcher.
+  final void Function(String serviceKey)? onSwitchService;
 
   @override
   ConsumerState<AppSessionScreen> createState() => _AppSessionState();
@@ -372,6 +391,20 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
     super.initState();
     _threadId = widget.threadId;
     _cwd = widget.cwd;
+    // Remember where the user is chatting so the next cold start (and the
+    // chat-first home) lands right back here. Deferred: provider writes are
+    // not allowed while the tree is building. A thread-less mount (fresh
+    // conversation) records nothing — the previous "last conversation" stays
+    // the restore target until this one actually exists (first send).
+    final initialThread = _threadId;
+    Future.microtask(() {
+      if (!mounted) return;
+      final prefs = ref.read(uiPrefsProvider.notifier)
+        ..setLastService(widget.serviceKey);
+      if (initialThread != null) {
+        prefs.setLastThread(widget.serviceKey, initialThread);
+      }
+    });
     // A brand-new conversation inherits the user's last-chosen model / mode /
     // plan / effort instead of resetting to hard defaults.
     if (_threadId == null) _seedDefaults();
@@ -391,14 +424,18 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
     });
   }
 
-  /// Load this project's conversations for the left sessions pane.
+  /// Load the conversations for the left sessions pane. As the home screen the
+  /// pane lists EVERY conversation on the service (the user asked for "all
+  /// sessions in the sidebar"); the classic pushed route keeps its
+  /// project-scoped view (the project tree it was opened from already gives
+  /// the full picture there).
   Future<void> _loadThreads() async {
     try {
       final all = await ref
           .read(bridgeApiProvider)
           .appThreadList(widget.serviceKey);
       final cwd = _cwd?.trim();
-      var mine = (cwd == null || cwd.isEmpty)
+      var mine = (widget.home || cwd == null || cwd.isEmpty)
           ? all
           : all.where((t) => t.cwd.trim() == cwd).toList();
       // Keep the freshly-started conversation visible even if `thread/list`
@@ -631,6 +668,12 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
   /// Switch the screen to another conversation (or a new one when [tid] is
   /// null) in place, resetting per-thread state. Used by the left sessions pane.
   void _openThread(String? tid, String? cwd) {
+    // Keep the "last conversation" record fresh for the chat-first home. A
+    // new (id-less) conversation records nothing until its first send — an
+    // abandoned draft shouldn't cost the user their restore target.
+    if (tid != null) {
+      ref.read(uiPrefsProvider.notifier).setLastThread(widget.serviceKey, tid);
+    }
     setState(() {
       _threadId = tid;
       _cwd = cwd;
@@ -1272,6 +1315,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
         sandbox: _mode.sandbox,
       );
       if (isNewThread) {
+        // The fresh conversation is now the one to restore on next launch.
+        ref
+            .read(uiPrefsProvider.notifier)
+            .setLastThread(widget.serviceKey, _threadId);
         // Surface the new session in the left pane immediately. `thread/list`
         // can lag `thread/start`, so optimistically insert it now (newest
         // first) and let _loadThreads reconcile once the server catches up.
@@ -2010,9 +2057,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
       // (Swipe-to-close already works once the drawer is open.)
       drawerEdgeDragWidth: isMobile ? 56 : null,
       appBar: AppBar(
-        // Mobile: the leading button OPENS the sessions list (drawer); "back to
-        // projects" lives inside that drawer. Desktop: leading is back-to-projects
-        // (the sessions pane is inline, toggled via the action button).
+        // Mobile: the leading button OPENS the sessions list (drawer). Desktop:
+        // as the home there is nothing to go back to, so leading toggles the
+        // inline sessions pane; the classic pushed route keeps back-to-projects
+        // (with the pane toggle in the actions).
         leading: isMobile
             ? Builder(
                 builder: (ctx) => IconButton(
@@ -2021,28 +2069,50 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
                   onPressed: () => Scaffold.of(ctx).openDrawer(),
                 ),
               )
+            : widget.home
+            ? IconButton(
+                tooltip: l10n.conversationsSection,
+                icon: Icon(_leftOpen ? Icons.menu_open : Icons.menu),
+                onPressed: () => setState(() => _leftOpen = !_leftOpen),
+              )
             : IconButton(
                 tooltip: l10n.backToProjects,
                 icon: const Icon(Icons.arrow_back),
                 onPressed: _backToProjects,
               ),
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        title: Row(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            Text(l10n.appServiceTitle, style: const TextStyle(fontSize: 16)),
-            if (_cwd != null && _cwd!.trim().isNotEmpty)
-              Text(
-                '${l10n.currentProject}: ${_projectName()}',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.bodySmall,
+            // As the home screen, lead with the brand (this IS the app now).
+            if (widget.home) ...[
+              const BrandLogo(size: 24, plated: false),
+              const SizedBox(width: 10),
+            ],
+            Flexible(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    widget.home ? l10n.appTitle : l10n.appServiceTitle,
+                    style: const TextStyle(fontSize: 16),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  if (_cwd != null && _cwd!.trim().isNotEmpty)
+                    Text(
+                      '${l10n.currentProject}: ${_projectName()}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                ],
               ),
+            ),
           ],
         ),
         actions: [
-          // Desktop only: toggle the inline sessions pane. On mobile the leading
-          // button opens the drawer instead, so this is omitted there.
-          if (!isMobile)
+          // Desktop, pushed route only: toggle the inline sessions pane (the
+          // home moves this to the leading slot; mobile opens the drawer).
+          if (!isMobile && !widget.home)
             IconButton(
               tooltip: l10n.conversationsSection,
               icon: Icon(_leftOpen ? Icons.menu_open : Icons.menu),
@@ -2597,7 +2667,13 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
     final filtered = q.isEmpty
         ? _threads
         : _threads
-              .where((t) => t.preview.toLowerCase().contains(q))
+              .where(
+                (t) =>
+                    t.preview.toLowerCase().contains(q) ||
+                    // The home pane spans projects, so let the filter reach
+                    // the project path too (mirrors the project tree's search).
+                    (widget.home && t.cwd.toLowerCase().contains(q)),
+              )
               .toList(growable: false);
     final now = DateTime.now();
     final active = <ThreadMeta>[];
@@ -2621,6 +2697,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
           selected: t.id == _threadId,
           now: now,
           l10n: l10n,
+          // The home pane mixes every project, so each row carries its own
+          // project name for orientation; the project-scoped pane doesn't.
+          project: widget.home ? _leafOf(t.cwd) : null,
           onTap: () {
             closeDrawerIfOpen(ctx);
             if (t.id != _threadId) _openThread(t.id, t.cwd);
@@ -2642,8 +2721,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
           children: [
             // In the mobile drawer, "back to projects" lives here (the AppBar's
             // leading button opens this drawer instead). Desktop shows it as the
-            // AppBar leading, so the inline pane omits it.
-            if (inDrawer) ...[
+            // AppBar leading, so the inline pane omits it. The home has no back
+            // destination at all.
+            if (inDrawer && !widget.home) ...[
               ListTile(
                 key: const Key('drawer-back-to-projects'),
                 dense: true,
@@ -2656,6 +2736,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
               ),
               const Divider(height: 1),
             ],
+            // Home only: which host this chat runs on, switchable when several
+            // app services are available.
+            if (widget.home) _serviceSwitcher(l10n),
             // Header: title + a circular "new conversation" button (echoes the
             // composer's send button).
             Padding(
@@ -2761,10 +2844,160 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
                       children: rows,
                     ),
             ),
+            // Home only: everything that used to require navigating away from
+            // the chat — management, the host's session browser (incl. force
+            // takeover), logs, settings — one tap from the sidebar.
+            if (widget.home) ...[
+              const Divider(height: 1),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceAround,
+                  children: [
+                    _paneShortcut(
+                      key: 'sidebar-manage-btn',
+                      icon: Icons.dns_outlined,
+                      tooltip: l10n.manageServices,
+                      ctx: ctx,
+                      route: '/manage',
+                    ),
+                    // The host session browser rides the meta tunnel, which is
+                    // an account-mode feature (mirrors the manage page's
+                    // Sessions tab gate).
+                    if (ref.watch(configProvider).valueOrNull?.mode ==
+                        'account')
+                      _paneShortcut(
+                        key: 'sidebar-history-btn',
+                        icon: Icons.history,
+                        tooltip: l10n.hostSessions,
+                        ctx: ctx,
+                        route: Uri(
+                          path: '/sessions',
+                          queryParameters: {'svc': widget.serviceKey},
+                        ).toString(),
+                      ),
+                    _paneShortcut(
+                      key: 'sidebar-logs-btn',
+                      icon: Icons.article_outlined,
+                      tooltip: l10n.logsTitle,
+                      ctx: ctx,
+                      route: '/logs',
+                    ),
+                    _paneShortcut(
+                      key: 'sidebar-settings-btn',
+                      icon: Icons.settings_outlined,
+                      tooltip: l10n.settingsTitle,
+                      ctx: ctx,
+                      route: '/settings',
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ],
         );
       },
     );
+  }
+
+  /// One sidebar-footer shortcut: closes the drawer (mobile) then pushes.
+  Widget _paneShortcut({
+    required String key,
+    required IconData icon,
+    required String tooltip,
+    required BuildContext ctx,
+    required String route,
+  }) => IconButton(
+    key: Key(key),
+    icon: Icon(icon, size: 20),
+    tooltip: tooltip,
+    visualDensity: VisualDensity.compact,
+    onPressed: () {
+      if (Scaffold.maybeOf(ctx)?.isDrawerOpen ?? false) Navigator.pop(ctx);
+      context.push(route);
+    },
+  );
+
+  /// Home-pane header row: the host currently serving this chat. Renders a
+  /// dropdown when more than one app service is connectable, else a static
+  /// identity row — either way the user always sees WHERE the conversation
+  /// runs.
+  Widget _serviceSwitcher(AppLocalizations l10n) {
+    final scheme = Theme.of(context).colorScheme;
+    String labelOf(ServiceEntry s) => '${s.device} · ${s.name}';
+    final entries = widget.services;
+    final multiple = entries.length > 1;
+    final current = entries.where((s) => s.key == widget.serviceKey).toList();
+    final currentLabel = current.isEmpty
+        ? _serviceLabelFromKey(widget.serviceKey)
+        : labelOf(current.first);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 10, 12, 0),
+      child: Row(
+        children: [
+          Icon(Icons.computer, size: 16, color: scheme.primary),
+          const SizedBox(width: 8),
+          Expanded(
+            child: multiple
+                ? DropdownButtonHideUnderline(
+                    child: DropdownButton<String>(
+                      key: const Key('sidebar-service-switcher'),
+                      value: current.isEmpty ? null : widget.serviceKey,
+                      hint: Text(
+                        currentLabel,
+                        style: const TextStyle(fontSize: 13),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      isExpanded: true,
+                      isDense: true,
+                      style: TextStyle(fontSize: 13, color: scheme.onSurface),
+                      items: [
+                        for (final s in entries)
+                          DropdownMenuItem(
+                            value: s.key,
+                            child: Text(
+                              labelOf(s),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                      ],
+                      onChanged: (key) {
+                        if (key != null && key != widget.serviceKey) {
+                          widget.onSwitchService?.call(key);
+                        }
+                      },
+                    ),
+                  )
+                : Text(
+                    currentLabel,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// `device · name` fallback parsed from a `pcx:<device>:app:<name>` key,
+  /// for when the switcher's service list doesn't contain the active key.
+  static String _serviceLabelFromKey(String key) {
+    final parts = key.split(':');
+    return parts.length >= 4
+        ? '${parts[1]} · ${parts.sublist(3).join(':')}'
+        : key;
+  }
+
+  /// Leaf folder name of [cwd], or empty when unknown.
+  static String _leafOf(String cwd) {
+    final c = cwd.trim();
+    if (c.isEmpty) return '';
+    final segs = c.split(RegExp(r'[\\/]'))..removeWhere((s) => s.isEmpty);
+    return segs.isEmpty ? c : segs.last;
   }
 
   /// A muted section header for the conversations pane (Active / Today / …).
@@ -2789,15 +3022,22 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
     required DateTime now,
     required AppLocalizations l10n,
     required VoidCallback onTap,
+    String? project,
   }) {
     final scheme = Theme.of(context).colorScheme;
     final fg = selected ? scheme.onPrimaryContainer : scheme.onSurface;
     final muted = selected
         ? scheme.onPrimaryContainer.withValues(alpha: 0.75)
         : scheme.onSurfaceVariant;
-    final subtitle = running
+    final when = running
         ? l10n.running
         : _relativeTime(thread.updatedAt, now, l10n);
+    // Cross-project pane rows show "project · time" so the user always knows
+    // where a conversation lives.
+    final subtitle = [
+      if (project != null && project.isNotEmpty) project,
+      if (when.isNotEmpty) when,
+    ].join(' · ');
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 1),
       child: Material(

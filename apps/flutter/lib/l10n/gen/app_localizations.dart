@@ -1951,6 +1951,72 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Copied {count} log lines'**
   String logsCopied(int count);
+
+  /// No description provided for @manageServices.
+  ///
+  /// In en, this message translates to:
+  /// **'Manage services'**
+  String get manageServices;
+
+  /// No description provided for @hostSessions.
+  ///
+  /// In en, this message translates to:
+  /// **'Host session history'**
+  String get hostSessions;
+
+  /// No description provided for @switchService.
+  ///
+  /// In en, this message translates to:
+  /// **'Switch host'**
+  String get switchService;
+
+  /// No description provided for @homeConnecting.
+  ///
+  /// In en, this message translates to:
+  /// **'Connecting to your Codex host…'**
+  String get homeConnecting;
+
+  /// No description provided for @homeRestoringHost.
+  ///
+  /// In en, this message translates to:
+  /// **'Restoring hosting…'**
+  String get homeRestoringHost;
+
+  /// No description provided for @homeNoServiceTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'No Codex host available'**
+  String get homeNoServiceTitle;
+
+  /// No description provided for @homeNoServiceDesktopHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Start hosting on this computer and the chat opens right here — your phone can connect to it too.'**
+  String get homeNoServiceDesktopHint;
+
+  /// No description provided for @homeNoServiceMobileHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Open Pocket-Codex on your computer and start hosting (app-server); this screen will enter the chat automatically.'**
+  String get homeNoServiceMobileHint;
+
+  /// No description provided for @homeNoServiceSelfHostHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Run `pocket-codex serve` on a machine with codex to publish an app-server on your relay, or sign in with an account to host from this app.'**
+  String get homeNoServiceSelfHostHint;
+
+  /// No description provided for @homeAutoRetryNote.
+  ///
+  /// In en, this message translates to:
+  /// **'Keeps checking for hosts automatically.'**
+  String get homeAutoRetryNote;
+
+  /// No description provided for @switchServiceFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Couldn\'t reach that host — staying on the current one.'**
+  String get switchServiceFailed;
 }
 
 class _AppLocalizationsDelegate

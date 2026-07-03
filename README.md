@@ -71,7 +71,7 @@ or a per-account GitHub login (hosted).
 | `codex app-server` supervision | spawn/stop/status via PID + state.toml |
 | Direct Responses API proxy     | local HTTP/WS proxy registered through pb-mapper |
 | Hosted account (GitHub)        | optional `pocket-codex-backend`: GitHub device-flow login, per-user `pcxu:<user>:…` broker tunnels through the relay (master key never leaves the server); self-host preserved behind `--relay`. See [`deploy/`](deploy/README.md) |
-| Flutter UI (`apps/flutter`)    | account onboarding ("Sign in with GitHub") + self-host onboarding (relay+key, `pcx1:` import/export); service discovery, app-server sessions, API-service subscribe, settings; responsive Material 3 (light/dark) |
+| Flutter UI (`apps/flutter`)    | chat-first home (opens straight into the latest session; all sessions in the sidebar; auto-connects to the last-used / locally hosted / first reachable host, desktop auto-restores hosting); account onboarding ("Sign in with GitHub") + self-host onboarding (relay+key, `pcx1:` import/export); manage page with service discovery, app-server sessions, API-service subscribe, hosting; settings; responsive Material 3 (light/dark) |
 
 Multi-device CLI flows are usable in both modes:
 
