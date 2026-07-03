@@ -162,7 +162,7 @@ cargo test --workspace --locked
 # Flutter front-end (requires `fvm install 3.44.0 --setup` once)
 cd apps/flutter
 fvm flutter pub get
-dart format --output=none --set-exit-if-changed lib/main.dart test integration_test
+dart format --output=none --set-exit-if-changed lib test integration_test
 fvm flutter analyze
 fvm flutter test
 ```

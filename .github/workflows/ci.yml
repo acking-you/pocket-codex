@@ -152,9 +152,11 @@ jobs:
 
       - name: dart format --output=none --set-exit-if-changed
         working-directory: apps/flutter
-        # Restrict to hand-written sources; the FRB-generated tree
-        # follows its own formatting and is regenerated, not edited.
-        run: dart format --output=none --set-exit-if-changed lib/main.dart test integration_test
+        # The whole lib tree: hand-written sources must be clean, and the
+        # generated trees (lib/src/rust via FRB, lib/l10n/gen via gen-l10n)
+        # already emit dart-format-clean output, so including them costs
+        # nothing and catches hand edits to files that should be regenerated.
+        run: dart format --output=none --set-exit-if-changed lib test integration_test
 
       - name: flutter analyze
         working-directory: apps/flutter
