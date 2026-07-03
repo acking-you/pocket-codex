@@ -380,6 +380,30 @@ abstract class AppLocalizations {
   /// **'Send'**
   String get send;
 
+  /// No description provided for @hideOptions.
+  ///
+  /// In en, this message translates to:
+  /// **'Hide'**
+  String get hideOptions;
+
+  /// No description provided for @prevTurn.
+  ///
+  /// In en, this message translates to:
+  /// **'Previous turn'**
+  String get prevTurn;
+
+  /// No description provided for @nextTurn.
+  ///
+  /// In en, this message translates to:
+  /// **'Next turn'**
+  String get nextTurn;
+
+  /// No description provided for @jumpToLatest.
+  ///
+  /// In en, this message translates to:
+  /// **'Jump to latest'**
+  String get jumpToLatest;
+
   /// No description provided for @attachImage.
   ///
   /// In en, this message translates to:

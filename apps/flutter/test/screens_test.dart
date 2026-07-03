@@ -1129,6 +1129,104 @@ void main() {
     );
   });
 
+  testWidgets('composer config pills collapse on mobile and expand on tap', (
+    t,
+  ) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(400, 800); // narrow → collapsed by default
+    addTearDown(t.view.reset);
+    await t.pumpWidget(
+      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+    );
+    await t.pumpAndSettle();
+
+    // Collapsed: the compact options toggle shows; the full pills (e.g. the
+    // permission pill '自动') are folded away so they don't eat the view.
+    expect(find.byKey(const Key('options-toggle')), findsOneWidget);
+    expect(find.text('自动'), findsNothing);
+
+    // Tapping the toggle expands the full pill row.
+    await t.tap(find.byKey(const Key('options-toggle')));
+    await t.pumpAndSettle();
+    expect(find.text('自动'), findsOneWidget); // permission pill now visible
+
+    // Tapping again collapses it back.
+    await t.tap(find.byKey(const Key('options-toggle')));
+    await t.pumpAndSettle();
+    expect(find.text('自动'), findsNothing);
+  });
+
+  testWidgets(
+    'turn-navigation controls appear with ≥2 turns and are tappable',
+    (t) async {
+      final api = FakeBridgeApi(
+        config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+      );
+      await api.appConnect('pcx:lb7666:app:default', 28080);
+      // A resumed thread with two user turns.
+      api.readResult = const ThreadHistory(
+        items: [
+          ThreadItem(
+            id: 'u1',
+            itemType: 'userMessage',
+            title: '',
+            text: 'first',
+          ),
+          ThreadItem(
+            id: 'a1',
+            itemType: 'agentMessage',
+            title: '',
+            text: 'reply one',
+          ),
+          ThreadItem(
+            id: 'u2',
+            itemType: 'userMessage',
+            title: '',
+            text: 'second',
+          ),
+          ThreadItem(
+            id: 'a2',
+            itemType: 'agentMessage',
+            title: '',
+            text: 'reply two',
+          ),
+        ],
+        running: false,
+      );
+      t.view.devicePixelRatio = 1.0;
+      t.view.physicalSize = const Size(400, 800);
+      addTearDown(t.view.reset);
+      await t.pumpWidget(
+        _host(
+          const AppSessionScreen(
+            serviceKey: 'pcx:lb7666:app:default',
+            threadId: 'th-nav',
+          ),
+          api,
+        ),
+      );
+      await t.pumpAndSettle();
+
+      // Two turns ⇒ prev/next-turn jumps are offered.
+      expect(find.byKey(const Key('nav-prev-turn')), findsOneWidget);
+      expect(find.byKey(const Key('nav-next-turn')), findsOneWidget);
+      // They drive the list controller; tapping must not throw even when the
+      // short transcript isn't scrollable.
+      await t.tap(find.byKey(const Key('nav-next-turn')));
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(const Key('nav-prev-turn')));
+      await t.pumpAndSettle();
+      // Still present and functional after use (and the taps threw nothing —
+      // pumpAndSettle would have surfaced any exception).
+      expect(find.byKey(const Key('nav-prev-turn')), findsOneWidget);
+      expect(find.byKey(const Key('nav-next-turn')), findsOneWidget);
+    },
+  );
+
   group('runtime config visibility', () {
     const key = 'pcx:lb7666:app:default';
 
@@ -1261,12 +1359,16 @@ void main() {
         ),
       );
       await t.pumpAndSettle();
-      // ...and the next turn's footnote records what handled it.
+      // ...and the next turn's footnote records what handled it. Target the
+      // footnote stamp by key — the collapsed composer summary also shows the
+      // active model, so a plain text match would be ambiguous.
       await t.enterText(find.byType(TextField), 'again');
       await t.pump();
       await t.tap(find.byKey(const Key('send-btn')));
       await t.pumpAndSettle();
-      expect(find.textContaining('gpt-5.5-codex · 高'), findsOneWidget);
+      final stamp = t.widget<Text>(find.byKey(const Key('turn-model-stamp')));
+      expect(stamp.data, contains('gpt-5.5-codex'));
+      expect(stamp.data, contains('高'));
     });
   });
 
@@ -1978,9 +2080,8 @@ void main() {
     expect(find.textContaining('用时'), findsOneWidget);
   });
 
-  testWidgets('composer pills wrap onto-screen on a narrow (mobile) width', (
-    t,
-  ) async {
+  testWidgets('composer pills are collapsed on mobile and, when expanded, wrap '
+      'fully on-screen', (t) async {
     t.view.devicePixelRatio = 1.0;
     t.view.physicalSize = const Size(360, 760); // a phone-ish viewport
     addTearDown(t.view.reset);
@@ -1999,9 +2100,16 @@ void main() {
     );
     await t.pumpAndSettle();
 
-    // The effort pill is the last of five; a horizontal scroll left it clipped
-    // off the right edge on a phone. Wrapped, it sits fully within the viewport.
-    final effort = find.text('思考强度'); // l10n.effort (zh), no effort set
+    // Collapsed by default on a narrow screen — the pills don't eat the view;
+    // the effort pill is folded away behind the options toggle.
+    expect(find.byKey(const Key('options-toggle')), findsOneWidget);
+    expect(find.text('思考强度'), findsNothing); // l10n.effort (zh)
+
+    // Expanding shows all five pills; the last (effort) wraps onto its own row
+    // and sits fully within the viewport (a horizontal scroll used to clip it).
+    await t.tap(find.byKey(const Key('options-toggle')));
+    await t.pumpAndSettle();
+    final effort = find.text('思考强度');
     expect(effort, findsOneWidget);
     expect(t.getRect(effort).right, lessThanOrEqualTo(360.0));
   });
