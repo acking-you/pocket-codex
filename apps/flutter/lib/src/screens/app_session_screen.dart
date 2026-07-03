@@ -153,6 +153,14 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
   final _input = TextEditingController();
   final _inputFocus = FocusNode();
   final _scroll = ScrollController();
+  // Index-based scrolling for the transcript (super_sliver_list): powers the
+  // prev/next-turn jump buttons via `visibleRange` + `animateToItem`.
+  final _listCtl = ListController();
+  // Whether the composer's config pills (model/permission/project/plan/effort)
+  // are expanded. `null` = auto by screen width (collapsed on narrow/mobile so
+  // they don't clutter and block messages; expanded on wide/desktop where
+  // there's room). A tap sets it explicitly, overriding the width default.
+  bool? _optionsExpanded;
   // Ordered timeline + an id→index map for upserting streamed/updated items.
   final List<_Item> _items = [];
   final Map<String, int> _itemIndex = {};
@@ -694,6 +702,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
     _inputFocus.dispose();
     _scroll.removeListener(_onScroll);
     _scroll.dispose();
+    _listCtl.dispose();
     super.dispose();
   }
 
@@ -1735,6 +1744,106 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) => settle(10));
   }
 
+  /// Jump the transcript to the previous ([next] false) or next ([next] true)
+  /// conversation turn — i.e. the nearest user message above/below the current
+  /// viewport top — placing it at the top so its whole exchange is in view.
+  /// User messages are never grouped, so each is its own row; we map row
+  /// indices and drive super_sliver_list's index-aware scroll.
+  void _gotoAdjacentTurn({required bool next}) {
+    if (!_listCtl.isAttached || !_scroll.hasClients) return;
+    final rows = _rows;
+    final turnRows = <int>[
+      for (var i = 0; i < rows.length; i++)
+        if (rows[i] is _Item && (rows[i] as _Item).isUser) i,
+    ];
+    if (turnRows.isEmpty) return;
+    // Topmost row currently in view (fallback to 0 before the first layout).
+    final anchor = _listCtl.visibleRange?.$1 ?? 0;
+    int? target;
+    if (next) {
+      for (final t in turnRows) {
+        if (t > anchor) {
+          target = t;
+          break;
+        }
+      }
+    } else {
+      for (final t in turnRows) {
+        if (t < anchor) {
+          target = t;
+        } else {
+          break;
+        }
+      }
+    }
+    if (target == null) return;
+    _listCtl.animateToItem(
+      index: target,
+      scrollController: _scroll,
+      alignment: 0, // land the turn's user message at the top of the viewport
+      duration: (est) => Duration(milliseconds: est.abs() > 2400 ? 420 : 260),
+      curve: (_) => Curves.easeOutCubic,
+    );
+  }
+
+  /// The bottom-right navigation cluster: prev/next-turn jumps (shown once
+  /// there are ≥2 turns) and a jump-to-latest (shown when scrolled up). A
+  /// single compact rounded bar rather than scattered FABs, so it stays out of
+  /// the way of the messages.
+  Widget _navCluster() {
+    final l10n = AppLocalizations.of(context);
+    final scheme = Theme.of(context).colorScheme;
+    final turns = _items.where((i) => i.isUser).length;
+    final showTurnNav = turns >= 2;
+    if (!showTurnNav && _atBottom) return const SizedBox.shrink();
+    Widget btn(Key key, IconData icon, String tip, VoidCallback onTap) =>
+        IconButton(
+          key: key,
+          tooltip: tip,
+          visualDensity: VisualDensity.compact,
+          iconSize: 22,
+          padding: const EdgeInsets.all(6),
+          constraints: const BoxConstraints(),
+          color: scheme.onSurfaceVariant,
+          onPressed: onTap,
+          icon: Icon(icon),
+        );
+    return Material(
+      elevation: 2,
+      color: scheme.surfaceContainerHigh,
+      borderRadius: BorderRadius.circular(24),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (showTurnNav) ...[
+              btn(
+                const Key('nav-prev-turn'),
+                Icons.keyboard_arrow_up,
+                l10n.prevTurn,
+                () => _gotoAdjacentTurn(next: false),
+              ),
+              btn(
+                const Key('nav-next-turn'),
+                Icons.keyboard_arrow_down,
+                l10n.nextTurn,
+                () => _gotoAdjacentTurn(next: true),
+              ),
+            ],
+            if (!_atBottom)
+              btn(
+                const Key('nav-to-bottom'),
+                Icons.vertical_align_bottom,
+                l10n.jumpToLatest,
+                () => _scrollToEnd(force: true),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
   String _projectName() {
     final c = _cwd?.trim();
     if (c == null || c.isEmpty) {
@@ -2274,6 +2383,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
                                     // visible rows build, so streaming stays cheap.
                                     return SuperListView.builder(
                                       controller: _scroll,
+                                      listController: _listCtl,
                                       padding: EdgeInsets.fromLTRB(
                                         pad,
                                         12,
@@ -2317,22 +2427,15 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
                                   },
                                 ),
                               ),
-                              // Jump-to-latest button when scrolled up.
-                              if (!_atBottom)
-                                Positioned(
-                                  right: 0,
-                                  left: 0,
-                                  bottom: 8,
-                                  child: Center(
-                                    child: FloatingActionButton.small(
-                                      heroTag: null,
-                                      elevation: 2,
-                                      onPressed: () =>
-                                          _scrollToEnd(force: true),
-                                      child: const Icon(Icons.arrow_downward),
-                                    ),
-                                  ),
-                                ),
+                              // Compact navigation cluster (bottom-right): jump
+                              // between conversation turns, and to the latest
+                              // message — so long transcripts are easy to move
+                              // through on mobile and desktop alike.
+                              Positioned(
+                                right: 12,
+                                bottom: 12,
+                                child: _navCluster(),
+                              ),
                             ],
                           ),
                   ),
@@ -3205,99 +3308,175 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
                 ),
               ),
               const SizedBox(height: 10),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  // Attach an image to this message (photo library on mobile,
-                  // file dialog on desktop).
-                  IconButton(
-                    key: const Key('attach-btn'),
-                    tooltip: l10n.attachImage,
-                    visualDensity: VisualDensity.compact,
-                    icon: Icon(
-                      Icons.add_photo_alternate_outlined,
-                      size: 20,
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
-                    ),
-                    onPressed: _sending ? null : _pickImages,
-                  ),
-                  // Attach a document/file: uploaded to the host, referenced
-                  // by path in the turn so the agent reads it with its tools.
-                  IconButton(
-                    key: const Key('attach-file-btn'),
-                    tooltip: l10n.attachFile,
-                    visualDensity: VisualDensity.compact,
-                    icon: Icon(
-                      Icons.attach_file,
-                      size: 20,
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
-                    ),
-                    onPressed: _sending ? null : _pickFiles,
-                  ),
-                  const SizedBox(width: 2),
-                  // Settings pills wrap onto extra rows on narrow screens so
-                  // none get clipped (a horizontal scroll left the last pill
-                  // half-cut on mobile); the send button stays bottom-right.
-                  Expanded(
-                    child: Wrap(
-                      spacing: 6,
-                      runSpacing: 6,
-                      children: [
-                        _pill(
-                          icon: Icons.auto_awesome,
-                          // With no explicit pick, show the model the server
-                          // actually runs (thread default) instead of an
-                          // opaque "default" — the pill stays the selection
-                          // control, but never misrepresents what will serve
-                          // the next turn.
-                          label:
-                              _model?.displayName ??
-                              _modelDisplayLabel(_runtime?.model) ??
-                              l10n.modelDefault,
-                          onTap: _pickModel,
-                        ),
-                        _pill(
-                          icon: _modeIcon(),
-                          label: _mode.label(l10n),
-                          onTap: _pickMode,
-                        ),
-                        _pill(
-                          icon: Icons.folder_outlined,
-                          label: _projectName(),
-                          onTap: _threadId == null ? _pickProject : null,
-                        ),
-                        // Plan-mode toggle: when on, the agent plans before
-                        // implementing. Highlighted while active.
-                        _pill(
-                          icon: Icons.checklist_rtl,
-                          label: l10n.planMode,
-                          active: _plan,
-                          onTap: () {
-                            setState(() {
-                              _plan = !_plan;
-                              _planToggledByUser = true;
-                            });
-                            _rememberDefaults();
-                            _persistThreadConfig();
-                          },
-                        ),
-                        // Reasoning effort ("thinking level"): shows the effort
-                        // the thread will run with (pending pick, else current),
-                        // or just "Effort" when none is set (model default).
-                        _pill(
-                          icon: Icons.psychology_outlined,
-                          label: _effectiveEffort == null
-                              ? l10n.effort
-                              : '${l10n.effort} · ${_effectiveEffort!.label(l10n)}',
-                          active: _effectiveEffort != null,
-                          onTap: _pickEffort,
-                        ),
+              // Config pills are collapsible: on a narrow (mobile) screen they
+              // otherwise wrap onto 2–3 rows and eat the message view, so they
+              // default collapsed to a single compact summary that expands on
+              // tap. On a wide screen there's room, so they default expanded.
+              Builder(
+                builder: (context) {
+                  final wide = MediaQuery.of(context).size.width >= 600;
+                  final expanded = _optionsExpanded ?? wide;
+                  return Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (expanded) ...[
+                        _configPills(l10n),
+                        const SizedBox(height: 8),
                       ],
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  _sendButton(),
-                ],
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          // Attach an image (photo library on mobile, file
+                          // dialog on desktop).
+                          IconButton(
+                            key: const Key('attach-btn'),
+                            tooltip: l10n.attachImage,
+                            visualDensity: VisualDensity.compact,
+                            icon: Icon(
+                              Icons.add_photo_alternate_outlined,
+                              size: 20,
+                              color: Theme.of(
+                                context,
+                              ).colorScheme.onSurfaceVariant,
+                            ),
+                            onPressed: _sending ? null : _pickImages,
+                          ),
+                          // Attach a document/file: uploaded to the host,
+                          // referenced by path so the agent reads it with tools.
+                          IconButton(
+                            key: const Key('attach-file-btn'),
+                            tooltip: l10n.attachFile,
+                            visualDensity: VisualDensity.compact,
+                            icon: Icon(
+                              Icons.attach_file,
+                              size: 20,
+                              color: Theme.of(
+                                context,
+                              ).colorScheme.onSurfaceVariant,
+                            ),
+                            onPressed: _sending ? null : _pickFiles,
+                          ),
+                          const SizedBox(width: 4),
+                          // The options toggle: a compact summary of the active
+                          // config when collapsed, a "hide" affordance when
+                          // expanded. Flexible so a long summary ellipsizes
+                          // instead of overflowing the row.
+                          Flexible(
+                            child: Align(
+                              alignment: Alignment.centerLeft,
+                              child: _optionsToggle(l10n, expanded),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          _sendButton(),
+                        ],
+                      ),
+                    ],
+                  );
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// The full config pill row (model / permission / project / plan / effort),
+  /// shown when the composer options are expanded. Wraps so nothing clips on a
+  /// narrow screen.
+  Widget _configPills(AppLocalizations l10n) => Wrap(
+    spacing: 6,
+    runSpacing: 6,
+    children: [
+      _pill(
+        icon: Icons.auto_awesome,
+        // With no explicit pick, show the model the server actually runs
+        // (thread default) rather than an opaque "default".
+        label:
+            _model?.displayName ??
+            _modelDisplayLabel(_runtime?.model) ??
+            l10n.modelDefault,
+        onTap: _pickModel,
+      ),
+      _pill(icon: _modeIcon(), label: _mode.label(l10n), onTap: _pickMode),
+      _pill(
+        icon: Icons.folder_outlined,
+        label: _projectName(),
+        onTap: _threadId == null ? _pickProject : null,
+      ),
+      _pill(
+        icon: Icons.checklist_rtl,
+        label: l10n.planMode,
+        active: _plan,
+        onTap: () {
+          setState(() {
+            _plan = !_plan;
+            _planToggledByUser = true;
+          });
+          _rememberDefaults();
+          _persistThreadConfig();
+        },
+      ),
+      _pill(
+        icon: Icons.psychology_outlined,
+        label: _effectiveEffort == null
+            ? l10n.effort
+            : '${l10n.effort} · ${_effectiveEffort!.label(l10n)}',
+        active: _effectiveEffort != null,
+        onTap: _pickEffort,
+      ),
+    ],
+  );
+
+  /// The composer options toggle. Collapsed: a compact one-line summary of the
+  /// active config (model · effort · plan) with a tune icon — the key settings
+  /// stay glanceable while the pills are folded away. Expanded: a "hide"
+  /// affordance. Tapping flips [_optionsExpanded] (overriding the width
+  /// default). The label is Flexible+ellipsized by the caller's [Flexible].
+  Widget _optionsToggle(AppLocalizations l10n, bool expanded) {
+    final scheme = Theme.of(context).colorScheme;
+    final fg = scheme.onSurfaceVariant;
+    final IconData icon;
+    final String label;
+    if (expanded) {
+      icon = Icons.expand_more;
+      label = l10n.hideOptions;
+    } else {
+      icon = Icons.tune;
+      final model =
+          _model?.displayName ??
+          _modelDisplayLabel(_runtime?.model) ??
+          l10n.modelDefault;
+      label = [
+        model,
+        if (_effectiveEffort != null) _effectiveEffort!.label(l10n),
+        if (_plan) l10n.planMode,
+      ].join(' · ');
+    }
+    return Material(
+      color: scheme.surfaceContainerHighest,
+      borderRadius: BorderRadius.circular(20),
+      child: InkWell(
+        key: const Key('options-toggle'),
+        borderRadius: BorderRadius.circular(20),
+        onTap: () => setState(() => _optionsExpanded = !expanded),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 15, color: fg),
+              const SizedBox(width: 5),
+              Flexible(
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  softWrap: false,
+                  style: TextStyle(fontSize: 12.5, color: fg),
+                ),
               ),
             ],
           ),
@@ -4782,6 +4961,7 @@ class _TurnDurationFooter extends StatelessWidget {
                   constraints: const BoxConstraints(maxWidth: 260),
                   child: Text(
                     modelText,
+                    key: const Key('turn-model-stamp'),
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(fontSize: 11.5, color: muted),
                   ),

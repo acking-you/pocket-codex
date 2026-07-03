@@ -155,6 +155,18 @@ class AppLocalizationsZh extends AppLocalizations {
   String get send => '发送';
 
   @override
+  String get hideOptions => '收起';
+
+  @override
+  String get prevTurn => '上一轮对话';
+
+  @override
+  String get nextTurn => '下一轮对话';
+
+  @override
+  String get jumpToLatest => '回到最新';
+
+  @override
   String get attachImage => '附加图片';
 
   @override
