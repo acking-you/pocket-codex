@@ -181,6 +181,106 @@ fn embedded_file_turn_sandboxed_with_staged_helpers() {
     }
 }
 
+/// LIVE host for debugging the "phone enters the embedded host → desktop
+/// crashes" bug WITH a real phone. Hosts the embedded (自带) app-server under a
+/// findable name, registers it on the account relay, installs a panic hook that
+/// logs EVERY panic (from any thread — including codex's in-process tasks) to
+/// `<support>/host_embedded_panic.log` before it unwinds, then blocks with a
+/// heartbeat so the operator can drive it from a phone.
+///
+/// A test binary always UNWINDS (libtest overrides `panic = "abort"`), which is
+/// exactly the FIXED release behavior — so if a codex panic fires when the
+/// phone enters, the hook captures the precise site (root cause) AND the host
+/// survives (the heartbeat keeps ticking), demonstrating the fix. A gap in the
+/// heartbeat / a missing survival line = the host died.
+///
+/// `HOST_NAME=phonetest cargo test -p pocket_codex_bridge live_host_for_phone
+/// -- --ignored --nocapture` (needs a signed-in account; runs ~15 min or until
+/// killed). Stops the host on exit.
+#[test]
+#[ignore = "manual: hosts an embedded app-server for a REAL phone to drive; blocks ~15 min"]
+fn live_host_for_phone() {
+    use crate::api::bridge as api;
+
+    if std::env::var_os("RUST_BACKTRACE").is_none() {
+        // SAFETY: set before any worker threads spawn.
+        unsafe { std::env::set_var("RUST_BACKTRACE", "1") };
+    }
+    let support = std::env::var("POCKET_CODEX_E2E_SUPPORT").unwrap_or_else(|_| {
+        let appdata = std::env::var("APPDATA").expect("APPDATA not set");
+        format!("{appdata}\\io.github.acking_you\\pocket_codex")
+    });
+    let panic_log = format!("{support}\\host_embedded_panic.log");
+    // Log every panic (any thread) with a backtrace before it unwinds, so a
+    // codex in-process task panic triggered by the phone is captured precisely.
+    let prev = std::panic::take_hook();
+    let log_path = panic_log.clone();
+    std::panic::set_hook(Box::new(move |info| {
+        let bt = std::backtrace::Backtrace::force_capture();
+        let thread = std::thread::current();
+        let msg = format!(
+            "\n=== PANIC on thread {:?} ===\n{info}\n--- backtrace ---\n{bt}\n",
+            thread.name().unwrap_or("<unnamed>")
+        );
+        eprintln!("{msg}");
+        if let Ok(mut f) =
+            std::fs::OpenOptions::new().create(true).append(true).open(&log_path)
+        {
+            use std::io::Write as _;
+            let _ = f.write_all(msg.as_bytes());
+        }
+        prev(info);
+    }));
+
+    let name = std::env::var("HOST_NAME").unwrap_or_else(|_| "phonetest".to_string());
+    let host = init_and_host(&name, /*embedded*/ true);
+    println!("================ EMBEDDED HOST UP ================");
+    println!("name       : {name}");
+    println!("app key    : {}", host.app_service_key);
+    println!("pid        : {}", std::process::id());
+    println!("panic log  : {panic_log}");
+    println!(">> On your PHONE (same account): open Pocket-Codex, find the");
+    println!(">> app-server '{name}', tap ENTER, then send a message.");
+    println!(">> Heartbeat below proves the host is alive; if it STOPS, it died.");
+    println!("=================================================");
+
+    // Positive activity signal: the newest rollout's mtime in CODEX_HOME
+    // advances whenever a turn runs. Logging when it moves PROVES the phone
+    // actually drove this host (vs. the host merely idling), so a surviving
+    // heartbeat across real activity is meaningful. Baseline it now.
+    let newest_rollout_mtime = || -> u64 {
+        pocket_codex_codex::rollout::scan_sessions()
+            .map(|v| v.iter().map(|s| s.updated_at).max().unwrap_or(0))
+            .unwrap_or(0) as u64
+    };
+    let mut last_activity = newest_rollout_mtime();
+    println!("(baseline newest-rollout mtime = {last_activity})");
+
+    let deadline = Instant::now() + Duration::from_secs(30 * 60);
+    let mut tick = 0u64;
+    while Instant::now() < deadline {
+        std::thread::sleep(Duration::from_secs(3));
+        tick += 1;
+        let status = api::app_serve_status();
+        let s = status.iter().find(|s| s.name == name);
+        let now = newest_rollout_mtime();
+        if now > last_activity {
+            println!(
+                ">>> PHONE ACTIVITY: a turn ran on the host (rollout advanced \
+                 {last_activity} -> {now}) and the host is STILL ALIVE"
+            );
+            last_activity = now;
+        }
+        println!(
+            "heartbeat #{tick}  host_alive={}  app_registered={}",
+            s.map(|s| s.alive).unwrap_or(false),
+            s.map(|s| s.app_registered).unwrap_or(false),
+        );
+    }
+    let _ = api::app_serve_stop(name);
+    println!("live host stopped (deadline reached)");
+}
+
 /// Repro for the "remote phone entering the embedded host panics the whole
 /// desktop" bug. Entering the app-server on a device runs
 /// `app_probe` (a transient connect+initialize+teardown) → `app_connect`
