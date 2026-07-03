@@ -181,6 +181,87 @@ fn embedded_file_turn_sandboxed_with_staged_helpers() {
     }
 }
 
+/// Repro for the "remote phone entering the embedded host panics the whole
+/// desktop" bug. Entering the app-server on a device runs
+/// `app_probe` (a transient connect+initialize+teardown) → `app_connect`
+/// (persistent) → `thread/list`, and the HOST's own services screen probes the
+/// same embedded server every 15s — so a real "enter" produces SEVERAL
+/// concurrent connections to the in-process app-server, a path the
+/// single-connect turn tests never exercise. This hammers that: a persistent
+/// session plus many concurrent transient probes + `thread/list` calls against
+/// one embedded host. A panic in any codex-spawned task shows as a
+/// `thread '…' panicked` line under `--nocapture` (and, in a release build with
+/// `panic = "abort"`, would abort the whole process — the reported symptom).
+///
+/// `POCKET_CODEX_E2E_SUPPORT=… cargo test -p pocket_codex_bridge
+/// remote_enter_concurrent_smoke -- --ignored --nocapture` (dev profile so a
+/// panic is captured, not aborted).
+#[test]
+#[ignore = "manual e2e: needs a signed-in account; reproduces the embedded remote-enter crash"]
+fn remote_enter_concurrent_smoke() {
+    use crate::api::bridge as api;
+    let name = format!("e2e-enter-{}", std::process::id());
+    let host = init_and_host(&name, true);
+    let key = host.app_service_key.clone();
+    let result = std::panic::catch_unwind(|| {
+        // The "phone" enters: probe, then a persistent session, then list.
+        assert!(api::app_probe(key.clone()).unwrap_or(false), "probe should succeed");
+        connect_with_retry(&key);
+        let listed = api::app_thread_list(key.clone()).expect("thread_list");
+        println!("thread_list returned {} existing threads", listed.len());
+        // Resume + read the account's REAL existing threads (what a phone does
+        // when opening a conversation) — a specific rollout's content could
+        // panic codex's resume/read path where a fresh thread wouldn't.
+        for meta in listed.iter().take(12) {
+            let _ = api::app_thread_resume(key.clone(), meta.id.clone());
+            let _ = api::app_thread_read(key.clone(), meta.id.clone());
+            let _ = api::meta_thread_config_get(key.clone(), meta.id.clone());
+        }
+        // A thread to read/resume through the tunnel like opening a conversation.
+        let cwd = std::env::temp_dir().join("pcx-e2e-enter");
+        std::fs::create_dir_all(&cwd).ok();
+        let tid = api::app_thread_start(
+            key.clone(),
+            None,
+            Some(cwd.to_string_lossy().into_owned()),
+            Some("never".into()),
+            Some("danger-full-access".into()),
+        )
+        .expect("thread_start");
+        // A fresh thread isn't materialized until its first user message, so
+        // thread_read may legitimately error here — that's not the bug; ignore.
+        let _ = api::app_thread_read(key.clone(), tid.clone());
+        // Now flood the embedded server with concurrent transient connections
+        // (probes) + reads + fresh `thread/list`s, as several devices + the
+        // host's periodic probe would. Each app_probe opens its OWN connection.
+        let mut handles = Vec::new();
+        for _ in 0..8 {
+            let k = key.clone();
+            let t = tid.clone();
+            handles.push(std::thread::spawn(move || {
+                for _ in 0..6 {
+                    let _ = api::app_probe(k.clone());
+                    let _ = api::app_thread_list(k.clone());
+                    let _ = api::app_thread_read(k.clone(), t.clone());
+                    let _ = api::meta_thread_config_get(k.clone(), t.clone());
+                }
+            }));
+        }
+        for h in handles {
+            let _ = h.join();
+        }
+        // Re-enter: disconnect + reconnect + list, like navigating back in.
+        api::app_disconnect(key.clone());
+        connect_with_retry(&key);
+        let _ = api::app_thread_list(key.clone()).expect("thread_list after reconnect");
+        println!("remote-enter smoke OK: no panic surfaced");
+    });
+    let _ = api::app_serve_stop(name);
+    if let Err(p) = result {
+        std::panic::resume_unwind(p);
+    }
+}
+
 /// Connect with retries: an EXTERNAL codex (an npm shim spawning node) can
 /// accept TCP before its websocket endpoint finishes booting, so the first
 /// handshake may fail where the app's own reconnect logic would retry.

@@ -151,6 +151,19 @@ fn hosts() -> &'static Mutex<HashMap<String, LocalServe>> {
     HOSTS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// Lock the process-global host map, RECOVERING a poisoned lock instead of
+/// panicking. The guarded value is a plain registry of `JoinHandle`s +
+/// metadata with no cross-field invariant a panic could half-update, so a
+/// previous panic-while-holding leaves it perfectly usable. Without this,
+/// `.lock().expect(...)` would turn one unlucky panic into a cascade: every
+/// later serve/status/stop call would panic on the poisoned lock — under the
+/// release `panic = "unwind"` that just errors the call, but recovering keeps
+/// hosting fully operational. Prefer this over `.lock().expect(...)`
+/// everywhere.
+fn hosts_locked() -> std::sync::MutexGuard<'static, HashMap<String, LocalServe>> {
+    hosts().lock().unwrap_or_else(|poison| poison.into_inner())
+}
+
 /// Stable-per-process client instance id for the broker register handshake (the
 /// broker treats a new instance with the same key as a takeover).
 fn client_instance_id() -> String {
@@ -224,13 +237,33 @@ fn tunnel_down(handle: &Option<JoinHandle<()>>) -> bool {
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 async fn run_embedded_supervised(listen_url: String) {
     loop {
-        match pocket_codex_codex::embedded::run(&listen_url).await {
-            Ok(()) => {
+        // Run the in-process app-server as its OWN task and await its handle, so
+        // a PANIC in codex's top-level accept future is delivered here as a
+        // JoinError instead of unwinding through (and, in a release build,
+        // aborting) the whole desktop. We log and restart, exactly as for a
+        // clean exit or an error. (Panics inside codex's per-connection subtasks
+        // are already contained by the tokio runtime under the unwind panic
+        // strategy — see the workspace `[profile.release] panic = "unwind"`
+        // note; this guards the supervisor's own future too so the embedded
+        // server auto-recovers rather than the service silently dying.)
+        let url = listen_url.clone();
+        let handle =
+            runtime::runtime().spawn(async move { pocket_codex_codex::embedded::run(&url).await });
+        match handle.await {
+            Ok(Ok(())) => {
                 tracing::warn!(%listen_url, "embedded codex app-server exited; restarting")
             },
-            Err(e) => {
+            Ok(Err(e)) => {
                 eprintln!("[embedded codex] failed on {listen_url}: {e:#}; restarting");
                 tracing::error!(%listen_url, "embedded codex app-server failed: {e:#}; restarting")
+            },
+            Err(join_err) if join_err.is_panic() => {
+                eprintln!("[embedded codex] PANICKED on {listen_url}: {join_err}; restarting");
+                tracing::error!(%listen_url, "embedded codex app-server PANICKED: {join_err}; restarting")
+            },
+            Err(join_err) => {
+                // Cancelled (e.g. runtime shutdown) — don't hot-loop.
+                tracing::warn!(%listen_url, "embedded codex app-server task ended: {join_err}");
             },
         }
         tokio::time::sleep(Duration::from_millis(800)).await;
@@ -425,7 +458,7 @@ pub fn serve_start(
     // - same name + codex dead    → drop the stale entry, then spawn fresh.
     // - requested port taken      → reject.
     {
-        let mut guard = hosts().lock().expect("serve hosts poisoned");
+        let mut guard = hosts_locked();
         if let Some(ls) = guard.get_mut(&name) {
             if listen_addr_open(&ls.app_local.to_string()) {
                 let (connector, tokens) = account::broker_transport(&support)?;
@@ -675,7 +708,7 @@ pub fn serve_start(
 
 /// Snapshot of every local host, sorted by name for a stable UI order.
 pub fn serve_status() -> Vec<ServeStatus> {
-    let guard = hosts().lock().expect("serve hosts poisoned");
+    let guard = hosts_locked();
     let mut out: Vec<ServeStatus> = guard
         .values()
         .map(|ls| ServeStatus {
@@ -708,7 +741,7 @@ pub fn serve_deregister(name: &str, kind: &str) -> Result<()> {
         .map_err(|_| anyhow!("invalid service kind `{kind}`"))?;
     let support = runtime::support_dir()?;
     let (device, svc_name) = {
-        let mut guard = hosts().lock().expect("serve hosts poisoned");
+        let mut guard = hosts_locked();
         let ls = guard
             .get_mut(name)
             .ok_or_else(|| anyhow!("`{name}` is not hosting locally"))?;
@@ -761,7 +794,7 @@ pub fn serve_reregister(name: &str, kind: &str) -> Result<()> {
         .map_err(|_| anyhow!("invalid service kind `{kind}`"))?;
     let support = runtime::support_dir()?;
     let (connector, tokens) = account::broker_transport(&support)?;
-    let mut guard = hosts().lock().expect("serve hosts poisoned");
+    let mut guard = hosts_locked();
     let ls = guard
         .get_mut(name)
         .ok_or_else(|| anyhow!("`{name}` is not hosting locally"))?;
@@ -817,7 +850,7 @@ pub fn serve_reregister(name: &str, kind: &str) -> Result<()> {
 /// API proxy + meta service tasks, stop its codex, and force the relay to drop
 /// all keys now. Best-effort + idempotent (no-op when that name isn't hosting).
 pub fn serve_stop(name: &str) -> Result<()> {
-    let removed = hosts().lock().expect("serve hosts poisoned").remove(name);
+    let removed = hosts_locked().remove(name);
     if let Some(ls) = removed {
         let device = ls.device.clone();
         let svc_name = ls.name.clone();
@@ -1086,4 +1119,35 @@ fn wait_for_port_closed(addr: &str, timeout: Duration) -> bool {
         std::thread::sleep(Duration::from_millis(200));
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hosts_locked_recovers_a_poisoned_lock() {
+        // Poison the process-global host mutex the way a real panic-while-holding
+        // would: a thread panics with the guard held. (Quiet the hook so the
+        // intentional panic doesn't spam the test log.)
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let _ = std::thread::spawn(|| {
+            let _guard = hosts().lock().expect("acquire before poisoning");
+            panic!("intentional: poison the hosts mutex");
+        })
+        .join();
+        std::panic::set_hook(prev);
+
+        // The raw lock is now poisoned...
+        assert!(hosts().lock().is_err(), "the mutex should be poisoned after the panic");
+        // ...but the recovering accessor still hands back a usable guard instead
+        // of panicking (which, cascading across every serve/status/stop call,
+        // is what would take hosting down after one unlucky panic).
+        let mut guard = hosts_locked();
+        let before = guard.len();
+        // It's a normal, mutable map — prove it's fully usable post-recovery.
+        guard.retain(|_, _| true);
+        assert_eq!(guard.len(), before);
+    }
 }
