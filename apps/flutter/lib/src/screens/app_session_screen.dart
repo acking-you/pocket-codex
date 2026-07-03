@@ -393,13 +393,17 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
     _cwd = widget.cwd;
     // Remember where the user is chatting so the next cold start (and the
     // chat-first home) lands right back here. Deferred: provider writes are
-    // not allowed while the tree is building.
+    // not allowed while the tree is building. A thread-less mount (fresh
+    // conversation) records nothing — the previous "last conversation" stays
+    // the restore target until this one actually exists (first send).
     final initialThread = _threadId;
     Future.microtask(() {
       if (!mounted) return;
-      ref.read(uiPrefsProvider.notifier)
-        ..setLastService(widget.serviceKey)
-        ..setLastThread(widget.serviceKey, initialThread);
+      final prefs = ref.read(uiPrefsProvider.notifier)
+        ..setLastService(widget.serviceKey);
+      if (initialThread != null) {
+        prefs.setLastThread(widget.serviceKey, initialThread);
+      }
     });
     // A brand-new conversation inherits the user's last-chosen model / mode /
     // plan / effort instead of resetting to hard defaults.
@@ -664,8 +668,12 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
   /// Switch the screen to another conversation (or a new one when [tid] is
   /// null) in place, resetting per-thread state. Used by the left sessions pane.
   void _openThread(String? tid, String? cwd) {
-    // Keep the "last conversation" record fresh for the chat-first home.
-    ref.read(uiPrefsProvider.notifier).setLastThread(widget.serviceKey, tid);
+    // Keep the "last conversation" record fresh for the chat-first home. A
+    // new (id-less) conversation records nothing until its first send — an
+    // abandoned draft shouldn't cost the user their restore target.
+    if (tid != null) {
+      ref.read(uiPrefsProvider.notifier).setLastThread(widget.serviceKey, tid);
+    }
     setState(() {
       _threadId = tid;
       _cwd = cwd;
@@ -2853,16 +2861,21 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
                       ctx: ctx,
                       route: '/manage',
                     ),
-                    _paneShortcut(
-                      key: 'sidebar-history-btn',
-                      icon: Icons.history,
-                      tooltip: l10n.hostSessions,
-                      ctx: ctx,
-                      route: Uri(
-                        path: '/sessions',
-                        queryParameters: {'svc': widget.serviceKey},
-                      ).toString(),
-                    ),
+                    // The host session browser rides the meta tunnel, which is
+                    // an account-mode feature (mirrors the manage page's
+                    // Sessions tab gate).
+                    if (ref.watch(configProvider).valueOrNull?.mode ==
+                        'account')
+                      _paneShortcut(
+                        key: 'sidebar-history-btn',
+                        icon: Icons.history,
+                        tooltip: l10n.hostSessions,
+                        ctx: ctx,
+                        route: Uri(
+                          path: '/sessions',
+                          queryParameters: {'svc': widget.serviceKey},
+                        ).toString(),
+                      ),
                     _paneShortcut(
                       key: 'sidebar-logs-btn',
                       icon: Icons.article_outlined,

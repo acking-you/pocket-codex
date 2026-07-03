@@ -2000,11 +2000,23 @@ abstract class AppLocalizations {
   /// **'Open Pocket-Codex on your computer and start hosting (app-server); this screen will enter the chat automatically.'**
   String get homeNoServiceMobileHint;
 
+  /// No description provided for @homeNoServiceSelfHostHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Run `pocket-codex serve` on a machine with codex to publish an app-server on your relay, or sign in with an account to host from this app.'**
+  String get homeNoServiceSelfHostHint;
+
   /// No description provided for @homeAutoRetryNote.
   ///
   /// In en, this message translates to:
   /// **'Keeps checking for hosts automatically.'**
   String get homeAutoRetryNote;
+
+  /// No description provided for @switchServiceFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Couldn\'t reach that host — staying on the current one.'**
+  String get switchServiceFailed;
 }
 
 class _AppLocalizationsDelegate

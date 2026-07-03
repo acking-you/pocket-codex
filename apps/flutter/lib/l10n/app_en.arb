@@ -425,5 +425,7 @@
   "homeNoServiceTitle": "No Codex host available",
   "homeNoServiceDesktopHint": "Start hosting on this computer and the chat opens right here — your phone can connect to it too.",
   "homeNoServiceMobileHint": "Open Pocket-Codex on your computer and start hosting (app-server); this screen will enter the chat automatically.",
-  "homeAutoRetryNote": "Keeps checking for hosts automatically."
+  "homeNoServiceSelfHostHint": "Run `pocket-codex serve` on a machine with codex to publish an app-server on your relay, or sign in with an account to host from this app.",
+  "homeAutoRetryNote": "Keeps checking for hosts automatically.",
+  "switchServiceFailed": "Couldn't reach that host — staying on the current one."
 }

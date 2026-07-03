@@ -61,6 +61,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   /// own. Matches the manage page's re-probe cadence.
   static const _retryInterval = Duration(seconds: 15);
 
+  /// How long an in-flight resolve may run before the self-heal tick is
+  /// allowed to supersede it (a wedged tunnel connect would otherwise disable
+  /// the retry loop forever — the generation guard makes superseding safe).
+  static const _stuckAfter = Duration(seconds: 45);
+
   /// Auto-restoring the last hosting is attempted once per app run — a user
   /// who stops hosting afterwards must not have it resurrected behind their
   /// back by a later visit to the home route.
@@ -78,6 +83,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   int _generation = 0;
   Timer? _retryTimer;
   bool _resolving = false;
+  DateTime? _resolveStartedAt;
+  bool _switching = false;
 
   bool get _isDesktop =>
       !kIsWeb &&
@@ -98,13 +105,21 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       ref.invalidate(servicesProvider);
       _resolve();
     });
-    _retryTimer = Timer.periodic(_retryInterval, (_) {
-      // Self-heal only the failure states; never disturb a live chat.
-      if (mounted && _phase != _Phase.ready && !_resolving) {
-        ref.invalidate(servicesProvider);
-        _resolve();
-      }
-    });
+    _retryTimer = Timer.periodic(_retryInterval, (_) => _selfHeal());
+  }
+
+  /// Re-check a failure state in place (no splash flash), and rescue a
+  /// wedged resolve after [_stuckAfter].
+  void _selfHeal() {
+    if (!mounted || _phase == _Phase.ready) return;
+    final startedAt = _resolveStartedAt;
+    final stuck =
+        _resolving &&
+        startedAt != null &&
+        DateTime.now().difference(startedAt) > _stuckAfter;
+    if (_resolving && !stuck) return;
+    ref.invalidate(servicesProvider);
+    _resolve(background: true);
   }
 
   @override
@@ -123,19 +138,24 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
         _phase != _Phase.ready &&
         !_resolving) {
       ref.invalidate(servicesProvider);
-      _resolve();
+      _resolve(background: true);
     }
   }
 
   /// Resolve → connect → land in the chat. [forceKey] pins the service (the
-  /// sidebar switcher); otherwise ranking picks one.
-  Future<void> _resolve({String? forceKey}) async {
+  /// sidebar switcher); otherwise ranking picks one. [background] re-checks
+  /// without flipping the current fallback UI to the splash — the hero stays
+  /// put and only a changed outcome repaints (no 15s flicker).
+  Future<void> _resolve({String? forceKey, bool background = false}) async {
     final gen = ++_generation;
     _resolving = true;
-    setState(() {
-      _phase = _Phase.resolving;
-      _error = null;
-    });
+    _resolveStartedAt = DateTime.now();
+    if (!background) {
+      setState(() {
+        _phase = _Phase.resolving;
+        _error = null;
+      });
+    }
     try {
       final api = ref.read(bridgeApiProvider);
 
@@ -152,23 +172,35 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
         return;
       }
       if (!mounted || gen != _generation) return;
-      final dismissed =
-          ref.read(dismissedServicesProvider).valueOrNull ?? const <String>{};
+      final dismissed = await _dismissed();
+      if (!mounted || gen != _generation) return;
       List<ServiceEntry> candidates() => services
           .where((s) => s.kind == 'app' && !dismissed.contains(s.key))
           .toList(growable: false);
 
       // 2. Desktop: restore the hosting the user left running last time, so a
-      // freshly booted desktop is immediately chattable (and reachable from
-      // the phone). Best-effort; failures fall through to the hero.
+      // freshly booted desktop is immediately chattable (and phone-reachable)
+      // even when OTHER hosts are discoverable. Gated on THIS machine not
+      // hosting yet; best-effort — failures fall through to the hero/remote.
       var apps = candidates();
-      if (apps.isEmpty && !_autoHostAttempted && _isDesktop) {
-        _autoHostAttempted = true;
+      if (_isDesktop && !_autoHostAttempted) {
         final prefs = await _prefs();
         final host = prefs.autoHost;
+        var locallyHosting = false;
         if (host != null) {
-          if (!mounted || gen != _generation) return;
-          setState(() => _rehosting = true);
+          try {
+            locallyHosting = (await api.appServeStatus()).isNotEmpty;
+          } catch (_) {
+            // Unknown local state: treat as not hosting and let the attempt
+            // (or its failure) settle it.
+          }
+        }
+        if (!mounted || gen != _generation) return;
+        if (host != null && !locallyHosting) {
+          // Burn the once-per-run flag only for a real attempt, so a slow
+          // prefs load on the first pass doesn't forfeit the restore.
+          _autoHostAttempted = true;
+          if (!background) setState(() => _rehosting = true);
           try {
             await api.appServeStart(
               port: host.port,
@@ -184,7 +216,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
           } catch (_) {
             // The hero (with its start-hosting action) is the fallback.
           } finally {
-            if (mounted && gen == _generation) {
+            if (mounted && gen == _generation && _rehosting) {
               setState(() => _rehosting = false);
             }
           }
@@ -195,6 +227,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
         setState(() {
           _phase = _Phase.noService;
           _candidates = const [];
+          if (background) _error = null;
         });
         return;
       }
@@ -268,24 +301,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
 
       // 6. Land in the most recent conversation (prefer the one the user last
       // had open); none → a fresh conversation with the starter guidance.
-      List<ThreadMeta> threads = const [];
-      try {
-        threads = await api.appThreadList(target.key);
-      } catch (_) {
-        // A failed list just means we open a new conversation.
-      }
+      final pick = await _pickThread(target.key, prefs);
       if (!mounted || gen != _generation) return;
-      ThreadMeta? pick;
-      final last = prefs.lastThreadByService[target.key];
-      for (final t in threads) {
-        if (t.id == last) {
-          pick = t;
-          break;
-        }
-      }
-      if (pick == null && threads.isNotEmpty) {
-        pick = threads.reduce((a, b) => a.updatedAt >= b.updatedAt ? a : b);
-      }
 
       ref.read(uiPrefsProvider.notifier).setLastService(target.key);
       setState(() {
@@ -296,8 +313,29 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
         _candidates = ranked;
       });
     } finally {
-      if (gen == _generation) _resolving = false;
+      if (gen == _generation) {
+        _resolving = false;
+        _resolveStartedAt = null;
+      }
     }
+  }
+
+  /// The conversation the chat should open on [serviceKey]: the one the user
+  /// last had open when still listed, else the most recently updated, else
+  /// null (fresh conversation).
+  Future<ThreadMeta?> _pickThread(String serviceKey, UiPrefs prefs) async {
+    List<ThreadMeta> threads = const [];
+    try {
+      threads = await ref.read(bridgeApiProvider).appThreadList(serviceKey);
+    } catch (_) {
+      // A failed list just means we open a new conversation.
+    }
+    final last = prefs.lastThreadByService[serviceKey];
+    for (final t in threads) {
+      if (t.id == last) return t;
+    }
+    if (threads.isEmpty) return null;
+    return threads.reduce((a, b) => a.updatedAt >= b.updatedAt ? a : b);
   }
 
   /// The prefs snapshot. Prefers what's already in memory; briefly waits for
@@ -315,10 +353,77 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     }
   }
 
-  void _switchService(String key) {
-    if (key == _serviceKey) return;
-    ref.read(uiPrefsProvider.notifier).setLastService(key);
-    _resolve(forceKey: key);
+  /// The dismissed-service keys, waiting briefly for the initial file load so
+  /// the boot resolve doesn't pick an entry the user durably hid.
+  Future<Set<String>> _dismissed() async {
+    final snap = ref.read(dismissedServicesProvider).valueOrNull;
+    if (snap != null) return snap;
+    try {
+      return await ref
+          .read(dismissedServicesProvider.future)
+          .timeout(const Duration(seconds: 2));
+    } catch (_) {
+      return const <String>{};
+    }
+  }
+
+  /// Switch the chat to another host, keeping the current chat on screen
+  /// until the target is known-good: probe + connect FIRST, and on failure
+  /// stay put with a snackbar instead of tearing the conversation down.
+  Future<void> _switchService(String key) async {
+    if (key == _serviceKey || _switching) return;
+    final l10n = AppLocalizations.of(context);
+    final messenger = ScaffoldMessenger.of(context);
+    // Supersede any background resolve; this switch owns the outcome now.
+    final gen = ++_generation;
+    setState(() => _switching = true);
+    try {
+      final api = ref.read(bridgeApiProvider);
+      var ok = false;
+      try {
+        ok = await api.appProbe(key);
+      } catch (_) {
+        ok = false;
+      }
+      if (ok && !api.appIsConnected(key)) {
+        try {
+          await api.appConnect(key, appLocalPort);
+        } catch (_) {
+          try {
+            await api.appDisconnect(key);
+            await api.appConnect(key, appLocalPort);
+          } catch (_) {
+            ok = false;
+          }
+        }
+      }
+      if (!mounted || gen != _generation) return;
+      if (!ok) {
+        messenger.showSnackBar(
+          SnackBar(content: Text(l10n.switchServiceFailed)),
+        );
+        return;
+      }
+      final pick = await _pickThread(key, await _prefs());
+      if (!mounted || gen != _generation) return;
+      ref.read(uiPrefsProvider.notifier).setLastService(key);
+      setState(() {
+        _phase = _Phase.ready;
+        _serviceKey = key;
+        _threadId = pick?.id;
+        _cwd = pick?.cwd;
+      });
+    } finally {
+      // The switch superseded any resolve, so clear its in-flight markers too
+      // (or the self-heal tick would think a resolve is still running).
+      _resolving = false;
+      _resolveStartedAt = null;
+      if (mounted) {
+        setState(() => _switching = false);
+      } else {
+        _switching = false;
+      }
+    }
   }
 
   Future<void> _startHosting() async {
@@ -342,6 +447,18 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     final l10n = AppLocalizations.of(context);
     switch (_phase) {
       case _Phase.ready:
+        // The switcher list tracks live discovery (a host added/removed on the
+        // manage page shows up without re-resolving); reachability is probed
+        // on switch, so no per-entry filtering here.
+        final live = ref.watch(servicesProvider).valueOrNull;
+        final dismissed =
+            ref.watch(dismissedServicesProvider).valueOrNull ??
+            const <String>{};
+        final candidates = live == null
+            ? _candidates
+            : live
+                  .where((s) => s.kind == 'app' && !dismissed.contains(s.key))
+                  .toList(growable: false);
         // The chat IS the home. Keyed by service so a switch rebuilds the
         // session state from scratch (connections stay alive underneath).
         return AppSessionScreen(
@@ -350,7 +467,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
           threadId: _threadId,
           cwd: _cwd,
           home: true,
-          services: _candidates,
+          services: candidates,
           onSwitchService: _switchService,
         );
       case _Phase.resolving:
@@ -361,8 +478,36 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     }
   }
 
-  /// Branded connecting splash (cold start / service switch).
+  /// Brand app bar with the manage/settings escape hatches, shared by the
+  /// splash and the hero so no home state is ever a dead end.
+  PreferredSizeWidget _homeAppBar(AppLocalizations l10n) => AppBar(
+    title: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const BrandLogo(size: 26, plated: false),
+        const SizedBox(width: 10),
+        Flexible(child: Text(l10n.appTitle, overflow: TextOverflow.ellipsis)),
+      ],
+    ),
+    actions: [
+      IconButton(
+        key: const Key('home-manage-btn'),
+        icon: const Icon(Icons.dns_outlined),
+        tooltip: l10n.manageServices,
+        onPressed: () => context.push('/manage'),
+      ),
+      IconButton(
+        key: const Key('home-settings-btn'),
+        icon: const Icon(Icons.settings_outlined),
+        tooltip: l10n.settingsTitle,
+        onPressed: () => context.push('/settings'),
+      ),
+    ],
+  );
+
+  /// Branded connecting splash (cold start / explicit retry).
   Widget _splash(AppLocalizations l10n) => Scaffold(
+    appBar: _homeAppBar(l10n),
     body: Center(
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -395,33 +540,18 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     final account = config?.mode == 'account';
     // Hosting from the hero mirrors the manage page's gate (desktop + account).
     final canHost = _isDesktop && account;
+    final hint = discoverFailed
+        ? (_error ?? '')
+        : canHost
+        ? l10n.homeNoServiceDesktopHint
+        : _isDesktop
+        // Self-host desktop: in-app hosting is account-only, so point at
+        // the CLI (and the account path) instead of a button that isn't
+        // there / a "use your computer" hint that IS this computer.
+        ? l10n.homeNoServiceSelfHostHint
+        : l10n.homeNoServiceMobileHint;
     return Scaffold(
-      appBar: AppBar(
-        title: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const BrandLogo(size: 26, plated: false),
-            const SizedBox(width: 10),
-            Flexible(
-              child: Text(l10n.appTitle, overflow: TextOverflow.ellipsis),
-            ),
-          ],
-        ),
-        actions: [
-          IconButton(
-            key: const Key('home-manage-btn'),
-            icon: const Icon(Icons.dns_outlined),
-            tooltip: l10n.manageServices,
-            onPressed: () => context.push('/manage'),
-          ),
-          IconButton(
-            key: const Key('home-settings-btn'),
-            icon: const Icon(Icons.settings_outlined),
-            tooltip: l10n.settingsTitle,
-            onPressed: () => context.push('/settings'),
-          ),
-        ],
-      ),
+      appBar: _homeAppBar(l10n),
       body: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 440),
@@ -442,11 +572,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                 ),
                 const SizedBox(height: 10),
                 Text(
-                  discoverFailed
-                      ? (_error ?? '')
-                      : canHost
-                      ? l10n.homeNoServiceDesktopHint
-                      : l10n.homeNoServiceMobileHint,
+                  hint,
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
                     color: scheme.onSurfaceVariant,
                   ),

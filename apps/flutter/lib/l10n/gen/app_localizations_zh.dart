@@ -1033,5 +1033,12 @@ class AppLocalizationsZh extends AppLocalizations {
       '在电脑上打开 Pocket-Codex 并开启托管（app-server），这里就会自动进入对话。';
 
   @override
+  String get homeNoServiceSelfHostHint =>
+      '在装有 codex 的机器上运行 `pocket-codex serve` 把 app-server 发布到中转，或登录账号后直接在本应用内托管。';
+
+  @override
   String get homeAutoRetryNote => '会自动持续检测新主机。';
+
+  @override
+  String get switchServiceFailed => '无法连接该主机，已保持当前主机不变。';
 }

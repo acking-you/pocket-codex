@@ -110,10 +110,12 @@ void main() {
     expect(api.lastResumed, 't-new');
     expect(find.byKey(const Key('send-btn')), findsOneWidget);
     // The sidebar (inline at 800px) lists sessions from BOTH projects, each
-    // annotated with its project name.
+    // annotated with its project name. 'beta' can only come from the second
+    // project's row annotation (the single-service switcher label reads
+    // 'devbox · alpha'), so this pins the per-row project tag specifically.
     expect(find.text('old topic'), findsOneWidget);
     expect(find.text('newest topic'), findsOneWidget);
-    expect(find.textContaining('alpha'), findsWidgets);
+    expect(find.textContaining('beta'), findsWidgets);
   });
 
   testWidgets('Home restores the conversation the user last had open', (
@@ -170,11 +172,61 @@ void main() {
     await t.pumpAndSettle();
     expect(find.byKey(const Key('home-hero-title')), findsOneWidget);
 
-    // The desktop host comes online; the periodic re-check finds it.
+    // The desktop host comes online; the periodic re-check finds it. The
+    // background re-resolve doesn't animate the hero, so advance fake time
+    // explicitly past the bounded prefs/dismissed waits before settling.
     api.services.add(_app1);
     await t.pump(const Duration(seconds: 16));
+    await t.pump(const Duration(seconds: 3));
     await t.pumpAndSettle();
     expect(find.byKey(const Key('send-btn')), findsOneWidget);
+    expect(api.appIsConnected(_app1.key), isTrue);
+  });
+
+  testWidgets('Cold start restores hosting even when a remote host exists', (
+    t,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    try {
+      // A reachable REMOTE host is discoverable, but this machine held a
+      // hosting record — both must come up: hosting restored AND the chat
+      // opens (preferring the local host in the ranking).
+      final api = FakeBridgeApi(config: _accountConfig, services: [_app2]);
+      await _pumpHome(
+        t,
+        api,
+        seed: (c) => c
+            .read(uiPrefsProvider.notifier)
+            .setAutoHost(const AutoHostPrefs(port: 18080, name: 'default')),
+      );
+      await t.pumpAndSettle();
+
+      expect(api.lastServePort, 18080);
+      expect(find.byKey(const Key('send-btn')), findsOneWidget);
+      expect(api.appIsConnected('pcx:local:app:default'), isTrue);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
+  testWidgets('Switching to an unreachable host keeps the current chat', (
+    t,
+  ) async {
+    final api = FakeBridgeApi(config: _accountConfig, services: [_app1, _app2]);
+    api.reachable[_app2.key] = false;
+    await _pumpHome(t, api);
+    await t.pumpAndSettle();
+    expect(api.appIsConnected(_app1.key), isTrue);
+
+    await t.tap(find.byKey(const Key('sidebar-service-switcher')));
+    await t.pumpAndSettle();
+    await t.tap(find.text('laptop · beta').last);
+    await t.pumpAndSettle();
+
+    // Probe failed → snackbar, no teardown: the chat stays on the first host.
+    expect(find.text('无法连接该主机，已保持当前主机不变。'), findsOneWidget);
+    expect(find.byKey(const Key('send-btn')), findsOneWidget);
+    expect(api.appIsConnected(_app2.key), isFalse);
     expect(api.appIsConnected(_app1.key), isTrue);
   });
 

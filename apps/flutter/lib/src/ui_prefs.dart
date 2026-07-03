@@ -143,13 +143,25 @@ class UiPrefsStore extends AsyncNotifier<UiPrefs> {
   @override
   Future<UiPrefs> build() async {
     final loaded = await _load();
-    // A mutation that raced the initial load set state already; prefer it (it
-    // is newer) and persist the merge so it survives a restart.
+    // A mutation that raced the initial load computed its snapshot from EMPTY
+    // defaults (state had no value yet), so adopting it wholesale would wipe
+    // everything already on disk. Mutations during the race window only ever
+    // SET fields (the clear-style ops early-return on a default snapshot), so
+    // null/absent in the raced snapshot means "untouched" and a field-wise
+    // merge onto the loaded file is lossless.
     final raced = state.valueOrNull;
     _loaded = true;
     if (raced != null) {
-      _enqueueWrite(raced);
-      return raced;
+      final merged = UiPrefs(
+        lastServiceKey: raced.lastServiceKey ?? loaded.lastServiceKey,
+        lastThreadByService: {
+          ...loaded.lastThreadByService,
+          ...raced.lastThreadByService,
+        },
+        autoHost: raced.autoHost ?? loaded.autoHost,
+      );
+      _enqueueWrite(merged);
+      return merged;
     }
     return loaded;
   }

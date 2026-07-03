@@ -1057,5 +1057,13 @@ class AppLocalizationsEn extends AppLocalizations {
       'Open Pocket-Codex on your computer and start hosting (app-server); this screen will enter the chat automatically.';
 
   @override
+  String get homeNoServiceSelfHostHint =>
+      'Run `pocket-codex serve` on a machine with codex to publish an app-server on your relay, or sign in with an account to host from this app.';
+
+  @override
   String get homeAutoRetryNote => 'Keeps checking for hosts automatically.';
+
+  @override
+  String get switchServiceFailed =>
+      'Couldn\'t reach that host — staying on the current one.';
 }
