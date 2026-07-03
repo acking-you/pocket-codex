@@ -181,12 +181,14 @@ pub fn connect_account(
 }
 
 /// Whether a live session already exists for `service_key`. The forwarder task
-/// ends when the websocket closes, so `is_finished()` means the socket is dead
-/// (the service may still show registered/online on the relay) — reconnect.
+/// ends when the websocket closes (`is_finished()`), and the client's watchdog
+/// clears `is_alive()` when the socket goes silent/half-open before it has even
+/// closed — either means the link is dead (the service may still show
+/// registered/online on the relay), so reconnect.
 fn reuse_live(service_key: &str) -> bool {
     let map = sessions().lock().expect("sessions poisoned");
     map.get(service_key)
-        .is_some_and(|s| !s.forwarder.is_finished())
+        .is_some_and(|s| !s.forwarder.is_finished() && s.client.is_alive())
 }
 
 /// Open the JSON-RPC client over `ws://<local_addr>`, run the `initialize`
@@ -496,14 +498,16 @@ fn probe_http_endpoint(local_addr: &str) -> bool {
 }
 
 /// Whether a *live* session exists for `service_key` (the websocket forwarder
-/// is still running). A session whose socket has closed reports `false` so the
-/// UI doesn't show a dead connection as "connected".
+/// is still running AND the client's watchdog still considers the socket
+/// alive). A session whose socket has closed OR gone silent/half-open reports
+/// `false` so the UI reconnects instead of showing a dead connection as
+/// "connected" (and hanging the next turn until it times out).
 pub fn is_connected(service_key: &str) -> bool {
     sessions()
         .lock()
         .expect("sessions poisoned")
         .get(service_key)
-        .map(|s| !s.forwarder.is_finished())
+        .map(|s| !s.forwarder.is_finished() && s.client.is_alive())
         .unwrap_or(false)
 }
 

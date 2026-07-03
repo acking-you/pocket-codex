@@ -17,7 +17,7 @@
 use std::{
     collections::HashMap,
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
     },
     time::Duration,
@@ -66,8 +66,16 @@ type Pending = Arc<Mutex<HashMap<String, oneshot::Sender<Result<Value>>>>>;
 type ServerReqs = Arc<Mutex<HashMap<String, RequestId>>>;
 
 /// How often to send a WebSocket ping. Keeps the pb-mapper relay tunnel from
-/// idle-closing a backgrounded connection, and surfaces a dead socket promptly.
-const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(25);
+/// idle-closing a backgrounded connection, and drives the liveness watchdog.
+const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
+
+/// How long after a ping the socket may be silent (no Pong and no other frame)
+/// before it is judged dead. A HALF-OPEN socket — TCP dropped without a clean
+/// FIN, common on relay/mobile jitter — still accepts buffered writes, so the
+/// ping "succeeds" while the read half hangs forever; only the absence of
+/// return traffic reveals it. Comfortably longer than one round-trip over a
+/// slow relay hop, short enough to reconnect long before a request times out.
+const LIVENESS_DEADLINE: Duration = Duration::from_secs(20);
 
 /// A connected app-server WebSocket JSON-RPC client.
 pub struct AppClient {
@@ -77,6 +85,11 @@ pub struct AppClient {
     next_id: AtomicU64,
     reader: JoinHandle<()>,
     keepalive: JoinHandle<()>,
+    /// Cleared by the keepalive watchdog when the socket goes silent past
+    /// [`LIVENESS_DEADLINE`] (a half-open connection). Callers poll
+    /// [`AppClient::is_alive`] so a wedged-but-not-yet-closed socket is treated
+    /// as dead and reconnected, instead of hanging until a request times out.
+    healthy: Arc<AtomicBool>,
 }
 
 impl Drop for AppClient {
@@ -99,10 +112,20 @@ impl AppClient {
         let server_reqs: ServerReqs = Arc::new(Mutex::new(HashMap::new()));
         let (notify_tx, notify_rx) = mpsc::unbounded_channel();
 
+        // Monotonic "frames seen" counter: the reader bumps it on EVERY inbound
+        // frame (data or Pong), and the keepalive watchdog uses it to tell a
+        // live-but-quiet socket from a dead half-open one.
+        let activity = Arc::new(AtomicU64::new(0));
+        let healthy = Arc::new(AtomicBool::new(true));
+
         let reader_pending = Arc::clone(&pending);
         let reader_server_reqs = Arc::clone(&server_reqs);
+        let reader_activity = Arc::clone(&activity);
         let reader = tokio::spawn(async move {
             while let Some(frame) = read.next().await {
+                // Any frame — including the Pong answering our keepalive Ping —
+                // proves the socket's read half is alive.
+                reader_activity.fetch_add(1, Ordering::Relaxed);
                 let text = match frame {
                     Ok(WsMessage::Text(t)) => t.to_string(),
                     Ok(WsMessage::Binary(b)) => String::from_utf8_lossy(&b).into_owned(),
@@ -159,21 +182,39 @@ impl AppClient {
         });
 
         let sink = Arc::new(Mutex::new(sink));
-        // Periodic ping keeps the relay tunnel warm (so a backgrounded session
-        // isn't idle-closed) and fails fast if the socket has died.
+        // Keepalive + liveness watchdog. Each tick pings (keeping the relay
+        // tunnel warm so a backgrounded session isn't idle-closed) then waits a
+        // bounded window for ANY return frame. A healthy socket answers the Ping
+        // with a Pong (or is already streaming), bumping `activity`; a HALF-OPEN
+        // socket accepts the buffered Ping write but never reads back, so
+        // `activity` stays put — that is the only reliable dead-socket signal,
+        // since the write "succeeds". On silence we mark unhealthy (callers
+        // reconnect) and best-effort close the sink to unwedge the reader.
         let keepalive_sink = Arc::clone(&sink);
+        let keepalive_activity = Arc::clone(&activity);
+        let keepalive_healthy = Arc::clone(&healthy);
         let keepalive = tokio::spawn(async move {
             let mut tick = tokio::time::interval(KEEPALIVE_INTERVAL);
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             tick.tick().await; // consume the immediate first tick
             loop {
                 tick.tick().await;
+                let before = keepalive_activity.load(Ordering::Relaxed);
                 let sent = keepalive_sink
                     .lock()
                     .await
                     .send(WsMessage::Ping(Vec::new().into()))
                     .await;
                 if sent.is_err() {
+                    keepalive_healthy.store(false, Ordering::Relaxed);
+                    break;
+                }
+                // Give the Pong (or any traffic) a bounded window to arrive.
+                tokio::time::sleep(LIVENESS_DEADLINE).await;
+                if keepalive_activity.load(Ordering::Relaxed) == before {
+                    // No return frame within the deadline → half-open/dead.
+                    keepalive_healthy.store(false, Ordering::Relaxed);
+                    let _ = keepalive_sink.lock().await.close().await;
                     break;
                 }
             }
@@ -187,9 +228,18 @@ impl AppClient {
                 next_id: AtomicU64::new(1),
                 reader,
                 keepalive,
+                healthy,
             },
             notify_rx,
         ))
+    }
+
+    /// Whether the socket is still considered live. Goes `false` once the
+    /// keepalive watchdog sees the connection go silent past
+    /// [`LIVENESS_DEADLINE`] — a half-open socket that still accepts writes.
+    /// Higher layers poll this to reconnect instead of hanging on a dead link.
+    pub fn is_alive(&self) -> bool {
+        self.healthy.load(Ordering::Relaxed)
     }
 
     /// Answer a server→client request (identified by the `request_id` token
