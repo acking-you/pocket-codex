@@ -244,6 +244,11 @@ pub struct TranscriptItem {
 ///   `commandExecution` item (title = command, text = output, ANSI stripped)
 /// * `reasoning` with a non-empty `summary` → a reasoning item
 ///
+/// plus the `turn_context` records written at each turn boundary, which become
+/// synthetic `turnContext` items so the viewer can show WHICH model (and
+/// effort / permissions) actually handled each turn — the read-only analogue
+/// of the live conversation's per-turn model stamp.
+///
 /// Encrypted reasoning (no readable `summary`), lifecycle and token events
 /// are skipped. Unreadable lines are skipped rather than failing the whole
 /// read, so a partially-written rollout (one a live writer is appending to)
@@ -263,13 +268,32 @@ pub fn read_transcript(path: &Path) -> Result<Vec<TranscriptItem>> {
         let Ok(value) = serde_json::from_str::<Value>(&line) else {
             continue;
         };
-        if value.get("type").and_then(Value::as_str) != Some("response_item") {
-            continue;
-        }
+        let line_type = value.get("type").and_then(Value::as_str);
         let Some(payload) = value.get("payload") else {
             continue;
         };
         let id = format!("t{idx}");
+        if line_type == Some("turn_context") {
+            if let Some(item) = turn_context_item(id, payload) {
+                // Consecutive context records with no displayable item between
+                // them (e.g. mid-turn settings updates) collapse to the LAST —
+                // the effective one — so each rendered caption marks a real
+                // turn boundary. Popping is safe: only `function_call` indexes
+                // are referenced by `pending`, and only a trailing turnContext
+                // is ever removed, so no stored index shifts.
+                if out
+                    .last()
+                    .is_some_and(|prev| prev.item_type == "turnContext")
+                {
+                    out.pop();
+                }
+                out.push(item);
+            }
+            continue;
+        }
+        if line_type != Some("response_item") {
+            continue;
+        }
         match payload.get("type").and_then(Value::as_str) {
             Some("message") => {
                 let (text, images) = split_message_content(payload);
@@ -335,6 +359,65 @@ pub fn read_transcript(path: &Path) -> Result<Vec<TranscriptItem>> {
         }
     }
     Ok(out)
+}
+
+/// Map a `turn_context` record to a synthetic `turnContext` item: `title` =
+/// the model handling the turn, `text` = a compact JSON object with the rest
+/// of the effective settings (`effort`, `approvalPolicy`, `sandboxMode`,
+/// `collaborationMode`; a key is absent when the rollout didn't record it).
+/// Reusing the existing `{type, title, text}` row shape — exactly like the
+/// live view's `plan` item — keeps the wire format (host-svc `TranscriptItem`,
+/// bridge DTOs) untouched, and an older client renders an unknown type as a
+/// generic activity row instead of failing.
+///
+/// Rollouts store codex-core serde shapes: snake_case fields, kebab-case
+/// approval strings (`never`, `on-request`, …; the granular variant is an
+/// externally-tagged object) and an internally-tagged sandbox policy whose
+/// `type` values (`read-only`, `workspace-write`, `danger-full-access`) match
+/// the app's wire strings directly. `model`/`effort` live at the top level,
+/// mirrored inside `collaboration_mode.settings` (used as fallback for older
+/// records). No model at all → nothing worth a caption → `None`.
+fn turn_context_item(id: String, payload: &Value) -> Option<TranscriptItem> {
+    let text_of = |v: Option<&Value>| {
+        v.and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    };
+    let collab = payload.get("collaboration_mode");
+    let collab_settings = collab.and_then(|c| c.get("settings"));
+    let model = text_of(payload.get("model"))
+        .or_else(|| text_of(collab_settings.and_then(|s| s.get("model"))))?;
+    let effort = text_of(payload.get("effort"))
+        .or_else(|| text_of(collab_settings.and_then(|s| s.get("reasoning_effort"))));
+    // Approval: a plain kebab string, or the externally-tagged `granular`
+    // object → its tag.
+    let approval = payload.get("approval_policy").and_then(|v| {
+        text_of(Some(v)).or_else(|| v.as_object().and_then(|o| o.keys().next().cloned()))
+    });
+    let sandbox = payload.get("sandbox_policy").and_then(|v| {
+        text_of(v.get("type"))
+            // Tolerate a bare-string form, should the on-disk shape drift.
+            .or_else(|| text_of(Some(v)))
+    });
+    let collab_mode = text_of(collab.and_then(|c| c.get("mode")));
+    let mut details = serde_json::Map::new();
+    for (key, value) in [
+        ("effort", effort),
+        ("approvalPolicy", approval),
+        ("sandboxMode", sandbox),
+        ("collaborationMode", collab_mode),
+    ] {
+        if let Some(value) = value {
+            details.insert(key.to_string(), Value::String(value));
+        }
+    }
+    Some(TranscriptItem {
+        id,
+        item_type: "turnContext".to_string(),
+        title: model,
+        text: Value::Object(details).to_string(),
+        images: Vec::new(),
+    })
 }
 
 /// Split a `message` payload's `content` array into (typed text, image data
@@ -938,6 +1021,77 @@ mod tests {
         assert_eq!(items[1].text, "[32mhi[0m");
         assert_eq!(items[2].item_type, "agentMessage");
         assert_eq!(items[2].text, "done");
+    }
+
+    /// Manual harness: parse a REAL rollout and dump what the viewer would
+    /// show. `POCKET_CODEX_TEST_ROLLOUT=path cargo test -p pocket-codex-codex
+    /// real_rollout -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "manual: needs POCKET_CODEX_TEST_ROLLOUT pointing at a rollout file"]
+    fn real_rollout_transcript_dump() {
+        let path =
+            std::env::var("POCKET_CODEX_TEST_ROLLOUT").expect("set POCKET_CODEX_TEST_ROLLOUT");
+        let items = read_transcript(Path::new(&path)).expect("read transcript");
+        for item in &items {
+            println!(
+                "{:>14}  {}  {}",
+                item.item_type,
+                item.title,
+                item.text
+                    .chars()
+                    .take(120)
+                    .collect::<String>()
+                    .replace('\n', "\\n")
+            );
+        }
+        assert!(
+            items.iter().any(|i| i.item_type == "turnContext"),
+            "a real rollout should carry at least one turn_context record"
+        );
+    }
+
+    #[test]
+    fn read_transcript_surfaces_turn_context_as_model_captions() {
+        // The exact core serde shape a real rollout records (observed live):
+        // snake_case fields, kebab approval, internally-tagged sandbox policy,
+        // top-level model/effort mirrored inside collaboration_mode.settings.
+        let lines = [
+            r#"{"type":"turn_context","payload":{"turn_id":"t-1","cwd":"C:\\w","approval_policy":"never","sandbox_policy":{"type":"danger-full-access"},"model":"gpt-5.5","collaboration_mode":{"mode":"default","settings":{"model":"gpt-5.5","reasoning_effort":"low"}},"effort":"low","summary":"auto"}}"#,
+            r#"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}}"#,
+            // Two consecutive context records (a mid-turn settings update)
+            // collapse to the LAST — the effective one.
+            r#"{"type":"turn_context","payload":{"model":"gpt-5.5","effort":"low"}}"#,
+            r#"{"type":"turn_context","payload":{"model":"o4","effort":"high","approval_policy":{"granular":{"rules":true}}}}"#,
+            r#"{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}}"#,
+            // A record with no model anywhere has nothing worth a caption.
+            r#"{"type":"turn_context","payload":{"cwd":"C:\\w"}}"#,
+        ];
+        let path = std::env::temp_dir().join(format!(
+            "pcx-transcript-{}-{}.jsonl",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::write(&path, lines.join("\n")).expect("write transcript fixture");
+        let items = read_transcript(&path).expect("read transcript");
+        std::fs::remove_file(&path).ok();
+
+        assert_eq!(items.len(), 4, "{items:?}");
+        assert_eq!(items[0].item_type, "turnContext");
+        assert_eq!(items[0].title, "gpt-5.5");
+        let details: Value = serde_json::from_str(&items[0].text).expect("details json");
+        assert_eq!(details.get("effort").and_then(Value::as_str), Some("low"));
+        assert_eq!(details.get("approvalPolicy").and_then(Value::as_str), Some("never"));
+        assert_eq!(details.get("sandboxMode").and_then(Value::as_str), Some("danger-full-access"));
+        assert_eq!(details.get("collaborationMode").and_then(Value::as_str), Some("default"));
+        assert_eq!(items[1].item_type, "userMessage");
+        // The two back-to-back contexts collapsed to the later one, and the
+        // granular approval object mapped to its tag.
+        assert_eq!(items[2].item_type, "turnContext");
+        assert_eq!(items[2].title, "o4");
+        let details: Value = serde_json::from_str(&items[2].text).expect("details json");
+        assert_eq!(details.get("effort").and_then(Value::as_str), Some("high"));
+        assert_eq!(details.get("approvalPolicy").and_then(Value::as_str), Some("granular"));
+        assert_eq!(items[3].item_type, "agentMessage");
     }
 
     #[test]
