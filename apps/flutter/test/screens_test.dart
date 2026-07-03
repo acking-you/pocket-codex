@@ -722,6 +722,114 @@ void main() {
     expect(find.text('orphan'), findsOneWidget);
   });
 
+  testWidgets('batch cleanup: select several unreachable entries and remove '
+      'them in one action; reachable entries stay untouched', (t) async {
+    final api =
+        FakeBridgeApi(
+            config: const ConfigInfo(
+              relay: '',
+              hasKey: false,
+              mode: 'account',
+              accountLogin: 'acking-you',
+            ),
+            services: const [
+              ServiceEntry(
+                device: 'devA',
+                kind: 'api',
+                name: 'dead1',
+                key: 'pcx:devA:api:dead1',
+              ),
+              ServiceEntry(
+                device: 'devB',
+                kind: 'api',
+                name: 'dead2',
+                key: 'pcx:devB:api:dead2',
+              ),
+              ServiceEntry(
+                device: 'devC',
+                kind: 'api',
+                name: 'alive',
+                key: 'pcx:devC:api:alive',
+              ),
+            ],
+          )
+          ..reachable['pcx:devA:api:dead1'] = false
+          ..reachable['pcx:devB:api:dead2'] = false
+          ..reachable['pcx:devC:api:alive'] = true
+          ..keepOnDeregister = true; // relay keeps listing orphans
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(400, 900); // narrow: single-pane list
+    addTearDown(t.view.reset);
+    await t.pumpWidget(_host(const ServicesScreen(), api));
+    await t.pumpAndSettle(); // let the probes resolve
+
+    // All three list; the cleanup affordance appears because ≥1 is unreachable.
+    expect(find.text('dead1'), findsOneWidget);
+    expect(find.text('dead2'), findsOneWidget);
+    expect(find.text('alive'), findsOneWidget);
+    expect(find.byKey(const Key('batch-enter-btn')), findsOneWidget);
+
+    // Enter select mode → only the two unreachable cards get a checkbox; the
+    // reachable one is not selectable.
+    await t.tap(find.byKey(const Key('batch-enter-btn')));
+    await t.pumpAndSettle();
+    expect(find.byType(Checkbox), findsNWidgets(2));
+
+    // "Select all" ticks both removable entries; the batch button counts them.
+    await t.tap(find.byKey(const Key('batch-select-all-btn')));
+    await t.pumpAndSettle();
+    expect(find.text('移除（2）'), findsOneWidget);
+
+    // Remove → confirm the batch dialog.
+    await t.tap(find.byKey(const Key('batch-remove-btn')));
+    await t.pumpAndSettle();
+    expect(find.text('移除这些不可达服务？'), findsOneWidget);
+    await t.tap(find.byKey(const Key('batch-remove-confirm-btn')));
+    await t.pumpAndSettle();
+
+    // Both unreachable entries are gone (durably dismissed) and each got a
+    // best-effort backend drop; the reachable one is untouched, and select mode
+    // exited (no more batch bar).
+    expect(find.text('dead1'), findsNothing);
+    expect(find.text('dead2'), findsNothing);
+    expect(find.text('alive'), findsOneWidget);
+    expect(
+      api.deregistered,
+      containsAll(<String>['pcx:devA:api:dead1', 'pcx:devB:api:dead2']),
+    );
+    expect(api.deregistered, isNot(contains('pcx:devC:api:alive')));
+    expect(find.byKey(const Key('batch-remove-btn')), findsNothing);
+  });
+
+  testWidgets('batch cleanup: the affordance is absent when every entry is '
+      'reachable', (t) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(
+        relay: '',
+        hasKey: false,
+        mode: 'account',
+        accountLogin: 'acking-you',
+      ),
+      services: const [
+        ServiceEntry(
+          device: 'devC',
+          kind: 'api',
+          name: 'alive',
+          key: 'pcx:devC:api:alive',
+        ),
+      ],
+    )..reachable['pcx:devC:api:alive'] = true;
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(400, 900);
+    addTearDown(t.view.reset);
+    await t.pumpWidget(_host(const ServicesScreen(), api));
+    await t.pumpAndSettle();
+
+    expect(find.text('alive'), findsOneWidget);
+    // Nothing to clean up → no "clean up unreachable" button.
+    expect(find.byKey(const Key('batch-enter-btn')), findsNothing);
+  });
+
   testWidgets('a registered-but-dead API proxy reads "unreachable", not '
       '"online"', (t) async {
     final api = FakeBridgeApi(

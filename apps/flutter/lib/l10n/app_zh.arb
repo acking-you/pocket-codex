@@ -318,6 +318,23 @@
   "deregisterOrphanWarning": "「{name}」没有响应——它的注册残留在中继上、但没有可达的主机。此操作会把它从你的列表中移除（即使残留注册仍在也会保持隐藏），并请求后端将其丢弃。",
   "remove": "移除",
   "deregisterFailed": "注销失败",
+  "batchRemoveEnter": "清理不可达",
+  "batchRemoveHint": "点选要移除的不可达服务。",
+  "batchSelectAll": "全选",
+  "batchClear": "清空",
+  "batchRemoveSelected": "移除（{count}）",
+  "@batchRemoveSelected": {
+    "placeholders": { "count": { "type": "int" } }
+  },
+  "batchRemoveTitle": "移除这些不可达服务？",
+  "batchRemoveWarning": "从此设备的列表中移除 {count} 个不可达服务。若其中某个恢复，会重新出现。",
+  "@batchRemoveWarning": {
+    "placeholders": { "count": { "type": "int" } }
+  },
+  "batchRemovedSnack": "已移除 {count} 个服务",
+  "@batchRemovedSnack": {
+    "placeholders": { "count": { "type": "int" } }
+  },
   "tunnelAppLabel": "App-server",
   "tunnelApiLabel": "API",
   "tunnelMetaLabel": "会话（meta）",

@@ -200,6 +200,53 @@ final servicesSectionProvider = StateProvider<ServicesSection>(
   (ref) => ServicesSection.api,
 );
 
+/// Multi-select state for batch-removing inactive service entries. `active`
+/// gates the checkbox UI; `keys` are the currently-ticked service keys. Only
+/// unreachable, non-local entries are ever selectable — reachable or locally
+/// hosted services must never be dismissed (a dismissal is keyed on being
+/// unreachable, and hiding a live one would strand it), mirroring the
+/// single-entry 注销 rule.
+@immutable
+class ServiceSelection {
+  /// Creates a selection state (inactive + empty by default).
+  const ServiceSelection({this.active = false, this.keys = const {}});
+
+  /// Whether multi-select mode is on (checkboxes shown, taps toggle).
+  final bool active;
+
+  /// The ticked service keys.
+  final Set<String> keys;
+
+  /// Whether [key] is currently ticked.
+  bool contains(String key) => keys.contains(key);
+
+  /// Number of ticked keys.
+  int get count => keys.length;
+
+  /// Selection with [key] toggled (and mode forced on).
+  ServiceSelection toggled(String key) {
+    final next = {...keys};
+    if (!next.remove(key)) next.add(key);
+    return ServiceSelection(active: true, keys: next);
+  }
+
+  /// Selection with exactly [all] ticked (and mode on) — the "select all".
+  ServiceSelection withAll(Iterable<String> all) =>
+      ServiceSelection(active: true, keys: {...all});
+
+  /// Selection with [removed] keys dropped, keeping mode + the rest.
+  ServiceSelection without(Iterable<String> removed) =>
+      ServiceSelection(active: active, keys: {...keys}..removeAll(removed));
+}
+
+/// Per-section multi-select state, so entering select mode in one tab (API vs
+/// app-server) never shows checkboxes in another. Not autoDispose (tiny state,
+/// preserved across a glance at another tab), matching [pendingRemovalProvider].
+final serviceSelectionProvider =
+    StateProvider.family<ServiceSelection, ServicesSection>(
+      (ref, section) => const ServiceSelection(),
+    );
+
 /// Active UI locale (`null` = follow system). Seeded at boot from the
 /// persisted config via a ProviderScope override, then changed by the
 /// settings language picker (which also persists through `setLocale`).
