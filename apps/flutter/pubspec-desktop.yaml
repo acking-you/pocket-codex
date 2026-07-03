@@ -105,9 +105,10 @@ dev_dependencies:
   plugin_platform_interface: ^2.1.8
   flutter_launcher_icons: ^0.14.2
   flutter_native_splash: ^2.4.3
-  # Mirrors pubspec.yaml: test/gen_icon_test.dart rasterises the brand/tray SVGs
-  # (flutter_svg) and encodes the Windows tray .ico (image). Kept in sync so the
-  # icon-regen test compiles when this desktop manifest is the active pubspec.
+  # Mirrors pubspec.yaml: test/gen_icon_test.dart (opt-in via REGEN_ICONS=1)
+  # rasterises the brand/tray SVGs (flutter_svg) and encodes the Windows tray
+  # .ico (image). Kept in sync so the icon-regen test compiles when this
+  # desktop manifest is the active pubspec.
   flutter_svg: ^2.0.10
 
 flutter:

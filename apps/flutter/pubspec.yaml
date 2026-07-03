@@ -95,7 +95,8 @@ dev_dependencies:
   flutter_native_splash: ^2.4.3
   # Used only by test/gen_icon_test.dart to rasterise icon/pocket_mark.svg
   # (the vector source of truth) into the PNGs flutter_launcher_icons /
-  # flutter_native_splash consume. Not shipped in the app bundle.
+  # flutter_native_splash consume. Regeneration is opt-in (REGEN_ICONS=1) so a
+  # plain `flutter test` never rewrites them. Not shipped in the app bundle.
   flutter_svg: ^2.0.10
 
 flutter:
