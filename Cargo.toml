@@ -162,7 +162,15 @@ unescaped_backticks = "deny"
 opt-level = 3
 lto = "thin"
 codegen-units = 1
-panic = "abort"
+# UNWIND, not abort: the desktop app runs codex's app-server IN-PROCESS
+# (embedded 自带 mode), so a panic in any codex-spawned task — e.g. a
+# per-connection handler reacting to a remote client — must NOT abort the whole
+# desktop. With unwind, tokio/std contain a task/thread panic (the bad
+# connection dies, the embedded supervisor restarts the server) instead of
+# taking down the process. `examples/panic_probe.rs` in pocket-codex-core
+# demonstrates the difference. (flutter_rust_bridge also relies on unwinding to
+# turn a panic in a bridge call into a Dart exception rather than a hard crash.)
+panic = "unwind"
 strip = "symbols"
 
 [profile.dev]
