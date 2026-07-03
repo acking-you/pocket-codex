@@ -2,6 +2,7 @@ import 'package:go_router/go_router.dart';
 import 'package:pocket_codex/src/screens/api_service_screen.dart';
 import 'package:pocket_codex/src/screens/app_service_screen.dart';
 import 'package:pocket_codex/src/screens/app_session_screen.dart';
+import 'package:pocket_codex/src/screens/home_screen.dart';
 import 'package:pocket_codex/src/screens/local_session_view_screen.dart';
 import 'package:pocket_codex/src/screens/account_onboarding_screen.dart';
 import 'package:pocket_codex/src/screens/local_sessions_screen.dart';
@@ -50,10 +51,25 @@ GoRouter buildRouter({
       path: '/onboarding/self-host',
       builder: (c, s) => const OnboardingScreen(),
     ),
-    GoRoute(path: '/', builder: (c, s) => const ServicesScreen()),
+    // Chat-first home: resolves an app service + the latest conversation and
+    // lands the user directly in the chat. All management moved to /manage.
+    GoRoute(path: '/', builder: (c, s) => const HomeScreen()),
+    GoRoute(path: '/manage', builder: (c, s) => const ServicesScreen()),
     GoRoute(path: '/settings', builder: (c, s) => const SettingsScreen()),
     GoRoute(path: '/logs', builder: (c, s) => const LogViewScreen()),
-    GoRoute(path: '/sessions', builder: (c, s) => const LocalSessionsScreen()),
+    // Session browser: no param = this machine's CODEX_HOME; ?svc=<key> = the
+    // host behind that app service, read over its meta tunnel.
+    GoRoute(
+      path: '/sessions',
+      builder: (c, s) {
+        final svc = s.uri.queryParameters['svc'];
+        return LocalSessionsScreen(
+          source: (svc == null || svc.isEmpty)
+              ? const SessionSource.local()
+              : SessionSource.remote(svc),
+        );
+      },
+    ),
     GoRoute(
       path: '/sessions/view',
       builder: (c, s) => LocalSessionViewScreen(

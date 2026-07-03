@@ -359,5 +359,14 @@
   "logsCopied": "已复制 {count} 行日志",
   "@logsCopied": {
     "placeholders": { "count": { "type": "int" } }
-  }
+  },
+  "manageServices": "服务管理",
+  "hostSessions": "主机历史会话",
+  "switchService": "切换主机",
+  "homeConnecting": "正在连接 Codex 主机…",
+  "homeRestoringHost": "正在恢复托管…",
+  "homeNoServiceTitle": "没有可用的 Codex 主机",
+  "homeNoServiceDesktopHint": "在本机开启托管后即可直接开始对话，手机也能随时连回来。",
+  "homeNoServiceMobileHint": "在电脑上打开 Pocket-Codex 并开启托管（app-server），这里就会自动进入对话。",
+  "homeAutoRetryNote": "会自动持续检测新主机。"
 }

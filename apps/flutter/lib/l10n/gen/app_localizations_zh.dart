@@ -1006,4 +1006,32 @@ class AppLocalizationsZh extends AppLocalizations {
   String logsCopied(int count) {
     return '已复制 $count 行日志';
   }
+
+  @override
+  String get manageServices => '服务管理';
+
+  @override
+  String get hostSessions => '主机历史会话';
+
+  @override
+  String get switchService => '切换主机';
+
+  @override
+  String get homeConnecting => '正在连接 Codex 主机…';
+
+  @override
+  String get homeRestoringHost => '正在恢复托管…';
+
+  @override
+  String get homeNoServiceTitle => '没有可用的 Codex 主机';
+
+  @override
+  String get homeNoServiceDesktopHint => '在本机开启托管后即可直接开始对话，手机也能随时连回来。';
+
+  @override
+  String get homeNoServiceMobileHint =>
+      '在电脑上打开 Pocket-Codex 并开启托管（app-server），这里就会自动进入对话。';
+
+  @override
+  String get homeAutoRetryNote => '会自动持续检测新主机。';
 }

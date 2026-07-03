@@ -1029,4 +1029,33 @@ class AppLocalizationsEn extends AppLocalizations {
   String logsCopied(int count) {
     return 'Copied $count log lines';
   }
+
+  @override
+  String get manageServices => 'Manage services';
+
+  @override
+  String get hostSessions => 'Host session history';
+
+  @override
+  String get switchService => 'Switch host';
+
+  @override
+  String get homeConnecting => 'Connecting to your Codex host…';
+
+  @override
+  String get homeRestoringHost => 'Restoring hosting…';
+
+  @override
+  String get homeNoServiceTitle => 'No Codex host available';
+
+  @override
+  String get homeNoServiceDesktopHint =>
+      'Start hosting on this computer and the chat opens right here — your phone can connect to it too.';
+
+  @override
+  String get homeNoServiceMobileHint =>
+      'Open Pocket-Codex on your computer and start hosting (app-server); this screen will enter the chat automatically.';
+
+  @override
+  String get homeAutoRetryNote => 'Keeps checking for hosts automatically.';
 }
