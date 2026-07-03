@@ -223,8 +223,10 @@ fn live_host_for_phone() {
             thread.name().unwrap_or("<unnamed>")
         );
         eprintln!("{msg}");
-        if let Ok(mut f) =
-            std::fs::OpenOptions::new().create(true).append(true).open(&log_path)
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
         {
             use std::io::Write as _;
             let _ = f.write_all(msg.as_bytes());
@@ -233,7 +235,7 @@ fn live_host_for_phone() {
     }));
 
     let name = std::env::var("HOST_NAME").unwrap_or_else(|_| "phonetest".to_string());
-    let host = init_and_host(&name, /*embedded*/ true);
+    let host = init_and_host(&name, /* embedded */ true);
     println!("================ EMBEDDED HOST UP ================");
     println!("name       : {name}");
     println!("app key    : {}", host.app_service_key);
@@ -266,8 +268,8 @@ fn live_host_for_phone() {
         let now = newest_rollout_mtime();
         if now > last_activity {
             println!(
-                ">>> PHONE ACTIVITY: a turn ran on the host (rollout advanced \
-                 {last_activity} -> {now}) and the host is STILL ALIVE"
+                ">>> PHONE ACTIVITY: a turn ran on the host (rollout advanced {last_activity} -> \
+                 {now}) and the host is STILL ALIVE"
             );
             last_activity = now;
         }
