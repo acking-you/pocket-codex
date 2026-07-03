@@ -3449,12 +3449,20 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
           _model?.displayName ??
           _modelDisplayLabel(_runtime?.model) ??
           l10n.modelDefault;
+      // Order by how safety-relevant / how often it changes: model, permission
+      // (early so it survives ellipsis), effort, plan. Permission is always
+      // shown so "完全放行" (no sandbox, never ask) can't hide off-screen.
       label = [
         model,
+        _mode.label(l10n),
         if (_effectiveEffort != null) _effectiveEffort!.label(l10n),
         if (_plan) l10n.planMode,
       ].join(' · ');
     }
+    // Flag the risky no-sandbox "full access" preset with an amber icon so it's
+    // noticeable even while the pills are collapsed.
+    final flagFull = !expanded && _mode == PermissionMode.full;
+    final iconColor = flagFull ? Colors.amber.shade800 : fg;
     return Material(
       color: scheme.surfaceContainerHighest,
       borderRadius: BorderRadius.circular(20),
@@ -3467,7 +3475,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(icon, size: 15, color: fg),
+              Icon(icon, size: 15, color: iconColor),
               const SizedBox(width: 5),
               Flexible(
                 child: Text(
