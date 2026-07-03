@@ -252,7 +252,12 @@ fn tunnel_down(handle: &Option<JoinHandle<()>>) -> bool {
 /// equivalent of the spawned `codex` binary plus its health watchdog.
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 async fn run_embedded_supervised(listen_url: String) {
+    // Bounded restart backoff so a persistently-broken embedded codex (bad
+    // state, a bind that never frees) can't hot-loop at ~1 Hz; a run that lasts
+    // a while resets it so a one-off crash still restarts promptly.
+    let mut failures: u32 = 0;
     loop {
+        let started = std::time::Instant::now();
         // Run the in-process app-server as its OWN task and await its handle, so
         // a PANIC in codex's top-level accept future is delivered here as a
         // JoinError instead of unwinding through (and, in a release build,
@@ -282,7 +287,14 @@ async fn run_embedded_supervised(listen_url: String) {
                 tracing::warn!(%listen_url, "embedded codex app-server task ended: {join_err}");
             },
         }
-        tokio::time::sleep(Duration::from_millis(800)).await;
+        // A healthy run (up long enough to have served) clears the backoff so a
+        // transient crash restarts fast; repeated fast failures back off.
+        failures = if started.elapsed() >= Duration::from_secs(30) {
+            0
+        } else {
+            failures.saturating_add(1)
+        };
+        tokio::time::sleep(proxy_restart_backoff(failures)).await;
     }
 }
 
@@ -687,28 +699,25 @@ pub fn serve_start(
     let meta_register =
         Some(spawn_register(connector, tokens, &device, ServiceKind::Meta, &name, meta_local));
 
-    hosts()
-        .lock()
-        .expect("serve hosts poisoned")
-        .insert(name.clone(), LocalServe {
-            device: device.clone(),
-            name: name.clone(),
-            app_key: app_key.clone(),
-            app_local,
-            pid,
-            app_register,
-            watchdog,
-            embedded: embedded_task,
-            log_tail,
-            api_key: api_key.clone(),
-            api_local,
-            api_proxy,
-            api_register,
-            meta_key: meta_key.clone(),
-            meta_local,
-            meta_svc,
-            meta_register,
-        });
+    hosts_locked().insert(name.clone(), LocalServe {
+        device: device.clone(),
+        name: name.clone(),
+        app_key: app_key.clone(),
+        app_local,
+        pid,
+        app_register,
+        watchdog,
+        embedded: embedded_task,
+        log_tail,
+        api_key: api_key.clone(),
+        api_local,
+        api_proxy,
+        api_register,
+        meta_key: meta_key.clone(),
+        meta_local,
+        meta_svc,
+        meta_register,
+    });
 
     Ok(ServeReport {
         device,
@@ -899,12 +908,7 @@ pub fn serve_stop(name: &str) -> Result<()> {
 /// Stop every host (called on app quit so a real quit leaves no orphan codex).
 /// Process exit closes the broker tunnels, so no explicit relay drop is needed.
 pub fn serve_stop_all() {
-    let all: Vec<LocalServe> = hosts()
-        .lock()
-        .expect("serve hosts poisoned")
-        .drain()
-        .map(|(_, ls)| ls)
-        .collect();
+    let all: Vec<LocalServe> = hosts_locked().drain().map(|(_, ls)| ls).collect();
     for ls in all {
         stop_host_tasks(ls);
     }
