@@ -243,12 +243,17 @@ The order below is our current best guess; it is not a contract.
    `serde_json::Value` surface in `pocket-codex-codex::protocol` with
    the upstream `codex-app-server-protocol` types so the Flutter UI
    gets compile-time-checked methods.
-7. **Flutter UI evolution (P1 done).** `apps/flutter` consumes the
-   bridge via `flutter_rust_bridge`. P1 shipped: onboarding (relay+key,
-   `pcx1:` import/export, persisted to `config.toml` 0600), service
-   discovery, API-service subscribe (local OpenAI-compatible endpoint),
-   settings, responsive Material 3 (light/dark). P2 (next): app-server
-   session monitoring (`thread/list`/`read` + live event stream).
+7. **Flutter UI evolution.** `apps/flutter` consumes the bridge via
+   `flutter_rust_bridge`. P1 shipped: onboarding (relay+key, `pcx1:`
+   import/export, persisted to `config.toml` 0600), service discovery,
+   API-service subscribe (local OpenAI-compatible endpoint), settings,
+   responsive Material 3 (light/dark). P2 shipped: app-server remote
+   control (threads, live event stream, approvals, attachments,
+   per-thread config). P3 shipped: chat-first home — `/` resolves a
+   host (last used → locally hosted → first reachable), auto-connects,
+   and opens the latest session with all sessions in the sidebar; the
+   services hub lives on at `/manage`; desktop auto-restores hosting on
+   boot (`ui_state.json`).
 
 When you ship a milestone, update `README.md` (Status table) **and**
 this file's roadmap so the source of truth stays in sync.

@@ -89,7 +89,15 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _resolve();
+    // Deferred so the invalidate isn't a during-build provider write. A fresh
+    // discovery on mount matters after onboarding/sign-in: the provider may
+    // cache a pre-login fetch (or its error), and first impressions shouldn't
+    // wait for the 15s self-heal tick.
+    Future.microtask(() {
+      if (!mounted) return;
+      ref.invalidate(servicesProvider);
+      _resolve();
+    });
     _retryTimer = Timer.periodic(_retryInterval, (_) {
       // Self-heal only the failure states; never disturb a live chat.
       if (mounted && _phase != _Phase.ready && !_resolving) {
