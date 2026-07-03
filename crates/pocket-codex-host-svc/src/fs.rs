@@ -8,7 +8,7 @@
 //! lives inside one. The confinement check ([`within_roots`]) canonicalises
 //! both sides so `..` traversal and symlinks can't escape a root.
 
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -28,33 +28,29 @@ pub struct DirEntry {
     pub is_git_repo: bool,
 }
 
-/// Canonicalise `p`, falling back to the raw path when it does not exist on
-/// disk. Canonicalisation resolves symlinks so they can't escape a root; the
-/// `..` case is handled separately in [`within_roots`] (see there) because a
-/// non-existent traversal path canonicalises to nothing useful.
-fn canonical(p: &Path) -> PathBuf {
-    std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
+/// Canonicalise `p`, or `None` when it does not exist / cannot be resolved.
+fn canonical(p: &Path) -> Option<PathBuf> {
+    std::fs::canonicalize(p).ok()
 }
 
 /// Whether `path` is one of `roots` or lives inside one — the
 /// browse-confinement rule.
 ///
-/// A `..` component is rejected outright: a non-existent traversal path (e.g.
-/// `root/sub/../../outside`) makes `canonicalize` fall back to the raw path
-/// with the `..` unresolved, and a plain `starts_with(root)` then wrongly
-/// matches on the leading `root` prefix (a real hole — reproduced on Linux
-/// where the fallback keeps the literal components). The browser only ever
-/// sends absolute paths straight from a listing, never a `..`, so rejecting
-/// them closes the escape without costing any legitimate path. Existing paths
-/// are then canonicalised so symlinks can't slip out either.
+/// This endpoint only ever lists **existing** directories, so a path that
+/// cannot be canonicalised is rejected outright. That is also what closes the
+/// path-traversal hole: a non-existent `root/sub/../../outside` fails to
+/// canonicalise (instead of falling back to a raw path whose `..` a plain
+/// `starts_with(root)` would miss — a real escape, reproduced on Linux where
+/// the fallback kept the literal components), while an existing traversal path
+/// is fully resolved first, so the `starts_with` check runs against the REAL
+/// target with symlinks and `..` already collapsed.
 pub fn within_roots(path: &Path, roots: &[String]) -> bool {
-    if path.components().any(|c| matches!(c, Component::ParentDir)) {
+    let Some(target) = canonical(path) else {
         return false;
-    }
-    let target = canonical(path);
+    };
     roots.iter().any(|root| {
-        let root = canonical(Path::new(root));
-        target == root || target.starts_with(&root)
+        canonical(Path::new(root))
+            .is_some_and(|root| target == root || target.starts_with(&root))
     })
 }
 
@@ -155,8 +151,25 @@ mod tests {
         let root = dir.path().join("root");
         std::fs::create_dir_all(root.join("sub")).expect("mkdir");
         let roots = vec![root.to_string_lossy().into_owned()];
-        // `root/sub/../../outside` canonicalises out of the root → rejected.
+        // `root/sub/../../outside` (non-existent target) can't canonicalise →
+        // rejected, so it can't slip past the leading-`root` prefix.
         let escape = root.join("sub").join("..").join("..").join("outside");
         assert!(!within_roots(&escape, &roots));
+    }
+
+    #[test]
+    fn confinement_rejects_nonexistent_and_allows_resolved_traversal() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().join("root");
+        std::fs::create_dir_all(root.join("a").join("b")).expect("mkdir");
+        let roots = vec![root.to_string_lossy().into_owned()];
+
+        // A path that doesn't exist is rejected (only existing dirs are listed).
+        assert!(!within_roots(&root.join("missing"), &roots));
+
+        // An EXISTING traversal path that resolves back inside the root is
+        // allowed — canonicalisation collapses the `..` before the check.
+        let resolved = root.join("a").join("b").join("..");
+        assert!(within_roots(&resolved, &roots));
     }
 }

@@ -61,12 +61,18 @@ class _FolderTreePickerState extends ConsumerState<_FolderTreePicker> {
           .metaProjectConfig(widget.serviceKey);
       if (!mounted) return;
       _roots = cfg.projectRoots;
-      // A single root is a needless tap — drop straight into it. Multiple roots
-      // (or none) start at the roots list.
-      if (_roots.length == 1) {
+      // Open where the caller pointed us (the conversation's current folder),
+      // when it sits inside a configured root — build the browse stack down to
+      // it so it opens there and "up" walks back out. Falls through to the
+      // default entry points when there's no usable initial path.
+      if (_openAtInitialPath()) {
+        await _loadDir(_stack.last);
+      } else if (_roots.length == 1) {
+        // A single root is a needless tap — drop straight into it.
         _stack.add(_roots.first);
         await _loadDir(_roots.first);
       } else {
+        // Multiple roots (or none) start at the roots list.
         setState(() {
           _entries = const [];
           _loading = false;
@@ -80,6 +86,36 @@ class _FolderTreePickerState extends ConsumerState<_FolderTreePicker> {
         });
       }
     }
+  }
+
+  /// Seed [_stack] from [widget.initialPath] when it is a configured root or a
+  /// folder inside one, so the browser opens at the conversation's current
+  /// folder. Returns whether it seeded anything.
+  bool _openAtInitialPath() {
+    final start = widget.initialPath?.trim();
+    if (start == null || start.isEmpty) return false;
+    // Which root contains it? Match the root itself or a child (either
+    // separator style, since the host may be Windows or Unix).
+    final root = _roots.where(
+      (r) => start == r || start.startsWith('$r/') || start.startsWith('$r\\'),
+    );
+    if (root.isEmpty) return false;
+    final base = root.first;
+    _stack.add(base);
+    // Push each intermediate folder down to the initial path, rebuilding the
+    // absolute path with the root's own separator so it round-trips as a real
+    // host path.
+    final sep = base.contains('\\') ? '\\' : '/';
+    var cur = base;
+    for (final seg
+        in start
+            .substring(base.length)
+            .split(RegExp(r'[\\/]'))
+            .where((s) => s.isNotEmpty)) {
+      cur = '$cur$sep$seg';
+      _stack.add(cur);
+    }
+    return true;
   }
 
   Future<void> _loadDir(String path) async {

@@ -69,6 +69,49 @@ void main() {
       expect(picked, r'D:\proj\app');
     });
 
+    testWidgets('opens at initialPath when it is inside a root', (t) async {
+      final api = FakeBridgeApi();
+      api.projectConfigs[_svc] = const ProjectConfig(
+        projectRoots: [r'D:\proj'],
+      );
+      api.dirTree[r'D:\proj\app\lib'] = const [
+        HostDirEntry(name: 'src', path: r'D:\proj\app\lib\src'),
+      ];
+      await t.pumpWidget(
+        _host(
+          Builder(
+            builder: (c) => Scaffold(
+              body: Center(
+                child: ElevatedButton(
+                  onPressed: () => showFolderPicker(
+                    c,
+                    serviceKey: _svc,
+                    initialPath: r'D:\proj\app\lib',
+                  ),
+                  child: const Text('open'),
+                ),
+              ),
+            ),
+          ),
+          api,
+        ),
+      );
+      await t.tap(find.text('open'));
+      await t.pumpAndSettle();
+
+      // Opened straight at the initial folder: its child is listed, "use this
+      // folder" is enabled, and the up button walks back out.
+      expect(
+        find.byKey(const Key(r'folder-row-D:\proj\app\lib\src')),
+        findsOneWidget,
+      );
+      final useBtn = t.widget<FilledButton>(
+        find.byKey(const Key('folder-use-btn')),
+      );
+      expect(useBtn.onPressed, isNotNull);
+      expect(find.byKey(const Key('folder-up-btn')), findsOneWidget);
+    });
+
     testWidgets('no configured roots shows the guidance message', (t) async {
       final api = FakeBridgeApi();
       api.projectConfigs[_svc] = const ProjectConfig();
