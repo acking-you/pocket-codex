@@ -1,0 +1,4 @@
+# Keep shell scripts LF-only regardless of a contributor's autocrlf setting —
+# a CRLF shebang (`#!/bin/sh\r`) fails with "bad interpreter" on Linux/macOS,
+# which would break the one-line CLI installer piped to `sh`.
+*.sh text eol=lf

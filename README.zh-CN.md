@@ -117,6 +117,26 @@ pocket-codex/
 
 > 提醒：当前为打地基阶段。CLI 参数、磁盘状态、协议覆盖面与 UI 范围都可能变化。
 
+### 一键安装 CLI
+
+从最新 release 下载 `pocket-codex` 二进制，无需任何工具链。安装脚本会按你的
+系统 + CPU 选择对应构建（Linux 用静态 musl、macOS/Windows 用原生），并放到
+`PATH` 上。
+
+```bash
+# Linux / macOS
+curl -fsSL https://raw.githubusercontent.com/acking-you/pocket-codex/main/scripts/install.sh | sh
+```
+
+```powershell
+# Windows（PowerShell）
+irm https://raw.githubusercontent.com/acking-you/pocket-codex/main/scripts/install.ps1 | iex
+```
+
+可用环境变量覆盖：`POCKET_CODEX_VERSION` 固定某个 tag（如 `v0.1.3`）、
+`POCKET_CODEX_BIN_DIR` 指定安装目录、`POCKET_CODEX_NO_MODIFY_PATH=1` 跳过
+PATH 处理。想用包管理器或从源码构建？见下文。
+
 ### Rust 工作区
 
 ```bash
