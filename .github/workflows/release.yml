@@ -397,11 +397,12 @@ jobs:
   # TWICE on one machine. Under the release profile (after #49 flipped it to
   # `panic = "unwind"`) that double build outgrew the ~7 GB arm64 runner and
   # wedged for 40-85 min, so v0.1.2/v0.1.3 shipped without a macOS desktop app.
-  # Instead build each arch on its OWN native runner, constrained to a single
-  # slice, and ship two downloads (Apple Silicon + Intel): half the work per
-  # machine and no double-compile memory thrash. (If GitHub retires the Intel
-  # `macos-13` image, switch the x64 leg to cross-compile on macos-latest — the
-  # CLI job already cross-builds x86_64-apple-darwin on the arm64 runner.)
+  # Instead build ONE arch per job, constrained to a single slice, and ship two
+  # downloads (Apple Silicon + Intel): half the work per job, no double-compile
+  # memory thrash. Both legs run on macos-latest (Apple Silicon) — GitHub no
+  # longer serves Intel `macos-13` runners (jobs targeting it queue forever), so
+  # x64 is CROSS-built on the arm64 runner, exactly like the CLI job already
+  # cross-builds x86_64-apple-darwin. FLUTTER_XCODE_ARCHS pins each leg's slice.
   app-macos:
     name: App (macOS ${{ matrix.arch }})
     needs: prepare
@@ -411,8 +412,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { arch: arm64, runner: macos-latest, xarch: arm64 } # Apple Silicon (native)
-          - { arch: x64, runner: macos-13, xarch: x86_64 } # Intel (native)
+          # Both on macos-latest (Apple Silicon): arm64 native, x64 cross-built.
+          - { arch: arm64, runner: macos-latest, xarch: arm64, rust: aarch64-apple-darwin }
+          - { arch: x64, runner: macos-latest, xarch: x86_64, rust: x86_64-apple-darwin }
     steps:
       - uses: actions/checkout@v4
         with:
@@ -431,10 +433,11 @@ jobs:
           cache: true
       - uses: dtolnay/rust-toolchain@master
         with:
-          # Native build on each runner, so the host target (aarch64- / x86_64-
-          # apple-darwin) is already installed — no `targets:` needed. When
-          # cross-building x64 on macos-latest, add `targets: x86_64-apple-darwin`.
+          # Install this leg's Rust target: x64 is cross-built on the arm64
+          # runner so it needs x86_64-apple-darwin; for arm64 it's the host
+          # target (a harmless no-op). Use the real triple (aarch64-, not arm64-).
           toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: ${{ matrix.rust }}
       - uses: Swatinem/rust-cache@v2
         with:
           key: app-macos-${{ matrix.arch }}
@@ -448,12 +451,14 @@ jobs:
         working-directory: apps/flutter
         # Constrain Xcode — and the Rust bridge build phase, which reads $ARCHS —
         # to THIS job's single arch via FLUTTER_XCODE_ARCHS (Flutter forwards
-        # FLUTTER_XCODE_* as xcodebuild build settings). So the codex tree
-        # compiles once, not twice. codegen-units=16 + LTO off stay as a
-        # belt-and-braces memory cap on the 7 GB arm64 runner; negligible size
-        # cost for a desktop app, and `panic = "unwind"` runtime is preserved.
+        # FLUTTER_XCODE_* as xcodebuild build settings). ONLY_ACTIVE_ARCH=NO lets
+        # the x64 leg cross-build its (non-active) x86_64 slice on the arm64
+        # runner. So the codex tree compiles once, not twice. codegen-units=16 +
+        # LTO off stay as a belt-and-braces memory cap on the 7 GB runner;
+        # negligible size cost, and `panic = "unwind"` runtime is preserved.
         env:
           FLUTTER_XCODE_ARCHS: ${{ matrix.xarch }}
+          FLUTTER_XCODE_ONLY_ACTIVE_ARCH: "NO"
           CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
           CARGO_PROFILE_RELEASE_LTO: "false"
         run: |
