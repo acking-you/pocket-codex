@@ -183,6 +183,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
+      # cargokit builds the embedded codex with `rustup run stable` (it ignores
+      # rust-toolchain.toml), and codex pins rustc >= 1.95, so make sure the
+      # runner's stable is new enough rather than trusting the image default.
+      - name: Refresh stable toolchain (cargokit compiles the bridge with it)
+        run: rustup update stable
       - uses: Swatinem/rust-cache@v2
         with:
           key: app-windows
@@ -438,6 +443,11 @@ jobs:
           # target (a harmless no-op). Use the real triple (aarch64-, not arm64-).
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: ${{ matrix.rust }}
+      # cargokit builds the embedded codex with `rustup run stable` (it ignores
+      # rust-toolchain.toml), and codex pins rustc >= 1.95, so make sure the
+      # runner's stable is new enough rather than trusting the image default.
+      - name: Refresh stable toolchain (cargokit compiles the bridge with it)
+        run: rustup update stable
       - uses: Swatinem/rust-cache@v2
         with:
           key: app-macos-${{ matrix.arch }}

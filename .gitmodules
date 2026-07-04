@@ -1,6 +1,7 @@
 [submodule "deps/codex"]
 	path = deps/codex
 	url = git@github.com:acking-you/codex.git
+	branch = pocket-codex
 [submodule "deps/pb-mapper"]
 	path = deps/pb-mapper
 	url = git@github.com:acking-you/pb-mapper.git
