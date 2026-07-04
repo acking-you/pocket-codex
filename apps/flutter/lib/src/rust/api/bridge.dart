@@ -65,10 +65,11 @@ Future<void> codexSetPromptVariant({required String variant}) =>
 /// Begin codex's official ChatGPT login on the app-server behind `service_key`
 /// (which must be a connected host). Tries the browser flow, falling back to
 /// device code when codex can't bind its local callback port (`:1455`/`:1457`,
-/// reserved on many Windows machines). codex writes `auth.json` itself — Pocket-
-/// Codex never generates the credential. Poll [`codex_auth_status`] until
-/// `authenticated`. The OAuth HTTP inherits the proxy the host was started with,
-/// so a China-network user hosts with a proxy and login goes through it.
+/// reserved on many Windows machines). codex writes `auth.json` itself —
+/// Pocket- Codex never generates the credential. Poll [`codex_auth_status`]
+/// until `authenticated`. The OAuth HTTP inherits the proxy the host was
+/// started with, so a China-network user hosts with a proxy and login goes
+/// through it.
 Future<CodexLoginStartDto> codexLoginChatgptStart({
   required String serviceKey,
 }) => RustLib.instance.api.crateApiBridgeCodexLoginChatgptStart(
@@ -213,6 +214,22 @@ Future<bool> appProbe({required String serviceKey}) =>
 /// call), then tears it down.
 Future<bool> apiProbe({required String serviceKey}) =>
     RustLib.instance.api.crateApiBridgeApiProbe(serviceKey: serviceKey);
+
+/// Health-check an app-server THIS machine hosts itself, by its loopback
+/// app-listen address (e.g. `127.0.0.1:18080`) — a direct `initialize`
+/// handshake with no relay hop. Unlike a bare port-open check this catches a
+/// wedged / half-open codex (the listener still `accept`s but never answers
+/// RPC), so a locally-hosted server that has silently stopped serving reads
+/// `false` instead of a false "running". Fast because it stays on loopback.
+Future<bool> appProbeLocal({required String localAddr}) =>
+    RustLib.instance.api.crateApiBridgeAppProbeLocal(localAddr: localAddr);
+
+/// Health-check an API proxy THIS machine hosts itself, by its loopback
+/// api-listen address — a direct minimal HTTP request, no relay hop. Lets a
+/// local host's API tunnel read "online" the instant its proxy is up instead
+/// of waiting on a slower transient relay round-trip. Mirrors [`app_probe_local`].
+Future<bool> apiProbeLocal({required String localAddr}) =>
+    RustLib.instance.api.crateApiBridgeApiProbeLocal(localAddr: localAddr);
 
 /// Stream captured `tracing` events for the in-app log viewer: the retained
 /// recent history (oldest first) followed by every new event live, until the

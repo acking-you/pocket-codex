@@ -92,6 +92,30 @@ final apiReachableProvider = FutureProvider.family<bool, String>((
   return ref.watch(bridgeApiProvider).apiProbe(serviceKey);
 });
 
+/// Whether an app-server THIS machine hosts itself actually answers, probed by
+/// its loopback app-listen `host:port` (no relay hop). Unlike a host's bare
+/// port-open `alive` flag this is a real `initialize` handshake, so a wedged /
+/// half-open local codex reads `false` instead of a false "running"; and it is
+/// fast (loopback), so it flips green the instant the backend is up. Keyed by
+/// local address so it re-probes per host. Invalidated on the same cadence as
+/// [`appReachableProvider`].
+final appReachableLocalProvider = FutureProvider.family<bool, String>((
+  ref,
+  localAddr,
+) async {
+  return ref.watch(bridgeApiProvider).appProbeLocal(localAddr);
+});
+
+/// Loopback-direct reachability of an API proxy THIS machine hosts (the API
+/// analogue of [`appReachableLocalProvider`]): a real HTTP probe with no relay
+/// round-trip, so a local host's API tunnel reads "online" immediately.
+final apiReachableLocalProvider = FutureProvider.family<bool, String>((
+  ref,
+  localAddr,
+) async {
+  return ref.watch(bridgeApiProvider).apiProbeLocal(localAddr);
+});
+
 /// Every locally-hosted codex app-server (the app's own `serve` hosts), for the
 /// desktop local-hosting block. Invalidated by the services-screen re-probe
 /// timer + the refresh button, and after start/stop.

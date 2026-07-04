@@ -834,6 +834,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get localHostStarting => 'Starting…';
 
   @override
+  String get localHostUnresponsive => 'Not responding';
+
+  @override
   String get startHosting => 'Start hosting';
 
   @override

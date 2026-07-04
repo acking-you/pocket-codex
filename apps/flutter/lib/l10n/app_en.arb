@@ -325,6 +325,7 @@
   "localHostStopped": "Stopped",
   "localHostRunning": "Hosting",
   "localHostStarting": "Starting…",
+  "localHostUnresponsive": "Not responding",
   "startHosting": "Start hosting",
   "stopHosting": "Stop hosting",
   "localHostPort": "Port",

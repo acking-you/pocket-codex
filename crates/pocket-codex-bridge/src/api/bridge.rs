@@ -686,6 +686,25 @@ pub fn api_probe(service_key: String) -> Result<bool> {
     Ok(app_session::probe_api(service_key, relay))
 }
 
+/// Health-check an app-server THIS machine hosts itself, by its loopback
+/// app-listen address (e.g. `127.0.0.1:18080`) — a direct `initialize`
+/// handshake with no relay hop. Unlike a bare port-open check this catches a
+/// wedged / half-open codex (the listener still `accept`s but never answers
+/// RPC), so a locally-hosted server that has silently stopped serving reads
+/// `false` instead of a false "running". Fast because it stays on loopback.
+pub fn app_probe_local(local_addr: String) -> bool {
+    app_session::probe_endpoint(&local_addr)
+}
+
+/// Health-check an API proxy THIS machine hosts itself, by its loopback
+/// api-listen address — a direct minimal HTTP request, no relay hop. Lets a
+/// local host's API tunnel read "online" the instant its proxy is up instead
+/// of waiting on a slower transient relay round-trip. Mirrors
+/// [`app_probe_local`].
+pub fn api_probe_local(local_addr: String) -> bool {
+    app_session::probe_http_endpoint(&local_addr)
+}
+
 /// One captured runtime log line for the in-app log viewer.
 pub struct LogLineDto {
     /// `TRACE` / `DEBUG` / `INFO` / `WARN` / `ERROR`.

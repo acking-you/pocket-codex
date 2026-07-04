@@ -50,6 +50,8 @@ class _ServicesScreenState extends ConsumerState<ServicesScreen>
       if (mounted) {
         ref.invalidate(appReachableProvider);
         ref.invalidate(apiReachableProvider);
+        ref.invalidate(appReachableLocalProvider);
+        ref.invalidate(apiReachableLocalProvider);
         ref.invalidate(localServeListProvider);
       }
     });
@@ -69,6 +71,8 @@ class _ServicesScreenState extends ConsumerState<ServicesScreen>
     if (state == AppLifecycleState.resumed && mounted) {
       ref.invalidate(appReachableProvider);
       ref.invalidate(apiReachableProvider);
+      ref.invalidate(appReachableLocalProvider);
+      ref.invalidate(apiReachableLocalProvider);
       // Refresh local hosts too (a host's codex/tunnels may have changed while
       // backgrounded) — same as the periodic timer + the refresh button.
       ref.invalidate(localServeListProvider);
@@ -140,6 +144,8 @@ class _ServicesScreenState extends ConsumerState<ServicesScreen>
               ref.invalidate(subscriptionsProvider);
               ref.invalidate(appReachableProvider);
               ref.invalidate(apiReachableProvider);
+              ref.invalidate(appReachableLocalProvider);
+              ref.invalidate(apiReachableLocalProvider);
               ref.invalidate(localServeListProvider);
             },
           ),
@@ -456,6 +462,17 @@ class _ServiceList extends ConsumerWidget {
         h.apiServiceKey: (name: h.name, kind: 'api'),
       },
     };
+    // Loopback listen address of each tunnel THIS machine hosts, keyed by
+    // service key. For our own tunnels we health-check the local proxy directly
+    // (no relay round-trip), so the dot flips green the instant the backend is
+    // up instead of lagging a transient relay subscribe — and reads honestly if
+    // it later wedges. Empty for anyone else's service (probe via the relay).
+    final localAppAddr = <String, String>{
+      for (final h in localHosts) h.appServiceKey: h.appListenAddr,
+    };
+    final localApiAddr = <String, String>{
+      for (final h in localHosts) h.apiServiceKey: h.apiListenAddr,
+    };
     // Live subscription health, keyed by service key (alive/dead). A discovered
     // service is by definition currently registered on the relay → "online".
     final subs = {
@@ -537,43 +554,47 @@ class _ServiceList extends ConsumerWidget {
                 null,
               );
       }
-      return ref
-          .watch(apiReachableProvider(s.key))
-          .when(
-            data: (ok) => ok
-                ? (
-                    StatusChip(
-                      color: online,
-                      label: l10n.statusOnline,
-                      filled: true,
-                    ),
-                    null,
-                  )
-                : (
-                    StatusChip(
-                      color: scheme.error,
-                      label: l10n.statusUnreachable,
-                      filled: true,
-                    ),
-                    l10n.apiUnreachableReason,
-                  ),
-            loading: () => (
-              StatusChip(
-                color: scheme.outline,
-                label: l10n.statusChecking,
-                filled: true,
+      // Our own api tunnel: probe the loopback proxy directly (fast, no relay
+      // hop) so it reads online the instant it is up. Anyone else's: relay probe.
+      final localAddr = localApiAddr[s.key];
+      final probe = localAddr != null
+          ? ref.watch(apiReachableLocalProvider(localAddr))
+          : ref.watch(apiReachableProvider(s.key));
+      return probe.when(
+        data: (ok) => ok
+            ? (
+                StatusChip(
+                  color: online,
+                  label: l10n.statusOnline,
+                  filled: true,
+                ),
+                null,
+              )
+            : (
+                StatusChip(
+                  color: scheme.error,
+                  label: l10n.statusUnreachable,
+                  filled: true,
+                ),
+                l10n.apiUnreachableReason,
               ),
-              null,
-            ),
-            error: (_, _) => (
-              StatusChip(
-                color: scheme.error,
-                label: l10n.statusUnreachable,
-                filled: true,
-              ),
-              l10n.apiUnreachableReason,
-            ),
-          );
+        loading: () => (
+          StatusChip(
+            color: scheme.outline,
+            label: l10n.statusChecking,
+            filled: true,
+          ),
+          null,
+        ),
+        error: (_, _) => (
+          StatusChip(
+            color: scheme.error,
+            label: l10n.statusUnreachable,
+            filled: true,
+          ),
+          l10n.apiUnreachableReason,
+        ),
+      );
     }
 
     Widget apiCard(ServiceEntry s) {
@@ -614,8 +635,12 @@ class _ServiceList extends ConsumerWidget {
       // "Registered on the relay" is NOT "reachable": a pb-register worker can
       // outlive the codex app-server it forwards to, leaving a hollow
       // registration. Probe the real backend so a dead one reads "unreachable"
-      // instead of a false green "online".
-      final reach = ref.watch(appReachableProvider(s.key));
+      // instead of a false green "online". For our OWN host, probe its loopback
+      // address directly (fast, no relay hop) so it reads honestly and promptly.
+      final localAddr = localAppAddr[s.key];
+      final reach = localAddr != null
+          ? ref.watch(appReachableLocalProvider(localAddr))
+          : ref.watch(appReachableProvider(s.key));
       // `reason` is non-null only when unreachable: the backend probe failed even
       // though the relay still lists the registration, so spell out that the dead
       // link is the remote app-server, not the relay.
@@ -1276,11 +1301,46 @@ class _LocalHostCard extends ConsumerWidget {
     final l10n = AppLocalizations.of(context);
     final scheme = Theme.of(context).colorScheme;
     final online = Colors.green.shade600;
-    final codexChip = StatusChip(
-      color: host.alive ? online : scheme.tertiary,
-      label: host.alive ? l10n.localHostRunning : l10n.localHostStarting,
-      filled: true,
-    );
+    // Honest host health. `host.alive` is only port-open (the listener bound),
+    // which stays true even when the embedded codex has wedged / gone half-open
+    // (still accept()ing but never answering RPC) — a false "hosting". So once
+    // the listener is up, the real signal is a loopback `initialize` handshake
+    // (appReachableLocalProvider, no relay hop): answers → 托管中, listening but
+    // silent → 无响应. Before the port is even open it is genuinely starting.
+    final StatusChip codexChip;
+    if (!host.alive) {
+      codexChip = StatusChip(
+        color: scheme.tertiary,
+        label: l10n.localHostStarting,
+        filled: true,
+      );
+    } else {
+      codexChip = ref
+          .watch(appReachableLocalProvider(host.appListenAddr))
+          .when(
+            data: (ok) => ok
+                ? StatusChip(
+                    color: online,
+                    label: l10n.localHostRunning,
+                    filled: true,
+                  )
+                : StatusChip(
+                    color: scheme.error,
+                    label: l10n.localHostUnresponsive,
+                    filled: true,
+                  ),
+            loading: () => StatusChip(
+              color: scheme.tertiary,
+              label: l10n.localHostStarting,
+              filled: true,
+            ),
+            error: (_, _) => StatusChip(
+              color: scheme.error,
+              label: l10n.localHostUnresponsive,
+              filled: true,
+            ),
+          );
+    }
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Material(

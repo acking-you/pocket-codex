@@ -1616,6 +1616,12 @@ abstract class AppLocalizations {
   /// **'Starting…'**
   String get localHostStarting;
 
+  /// No description provided for @localHostUnresponsive.
+  ///
+  /// In en, this message translates to:
+  /// **'Not responding'**
+  String get localHostUnresponsive;
+
   /// No description provided for @startHosting.
   ///
   /// In en, this message translates to:
