@@ -12,9 +12,21 @@ use once_cell::sync::OnceCell;
 use pocket_codex_broker_client::{run_subscribe, SubscribeConfig};
 use pocket_codex_core::service::ServiceId;
 use pocket_codex_pb::{subscribe, SubscribeOptions};
-use tokio::{runtime::Runtime, task::JoinHandle};
+use tokio::{
+    runtime::{Builder, Runtime},
+    task::JoinHandle,
+};
 
 use crate::engine::account;
+
+/// Worker-thread stack size for the runtime the EMBEDDED codex app-server runs
+/// on. codex is a very deep async codebase — its resume/turn futures need far
+/// more than tokio's default 2 MiB worker stack, and codex's own entrypoint
+/// (`deps/codex/codex-rs/arg0`) sets exactly this 16 MiB for the same reason.
+/// A plain `Runtime::new()` (2 MiB) overflows the worker stack when resuming a
+/// session, which is a hard `0xc00000fd` STACK_OVERFLOW that unwinding /
+/// `catch_unwind` cannot recover — it crashes the whole desktop. Match codex.
+const RUNTIME_WORKER_STACK_SIZE: usize = 16 * 1024 * 1024;
 
 static RUNTIME: OnceCell<Runtime> = OnceCell::new();
 static SUPPORT_DIR: OnceCell<PathBuf> = OnceCell::new();
@@ -28,7 +40,16 @@ struct SubEntry {
 /// Initialise the runtime + support dir. Idempotent; safe to call once at boot.
 pub fn init(support_dir: PathBuf) -> Result<()> {
     RUNTIME
-        .set(Runtime::new().map_err(|e| anyhow!("building tokio runtime: {e}"))?)
+        .set(
+            Builder::new_multi_thread()
+                .enable_all()
+                // Give the embedded codex app-server the big worker stack it
+                // needs (see RUNTIME_WORKER_STACK_SIZE); the default overflows on
+                // resume and crashes the whole process.
+                .thread_stack_size(RUNTIME_WORKER_STACK_SIZE)
+                .build()
+                .map_err(|e| anyhow!("building tokio runtime: {e}"))?,
+        )
         .ok();
     SUPPORT_DIR.set(support_dir).ok();
     REGISTRY.set(Mutex::new(HashMap::new())).ok();
