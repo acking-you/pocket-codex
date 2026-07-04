@@ -481,6 +481,9 @@
   "codexSetupProviderSaved": "Provider saved. Restart local hosting to use it.",
   "codexSetupNeedHost": "Start local hosting under Services first, then sign in with ChatGPT.",
   "codexSetupLoginOpened": "Opened the login page in your browser; completion is detected automatically…",
+  "codexSetupDeviceOpened": "Opened the verification page in your browser. Enter the code below there; completion is detected automatically…",
+  "codexSetupDeviceCodeLabel": "Verification code",
+  "codexSetupDeviceReopen": "Reopen verification page",
   "codexSetupLoginSuccess": "Signed in ({method}).",
   "@codexSetupLoginSuccess": {
     "placeholders": { "method": { "type": "String" } }

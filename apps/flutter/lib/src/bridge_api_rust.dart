@@ -267,7 +267,13 @@ class RustBridgeApi implements BridgeApi {
   @override
   Future<CodexLoginStart> codexLoginChatgptStart(String serviceKey) async {
     final s = await frb.codexLoginChatgptStart(serviceKey: serviceKey);
-    return CodexLoginStart(loginId: s.loginId, authUrl: s.authUrl);
+    return CodexLoginStart(
+      mode: s.mode,
+      loginId: s.loginId,
+      authUrl: s.authUrl,
+      verificationUrl: s.verificationUrl,
+      userCode: s.userCode,
+    );
   }
 
   @override

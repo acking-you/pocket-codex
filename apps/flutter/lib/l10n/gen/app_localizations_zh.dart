@@ -1200,6 +1200,15 @@ class AppLocalizationsZh extends AppLocalizations {
   String get codexSetupLoginOpened => '已在浏览器打开登录页,完成后自动检测…';
 
   @override
+  String get codexSetupDeviceOpened => '已在浏览器打开验证页面。请在页面中输入下方验证码,完成后自动检测…';
+
+  @override
+  String get codexSetupDeviceCodeLabel => '验证码';
+
+  @override
+  String get codexSetupDeviceReopen => '重新打开验证页面';
+
+  @override
   String codexSetupLoginSuccess(String method) {
     return '登录成功($method)。';
   }

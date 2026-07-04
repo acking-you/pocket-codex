@@ -149,6 +149,7 @@ class FakeBridgeApi implements BridgeApi {
   @override
   Future<CodexLoginStart> codexLoginChatgptStart(String serviceKey) async =>
       const CodexLoginStart(
+        mode: 'browser',
         loginId: 'fake-login',
         authUrl: 'https://auth.openai.com/fake',
       );

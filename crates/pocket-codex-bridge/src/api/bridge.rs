@@ -199,12 +199,21 @@ pub fn codex_set_prompt_variant(variant: String) -> Result<()> {
     pocket_codex_codex::setup::set_prompt_variant(&variant)
 }
 
-/// A started ChatGPT browser login on the 自带 codex, mirrored for Dart.
+/// A started ChatGPT login on the 自带 codex, mirrored for Dart. `mode` is
+/// `"browser"` (open `auth_url`) or `"device"` (open `verification_url` and
+/// enter `user_code`) — codex falls back to device code when it can't bind its
+/// local OAuth callback port.
 pub struct CodexLoginStartDto {
+    /// `"browser"` or `"device"`.
+    pub mode: String,
     /// Opaque id to pass back to [`codex_login_cancel`].
     pub login_id: String,
-    /// URL the UI opens in a browser to complete the OAuth flow.
-    pub auth_url: String,
+    /// Browser flow: OAuth URL to open. `None` for device flow.
+    pub auth_url: Option<String>,
+    /// Device flow: URL to open. `None` for browser flow.
+    pub verification_url: Option<String>,
+    /// Device flow: one-time code to enter. `None` for browser flow.
+    pub user_code: Option<String>,
 }
 
 /// codex auth status for the app-server behind `service_key`, mirrored for
@@ -217,16 +226,21 @@ pub struct CodexAuthStatusDto {
 }
 
 /// Begin codex's official ChatGPT login on the app-server behind `service_key`
-/// (which must be a connected host). Returns the OAuth URL for the UI to open;
-/// codex runs its own callback server and writes `auth.json` itself — Pocket-
-/// Codex never generates the credential. Poll [`codex_auth_status`] until
-/// `authenticated`. The OAuth HTTP inherits the proxy the host was started
-/// with, so a China-network user hosts with a proxy and login goes through it.
+/// (which must be a connected host). Tries the browser flow, falling back to
+/// device code when codex can't bind its local callback port (`:1455`/`:1457`,
+/// reserved on many Windows machines). codex writes `auth.json` itself —
+/// Pocket- Codex never generates the credential. Poll [`codex_auth_status`]
+/// until `authenticated`. The OAuth HTTP inherits the proxy the host was
+/// started with, so a China-network user hosts with a proxy and login goes
+/// through it.
 pub fn codex_login_chatgpt_start(service_key: String) -> Result<CodexLoginStartDto> {
-    let (login_id, auth_url) = app_session::login_chatgpt_start(&service_key)?;
+    let s = app_session::login_chatgpt_start(&service_key)?;
     Ok(CodexLoginStartDto {
-        login_id,
-        auth_url,
+        mode: s.mode,
+        login_id: s.login_id,
+        auth_url: s.auth_url,
+        verification_url: s.verification_url,
+        user_code: s.user_code,
     })
 }
 

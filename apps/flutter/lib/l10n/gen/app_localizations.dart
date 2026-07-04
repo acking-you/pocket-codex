@@ -2318,6 +2318,24 @@ abstract class AppLocalizations {
   /// **'Opened the login page in your browser; completion is detected automatically…'**
   String get codexSetupLoginOpened;
 
+  /// No description provided for @codexSetupDeviceOpened.
+  ///
+  /// In en, this message translates to:
+  /// **'Opened the verification page in your browser. Enter the code below there; completion is detected automatically…'**
+  String get codexSetupDeviceOpened;
+
+  /// No description provided for @codexSetupDeviceCodeLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Verification code'**
+  String get codexSetupDeviceCodeLabel;
+
+  /// No description provided for @codexSetupDeviceReopen.
+  ///
+  /// In en, this message translates to:
+  /// **'Reopen verification page'**
+  String get codexSetupDeviceReopen;
+
   /// No description provided for @codexSetupLoginSuccess.
   ///
   /// In en, this message translates to:

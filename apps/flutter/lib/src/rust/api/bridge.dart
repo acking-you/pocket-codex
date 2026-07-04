@@ -30,9 +30,9 @@ Future<void> setKey({required String key}) =>
 Future<void> setLocale({required String locale}) =>
     RustLib.instance.api.crateApiBridgeSetLocale(locale: locale);
 
-/// Detect whether the 自带 codex has a usable provider + credentials. Drives the
-/// first-run setup wizard: `needs_setup` is `true` when neither a login nor a
-/// custom provider is configured.
+/// Detect whether the 自带 codex has a usable provider + credentials. Drives
+/// the first-run setup wizard: `needs_setup` is `true` when neither a login nor
+/// a custom provider is configured.
 Future<CodexSetupStatusDto> codexSetupStatus() =>
     RustLib.instance.api.crateApiBridgeCodexSetupStatus();
 
@@ -63,8 +63,9 @@ Future<void> codexSetPromptVariant({required String variant}) =>
     RustLib.instance.api.crateApiBridgeCodexSetPromptVariant(variant: variant);
 
 /// Begin codex's official ChatGPT login on the app-server behind `service_key`
-/// (which must be a connected host). Returns the OAuth URL for the UI to open;
-/// codex runs its own callback server and writes `auth.json` itself — Pocket-
+/// (which must be a connected host). Tries the browser flow, falling back to
+/// device code when codex can't bind its local callback port (`:1455`/`:1457`,
+/// reserved on many Windows machines). codex writes `auth.json` itself — Pocket-
 /// Codex never generates the credential. Poll [`codex_auth_status`] until
 /// `authenticated`. The OAuth HTTP inherits the proxy the host was started with,
 /// so a China-network user hosts with a proxy and login goes through it.
@@ -925,7 +926,8 @@ class AppServeStatusDto {
           metaRegistered == other.metaRegistered;
 }
 
-/// codex auth status for the app-server behind `service_key`, mirrored for Dart.
+/// codex auth status for the app-server behind `service_key`, mirrored for
+/// Dart.
 class CodexAuthStatusDto {
   /// Signed in (a credential is active).
   final bool authenticated;
@@ -947,26 +949,52 @@ class CodexAuthStatusDto {
           method == other.method;
 }
 
-/// A started ChatGPT browser login on the 自带 codex, mirrored for Dart.
+/// A started ChatGPT login on the 自带 codex, mirrored for Dart. `mode` is
+/// `"browser"` (open `auth_url`) or `"device"` (open `verification_url` and
+/// enter `user_code`) — codex falls back to device code when it can't bind its
+/// local OAuth callback port.
 class CodexLoginStartDto {
+  /// `"browser"` or `"device"`.
+  final String mode;
+
   /// Opaque id to pass back to [`codex_login_cancel`].
   final String loginId;
 
-  /// URL the UI opens in a browser to complete the OAuth flow.
-  final String authUrl;
+  /// Browser flow: OAuth URL to open. `None` for device flow.
+  final String? authUrl;
 
-  const CodexLoginStartDto({required this.loginId, required this.authUrl});
+  /// Device flow: URL to open. `None` for browser flow.
+  final String? verificationUrl;
+
+  /// Device flow: one-time code to enter. `None` for browser flow.
+  final String? userCode;
+
+  const CodexLoginStartDto({
+    required this.mode,
+    required this.loginId,
+    this.authUrl,
+    this.verificationUrl,
+    this.userCode,
+  });
 
   @override
-  int get hashCode => loginId.hashCode ^ authUrl.hashCode;
+  int get hashCode =>
+      mode.hashCode ^
+      loginId.hashCode ^
+      authUrl.hashCode ^
+      verificationUrl.hashCode ^
+      userCode.hashCode;
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
       other is CodexLoginStartDto &&
           runtimeType == other.runtimeType &&
+          mode == other.mode &&
           loginId == other.loginId &&
-          authUrl == other.authUrl;
+          authUrl == other.authUrl &&
+          verificationUrl == other.verificationUrl &&
+          userCode == other.userCode;
 }
 
 /// What the 自带 codex has on disk in `CODEX_HOME`, for the onboarding wizard.
@@ -980,7 +1008,8 @@ class CodexSetupStatusDto {
   /// A credential exists (`auth.json` or `CODEX_ACCESS_TOKEN`).
   final bool hasAuth;
 
-  /// A non-OpenAI custom provider is configured (authorizes turns on its own).
+  /// A non-OpenAI custom provider is configured (authorizes turns on its
+  /// own).
   final bool hasCustomProvider;
 
   /// `auth.json`'s `auth_mode` (`apikey` / `chatgpt` / …), when present.

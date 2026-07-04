@@ -1237,6 +1237,16 @@ class AppLocalizationsEn extends AppLocalizations {
       'Opened the login page in your browser; completion is detected automatically…';
 
   @override
+  String get codexSetupDeviceOpened =>
+      'Opened the verification page in your browser. Enter the code below there; completion is detected automatically…';
+
+  @override
+  String get codexSetupDeviceCodeLabel => 'Verification code';
+
+  @override
+  String get codexSetupDeviceReopen => 'Reopen verification page';
+
+  @override
   String codexSetupLoginSuccess(String method) {
     return 'Signed in ($method).';
   }

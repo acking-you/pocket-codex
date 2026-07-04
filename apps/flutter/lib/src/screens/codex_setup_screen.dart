@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
@@ -35,6 +36,10 @@ class _CodexSetupScreenState extends ConsumerState<CodexSetupScreen> {
   bool _loginPolling = false;
   String? _error;
   String? _info;
+  // Device-code login: the one-time code the user enters on the opened page,
+  // and that page's URL (so they can reopen it). Null for the browser flow.
+  String? _deviceCode;
+  String? _deviceUrl;
 
   @override
   void initState() {
@@ -102,6 +107,8 @@ class _CodexSetupScreenState extends ConsumerState<CodexSetupScreen> {
       _busy = true;
       _error = null;
       _info = null;
+      _deviceCode = null;
+      _deviceUrl = null;
     });
     try {
       final hosts = await _api.appServeStatus();
@@ -123,13 +130,22 @@ class _CodexSetupScreenState extends ConsumerState<CodexSetupScreen> {
         await _api.appConnect(key, 0);
       }
       final start = await _api.codexLoginChatgptStart(key);
-      final uri = Uri.parse(start.authUrl);
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
+      final isDevice = start.mode == 'device';
+      // Browser flow opens authUrl; device flow (codex couldn't bind its local
+      // callback port) opens the verification page and shows a code to enter.
+      final url = isDevice ? start.verificationUrl : start.authUrl;
+      if (url != null && url.isNotEmpty) {
+        await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+      }
       if (!mounted) return;
       setState(() {
         _busy = false;
         _loginPolling = true;
-        _info = l10n.codexSetupLoginOpened;
+        _deviceCode = isDevice ? start.userCode : null;
+        _deviceUrl = isDevice ? start.verificationUrl : null;
+        _info = isDevice
+            ? l10n.codexSetupDeviceOpened
+            : l10n.codexSetupLoginOpened;
       });
       await _pollUntilAuthenticated(l10n, key, start.loginId);
     } catch (e) {
@@ -159,6 +175,8 @@ class _CodexSetupScreenState extends ConsumerState<CodexSetupScreen> {
           if (mounted) {
             setState(() {
               _loginPolling = false;
+              _deviceCode = null;
+              _deviceUrl = null;
               _info = l10n.codexSetupLoginSuccess(status.method ?? 'chatgpt');
             });
           }
@@ -269,6 +287,72 @@ class _CodexSetupScreenState extends ConsumerState<CodexSetupScreen> {
                         : l10n.codexSetupLoginButton,
                   ),
                 ),
+                // Device-code flow: show the one-time code to enter on the
+                // opened verification page (browser callback port unavailable).
+                if (_deviceCode != null && _deviceCode!.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.surfaceContainerHighest,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          l10n.codexSetupDeviceCodeLabel,
+                          style: theme.textTheme.labelMedium,
+                        ),
+                        const SizedBox(height: 4),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: SelectableText(
+                                _deviceCode!,
+                                key: const Key('codex-device-code'),
+                                style: theme.textTheme.headlineSmall?.copyWith(
+                                  letterSpacing: 3,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                            IconButton(
+                              key: const Key('codex-device-code-copy'),
+                              tooltip: l10n.accountCopyCode,
+                              icon: const Icon(Icons.copy, size: 20),
+                              onPressed: () async {
+                                final messenger = ScaffoldMessenger.of(context);
+                                await Clipboard.setData(
+                                  ClipboardData(text: _deviceCode!),
+                                );
+                                messenger.showSnackBar(
+                                  SnackBar(
+                                    content: Text(l10n.copied),
+                                    duration: const Duration(seconds: 1),
+                                  ),
+                                );
+                              },
+                            ),
+                          ],
+                        ),
+                        if (_deviceUrl != null && _deviceUrl!.isNotEmpty)
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: TextButton.icon(
+                              onPressed: () => launchUrl(
+                                Uri.parse(_deviceUrl!),
+                                mode: LaunchMode.externalApplication,
+                              ),
+                              icon: const Icon(Icons.open_in_new, size: 16),
+                              label: Text(l10n.codexSetupDeviceReopen),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
 
                 const Divider(height: 40),
 
