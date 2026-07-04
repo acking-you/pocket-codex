@@ -134,6 +134,121 @@ pub fn set_locale(locale: String) -> Result<()> {
     config::save_config(&dir, &cfg)
 }
 
+// ---------------------------------------------------------------------------
+// 自带 codex bootstrap: CODEX_HOME provider setup, ChatGPT login, system prompt
+// ---------------------------------------------------------------------------
+
+/// What the 自带 codex has on disk in `CODEX_HOME`, for the onboarding wizard.
+pub struct CodexSetupStatusDto {
+    /// Resolved `CODEX_HOME` (display path).
+    pub codex_home: String,
+    /// `config.toml` exists.
+    pub has_config: bool,
+    /// A credential exists (`auth.json` or `CODEX_ACCESS_TOKEN`).
+    pub has_auth: bool,
+    /// A non-OpenAI custom provider is configured (authorizes turns on its
+    /// own).
+    pub has_custom_provider: bool,
+    /// `auth.json`'s `auth_mode` (`apikey` / `chatgpt` / …), when present.
+    pub auth_mode: Option<String>,
+    /// Nothing lets codex authenticate yet → show the setup wizard.
+    pub needs_setup: bool,
+    /// Active system-prompt variant (`default` / `non_degraded` / `custom`).
+    pub prompt_variant: String,
+}
+
+/// Detect whether the 自带 codex has a usable provider + credentials. Drives
+/// the first-run setup wizard: `needs_setup` is `true` when neither a login nor
+/// a custom provider is configured.
+pub fn codex_setup_status() -> Result<CodexSetupStatusDto> {
+    let s = pocket_codex_codex::setup::setup_status()?;
+    Ok(CodexSetupStatusDto {
+        codex_home: s.codex_home,
+        has_config: s.has_config,
+        has_auth: s.has_auth,
+        has_custom_provider: s.has_custom_provider,
+        auth_mode: s.auth_mode,
+        needs_setup: s.needs_setup,
+        prompt_variant: s.prompt_variant,
+    })
+}
+
+/// Configure a minimal custom OpenAI-compatible provider (base URL + API key)
+/// for the 自带 codex, writing `$CODEX_HOME/config.toml`. No `codex login` is
+/// needed — the key rides as the provider's bearer token. `model` is optional
+/// (defaults to a sensible model). Takes effect on the next hosting start.
+pub fn codex_setup_provider(
+    base_url: String,
+    api_key: String,
+    model: Option<String>,
+) -> Result<()> {
+    pocket_codex_codex::setup::write_provider_config(&base_url, &api_key, model.as_deref())
+}
+
+/// The active 自带-codex system-prompt variant (`default` / `non_degraded` /
+/// `custom`).
+pub fn codex_prompt_variant() -> Result<String> {
+    Ok(pocket_codex_codex::setup::setup_status()?.prompt_variant)
+}
+
+/// Switch the 自带-codex system prompt. `non_degraded` swaps in the bundled
+/// prompt that drops the commentary / intermediary-update mandates (which can
+/// starve reasoning, see openai/codex#30364); `default` restores codex's
+/// built-in prompt. Takes effect for threads started after the change.
+pub fn codex_set_prompt_variant(variant: String) -> Result<()> {
+    pocket_codex_codex::setup::set_prompt_variant(&variant)
+}
+
+/// A started ChatGPT browser login on the 自带 codex, mirrored for Dart.
+pub struct CodexLoginStartDto {
+    /// Opaque id to pass back to [`codex_login_cancel`].
+    pub login_id: String,
+    /// URL the UI opens in a browser to complete the OAuth flow.
+    pub auth_url: String,
+}
+
+/// codex auth status for the app-server behind `service_key`, mirrored for
+/// Dart.
+pub struct CodexAuthStatusDto {
+    /// Signed in (a credential is active).
+    pub authenticated: bool,
+    /// Method when signed in (`chatgpt` / `apikey` / …).
+    pub method: Option<String>,
+}
+
+/// Begin codex's official ChatGPT login on the app-server behind `service_key`
+/// (which must be a connected host). Returns the OAuth URL for the UI to open;
+/// codex runs its own callback server and writes `auth.json` itself — Pocket-
+/// Codex never generates the credential. Poll [`codex_auth_status`] until
+/// `authenticated`. The OAuth HTTP inherits the proxy the host was started
+/// with, so a China-network user hosts with a proxy and login goes through it.
+pub fn codex_login_chatgpt_start(service_key: String) -> Result<CodexLoginStartDto> {
+    let (login_id, auth_url) = app_session::login_chatgpt_start(&service_key)?;
+    Ok(CodexLoginStartDto {
+        login_id,
+        auth_url,
+    })
+}
+
+/// Poll the codex auth status for the app-server behind `service_key`.
+pub fn codex_auth_status(service_key: String) -> Result<CodexAuthStatusDto> {
+    let (authenticated, method) = app_session::auth_status(&service_key)?;
+    Ok(CodexAuthStatusDto {
+        authenticated,
+        method,
+    })
+}
+
+/// Cancel an in-flight ChatGPT login (from [`codex_login_chatgpt_start`]).
+pub fn codex_login_cancel(service_key: String, login_id: String) -> Result<()> {
+    app_session::login_cancel(&service_key, &login_id)
+}
+
+/// Sign the 自带 codex out (revoke + delete its `auth.json`) on `service_key`.
+pub fn codex_logout(service_key: String) -> Result<()> {
+    app_session::codex_logout(&service_key)
+}
+
 /// Import a `pcx1:` share string: decode, persist relay + key, return relay.
 pub fn import_config(text: String) -> Result<String> {
     let payload = config::decode_pcx1(&text)?;

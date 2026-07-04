@@ -9,11 +9,11 @@ class AppLocalizationsEn extends AppLocalizations {
   AppLocalizationsEn([String locale = 'en']) : super(locale);
 
   @override
-  String get appTitle => 'Pocket-Codex';
+  String get appTitle => 'PocketCodex';
 
   @override
   String get webUnsupported =>
-      'Pocket-Codex needs local network and file access; Web is not supported.\nUse Android / iOS / desktop.';
+      'PocketCodex needs local network and file access; Web is not supported.\nUse Android / iOS / desktop.';
 
   @override
   String get onboardingTitle => 'Connect to a pb-mapper relay';
@@ -784,7 +784,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String takeoverBody(int n) {
-    return 'This session is held open by $n other process(es). Pocket-Codex will try to terminate them, then resume it here. Any unsaved work in those processes will be lost.';
+    return 'This session is held open by $n other process(es). PocketCodex will try to terminate them, then resume it here. Any unsaved work in those processes will be lost.';
   }
 
   @override
@@ -1054,7 +1054,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get homeNoServiceMobileHint =>
-      'Open Pocket-Codex on your computer and start hosting (app-server); this screen will enter the chat automatically.';
+      'Open PocketCodex on your computer and start hosting (app-server); this screen will enter the chat automatically.';
 
   @override
   String get homeNoServiceSelfHostHint =>
@@ -1115,7 +1115,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get removeProjectFolder => 'Remove';
 
   @override
-  String get welcomeTitle => 'Welcome to Pocket-Codex';
+  String get welcomeTitle => 'Welcome to PocketCodex';
 
   @override
   String get welcomeSubtitleDesktop =>
@@ -1123,7 +1123,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get welcomeSubtitleMobile =>
-      'Pocket-Codex remote-controls the Codex running on your computer. Set up hosting there once and you\'re ready.';
+      'PocketCodex remote-controls the Codex running on your computer. Set up hosting there once and you\'re ready.';
 
   @override
   String get welcomeStepHost => 'Start hosting on this computer';
@@ -1147,7 +1147,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get welcomeMobileStep1 =>
-      'Install and open Pocket-Codex on your computer';
+      'Install and open PocketCodex on your computer';
 
   @override
   String get welcomeMobileStep2 => 'Sign in with the same GitHub account';
@@ -1172,4 +1172,90 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get welcomeSkip => 'Skip the guide';
+
+  @override
+  String get codexSetup => 'Configure Codex';
+
+  @override
+  String get codexSetupSettingsSubtitle =>
+      'Provider / official login / non-degraded prompt';
+
+  @override
+  String get codexSetupStepTitle => 'Configure Codex model access';
+
+  @override
+  String get codexSetupStepDesc =>
+      'Fill in a provider (URL + API Key) or sign in with ChatGPT, and optionally switch on the non-degraded system prompt.';
+
+  @override
+  String get codexSetupProviderSection => 'Option 1 · Custom Provider';
+
+  @override
+  String get codexSetupProviderDesc =>
+      'Enter the provider\'s Base URL and API Key; it is written into codex\'s config automatically, with no official login needed.';
+
+  @override
+  String get codexSetupModelLabel => 'Model (optional, default gpt-5.5)';
+
+  @override
+  String get codexSetupSaveProvider => 'Save and use';
+
+  @override
+  String get codexSetupLoginSection => 'Option 2 · Official ChatGPT login';
+
+  @override
+  String get codexSetupLoginDesc =>
+      'Complete OpenAI\'s official login in a browser; codex generates the credential itself (no manual config). On a restricted network, set a proxy when you start local hosting.';
+
+  @override
+  String get codexSetupLoginButton => 'Sign in with ChatGPT';
+
+  @override
+  String get codexSetupLoginWaiting => 'Waiting for the browser login…';
+
+  @override
+  String get codexSetupNonDegradedTitle => 'Use the non-degraded system prompt';
+
+  @override
+  String get codexSetupNonDegradedDesc =>
+      'Removes the commentary / progress-report instructions that interrupt the reasoning chain (openai/codex#30364) so the model spends its budget on reasoning. Applies to new conversations.';
+
+  @override
+  String get codexSetupNeedFields =>
+      'Please fill in both Base URL and API Key.';
+
+  @override
+  String get codexSetupProviderSaved =>
+      'Provider saved. Restart local hosting to use it.';
+
+  @override
+  String get codexSetupNeedHost =>
+      'Start local hosting under Services first, then sign in with ChatGPT.';
+
+  @override
+  String get codexSetupLoginOpened =>
+      'Opened the login page in your browser; completion is detected automatically…';
+
+  @override
+  String codexSetupLoginSuccess(String method) {
+    return 'Signed in ($method).';
+  }
+
+  @override
+  String get codexSetupLoginTimeout => 'Login timed out, please retry.';
+
+  @override
+  String get codexSetupStatusProvider => 'Custom provider configured';
+
+  @override
+  String codexSetupStatusAuth(String method) {
+    return 'Signed in ($method)';
+  }
+
+  @override
+  String get codexSetupStatusNeedSetup =>
+      'Not configured yet — pick a method below.';
+
+  @override
+  String get codexSetupCredentialExists => 'credential present';
 }

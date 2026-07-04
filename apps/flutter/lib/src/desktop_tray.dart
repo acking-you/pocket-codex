@@ -98,7 +98,7 @@ class DesktopTray with TrayListener, WindowListener {
     // appindicator (Linux) has no hover tooltip; setting one is a harmless
     // no-op, but skip it to keep the platform log clean.
     if (!_isLinux) {
-      await trayManager.setToolTip('Pocket-Codex');
+      await trayManager.setToolTip('PocketCodex');
     }
   }
 

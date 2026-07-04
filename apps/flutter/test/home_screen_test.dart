@@ -161,7 +161,7 @@ void main() {
     expect(find.byKey(const Key('home-hero-title')), findsOneWidget);
     expect(find.byKey(const Key('home-start-hosting-btn')), findsNothing);
     expect(
-      find.text('在电脑上打开 Pocket-Codex 并开启托管（app-server），这里就会自动进入对话。'),
+      find.text('在电脑上打开 PocketCodex 并开启托管（app-server），这里就会自动进入对话。'),
       findsOneWidget,
     );
   });

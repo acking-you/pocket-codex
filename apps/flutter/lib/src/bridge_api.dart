@@ -764,6 +764,67 @@ class HostDirEntry {
   final bool isGitRepo;
 }
 
+/// What the 自带 codex has on disk in `CODEX_HOME`, for the setup wizard.
+class CodexSetupStatus {
+  /// Creates a codex setup status.
+  const CodexSetupStatus({
+    required this.codexHome,
+    required this.hasConfig,
+    required this.hasAuth,
+    required this.hasCustomProvider,
+    this.authMode,
+    required this.needsSetup,
+    required this.promptVariant,
+  });
+
+  /// Resolved `CODEX_HOME` (display path).
+  final String codexHome;
+
+  /// `config.toml` exists.
+  final bool hasConfig;
+
+  /// A credential exists (`auth.json` or `CODEX_ACCESS_TOKEN`).
+  final bool hasAuth;
+
+  /// A non-OpenAI custom provider is configured (authorizes turns on its own,
+  /// so no `codex login` is required).
+  final bool hasCustomProvider;
+
+  /// `auth.json`'s `auth_mode` (`apikey` / `chatgpt` / …), when present.
+  final String? authMode;
+
+  /// Nothing lets codex authenticate a model call yet → show the wizard.
+  final bool needsSetup;
+
+  /// Active system-prompt variant (`default` / `non_degraded` / `custom`).
+  final String promptVariant;
+}
+
+/// A started ChatGPT browser login on the 自带 codex: open [authUrl], then poll
+/// [BridgeApi.codexAuthStatus] until authenticated.
+class CodexLoginStart {
+  /// Creates a started codex login.
+  const CodexLoginStart({required this.loginId, required this.authUrl});
+
+  /// Opaque id to pass back to [BridgeApi.codexLoginCancel].
+  final String loginId;
+
+  /// URL the UI opens in a browser to complete the OAuth flow.
+  final String authUrl;
+}
+
+/// codex auth status for one app-server.
+class CodexAuthStatus {
+  /// Creates a codex auth status.
+  const CodexAuthStatus({required this.authenticated, this.method});
+
+  /// Whether a credential is active (login complete / provider key present).
+  final bool authenticated;
+
+  /// Auth method when signed in (`chatgpt` / `apikey` / …).
+  final String? method;
+}
+
 /// The whole engine surface the UI is allowed to touch. One real impl wraps
 /// flutter_rust_bridge; a fake backs widget tests.
 abstract interface class BridgeApi {
@@ -797,6 +858,45 @@ abstract interface class BridgeApi {
   /// Persist the UI locale (BCP-47, e.g. `en`/`zh`). An empty string clears
   /// it, meaning follow the system locale.
   Future<void> setLocale(String locale);
+
+  // --- 自带 codex bootstrap: provider setup, ChatGPT login, system prompt ---
+
+  /// Detect whether the 自带 codex has a usable provider + credentials. Drives
+  /// the first-run setup wizard: `needsSetup` is true when neither a login nor a
+  /// custom provider is configured.
+  Future<CodexSetupStatus> codexSetupStatus();
+
+  /// Configure a minimal custom OpenAI-compatible provider (base URL + API key)
+  /// for the 自带 codex — writes `$CODEX_HOME/config.toml`, no login needed.
+  /// [model] is optional (a sensible default is used when null/blank).
+  Future<void> codexSetupProvider({
+    required String baseUrl,
+    required String apiKey,
+    String? model,
+  });
+
+  /// The active 自带-codex system-prompt variant (`default` / `non_degraded` /
+  /// `custom`).
+  Future<String> codexPromptVariant();
+
+  /// Switch the 自带-codex system prompt. `non_degraded` drops the commentary /
+  /// intermediary-update mandates that can starve reasoning (openai/codex#30364);
+  /// `default` restores codex's built-in prompt.
+  Future<void> codexSetPromptVariant(String variant);
+
+  /// Begin codex's official ChatGPT login on the app-server behind [serviceKey]
+  /// (a connected host). Open the returned URL in a browser; codex writes its
+  /// own `auth.json`. Poll [codexAuthStatus] until authenticated.
+  Future<CodexLoginStart> codexLoginChatgptStart(String serviceKey);
+
+  /// Poll the codex auth status for the app-server behind [serviceKey].
+  Future<CodexAuthStatus> codexAuthStatus(String serviceKey);
+
+  /// Cancel an in-flight ChatGPT login (from [codexLoginChatgptStart]).
+  Future<void> codexLoginCancel(String serviceKey, String loginId);
+
+  /// Sign the 自带 codex out (revoke + delete its `auth.json`) on [serviceKey].
+  Future<void> codexLogout(String serviceKey);
 
   // --- Hosted account (GitHub device-flow login) ---
 

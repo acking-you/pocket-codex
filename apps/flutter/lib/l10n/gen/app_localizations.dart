@@ -101,13 +101,13 @@ abstract class AppLocalizations {
   /// No description provided for @appTitle.
   ///
   /// In en, this message translates to:
-  /// **'Pocket-Codex'**
+  /// **'PocketCodex'**
   String get appTitle;
 
   /// No description provided for @webUnsupported.
   ///
   /// In en, this message translates to:
-  /// **'Pocket-Codex needs local network and file access; Web is not supported.\nUse Android / iOS / desktop.'**
+  /// **'PocketCodex needs local network and file access; Web is not supported.\nUse Android / iOS / desktop.'**
   String get webUnsupported;
 
   /// No description provided for @onboardingTitle.
@@ -1535,7 +1535,7 @@ abstract class AppLocalizations {
   /// No description provided for @takeoverBody.
   ///
   /// In en, this message translates to:
-  /// **'This session is held open by {n} other process(es). Pocket-Codex will try to terminate them, then resume it here. Any unsaved work in those processes will be lost.'**
+  /// **'This session is held open by {n} other process(es). PocketCodex will try to terminate them, then resume it here. Any unsaved work in those processes will be lost.'**
   String takeoverBody(int n);
 
   /// No description provided for @takeoverWillTerminate.
@@ -1997,7 +1997,7 @@ abstract class AppLocalizations {
   /// No description provided for @homeNoServiceMobileHint.
   ///
   /// In en, this message translates to:
-  /// **'Open Pocket-Codex on your computer and start hosting (app-server); this screen will enter the chat automatically.'**
+  /// **'Open PocketCodex on your computer and start hosting (app-server); this screen will enter the chat automatically.'**
   String get homeNoServiceMobileHint;
 
   /// No description provided for @homeNoServiceSelfHostHint.
@@ -2111,7 +2111,7 @@ abstract class AppLocalizations {
   /// No description provided for @welcomeTitle.
   ///
   /// In en, this message translates to:
-  /// **'Welcome to Pocket-Codex'**
+  /// **'Welcome to PocketCodex'**
   String get welcomeTitle;
 
   /// No description provided for @welcomeSubtitleDesktop.
@@ -2123,7 +2123,7 @@ abstract class AppLocalizations {
   /// No description provided for @welcomeSubtitleMobile.
   ///
   /// In en, this message translates to:
-  /// **'Pocket-Codex remote-controls the Codex running on your computer. Set up hosting there once and you\'re ready.'**
+  /// **'PocketCodex remote-controls the Codex running on your computer. Set up hosting there once and you\'re ready.'**
   String get welcomeSubtitleMobile;
 
   /// No description provided for @welcomeStepHost.
@@ -2165,7 +2165,7 @@ abstract class AppLocalizations {
   /// No description provided for @welcomeMobileStep1.
   ///
   /// In en, this message translates to:
-  /// **'Install and open Pocket-Codex on your computer'**
+  /// **'Install and open PocketCodex on your computer'**
   String get welcomeMobileStep1;
 
   /// No description provided for @welcomeMobileStep2.
@@ -2209,6 +2209,150 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Skip the guide'**
   String get welcomeSkip;
+
+  /// No description provided for @codexSetup.
+  ///
+  /// In en, this message translates to:
+  /// **'Configure Codex'**
+  String get codexSetup;
+
+  /// No description provided for @codexSetupSettingsSubtitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Provider / official login / non-degraded prompt'**
+  String get codexSetupSettingsSubtitle;
+
+  /// No description provided for @codexSetupStepTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Configure Codex model access'**
+  String get codexSetupStepTitle;
+
+  /// No description provided for @codexSetupStepDesc.
+  ///
+  /// In en, this message translates to:
+  /// **'Fill in a provider (URL + API Key) or sign in with ChatGPT, and optionally switch on the non-degraded system prompt.'**
+  String get codexSetupStepDesc;
+
+  /// No description provided for @codexSetupProviderSection.
+  ///
+  /// In en, this message translates to:
+  /// **'Option 1 · Custom Provider'**
+  String get codexSetupProviderSection;
+
+  /// No description provided for @codexSetupProviderDesc.
+  ///
+  /// In en, this message translates to:
+  /// **'Enter the provider\'s Base URL and API Key; it is written into codex\'s config automatically, with no official login needed.'**
+  String get codexSetupProviderDesc;
+
+  /// No description provided for @codexSetupModelLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Model (optional, default gpt-5.5)'**
+  String get codexSetupModelLabel;
+
+  /// No description provided for @codexSetupSaveProvider.
+  ///
+  /// In en, this message translates to:
+  /// **'Save and use'**
+  String get codexSetupSaveProvider;
+
+  /// No description provided for @codexSetupLoginSection.
+  ///
+  /// In en, this message translates to:
+  /// **'Option 2 · Official ChatGPT login'**
+  String get codexSetupLoginSection;
+
+  /// No description provided for @codexSetupLoginDesc.
+  ///
+  /// In en, this message translates to:
+  /// **'Complete OpenAI\'s official login in a browser; codex generates the credential itself (no manual config). On a restricted network, set a proxy when you start local hosting.'**
+  String get codexSetupLoginDesc;
+
+  /// No description provided for @codexSetupLoginButton.
+  ///
+  /// In en, this message translates to:
+  /// **'Sign in with ChatGPT'**
+  String get codexSetupLoginButton;
+
+  /// No description provided for @codexSetupLoginWaiting.
+  ///
+  /// In en, this message translates to:
+  /// **'Waiting for the browser login…'**
+  String get codexSetupLoginWaiting;
+
+  /// No description provided for @codexSetupNonDegradedTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Use the non-degraded system prompt'**
+  String get codexSetupNonDegradedTitle;
+
+  /// No description provided for @codexSetupNonDegradedDesc.
+  ///
+  /// In en, this message translates to:
+  /// **'Removes the commentary / progress-report instructions that interrupt the reasoning chain (openai/codex#30364) so the model spends its budget on reasoning. Applies to new conversations.'**
+  String get codexSetupNonDegradedDesc;
+
+  /// No description provided for @codexSetupNeedFields.
+  ///
+  /// In en, this message translates to:
+  /// **'Please fill in both Base URL and API Key.'**
+  String get codexSetupNeedFields;
+
+  /// No description provided for @codexSetupProviderSaved.
+  ///
+  /// In en, this message translates to:
+  /// **'Provider saved. Restart local hosting to use it.'**
+  String get codexSetupProviderSaved;
+
+  /// No description provided for @codexSetupNeedHost.
+  ///
+  /// In en, this message translates to:
+  /// **'Start local hosting under Services first, then sign in with ChatGPT.'**
+  String get codexSetupNeedHost;
+
+  /// No description provided for @codexSetupLoginOpened.
+  ///
+  /// In en, this message translates to:
+  /// **'Opened the login page in your browser; completion is detected automatically…'**
+  String get codexSetupLoginOpened;
+
+  /// No description provided for @codexSetupLoginSuccess.
+  ///
+  /// In en, this message translates to:
+  /// **'Signed in ({method}).'**
+  String codexSetupLoginSuccess(String method);
+
+  /// No description provided for @codexSetupLoginTimeout.
+  ///
+  /// In en, this message translates to:
+  /// **'Login timed out, please retry.'**
+  String get codexSetupLoginTimeout;
+
+  /// No description provided for @codexSetupStatusProvider.
+  ///
+  /// In en, this message translates to:
+  /// **'Custom provider configured'**
+  String get codexSetupStatusProvider;
+
+  /// No description provided for @codexSetupStatusAuth.
+  ///
+  /// In en, this message translates to:
+  /// **'Signed in ({method})'**
+  String codexSetupStatusAuth(String method);
+
+  /// No description provided for @codexSetupStatusNeedSetup.
+  ///
+  /// In en, this message translates to:
+  /// **'Not configured yet — pick a method below.'**
+  String get codexSetupStatusNeedSetup;
+
+  /// No description provided for @codexSetupCredentialExists.
+  ///
+  /// In en, this message translates to:
+  /// **'credential present'**
+  String get codexSetupCredentialExists;
 }
 
 class _AppLocalizationsDelegate

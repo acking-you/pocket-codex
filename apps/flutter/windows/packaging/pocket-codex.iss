@@ -20,9 +20,9 @@
   #define OutDir "dist"
 #endif
 
-#define MyAppName "Pocket-Codex"
+#define MyAppName "PocketCodex"
 #define MyAppExe "pocket_codex.exe"
-#define MyAppPublisher "Pocket-Codex Contributors"
+#define MyAppPublisher "PocketCodex Contributors"
 #define MyAppURL "https://github.com/acking-you/pocket-codex"
 
 [Setup]

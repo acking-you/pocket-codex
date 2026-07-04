@@ -191,6 +191,25 @@ class _WelcomeGuideScreenState extends ConsumerState<WelcomeGuideScreen> {
               )
             : ProjectFoldersEditor(serviceKey: host.appServiceKey),
       ),
+      const SizedBox(height: 12),
+      // Step 3: 配置 codex 的模型访问 (provider / 官方登录) + 非降智 prompt。
+      // 若 CODEX_HOME 缺少凭证或自定义 provider,codex 无法发起模型调用。
+      _stepCard(
+        scheme: scheme,
+        number: 3,
+        done: false,
+        title: l10n.codexSetupStepTitle,
+        description: l10n.codexSetupStepDesc,
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: FilledButton.tonalIcon(
+            key: const Key('welcome-codex-setup-btn'),
+            onPressed: () => context.push('/setup/codex'),
+            icon: const Icon(Icons.tune, size: 18),
+            label: Text(l10n.codexSetup),
+          ),
+        ),
+      ),
     ];
   }
 
