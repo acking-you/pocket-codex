@@ -421,7 +421,13 @@ pub fn probe_account(service_key: String, local_port: u16, support_dir: &std::pa
 /// Open a transient JSON-RPC client over `ws://<local_addr>` and run the
 /// `initialize` handshake, bounded by [`PROBE_TIMEOUT`]; `true` iff it
 /// succeeds.
-fn probe_endpoint(local_addr: &str) -> bool {
+///
+/// `local_addr` is a plain `host:port` this process can reach directly. For a
+/// service THIS machine hosts itself, pass its loopback app-listen address to
+/// health-check the backend with no relay hop — a real handshake, so a wedged
+/// or half-open codex (port still `accept`ing but never answering RPC) reads
+/// `false` where a bare TCP-connect check would falsely read "online".
+pub fn probe_endpoint(local_addr: &str) -> bool {
     let ws_url = format!("ws://{local_addr}");
     let outcome = runtime::runtime().block_on(async {
         let (client, _notify_rx) = tokio::time::timeout(PROBE_TIMEOUT, AppClient::connect(&ws_url))
@@ -476,7 +482,10 @@ pub fn probe_api(service_key: String, relay: String) -> bool {
 /// non-`/v1/responses` path hits the proxy's local 403 fallback (no upstream
 /// model call), so ANY HTTP response proves the proxy is reachable; a
 /// connect/read timeout means the relay registration is hollow.
-fn probe_http_endpoint(local_addr: &str) -> bool {
+///
+/// `local_addr` may be a loopback proxy address this machine hosts itself, to
+/// health-check it directly with no relay hop.
+pub fn probe_http_endpoint(local_addr: &str) -> bool {
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
     runtime::runtime().block_on(async {
         let Ok(Ok(mut stream)) =

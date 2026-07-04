@@ -212,14 +212,22 @@ class _CodexSetupScreenState extends ConsumerState<CodexSetupScreen> {
       await Future<void>.delayed(const Duration(seconds: 2));
       if (!mounted || !_loginPolling) return;
       try {
-        final status = await _api.codexAuthStatus(serviceKey);
-        if (status.authenticated) {
+        // Detect completion two ways, because the app-server's getAuthStatus RPC
+        // caches and can lag behind the auth.json codex just wrote (esp. the
+        // device-code flow): the RPC (authoritative for a REMOTE host) OR the
+        // local auth.json on disk via codexSetupStatus (flips first for a LOCAL
+        // host — this is what "re-enter the screen" was picking up).
+        final rpc = await _api.codexAuthStatus(serviceKey);
+        final disk = await _api.codexSetupStatus();
+        if (rpc.authenticated || disk.hasAuth) {
           if (mounted) {
             setState(() {
               _loginPolling = false;
               _deviceCode = null;
               _deviceUrl = null;
-              _info = l10n.codexSetupLoginSuccess(status.method ?? 'chatgpt');
+              _info = l10n.codexSetupLoginSuccess(
+                rpc.method ?? disk.authMode ?? 'chatgpt',
+              );
             });
           }
           await _loadStatus();

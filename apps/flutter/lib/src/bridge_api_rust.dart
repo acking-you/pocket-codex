@@ -321,6 +321,14 @@ class RustBridgeApi implements BridgeApi {
       frb.apiProbe(serviceKey: serviceKey);
 
   @override
+  Future<bool> appProbeLocal(String localAddr) =>
+      frb.appProbeLocal(localAddr: localAddr);
+
+  @override
+  Future<bool> apiProbeLocal(String localAddr) =>
+      frb.apiProbeLocal(localAddr: localAddr);
+
+  @override
   Stream<AppEvent> appEvents(String serviceKey) => frb
       .appEvents(serviceKey: serviceKey)
       .map(

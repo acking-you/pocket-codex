@@ -816,6 +816,9 @@ class AppLocalizationsZh extends AppLocalizations {
   String get localHostStarting => '启动中…';
 
   @override
+  String get localHostUnresponsive => '无响应';
+
+  @override
   String get startHosting => '开始托管';
 
   @override

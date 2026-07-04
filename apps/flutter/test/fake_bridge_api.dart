@@ -422,6 +422,18 @@ class FakeBridgeApi implements BridgeApi {
   Future<bool> apiProbe(String serviceKey) async =>
       reachable[serviceKey] ?? true;
 
+  /// Seedable reachability for the loopback health checks ([appProbeLocal] /
+  /// [apiProbeLocal]), keyed by the local `host:port` (default: reachable).
+  final Map<String, bool> reachableLocal = {};
+
+  @override
+  Future<bool> appProbeLocal(String localAddr) async =>
+      reachableLocal[localAddr] ?? true;
+
+  @override
+  Future<bool> apiProbeLocal(String localAddr) async =>
+      reachableLocal[localAddr] ?? true;
+
   @override
   Stream<AppEvent> appEvents(String serviceKey) => _appEvents
       .putIfAbsent(serviceKey, StreamController<AppEvent>.broadcast)

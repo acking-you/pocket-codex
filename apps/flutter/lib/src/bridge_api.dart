@@ -1028,6 +1028,19 @@ abstract interface class BridgeApi {
   /// dead-but-registered proxy reads unreachable instead of a false "online".
   Future<bool> apiProbe(String serviceKey);
 
+  /// Health-check an app-server THIS machine hosts itself, by its loopback
+  /// app-listen address (e.g. `127.0.0.1:18080`). A direct `initialize`
+  /// handshake with no relay hop, so — unlike a bare port-open check — a wedged
+  /// or half-open codex (still accepting sockets but never answering RPC) reads
+  /// false instead of a misleading "running". Fast because it stays on loopback.
+  Future<bool> appProbeLocal(String localAddr);
+
+  /// Health-check an API proxy THIS machine hosts itself, by its loopback
+  /// api-listen address — a direct minimal HTTP request, no relay hop, so a
+  /// local host's API tunnel reads "online" the instant its proxy is up rather
+  /// than after a slower transient relay round-trip.
+  Future<bool> apiProbeLocal(String localAddr);
+
   /// Live event stream for [serviceKey] (turn/item notifications).
   Stream<AppEvent> appEvents(String serviceKey);
 
