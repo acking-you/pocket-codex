@@ -46,7 +46,9 @@ crates/
   pocket-codex-cli/        # `pocket-codex` binary entrypoint
   pocket-codex-bridge/     # cdylib consumed by flutter_rust_bridge
 deps/
-  codex/                   # upstream openai/codex (git submodule)
+  codex/                   # acking-you/codex fork, branch `pocket-codex`
+                           # (git submodule) = upstream openai/codex main +
+                           # our adaptations; see §8
   pb-mapper/               # upstream pb-mapper (git submodule)
   kanal/                   # fork pinned to a known-good commit; transitively
                            # required by pb-mapper, redirected via [patch]
@@ -202,19 +204,78 @@ git checkout -- apps/flutter/pubspec.yaml   # restore before committing
 
 ## 8. Working with submodules
 
-`deps/codex` and `deps/pb-mapper` are git submodules. They pin specific
-upstream commits; do **not** edit them in place from this repo.
+`deps/codex` and `deps/pb-mapper` are git submodules pinned to specific
+commits. After pulling this repo, materialise them with:
 
 ```bash
-# After pulling new commits in this repo:
 git submodule update --init --recursive
-
-# To bump a submodule (only when intentional):
-git -C deps/codex fetch
-git -C deps/codex checkout <sha-or-tag>
-git add deps/codex
-git commit -m "deps(codex): bump to <sha-or-tag>"
 ```
+
+### 8.1 `deps/codex` is a fork branch, not vanilla upstream
+
+`deps/codex` tracks the **`pocket-codex` branch** of our fork
+`git@github.com:acking-you/codex.git` (pinned via `branch = pocket-codex`
+in `.gitmodules`). That branch is **upstream `openai/codex` main plus a
+small, self-contained set of pocket-codex adaptations** — it is not a
+vanilla upstream checkout. The adaptations are the *only* first-party
+changes allowed to live inside `deps/codex`, and they exist because the
+desktop app compiles codex **in-process** (the `embedded-codex` feature,
+Windows/macOS), so codex's own child processes run under our GUI host:
+
+- **Windows `CREATE_NO_WINDOW` console suppression.** Every `git` / shell /
+  hook / plugin / PTY child codex spawns gets `creation_flags(0x08000000)`.
+  Without it a console-subsystem child flashes a black terminal window
+  because the host process has no console. Applied at each spawn site and
+  the central git-command helpers.
+- **Embedded PTY `HPCON` → std `RawHandle` cast** so the ConPTY code builds
+  as an in-workspace path dependency.
+
+**Rule: never carry pocket-codex logic in `deps/codex` beyond these
+host-integration shims.** Anything else belongs in the `crates/` above codex.
+
+### 8.2 Periodically merging upstream
+
+The `pocket-codex` branch is long-lived; we bring in upstream by **merging
+`origin/main` into it** (never rebasing — it is shared and pinned). Roughly
+every so often:
+
+```bash
+cd deps/codex
+git fetch origin                       # fork's main mirrors openai/codex main
+git checkout pocket-codex
+git merge origin/main                  # re-apply our shims onto upstream refactors
+# resolve conflicts by TAKING UPSTREAM's new structure, then re-inject the
+# CREATE_NO_WINDOW suppression into the moved/renamed git-command builders.
+git push origin pocket-codex
+```
+
+Then, back in **this** repo, record the new codex + keep the build green:
+
+```bash
+git add deps/codex .gitmodules         # bump the submodule pointer
+```
+
+- **Mirror codex's `[patch]` table.** codex pins forked
+  `tokio-tungstenite` / `tungstenite` (and may add others). Copy the exact
+  `rev`s from `deps/codex/codex-rs/Cargo.toml`'s `[patch]` into the root
+  `Cargo.toml` `[patch]` (both the `crates-io` and the `ssh://…tungstenite`
+  blocks) — our WS client shares those forks.
+- **Regenerate `Cargo.lock`** (`cargo update -w`); the CLI release builds
+  `--locked`.
+- **Compile the embedded path**: on Windows/macOS `cargo check -p
+  pocket_codex_bridge` pulls codex in-process, so it is the real test that
+  the merge + our shims + the patch revs still build. The `embedded-codex`
+  dependency is target-gated to Windows/macOS, so **Linux CI does not compile
+  codex at all** and will not catch codex-integration breakage — check it
+  locally on a desktop OS before opening the PR.
+- **Keep `sqlx` in lock-step with codex's `libsqlite3-sys`.** codex's
+  `codex-state` links the native `sqlite3` at a specific `libsqlite3-sys`
+  version; so does the backend's `sqlx`. Cargo forbids two `sqlite3`-linking
+  crates at *different* versions in one workspace graph, so a codex bump that
+  moves `libsqlite3-sys` breaks the whole workspace resolve. When bumping
+  codex, read `deps/codex/codex-rs/Cargo.toml`'s `libsqlite3-sys` pin and set
+  the root `sqlx` to a version whose bundled `libsqlite3-sys` matches it
+  (codex `0.37` ↔ sqlx `0.9`; codex `0.30`/`0.28` ↔ sqlx `0.8`).
 
 ## 9. Roadmap (rough)
 

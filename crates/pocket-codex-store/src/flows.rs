@@ -59,7 +59,9 @@ impl Store {
     /// refresh tokens (periodic cleanup).
     pub async fn purge_expired(&self, now: i64) -> Result<()> {
         for table in ["device_flows", "web_auth_flows", "web_exchange_codes", "refresh_tokens"] {
-            sqlx::query(&format!("DELETE FROM {table} WHERE expires_at < ?1"))
+            // sqlx 0.9 requires SqlSafeStr; `table` is a hardcoded literal from
+            // the fixed list above (never user input), so asserting is sound.
+            sqlx::query(sqlx::AssertSqlSafe(format!("DELETE FROM {table} WHERE expires_at < ?1")))
                 .bind(now)
                 .execute(&self.pool)
                 .await?;
