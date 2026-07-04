@@ -71,7 +71,7 @@ jobs:
             echo "| Platform | File |"
             echo "|---|---|"
             echo "| Windows | \`…-windows-x64-setup.exe\` (installer) · \`…-windows-x64.zip\` (portable) |"
-            echo "| macOS | \`…-macos.dmg\` |"
+            echo "| macOS | \`…-macos-arm64.dmg\` (Apple Silicon) · \`…-macos-x64.dmg\` (Intel) — also \`.zip\` |"
             echo "| Linux | \`…-linux-x86_64.AppImage\` (portable) · \`…-linux-amd64.deb\` (Debian/Ubuntu) · \`…-linux-x64.zip\` |"
             echo "| Android | \`…-android-arm64-v8a.apk\` (most phones) · armeabi-v7a · x86_64 |"
             echo "| iOS | \`…-ios-unsigned.ipa\` (sideload / development) |"
@@ -391,11 +391,30 @@ jobs:
           body_path: release_notes.md
           files: apps/flutter/dist/*
 
-  # --- App: macOS (DMG + portable zip) ----------------------------------------
+  # --- App: macOS (per-arch DMG + portable zip) -------------------------------
+  # `flutter build macos` defaults to a UNIVERSAL binary (arm64 + x86_64), which
+  # makes the Rust bridge — statically linking the whole codex tree — compile
+  # TWICE on one machine. Under the release profile (after #49 flipped it to
+  # `panic = "unwind"`) that double build outgrew the ~7 GB arm64 runner and
+  # wedged for 40-85 min, so v0.1.2/v0.1.3 shipped without a macOS desktop app.
+  # Instead build ONE arch per job, constrained to a single slice, and ship two
+  # downloads (Apple Silicon + Intel): half the work per job, no double-compile
+  # memory thrash. Both legs run on macos-latest (Apple Silicon) — GitHub no
+  # longer serves Intel `macos-13` runners (jobs targeting it queue forever), so
+  # x64 is CROSS-built on the arm64 runner, exactly like the CLI job already
+  # cross-builds x86_64-apple-darwin. FLUTTER_XCODE_ARCHS pins each leg's slice.
   app-macos:
-    name: App (macOS)
+    name: App (macOS ${{ matrix.arch }})
     needs: prepare
-    runs-on: macos-latest
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Both on macos-latest (Apple Silicon): arm64 native, x64 cross-built.
+          - { arch: arm64, runner: macos-latest, xarch: arm64, rust: aarch64-apple-darwin }
+          - { arch: x64, runner: macos-latest, xarch: x86_64, rust: x86_64-apple-darwin }
     steps:
       - uses: actions/checkout@v4
         with:
@@ -414,31 +433,49 @@ jobs:
           cache: true
       - uses: dtolnay/rust-toolchain@master
         with:
+          # Install this leg's Rust target: x64 is cross-built on the arm64
+          # runner so it needs x86_64-apple-darwin; for arm64 it's the host
+          # target (a harmless no-op). Use the real triple (aarch64-, not arm64-).
           toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: ${{ matrix.rust }}
       - uses: Swatinem/rust-cache@v2
         with:
-          key: app-macos
+          key: app-macos-${{ matrix.arch }}
       - name: Install appdmg
         run: npm install -g appdmg
       - name: Activate desktop manifest (bundle Noto Sans SC)
         shell: bash
         working-directory: apps/flutter
         run: cp pubspec-desktop.yaml pubspec.yaml
-      - name: Build macOS app
+      - name: Build macOS app (${{ matrix.arch }})
         working-directory: apps/flutter
+        # Constrain Xcode — and the Rust bridge build phase, which reads $ARCHS —
+        # to THIS job's single arch via FLUTTER_XCODE_ARCHS (Flutter forwards
+        # FLUTTER_XCODE_* as xcodebuild build settings). ONLY_ACTIVE_ARCH=NO lets
+        # the x64 leg cross-build its (non-active) x86_64 slice on the arm64
+        # runner. So the codex tree compiles once, not twice. codegen-units=16 +
+        # LTO off stay as a belt-and-braces memory cap on the 7 GB runner;
+        # negligible size cost, and `panic = "unwind"` runtime is preserved.
+        env:
+          FLUTTER_XCODE_ARCHS: ${{ matrix.xarch }}
+          FLUTTER_XCODE_ONLY_ACTIVE_ARCH: "NO"
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+          CARGO_PROFILE_RELEASE_LTO: "false"
         run: |
           flutter pub get
           flutter build macos --release
       - name: Package (zip + dmg)
         shell: bash
         working-directory: apps/flutter
+        env:
+          ARCH: ${{ matrix.arch }}
         run: |
           set -euo pipefail
           tag="${GITHUB_REF_NAME//\//-}"
           rel="build/macos/Build/Products/Release"
           mkdir -p dist
           # Portable zip
-          ( cd "$rel" && zip -qry "${OLDPWD}/dist/pocket-codex-app-${tag}-macos.zip" pocket_codex.app )
+          ( cd "$rel" && zip -qry "${OLDPWD}/dist/pocket-codex-app-${tag}-macos-${ARCH}.zip" pocket_codex.app )
           # DMG (headless-friendly via appdmg)
           cat > "$rel/appdmg.json" <<JSON
           {
@@ -450,7 +487,7 @@ jobs:
             ]
           }
           JSON
-          ( cd "$rel" && appdmg appdmg.json "${OLDPWD}/dist/pocket-codex-app-${tag}-macos.dmg" )
+          ( cd "$rel" && appdmg appdmg.json "${OLDPWD}/dist/pocket-codex-app-${tag}-macos-${ARCH}.dmg" )
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}

@@ -133,6 +133,26 @@ pocket-codex/
 > Heads up: this is bootstrap-quality. CLI flags, on-disk state,
 > protocol coverage and UI surface area are all expected to change.
 
+### Install the CLI (one-liner)
+
+Grab the `pocket-codex` binary from the latest release — no toolchain needed.
+The installer picks the build for your OS + CPU (static-musl on Linux, native
+on macOS/Windows) and drops it on your `PATH`.
+
+```bash
+# Linux / macOS
+curl -fsSL https://raw.githubusercontent.com/acking-you/pocket-codex/main/scripts/install.sh | sh
+```
+
+```powershell
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/acking-you/pocket-codex/main/scripts/install.ps1 | iex
+```
+
+Overrides (env vars): `POCKET_CODEX_VERSION` pins a tag (e.g. `v0.1.3`),
+`POCKET_CODEX_BIN_DIR` sets the install dir, `POCKET_CODEX_NO_MODIFY_PATH=1`
+skips the PATH step. Prefer a package or a from-source build? See below.
+
 ### Rust workspace
 
 ```bash
