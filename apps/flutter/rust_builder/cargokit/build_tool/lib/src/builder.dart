@@ -1,6 +1,8 @@
 /// This is copied from Cargokit (which is the official way to use it currently)
 /// Details: https://fzyzcjy.github.io/flutter_rust_bridge/manual/integrate/builtin
 
+import 'dart:io';
+
 import 'package:collection/collection.dart';
 import 'package:logging/logging.dart';
 import 'package:path/path.dart' as path;
@@ -14,6 +16,28 @@ import 'target.dart';
 import 'util.dart';
 
 final _log = Logger('builder');
+
+/// (pocket-codex patch) Reads the `channel` from the nearest `rust-toolchain.toml`
+/// (or `rust-toolchain`), walking up from [startDir], so cargokit builds with the
+/// repo-pinned toolchain that `rustup` auto-installs. Returns null if none found.
+String? _rustToolchainChannel(String startDir) {
+  final channelRe = RegExp(r'channel\s*=\s*"([^"]+)"');
+  var dir = Directory(startDir).absolute;
+  while (true) {
+    for (final name in const ['rust-toolchain.toml', 'rust-toolchain']) {
+      final file = File(path.join(dir.path, name));
+      if (file.existsSync()) {
+        final match = channelRe.firstMatch(file.readAsStringSync());
+        if (match != null) {
+          return match.group(1);
+        }
+      }
+    }
+    final parent = dir.parent;
+    if (parent.path == dir.path) return null; // reached the filesystem root
+    dir = parent;
+  }
+}
 
 enum BuildConfiguration {
   debug,
@@ -125,7 +149,7 @@ class RustBuilder {
     if (rustup.installedTargets(toolchain) == null) {
       rustup.installToolchain(toolchain);
     }
-    if (toolchain == 'nightly') {
+    if (toolchain.startsWith('nightly')) {
       rustup.installRustSrcForNightly();
     }
     if (!rustup.installedTargets(toolchain)!.contains(target.rust)) {
@@ -139,7 +163,22 @@ class RustBuilder {
   CargoBuildOptions? get _buildOptions =>
       environment.crateOptions.cargo[environment.configuration];
 
-  String get _toolchain => _buildOptions?.toolchain.name ?? 'stable';
+  /// The toolchain cargokit builds the crate with. Precedence:
+  ///   1. an explicit `toolchain:` in cargokit_options.yaml, else
+  ///   2. the `channel` pinned in the nearest `rust-toolchain.toml` (walking up
+  ///      from the crate), else
+  ///   3. `stable`.
+  ///
+  /// (pocket-codex patch) Upstream cargokit always runs `rustup run stable`,
+  /// which silently ignores `rust-toolchain.toml` and uses whatever `stable` the
+  /// developer happens to have installed. Our embedded codex pins a minimum
+  /// rustc (`deps/codex/codex-rs/rust-toolchain.toml`), so honouring the repo's
+  /// pinned channel here lets `rustup` auto-install the exact toolchain — a
+  /// one-click `flutter build` — instead of failing on a stale `stable`.
+  String get _toolchain =>
+      _buildOptions?.toolchain.name ??
+      _rustToolchainChannel(environment.manifestDir) ??
+      'stable';
 
   /// Returns the path of directory containing build artifacts.
   Future<String> build() async {
