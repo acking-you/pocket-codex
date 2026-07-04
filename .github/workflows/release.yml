@@ -396,6 +396,14 @@ jobs:
     name: App (macOS)
     needs: prepare
     runs-on: macos-latest
+    # `flutter build macos` produces a UNIVERSAL binary (x86_64 + arm64), so the
+    # Rust bridge — which statically links the whole codex tree — compiles
+    # TWICE. Under the release profile's `codegen-units = 1` + thin LTO, and
+    # after #49 switched the profile to `panic = "unwind"` (bigger codegen +
+    # unwind tables per crate), that double build outgrew the ~7 GB macOS runner
+    # and wedged for 40-85 min (v0.1.2/v0.1.3 macOS assets went missing). Cap the
+    # wall clock so a genuinely stuck build fails fast and can be re-run.
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
         with:
@@ -426,6 +434,16 @@ jobs:
         run: cp pubspec-desktop.yaml pubspec.yaml
       - name: Build macOS app
         working-directory: apps/flutter
+        # Make the universal Rust build fit the runner: `codegen-units = 16`
+        # restores parallel codegen and slashes peak memory per crate (the
+        # `= 1` in the shared release profile serialises it and thrashes swap),
+        # and LTO off drops the memory-heavy whole-program link. Scoped to this
+        # step via env, so the CLI + other platform artifacts keep the tuned
+        # profile; the desktop app only loses a little size/inlining. Runtime
+        # behaviour is unchanged (`panic = "unwind"` is preserved).
+        env:
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+          CARGO_PROFILE_RELEASE_LTO: "false"
         run: |
           flutter pub get
           flutter build macos --release
