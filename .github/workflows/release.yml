@@ -431,8 +431,10 @@ jobs:
           cache: true
       - uses: dtolnay/rust-toolchain@master
         with:
+          # Native build on each runner, so the host target (aarch64- / x86_64-
+          # apple-darwin) is already installed — no `targets:` needed. When
+          # cross-building x64 on macos-latest, add `targets: x86_64-apple-darwin`.
           toolchain: ${{ env.RUST_TOOLCHAIN }}
-          targets: ${{ matrix.xarch }}-apple-darwin
       - uses: Swatinem/rust-cache@v2
         with:
           key: app-macos-${{ matrix.arch }}
