@@ -331,7 +331,7 @@ jobs:
           cp "$appdir/usr/share/icons/hicolor/256x256/apps/pocket-codex.png" "$appdir/pocket-codex.png"
           cat > "$appdir/usr/share/applications/pocket-codex.desktop" <<'DESKTOP'
           [Desktop Entry]
-          Name=Pocket-Codex
+          Name=PocketCodex
           Comment=Remote-control codex sessions from any device
           Exec=pocket_codex
           Icon=pocket-codex
@@ -362,7 +362,7 @@ jobs:
           cp icon/icon_square.png "$deb/usr/share/icons/hicolor/256x256/apps/pocket-codex.png"
           cat > "$deb/usr/share/applications/pocket-codex.desktop" <<'DESKTOP'
           [Desktop Entry]
-          Name=Pocket-Codex
+          Name=PocketCodex
           Comment=Remote-control codex sessions from any device
           Exec=/usr/lib/pocket-codex/pocket_codex
           Icon=pocket-codex

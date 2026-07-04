@@ -549,11 +549,24 @@ pub fn serve_start(
     }
 
     // The API proxy reuses the host's codex login (`CODEX_ACCESS_TOKEN` or
-    // `~/.codex/auth.json`). Fail fast here rather than registering an api tunnel
-    // to a proxy that would immediately exit because the login is missing.
-    runtime::runtime()
-        .block_on(pocket_codex_api_proxy::check_auth())
-        .context("hosting needs a codex login; run `codex login` first")?;
+    // `~/.codex/auth.json`). This used to be a hard gate, but first-run
+    // onboarding must host BEFORE a login exists: either a custom provider (which
+    // authorizes turns on its own) is configured, or the user drives codex's
+    // ChatGPT login over the app-server we're about to start. So a missing login
+    // is non-fatal now — the app-server + meta service host fine and the API
+    // proxy supervisor keeps retrying until a credential appears. The onboarding
+    // UI surfaces the "no credential yet" state via `codex_setup_status`.
+    if let Err(e) = runtime::runtime().block_on(pocket_codex_api_proxy::check_auth()) {
+        if pocket_codex_codex::setup::has_custom_provider() {
+            tracing::info!("no codex login, but a custom provider is configured; hosting proceeds");
+        } else {
+            tracing::warn!(
+                error = %format!("{e:#}"),
+                "hosting without a codex login yet; configure a provider or complete codex login. \
+                 The API proxy will fail upstream until a credential exists."
+            );
+        }
+    }
 
     // Open the (process-global) meta config store before spawning anything, so an
     // unwritable CODEX_HOME surfaces as a hosting error here instead of after a

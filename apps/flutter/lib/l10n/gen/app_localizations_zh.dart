@@ -9,11 +9,11 @@ class AppLocalizationsZh extends AppLocalizations {
   AppLocalizationsZh([String locale = 'zh']) : super(locale);
 
   @override
-  String get appTitle => 'Pocket-Codex';
+  String get appTitle => 'PocketCodex';
 
   @override
   String get webUnsupported =>
-      'Pocket-Codex 需要本地网络与文件访问,暂不支持 Web。\n请使用 Android / iOS / 桌面版。';
+      'PocketCodex 需要本地网络与文件访问,暂不支持 Web。\n请使用 Android / iOS / 桌面版。';
 
   @override
   String get onboardingTitle => '连接到 pb-mapper relay';
@@ -767,7 +767,7 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String takeoverBody(int n) {
-    return '该会话正被另外 $n 个进程占用。Pocket-Codex 将尝试终止它们后在此恢复。这些进程中未保存的工作将会丢失。';
+    return '该会话正被另外 $n 个进程占用。PocketCodex 将尝试终止它们后在此恢复。这些进程中未保存的工作将会丢失。';
   }
 
   @override
@@ -1030,7 +1030,7 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get homeNoServiceMobileHint =>
-      '在电脑上打开 Pocket-Codex 并开启托管（app-server），这里就会自动进入对话。';
+      '在电脑上打开 PocketCodex 并开启托管（app-server），这里就会自动进入对话。';
 
   @override
   String get homeNoServiceSelfHostHint =>
@@ -1088,14 +1088,14 @@ class AppLocalizationsZh extends AppLocalizations {
   String get removeProjectFolder => '移除';
 
   @override
-  String get welcomeTitle => '欢迎使用 Pocket-Codex';
+  String get welcomeTitle => '欢迎使用 PocketCodex';
 
   @override
   String get welcomeSubtitleDesktop => '只差一步：在本机开启托管，手机就能随时随地远程控制这台电脑上的 Codex。';
 
   @override
   String get welcomeSubtitleMobile =>
-      'Pocket-Codex 远程控制运行在你电脑上的 Codex。在电脑上完成一次托管配置即可开始。';
+      'PocketCodex 远程控制运行在你电脑上的 Codex。在电脑上完成一次托管配置即可开始。';
 
   @override
   String get welcomeStepHost => '在本机开启托管';
@@ -1116,7 +1116,7 @@ class AppLocalizationsZh extends AppLocalizations {
   String get welcomeFoldersLocked => '开启托管后即可配置。';
 
   @override
-  String get welcomeMobileStep1 => '在电脑上安装并打开 Pocket-Codex';
+  String get welcomeMobileStep1 => '在电脑上安装并打开 PocketCodex';
 
   @override
   String get welcomeMobileStep2 => '登录同一个 GitHub 账号';
@@ -1140,4 +1140,84 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get welcomeSkip => '跳过引导';
+
+  @override
+  String get codexSetup => '配置 Codex';
+
+  @override
+  String get codexSetupSettingsSubtitle => 'Provider / 官方登录 / 非降智 prompt';
+
+  @override
+  String get codexSetupStepTitle => '配置 Codex 模型访问';
+
+  @override
+  String get codexSetupStepDesc =>
+      '填写 provider(URL + API Key)或用 ChatGPT 官方登录,并可切换「非降智」system prompt。';
+
+  @override
+  String get codexSetupProviderSection => '方式一 · 自定义 Provider';
+
+  @override
+  String get codexSetupProviderDesc =>
+      '填写服务商的 Base URL 和 API Key,自动写入 codex 配置,无需官方登录。';
+
+  @override
+  String get codexSetupModelLabel => '模型(可选,默认 gpt-5.5)';
+
+  @override
+  String get codexSetupSaveProvider => '保存并使用';
+
+  @override
+  String get codexSetupLoginSection => '方式二 · 官方 ChatGPT 登录';
+
+  @override
+  String get codexSetupLoginDesc =>
+      '通过浏览器完成 OpenAI 官方登录,codex 自动生成凭证(无需手工配置)。若在受限网络,请在启动本机托管时设置代理。';
+
+  @override
+  String get codexSetupLoginButton => '使用 ChatGPT 登录';
+
+  @override
+  String get codexSetupLoginWaiting => '等待浏览器完成登录…';
+
+  @override
+  String get codexSetupNonDegradedTitle => '使用非降智 system prompt';
+
+  @override
+  String get codexSetupNonDegradedDesc =>
+      '移除会打断思维链的 commentary / 进度汇报指令(openai/codex#30364),让模型把预算用在推理上。对之后新建的会话生效。';
+
+  @override
+  String get codexSetupNeedFields => '请填写 Base URL 和 API Key。';
+
+  @override
+  String get codexSetupProviderSaved => 'Provider 已保存,重新开始本机托管后即可使用。';
+
+  @override
+  String get codexSetupNeedHost => '请先在「服务」页启动本机托管,再进行官方登录。';
+
+  @override
+  String get codexSetupLoginOpened => '已在浏览器打开登录页,完成后自动检测…';
+
+  @override
+  String codexSetupLoginSuccess(String method) {
+    return '登录成功($method)。';
+  }
+
+  @override
+  String get codexSetupLoginTimeout => '登录超时,请重试。';
+
+  @override
+  String get codexSetupStatusProvider => '已配置自定义 Provider';
+
+  @override
+  String codexSetupStatusAuth(String method) {
+    return '已登录($method)';
+  }
+
+  @override
+  String get codexSetupStatusNeedSetup => '尚未配置:请在下方选择一种方式。';
+
+  @override
+  String get codexSetupCredentialExists => '凭证已存在';
 }

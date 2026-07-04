@@ -77,6 +77,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   int dco_decode_box_autoadd_u_32(dynamic raw);
 
   @protected
+  CodexAuthStatusDto dco_decode_codex_auth_status_dto(dynamic raw);
+
+  @protected
+  CodexLoginStartDto dco_decode_codex_login_start_dto(dynamic raw);
+
+  @protected
+  CodexSetupStatusDto dco_decode_codex_setup_status_dto(dynamic raw);
+
+  @protected
   ConfigView dco_decode_config_view(dynamic raw);
 
   @protected
@@ -271,6 +280,21 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   int sse_decode_box_autoadd_u_32(SseDeserializer deserializer);
+
+  @protected
+  CodexAuthStatusDto sse_decode_codex_auth_status_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  CodexLoginStartDto sse_decode_codex_login_start_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  CodexSetupStatusDto sse_decode_codex_setup_status_dto(
+    SseDeserializer deserializer,
+  );
 
   @protected
   ConfigView sse_decode_config_view(SseDeserializer deserializer);
@@ -513,6 +537,24 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_box_autoadd_u_32(int self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_codex_auth_status_dto(
+    CodexAuthStatusDto self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_codex_login_start_dto(
+    CodexLoginStartDto self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_codex_setup_status_dto(
+    CodexSetupStatusDto self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_config_view(ConfigView self, SseSerializer serializer);

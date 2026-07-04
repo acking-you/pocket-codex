@@ -36,6 +36,14 @@ class _SettingsState extends ConsumerState<SettingsScreen> {
             trailing: const Icon(Icons.language),
             onTap: () => _pickLanguage(api),
           ),
+          ListTile(
+            key: const Key('codex-setup-btn'),
+            leading: const Icon(Icons.tune),
+            title: Text(l10n.codexSetup),
+            subtitle: Text(l10n.codexSetupSettingsSubtitle),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => context.push('/setup/codex'),
+          ),
           const Divider(),
           if (config?.mode == 'account') ...[
             Padding(

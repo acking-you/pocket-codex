@@ -29,6 +29,10 @@ pub mod process;
 /// most-recent-turn state.
 pub mod rollout;
 
+/// Bootstrap `CODEX_HOME` (custom provider / non-degraded prompt) from the
+/// onboarding UI.
+pub mod setup;
+
 /// Detect whether a session's rollout is currently held open by a live
 /// process, and enumerate codex app-server processes.
 pub mod liveness;

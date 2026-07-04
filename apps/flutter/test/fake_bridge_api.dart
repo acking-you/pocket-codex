@@ -91,6 +91,77 @@ class FakeBridgeApi implements BridgeApi {
     locale: locale.isEmpty ? null : locale,
   );
 
+  // --- 自带 codex bootstrap ---
+
+  /// Seedable codex setup status returned by [codexSetupStatus].
+  CodexSetupStatus codexStatus = const CodexSetupStatus(
+    codexHome: '/fake/.codex',
+    hasConfig: false,
+    hasAuth: false,
+    hasCustomProvider: false,
+    needsSetup: true,
+    promptVariant: 'default',
+  );
+
+  /// Records the last provider config written via [codexSetupProvider].
+  ({String baseUrl, String apiKey, String? model})? lastProvider;
+
+  /// Seedable auth status returned by [codexAuthStatus].
+  CodexAuthStatus codexAuth = const CodexAuthStatus(authenticated: false);
+
+  @override
+  Future<CodexSetupStatus> codexSetupStatus() async => codexStatus;
+
+  @override
+  Future<void> codexSetupProvider({
+    required String baseUrl,
+    required String apiKey,
+    String? model,
+  }) async {
+    lastProvider = (baseUrl: baseUrl, apiKey: apiKey, model: model);
+    codexStatus = CodexSetupStatus(
+      codexHome: codexStatus.codexHome,
+      hasConfig: true,
+      hasAuth: codexStatus.hasAuth,
+      hasCustomProvider: true,
+      authMode: codexStatus.authMode,
+      needsSetup: false,
+      promptVariant: codexStatus.promptVariant,
+    );
+  }
+
+  @override
+  Future<String> codexPromptVariant() async => codexStatus.promptVariant;
+
+  @override
+  Future<void> codexSetPromptVariant(String variant) async {
+    codexStatus = CodexSetupStatus(
+      codexHome: codexStatus.codexHome,
+      hasConfig: codexStatus.hasConfig,
+      hasAuth: codexStatus.hasAuth,
+      hasCustomProvider: codexStatus.hasCustomProvider,
+      authMode: codexStatus.authMode,
+      needsSetup: codexStatus.needsSetup,
+      promptVariant: variant,
+    );
+  }
+
+  @override
+  Future<CodexLoginStart> codexLoginChatgptStart(String serviceKey) async =>
+      const CodexLoginStart(
+        loginId: 'fake-login',
+        authUrl: 'https://auth.openai.com/fake',
+      );
+
+  @override
+  Future<CodexAuthStatus> codexAuthStatus(String serviceKey) async => codexAuth;
+
+  @override
+  Future<void> codexLoginCancel(String serviceKey, String loginId) async {}
+
+  @override
+  Future<void> codexLogout(String serviceKey) async {}
+
   // --- Hosted account ---
 
   /// Seedable signed-in user returned by [accountCurrentUser] (null = signed out).

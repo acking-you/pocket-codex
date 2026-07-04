@@ -1180,6 +1180,64 @@ pub fn rate_limits(service_key: &str) -> Result<String> {
     Ok(res.to_string())
 }
 
+/// Start a ChatGPT browser OAuth login on the app-server behind `service_key`.
+/// Returns `(login_id, auth_url)`: the UI opens `auth_url` in a browser, and
+/// codex's own login server (loopback `:1455`) handles the callback and writes
+/// `auth.json` — Pocket-Codex never touches the credential. Poll
+/// [`auth_status`] until authenticated. The OAuth HTTP runs inside the codex
+/// process, so it honours the proxy the host was started with.
+pub fn login_chatgpt_start(service_key: &str) -> Result<(String, String)> {
+    let client = client_for(service_key)?;
+    // v2 params: `{ "type": "chatgpt" }` (streamlined flag omitted → default).
+    let res = runtime::runtime()
+        .block_on(client.request("account/login/start", json!({ "type": "chatgpt" })))?;
+    let login_id = res
+        .get("loginId")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let auth_url = res
+        .get("authUrl")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| anyhow!("account/login/start returned no authUrl"))?
+        .to_string();
+    Ok((login_id, auth_url))
+}
+
+/// The app-server's codex auth status: `(authenticated, method)` where `method`
+/// is `chatgpt` / `apikey` / … when signed in. Polled after
+/// [`login_chatgpt_start`] to learn when the browser flow completed.
+pub fn auth_status(service_key: &str) -> Result<(bool, Option<String>)> {
+    let client = client_for(service_key)?;
+    // GetAuthStatusParams: both fields optional; `{}` reads status without a token.
+    let res = runtime::runtime().block_on(client.request("account/getAuthStatus", json!({})))?;
+    let method = res
+        .get("authMethod")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    Ok((method.is_some(), method))
+}
+
+/// Cancel an in-flight browser login (identified by the `login_id` from
+/// [`login_chatgpt_start`]).
+pub fn login_cancel(service_key: &str, login_id: &str) -> Result<()> {
+    let client = client_for(service_key)?;
+    runtime::runtime()
+        .block_on(client.request("account/login/cancel", json!({ "loginId": login_id })))?;
+    Ok(())
+}
+
+/// Sign the app-server's codex out: revoke the refresh token (best effort) and
+/// delete its `auth.json`.
+pub fn codex_logout(service_key: &str) -> Result<()> {
+    let client = client_for(service_key)?;
+    // `account/logout` takes no params (`Option<()>`, skipped when absent).
+    runtime::runtime().block_on(client.request_no_params("account/logout"))?;
+    Ok(())
+}
+
 /// Unified diff of the repo at `cwd` vs its remote default branch
 /// (`gitDiffToRemote`). Returns the diff text, or an empty string when the cwd
 /// isn't a git repo / there are no changes.

@@ -4,7 +4,7 @@
          request fails with a DNS "No address associated with hostname"). -->
     <uses-permission android:name="android.permission.INTERNET"/>
     <application
-        android:label="pocket_codex"
+        android:label="PocketCodex"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

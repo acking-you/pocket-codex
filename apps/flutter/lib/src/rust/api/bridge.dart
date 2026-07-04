@@ -30,6 +30,67 @@ Future<void> setKey({required String key}) =>
 Future<void> setLocale({required String locale}) =>
     RustLib.instance.api.crateApiBridgeSetLocale(locale: locale);
 
+/// Detect whether the 自带 codex has a usable provider + credentials. Drives the
+/// first-run setup wizard: `needs_setup` is `true` when neither a login nor a
+/// custom provider is configured.
+Future<CodexSetupStatusDto> codexSetupStatus() =>
+    RustLib.instance.api.crateApiBridgeCodexSetupStatus();
+
+/// Configure a minimal custom OpenAI-compatible provider (base URL + API key)
+/// for the 自带 codex, writing `$CODEX_HOME/config.toml`. No `codex login` is
+/// needed — the key rides as the provider's bearer token. `model` is optional
+/// (defaults to a sensible model). Takes effect on the next hosting start.
+Future<void> codexSetupProvider({
+  required String baseUrl,
+  required String apiKey,
+  String? model,
+}) => RustLib.instance.api.crateApiBridgeCodexSetupProvider(
+  baseUrl: baseUrl,
+  apiKey: apiKey,
+  model: model,
+);
+
+/// The active 自带-codex system-prompt variant (`default` / `non_degraded` /
+/// `custom`).
+Future<String> codexPromptVariant() =>
+    RustLib.instance.api.crateApiBridgeCodexPromptVariant();
+
+/// Switch the 自带-codex system prompt. `non_degraded` swaps in the bundled
+/// prompt that drops the commentary / intermediary-update mandates (which can
+/// starve reasoning, see openai/codex#30364); `default` restores codex's
+/// built-in prompt. Takes effect for threads started after the change.
+Future<void> codexSetPromptVariant({required String variant}) =>
+    RustLib.instance.api.crateApiBridgeCodexSetPromptVariant(variant: variant);
+
+/// Begin codex's official ChatGPT login on the app-server behind `service_key`
+/// (which must be a connected host). Returns the OAuth URL for the UI to open;
+/// codex runs its own callback server and writes `auth.json` itself — Pocket-
+/// Codex never generates the credential. Poll [`codex_auth_status`] until
+/// `authenticated`. The OAuth HTTP inherits the proxy the host was started with,
+/// so a China-network user hosts with a proxy and login goes through it.
+Future<CodexLoginStartDto> codexLoginChatgptStart({
+  required String serviceKey,
+}) => RustLib.instance.api.crateApiBridgeCodexLoginChatgptStart(
+  serviceKey: serviceKey,
+);
+
+/// Poll the codex auth status for the app-server behind `service_key`.
+Future<CodexAuthStatusDto> codexAuthStatus({required String serviceKey}) =>
+    RustLib.instance.api.crateApiBridgeCodexAuthStatus(serviceKey: serviceKey);
+
+/// Cancel an in-flight ChatGPT login (from [`codex_login_chatgpt_start`]).
+Future<void> codexLoginCancel({
+  required String serviceKey,
+  required String loginId,
+}) => RustLib.instance.api.crateApiBridgeCodexLoginCancel(
+  serviceKey: serviceKey,
+  loginId: loginId,
+);
+
+/// Sign the 自带 codex out (revoke + delete its `auth.json`) on `service_key`.
+Future<void> codexLogout({required String serviceKey}) =>
+    RustLib.instance.api.crateApiBridgeCodexLogout(serviceKey: serviceKey);
+
 /// Import a `pcx1:` share string: decode, persist relay + key, return relay.
 Future<String> importConfig({required String text}) =>
     RustLib.instance.api.crateApiBridgeImportConfig(text: text);
@@ -864,6 +925,107 @@ class AppServeStatusDto {
           metaRegistered == other.metaRegistered;
 }
 
+/// codex auth status for the app-server behind `service_key`, mirrored for Dart.
+class CodexAuthStatusDto {
+  /// Signed in (a credential is active).
+  final bool authenticated;
+
+  /// Method when signed in (`chatgpt` / `apikey` / …).
+  final String? method;
+
+  const CodexAuthStatusDto({required this.authenticated, this.method});
+
+  @override
+  int get hashCode => authenticated.hashCode ^ method.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is CodexAuthStatusDto &&
+          runtimeType == other.runtimeType &&
+          authenticated == other.authenticated &&
+          method == other.method;
+}
+
+/// A started ChatGPT browser login on the 自带 codex, mirrored for Dart.
+class CodexLoginStartDto {
+  /// Opaque id to pass back to [`codex_login_cancel`].
+  final String loginId;
+
+  /// URL the UI opens in a browser to complete the OAuth flow.
+  final String authUrl;
+
+  const CodexLoginStartDto({required this.loginId, required this.authUrl});
+
+  @override
+  int get hashCode => loginId.hashCode ^ authUrl.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is CodexLoginStartDto &&
+          runtimeType == other.runtimeType &&
+          loginId == other.loginId &&
+          authUrl == other.authUrl;
+}
+
+/// What the 自带 codex has on disk in `CODEX_HOME`, for the onboarding wizard.
+class CodexSetupStatusDto {
+  /// Resolved `CODEX_HOME` (display path).
+  final String codexHome;
+
+  /// `config.toml` exists.
+  final bool hasConfig;
+
+  /// A credential exists (`auth.json` or `CODEX_ACCESS_TOKEN`).
+  final bool hasAuth;
+
+  /// A non-OpenAI custom provider is configured (authorizes turns on its own).
+  final bool hasCustomProvider;
+
+  /// `auth.json`'s `auth_mode` (`apikey` / `chatgpt` / …), when present.
+  final String? authMode;
+
+  /// Nothing lets codex authenticate yet → show the setup wizard.
+  final bool needsSetup;
+
+  /// Active system-prompt variant (`default` / `non_degraded` / `custom`).
+  final String promptVariant;
+
+  const CodexSetupStatusDto({
+    required this.codexHome,
+    required this.hasConfig,
+    required this.hasAuth,
+    required this.hasCustomProvider,
+    this.authMode,
+    required this.needsSetup,
+    required this.promptVariant,
+  });
+
+  @override
+  int get hashCode =>
+      codexHome.hashCode ^
+      hasConfig.hashCode ^
+      hasAuth.hashCode ^
+      hasCustomProvider.hashCode ^
+      authMode.hashCode ^
+      needsSetup.hashCode ^
+      promptVariant.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is CodexSetupStatusDto &&
+          runtimeType == other.runtimeType &&
+          codexHome == other.codexHome &&
+          hasConfig == other.hasConfig &&
+          hasAuth == other.hasAuth &&
+          hasCustomProvider == other.hasCustomProvider &&
+          authMode == other.authMode &&
+          needsSetup == other.needsSetup &&
+          promptVariant == other.promptVariant;
+}
+
 /// View of persisted config for the UI; never exposes the raw key or token.
 class ConfigView {
   /// Configured relay `host:port`, if any.
@@ -1236,7 +1398,8 @@ class ProjectConfigDto {
   /// Absolute host paths configured as project roots.
   final List<String> projectRoots;
 
-  /// Absolute host path new conversations default to (`None` = codex default).
+  /// Absolute host path new conversations default to (`None` = codex
+  /// default).
   final String? defaultProject;
 
   const ProjectConfigDto({required this.projectRoots, this.defaultProject});

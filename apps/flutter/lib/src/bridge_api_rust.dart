@@ -234,6 +234,56 @@ class RustBridgeApi implements BridgeApi {
   @override
   Future<void> setLocale(String locale) => frb.setLocale(locale: locale);
 
+  // --- 自带 codex bootstrap: provider setup, ChatGPT login, system prompt ---
+
+  @override
+  Future<CodexSetupStatus> codexSetupStatus() async {
+    final s = await frb.codexSetupStatus();
+    return CodexSetupStatus(
+      codexHome: s.codexHome,
+      hasConfig: s.hasConfig,
+      hasAuth: s.hasAuth,
+      hasCustomProvider: s.hasCustomProvider,
+      authMode: s.authMode,
+      needsSetup: s.needsSetup,
+      promptVariant: s.promptVariant,
+    );
+  }
+
+  @override
+  Future<void> codexSetupProvider({
+    required String baseUrl,
+    required String apiKey,
+    String? model,
+  }) => frb.codexSetupProvider(baseUrl: baseUrl, apiKey: apiKey, model: model);
+
+  @override
+  Future<String> codexPromptVariant() => frb.codexPromptVariant();
+
+  @override
+  Future<void> codexSetPromptVariant(String variant) =>
+      frb.codexSetPromptVariant(variant: variant);
+
+  @override
+  Future<CodexLoginStart> codexLoginChatgptStart(String serviceKey) async {
+    final s = await frb.codexLoginChatgptStart(serviceKey: serviceKey);
+    return CodexLoginStart(loginId: s.loginId, authUrl: s.authUrl);
+  }
+
+  @override
+  Future<CodexAuthStatus> codexAuthStatus(String serviceKey) async {
+    final s = await frb.codexAuthStatus(serviceKey: serviceKey);
+    return CodexAuthStatus(authenticated: s.authenticated, method: s.method);
+  }
+
+  @override
+  Future<void> codexLoginCancel(String serviceKey, String loginId) =>
+      frb.codexLoginCancel(serviceKey: serviceKey, loginId: loginId);
+
+  @override
+  Future<void> codexLogout(String serviceKey) =>
+      frb.codexLogout(serviceKey: serviceKey);
+
   // --- App-server remote control ---
 
   @override

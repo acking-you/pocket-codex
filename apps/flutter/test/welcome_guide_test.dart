@@ -116,7 +116,7 @@ void main() {
 
     // The three point-to-PC steps + the waiting indicator; no hosting button
     // on a phone.
-    expect(find.text('在电脑上安装并打开 Pocket-Codex'), findsOneWidget);
+    expect(find.text('在电脑上安装并打开 PocketCodex'), findsOneWidget);
     expect(find.text('登录同一个 GitHub 账号'), findsOneWidget);
     expect(find.byKey(const Key('welcome-start-hosting-btn')), findsNothing);
     expect(find.byKey(const Key('welcome-waiting-host')), findsOneWidget);
