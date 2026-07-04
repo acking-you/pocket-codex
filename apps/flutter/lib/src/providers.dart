@@ -101,6 +101,14 @@ final localServeListProvider = FutureProvider<List<AppServeStatus>>((
   return ref.watch(bridgeApiProvider).appServeStatus();
 });
 
+/// The 自带 codex's config/credential status on THIS machine (config.toml /
+/// auth.json / custom provider). The chat uses it to guide the user to the
+/// setup wizard when the local host's codex can't make model calls yet. Refresh
+/// via `ref.invalidate` after the setup wizard changes anything.
+final codexSetupStatusProvider = FutureProvider<CodexSetupStatus>((ref) async {
+  return ref.watch(bridgeApiProvider).codexSetupStatus();
+});
+
 /// Service keys for one of OUR OWN local tunnels the user just deregistered or
 /// stopped, hidden from the service lists optimistically so the entry vanishes
 /// at once. Only such keys go here — they reliably leave the relay — and each is

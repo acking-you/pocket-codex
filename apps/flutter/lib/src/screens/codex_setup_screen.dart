@@ -60,9 +60,51 @@ class _CodexSetupScreenState extends ConsumerState<CodexSetupScreen> {
   Future<void> _loadStatus() async {
     try {
       final s = await _api.codexSetupStatus();
-      if (mounted) setState(() => _status = s);
+      if (mounted) {
+        setState(() => _status = s);
+        // Keep the chat's "codex needs setup" banner/send-guard in sync with
+        // what the wizard just changed (configured a provider, logged in, …).
+        ref.invalidate(codexSetupStatusProvider);
+      }
     } catch (e) {
       if (mounted) setState(() => _error = friendlyError(e));
+    }
+  }
+
+  /// Sign the local codex out on the running host, then refresh.
+  Future<void> _logout(AppLocalizations l10n) async {
+    setState(() {
+      _busy = true;
+      _error = null;
+      _info = null;
+    });
+    try {
+      final hosts = await _api.appServeStatus();
+      final candidates = hosts
+          .where((h) => h.appServiceKey.isNotEmpty)
+          .toList();
+      final host = candidates.isEmpty ? null : candidates.first;
+      if (host == null) {
+        setState(() {
+          _busy = false;
+          _error = l10n.codexSetupNeedHost;
+        });
+        return;
+      }
+      final key = host.appServiceKey;
+      if (!_api.appIsConnected(key)) {
+        await _api.appConnect(key, 0);
+      }
+      await _api.codexLogout(key);
+      await _loadStatus();
+      if (mounted) setState(() => _busy = false);
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _error = friendlyError(e);
+        });
+      }
     }
   }
 
@@ -276,17 +318,45 @@ class _CodexSetupScreenState extends ConsumerState<CodexSetupScreen> {
                   style: theme.textTheme.bodySmall,
                 ),
                 const SizedBox(height: 12),
-                FilledButton.tonal(
-                  key: const Key('codex-login-chatgpt'),
-                  onPressed: (_busy || _loginPolling)
-                      ? null
-                      : () => _startChatgptLogin(l10n),
-                  child: Text(
-                    _loginPolling
-                        ? l10n.codexSetupLoginWaiting
-                        : l10n.codexSetupLoginButton,
+                if (status?.hasAuth == true)
+                  // Signed in → show the state + a sign-out instead of a login
+                  // button (the status card above turns green too).
+                  Row(
+                    children: [
+                      Icon(
+                        Icons.check_circle,
+                        size: 18,
+                        color: theme.colorScheme.primary,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          l10n.codexSetupStatusAuth(
+                            status!.authMode ?? l10n.codexSetupCredentialExists,
+                          ),
+                          key: const Key('codex-login-done'),
+                          style: TextStyle(color: theme.colorScheme.primary),
+                        ),
+                      ),
+                      TextButton(
+                        key: const Key('codex-logout-btn'),
+                        onPressed: _busy ? null : () => _logout(l10n),
+                        child: Text(l10n.accountSignOut),
+                      ),
+                    ],
+                  )
+                else
+                  FilledButton.tonal(
+                    key: const Key('codex-login-chatgpt'),
+                    onPressed: (_busy || _loginPolling)
+                        ? null
+                        : () => _startChatgptLogin(l10n),
+                    child: Text(
+                      _loginPolling
+                          ? l10n.codexSetupLoginWaiting
+                          : l10n.codexSetupLoginButton,
+                    ),
                   ),
-                ),
                 // Device-code flow: show the one-time code to enter on the
                 // opened verification page (browser callback port unavailable).
                 if (_deviceCode != null && _deviceCode!.isNotEmpty) ...[

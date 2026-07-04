@@ -1177,6 +1177,10 @@ class AppLocalizationsEn extends AppLocalizations {
   String get codexSetup => 'Configure Codex';
 
   @override
+  String get codexChatNeedsSetup =>
+      'Model access isn\'t set up yet — configure Codex before chatting.';
+
+  @override
   String get codexSetupSettingsSubtitle =>
       'Provider / official login / non-degraded prompt';
 

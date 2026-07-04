@@ -2216,6 +2216,12 @@ abstract class AppLocalizations {
   /// **'Configure Codex'**
   String get codexSetup;
 
+  /// No description provided for @codexChatNeedsSetup.
+  ///
+  /// In en, this message translates to:
+  /// **'Model access isn\'t set up yet — configure Codex before chatting.'**
+  String get codexChatNeedsSetup;
+
   /// No description provided for @codexSetupSettingsSubtitle.
   ///
   /// In en, this message translates to:

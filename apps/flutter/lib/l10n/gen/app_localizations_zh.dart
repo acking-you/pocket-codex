@@ -1145,6 +1145,9 @@ class AppLocalizationsZh extends AppLocalizations {
   String get codexSetup => '配置 Codex';
 
   @override
+  String get codexChatNeedsSetup => '模型访问尚未配置 —— 请先完成 Codex 认证再对话。';
+
+  @override
   String get codexSetupSettingsSubtitle => 'Provider / 官方登录 / 非降智 prompt';
 
   @override

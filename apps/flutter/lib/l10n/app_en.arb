@@ -464,6 +464,7 @@
   "welcomeEnterChat": "Enter the chat",
   "welcomeSkip": "Skip the guide",
   "codexSetup": "Configure Codex",
+  "codexChatNeedsSetup": "Model access isn't set up yet — configure Codex before chatting.",
   "codexSetupSettingsSubtitle": "Provider / official login / non-degraded prompt",
   "codexSetupStepTitle": "Configure Codex model access",
   "codexSetupStepDesc": "Fill in a provider (URL + API Key) or sign in with ChatGPT, and optionally switch on the non-degraded system prompt.",

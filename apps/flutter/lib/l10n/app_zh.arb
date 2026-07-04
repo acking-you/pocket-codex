@@ -407,6 +407,7 @@
   "welcomeEnterChat": "进入聊天",
   "welcomeSkip": "跳过引导",
   "codexSetup": "配置 Codex",
+  "codexChatNeedsSetup": "模型访问尚未配置 —— 请先完成 Codex 认证再对话。",
   "codexSetupSettingsSubtitle": "Provider / 官方登录 / 非降智 prompt",
   "codexSetupStepTitle": "配置 Codex 模型访问",
   "codexSetupStepDesc": "填写 provider(URL + API Key)或用 ChatGPT 官方登录,并可切换「非降智」system prompt。",
