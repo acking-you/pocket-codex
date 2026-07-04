@@ -5,12 +5,15 @@
 #   curl -fsSL https://raw.githubusercontent.com/acking-you/pocket-codex/main/scripts/install.sh | sh
 #
 # Downloads the `pocket-codex` binary from the latest GitHub release, matching
-# your OS + CPU, and installs it to a bin dir on your PATH.
+# your OS + CPU, installs it to a bin dir, and makes sure that dir is on your
+# PATH so `pocket-codex` just works in new shells. If a `pocket-codex` is
+# already installed it is updated in place (the old and new versions are
+# printed).
 #
 # Environment overrides:
-#   POCKET_CODEX_VERSION       pin a release tag (e.g. v0.1.3); default: latest
-#   POCKET_CODEX_BIN_DIR       install dir; default: $HOME/.local/bin
-#   POCKET_CODEX_NO_MODIFY_PATH set to 1 to skip the PATH hint (still installs)
+#   POCKET_CODEX_VERSION        pin a release tag (e.g. v0.1.3); default: latest
+#   POCKET_CODEX_BIN_DIR        install dir; default: $HOME/.local/bin
+#   POCKET_CODEX_NO_MODIFY_PATH set to 1 to install but not touch any profile
 #
 # POSIX sh; no bashisms. Depends only on: curl or wget, tar, uname, mkdir, mv.
 set -eu
@@ -61,9 +64,8 @@ esac
 # The release asset is `pocket-codex-cli-<tag>-<target>.tar.gz`. We match on the
 # full target triple so a Linux target can't collide with the Windows one.
 if [ -n "${POCKET_CODEX_VERSION:-}" ]; then
-  ver="$POCKET_CODEX_VERSION"
-  url="https://github.com/${REPO}/releases/download/${ver}/pocket-codex-cli-${ver}-${target}.tar.gz"
-  info "installing pinned $ver for $target"
+  tag="$POCKET_CODEX_VERSION"
+  url="https://github.com/${REPO}/releases/download/${tag}/pocket-codex-cli-${tag}-${target}.tar.gz"
 else
   info "resolving the latest release for $target"
   # Parse the release JSON without jq: pick the matching browser_download_url.
@@ -76,6 +78,17 @@ else
       cut -d '"' -f 4
   )"
   [ -n "$url" ] || err "could not find a CLI asset for $target in the latest release."
+  # The tag is the path segment after /releases/download/ (for logging).
+  tag="$(printf '%s\n' "$url" | sed -n 's#.*/releases/download/\([^/]*\)/.*#\1#p')"
+fi
+
+# --- install vs update: report the current version, if any ------------------
+existing="$(command -v "$BIN" 2>/dev/null || true)"
+if [ -n "$existing" ]; then
+  cur="$("$existing" --version 2>/dev/null | awk 'NR==1{print $NF}')"
+  info "found $BIN ${cur:-(unknown version)} at $existing — updating to ${tag}"
+else
+  info "installing $BIN ${tag}"
 fi
 
 # --- download + unpack ------------------------------------------------------
@@ -93,23 +106,58 @@ src="$(find "$tmp" -type f -name "$BIN" | head -n 1)"
 chmod +x "$src"
 
 # --- install ----------------------------------------------------------------
-bindir="${POCKET_CODEX_BIN_DIR:-$HOME/.local/bin}"
+# When updating an install on the PATH, replace THAT copy so the user keeps
+# using the same location; otherwise use the default (or overridden) bin dir.
+if [ -n "${POCKET_CODEX_BIN_DIR:-}" ]; then
+  bindir="$POCKET_CODEX_BIN_DIR"
+elif [ -n "$existing" ]; then
+  bindir="$(dirname "$existing")"
+else
+  bindir="$HOME/.local/bin"
+fi
 mkdir -p "$bindir" || err "could not create install dir: $bindir"
 mv -f "$src" "$bindir/$BIN" || err "could not write to $bindir (try POCKET_CODEX_BIN_DIR=/some/writable/dir)."
 
-info "installed $BIN → $bindir/$BIN"
-"$bindir/$BIN" version 2>/dev/null || warn "installed, but '$BIN version' did not run cleanly."
+newver="$("$bindir/$BIN" --version 2>/dev/null | awk 'NR==1{print $NF}')"
+info "installed $BIN ${newver:-$tag} → $bindir/$BIN"
 
-# --- PATH hint --------------------------------------------------------------
-if [ "${POCKET_CODEX_NO_MODIFY_PATH:-0}" != "1" ]; then
-  case ":$PATH:" in
-    *":$bindir:"*) : ;; # already on PATH
+# --- make sure the bin dir is on PATH (persist to the shell profile) --------
+add_to_path() {
+  dir="$1"
+  case ":$PATH:" in *":$dir:"*) return 0 ;; esac # already on PATH
+  [ "${POCKET_CODEX_NO_MODIFY_PATH:-0}" = "1" ] && {
+    warn "$dir is not on PATH (POCKET_CODEX_NO_MODIFY_PATH=1 — not changing any profile)."
+    printf '  Add it yourself:  export PATH="%s:$PATH"\n' "$dir"
+    return 0
+  }
+  case "$(basename "${SHELL:-/bin/sh}")" in
+    fish)
+      profile="$HOME/.config/fish/config.fish"
+      line="fish_add_path $dir"
+      ;;
+    zsh)
+      profile="${ZDOTDIR:-$HOME}/.zshrc"
+      line="export PATH=\"$dir:\$PATH\""
+      ;;
+    bash)
+      profile="$HOME/.bashrc"
+      line="export PATH=\"$dir:\$PATH\""
+      ;;
     *)
-      warn "$bindir is not on your PATH."
-      printf '  Add this line to your shell profile (~/.bashrc, ~/.zshrc, ~/.profile):\n'
-      printf '    export PATH="%s:$PATH"\n' "$bindir"
+      profile="$HOME/.profile"
+      line="export PATH=\"$dir:\$PATH\""
       ;;
   esac
-fi
+  mkdir -p "$(dirname "$profile")"
+  if [ -f "$profile" ] && grep -Fq "$dir" "$profile" 2>/dev/null; then
+    : # already referenced — don't duplicate
+  else
+    printf '\n# added by the pocket-codex installer\n%s\n' "$line" >>"$profile"
+    info "added $dir to your PATH in $profile"
+  fi
+  warn "start a new terminal, or run this to use it right now:"
+  printf '    export PATH="%s:$PATH"\n' "$dir"
+}
+add_to_path "$bindir"
 
 info "done. Run '$BIN --help' to get started."

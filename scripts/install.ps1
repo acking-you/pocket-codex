@@ -36,12 +36,11 @@ if ($archEnv -match 'ARM64') {
 }
 $target = 'x86_64-pc-windows-msvc'
 
-# --- resolve the download URL ----------------------------------------------
+# --- resolve the download URL + tag ----------------------------------------
 $headers = @{ 'User-Agent' = 'pocket-codex-install' }
 if ($env:POCKET_CODEX_VERSION) {
-  $ver = $env:POCKET_CODEX_VERSION
-  $url = "https://github.com/$Repo/releases/download/$ver/pocket-codex-cli-$ver-$target.zip"
-  Info "installing pinned $ver for $target"
+  $tag = $env:POCKET_CODEX_VERSION
+  $url = "https://github.com/$Repo/releases/download/$tag/pocket-codex-cli-$tag-$target.zip"
 }
 else {
   Info "resolving the latest release for $target"
@@ -49,6 +48,18 @@ else {
   $asset = $rel.assets | Where-Object { $_.name -like "pocket-codex-cli-*-$target.zip" } | Select-Object -First 1
   if (-not $asset) { throw "could not find a CLI asset for $target in the latest release." }
   $url = $asset.browser_download_url
+  $tag = $rel.tag_name
+}
+
+# --- install vs update: report the current version, if any -----------------
+$existing = Get-Command $Bin -ErrorAction SilentlyContinue
+if ($existing) {
+  $cur = (& $existing.Source --version 2>$null | Select-Object -First 1)
+  $curVer = if ($cur) { ($cur -split '\s+')[-1] } else { '(unknown version)' }
+  Info "found $Bin $curVer at $($existing.Source) — updating to $tag"
+}
+else {
+  Info "installing $Bin $tag"
 }
 
 # --- download + unpack ------------------------------------------------------
@@ -65,14 +76,19 @@ try {
   if (-not $exe) { throw "the archive did not contain a '$Bin.exe' binary." }
 
   # --- install --------------------------------------------------------------
-  $binDir = if ($env:POCKET_CODEX_BIN_DIR) { $env:POCKET_CODEX_BIN_DIR } `
+  # When updating an existing install (and no explicit dir), replace THAT copy
+  # so the user keeps the same location; otherwise the default programs dir.
+  $binDir =
+    if ($env:POCKET_CODEX_BIN_DIR) { $env:POCKET_CODEX_BIN_DIR }
+    elseif ($existing) { Split-Path -Parent $existing.Source }
     else { Join-Path $env:LOCALAPPDATA 'Programs\pocket-codex' }
   New-Item -ItemType Directory -Path $binDir -Force | Out-Null
-  Copy-Item -Path $exe.FullName -Destination (Join-Path $binDir "$Bin.exe") -Force
-  Info "installed $Bin -> $binDir\$Bin.exe"
+  $dest = Join-Path $binDir "$Bin.exe"
+  Copy-Item -Path $exe.FullName -Destination $dest -Force
 
-  & (Join-Path $binDir "$Bin.exe") version 2>$null
-  if ($LASTEXITCODE -ne 0) { Warn "installed, but '$Bin version' did not run cleanly." }
+  $newVer = (& $dest --version 2>$null | Select-Object -First 1)
+  $newVer = if ($newVer) { ($newVer -split '\s+')[-1] } else { $tag }
+  Info "installed $Bin $newVer -> $dest"
 
   # --- PATH -----------------------------------------------------------------
   if ($env:POCKET_CODEX_NO_MODIFY_PATH -ne '1') {
