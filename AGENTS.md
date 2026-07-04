@@ -276,6 +276,13 @@ git add deps/codex .gitmodules         # bump the submodule pointer
   codex, read `deps/codex/codex-rs/Cargo.toml`'s `libsqlite3-sys` pin and set
   the root `sqlx` to a version whose bundled `libsqlite3-sys` matches it
   (codex `0.37` ↔ sqlx `0.9`; codex `0.30`/`0.28` ↔ sqlx `0.8`).
+- **Watch codex's rustc pin.** codex pins its own toolchain in
+  `deps/codex/codex-rs/rust-toolchain.toml` (e.g. `1.95.0`). The desktop app
+  compiles codex through cargokit, which runs `rustup run stable` and ignores
+  our root `rust-toolchain.toml` nightly pin. So when codex raises its floor
+  above your installed `stable`, `flutter build windows/macos` fails with
+  "rustc X is not supported by the following packages" — fix with
+  `rustup update stable` (the release Windows/macOS app jobs do this too).
 
 ## 9. Roadmap (rough)
 
