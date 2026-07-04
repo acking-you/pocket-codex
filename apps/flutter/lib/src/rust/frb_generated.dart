@@ -2833,11 +2833,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   CodexLoginStartDto dco_decode_codex_login_start_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 2)
-      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    if (arr.length != 5)
+      throw Exception('unexpected arr length: expect 5 but see ${arr.length}');
     return CodexLoginStartDto(
-      loginId: dco_decode_String(arr[0]),
-      authUrl: dco_decode_String(arr[1]),
+      mode: dco_decode_String(arr[0]),
+      loginId: dco_decode_String(arr[1]),
+      authUrl: dco_decode_opt_String(arr[2]),
+      verificationUrl: dco_decode_opt_String(arr[3]),
+      userCode: dco_decode_opt_String(arr[4]),
     );
   }
 
@@ -3505,9 +3508,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_mode = sse_decode_String(deserializer);
     var var_loginId = sse_decode_String(deserializer);
-    var var_authUrl = sse_decode_String(deserializer);
-    return CodexLoginStartDto(loginId: var_loginId, authUrl: var_authUrl);
+    var var_authUrl = sse_decode_opt_String(deserializer);
+    var var_verificationUrl = sse_decode_opt_String(deserializer);
+    var var_userCode = sse_decode_opt_String(deserializer);
+    return CodexLoginStartDto(
+      mode: var_mode,
+      loginId: var_loginId,
+      authUrl: var_authUrl,
+      verificationUrl: var_verificationUrl,
+      userCode: var_userCode,
+    );
   }
 
   @protected
@@ -4328,8 +4340,11 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     SseSerializer serializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.mode, serializer);
     sse_encode_String(self.loginId, serializer);
-    sse_encode_String(self.authUrl, serializer);
+    sse_encode_opt_String(self.authUrl, serializer);
+    sse_encode_opt_String(self.verificationUrl, serializer);
+    sse_encode_opt_String(self.userCode, serializer);
   }
 
   @protected

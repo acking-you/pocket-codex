@@ -1229,6 +1229,13 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
     // Block sends while reconnecting — a reconnect reloads history and would
     // wipe an optimistic message added mid-flight.
     if ((text.isEmpty && images.isEmpty) || _sending || _reconnecting) return;
+    // If this host is THIS machine's codex and it can't make model calls yet
+    // (no login AND no custom provider), a turn would silently fail. Steer the
+    // user to the setup wizard instead of starting an invalid conversation.
+    if (_codexNeedsSetup(watch: false)) {
+      _openCodexSetup();
+      return;
+    }
     // Never send while an attachment is still processing/uploading — the
     // message would silently ship without it. (The send button is disabled
     // too; this also guards the Enter-to-send path.)
@@ -2046,11 +2053,83 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
     return l10n.resetsIn(span);
   }
 
+  /// Whether THIS machine's codex (the local host behind [widget.serviceKey])
+  /// still needs setup — no login AND no custom provider — so a model turn
+  /// can't succeed. Only ever true for a LOCAL host; a remote host's codex
+  /// config is the remote owner's concern, not ours to detect. Pass
+  /// `watch: true` from `build` (so it rebuilds when the status resolves),
+  /// `watch: false` from callbacks.
+  bool _codexNeedsSetup({required bool watch}) {
+    final locals = watch
+        ? ref.watch(localServeListProvider)
+        : ref.read(localServeListProvider);
+    final isLocal = (locals.valueOrNull ?? const <AppServeStatus>[]).any(
+      (h) => h.appServiceKey == widget.serviceKey,
+    );
+    if (!isLocal) return false;
+    final status = watch
+        ? ref.watch(codexSetupStatusProvider)
+        : ref.read(codexSetupStatusProvider);
+    return status.valueOrNull?.needsSetup ?? false;
+  }
+
+  /// Open the setup wizard, refreshing the status on return so the banner /
+  /// send-guard clear once codex is configured.
+  void _openCodexSetup() {
+    context.push('/setup/codex').then((_) {
+      if (mounted) ref.invalidate(codexSetupStatusProvider);
+    });
+  }
+
+  /// A warning strip under the app bar when the local codex isn't configured —
+  /// a persistent, tappable pointer to the setup wizard.
+  PreferredSizeWidget _codexSetupBar(AppLocalizations l10n) {
+    final scheme = Theme.of(context).colorScheme;
+    return PreferredSize(
+      preferredSize: const Size.fromHeight(46),
+      child: Material(
+        color: scheme.errorContainer,
+        child: InkWell(
+          onTap: _openCodexSetup,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.warning_amber_rounded,
+                  size: 18,
+                  color: scheme.onErrorContainer,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    l10n.codexChatNeedsSetup,
+                    key: const Key('codex-chat-needs-setup'),
+                    style: TextStyle(
+                      color: scheme.onErrorContainer,
+                      fontSize: 13,
+                    ),
+                  ),
+                ),
+                TextButton(
+                  key: const Key('codex-chat-setup-btn'),
+                  onPressed: _openCodexSetup,
+                  child: Text(l10n.codexSetup),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
     final width = MediaQuery.of(context).size.width;
     final isMobile = width < 600;
+    final needsCodexSetup = _codexNeedsSetup(watch: true);
     return Scaffold(
       // On phones the sessions list is a slide-in drawer (hamburger); on wider
       // screens it's an inline collapsible pane (see the body).
@@ -2064,6 +2143,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
       // (Swipe-to-close already works once the drawer is open.)
       drawerEdgeDragWidth: isMobile ? 56 : null,
       appBar: AppBar(
+        // Local codex not configured → a warning strip pointing at the wizard.
+        bottom: needsCodexSetup ? _codexSetupBar(l10n) : null,
         // Mobile: the leading button OPENS the sessions list (drawer). Desktop:
         // as the home there is nothing to go back to, so leading toggles the
         // inline sessions pane; the classic pushed route keeps back-to-projects

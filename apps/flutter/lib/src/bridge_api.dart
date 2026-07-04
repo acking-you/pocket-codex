@@ -800,17 +800,34 @@ class CodexSetupStatus {
   final String promptVariant;
 }
 
-/// A started ChatGPT browser login on the 自带 codex: open [authUrl], then poll
-/// [BridgeApi.codexAuthStatus] until authenticated.
+/// A started ChatGPT login on the 自带 codex. [mode] is `browser` (open
+/// [authUrl] and poll) or `device` (open [verificationUrl], show [userCode], and
+/// poll) — codex falls back to device code when it can't bind its local OAuth
+/// callback port. Poll [BridgeApi.codexAuthStatus] until authenticated either way.
 class CodexLoginStart {
   /// Creates a started codex login.
-  const CodexLoginStart({required this.loginId, required this.authUrl});
+  const CodexLoginStart({
+    required this.mode,
+    required this.loginId,
+    this.authUrl,
+    this.verificationUrl,
+    this.userCode,
+  });
+
+  /// `browser` or `device`.
+  final String mode;
 
   /// Opaque id to pass back to [BridgeApi.codexLoginCancel].
   final String loginId;
 
-  /// URL the UI opens in a browser to complete the OAuth flow.
-  final String authUrl;
+  /// Browser flow: URL to open in a browser. Null for the device flow.
+  final String? authUrl;
+
+  /// Device flow: URL to open. Null for the browser flow.
+  final String? verificationUrl;
+
+  /// Device flow: one-time code the user enters. Null for the browser flow.
+  final String? userCode;
 }
 
 /// codex auth status for one app-server.

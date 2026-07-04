@@ -2829,11 +2829,17 @@ impl SseDecode for crate::api::bridge::CodexAuthStatusDto {
 impl SseDecode for crate::api::bridge::CodexLoginStartDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_mode = <String>::sse_decode(deserializer);
         let mut var_loginId = <String>::sse_decode(deserializer);
-        let mut var_authUrl = <String>::sse_decode(deserializer);
+        let mut var_authUrl = <Option<String>>::sse_decode(deserializer);
+        let mut var_verificationUrl = <Option<String>>::sse_decode(deserializer);
+        let mut var_userCode = <Option<String>>::sse_decode(deserializer);
         return crate::api::bridge::CodexLoginStartDto {
+            mode: var_mode,
             login_id: var_loginId,
             auth_url: var_authUrl,
+            verification_url: var_verificationUrl,
+            user_code: var_userCode,
         };
     }
 }
@@ -3780,8 +3786,14 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::bridge::CodexAuthStatusDto>
 // Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for crate::api::bridge::CodexLoginStartDto {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
-        [self.login_id.into_into_dart().into_dart(), self.auth_url.into_into_dart().into_dart()]
-            .into_dart()
+        [
+            self.mode.into_into_dart().into_dart(),
+            self.login_id.into_into_dart().into_dart(),
+            self.auth_url.into_into_dart().into_dart(),
+            self.verification_url.into_into_dart().into_dart(),
+            self.user_code.into_into_dart().into_dart(),
+        ]
+        .into_dart()
     }
 }
 impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
@@ -4379,8 +4391,11 @@ impl SseEncode for crate::api::bridge::CodexAuthStatusDto {
 impl SseEncode for crate::api::bridge::CodexLoginStartDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.mode, serializer);
         <String>::sse_encode(self.login_id, serializer);
-        <String>::sse_encode(self.auth_url, serializer);
+        <Option<String>>::sse_encode(self.auth_url, serializer);
+        <Option<String>>::sse_encode(self.verification_url, serializer);
+        <Option<String>>::sse_encode(self.user_code, serializer);
     }
 }
 

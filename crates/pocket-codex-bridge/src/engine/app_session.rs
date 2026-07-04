@@ -1180,29 +1180,102 @@ pub fn rate_limits(service_key: &str) -> Result<String> {
     Ok(res.to_string())
 }
 
-/// Start a ChatGPT browser OAuth login on the app-server behind `service_key`.
-/// Returns `(login_id, auth_url)`: the UI opens `auth_url` in a browser, and
-/// codex's own login server (loopback `:1455`) handles the callback and writes
-/// `auth.json` — Pocket-Codex never touches the credential. Poll
-/// [`auth_status`] until authenticated. The OAuth HTTP runs inside the codex
-/// process, so it honours the proxy the host was started with.
-pub fn login_chatgpt_start(service_key: &str) -> Result<(String, String)> {
+/// A started codex ChatGPT login. Browser OAuth is tried first; if codex can't
+/// bind its fixed local callback port (`:1455`/`:1457`) it falls back to the
+/// device-code flow, which needs no local port.
+pub struct ChatgptLoginStart {
+    /// `"browser"` (open `auth_url`) or `"device"` (open `verification_url` and
+    /// enter `user_code`).
+    pub mode: String,
+    /// Opaque id for [`login_cancel`].
+    pub login_id: String,
+    /// Browser flow: the OAuth URL to open. `None` for the device flow.
+    pub auth_url: Option<String>,
+    /// Device flow: the URL to open. `None` for the browser flow.
+    pub verification_url: Option<String>,
+    /// Device flow: the one-time code the user enters. `None` for browser.
+    pub user_code: Option<String>,
+}
+
+/// Start a codex ChatGPT login on the app-server behind `service_key`.
+///
+/// Tries the browser OAuth flow first (smoothest where the callback port is
+/// free). On a login-server *bind* failure — codex can't open its fixed
+/// `:1455`/`:1457` callback port, which is reserved on many Windows machines
+/// (Hyper-V/WSL/Docker reserve those ranges → `os error 10013`) — it
+/// transparently retries with the device-code flow, which needs no local port.
+/// Either way codex writes `auth.json` itself; poll [`auth_status`] until
+/// authenticated. The OAuth HTTP runs inside codex, so it honours the host's
+/// proxy.
+pub fn login_chatgpt_start(service_key: &str) -> Result<ChatgptLoginStart> {
     let client = client_for(service_key)?;
-    // v2 params: `{ "type": "chatgpt" }` (streamlined flag omitted → default).
-    let res = runtime::runtime()
-        .block_on(client.request("account/login/start", json!({ "type": "chatgpt" })))?;
-    let login_id = res
-        .get("loginId")
+    // Browser OAuth first: `{ "type": "chatgpt" }`.
+    let browser = runtime::runtime()
+        .block_on(client.request("account/login/start", json!({ "type": "chatgpt" })));
+    match browser {
+        Ok(res) => {
+            let auth_url = res
+                .get("authUrl")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| anyhow!("account/login/start returned no authUrl"))?
+                .to_string();
+            Ok(ChatgptLoginStart {
+                mode: "browser".to_string(),
+                login_id: login_id_of(&res),
+                auth_url: Some(auth_url),
+                verification_url: None,
+                user_code: None,
+            })
+        },
+        Err(e) if is_login_server_bind_failure(&e) => {
+            // codex couldn't start its local callback server → device code.
+            let res = runtime::runtime().block_on(
+                client.request("account/login/start", json!({ "type": "chatgptDeviceCode" })),
+            )?;
+            let verification_url = res
+                .get("verificationUrl")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| anyhow!("device-code login returned no verificationUrl"))?
+                .to_string();
+            let user_code = res
+                .get("userCode")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            Ok(ChatgptLoginStart {
+                mode: "device".to_string(),
+                login_id: login_id_of(&res),
+                auth_url: None,
+                verification_url: Some(verification_url),
+                user_code: Some(user_code),
+            })
+        },
+        Err(e) => Err(e),
+    }
+}
+
+/// The `loginId` of a `account/login/start` response, or empty when absent.
+fn login_id_of(res: &Value) -> String {
+    res.get("loginId")
         .and_then(Value::as_str)
         .unwrap_or_default()
-        .to_string();
-    let auth_url = res
-        .get("authUrl")
-        .and_then(Value::as_str)
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| anyhow!("account/login/start returned no authUrl"))?
-        .to_string();
-    Ok((login_id, auth_url))
+        .to_string()
+}
+
+/// Whether a `account/login/start` error is codex failing to *bind* its local
+/// OAuth callback server (so the caller retries with device code). codex
+/// reports it as "failed to start login server: <os error>"; the raw socket
+/// errors (`10013` access-denied for a reserved port, `10048` in-use) are
+/// matched too so a wording change upstream doesn't defeat the fallback.
+fn is_login_server_bind_failure(e: &anyhow::Error) -> bool {
+    let msg = e.to_string().to_lowercase();
+    msg.contains("login server")
+        || msg.contains("os error 10013")
+        || msg.contains("os error 10048")
+        || msg.contains("address in use")
+        || msg.contains("address already in use")
 }
 
 /// The app-server's codex auth status: `(authenticated, method)` where `method`

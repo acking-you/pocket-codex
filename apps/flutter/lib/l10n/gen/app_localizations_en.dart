@@ -1177,6 +1177,10 @@ class AppLocalizationsEn extends AppLocalizations {
   String get codexSetup => 'Configure Codex';
 
   @override
+  String get codexChatNeedsSetup =>
+      'Model access isn\'t set up yet — configure Codex before chatting.';
+
+  @override
   String get codexSetupSettingsSubtitle =>
       'Provider / official login / non-degraded prompt';
 
@@ -1235,6 +1239,16 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get codexSetupLoginOpened =>
       'Opened the login page in your browser; completion is detected automatically…';
+
+  @override
+  String get codexSetupDeviceOpened =>
+      'Opened the verification page in your browser. Enter the code below there; completion is detected automatically…';
+
+  @override
+  String get codexSetupDeviceCodeLabel => 'Verification code';
+
+  @override
+  String get codexSetupDeviceReopen => 'Reopen verification page';
 
   @override
   String codexSetupLoginSuccess(String method) {

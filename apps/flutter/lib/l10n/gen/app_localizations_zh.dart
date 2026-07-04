@@ -1145,6 +1145,9 @@ class AppLocalizationsZh extends AppLocalizations {
   String get codexSetup => '配置 Codex';
 
   @override
+  String get codexChatNeedsSetup => '模型访问尚未配置 —— 请先完成 Codex 认证再对话。';
+
+  @override
   String get codexSetupSettingsSubtitle => 'Provider / 官方登录 / 非降智 prompt';
 
   @override
@@ -1198,6 +1201,15 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get codexSetupLoginOpened => '已在浏览器打开登录页,完成后自动检测…';
+
+  @override
+  String get codexSetupDeviceOpened => '已在浏览器打开验证页面。请在页面中输入下方验证码,完成后自动检测…';
+
+  @override
+  String get codexSetupDeviceCodeLabel => '验证码';
+
+  @override
+  String get codexSetupDeviceReopen => '重新打开验证页面';
 
   @override
   String codexSetupLoginSuccess(String method) {
