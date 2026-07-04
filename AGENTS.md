@@ -276,13 +276,17 @@ git add deps/codex .gitmodules         # bump the submodule pointer
   codex, read `deps/codex/codex-rs/Cargo.toml`'s `libsqlite3-sys` pin and set
   the root `sqlx` to a version whose bundled `libsqlite3-sys` matches it
   (codex `0.37` ↔ sqlx `0.9`; codex `0.30`/`0.28` ↔ sqlx `0.8`).
-- **Watch codex's rustc pin.** codex pins its own toolchain in
-  `deps/codex/codex-rs/rust-toolchain.toml` (e.g. `1.95.0`). The desktop app
-  compiles codex through cargokit, which runs `rustup run stable` and ignores
-  our root `rust-toolchain.toml` nightly pin. So when codex raises its floor
-  above your installed `stable`, `flutter build windows/macos` fails with
-  "rustc X is not supported by the following packages" — fix with
-  `rustup update stable` (the release Windows/macOS app jobs do this too).
+- **Keep the root `rust-toolchain.toml` at/above codex's rustc floor.** codex
+  pins its own toolchain in `deps/codex/codex-rs/rust-toolchain.toml` (e.g.
+  `1.95.0`). The desktop app compiles codex through cargokit, which we patched
+  (`apps/flutter/rust_builder/cargokit/build_tool/lib/src/builder.dart`) to read
+  the root `rust-toolchain.toml` `channel` — so `flutter build` and `cargo`
+  share ONE pinned toolchain that `rustup` auto-installs (a one-click build),
+  instead of cargokit's default stale `stable`. When codex raises its floor,
+  bump the root `rust-toolchain.toml` (and the matching `RUST_TOOLCHAIN` in
+  `ci.yml` / `release.yml`) to a nightly at/above it, and re-run
+  `cargo fmt --check` on the new nightly (rustfmt output can shift between
+  nightlies and force a reformat).
 
 ## 9. Roadmap (rough)
 
