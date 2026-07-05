@@ -44,16 +44,25 @@ class _ServicesScreenState extends ConsumerState<ServicesScreen>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _reprobeTimer = Timer.periodic(_reprobeInterval, (_) {
-      // Re-probe each service's reachability (app-server + API proxy), not the
-      // full discovery: cheap, and the thing that goes stale when a remote
-      // server is restarted out from under us.
+      // Re-run discovery AND re-probe each service's reachability. Discovery
+      // (a single /v1/services call) is refreshed too because the desktop
+      // auto-hosts on startup — the initial listing is fetched before the
+      // host finishes registering, so without a periodic re-fetch the page
+      // stays empty even though the services are live on the relay.
       if (mounted) {
+        ref.invalidate(servicesProvider);
         ref.invalidate(appReachableProvider);
         ref.invalidate(apiReachableProvider);
         ref.invalidate(appReachableLocalProvider);
         ref.invalidate(apiReachableLocalProvider);
         ref.invalidate(localServeListProvider);
       }
+    });
+    // Discovery may be cached stale (fetched before the desktop finished
+    // auto-hosting), so refresh it once immediately on open instead of waiting
+    // for the first periodic tick.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) ref.invalidate(servicesProvider);
     });
   }
 
@@ -69,6 +78,7 @@ class _ServicesScreenState extends ConsumerState<ServicesScreen>
     // Returning to the foreground: re-probe once immediately so a server that
     // recovered while we were backgrounded shows online without waiting a tick.
     if (state == AppLifecycleState.resumed && mounted) {
+      ref.invalidate(servicesProvider);
       ref.invalidate(appReachableProvider);
       ref.invalidate(apiReachableProvider);
       ref.invalidate(appReachableLocalProvider);
