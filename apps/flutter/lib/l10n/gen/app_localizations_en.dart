@@ -211,6 +211,24 @@ class AppLocalizationsEn extends AppLocalizations {
   String get dropToAttach => 'Drop to attach';
 
   @override
+  String queuedCount(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count messages queued',
+      one: '1 message queued',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get queuedHint =>
+      'Sends after the current reply. Esc puts the last one back.';
+
+  @override
+  String get removeQueued => 'Remove from queue';
+
+  @override
   String get removeFile => 'Remove file';
 
   @override
