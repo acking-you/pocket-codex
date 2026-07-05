@@ -1404,7 +1404,7 @@ void main() {
             'threadSettings': {
               'model': 'gpt-5.5-codex',
               'effort': 'high',
-              'approvalPolicy': 'on-failure',
+              'approvalPolicy': 'on-request',
               'sandboxPolicy': {'type': 'workspaceWrite'},
             },
           }),
@@ -3501,12 +3501,12 @@ void main() {
     );
     await t.pumpAndSettle();
 
-    // Default mode = Auto → on-failure / workspace-write.
+    // Default mode = Auto → on-request / workspace-write.
     await t.enterText(find.byType(TextField), 'hi');
     await t.pump(); // let the send button enable for the non-empty input
     await t.tap(find.byKey(const Key('send-btn')));
     await t.pumpAndSettle();
-    expect(api.lastApproval, 'on-failure');
+    expect(api.lastApproval, 'on-request');
     expect(api.lastSandbox, 'workspace-write');
   });
 
