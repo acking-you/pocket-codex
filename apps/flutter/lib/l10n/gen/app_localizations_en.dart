@@ -208,6 +208,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get attachFile => 'Attach file';
 
   @override
+  String get dropToAttach => 'Drop to attach';
+
+  @override
   String get removeFile => 'Remove file';
 
   @override

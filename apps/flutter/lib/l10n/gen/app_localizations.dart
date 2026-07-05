@@ -464,6 +464,12 @@ abstract class AppLocalizations {
   /// **'Attach file'**
   String get attachFile;
 
+  /// No description provided for @dropToAttach.
+  ///
+  /// In en, this message translates to:
+  /// **'Drop to attach'**
+  String get dropToAttach;
+
   /// No description provided for @removeFile.
   ///
   /// In en, this message translates to:

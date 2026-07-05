@@ -1,10 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:desktop_drop/desktop_drop.dart';
 import 'package:file_selector/file_selector.dart' show openFiles;
-import 'package:flutter/foundation.dart' show listEquals;
+import 'package:flutter/foundation.dart'
+    show listEquals, defaultTargetPlatform, TargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:pasteboard/pasteboard.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -322,6 +325,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
   // still being downscaled/re-encoded in a background isolate.
   final List<_Attachment> _attachments = [];
   int _attachSeq = 0; // ids for attachment list entries
+  // True while a file is being dragged over the chat (desktop) — shows the
+  // "drop to attach" overlay.
+  bool _dragging = false;
 
   /// Whether to offer the "implement this plan" choice — shown after a plan-mode
   /// turn has produced its proposal, until the user implements or steers past it.
@@ -416,6 +422,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
       _seedDefaultCwd();
     }
     _scroll.addListener(_onScroll);
+    // Desktop: intercept Ctrl/Cmd+V so a clipboard image/file also attaches
+    // (text paste still works — the handler never consumes the event).
+    if (_isDesktop) HardwareKeyboard.instance.addHandler(_onHardwareKey);
     _subscribe();
     if (_threadId != null) _resumeAndLoad();
     _loadThreads();
@@ -750,6 +759,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
     _sub?.cancel();
     _input.dispose();
     _inputFocus.dispose();
+    if (_isDesktop) HardwareKeyboard.instance.removeHandler(_onHardwareKey);
     _scroll.removeListener(_onScroll);
     _scroll.dispose();
     _listCtl.dispose();
@@ -2235,7 +2245,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
                 SizedBox(width: 280, child: _sessionsPane(l10n)),
                 const VerticalDivider(width: 1),
               ],
-              Expanded(child: _chatPane(l10n)),
+              Expanded(child: _dropWrap(_chatPane(l10n), l10n)),
               if (canRight && _rightOpen) ...[
                 const VerticalDivider(width: 1),
                 SizedBox(width: 420, child: _diffPane(l10n)),
@@ -3355,16 +3365,30 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
   Future<void> _processAttachment(_Attachment att, XFile file) async {
     try {
       final bytes = await file.readAsBytes();
+      await _processImageBytes(att, bytes);
+    } catch (_) {
+      _failImageAttachment(att);
+    }
+  }
+
+  /// Downscale/re-encode raw image bytes for [att] (shared by picked/dropped
+  /// files and pasted clipboard image bytes, which have no readable path).
+  Future<void> _processImageBytes(_Attachment att, Uint8List bytes) async {
+    try {
       final processed = await processImage(bytes);
       if (!mounted || !_attachments.contains(att)) return; // removed via ×
       setState(() => att.processed = processed);
     } catch (_) {
-      if (!mounted || !_attachments.contains(att)) return;
-      setState(() => _attachments.remove(att));
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(AppLocalizations.of(context).imagePickFailed)),
-      );
+      _failImageAttachment(att);
     }
+  }
+
+  void _failImageAttachment(_Attachment att) {
+    if (!mounted || !_attachments.contains(att)) return;
+    setState(() => _attachments.remove(att));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(AppLocalizations.of(context).imagePickFailed)),
+    );
   }
 
   /// Extensions the image pipeline can decode; a file picked with one of
@@ -3401,7 +3425,21 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
       }
       return;
     }
+    _addFiles(picked);
+  }
+
+  /// Route a batch of files (picked, DRAGGED-and-dropped, or PASTED as paths)
+  /// into attachments: images go through the local image pipeline, everything
+  /// else uploads to the host as a path reference. Enforces the per-message
+  /// image/file caps, surfacing a snackbar for anything dropped over-cap so a
+  /// selection never silently vanishes. Shared by [_pickFiles], the drop
+  /// target, and clipboard paste.
+  void _addFiles(List<XFile> picked) {
     if (picked.isEmpty || !mounted) return;
+    final l10n = AppLocalizations.of(context);
+    final messenger = ScaffoldMessenger.of(context);
+    final remaining =
+        kMaxFilesPerMessage - _attachments.where((a) => a.isFile).length;
     var files = 0;
     var filesDropped = 0;
     var imagesDropped = 0;
@@ -3430,8 +3468,6 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
         }
       }
     });
-    // Over-cap picks must never vanish silently — the user would send a
-    // message believing everything they selected is attached.
     if (filesDropped > 0) {
       messenger.showSnackBar(
         SnackBar(content: Text(l10n.fileTooMany(kMaxFilesPerMessage))),
@@ -3442,6 +3478,128 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
         SnackBar(content: Text(l10n.imageTooMany(kMaxImagesPerMessage))),
       );
     }
+  }
+
+  /// Wrap the chat pane in a drag-and-drop target on desktop: a file dragged
+  /// anywhere over the conversation attaches it (image or document), with a
+  /// clear "drop to attach" overlay while hovering. A no-op on mobile/web.
+  Widget _dropWrap(Widget child, AppLocalizations l10n) {
+    if (!_isDesktop) return child;
+    return DropTarget(
+      onDragEntered: (_) => setState(() => _dragging = true),
+      onDragExited: (_) => setState(() => _dragging = false),
+      onDragDone: (detail) {
+        setState(() => _dragging = false);
+        _onDrop(detail);
+      },
+      child: Stack(
+        children: [
+          child,
+          if (_dragging)
+            Positioned.fill(child: IgnorePointer(child: _dropOverlay(l10n))),
+        ],
+      ),
+    );
+  }
+
+  Widget _dropOverlay(AppLocalizations l10n) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      color: scheme.primary.withValues(alpha: 0.07),
+      alignment: Alignment.center,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+        decoration: BoxDecoration(
+          color: scheme.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: scheme.primary, width: 2),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.file_download_outlined, color: scheme.primary),
+            const SizedBox(width: 10),
+            Text(
+              l10n.dropToAttach,
+              style: TextStyle(
+                color: scheme.primary,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// True on a desktop platform (where drag-and-drop + clipboard paste of
+  /// images/files make sense). `defaultTargetPlatform` (not `dart:io`) so the
+  /// web build still compiles.
+  bool get _isDesktop =>
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.windows ||
+          defaultTargetPlatform == TargetPlatform.macOS ||
+          defaultTargetPlatform == TargetPlatform.linux);
+
+  /// Files dropped onto the chat → attach them exactly like a pick.
+  void _onDrop(DropDoneDetails detail) {
+    if (_sending) return;
+    _addFiles(detail.files);
+  }
+
+  /// Ctrl/Cmd+V while the composer is focused: attach a clipboard IMAGE (raw
+  /// bytes — no readable path, so processed directly) or clipboard FILES (by
+  /// path). Runs alongside the text field's own text-paste (this never consumes
+  /// the key event), so pasting text still works; only image/file clipboards
+  /// add an attachment.
+  Future<void> _onClipboardPaste() async {
+    if (_sending || !mounted) return;
+    try {
+      final img = await Pasteboard.image;
+      if (img != null && img.isNotEmpty) {
+        if (!mounted) return;
+        if (_attachments.where((a) => !a.isFile).length >=
+            kMaxImagesPerMessage) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                AppLocalizations.of(context).imageTooMany(kMaxImagesPerMessage),
+              ),
+            ),
+          );
+          return;
+        }
+        final att = _Attachment.image(
+          id: _attachSeq++,
+          name: 'pasted-image.png',
+        );
+        setState(() => _attachments.add(att));
+        unawaited(_processImageBytes(att, img));
+        return;
+      }
+      final files = await Pasteboard.files();
+      if (files.isNotEmpty && mounted) {
+        _addFiles([for (final p in files) XFile(p)]);
+      }
+    } catch (_) {
+      // Clipboard read is best-effort; a text paste already happened natively.
+    }
+  }
+
+  /// Global key hook (desktop): fire clipboard-paste handling on Ctrl/Cmd+V
+  /// while the composer is focused. Returns false so the event still reaches
+  /// the text field for ordinary text paste.
+  bool _onHardwareKey(KeyEvent e) {
+    if (e is! KeyDownEvent || !_inputFocus.hasFocus) return false;
+    if (e.logicalKey != LogicalKeyboardKey.keyV) return false;
+    final pressed = HardwareKeyboard.instance.logicalKeysPressed;
+    final ctrlOrCmd =
+        pressed.contains(LogicalKeyboardKey.controlLeft) ||
+        pressed.contains(LogicalKeyboardKey.controlRight) ||
+        pressed.contains(LogicalKeyboardKey.metaLeft) ||
+        pressed.contains(LogicalKeyboardKey.metaRight);
+    if (ctrlOrCmd) unawaited(_onClipboardPaste());
+    return false;
   }
 
   Future<void> _uploadAttachment(_Attachment att, XFile file) async {
