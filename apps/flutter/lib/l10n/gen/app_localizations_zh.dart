@@ -205,6 +205,9 @@ class AppLocalizationsZh extends AppLocalizations {
   String get attachFile => '附加文件';
 
   @override
+  String get dropToAttach => '松开以添加附件';
+
+  @override
   String get removeFile => '移除文件';
 
   @override

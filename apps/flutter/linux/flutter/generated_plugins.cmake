@@ -3,8 +3,10 @@
 #
 
 list(APPEND FLUTTER_PLUGIN_LIST
+  desktop_drop
   desktop_webview_window
   file_selector_linux
+  pasteboard
   screen_retriever_linux
   tray_manager
   url_launcher_linux

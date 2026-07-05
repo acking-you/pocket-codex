@@ -79,6 +79,7 @@
   },
   "imageOnlyMessage": "[Image]",
   "attachFile": "Attach file",
+  "dropToAttach": "Drop to attach",
   "removeFile": "Remove file",
   "filePickFailed": "Couldn't read the selected file",
   "fileTooMany": "At most {count} files per message",
