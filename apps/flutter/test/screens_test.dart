@@ -4077,11 +4077,9 @@ void main() {
     // sends "first", and with autoCompleteTurn=false the fake emits only
     // turn/started — the exact state Esc "undoes".
     Future<FakeBridgeApi> pumpStreaming(WidgetTester t) async {
-      final api =
-          FakeBridgeApi(
-              config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
-            )
-            ..autoCompleteTurn = false;
+      final api = FakeBridgeApi(
+        config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+      )..autoCompleteTurn = false;
       await api.appConnect(svc, 28080);
       await t.pumpWidget(
         _host(const AppSessionScreen(serviceKey: svc, threadId: 't1'), api),
