@@ -588,6 +588,12 @@ class FakeBridgeApi implements BridgeApi {
   /// while a turn is "in flight". Complete it to let the turn finish.
   Completer<void>? turnStartGate;
 
+  /// When false, [appTurnStart] emits ONLY `turn/started` (no reply delta, no
+  /// completion) — leaving the turn "streaming with no output yet" so a test can
+  /// drive the rest (deltas / completion / interrupt) precisely via [pushEvent].
+  /// Used to exercise the Esc state machine + message queue.
+  bool autoCompleteTurn = true;
+
   /// Echoes a streamed agent reply so widget tests can assert rendering.
   @override
   Future<void> appTurnStart(
@@ -613,6 +619,9 @@ class FakeBridgeApi implements BridgeApi {
     final c = _appEvents[serviceKey];
     if (c == null) return;
     c.add(AppEvent(kind: 'turn/started', threadId: threadId, raw: '{}'));
+    // Leave the turn running with no output when the test wants to drive the
+    // reply/completion itself (Esc state-machine + queue tests).
+    if (!autoCompleteTurn) return;
     c.add(
       AppEvent(
         kind: 'item/agentMessage/delta',

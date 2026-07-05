@@ -470,6 +470,24 @@ abstract class AppLocalizations {
   /// **'Drop to attach'**
   String get dropToAttach;
 
+  /// No description provided for @queuedCount.
+  ///
+  /// In en, this message translates to:
+  /// **'{count, plural, =1{1 message queued} other{{count} messages queued}}'**
+  String queuedCount(int count);
+
+  /// No description provided for @queuedHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Sends after the current reply. Esc puts the last one back.'**
+  String get queuedHint;
+
+  /// No description provided for @removeQueued.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove from queue'**
+  String get removeQueued;
+
   /// No description provided for @removeFile.
   ///
   /// In en, this message translates to:

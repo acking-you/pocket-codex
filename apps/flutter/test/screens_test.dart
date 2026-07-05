@@ -4057,4 +4057,179 @@ void main() {
     expect(find.byType(Shimmer), findsOneWidget);
     expect(find.byType(SkeletonBox), findsWidgets);
   });
+
+  group('Esc state machine + message queue (codex-cli parity)', () {
+    const svc = 'pcx:lb7666:app:default';
+
+    // Run a test body with a desktop target forced (registers the Esc/paste key
+    // handler). Reset inside the body — not addTearDown — so the framework's
+    // debug-var invariant check passes.
+    Future<void> onDesktop(Future<void> Function() body) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      try {
+        await body();
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+      }
+    }
+
+    // Mount a desktop session sitting on a running turn with NO output yet:
+    // sends "first", and with autoCompleteTurn=false the fake emits only
+    // turn/started — the exact state Esc "undoes".
+    Future<FakeBridgeApi> pumpStreaming(WidgetTester t) async {
+      final api = FakeBridgeApi(
+        config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+      )..autoCompleteTurn = false;
+      await api.appConnect(svc, 28080);
+      await t.pumpWidget(
+        _host(const AppSessionScreen(serviceKey: svc, threadId: 't1'), api),
+      );
+      await t.pumpAndSettle();
+      await t.enterText(find.byKey(const Key('composer-input')), 'first');
+      await t.testTextInput.receiveAction(TextInputAction.send);
+      await t.pump();
+      return api;
+    }
+
+    String composerText(WidgetTester t) => t
+        .widget<TextField>(find.byKey(const Key('composer-input')))
+        .controller!
+        .text;
+
+    // Ensure the composer is focused (the key handler requires it), then Esc.
+    Future<void> pressEsc(WidgetTester t) async {
+      await t.tap(find.byKey(const Key('composer-input')));
+      await t.pump();
+      await t.sendKeyEvent(LogicalKeyboardKey.escape);
+      await t.pump();
+    }
+
+    Future<void> queue(WidgetTester t, String text) async {
+      await t.enterText(find.byKey(const Key('composer-input')), text);
+      await t.testTextInput.receiveAction(TextInputAction.send);
+      await t.pump();
+    }
+
+    void pushDelta(FakeBridgeApi api) => api.pushEvent(
+      svc,
+      const AppEvent(
+        kind: 'item/agentMessage/delta',
+        threadId: 't1',
+        itemId: 'a1',
+        itemType: 'agentMessage',
+        text: 'thinking…',
+        raw: '{}',
+      ),
+    );
+
+    void pushCompleted(FakeBridgeApi api) => api.pushEvent(
+      svc,
+      const AppEvent(kind: 'turn/completed', threadId: 't1', raw: '{}'),
+    );
+
+    testWidgets('Esc before any output undoes the send (restore, no marker)', (
+      t,
+    ) async {
+      await onDesktop(() async {
+        final api = await pumpStreaming(t);
+        expect(find.byKey(const Key('stop-btn')), findsOneWidget);
+        expect(composerText(t), '');
+
+        await pressEsc(t);
+
+        // Interrupted, the message is back in the box, and it was NOT resent.
+        expect(api.interrupted, isTrue);
+        expect(composerText(t), 'first');
+        expect(api.turnStartCount, 1);
+
+        // The aborted turn ends without a "stopped" marker — this was an undo.
+        pushCompleted(api);
+        await t.pumpAndSettle();
+        expect(find.text('已停止'), findsNothing);
+      });
+    });
+
+    testWidgets('Esc after output interrupts the turn (no restore, marker)', (
+      t,
+    ) async {
+      await onDesktop(() async {
+        final api = await pumpStreaming(t);
+        pushDelta(api); // the model began replying → output has started
+        await t.pump();
+
+        await pressEsc(t);
+
+        expect(api.interrupted, isTrue);
+        expect(composerText(t), ''); // nothing restored
+        expect(api.turnStartCount, 1);
+
+        pushCompleted(api);
+        await t.pumpAndSettle();
+        expect(find.text('已停止'), findsOneWidget); // stopped marker shown
+      });
+    });
+
+    testWidgets('a message sent mid-turn queues, then flushes on turn end', (
+      t,
+    ) async {
+      await onDesktop(() async {
+        final api = await pumpStreaming(t);
+        pushDelta(api);
+        await t.pump();
+
+        await queue(t, 'second');
+        expect(find.byKey(const Key('queued-0')), findsOneWidget);
+        expect(find.text('second'), findsOneWidget);
+        expect(api.lastTurnText, 'first'); // not sent yet
+
+        // The running turn ends → the queued message flushes as the next turn.
+        pushCompleted(api);
+        await t.pump();
+        expect(api.lastTurnText, 'second');
+        expect(api.turnStartCount, 2);
+        expect(find.byKey(const Key('queued-0')), findsNothing);
+      });
+    });
+
+    testWidgets('Esc with a queued message pops it back before the turn', (
+      t,
+    ) async {
+      await onDesktop(() async {
+        final api = await pumpStreaming(t);
+        pushDelta(api); // output started: a fall-through Esc would interrupt
+        await t.pump();
+        await queue(t, 'second');
+        expect(find.byKey(const Key('queued-0')), findsOneWidget);
+
+        // First Esc dequeues 'second' back to the composer — turn untouched.
+        await pressEsc(t);
+        expect(composerText(t), 'second');
+        expect(find.byKey(const Key('queued-0')), findsNothing);
+        expect(api.interrupted, isFalse);
+
+        // Second Esc (queue now empty) interrupts the still-running turn.
+        await pressEsc(t);
+        expect(api.interrupted, isTrue);
+      });
+    });
+
+    testWidgets('the ✕ on a queued chip discards it (not restored)', (t) async {
+      await onDesktop(() async {
+        final api = await pumpStreaming(t);
+        await queue(t, 'second');
+        expect(find.byKey(const Key('queued-0')), findsOneWidget);
+
+        await t.tap(find.byKey(const Key('queued-remove-0')));
+        await t.pump();
+        expect(find.byKey(const Key('queued-0')), findsNothing);
+        expect(composerText(t), ''); // discarded, not put back in the box
+
+        // Nothing to flush when the turn ends.
+        pushCompleted(api);
+        await t.pump();
+        expect(api.lastTurnText, 'first');
+        expect(api.turnStartCount, 1);
+      });
+    });
+  });
 }

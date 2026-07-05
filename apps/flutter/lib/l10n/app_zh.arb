@@ -68,6 +68,12 @@
   "imageOnlyMessage": "[图片]",
   "attachFile": "附加文件",
   "dropToAttach": "松开以添加附件",
+  "queuedCount": "{count, plural, other{{count} 条消息排队中}}",
+  "@queuedCount": {
+    "placeholders": { "count": { "type": "int" } }
+  },
+  "queuedHint": "将在当前回复结束后发送。按 Esc 取回最后一条。",
+  "removeQueued": "移出队列",
   "removeFile": "移除文件",
   "filePickFailed": "无法读取所选文件",
   "fileTooMany": "每条消息最多附加 {count} 个文件",

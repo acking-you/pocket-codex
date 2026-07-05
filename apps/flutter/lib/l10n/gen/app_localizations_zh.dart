@@ -208,6 +208,22 @@ class AppLocalizationsZh extends AppLocalizations {
   String get dropToAttach => '松开以添加附件';
 
   @override
+  String queuedCount(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count 条消息排队中',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get queuedHint => '将在当前回复结束后发送。按 Esc 取回最后一条。';
+
+  @override
+  String get removeQueued => '移出队列';
+
+  @override
   String get removeFile => '移除文件';
 
   @override

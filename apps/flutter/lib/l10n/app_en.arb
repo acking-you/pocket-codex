@@ -80,6 +80,12 @@
   "imageOnlyMessage": "[Image]",
   "attachFile": "Attach file",
   "dropToAttach": "Drop to attach",
+  "queuedCount": "{count, plural, =1{1 message queued} other{{count} messages queued}}",
+  "@queuedCount": {
+    "placeholders": { "count": { "type": "int" } }
+  },
+  "queuedHint": "Sends after the current reply. Esc puts the last one back.",
+  "removeQueued": "Remove from queue",
   "removeFile": "Remove file",
   "filePickFailed": "Couldn't read the selected file",
   "fileTooMany": "At most {count} files per message",

@@ -158,6 +158,25 @@ class _Attachment {
   bool get ready => isFile ? hostPath != null : processed != null;
 }
 
+/// A message the user composed while a turn was already running. It isn't sent
+/// immediately — it waits in [_AppSessionState._queue] and fires as its own turn
+/// once the running (and any earlier queued) turns finish (codex-cli parity).
+/// The composer draft is snapshotted whole (text + its ready attachments) so the
+/// entry can be sent verbatim later, or handed back to the composer on Esc.
+class _Queued {
+  _Queued({required this.id, required this.text, required this.attachments});
+  final int id;
+  final String text; // the raw composer text, as typed
+  final List<_Attachment> attachments;
+
+  /// One-line preview for the queued-messages strip.
+  String get preview {
+    final t = text.trim();
+    if (t.isNotEmpty) return t;
+    return attachments.isEmpty ? '' : attachments.first.name;
+  }
+}
+
 /// One entry in an option-picker bottom sheet (model / permission / effort).
 class _PickerOption<T> {
   const _PickerOption({
@@ -328,6 +347,24 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
   // True while a file is being dragged over the chat (desktop) — shows the
   // "drop to attach" overlay.
   bool _dragging = false;
+
+  // Messages composed while a turn was already in flight. They queue instead of
+  // racing the running turn and each flushes as its own turn once the prior one
+  // ends (codex-cli parity). Esc pops the most recent back into the composer.
+  final List<_Queued> _queue = [];
+  int _queueSeq = 0; // ids for queue entries
+  // Whether the running turn has produced ANY output yet (reasoning, a tool
+  // call, or reply text). Distinguishes "sent, nothing back" — where Esc undoes
+  // the send and restores the text — from "output started", where Esc simply
+  // interrupts. Reset on each turn/started; set on the first agent-side item.
+  bool _outputStarted = false;
+  // The raw text of the just-sent message, kept so an Esc "undo" (before any
+  // output) can drop it back into the composer. Set at optimistic-send time for
+  // ordinary sends only (a programmatic/retry send has no draft to restore).
+  String? _undoableText;
+  // Set when an interrupt is really an Esc "undo": the turn's end must NOT add a
+  // "stopped" marker (the send is being taken back, not shown as stopped).
+  bool _suppressStopMarker = false;
 
   /// Whether to offer the "implement this plan" choice — shown after a plan-mode
   /// turn has produced its proposal, until the user implements or steers past it.
@@ -743,6 +780,11 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
       // clear them with the input (and the retry snapshot, which references a
       // turn on the previous thread).
       _attachments.clear();
+      // The queue + undo state belong to the previous conversation.
+      _queue.clear();
+      _outputStarted = false;
+      _undoableText = null;
+      _suppressStopMarker = false;
       _lastUserText = null;
       _lastUserImages = const [];
       // A brand-new conversation inherits the user's last-chosen settings; an
@@ -875,6 +917,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
         // Restore the "thinking" state if a turn was still running when we
         // left: live events (delivered after resume) will finish rendering it.
         _streaming = history.running;
+        // We can't tell whether a resumed turn has already produced output, and
+        // it wasn't sent from this composer, so there's nothing to un-send —
+        // treat it as output-started so Esc interrupts (with a marker) instead.
+        _outputStarted = history.running;
         // Restore the running turn's live clock + loading animation. Without
         // this the streaming flag was set but the ticker wasn't, so the bottom
         // in-progress indicator showed a frozen 0:00 (looked "gone"). We can't
@@ -972,6 +1018,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
       });
       _loadGit();
       _scrollToEnd(force: true);
+      // A turn may have completed while we were disconnected: if the reload
+      // landed idle with messages still queued, drain the backlog now (turn-end
+      // events that would normally flush it were missed during the drop).
+      _maybeFlushQueue();
     } catch (e) {
       if (mounted && _threadId == startTid) {
         setState(() {
@@ -1064,6 +1114,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
           _turnId = _parseTurnId(e.raw);
           _implementDismissed = false;
           _pendingInterrupt = false;
+          // A fresh turn hasn't produced output yet, so Esc undoes the send
+          // until the first item lands.
+          _outputStarted = false;
           _elapsedSecs = 0;
           // Stamp what this turn runs with. A server that notifies settings
           // does so BEFORE turn/started, so a confirmed runtime is already
@@ -1104,6 +1157,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
             _retry = () => _send(retry: true);
           }
         });
+        _maybeFlushQueue(); // send the next queued message, if any
         _loadGit(); // edits from the turn may have changed the diff
       case 'turn/failed':
         setState(() {
@@ -1122,6 +1176,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
             _retry = () => _send(retry: true);
           }
         });
+        _maybeFlushQueue(); // send the next queued message, if any
       default:
         _handleItemEvent(e);
     }
@@ -1182,6 +1237,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
     final isDelta = e.kind.contains('delta');
     final running = e.kind.contains('started');
     setState(() {
+      // Any agent-side item (reasoning, a tool call, or reply text) means the
+      // turn has begun producing output: past this point Esc interrupts rather
+      // than undoing the send.
+      _outputStarted = true;
       final idx = _itemIndex[id];
       if (idx == null) {
         _items.add(
@@ -1284,6 +1343,11 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
             imageUrls: images,
           ),
         );
+        // Remember the just-sent draft so an Esc "undo" (before any output)
+        // can restore it to the composer. Only for an ordinary send — a
+        // programmatic prompt (e.g. "implement the plan") has no user draft to
+        // hand back.
+        _undoableText = overrideText == null ? typed : null;
         // Don't clear the composer for a programmatic send (e.g. "implement
         // the plan") — the user may have text in progress there.
         if (overrideText == null) {
@@ -1518,13 +1582,161 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
     }
   }
 
+  // ── Send / queue / Esc state machine (codex-cli parity) ──────────────────
+  //
+  // Composer submit routes through _submit: while a turn is in flight the
+  // message QUEUES (fires as its own turn once the running one ends) instead of
+  // racing it. Esc is context-sensitive (see _onEscape):
+  //   • queue non-empty         → pop the most recent queued message to the box
+  //   • running, no output yet  → undo the send (interrupt + restore the text)
+  //   • running, output started → interrupt the turn (stopped marker)
+
+  /// Composer send: queue while a turn is in flight (or a backlog is still
+  /// draining), otherwise send now.
+  void _submit() {
+    if (_streaming || _sending || _queue.isNotEmpty) {
+      _enqueue();
+      // Idle with a residual backlog (e.g. a flush skipped during a reconnect):
+      // drain it now so nothing stays stuck.
+      if (!_streaming && !_sending) _maybeFlushQueue();
+    } else {
+      _send();
+    }
+  }
+
+  /// Snapshot the composer (text + its ready attachments) into the queue and
+  /// clear it. A no-op for an empty draft or while an attachment is still
+  /// processing (the message would ship without it).
+  void _enqueue() {
+    final atts = List<_Attachment>.from(_attachments);
+    if (_input.text.trim().isEmpty && atts.isEmpty) return;
+    if (atts.any((a) => !a.ready)) return;
+    setState(() {
+      _queue.add(
+        _Queued(id: _queueSeq++, text: _input.text, attachments: atts),
+      );
+      _input.clear();
+      _attachments.clear();
+    });
+  }
+
+  /// Send the head of the queue as a new turn, if the session is idle. Called on
+  /// every turn end (and after a reconnect). Restores the queued draft into the
+  /// composer and reuses the ordinary send path, so attachments / file refs /
+  /// retry-on-drop all behave exactly like a hand-typed send.
+  void _maybeFlushQueue() {
+    if (_queue.isEmpty || _streaming || _sending || _reconnecting) return;
+    final q = _queue.removeAt(0); // FIFO
+    _input.text = q.text;
+    _attachments
+      ..clear()
+      ..addAll(q.attachments);
+    // _send reads _input + _attachments synchronously (before its first await)
+    // and clears them; no intermediate frame renders, so nothing flickers.
+    unawaited(_send());
+  }
+
+  /// Esc handling. Returns true when it acted (so the key is consumed).
+  bool _onEscape() {
+    // 1. A queued message is the most recent thing the user did — hand the last
+    //    one back to the composer before touching the running turn.
+    if (_queue.isNotEmpty) {
+      _dequeueLast();
+      return true;
+    }
+    // 2. A turn is running.
+    if (_streaming) {
+      if (_outputStarted) {
+        unawaited(_interrupt()); // already replying → stop it (stopped marker)
+      } else {
+        _undoSend(); // nothing back yet → take the send back into the composer
+      }
+      return true;
+    }
+    // 3. Nothing to interrupt or dequeue — let the key through.
+    return false;
+  }
+
+  /// Pop the most recently queued message back into the composer (Esc).
+  void _dequeueLast() {
+    if (_queue.isNotEmpty) _restoreQueued(_queue.last);
+  }
+
+  /// Take a queued message out of the queue and back into the composer so the
+  /// user can edit/resend it (Esc, or tapping its chip). Replaces the current
+  /// draft — in the normal flow the box is empty after queueing.
+  void _restoreQueued(_Queued q) {
+    setState(() {
+      _queue.removeWhere((e) => e.id == q.id);
+      _attachments
+        ..clear()
+        ..addAll(q.attachments);
+    });
+    _input.text = q.text;
+    _input.selection = TextSelection.collapsed(offset: _input.text.length);
+    _inputFocus.requestFocus();
+  }
+
+  /// Discard a specific queued message (the ✕ on its chip). Unlike Esc, this
+  /// drops it rather than restoring it — the user explicitly removed it.
+  void _discardQueued(int id) {
+    setState(() => _queue.removeWhere((q) => q.id == id));
+  }
+
+  /// Esc "undo" for a turn that hasn't produced output yet: interrupt it and
+  /// drop the just-sent text back into the composer, taking the send back. The
+  /// server may still record an aborted turn (accepted — it surfaces on reload),
+  /// but live the optimistic bubble is removed so it reads as un-sent.
+  void _undoSend() {
+    final restore = _undoableText;
+    setState(() {
+      _removeLastLocalUserBubble();
+      // This interrupt is an undo: suppress the "stopped" marker its turn-end
+      // would otherwise add.
+      _suppressStopMarker = true;
+    });
+    unawaited(_interrupt());
+    if (restore != null && restore.isNotEmpty) {
+      _input.text = restore;
+      _input.selection = TextSelection.collapsed(offset: restore.length);
+    }
+    _inputFocus.requestFocus();
+  }
+
+  /// Remove the newest optimistic user bubble (id `local-user-*`) — the one the
+  /// undone send added. Call inside a setState; rebuilds the id→index map.
+  void _removeLastLocalUserBubble() {
+    for (var i = _items.length - 1; i >= 0; i--) {
+      if (_items[i].type == 'userMessage' &&
+          _items[i].id.startsWith('local-user-')) {
+        _items.removeAt(i);
+        _rebuildItemIndex();
+        return;
+      }
+    }
+  }
+
+  /// Rebuild `_itemIndex` from `_items` after a mid-list removal.
+  void _rebuildItemIndex() {
+    _itemIndex.clear();
+    for (var i = 0; i < _items.length; i++) {
+      _itemIndex[_items[i].id] = i;
+    }
+  }
+
   /// Append a local "stopped" marker so an interrupted turn is visible in the
-  /// transcript. Local-only (not persisted); call inside a `setState`.
+  /// transcript. Local-only (not persisted); call inside a `setState`. An Esc
+  /// "undo" interrupt suppresses the marker — the send is being taken back into
+  /// the composer, not shown as a stopped turn.
   void _addStoppedMarker() {
+    _pendingInterrupt = false;
+    if (_suppressStopMarker) {
+      _suppressStopMarker = false;
+      return;
+    }
     final id = 'local-stopped-${_localSeq++}';
     _itemIndex[id] = _items.length;
     _items.add(_Item(id: id, type: 'interrupted', text: ''));
-    _pendingInterrupt = false;
   }
 
   /// Begin ticking the running turn's elapsed clock once a second so the status
@@ -3586,20 +3798,33 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
     }
   }
 
-  /// Global key hook (desktop): fire clipboard-paste handling on Ctrl/Cmd+V
-  /// while the composer is focused. Returns false so the event still reaches
-  /// the text field for ordinary text paste.
+  /// Global key hook (desktop), active only while the composer is focused:
+  ///   • Ctrl/Cmd+V → also attach a clipboard image/file (returns false so the
+  ///     text field still handles ordinary text paste).
+  ///   • Esc        → the interrupt / undo / dequeue state machine (returns true
+  ///     when it acts, consuming the key).
+  /// Gating on composer focus keeps Esc from firing while a dialog/picker is
+  /// open (those steal focus), so their own Esc-to-dismiss still works.
   bool _onHardwareKey(KeyEvent e) {
     if (e is! KeyDownEvent || !_inputFocus.hasFocus) return false;
-    if (e.logicalKey != LogicalKeyboardKey.keyV) return false;
+    final key = e.logicalKey;
+    if (key == LogicalKeyboardKey.keyV && _isCtrlOrCmdDown()) {
+      unawaited(_onClipboardPaste());
+      return false; // never consume — text paste must still fire
+    }
+    if (key == LogicalKeyboardKey.escape) {
+      return _onEscape();
+    }
+    return false;
+  }
+
+  /// Whether a Ctrl (Win/Linux) or Cmd (macOS) modifier is currently held.
+  bool _isCtrlOrCmdDown() {
     final pressed = HardwareKeyboard.instance.logicalKeysPressed;
-    final ctrlOrCmd =
-        pressed.contains(LogicalKeyboardKey.controlLeft) ||
+    return pressed.contains(LogicalKeyboardKey.controlLeft) ||
         pressed.contains(LogicalKeyboardKey.controlRight) ||
         pressed.contains(LogicalKeyboardKey.metaLeft) ||
         pressed.contains(LogicalKeyboardKey.metaRight);
-    if (ctrlOrCmd) unawaited(_onClipboardPaste());
-    return false;
   }
 
   Future<void> _uploadAttachment(_Attachment att, XFile file) async {
@@ -3649,6 +3874,87 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
 
   /// Horizontal strip of pending attachments above the composer input: a
   /// thumbnail (or a spinner while processing) with a remove button each.
+  /// The pending-queue strip above the composer: messages the user sent while a
+  /// turn was running, each shown as a chip (with a ✕ to discard). A caption
+  /// explains they'll send next and that Esc pulls the last one back.
+  Widget _queuedStrip(AppLocalizations l10n) {
+    final scheme = Theme.of(context).colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(Icons.schedule, size: 13, color: scheme.onSurfaceVariant),
+            const SizedBox(width: 4),
+            Flexible(
+              child: Text(
+                '${l10n.queuedCount(_queue.length)} · ${l10n.queuedHint}',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                  color: scheme.onSurfaceVariant,
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          children: [
+            for (final q in _queue)
+              Container(
+                key: Key('queued-${q.id}'),
+                constraints: const BoxConstraints(maxWidth: 260),
+                decoration: BoxDecoration(
+                  color: scheme.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: scheme.outlineVariant),
+                ),
+                padding: const EdgeInsets.fromLTRB(10, 5, 4, 5),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Flexible(
+                      // Tapping a chip pulls it back into the composer to edit —
+                      // the recover path on mobile, where there's no Esc.
+                      child: InkWell(
+                        onTap: () => _restoreQueued(q),
+                        child: Text(
+                          q.preview,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 2),
+                    Tooltip(
+                      message: l10n.removeQueued,
+                      child: InkWell(
+                        key: Key('queued-remove-${q.id}'),
+                        onTap: () => _discardQueued(q.id),
+                        borderRadius: BorderRadius.circular(12),
+                        child: Padding(
+                          padding: const EdgeInsets.all(2),
+                          child: Icon(
+                            Icons.close,
+                            size: 15,
+                            color: scheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ),
+      ],
+    );
+  }
+
   Widget _attachmentStrip(AppLocalizations l10n) {
     final scheme = Theme.of(context).colorScheme;
     final scale = MediaQuery.of(context).devicePixelRatio;
@@ -3775,17 +4081,22 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              if (_queue.isNotEmpty) ...[
+                _queuedStrip(l10n),
+                const SizedBox(height: 8),
+              ],
               if (_attachments.isNotEmpty) ...[
                 _attachmentStrip(l10n),
                 const SizedBox(height: 8),
               ],
               TextField(
+                key: const Key('composer-input'),
                 controller: _input,
                 focusNode: _inputFocus,
                 minLines: 1,
                 maxLines: 6,
                 textInputAction: TextInputAction.send,
-                onSubmitted: (_) => _send(),
+                onSubmitted: (_) => _submit(),
                 style: Theme.of(context).textTheme.bodyLarge,
                 decoration: InputDecoration(
                   hintText: l10n.messageHint,
@@ -4011,7 +4322,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
             (value.text.trim().isNotEmpty || _attachments.isNotEmpty);
         return IconButton.filled(
           key: const Key('send-btn'),
-          onPressed: canSend ? () => _send() : null,
+          onPressed: canSend ? () => _submit() : null,
           icon: const Icon(Icons.arrow_upward, size: 20),
         );
       },
