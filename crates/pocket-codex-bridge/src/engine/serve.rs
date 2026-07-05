@@ -88,6 +88,13 @@ struct LocalServe {
     meta_svc: JoinHandle<()>,
     /// `Some` while the meta tunnel is published; `None` once deregistered.
     meta_register: Option<JoinHandle<()>>,
+    /// The resolved external codex binary path, or `None` for an embedded host
+    /// (which runs codex in-process). Surfaced in the host details for
+    /// debugging.
+    codex_binary: Option<String>,
+    /// The upstream proxy codex + the API proxy were started with, or `None`
+    /// when they inherit the app's own environment. Surfaced for debugging.
+    proxy: Option<String>,
 }
 
 /// Result of [`serve_start`], surfaced to the UI.
@@ -144,6 +151,14 @@ pub struct ServeStatus {
     pub meta_service_key: String,
     /// The meta tunnel is published (register task live).
     pub meta_registered: bool,
+    /// This host runs codex IN-PROCESS (the compiled-in `embedded-codex`)
+    /// rather than spawning an external binary.
+    pub embedded: bool,
+    /// The resolved external codex binary path, or `None` for an embedded host.
+    pub codex_binary: Option<String>,
+    /// Upstream proxy codex + the API proxy were started with, or `None` when
+    /// they inherit the app's environment.
+    pub proxy: Option<String>,
 }
 
 fn hosts() -> &'static Mutex<HashMap<String, LocalServe>> {
@@ -461,6 +476,9 @@ pub fn serve_start(
         }
         Some(resolved)
     };
+    // Capture the resolved path for the host details before `binary` is moved
+    // into the spawn options below (`None` for an embedded host).
+    let codex_binary_display = binary.as_ref().map(|p| p.display().to_string());
 
     let device = default_device_id();
     let name = name
@@ -730,6 +748,8 @@ pub fn serve_start(
         meta_local,
         meta_svc,
         meta_register,
+        codex_binary: codex_binary_display,
+        proxy: proxy.clone(),
     });
 
     Ok(ServeReport {
@@ -765,6 +785,9 @@ pub fn serve_status() -> Vec<ServeStatus> {
             meta_listen_addr: ls.meta_local.to_string(),
             meta_service_key: ls.meta_key.clone(),
             meta_registered: !tunnel_down(&ls.meta_register),
+            embedded: ls.embedded.is_some(),
+            codex_binary: ls.codex_binary.clone(),
+            proxy: ls.proxy.clone(),
         })
         .collect();
     out.sort_by(|a, b| a.name.cmp(&b.name));

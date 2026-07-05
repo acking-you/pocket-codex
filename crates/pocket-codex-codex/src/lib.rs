@@ -16,6 +16,12 @@
 
 #![forbid(unsafe_code)]
 
+/// The `deps/codex` submodule commit the embedded (自带) app-server was built
+/// from, baked at compile time by `build.rs`. codex's own crate version is a
+/// `0.0.0` placeholder, so this short commit is the meaningful "version" of the
+/// in-process codex. `"unknown"` if git was unavailable at build time.
+pub const EMBEDDED_CODEX_COMMIT: &str = env!("EMBEDDED_CODEX_COMMIT");
+
 /// JSON-RPC 2.0 envelopes used by the codex app-server.
 pub mod protocol;
 

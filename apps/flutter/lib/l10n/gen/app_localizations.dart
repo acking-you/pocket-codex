@@ -1682,6 +1682,42 @@ abstract class AppLocalizations {
   /// **'Runs the app\'s built-in codex in-process — no install needed.'**
   String get codexBuiltinNote;
 
+  /// No description provided for @hostRuntimeInfo.
+  ///
+  /// In en, this message translates to:
+  /// **'Runtime'**
+  String get hostRuntimeInfo;
+
+  /// No description provided for @hostRuntimeMode.
+  ///
+  /// In en, this message translates to:
+  /// **'codex'**
+  String get hostRuntimeMode;
+
+  /// No description provided for @hostCodexVersion.
+  ///
+  /// In en, this message translates to:
+  /// **'Version'**
+  String get hostCodexVersion;
+
+  /// No description provided for @hostCodexPath.
+  ///
+  /// In en, this message translates to:
+  /// **'Path'**
+  String get hostCodexPath;
+
+  /// No description provided for @hostProxyLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Proxy'**
+  String get hostProxyLabel;
+
+  /// No description provided for @hostProxyInherit.
+  ///
+  /// In en, this message translates to:
+  /// **'inherits the app\'s environment'**
+  String get hostProxyInherit;
+
   /// No description provided for @localHostDialogTitle.
   ///
   /// In en, this message translates to:

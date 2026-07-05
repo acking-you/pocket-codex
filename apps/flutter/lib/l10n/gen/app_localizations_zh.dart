@@ -849,6 +849,24 @@ class AppLocalizationsZh extends AppLocalizations {
   String get codexBuiltinNote => '进程内运行 app 自带的 codex，无需安装。';
 
   @override
+  String get hostRuntimeInfo => '运行信息';
+
+  @override
+  String get hostRuntimeMode => 'codex';
+
+  @override
+  String get hostCodexVersion => '版本';
+
+  @override
+  String get hostCodexPath => '路径';
+
+  @override
+  String get hostProxyLabel => '代理';
+
+  @override
+  String get hostProxyInherit => '继承 app 的运行环境';
+
+  @override
   String get localHostDialogTitle => '托管本地 app-server';
 
   @override

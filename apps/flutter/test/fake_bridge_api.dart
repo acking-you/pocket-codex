@@ -359,6 +359,12 @@ class FakeBridgeApi implements BridgeApi {
   Future<List<AppServeStatus>> appServeStatus() async =>
       List.unmodifiable(serveHosts);
 
+  /// Seedable value returned by [embeddedCodexVersion] (default: a fake commit).
+  String embeddedCodexCommit = 'deadbeef1234';
+
+  @override
+  Future<String> embeddedCodexVersion() async => embeddedCodexCommit;
+
   @override
   Future<void> appServeDeregister({
     required String name,

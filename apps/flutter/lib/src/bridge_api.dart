@@ -112,6 +112,9 @@ class AppServeStatus {
     this.metaListenAddr = '',
     this.metaServiceKey = '',
     this.metaRegistered = false,
+    this.embedded = false,
+    this.codexBinary,
+    this.proxy,
   });
 
   /// Service instance name.
@@ -152,6 +155,17 @@ class AppServeStatus {
 
   /// The meta tunnel is currently published.
   final bool metaRegistered;
+
+  /// This host runs codex IN-PROCESS (the compiled-in 自带 codex) rather than a
+  /// spawned external binary.
+  final bool embedded;
+
+  /// The resolved external codex binary path, or `null` for an embedded host.
+  final String? codexBinary;
+
+  /// Upstream proxy codex + the API proxy were started with, or `null` when
+  /// they inherit the app's environment.
+  final String? proxy;
 }
 
 /// View of persisted config (relay/key presence, locale, account state).
@@ -982,6 +996,11 @@ abstract interface class BridgeApi {
 
   /// Snapshot of every local host (for the status cards + periodic re-probe).
   Future<List<AppServeStatus>> appServeStatus();
+
+  /// The `deps/codex` commit the compiled-in (自带) codex was built from — the
+  /// meaningful "version" for an embedded host (codex's crate version is a
+  /// `0.0.0` placeholder). Shown in the host details.
+  Future<String> embeddedCodexVersion();
 
   /// Take one tunnel ([kind] = 'app' or 'api') of a local host off the relay
   /// without stopping the host — a reversible unpublish. The codex / API proxy
