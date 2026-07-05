@@ -157,10 +157,16 @@ class RustBridgeApi implements BridgeApi {
             metaListenAddr: s.metaListenAddr,
             metaServiceKey: s.metaServiceKey,
             metaRegistered: s.metaRegistered,
+            embedded: s.embedded,
+            codexBinary: s.codexBinary,
+            proxy: s.proxy,
           ),
         )
         .toList();
   }
+
+  @override
+  Future<String> embeddedCodexVersion() => frb.embeddedCodexVersion();
 
   @override
   Future<void> appServeDeregister({

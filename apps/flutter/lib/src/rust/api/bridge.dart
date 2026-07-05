@@ -123,6 +123,12 @@ Future<void> apiUnsubscribe({required String serviceKey}) =>
 Future<List<SubStatusDto>> subscriptions() =>
     RustLib.instance.api.crateApiBridgeSubscriptions();
 
+/// The `deps/codex` commit the compiled-in (自带) codex app-server was built
+/// from — its meaningful "version", since codex's own crate version is a
+/// `0.0.0` placeholder. The host details show this for an embedded host.
+Future<String> embeddedCodexVersion() =>
+    RustLib.instance.api.crateApiBridgeEmbeddedCodexVersion();
+
 /// Start hosting a local codex app-server **and** Responses API proxy under the
 /// signed-in account, publishing both `app:<name>` and `api:<name>`. Re-hosting
 /// a name whose codex is still alive just re-registers any dropped tunnels.
@@ -227,7 +233,8 @@ Future<bool> appProbeLocal({required String localAddr}) =>
 /// Health-check an API proxy THIS machine hosts itself, by its loopback
 /// api-listen address — a direct minimal HTTP request, no relay hop. Lets a
 /// local host's API tunnel read "online" the instant its proxy is up instead
-/// of waiting on a slower transient relay round-trip. Mirrors [`app_probe_local`].
+/// of waiting on a slower transient relay round-trip. Mirrors
+/// [`app_probe_local`].
 Future<bool> apiProbeLocal({required String localAddr}) =>
     RustLib.instance.api.crateApiBridgeApiProbeLocal(localAddr: localAddr);
 
@@ -891,6 +898,17 @@ class AppServeStatusDto {
   /// The meta tunnel is currently published.
   final bool metaRegistered;
 
+  /// This host runs codex IN-PROCESS (the compiled-in `embedded-codex`) rather
+  /// than a spawned external binary.
+  final bool embedded;
+
+  /// The resolved external codex binary path, or `None` for an embedded host.
+  final String? codexBinary;
+
+  /// Upstream proxy codex + the API proxy were started with, or `None` when
+  /// they inherit the app's environment.
+  final String? proxy;
+
   const AppServeStatusDto({
     required this.name,
     required this.device,
@@ -905,6 +923,9 @@ class AppServeStatusDto {
     required this.metaListenAddr,
     required this.metaServiceKey,
     required this.metaRegistered,
+    required this.embedded,
+    this.codexBinary,
+    this.proxy,
   });
 
   @override
@@ -921,7 +942,10 @@ class AppServeStatusDto {
       apiRegistered.hashCode ^
       metaListenAddr.hashCode ^
       metaServiceKey.hashCode ^
-      metaRegistered.hashCode;
+      metaRegistered.hashCode ^
+      embedded.hashCode ^
+      codexBinary.hashCode ^
+      proxy.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -940,7 +964,10 @@ class AppServeStatusDto {
           apiRegistered == other.apiRegistered &&
           metaListenAddr == other.metaListenAddr &&
           metaServiceKey == other.metaServiceKey &&
-          metaRegistered == other.metaRegistered;
+          metaRegistered == other.metaRegistered &&
+          embedded == other.embedded &&
+          codexBinary == other.codexBinary &&
+          proxy == other.proxy;
 }
 
 /// codex auth status for the app-server behind `service_key`, mirrored for

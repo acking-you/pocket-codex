@@ -869,6 +869,24 @@ class AppLocalizationsEn extends AppLocalizations {
       'Runs the app\'s built-in codex in-process — no install needed.';
 
   @override
+  String get hostRuntimeInfo => 'Runtime';
+
+  @override
+  String get hostRuntimeMode => 'codex';
+
+  @override
+  String get hostCodexVersion => 'Version';
+
+  @override
+  String get hostCodexPath => 'Path';
+
+  @override
+  String get hostProxyLabel => 'Proxy';
+
+  @override
+  String get hostProxyInherit => 'inherits the app\'s environment';
+
+  @override
   String get localHostDialogTitle => 'Host a local app-server';
 
   @override

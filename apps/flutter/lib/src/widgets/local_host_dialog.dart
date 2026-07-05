@@ -44,6 +44,9 @@ class _LocalHostDialogState extends ConsumerState<LocalHostDialog> {
   bool _embedded = false;
   bool _busy = false;
   String? _error;
+  // The built-in codex commit for a RUNNING embedded host (its "version"),
+  // loaded lazily in initState. Null until loaded / for an external host.
+  String? _embeddedVersion;
 
   bool get _isExisting => widget.existing != null;
   bool get _codexFound => _codexPath != null;
@@ -54,7 +57,17 @@ class _LocalHostDialogState extends ConsumerState<LocalHostDialog> {
   @override
   void initState() {
     super.initState();
-    if (_isExisting) return;
+    if (_isExisting) {
+      // Running host: load the built-in codex commit (its version) for the
+      // details panel when this host runs the embedded codex.
+      if (widget.existing!.embedded) {
+        Future.microtask(() async {
+          final v = await ref.read(bridgeApiProvider).embeddedCodexVersion();
+          if (mounted) setState(() => _embeddedVersion = v);
+        });
+      }
+      return;
+    }
     // Auto-detect codex: when found we just show "available" (with a "change
     // path" override); when not, the user picks a path (persisted on start) or
     // installs codex and taps "re-detect".
@@ -215,6 +228,41 @@ class _LocalHostDialogState extends ConsumerState<LocalHostDialog> {
           SelectableText(
             existing.apiServiceKey,
             style: small?.copyWith(color: scheme.onSurfaceVariant),
+          ),
+        )
+        // Runtime details: built-in (in-process) vs external codex, its version
+        // (the fork commit for the built-in one), and the active upstream proxy.
+        ..add(const Divider(height: 24))
+        ..add(
+          Text(
+            l10n.hostRuntimeInfo,
+            style: small?.copyWith(fontWeight: FontWeight.w600),
+          ),
+        )
+        ..add(const SizedBox(height: 4))
+        ..add(
+          Text(
+            '${l10n.hostRuntimeMode}: '
+            '${existing.embedded ? l10n.codexSourceBuiltin : l10n.codexSourceExternal}',
+            style: small,
+          ),
+        )
+        ..add(
+          existing.embedded
+              ? Text(
+                  '${l10n.hostCodexVersion}: '
+                  '${_embeddedVersion == null ? '…' : 'fork @$_embeddedVersion'}',
+                  style: small?.copyWith(color: scheme.onSurfaceVariant),
+                )
+              : SelectableText(
+                  '${l10n.hostCodexPath}: ${existing.codexBinary ?? '—'}',
+                  style: small?.copyWith(color: scheme.onSurfaceVariant),
+                ),
+        )
+        ..add(
+          Text(
+            '${l10n.hostProxyLabel}: ${existing.proxy ?? l10n.hostProxyInherit}',
+            style: small,
           ),
         )
         // Project folders: the roots a phone's folder browser is confined to,

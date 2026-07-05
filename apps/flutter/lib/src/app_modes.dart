@@ -7,8 +7,10 @@ enum PermissionMode {
   /// Ask before running; read-only sandbox.
   readOnly(approval: 'on-request', sandbox: 'read-only'),
 
-  /// Write within the workspace; ask only on failure. The default.
-  auto(approval: 'on-failure', sandbox: 'workspace-write'),
+  /// Write within the workspace; the model asks for approval when it needs to.
+  /// The default. (codex dropped the old `on-failure` policy — it now aliases to
+  /// `on-request`, and the app-server's v2 enum rejects the bare `on-failure`.)
+  auto(approval: 'on-request', sandbox: 'workspace-write'),
 
   /// No sandbox, never ask. The "bypass permissions" preset.
   full(approval: 'never', sandbox: 'danger-full-access');

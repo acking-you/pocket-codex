@@ -622,6 +622,20 @@ fn parse_approval_policy(v: Option<&Value>) -> Option<String> {
     v.as_object()?.keys().next().cloned()
 }
 
+/// Migrate a legacy approval-policy wire value before sending it to codex.
+/// codex removed the `OnFailure` variant — its enum now aliases `on-failure` to
+/// `OnRequest`, and the app-server's v2 protocol enum only accepts
+/// `untrusted`/`on-request`/`granular`/`never`, rejecting a bare `on-failure`
+/// with "unknown variant". A thread persisted (or a UI preset built) before the
+/// codex bump can still hand us `on-failure`, so normalize it to `on-request`
+/// (codex's own alias target) at the send boundary. Other values pass through.
+fn normalize_approval_policy(policy: &str) -> &str {
+    match policy {
+        "on-failure" => "on-request",
+        other => other,
+    }
+}
+
 /// A sandbox policy value, normalized to the kebab strings the UI speaks. The
 /// v2 protocol sends a camelCase-tagged object (`{"type": "readOnly", …}`);
 /// tolerate a legacy kebab tag or a bare string too, and pass unknown tags
@@ -872,7 +886,7 @@ pub fn thread_start(
         params.insert("cwd".into(), json!(c));
     }
     if let Some(a) = approval_policy {
-        params.insert("approvalPolicy".into(), json!(a));
+        params.insert("approvalPolicy".into(), json!(normalize_approval_policy(&a)));
     }
     if let Some(s) = sandbox {
         params.insert("sandbox".into(), json!(s));
@@ -1412,7 +1426,7 @@ pub fn turn_start(
         params.insert("effort".into(), json!(eff));
     }
     if let Some(a) = approval_policy {
-        params.insert("approvalPolicy".into(), json!(a));
+        params.insert("approvalPolicy".into(), json!(normalize_approval_policy(&a)));
     }
     // turn/start takes a structured `sandboxPolicy` (vs thread/start's plain
     // `sandbox` string); map the preset's mode to the tagged object.
@@ -2130,8 +2144,8 @@ mod tests {
         // Approval: plain strings pass through; the externally-tagged granular
         // object maps to its tag.
         assert_eq!(
-            parse_approval_policy(Some(&json!("on-failure"))).as_deref(),
-            Some("on-failure")
+            parse_approval_policy(Some(&json!("on-request"))).as_deref(),
+            Some("on-request")
         );
         assert_eq!(
             parse_approval_policy(Some(&json!({"granular": {"rules": true}}))).as_deref(),
@@ -2139,6 +2153,13 @@ mod tests {
         );
         assert_eq!(parse_approval_policy(Some(&json!(""))), None);
         assert_eq!(parse_approval_policy(None), None);
+        // Legacy `on-failure` is migrated to `on-request` before it reaches the
+        // app-server (codex removed the variant); other values pass through.
+        assert_eq!(normalize_approval_policy("on-failure"), "on-request");
+        assert_eq!(normalize_approval_policy("on-request"), "on-request");
+        assert_eq!(normalize_approval_policy("untrusted"), "untrusted");
+        assert_eq!(normalize_approval_policy("granular"), "granular");
+        assert_eq!(normalize_approval_policy("never"), "never");
         // Sandbox: v2 camelCase tags normalize to the kebab strings the UI
         // speaks; bare/kebab strings and unknown tags pass through.
         assert_eq!(

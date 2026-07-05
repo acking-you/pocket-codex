@@ -410,6 +410,21 @@ pub struct AppServeStatusDto {
     pub meta_service_key: String,
     /// The meta tunnel is currently published.
     pub meta_registered: bool,
+    /// This host runs codex IN-PROCESS (the compiled-in `embedded-codex`)
+    /// rather than a spawned external binary.
+    pub embedded: bool,
+    /// The resolved external codex binary path, or `None` for an embedded host.
+    pub codex_binary: Option<String>,
+    /// Upstream proxy codex + the API proxy were started with, or `None` when
+    /// they inherit the app's environment.
+    pub proxy: Option<String>,
+}
+
+/// The `deps/codex` commit the compiled-in (自带) codex app-server was built
+/// from — its meaningful "version", since codex's own crate version is a
+/// `0.0.0` placeholder. The host details show this for an embedded host.
+pub fn embedded_codex_version() -> String {
+    pocket_codex_codex::EMBEDDED_CODEX_COMMIT.to_string()
 }
 
 /// Start hosting a local codex app-server **and** Responses API proxy under the
@@ -459,6 +474,9 @@ pub fn app_serve_status() -> Vec<AppServeStatusDto> {
             meta_listen_addr: s.meta_listen_addr,
             meta_service_key: s.meta_service_key,
             meta_registered: s.meta_registered,
+            embedded: s.embedded,
+            codex_binary: s.codex_binary,
+            proxy: s.proxy,
         })
         .collect()
 }
