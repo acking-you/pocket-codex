@@ -65,6 +65,7 @@
     "placeholders": { "count": { "type": "int" } }
   },
   "imageSave": "Save image",
+  "imageLoadFailed": "Couldn't load this image",
   "imageSaved": "Saved to {path}",
   "@imageSaved": {
     "placeholders": { "path": { "type": "String" } }

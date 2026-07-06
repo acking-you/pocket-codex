@@ -187,6 +187,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get imageSave => 'Save image';
 
   @override
+  String get imageLoadFailed => 'Couldn\'t load this image';
+
+  @override
   String imageSaved(String path) {
     return 'Saved to $path';
   }

@@ -184,6 +184,9 @@ class AppLocalizationsZh extends AppLocalizations {
   String get imageSave => '保存图片';
 
   @override
+  String get imageLoadFailed => '无法加载此图片';
+
+  @override
   String imageSaved(String path) {
     return '已保存到 $path';
   }

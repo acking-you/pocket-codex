@@ -13,13 +13,18 @@ import 'package:pocket_codex/src/image_attachments.dart';
 /// its pixels never crossed the wire, so an honest filename chip is all a
 /// remote controller can show).
 class ResolvedImage {
-  ResolvedImage._({this.bytes, this.hostPath});
+  ResolvedImage._({this.bytes, this.hostPath, this.broken = false});
 
-  /// Decoded image bytes for a data URL; null for a host path.
+  /// Decoded image bytes for a data URL; null for a host path or broken image.
   final Uint8List? bytes;
 
   /// Host filesystem path for a `localImage`; null for a data URL.
   final String? hostPath;
+
+  /// True for a `data:image/...` URL whose payload failed to decode — kept
+  /// (not dropped) so the strip can show an honest "couldn't load" placeholder
+  /// instead of silently hiding an attachment the sender meant to include.
+  final bool broken;
 
   /// Basename of [hostPath] for the chip label.
   String get hostName {
@@ -31,18 +36,54 @@ class ResolvedImage {
 
 /// Resolve wire URLs into renderable attachments, decoding each base64
 /// payload exactly once (decoding per rebuild would jank the list).
-/// Undecodable data URLs are dropped; non-data URLs become host-path chips.
+/// An undecodable data URL becomes a `broken` placeholder (kept, not dropped);
+/// non-data URLs become host-path chips.
 List<ResolvedImage> resolveImageUrls(List<String> urls) {
   final out = <ResolvedImage>[];
   for (final url in urls) {
     if (url.startsWith('data:')) {
       final bytes = decodeImageDataUrl(url);
-      if (bytes != null) out.add(ResolvedImage._(bytes: bytes));
+      out.add(
+        bytes != null
+            ? ResolvedImage._(bytes: bytes)
+            : ResolvedImage._(broken: true),
+      );
     } else {
       out.add(ResolvedImage._(hostPath: url));
     }
   }
   return out;
+}
+
+/// Whether the save-to-file dialog is available. Desktop-only: `file_selector`
+/// has no mobile save implementation (mobile saving would need a gallery
+/// plugin).
+bool get canSaveImages =>
+    !kIsWeb &&
+    (defaultTargetPlatform == TargetPlatform.windows ||
+        defaultTargetPlatform == TargetPlatform.macOS ||
+        defaultTargetPlatform == TargetPlatform.linux);
+
+/// Save [bytes] to a user-chosen file, reporting the outcome via a snackbar.
+/// [suggestedName] seeds the dialog filename; a cancelled dialog is a no-op.
+/// Guard call sites with [canSaveImages] (desktop-only).
+Future<void> saveImageBytes(
+  BuildContext context,
+  Uint8List bytes, {
+  required String suggestedName,
+}) async {
+  final l10n = AppLocalizations.of(context);
+  final messenger = ScaffoldMessenger.of(context);
+  final location = await getSaveLocation(suggestedName: suggestedName);
+  if (location == null) return;
+  try {
+    await File(location.path).writeAsBytes(bytes);
+    messenger.showSnackBar(
+      SnackBar(content: Text(l10n.imageSaved(location.path))),
+    );
+  } catch (e) {
+    messenger.showSnackBar(SnackBar(content: Text(l10n.imageSaveFailed('$e'))));
+  }
 }
 
 /// Thumbnail strip for a message's image attachments. Tapping a thumbnail
@@ -70,57 +111,28 @@ class MessageImagesView extends StatelessWidget {
       children: [
         for (final image in images)
           if (image.bytes != null)
-            _thumb(context, renderable, bytesIndex++, side)
+            _ImageThumb(images: renderable, index: bytesIndex++, side: side)
+          else if (image.broken)
+            _brokenThumb(context, side)
           else
             _hostChip(context, image),
       ],
     );
   }
 
-  Widget _thumb(
-    BuildContext context,
-    List<Uint8List> renderable,
-    int index,
-    double side,
-  ) {
-    final scale = MediaQuery.of(context).devicePixelRatio;
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(10),
-      child: Stack(
-        children: [
-          Image.memory(
-            renderable[index],
-            key: Key('msg-image-$index'),
-            width: side,
-            height: side,
-            fit: BoxFit.cover,
-            // Decode near thumbnail resolution — full-res frames for every
-            // thumb would hold megabytes of pixels per message. 2× the box so a
-            // landscape image's SHORT edge still reaches the square cover box
-            // (cacheWidth alone would decode it too short and upscale blurry).
-            cacheWidth: (side * scale * 2).round(),
-            gaplessPlayback: true,
-            errorBuilder: (context, _, _) => SizedBox(
-              width: side,
-              height: side,
-              child: Icon(
-                Icons.broken_image_outlined,
-                color: Theme.of(context).colorScheme.outline,
-              ),
-            ),
-          ),
-          // A local transparent Material ON TOP of the opaque image so the
-          // tap ripple is actually visible (ink on the distant Scaffold
-          // Material would paint underneath the bubble and image).
-          Positioned.fill(
-            child: Material(
-              type: MaterialType.transparency,
-              child: InkWell(
-                onTap: () => ImageViewerPage.show(context, renderable, index),
-              ),
-            ),
-          ),
-        ],
+  Widget _brokenThumb(BuildContext context, double side) {
+    final scheme = Theme.of(context).colorScheme;
+    return Tooltip(
+      message: AppLocalizations.of(context).imageLoadFailed,
+      child: Container(
+        width: side,
+        height: side,
+        decoration: BoxDecoration(
+          color: scheme.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: scheme.outlineVariant),
+        ),
+        child: Icon(Icons.broken_image_outlined, color: scheme.outline),
       ),
     );
   }
@@ -216,6 +228,123 @@ class FileRefChips extends StatelessWidget {
   }
 }
 
+/// One tappable thumbnail. Stateful so a desktop hover can reveal a quick
+/// save button (`file_selector` is desktop-only) without a viewer round-trip.
+class _ImageThumb extends StatefulWidget {
+  const _ImageThumb({
+    required this.images,
+    required this.index,
+    required this.side,
+  });
+
+  final List<Uint8List> images;
+  final int index;
+  final double side;
+
+  @override
+  State<_ImageThumb> createState() => _ImageThumbState();
+}
+
+class _ImageThumbState extends State<_ImageThumb> {
+  bool _hovering = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final scale = MediaQuery.of(context).devicePixelRatio;
+    final bytes = widget.images[widget.index];
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovering = true),
+      onExit: (_) => setState(() => _hovering = false),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(10),
+        child: Stack(
+          children: [
+            Image.memory(
+              bytes,
+              key: Key('msg-image-${widget.index}'),
+              width: widget.side,
+              height: widget.side,
+              fit: BoxFit.cover,
+              // Decode near thumbnail resolution — full-res frames for every
+              // thumb would hold megabytes of pixels per message. 2× the box so
+              // a landscape image's SHORT edge still reaches the square cover
+              // box (cacheWidth alone would decode it too short and blurry).
+              cacheWidth: (widget.side * scale * 2).round(),
+              gaplessPlayback: true,
+              errorBuilder: (context, _, _) => SizedBox(
+                width: widget.side,
+                height: widget.side,
+                child: Icon(
+                  Icons.broken_image_outlined,
+                  color: Theme.of(context).colorScheme.outline,
+                ),
+              ),
+            ),
+            // A local transparent Material ON TOP of the opaque image so the
+            // tap ripple is actually visible (ink on the distant Scaffold
+            // Material would paint underneath the bubble and image).
+            Positioned.fill(
+              child: Material(
+                type: MaterialType.transparency,
+                child: InkWell(
+                  onTap: () => ImageViewerPage.show(
+                    context,
+                    widget.images,
+                    widget.index,
+                  ),
+                ),
+              ),
+            ),
+            if (canSaveImages && _hovering)
+              Positioned(
+                top: 4,
+                right: 4,
+                child: _SaveChip(
+                  onPressed: () => saveImageBytes(
+                    context,
+                    bytes,
+                    suggestedName:
+                        'image-${widget.index + 1}.${sniffImageExtension(bytes)}',
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// A small circular save button overlaid on a hovered thumbnail.
+class _SaveChip extends StatelessWidget {
+  const _SaveChip({required this.onPressed});
+
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.black54,
+      shape: const CircleBorder(),
+      child: InkWell(
+        customBorder: const CircleBorder(),
+        onTap: onPressed,
+        child: Padding(
+          padding: const EdgeInsets.all(6),
+          child: Tooltip(
+            message: AppLocalizations.of(context).imageSave,
+            child: const Icon(
+              Icons.download_outlined,
+              size: 18,
+              color: Colors.white,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// Fullscreen image viewer: swipe (PageView) between a message's images,
 /// pinch/scroll to zoom (InteractiveViewer), save-to-file on desktop.
 class ImageViewerPage extends StatefulWidget {
@@ -261,34 +390,34 @@ class _ImageViewerPageState extends State<ImageViewerPage> {
     super.dispose();
   }
 
-  /// Save is desktop-only: file_selector's save dialog has no mobile
-  /// implementation (mobile saving would need a gallery plugin).
-  bool get _canSave =>
-      !kIsWeb &&
-      (defaultTargetPlatform == TargetPlatform.windows ||
-          defaultTargetPlatform == TargetPlatform.macOS ||
-          defaultTargetPlatform == TargetPlatform.linux);
-
-  Future<void> _save() async {
-    final l10n = AppLocalizations.of(context);
-    final messenger = ScaffoldMessenger.of(context);
+  Future<void> _save() {
     final bytes = widget.images[_index];
     // Sniff the real container (small GIF/WebP originals pass through
     // byte-identical) so the suggested extension is honest.
-    final location = await getSaveLocation(
+    return saveImageBytes(
+      context,
+      bytes,
       suggestedName: 'image-${_index + 1}.${sniffImageExtension(bytes)}',
     );
-    if (location == null) return;
-    try {
-      await File(location.path).writeAsBytes(bytes);
-      messenger.showSnackBar(
-        SnackBar(content: Text(l10n.imageSaved(location.path))),
-      );
-    } catch (e) {
-      messenger.showSnackBar(
-        SnackBar(content: Text(l10n.imageSaveFailed('$e'))),
-      );
-    }
+  }
+
+  Widget _brokenViewer(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const Icon(
+          Icons.broken_image_outlined,
+          color: Colors.white70,
+          size: 48,
+        ),
+        const SizedBox(height: 8),
+        Text(
+          l10n.imageLoadFailed,
+          style: const TextStyle(color: Colors.white70),
+        ),
+      ],
+    );
   }
 
   @override
@@ -303,7 +432,7 @@ class _ImageViewerPageState extends State<ImageViewerPage> {
             ? Text('${_index + 1}/${widget.images.length}')
             : null,
         actions: [
-          if (_canSave)
+          if (canSaveImages)
             IconButton(
               key: const Key('image-save-btn'),
               tooltip: l10n.imageSave,
@@ -312,16 +441,27 @@ class _ImageViewerPageState extends State<ImageViewerPage> {
             ),
         ],
       ),
+      // A tap anywhere over a page pops the viewer, so the backdrop and margins
+      // close it — not just the X button. Pinch and double-tap still zoom;
+      // those are scale gestures, distinct from a no-move tap.
       body: PageView.builder(
         controller: _pager,
         itemCount: widget.images.length,
         onPageChanged: (i) => setState(() => _index = i),
-        itemBuilder: (context, i) => InteractiveViewer(
-          key: Key('image-viewer-$i'),
-          minScale: 0.5,
-          maxScale: 6,
-          child: Center(
-            child: Image.memory(widget.images[i], gaplessPlayback: true),
+        itemBuilder: (context, i) => GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () => Navigator.of(context).maybePop(),
+          child: InteractiveViewer(
+            key: Key('image-viewer-$i'),
+            minScale: 0.5,
+            maxScale: 6,
+            child: Center(
+              child: Image.memory(
+                widget.images[i],
+                gaplessPlayback: true,
+                errorBuilder: (context, _, _) => _brokenViewer(context),
+              ),
+            ),
           ),
         ),
       ),

@@ -434,6 +434,12 @@ abstract class AppLocalizations {
   /// **'Save image'**
   String get imageSave;
 
+  /// No description provided for @imageLoadFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Couldn\'t load this image'**
+  String get imageLoadFailed;
+
   /// No description provided for @imageSaved.
   ///
   /// In en, this message translates to:
