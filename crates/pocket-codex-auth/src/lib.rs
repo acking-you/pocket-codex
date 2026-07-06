@@ -33,6 +33,9 @@ use rand::RngCore as _;
 use sha2::{Digest as _, Sha256};
 use uuid::Uuid;
 
+const MIN_GITHUB_POLL_INTERVAL_SECS: u64 = 5;
+const MAX_GITHUB_POLL_INTERVAL_SECS: u64 = 300;
+
 /// Configuration for [`Auth`].
 pub struct Config {
     /// GitHub OAuth app client id (Device Flow enabled).
@@ -570,7 +573,7 @@ fn status_only(status: DevicePollStatus) -> DevicePollResponse {
 }
 
 fn github_poll_interval(interval_secs: u64) -> u64 {
-    interval_secs.max(5)
+    interval_secs.clamp(MIN_GITHUB_POLL_INTERVAL_SECS, MAX_GITHUB_POLL_INTERVAL_SECS)
 }
 
 fn gen_refresh_token() -> String {
@@ -663,6 +666,13 @@ mod tests {
             build_redirect("pocketcodex://auth", &[("error", "exchange failed")]),
             "pocketcodex://auth?error=exchange+failed"
         );
+    }
+
+    #[test]
+    fn github_poll_interval_bounds_provider_values() {
+        assert_eq!(github_poll_interval(0), 5);
+        assert_eq!(github_poll_interval(11), 11);
+        assert_eq!(github_poll_interval(u64::MAX), 300);
     }
 
     fn cfg(web: bool) -> Config {

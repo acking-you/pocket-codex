@@ -36,6 +36,10 @@ use crate::commands::ui;
 const DEFAULT_BACKEND_HOST: Option<&str> = option_env!("POCKET_CODEX_BACKEND_HOST");
 /// Default broker TLS port; the host is taken from the backend URL.
 const DEFAULT_BROKER_PORT: u16 = 7900;
+const MIN_DEVICE_POLL_INTERVAL_SECS: u64 = 6;
+const MAX_DEVICE_POLL_INTERVAL_SECS: u64 = 300;
+const DEFAULT_DEVICE_CODE_LIFETIME_SECS: u64 = 900;
+const MAX_DEVICE_CODE_LIFETIME_SECS: u64 = 3600;
 
 /// The compile-time default backend API base URL — `https://<host>:8443`, where
 /// `<host>` is the build-time [`DEFAULT_BACKEND_HOST`] or the bundled fallback.
@@ -117,7 +121,7 @@ async fn login_device(backend_flag: Option<&str>) -> Result<()> {
     ui::code(&format!("open {} and enter {}", start.verification_uri, start.user_code));
 
     let mut interval = device_poll_interval(start.interval_secs);
-    let deadline = Instant::now() + device_code_lifetime(start.expires_in_secs);
+    let deadline = device_code_deadline(Instant::now(), start.expires_in_secs);
     loop {
         let now = Instant::now();
         if now >= deadline {
@@ -173,15 +177,30 @@ async fn login_device(backend_flag: Option<&str>) -> Result<()> {
 }
 
 fn device_poll_interval(interval_secs: u64) -> Duration {
-    Duration::from_secs(interval_secs.max(6))
+    Duration::from_secs(
+        interval_secs.clamp(MIN_DEVICE_POLL_INTERVAL_SECS, MAX_DEVICE_POLL_INTERVAL_SECS),
+    )
 }
 
 fn device_code_lifetime(expires_in_secs: u64) -> Duration {
-    Duration::from_secs(if expires_in_secs == 0 { 900 } else { expires_in_secs })
+    let secs = if expires_in_secs == 0 {
+        DEFAULT_DEVICE_CODE_LIFETIME_SECS
+    } else {
+        expires_in_secs.min(MAX_DEVICE_CODE_LIFETIME_SECS)
+    };
+    Duration::from_secs(secs)
+}
+
+fn device_code_deadline(now: Instant, expires_in_secs: u64) -> Instant {
+    now.checked_add(device_code_lifetime(expires_in_secs))
+        .or_else(|| now.checked_add(Duration::from_secs(DEFAULT_DEVICE_CODE_LIFETIME_SECS)))
+        .unwrap_or(now)
 }
 
 fn slow_down_delay(current: Duration) -> Duration {
-    current + Duration::from_secs(5)
+    current
+        .saturating_add(Duration::from_secs(5))
+        .min(Duration::from_secs(MAX_DEVICE_POLL_INTERVAL_SECS))
 }
 
 fn next_poll_interval_after_slow_down(
@@ -677,12 +696,24 @@ mod tests {
     }
 
     #[test]
+    fn device_login_polling_caps_untrusted_backend_values() {
+        assert_eq!(device_poll_interval(u64::MAX), Duration::from_secs(300));
+        assert_eq!(device_code_lifetime(u64::MAX), Duration::from_secs(3600));
+
+        let now = Instant::now();
+        let deadline = device_code_deadline(now, u64::MAX);
+        assert_eq!(deadline.duration_since(now), Duration::from_secs(3600));
+    }
+
+    #[test]
     fn device_login_slow_down_increases_interval_cumulatively() {
         let mut delay = device_poll_interval(5);
         delay = next_poll_interval_after_slow_down(delay, None);
         assert_eq!(delay, Duration::from_secs(11));
         delay = next_poll_interval_after_slow_down(delay, None);
         assert_eq!(delay, Duration::from_secs(16));
+        let capped = next_poll_interval_after_slow_down(Duration::from_secs(300), None);
+        assert_eq!(capped, Duration::from_secs(300));
     }
 
     #[test]
