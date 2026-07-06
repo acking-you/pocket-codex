@@ -6,7 +6,10 @@
 //! token (a JWT, persisted in the same 0600 `config.toml` as the relay key) and
 //! the opaque refresh token used to renew it.
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use anyhow::{anyhow, bail, Context, Result};
 use base64::Engine as _;
@@ -33,6 +36,10 @@ use crate::commands::ui;
 const DEFAULT_BACKEND_HOST: Option<&str> = option_env!("POCKET_CODEX_BACKEND_HOST");
 /// Default broker TLS port; the host is taken from the backend URL.
 const DEFAULT_BROKER_PORT: u16 = 7900;
+const MIN_DEVICE_POLL_INTERVAL_SECS: u64 = 6;
+const MAX_DEVICE_POLL_INTERVAL_SECS: u64 = 300;
+const DEFAULT_DEVICE_CODE_LIFETIME_SECS: u64 = 900;
+const MAX_DEVICE_CODE_LIFETIME_SECS: u64 = 3600;
 
 /// The compile-time default backend API base URL — `https://<host>:8443`, where
 /// `<host>` is the build-time [`DEFAULT_BACKEND_HOST`] or the bundled fallback.
@@ -113,9 +120,17 @@ async fn login_device(backend_flag: Option<&str>) -> Result<()> {
     ui::field("url", &start.verification_uri);
     ui::code(&format!("open {} and enter {}", start.verification_uri, start.user_code));
 
-    let interval = Duration::from_secs(start.interval_secs.max(1));
+    let mut interval = device_poll_interval(start.interval_secs);
+    let deadline = device_code_deadline(Instant::now(), start.expires_in_secs);
     loop {
-        tokio::time::sleep(interval).await;
+        let now = Instant::now();
+        if now >= deadline {
+            bail!("device code expired; run `pocket-codex login` again");
+        }
+        tokio::time::sleep(interval.min(deadline.saturating_duration_since(now))).await;
+        if Instant::now() >= deadline {
+            bail!("device code expired; run `pocket-codex login` again");
+        }
         let poll: DevicePollResponse = client
             .post(format!("{base}/auth/device/poll"))
             .json(&pocket_codex_account_proto::http::DevicePollRequest {
@@ -129,9 +144,12 @@ async fn login_device(backend_flag: Option<&str>) -> Result<()> {
             .json()
             .await
             .context("parsing device poll response")?;
+        tracing::debug!(status = ?poll.status, "device login poll response");
         match poll.status {
             DevicePollStatus::Pending => continue,
-            DevicePollStatus::SlowDown => tokio::time::sleep(interval).await,
+            DevicePollStatus::SlowDown => {
+                interval = next_poll_interval_after_slow_down(interval, poll.interval_secs);
+            },
             DevicePollStatus::Authorized => {
                 let cred = poll
                     .credential
@@ -156,6 +174,42 @@ async fn login_device(backend_flag: Option<&str>) -> Result<()> {
             DevicePollStatus::Denied => bail!("access denied on GitHub"),
         }
     }
+}
+
+fn device_poll_interval(interval_secs: u64) -> Duration {
+    Duration::from_secs(
+        interval_secs.clamp(MIN_DEVICE_POLL_INTERVAL_SECS, MAX_DEVICE_POLL_INTERVAL_SECS),
+    )
+}
+
+fn device_code_lifetime(expires_in_secs: u64) -> Duration {
+    let secs = if expires_in_secs == 0 {
+        DEFAULT_DEVICE_CODE_LIFETIME_SECS
+    } else {
+        expires_in_secs.min(MAX_DEVICE_CODE_LIFETIME_SECS)
+    };
+    Duration::from_secs(secs)
+}
+
+fn device_code_deadline(now: Instant, expires_in_secs: u64) -> Instant {
+    now.checked_add(device_code_lifetime(expires_in_secs))
+        .or_else(|| now.checked_add(Duration::from_secs(DEFAULT_DEVICE_CODE_LIFETIME_SECS)))
+        .unwrap_or(now)
+}
+
+fn slow_down_delay(current: Duration) -> Duration {
+    current
+        .saturating_add(Duration::from_secs(5))
+        .min(Duration::from_secs(MAX_DEVICE_POLL_INTERVAL_SECS))
+}
+
+fn next_poll_interval_after_slow_down(
+    current: Duration,
+    server_interval_secs: Option<u64>,
+) -> Duration {
+    server_interval_secs
+        .map(device_poll_interval)
+        .unwrap_or_else(|| slow_down_delay(current))
 }
 
 /// The browser-redirect (authorization-code) flow: bind a loopback callback,
@@ -633,5 +687,38 @@ mod tests {
         let token = format!("h.{payload}.s");
         assert_eq!(jwt_exp(&token), Some(1_700_000_000));
         assert_eq!(jwt_exp("not-a-jwt"), None);
+    }
+
+    #[test]
+    fn device_login_polling_defaults_zero_bounds() {
+        assert_eq!(device_poll_interval(0), Duration::from_secs(6));
+        assert_eq!(device_code_lifetime(0), Duration::from_secs(900));
+    }
+
+    #[test]
+    fn device_login_polling_caps_untrusted_backend_values() {
+        assert_eq!(device_poll_interval(u64::MAX), Duration::from_secs(300));
+        assert_eq!(device_code_lifetime(u64::MAX), Duration::from_secs(3600));
+
+        let now = Instant::now();
+        let deadline = device_code_deadline(now, u64::MAX);
+        assert_eq!(deadline.duration_since(now), Duration::from_secs(3600));
+    }
+
+    #[test]
+    fn device_login_slow_down_increases_interval_cumulatively() {
+        let mut delay = device_poll_interval(5);
+        delay = next_poll_interval_after_slow_down(delay, None);
+        assert_eq!(delay, Duration::from_secs(11));
+        delay = next_poll_interval_after_slow_down(delay, None);
+        assert_eq!(delay, Duration::from_secs(16));
+        let capped = next_poll_interval_after_slow_down(Duration::from_secs(300), None);
+        assert_eq!(capped, Duration::from_secs(300));
+    }
+
+    #[test]
+    fn device_login_slow_down_prefers_backend_interval() {
+        let delay = next_poll_interval_after_slow_down(Duration::from_secs(10), Some(21));
+        assert_eq!(delay, Duration::from_secs(21));
     }
 }

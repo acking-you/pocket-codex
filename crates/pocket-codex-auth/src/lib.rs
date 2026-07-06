@@ -33,6 +33,9 @@ use rand::RngCore as _;
 use sha2::{Digest as _, Sha256};
 use uuid::Uuid;
 
+const MIN_GITHUB_POLL_INTERVAL_SECS: u64 = 5;
+const MAX_GITHUB_POLL_INTERVAL_SECS: u64 = 300;
+
 /// Configuration for [`Auth`].
 pub struct Config {
     /// GitHub OAuth app client id (Device Flow enabled).
@@ -80,6 +83,21 @@ pub struct Auth {
 impl Auth {
     /// Build the auth service over a [`Store`] and configuration.
     pub fn new(store: Store, config: Config) -> Result<Self> {
+        Self::new_with_github(store, config, GitHub::new)
+    }
+
+    #[cfg(test)]
+    fn new_with_github_base(store: Store, config: Config, github_base_url: &str) -> Result<Self> {
+        Self::new_with_github(store, config, |http, client_id| {
+            GitHub::new_with_base_url(http, client_id, github_base_url)
+        })
+    }
+
+    fn new_with_github(
+        store: Store,
+        config: Config,
+        github: impl FnOnce(reqwest::Client, String) -> GitHub,
+    ) -> Result<Self> {
         let http = reqwest::Client::builder()
             .user_agent("pocket-codex")
             // Bound every GitHub call so a slow/black-holing upstream can't pin a
@@ -102,7 +120,7 @@ impl Auth {
             _ => None,
         };
         Ok(Self {
-            github: GitHub::new(http, config.github_client_id),
+            github: github(http, config.github_client_id),
             jwt: Jwt::new(config.jwt_secret.as_bytes()),
             jwt_ttl_secs: config.jwt_ttl_secs,
             refresh_ttl_secs: config.refresh_ttl_secs,
@@ -141,7 +159,7 @@ impl Auth {
             user_code: dc.user_code,
             verification_uri: dc.verification_uri,
             poll_handle: handle,
-            interval_secs: dc.interval.max(0) as u64,
+            interval_secs: github_poll_interval(dc.interval.max(0) as u64),
             expires_in_secs: dc.expires_in.max(0) as u64,
         })
     }
@@ -156,7 +174,13 @@ impl Auth {
         };
         match self.github.poll_token(&flow.github_device_code).await? {
             PollResult::Pending => Ok(status_only(DevicePollStatus::Pending)),
-            PollResult::SlowDown => Ok(status_only(DevicePollStatus::SlowDown)),
+            PollResult::SlowDown {
+                interval_secs,
+            } => Ok(DevicePollResponse {
+                status: DevicePollStatus::SlowDown,
+                interval_secs: interval_secs.map(github_poll_interval),
+                credential: None,
+            }),
             PollResult::Expired => Ok(status_only(DevicePollStatus::Expired)),
             PollResult::Denied => Ok(status_only(DevicePollStatus::Denied)),
             PollResult::Authorized(access_token) => {
@@ -168,6 +192,7 @@ impl Auth {
                     .await?;
                 Ok(DevicePollResponse {
                     status: DevicePollStatus::Authorized,
+                    interval_secs: None,
                     credential: Some(credential),
                 })
             },
@@ -542,8 +567,13 @@ fn is_lost_response_retry(rotated_to: Option<&str>, revoked_at: Option<i64>, now
 fn status_only(status: DevicePollStatus) -> DevicePollResponse {
     DevicePollResponse {
         status,
+        interval_secs: None,
         credential: None,
     }
+}
+
+fn github_poll_interval(interval_secs: u64) -> u64 {
+    interval_secs.clamp(MIN_GITHUB_POLL_INTERVAL_SECS, MAX_GITHUB_POLL_INTERVAL_SECS)
 }
 
 fn gen_refresh_token() -> String {
@@ -558,6 +588,20 @@ fn hash_token(token: &str) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        io::{Error, ErrorKind},
+        sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        },
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    use tokio::{
+        io::{AsyncReadExt as _, AsyncWriteExt as _},
+        net::{TcpListener, TcpStream},
+    };
+
     use super::*;
 
     #[test]
@@ -624,6 +668,13 @@ mod tests {
         );
     }
 
+    #[test]
+    fn github_poll_interval_bounds_provider_values() {
+        assert_eq!(github_poll_interval(0), 5);
+        assert_eq!(github_poll_interval(11), 11);
+        assert_eq!(github_poll_interval(u64::MAX), 300);
+    }
+
     fn cfg(web: bool) -> Config {
         Config {
             github_client_id: "Iv1.test".to_string(),
@@ -661,5 +712,192 @@ mod tests {
                 .await,
             Err(AuthError::BadRedirect)
         ));
+    }
+
+    #[tokio::test]
+    async fn device_flow_authorizes_after_github_approval() {
+        let github = FakeGithub::spawn().await;
+        let store = Store::connect("sqlite::memory:").await.expect("store");
+        let auth = Auth::new_with_github_base(store, cfg(false), github.base_url()).expect("auth");
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock after unix epoch")
+            .as_secs() as i64;
+
+        let start = auth
+            .device_start(Some("laptop"), now)
+            .await
+            .expect("device start");
+        assert_eq!(start.user_code, "ABCD-EFGH");
+        assert_eq!(start.verification_uri, format!("{}/login/device", github.base_url()));
+        assert_eq!(start.interval_secs, 5);
+
+        let pending = auth
+            .device_poll(&start.poll_handle, now + 1)
+            .await
+            .expect("pending poll");
+        assert_eq!(pending.status, DevicePollStatus::Pending);
+        assert!(pending.credential.is_none());
+
+        let slow_down = auth
+            .device_poll(&start.poll_handle, now + 2)
+            .await
+            .expect("slow_down poll");
+        assert_eq!(slow_down.status, DevicePollStatus::SlowDown);
+        assert_eq!(slow_down.interval_secs, Some(11));
+        assert!(slow_down.credential.is_none());
+
+        let authorized = auth
+            .device_poll(&start.poll_handle, now + 3)
+            .await
+            .expect("authorized poll");
+        assert_eq!(authorized.status, DevicePollStatus::Authorized);
+        assert_eq!(authorized.interval_secs, None);
+        let credential = authorized.credential.expect("credential");
+        assert_eq!(credential.login, "octocat");
+        assert_eq!(credential.account_id.as_deref(), Some("42"));
+        let claims = auth.verify(&credential.token).expect("session jwt");
+        assert_eq!(claims.login, "octocat");
+        assert_eq!(claims.gh_id, 42);
+        assert_eq!(github.token_polls(), 3);
+
+        let consumed = auth
+            .device_poll(&start.poll_handle, now + 4)
+            .await
+            .expect("consumed poll");
+        assert_eq!(consumed.status, DevicePollStatus::Expired);
+        assert!(consumed.credential.is_none());
+    }
+
+    struct FakeGithub {
+        base_url: String,
+        token_polls: Arc<AtomicUsize>,
+    }
+
+    impl FakeGithub {
+        async fn spawn() -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("bind fake github");
+            let addr = listener.local_addr().expect("fake github addr");
+            let base_url = format!("http://{addr}");
+            let token_polls = Arc::new(AtomicUsize::new(0));
+            let server_base = base_url.clone();
+            let server_polls = token_polls.clone();
+            tokio::spawn(async move {
+                while let Ok((mut stream, _)) = listener.accept().await {
+                    let base = server_base.clone();
+                    let polls = server_polls.clone();
+                    tokio::spawn(async move {
+                        if let Ok((method, target, body)) = read_http_request(&mut stream).await {
+                            let (status, json) =
+                                fake_github_response(&base, &polls, &method, &target, &body);
+                            let response = format!(
+                                "HTTP/1.1 {status}\r\nContent-Type: \
+                                 application/json\r\nContent-Length: {}\r\nConnection: \
+                                 close\r\n\r\n{json}",
+                                json.len()
+                            );
+                            let _ = stream.write_all(response.as_bytes()).await;
+                            let _ = stream.shutdown().await;
+                        }
+                    });
+                }
+            });
+            Self {
+                base_url,
+                token_polls,
+            }
+        }
+
+        fn base_url(&self) -> &str {
+            &self.base_url
+        }
+
+        fn token_polls(&self) -> usize {
+            self.token_polls.load(Ordering::SeqCst)
+        }
+    }
+
+    async fn read_http_request(
+        stream: &mut TcpStream,
+    ) -> std::io::Result<(String, String, String)> {
+        let mut buf = Vec::new();
+        let mut chunk = [0u8; 1024];
+        let header_end = loop {
+            let n = stream.read(&mut chunk).await?;
+            if n == 0 {
+                return Err(Error::new(ErrorKind::UnexpectedEof, "request closed before headers"));
+            }
+            buf.extend_from_slice(&chunk[..n]);
+            if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                break pos + 4;
+            }
+            if buf.len() > 16 * 1024 {
+                return Err(Error::new(ErrorKind::InvalidData, "request headers too large"));
+            }
+        };
+        let headers = String::from_utf8_lossy(&buf[..header_end]).to_string();
+        let mut lines = headers.lines();
+        let request_line = lines
+            .next()
+            .ok_or_else(|| Error::new(ErrorKind::InvalidData, "missing request line"))?;
+        let mut parts = request_line.split_whitespace();
+        let method = parts
+            .next()
+            .ok_or_else(|| Error::new(ErrorKind::InvalidData, "missing method"))?
+            .to_string();
+        let target = parts
+            .next()
+            .ok_or_else(|| Error::new(ErrorKind::InvalidData, "missing target"))?
+            .to_string();
+        let content_length = headers
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse::<usize>().ok())
+                    .flatten()
+            })
+            .unwrap_or(0);
+        while buf.len() < header_end + content_length {
+            let n = stream.read(&mut chunk).await?;
+            if n == 0 {
+                return Err(Error::new(ErrorKind::UnexpectedEof, "request closed before body"));
+            }
+            buf.extend_from_slice(&chunk[..n]);
+        }
+        let body =
+            String::from_utf8_lossy(&buf[header_end..header_end + content_length]).to_string();
+        Ok((method, target, body))
+    }
+
+    fn fake_github_response(
+        base_url: &str,
+        token_polls: &AtomicUsize,
+        method: &str,
+        target: &str,
+        body: &str,
+    ) -> (&'static str, String) {
+        match (method, target) {
+            ("POST", "/login/device/code") if body.contains("client_id=Iv1.test") => (
+                "200 OK",
+                format!(
+                    r#"{{"device_code":"device-123","user_code":"ABCD-EFGH","verification_uri":"{base_url}/login/device","expires_in":900,"interval":1}}"#
+                ),
+            ),
+            ("POST", "/login/oauth/access_token") if body.contains("device_code=device-123") => {
+                match token_polls.fetch_add(1, Ordering::SeqCst) {
+                    0 => ("200 OK", r#"{"error":"authorization_pending"}"#.to_string()),
+                    1 => ("200 OK", r#"{"error":"slow_down","interval":11}"#.to_string()),
+                    _ => ("200 OK", r#"{"access_token":"gh-access"}"#.to_string()),
+                }
+            },
+            ("GET", "/user") => ("200 OK", r#"{"id":42,"login":"octocat"}"#.to_string()),
+            _ => (
+                "404 Not Found",
+                format!(r#"{{"error":"unexpected {method} {target} body={body}"}}"#),
+            ),
+        }
     }
 }
