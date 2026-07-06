@@ -6,6 +6,7 @@ import 'package:file_selector/file_selector.dart' show openFiles;
 import 'package:flutter/foundation.dart'
     show listEquals, defaultTargetPlatform, TargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:pocket_codex/src/widgets/window_title_bar.dart';
 import 'package:flutter/services.dart';
 import 'package:pasteboard/pasteboard.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
@@ -25,6 +26,7 @@ import 'package:pocket_codex/src/image_attachments.dart';
 import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/ui_prefs.dart';
 import 'package:pocket_codex/src/widgets/brand_logo.dart';
+import 'package:pocket_codex/src/widgets/file_browser_panel.dart';
 import 'package:pocket_codex/src/widgets/folder_tree_picker.dart';
 import 'package:pocket_codex/src/widgets/links.dart';
 import 'package:pocket_codex/src/widgets/loading.dart';
@@ -2364,7 +2366,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
       // the swipe start just inside that strip and open the sessions list.
       // (Swipe-to-close already works once the drawer is open.)
       drawerEdgeDragWidth: isMobile ? 56 : null,
-      appBar: AppBar(
+      appBar: WindowTitleBar(
         // Local codex not configured → a warning strip pointing at the wizard.
         bottom: needsCodexSetup ? _codexSetupBar(l10n) : null,
         // Mobile: the leading button OPENS the sessions list (drawer). Desktop:
@@ -4154,6 +4156,28 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
                             ),
                             onPressed: _sending ? null : _pickFiles,
                           ),
+                          // Browse / transfer host files (download from or
+                          // upload to the host's project folders). Desktop-only
+                          // (uses the save/open dialogs), so gated like saving.
+                          if (canSaveImages)
+                            IconButton(
+                              key: const Key('host-files-btn'),
+                              tooltip: l10n.hostFiles,
+                              visualDensity: VisualDensity.compact,
+                              icon: Icon(
+                                Icons.folder_open_outlined,
+                                size: 20,
+                                color: Theme.of(
+                                  context,
+                                ).colorScheme.onSurfaceVariant,
+                              ),
+                              onPressed: _sending
+                                  ? null
+                                  : () => showFileBrowser(
+                                      context,
+                                      serviceKey: widget.serviceKey,
+                                    ),
+                            ),
                           const SizedBox(width: 4),
                           // The options toggle: a compact summary of the active
                           // config when collapsed, a "hide" affordance when

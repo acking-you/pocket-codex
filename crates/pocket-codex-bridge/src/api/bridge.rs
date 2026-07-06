@@ -1348,6 +1348,19 @@ pub struct DirEntryDto {
     pub is_git_repo: bool,
 }
 
+/// One file in a host directory (mirrored for Dart), with size + mtime for the
+/// file-transfer panel.
+pub struct FileEntryDto {
+    /// The file's own name (final path component).
+    pub name: String,
+    /// Absolute host path.
+    pub path: String,
+    /// Size in bytes.
+    pub size: u64,
+    /// Last-modified time in unix seconds (0 when unavailable).
+    pub mtime: i64,
+}
+
 /// Read the project-folder config of the host behind `service_key`.
 pub fn meta_project_config(service_key: String) -> Result<ProjectConfigDto> {
     Ok(project_config_dto(meta::project_config(&service_key)?))
@@ -1381,6 +1394,41 @@ pub fn meta_list_dir(service_key: String, path: String) -> Result<Vec<DirEntryDt
             is_git_repo: e.is_git_repo,
         })
         .collect())
+}
+
+/// List the files (not sub-directories) in `path` on the host behind
+/// `service_key`, for the file-transfer panel. Errors (with a `403`-carrying
+/// message) if `path` is outside the host's configured project roots.
+pub fn meta_list_files(service_key: String, path: String) -> Result<Vec<FileEntryDto>> {
+    Ok(meta::list_files(&service_key, &path)?
+        .into_iter()
+        .map(|e| FileEntryDto {
+            name: e.name,
+            path: e.path,
+            size: e.size,
+            mtime: e.mtime,
+        })
+        .collect())
+}
+
+/// Download a host file's raw bytes (root-confined) from the host behind
+/// `service_key`, for saving to the controller's local disk. Errors (with a
+/// `403`-carrying message) if `path` is outside the configured project roots.
+pub fn meta_read_file(service_key: String, path: String) -> Result<Vec<u8>> {
+    meta::read_file(&service_key, &path)
+}
+
+/// Upload local `bytes` as `file_name` into host directory `dir`
+/// (root-confined) on the host behind `service_key`; returns the absolute HOST
+/// path where it landed. Never overwrites an existing same-named file (a
+/// collision surfaces the host's `409` in the returned message).
+pub fn meta_write_file(
+    service_key: String,
+    dir: String,
+    file_name: String,
+    bytes: Vec<u8>,
+) -> Result<String> {
+    Ok(meta::write_file(&service_key, &dir, &file_name, bytes)?.path)
 }
 
 // ---------------------------------------------------------------------------

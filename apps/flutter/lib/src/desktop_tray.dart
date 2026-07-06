@@ -84,6 +84,19 @@ class DesktopTray with TrayListener, WindowListener {
     _onOpenSettings = onOpenSettings;
 
     await windowManager.ensureInitialized();
+    // Frameless on macOS + Windows: hide the native title bar so the app's own
+    // bar sits flush at the top edge (WindowTitleBar handles the button
+    // avoidance + window drag). Keep the native window buttons visible. Linux
+    // keeps its native decorations for now. Best-effort — a title-bar-style
+    // failure must not abort tray setup / close-to-tray.
+    if (_isMacOS || _isWindows) {
+      try {
+        await windowManager.setTitleBarStyle(
+          TitleBarStyle.hidden,
+          windowButtonVisibility: true,
+        );
+      } catch (_) {}
+    }
     // Intercept the window close button: hide to tray instead of terminating.
     // onWindowClose (below) then hides the window; only the tray "Quit" exits.
     await windowManager.setPreventClose(true);

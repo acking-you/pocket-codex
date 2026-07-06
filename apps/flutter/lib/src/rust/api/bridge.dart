@@ -558,6 +558,44 @@ Future<List<DirEntryDto>> metaListDir({
   path: path,
 );
 
+/// List the files (not sub-directories) in `path` on the host behind
+/// `service_key`, for the file-transfer panel. Errors (with a `403`-carrying
+/// message) if `path` is outside the host's configured project roots.
+Future<List<FileEntryDto>> metaListFiles({
+  required String serviceKey,
+  required String path,
+}) => RustLib.instance.api.crateApiBridgeMetaListFiles(
+  serviceKey: serviceKey,
+  path: path,
+);
+
+/// Download a host file's raw bytes (root-confined) from the host behind
+/// `service_key`, for saving to the controller's local disk. Errors (with a
+/// `403`-carrying message) if `path` is outside the configured project roots.
+Future<Uint8List> metaReadFile({
+  required String serviceKey,
+  required String path,
+}) => RustLib.instance.api.crateApiBridgeMetaReadFile(
+  serviceKey: serviceKey,
+  path: path,
+);
+
+/// Upload local `bytes` as `file_name` into host directory `dir`
+/// (root-confined) on the host behind `service_key`; returns the absolute HOST
+/// path where it landed. Never overwrites an existing same-named file (a
+/// collision surfaces the host's `409` in the returned message).
+Future<String> metaWriteFile({
+  required String serviceKey,
+  required String dir,
+  required String fileName,
+  required List<int> bytes,
+}) => RustLib.instance.api.crateApiBridgeMetaWriteFile(
+  serviceKey: serviceKey,
+  dir: dir,
+  fileName: fileName,
+  bytes: bytes,
+);
+
 /// Begin a GitHub device-flow login. `backend` overrides the configured /
 /// default backend (and is remembered on success).
 Future<DeviceCodeDto> accountLoginStart({String? backend}) =>
@@ -898,8 +936,8 @@ class AppServeStatusDto {
   /// The meta tunnel is currently published.
   final bool metaRegistered;
 
-  /// This host runs codex IN-PROCESS (the compiled-in `embedded-codex`) rather
-  /// than a spawned external binary.
+  /// This host runs codex IN-PROCESS (the compiled-in `embedded-codex`)
+  /// rather than a spawned external binary.
   final bool embedded;
 
   /// The resolved external codex binary path, or `None` for an embedded host.
@@ -1230,6 +1268,43 @@ class DirEntryDto {
           name == other.name &&
           path == other.path &&
           isGitRepo == other.isGitRepo;
+}
+
+/// One file in a host directory (mirrored for Dart), with size + mtime for the
+/// file-transfer panel.
+class FileEntryDto {
+  /// The file's own name (final path component).
+  final String name;
+
+  /// Absolute host path.
+  final String path;
+
+  /// Size in bytes.
+  final BigInt size;
+
+  /// Last-modified time in unix seconds (0 when unavailable).
+  final PlatformInt64 mtime;
+
+  const FileEntryDto({
+    required this.name,
+    required this.path,
+    required this.size,
+    required this.mtime,
+  });
+
+  @override
+  int get hashCode =>
+      name.hashCode ^ path.hashCode ^ size.hashCode ^ mtime.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is FileEntryDto &&
+          runtimeType == other.runtimeType &&
+          name == other.name &&
+          path == other.path &&
+          size == other.size &&
+          mtime == other.mtime;
 }
 
 /// Outcome of a force-resume, mirrored for Dart.

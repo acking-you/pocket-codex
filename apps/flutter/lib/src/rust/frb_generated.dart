@@ -67,7 +67,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.12.0';
 
   @override
-  int get rustContentHash => 1156687954;
+  int get rustContentHash => -114646306;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -306,8 +306,18 @@ abstract class RustLibApi extends BaseApi {
     required String path,
   });
 
+  Future<List<FileEntryDto>> crateApiBridgeMetaListFiles({
+    required String serviceKey,
+    required String path,
+  });
+
   Future<ProjectConfigDto> crateApiBridgeMetaProjectConfig({
     required String serviceKey,
+  });
+
+  Future<Uint8List> crateApiBridgeMetaReadFile({
+    required String serviceKey,
+    required String path,
   });
 
   Future<SessionLivenessDto> crateApiBridgeMetaSessionLiveness({
@@ -343,6 +353,13 @@ abstract class RustLibApi extends BaseApi {
 
   Future<String> crateApiBridgeMetaUploadFile({
     required String serviceKey,
+    required String fileName,
+    required List<int> bytes,
+  });
+
+  Future<String> crateApiBridgeMetaWriteFile({
+    required String serviceKey,
+    required String dir,
     required String fileName,
     required List<int> bytes,
   });
@@ -2351,6 +2368,41 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   );
 
   @override
+  Future<List<FileEntryDto>> crateApiBridgeMetaListFiles({
+    required String serviceKey,
+    required String path,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(serviceKey, serializer);
+          sse_encode_String(path, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 63,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_file_entry_dto,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiBridgeMetaListFilesConstMeta,
+        argValues: [serviceKey, path],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiBridgeMetaListFilesConstMeta =>
+      const TaskConstMeta(
+        debugName: "meta_list_files",
+        argNames: ["serviceKey", "path"],
+      );
+
+  @override
   Future<ProjectConfigDto> crateApiBridgeMetaProjectConfig({
     required String serviceKey,
   }) {
@@ -2362,7 +2414,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 63,
+            funcId: 64,
             port: port_,
           );
         },
@@ -2384,6 +2436,40 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<Uint8List> crateApiBridgeMetaReadFile({
+    required String serviceKey,
+    required String path,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(serviceKey, serializer);
+          sse_encode_String(path, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 65,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_prim_u_8_strict,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiBridgeMetaReadFileConstMeta,
+        argValues: [serviceKey, path],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiBridgeMetaReadFileConstMeta => const TaskConstMeta(
+    debugName: "meta_read_file",
+    argNames: ["serviceKey", "path"],
+  );
+
+  @override
   Future<SessionLivenessDto> crateApiBridgeMetaSessionLiveness({
     required String serviceKey,
     required String threadId,
@@ -2397,7 +2483,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 64,
+            funcId: 66,
             port: port_,
           );
         },
@@ -2432,7 +2518,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 65,
+            funcId: 67,
             port: port_,
           );
         },
@@ -2465,7 +2551,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 66,
+            funcId: 68,
             port: port_,
           );
         },
@@ -2499,7 +2585,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 67,
+            funcId: 69,
             port: port_,
           );
         },
@@ -2534,7 +2620,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 68,
+            funcId: 70,
             port: port_,
           );
         },
@@ -2571,7 +2657,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 69,
+            funcId: 71,
             port: port_,
           );
         },
@@ -2608,7 +2694,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 70,
+            funcId: 72,
             port: port_,
           );
         },
@@ -2630,6 +2716,45 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<String> crateApiBridgeMetaWriteFile({
+    required String serviceKey,
+    required String dir,
+    required String fileName,
+    required List<int> bytes,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(serviceKey, serializer);
+          sse_encode_String(dir, serializer);
+          sse_encode_String(fileName, serializer);
+          sse_encode_list_prim_u_8_loose(bytes, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 73,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiBridgeMetaWriteFileConstMeta,
+        argValues: [serviceKey, dir, fileName, bytes],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiBridgeMetaWriteFileConstMeta =>
+      const TaskConstMeta(
+        debugName: "meta_write_file",
+        argNames: ["serviceKey", "dir", "fileName", "bytes"],
+      );
+
+  @override
   Future<void> crateApiBridgeSetKey({required String key}) {
     return handler.executeNormal(
       NormalTask(
@@ -2639,7 +2764,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 71,
+            funcId: 74,
             port: port_,
           );
         },
@@ -2667,7 +2792,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 72,
+            funcId: 75,
             port: port_,
           );
         },
@@ -2695,7 +2820,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 73,
+            funcId: 76,
             port: port_,
           );
         },
@@ -2722,7 +2847,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 74,
+            funcId: 77,
             port: port_,
           );
         },
@@ -3005,6 +3130,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  FileEntryDto dco_decode_file_entry_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 4)
+      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
+    return FileEntryDto(
+      name: dco_decode_String(arr[0]),
+      path: dco_decode_String(arr[1]),
+      size: dco_decode_u_64(arr[2]),
+      mtime: dco_decode_i_64(arr[3]),
+    );
+  }
+
+  @protected
   ForceResumeReportDto dco_decode_force_resume_report_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
@@ -3059,6 +3198,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   List<DirEntryDto> dco_decode_list_dir_entry_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return (raw as List<dynamic>).map(dco_decode_dir_entry_dto).toList();
+  }
+
+  @protected
+  List<FileEntryDto> dco_decode_list_file_entry_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_file_entry_dto).toList();
   }
 
   @protected
@@ -3701,6 +3846,21 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  FileEntryDto sse_decode_file_entry_dto(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_name = sse_decode_String(deserializer);
+    var var_path = sse_decode_String(deserializer);
+    var var_size = sse_decode_u_64(deserializer);
+    var var_mtime = sse_decode_i_64(deserializer);
+    return FileEntryDto(
+      name: var_name,
+      path: var_path,
+      size: var_size,
+      mtime: var_mtime,
+    );
+  }
+
+  @protected
   ForceResumeReportDto sse_decode_force_resume_report_dto(
     SseDeserializer deserializer,
   ) {
@@ -3783,6 +3943,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var ans_ = <DirEntryDto>[];
     for (var idx_ = 0; idx_ < len_; ++idx_) {
       ans_.add(sse_decode_dir_entry_dto(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
+  List<FileEntryDto> sse_decode_list_file_entry_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <FileEntryDto>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_file_entry_dto(deserializer));
     }
     return ans_;
   }
@@ -4503,6 +4677,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_file_entry_dto(FileEntryDto self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.name, serializer);
+    sse_encode_String(self.path, serializer);
+    sse_encode_u_64(self.size, serializer);
+    sse_encode_i_64(self.mtime, serializer);
+  }
+
+  @protected
   void sse_encode_force_resume_report_dto(
     ForceResumeReportDto self,
     SseSerializer serializer,
@@ -4570,6 +4753,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_i_32(self.length, serializer);
     for (final item in self) {
       sse_encode_dir_entry_dto(item, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_list_file_entry_dto(
+    List<FileEntryDto> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_file_entry_dto(item, serializer);
     }
   }
 

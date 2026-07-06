@@ -187,6 +187,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get imageSave => 'Save image';
 
   @override
+  String get imageLoadFailed => 'Couldn\'t load this image';
+
+  @override
   String imageSaved(String path) {
     return 'Saved to $path';
   }
@@ -1127,6 +1130,38 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get gitRepoLabel => 'Git repository';
+
+  @override
+  String get hostFiles => 'Host files';
+
+  @override
+  String get fileBrowserEmpty => 'This folder is empty';
+
+  @override
+  String get fileDownload => 'Download';
+
+  @override
+  String get fileUpload => 'Upload';
+
+  @override
+  String fileDownloaded(Object path) {
+    return 'Downloaded to $path';
+  }
+
+  @override
+  String fileDownloadFailed(Object error) {
+    return 'Couldn\'t download: $error';
+  }
+
+  @override
+  String fileUploaded(Object name) {
+    return 'Uploaded $name';
+  }
+
+  @override
+  String hostFileUploadFailed(Object error) {
+    return 'Couldn\'t upload: $error';
+  }
 
   @override
   String get browseProjectFolder => 'Browse project folders';

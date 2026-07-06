@@ -778,6 +778,29 @@ class HostDirEntry {
   final bool isGitRepo;
 }
 
+/// One file in a host directory, from [BridgeApi.metaListFiles].
+class HostFileEntry {
+  /// Creates a file entry.
+  const HostFileEntry({
+    required this.name,
+    required this.path,
+    required this.size,
+    required this.mtime,
+  });
+
+  /// The file's own name (final path component).
+  final String name;
+
+  /// Absolute host path.
+  final String path;
+
+  /// Size in bytes.
+  final int size;
+
+  /// Last-modified time in unix seconds (0 when unavailable).
+  final int mtime;
+}
+
 /// What the 自带 codex has on disk in `CODEX_HOME`, for the setup wizard.
 class CodexSetupStatus {
   /// Creates a codex setup status.
@@ -1256,4 +1279,25 @@ abstract interface class BridgeApi {
   /// the remote project-folder browser. Throws if [path] is outside the host's
   /// configured project roots.
   Future<List<HostDirEntry>> metaListDir(String serviceKey, String path);
+
+  /// List the files (not sub-directories) in [path] on the host behind
+  /// [serviceKey], for the file-transfer panel. Throws if [path] is outside the
+  /// host's configured project roots.
+  Future<List<HostFileEntry>> metaListFiles(String serviceKey, String path);
+
+  /// Download a host file's raw bytes (root-confined) from the host behind
+  /// [serviceKey], for saving to local disk. Throws if [path] is outside the
+  /// configured roots.
+  Future<Uint8List> metaReadFile(String serviceKey, String path);
+
+  /// Upload local [bytes] as [fileName] into host directory [dir]
+  /// (root-confined) on the host behind [serviceKey]; returns the absolute HOST
+  /// path where it landed. Throws if [dir] is outside the roots, or on a name
+  /// collision (the host never overwrites).
+  Future<String> metaWriteFile(
+    String serviceKey,
+    String dir,
+    String fileName,
+    Uint8List bytes,
+  );
 }

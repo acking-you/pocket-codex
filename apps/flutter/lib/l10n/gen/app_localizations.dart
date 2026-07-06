@@ -434,6 +434,12 @@ abstract class AppLocalizations {
   /// **'Save image'**
   String get imageSave;
 
+  /// No description provided for @imageLoadFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Couldn\'t load this image'**
+  String get imageLoadFailed;
+
   /// No description provided for @imageSaved.
   ///
   /// In en, this message translates to:
@@ -2119,6 +2125,54 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Git repository'**
   String get gitRepoLabel;
+
+  /// No description provided for @hostFiles.
+  ///
+  /// In en, this message translates to:
+  /// **'Host files'**
+  String get hostFiles;
+
+  /// No description provided for @fileBrowserEmpty.
+  ///
+  /// In en, this message translates to:
+  /// **'This folder is empty'**
+  String get fileBrowserEmpty;
+
+  /// No description provided for @fileDownload.
+  ///
+  /// In en, this message translates to:
+  /// **'Download'**
+  String get fileDownload;
+
+  /// No description provided for @fileUpload.
+  ///
+  /// In en, this message translates to:
+  /// **'Upload'**
+  String get fileUpload;
+
+  /// No description provided for @fileDownloaded.
+  ///
+  /// In en, this message translates to:
+  /// **'Downloaded to {path}'**
+  String fileDownloaded(Object path);
+
+  /// No description provided for @fileDownloadFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Couldn\'t download: {error}'**
+  String fileDownloadFailed(Object error);
+
+  /// No description provided for @fileUploaded.
+  ///
+  /// In en, this message translates to:
+  /// **'Uploaded {name}'**
+  String fileUploaded(Object name);
+
+  /// No description provided for @hostFileUploadFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Couldn\'t upload: {error}'**
+  String hostFileUploadFailed(Object error);
 
   /// No description provided for @browseProjectFolder.
   ///

@@ -97,6 +97,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   DirEntryDto dco_decode_dir_entry_dto(dynamic raw);
 
   @protected
+  FileEntryDto dco_decode_file_entry_dto(dynamic raw);
+
+  @protected
   ForceResumeReportDto dco_decode_force_resume_report_dto(dynamic raw);
 
   @protected
@@ -116,6 +119,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<DirEntryDto> dco_decode_list_dir_entry_dto(dynamic raw);
+
+  @protected
+  List<FileEntryDto> dco_decode_list_file_entry_dto(dynamic raw);
 
   @protected
   List<HolderDto> dco_decode_list_holder_dto(dynamic raw);
@@ -308,6 +314,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   DirEntryDto sse_decode_dir_entry_dto(SseDeserializer deserializer);
 
   @protected
+  FileEntryDto sse_decode_file_entry_dto(SseDeserializer deserializer);
+
+  @protected
   ForceResumeReportDto sse_decode_force_resume_report_dto(
     SseDeserializer deserializer,
   );
@@ -333,6 +342,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<DirEntryDto> sse_decode_list_dir_entry_dto(SseDeserializer deserializer);
+
+  @protected
+  List<FileEntryDto> sse_decode_list_file_entry_dto(
+    SseDeserializer deserializer,
+  );
 
   @protected
   List<HolderDto> sse_decode_list_holder_dto(SseDeserializer deserializer);
@@ -568,6 +582,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_dir_entry_dto(DirEntryDto self, SseSerializer serializer);
 
   @protected
+  void sse_encode_file_entry_dto(FileEntryDto self, SseSerializer serializer);
+
+  @protected
   void sse_encode_force_resume_report_dto(
     ForceResumeReportDto self,
     SseSerializer serializer,
@@ -597,6 +614,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_list_dir_entry_dto(
     List<DirEntryDto> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_file_entry_dto(
+    List<FileEntryDto> self,
     SseSerializer serializer,
   );
 

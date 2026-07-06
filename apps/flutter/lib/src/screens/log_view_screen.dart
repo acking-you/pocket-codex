@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:pocket_codex/src/widgets/window_title_bar.dart';
 import 'package:flutter/services.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
@@ -125,7 +126,7 @@ class _LogViewScreenState extends State<LogViewScreen> {
     final l10n = AppLocalizations.of(context);
     final scheme = Theme.of(context).colorScheme;
     return Scaffold(
-      appBar: AppBar(
+      appBar: WindowTitleBar(
         title: Text(l10n.logsTitle),
         actions: [
           IconButton(

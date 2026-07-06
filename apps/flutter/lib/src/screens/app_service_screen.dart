@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:pocket_codex/src/widgets/window_title_bar.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
@@ -166,7 +167,7 @@ class _AppServiceState extends ConsumerState<AppServiceScreen> {
         ref.watch(runningThreadsProvider(widget.serviceKey)).valueOrNull ??
         const <String>{};
     return Scaffold(
-      appBar: AppBar(
+      appBar: WindowTitleBar(
         title: Text(l10n.appServiceTitle),
         actions: [
           if (running.isNotEmpty)

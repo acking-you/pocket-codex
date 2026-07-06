@@ -65,6 +65,7 @@
     "placeholders": { "count": { "type": "int" } }
   },
   "imageSave": "Save image",
+  "imageLoadFailed": "Couldn't load this image",
   "imageSaved": "Saved to {path}",
   "@imageSaved": {
     "placeholders": { "path": { "type": "String" } }
@@ -448,6 +449,26 @@
   "folderPickerEmpty": "No sub-folders here",
   "folderPickerNoRoots": "No project folders are configured on this host yet. Add them on the computer under hosting settings.",
   "gitRepoLabel": "Git repository",
+  "hostFiles": "Host files",
+  "fileBrowserEmpty": "This folder is empty",
+  "fileDownload": "Download",
+  "fileUpload": "Upload",
+  "fileDownloaded": "Downloaded to {path}",
+  "@fileDownloaded": {
+    "placeholders": { "path": {} }
+  },
+  "fileDownloadFailed": "Couldn't download: {error}",
+  "@fileDownloadFailed": {
+    "placeholders": { "error": {} }
+  },
+  "fileUploaded": "Uploaded {name}",
+  "@fileUploaded": {
+    "placeholders": { "name": {} }
+  },
+  "hostFileUploadFailed": "Couldn't upload: {error}",
+  "@hostFileUploadFailed": {
+    "placeholders": { "error": {} }
+  },
   "browseProjectFolder": "Browse project folders",
   "orEnterPathManually": "Or enter a path manually:",
   "projectFolders": "Project folders",
