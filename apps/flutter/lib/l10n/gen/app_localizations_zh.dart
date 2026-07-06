@@ -984,6 +984,10 @@ class AppLocalizationsZh extends AppLocalizations {
   String get deregisterFailed => '注销失败';
 
   @override
+  String get hostNameConflict =>
+      '该名称已有另一个在线的服务器实例。请先停止那个实例，或换一个名称托管。（刚停止的实例约 15 秒内释放名称。）';
+
+  @override
   String get batchRemoveEnter => '清理不可达';
 
   @override

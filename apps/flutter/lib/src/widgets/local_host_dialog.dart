@@ -166,7 +166,16 @@ class _LocalHostDialogState extends ConsumerState<LocalHostDialog> {
       ref.invalidate(servicesProvider);
       if (mounted) Navigator.of(context).pop();
     } catch (e) {
-      if (mounted) setState(() => _error = friendlyError(e));
+      if (mounted) {
+        // A duplicate-name refusal (another live instance owns this name) gets
+        // the localized guidance instead of the raw broker reason.
+        final raw = friendlyError(e);
+        setState(
+          () => _error = isHostNameConflict(raw)
+              ? AppLocalizations.of(context).hostNameConflict
+              : raw,
+        );
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }

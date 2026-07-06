@@ -398,6 +398,7 @@
   },
   "remove": "Remove",
   "deregisterFailed": "Couldn't deregister the service",
+  "hostNameConflict": "This server name is already online from another instance. Stop that instance first, or host under a different name. (A just-stopped server frees its name within ~15 seconds.)",
   "batchRemoveEnter": "Clean up unreachable",
   "batchRemoveHint": "Tap the unreachable services you want to remove.",
   "batchSelectAll": "Select all",

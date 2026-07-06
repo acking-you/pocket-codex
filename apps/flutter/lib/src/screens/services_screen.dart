@@ -1294,11 +1294,29 @@ class _LocalHostCard extends ConsumerWidget {
     key: _keyFor(kind),
   );
 
-  Future<void> _reregister(WidgetRef ref, String kind) async {
+  Future<void> _reregister(
+    BuildContext context,
+    WidgetRef ref,
+    String kind,
+  ) async {
     final key = _keyFor(kind);
-    await ref
-        .read(bridgeApiProvider)
-        .appServeReregister(name: host.name, kind: kind);
+    final l10n = AppLocalizations.of(context);
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await ref
+          .read(bridgeApiProvider)
+          .appServeReregister(name: host.name, kind: kind);
+    } catch (e) {
+      // Surfaces a duplicate-name refusal (another live instance took the
+      // name while this tunnel was down) as guidance instead of silence.
+      final raw = friendlyError(e);
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(isHostNameConflict(raw) ? l10n.hostNameConflict : raw),
+        ),
+      );
+      return;
+    }
     // Make sure it isn't still optimistically hidden, then re-discover.
     ref
         .read(pendingRemovalProvider.notifier)
@@ -1421,7 +1439,7 @@ class _LocalHostCard extends ConsumerWidget {
                     _entry('app'),
                     localTunnel: (name: host.name, kind: 'app'),
                   ),
-                  onReregister: () => _reregister(ref, 'app'),
+                  onReregister: () => _reregister(context, ref, 'app'),
                 ),
                 Divider(height: 1, color: scheme.outlineVariant),
                 _TunnelRow(
@@ -1434,7 +1452,7 @@ class _LocalHostCard extends ConsumerWidget {
                     _entry('api'),
                     localTunnel: (name: host.name, kind: 'api'),
                   ),
-                  onReregister: () => _reregister(ref, 'api'),
+                  onReregister: () => _reregister(context, ref, 'api'),
                 ),
                 Divider(height: 1, color: scheme.outlineVariant),
                 _TunnelRow(
@@ -1447,7 +1465,7 @@ class _LocalHostCard extends ConsumerWidget {
                     _entry('meta'),
                     localTunnel: (name: host.name, kind: 'meta'),
                   ),
-                  onReregister: () => _reregister(ref, 'meta'),
+                  onReregister: () => _reregister(context, ref, 'meta'),
                 ),
               ],
             ),

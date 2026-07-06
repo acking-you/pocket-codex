@@ -1008,6 +1008,10 @@ class AppLocalizationsEn extends AppLocalizations {
   String get deregisterFailed => 'Couldn\'t deregister the service';
 
   @override
+  String get hostNameConflict =>
+      'This server name is already online from another instance. Stop that instance first, or host under a different name. (A just-stopped server frees its name within ~15 seconds.)';
+
+  @override
   String get batchRemoveEnter => 'Clean up unreachable';
 
   @override

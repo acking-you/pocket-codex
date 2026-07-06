@@ -208,14 +208,19 @@ async fn backend_http_and_broker_end_to_end() {
         addr: broker_addr,
     });
     let tokens: Arc<dyn TokenProvider> = Arc::new(StaticToken(token.clone()));
-    tokio::spawn(run_register(connector.clone(), tokens.clone(), RegisterConfig {
-        device: "dev".to_string(),
-        kind: ServiceKind::App,
-        name: "default".to_string(),
-        client_instance_id: "test".to_string(),
-        local_addr: echo_addr,
-        idle: Duration::from_secs(60),
-    }));
+    tokio::spawn(run_register(
+        connector.clone(),
+        tokens.clone(),
+        RegisterConfig {
+            device: "dev".to_string(),
+            kind: ServiceKind::App,
+            name: "default".to_string(),
+            client_instance_id: "test".to_string(),
+            local_addr: echo_addr,
+            idle: Duration::from_secs(60),
+        },
+        None,
+    ));
     wait_for_key(relay_sock, "pcxu:usera:dev:app:default").await;
 
     // /v1/services lists it (prefix stripped to device/kind/name).

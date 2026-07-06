@@ -39,7 +39,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use pocket_codex_broker_client::{run_register, Connector, RegisterConfig, TokenProvider};
 use pocket_codex_codex::{spawn, stop, ListenSpec, SpawnOptions};
 use pocket_codex_core::{
@@ -123,7 +123,8 @@ pub async fn run(args: ServeArgs) -> Result<()> {
                 local_addr,
                 relay_addr: relay.clone(),
                 codec,
-            })?;
+            })
+            .await?;
             print_serve_summary(
                 &report.info,
                 &outcome,
@@ -200,15 +201,21 @@ async fn serve_account(
             let dev = device.to_string();
             let nm = name.to_string();
             tokio::spawn(async move {
-                run_register(connector, tokens, RegisterConfig {
-                    device: dev,
-                    kind: ServiceKind::Meta,
-                    name: nm,
-                    client_instance_id: account::client_instance_id(),
-                    local_addr: meta_local,
-                    idle: ACCOUNT_DATA_IDLE,
-                })
+                let fatal = run_register(
+                    connector,
+                    tokens,
+                    RegisterConfig {
+                        device: dev,
+                        kind: ServiceKind::Meta,
+                        name: nm,
+                        client_instance_id: account::client_instance_id(),
+                        local_addr: meta_local,
+                        idle: ACCOUNT_DATA_IDLE,
+                    },
+                    None,
+                )
                 .await;
+                ui::warn(&format!("meta tunnel stopped: {}", fatal.reason));
             });
             ui::field("meta", &format!("{device}/meta/{name}"));
         },
@@ -217,16 +224,25 @@ async fn serve_account(
 
     ui::headline(ui::Tone::Action, "exposing — keep this running, Ctrl-C to stop");
 
-    run_register(connector, tokens, RegisterConfig {
-        device: device.to_string(),
-        kind: ServiceKind::App,
-        name: name.to_string(),
-        client_instance_id: account::client_instance_id(),
-        local_addr: local,
-        idle: ACCOUNT_DATA_IDLE,
-    })
+    // Runs until a FATAL rejection (e.g. another live instance owns this
+    // name); transient drops reconnect internally. A conflict on the very
+    // first handshake IS the duplicate-name interception: the command exits
+    // with a clear error instead of fighting the incumbent for the key.
+    let fatal = run_register(
+        connector,
+        tokens,
+        RegisterConfig {
+            device: device.to_string(),
+            kind: ServiceKind::App,
+            name: name.to_string(),
+            client_instance_id: account::client_instance_id(),
+            local_addr: local,
+            idle: ACCOUNT_DATA_IDLE,
+        },
+        None,
+    )
     .await;
-    Ok(())
+    bail!("hosting stopped: {}", fatal.reason);
 }
 
 /// Bind a loopback listener for the host meta service, start it (resuming into

@@ -53,3 +53,17 @@ bool isSandboxHelperFailure(String message) {
       lower.contains('spawn setup');
   return mentionsWindowsSandbox && cannotLaunchHelper;
 }
+
+/// True when starting/re-registering a hosting failed because another LIVE
+/// instance already owns the service name — the broker refused the
+/// registration (first-wins) or the self-hosted relay reported a healthy
+/// publisher for the key. The UI rewrites this into localized guidance
+/// (stop the other instance or pick another name) instead of the raw reason.
+/// Matches the exact phrasings produced by `engine/serve.rs`'s pre-flight,
+/// the broker's conflict nack, and the CLI relay probe.
+bool isHostNameConflict(String message) {
+  final lower = message.toLowerCase();
+  return lower.contains('name is already in use') ||
+      lower.contains('already owns') ||
+      lower.contains('already registered and online');
+}

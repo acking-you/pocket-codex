@@ -35,18 +35,66 @@ pub struct RegisterConfig {
     pub idle: Duration,
 }
 
-/// Run a register session forever, reconnecting with pb-mapper-matched backoff
-/// (plus jitter). Intended to be `tokio::spawn`ed.
+/// Why [`run_register`] gave up. Today the only fatal condition is a key
+/// conflict — another live instance owns the name, so reconnecting cannot
+/// succeed (and blindly retrying anyway is the duplicate-name leapfrog storm).
+#[derive(Debug, Clone)]
+pub struct RegisterFatal {
+    /// Human-readable reason, suitable for surfacing to the user.
+    pub reason: String,
+}
+
+/// Run a register session until a FATAL rejection, reconnecting on transient
+/// failures with pb-mapper-matched backoff (plus jitter). Intended to be
+/// `tokio::spawn`ed; the caller can watch the `JoinHandle` to learn the
+/// service was refused (e.g. name already in use) and surface it.
+///
+/// `first` (optional) resolves once with the FIRST decisive outcome — `Ok(())`
+/// when a control tunnel comes up, `Err(reason)` on a fatal rejection — so a
+/// serve start can pre-flight the registration and fail fast on a name
+/// conflict instead of "starting" a host that can never register. Transient
+/// errors do not resolve it (the caller applies its own optimism/timeout).
+///
+/// Anti-storm properties (2026-07-07 outage):
+/// - the reconnect backoff caps at [`params::REGISTER_BACKOFF_MAX`] (not 1 s),
+///   so a publisher that cannot hold a session degrades to a slow trickle;
+/// - the backoff resets only after a session survives
+///   [`params::STABLE_SESSION_MIN`] — a handshake that "succeeds" and dies
+///   milliseconds later (the takeover-war signature) keeps the backoff growing
+///   instead of re-arming a 100 ms retry forever.
 pub async fn run_register(
     connector: Arc<dyn Connector>,
     tokens: Arc<dyn TokenProvider>,
     cfg: RegisterConfig,
-) {
+    mut first: Option<tokio::sync::oneshot::Sender<Result<(), String>>>,
+) -> RegisterFatal {
     let cfg = Arc::new(cfg);
-    let mut backoff = RetryBackoff::new();
+    let mut backoff = RetryBackoff::with_max(params::REGISTER_BACKOFF_MAX);
     loop {
-        match session(&connector, &tokens, &cfg, &mut backoff).await {
+        // `established` is set to the handshake-success instant by `session`;
+        // it stays None if the attempt failed before the control tunnel came
+        // up. The reset is gated on time since THAT instant, not since the
+        // attempt began — otherwise a slow FAILURE (e.g. a backend that accepts
+        // TCP but never acks, tripping the 30 s handshake timeout) would re-arm
+        // the fast retry every cycle and the backoff cap would never engage.
+        let mut established: Option<tokio::time::Instant> = None;
+        let outcome = session(&connector, &tokens, &cfg, &mut first, &mut established).await;
+        // Only a session that came up AND then outlived the takeover-churn
+        // window proves the registration is healthy enough to re-arm.
+        if established.is_some_and(|at| at.elapsed() >= params::STABLE_SESSION_MIN) {
+            backoff.reset();
+        }
+        match outcome {
             Ok(()) => tracing::info!("register session retired; reconnecting"),
+            Err(BrokerError::KeyConflict(reason)) => {
+                tracing::error!(reason = %reason, "register refused: key owned by another live instance; giving up");
+                if let Some(tx) = first.take() {
+                    let _ = tx.send(Err(reason.clone()));
+                }
+                return RegisterFatal {
+                    reason,
+                };
+            },
             Err(e) => tracing::warn!(error = %e, "register session ended"),
         }
         sleep(backoff.next_delay_jittered(rand::random::<f64>())).await;
@@ -57,7 +105,8 @@ async fn session(
     connector: &Arc<dyn Connector>,
     tokens: &Arc<dyn TokenProvider>,
     cfg: &Arc<RegisterConfig>,
-    backoff: &mut RetryBackoff,
+    first: &mut Option<tokio::sync::oneshot::Sender<Result<(), String>>>,
+    established: &mut Option<tokio::time::Instant>,
 ) -> Result<(), BrokerError> {
     let token = tokens.token().await?;
     let mut ctrl = connector.connect().await?;
@@ -73,8 +122,13 @@ async fn session(
         stream_id: None,
     };
     let ack = conn::handshake(&mut ctrl, &hello).await?;
-    backoff.reset();
+    // The control tunnel is up: mark WHEN, so the caller's backoff resets on
+    // session lifetime rather than total attempt time.
+    *established = Some(tokio::time::Instant::now());
     tracing::info!(relay_key = ?ack.relay_key, "register control tunnel up");
+    if let Some(tx) = first.take() {
+        let _ = tx.send(Ok(()));
+    }
     control_loop(ctrl, connector.clone(), tokens.clone(), cfg.clone()).await
 }
 

@@ -94,7 +94,8 @@ async fn connect_self_host(args: ConnectArgs, config: &Config, relay: String) ->
         local_addr: args.local_addr,
         relay_addr: relay,
         codec: false,
-    })?;
+    })
+    .await?;
     if let Some(service_id) = target.service_id {
         let mut state = RuntimeState::load()?;
         state.record_selected_service(ServiceKind::App, service_id.device, service_id.name);

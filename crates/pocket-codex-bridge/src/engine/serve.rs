@@ -29,7 +29,9 @@ use std::{
 
 use anyhow::{anyhow, bail, Context, Result};
 use once_cell::sync::OnceCell;
-use pocket_codex_broker_client::{run_register, Connector, RegisterConfig, TokenProvider};
+use pocket_codex_broker_client::{
+    run_register, Connector, RegisterConfig, RegisterFatal, TokenProvider,
+};
 use pocket_codex_codex::{locate_binary, spawn, ListenSpec, SpawnOptions};
 use pocket_codex_core::{
     process::{find_codex_app_server, force_kill, send_sigterm, tcp_port_open},
@@ -66,7 +68,9 @@ struct LocalServe {
     app_local: SocketAddr,
     pid: u32,
     /// `Some` while the app tunnel is published; `None` once deregistered.
-    app_register: Option<JoinHandle<()>>,
+    /// The task resolves (with the fatal reason) if the registration is ever
+    /// refused because another live instance owns the name.
+    app_register: Option<JoinHandle<RegisterFatal>>,
     watchdog: JoinHandle<()>,
     /// The in-process codex app-server task (embedded mode). `None` for an
     /// external (spawned-binary) host. Aborted on stop.
@@ -80,14 +84,14 @@ struct LocalServe {
     api_local: SocketAddr,
     api_proxy: JoinHandle<()>,
     /// `Some` while the api tunnel is published; `None` once deregistered.
-    api_register: Option<JoinHandle<()>>,
+    api_register: Option<JoinHandle<RegisterFatal>>,
     // host-side meta service: makes this host's local sessions remote-viewable
     // and persists per-thread config, published as a third `meta:<name>` tunnel.
     meta_key: String,
     meta_local: SocketAddr,
     meta_svc: JoinHandle<()>,
     /// `Some` while the meta tunnel is published; `None` once deregistered.
-    meta_register: Option<JoinHandle<()>>,
+    meta_register: Option<JoinHandle<RegisterFatal>>,
     /// The resolved external codex binary path, or `None` for an embedded host
     /// (which runs codex in-process). Surfaced in the host details for
     /// debugging.
@@ -233,7 +237,20 @@ pub fn codex_locate() -> Option<String> {
     locate_binary(configured.as_deref()).map(|p| p.display().to_string())
 }
 
+/// How long a serve start waits for the app register tunnel's first outcome
+/// before proceeding optimistically. A reachable backend answers in one round
+/// trip (sub-second); the timeout only bites when the backend is down, where
+/// hosting should still start (the register loop keeps retrying) rather than
+/// fail.
+const REGISTER_PREFLIGHT: Duration = Duration::from_secs(6);
+
 /// Spawn one broker register tunnel for `kind`, forwarding to `local`.
+///
+/// `first` (optional) resolves with the FIRST decisive outcome — `Ok(())` once
+/// the tunnel is up, `Err(reason)` on a fatal name conflict — so serve start
+/// can pre-flight the registration. The task runs until a fatal rejection;
+/// a finished handle therefore means "no longer publishing" (surfaced by
+/// [`tunnel_down`]).
 fn spawn_register(
     connector: Arc<dyn Connector>,
     tokens: Arc<dyn TokenProvider>,
@@ -241,19 +258,41 @@ fn spawn_register(
     kind: ServiceKind,
     name: &str,
     local: SocketAddr,
-) -> JoinHandle<()> {
-    runtime::runtime().spawn(run_register(connector, tokens, RegisterConfig {
-        device: device.to_string(),
-        kind,
-        name: name.to_string(),
-        client_instance_id: client_instance_id(),
-        local_addr: local,
-        idle: account::ACCOUNT_DATA_IDLE,
-    }))
+    first: Option<tokio::sync::oneshot::Sender<std::result::Result<(), String>>>,
+) -> JoinHandle<RegisterFatal> {
+    runtime::runtime().spawn(run_register(
+        connector,
+        tokens,
+        RegisterConfig {
+            device: device.to_string(),
+            kind,
+            name: name.to_string(),
+            client_instance_id: client_instance_id(),
+            local_addr: local,
+            idle: account::ACCOUNT_DATA_IDLE,
+        },
+        first,
+    ))
 }
 
-/// `true` if a register handle is missing or finished (i.e. not publishing).
-fn tunnel_down(handle: &Option<JoinHandle<()>>) -> bool {
+/// Wait (bounded) for a just-spawned APP register tunnel's first outcome and
+/// distill it to the caller: `Err` only on a fatal name conflict — the name is
+/// owned by another live instance, so hosting under it cannot work. A timeout
+/// or channel drop proceeds optimistically (backend offline ≠ name taken).
+fn preflight_register(
+    rx: tokio::sync::oneshot::Receiver<std::result::Result<(), String>>,
+) -> Result<()> {
+    let outcome =
+        runtime::runtime().block_on(async { tokio::time::timeout(REGISTER_PREFLIGHT, rx).await });
+    if let Ok(Ok(Err(reason))) = outcome {
+        bail!("app-server name is already in use: {reason}");
+    }
+    Ok(())
+}
+
+/// `true` if a register handle is missing or finished (i.e. not publishing —
+/// a finished task gave up on a fatal name conflict).
+fn tunnel_down<T>(handle: &Option<JoinHandle<T>>) -> bool {
     handle.as_ref().is_none_or(|h| h.is_finished())
 }
 
@@ -513,7 +552,9 @@ pub fn serve_start(
                 let app_local = ls.app_local;
                 let api_local = ls.api_local;
                 let meta_local = ls.meta_local;
+                let mut app_preflight = None;
                 if tunnel_down(&ls.app_register) {
+                    let (tx, rx) = tokio::sync::oneshot::channel();
                     ls.app_register = Some(spawn_register(
                         connector.clone(),
                         tokens.clone(),
@@ -521,7 +562,9 @@ pub fn serve_start(
                         ServiceKind::App,
                         &nm,
                         app_local,
+                        Some(tx),
                     ));
+                    app_preflight = Some(rx);
                 }
                 if tunnel_down(&ls.api_register) {
                     ls.api_register = Some(spawn_register(
@@ -531,6 +574,7 @@ pub fn serve_start(
                         ServiceKind::Api,
                         &nm,
                         api_local,
+                        None,
                     ));
                 }
                 if tunnel_down(&ls.meta_register) {
@@ -541,9 +585,10 @@ pub fn serve_start(
                         ServiceKind::Meta,
                         &nm,
                         meta_local,
+                        None,
                     ));
                 }
-                return Ok(ServeReport {
+                let report = ServeReport {
                     device: dev,
                     name: nm,
                     app_service_key: ls.app_key.clone(),
@@ -554,7 +599,17 @@ pub fn serve_start(
                     meta_listen_addr: meta_local.to_string(),
                     pid: ls.pid,
                     reused: true,
-                });
+                };
+                // A re-registered app tunnel can be refused (another live
+                // instance took the name while ours was down) — surface that
+                // instead of reporting a host that can never publish. The
+                // local codex stays up; only this start call errors. Waits
+                // OUTSIDE the hosts lock so status polls don't stall on it.
+                drop(guard);
+                if let Some(rx) = app_preflight {
+                    preflight_register(rx)?;
+                }
+                return Ok(report);
             }
             // codex dead → retire the stale entry and fall through to spawn.
             if let Some(stale) = guard.remove(&name) {
@@ -711,6 +766,7 @@ pub fn serve_start(
     ));
 
     let (connector, tokens) = account::broker_transport(&support)?;
+    let (app_first_tx, app_first_rx) = tokio::sync::oneshot::channel();
     let app_register = Some(spawn_register(
         connector.clone(),
         tokens.clone(),
@@ -718,6 +774,7 @@ pub fn serve_start(
         ServiceKind::App,
         &name,
         app_local,
+        Some(app_first_tx),
     ));
     let api_register = Some(spawn_register(
         connector.clone(),
@@ -726,11 +783,19 @@ pub fn serve_start(
         ServiceKind::Api,
         &name,
         api_local,
+        None,
     ));
-    let meta_register =
-        Some(spawn_register(connector, tokens, &device, ServiceKind::Meta, &name, meta_local));
+    let meta_register = Some(spawn_register(
+        connector,
+        tokens,
+        &device,
+        ServiceKind::Meta,
+        &name,
+        meta_local,
+        None,
+    ));
 
-    hosts_locked().insert(name.clone(), LocalServe {
+    let host = LocalServe {
         device: device.clone(),
         name: name.clone(),
         app_key: app_key.clone(),
@@ -750,7 +815,19 @@ pub fn serve_start(
         meta_register,
         codex_binary: codex_binary_display,
         proxy: proxy.clone(),
-    });
+    };
+
+    // Pre-flight the app registration: if another live instance already owns
+    // this name, tear everything just built back down (codex included) and
+    // fail the start with the reason, instead of leaving a host that can never
+    // publish silently fighting for the key. A timeout (backend unreachable)
+    // proceeds optimistically — the register loop keeps retrying.
+    if let Err(conflict) = preflight_register(app_first_rx) {
+        stop_host_tasks(host);
+        return Err(conflict);
+    }
+
+    hosts_locked().insert(name.clone(), host);
 
     Ok(ServeReport {
         device,
@@ -863,10 +940,12 @@ pub fn serve_reregister(name: &str, kind: &str) -> Result<()> {
         .ok_or_else(|| anyhow!("`{name}` is not hosting locally"))?;
     let device = ls.device.clone();
     let svc_name = ls.name.clone();
+    let mut app_preflight = None;
     match kind {
         ServiceKind::App => {
             if tunnel_down(&ls.app_register) {
                 let local = ls.app_local;
+                let (tx, rx) = tokio::sync::oneshot::channel();
                 ls.app_register = Some(spawn_register(
                     connector,
                     tokens,
@@ -874,7 +953,9 @@ pub fn serve_reregister(name: &str, kind: &str) -> Result<()> {
                     ServiceKind::App,
                     &svc_name,
                     local,
+                    Some(tx),
                 ));
+                app_preflight = Some(rx);
             }
         },
         ServiceKind::Api => {
@@ -887,6 +968,7 @@ pub fn serve_reregister(name: &str, kind: &str) -> Result<()> {
                     ServiceKind::Api,
                     &svc_name,
                     local,
+                    None,
                 ));
             }
         },
@@ -900,11 +982,18 @@ pub fn serve_reregister(name: &str, kind: &str) -> Result<()> {
                     ServiceKind::Meta,
                     &svc_name,
                     local,
+                    None,
                 ));
             }
         },
         // `kind` came from FromStr, which never yields Unknown.
         ServiceKind::Unknown => {},
+    }
+    // Surface a name conflict on the re-published app tunnel (waits OUTSIDE
+    // the hosts lock so status polls don't stall on it).
+    drop(guard);
+    if let Some(rx) = app_preflight {
+        preflight_register(rx)?;
     }
     Ok(())
 }

@@ -1910,6 +1910,12 @@ abstract class AppLocalizations {
   /// **'Couldn\'t deregister the service'**
   String get deregisterFailed;
 
+  /// No description provided for @hostNameConflict.
+  ///
+  /// In en, this message translates to:
+  /// **'This server name is already online from another instance. Stop that instance first, or host under a different name. (A just-stopped server frees its name within ~15 seconds.)'**
+  String get hostNameConflict;
+
   /// No description provided for @batchRemoveEnter.
   ///
   /// In en, this message translates to:

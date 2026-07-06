@@ -341,6 +341,7 @@
   "deregisterOrphanWarning": "「{name}」没有响应——它的注册残留在中继上、但没有可达的主机。此操作会把它从你的列表中移除（即使残留注册仍在也会保持隐藏），并请求后端将其丢弃。",
   "remove": "移除",
   "deregisterFailed": "注销失败",
+  "hostNameConflict": "该名称已有另一个在线的服务器实例。请先停止那个实例，或换一个名称托管。（刚停止的实例约 15 秒内释放名称。）",
   "batchRemoveEnter": "清理不可达",
   "batchRemoveHint": "点选要移除的不可达服务。",
   "batchSelectAll": "全选",

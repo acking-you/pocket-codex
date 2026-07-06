@@ -66,6 +66,12 @@ pub struct BrokerHello {
     pub stream_id: Option<u64>,
 }
 
+/// Machine-readable [`BrokerAck::code`] for "another live instance already
+/// owns this key": the registration was refused, and retrying will not help
+/// until that owner goes away. Clients treat this as fatal (stop the register
+/// loop and surface the error) instead of reconnect-looping.
+pub const CODE_KEY_CONFLICT: &str = "key_conflict";
+
 /// The backend's reply to a [`BrokerHello`], sent before the tunnel goes raw.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BrokerAck {
@@ -78,6 +84,12 @@ pub struct BrokerAck {
     /// Human-readable reason when `ok` is false.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Machine-readable rejection code (e.g. [`CODE_KEY_CONFLICT`]) so clients
+    /// can tell fatal rejections from transient ones. Additive: absent from
+    /// older backends (and ignored by older clients), so both directions stay
+    /// wire-compatible.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
 }
 
 impl BrokerAck {
@@ -87,6 +99,7 @@ impl BrokerAck {
             ok: true,
             relay_key: Some(relay_key.into()),
             error: None,
+            code: None,
         }
     }
 
@@ -96,7 +109,25 @@ impl BrokerAck {
             ok: false,
             relay_key: None,
             error: Some(reason.into()),
+            code: None,
         }
+    }
+
+    /// A failure ack for a register key that is already owned by another live
+    /// instance ([`CODE_KEY_CONFLICT`]).
+    pub fn key_conflict(reason: impl Into<String>) -> Self {
+        Self {
+            ok: false,
+            relay_key: None,
+            error: Some(reason.into()),
+            code: Some(CODE_KEY_CONFLICT.to_string()),
+        }
+    }
+
+    /// Whether this rejection is a key-ownership conflict (fatal for the
+    /// register loop — retrying cannot succeed while the owner lives).
+    pub fn is_key_conflict(&self) -> bool {
+        self.code.as_deref() == Some(CODE_KEY_CONFLICT)
     }
 }
 

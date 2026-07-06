@@ -176,14 +176,19 @@ async fn end_to_end_register_subscribe_echo() {
     let tokens: Arc<dyn TokenProvider> = Arc::new(StaticToken("tok-A".to_string()));
 
     // 4. Register: expose the echo server under the account.
-    tokio::spawn(run_register(connector.clone(), tokens.clone(), RegisterConfig {
-        device: "dev".to_string(),
-        kind: ServiceKind::App,
-        name: "default".to_string(),
-        client_instance_id: "test-instance".to_string(),
-        local_addr: echo_addr,
-        idle: Duration::from_secs(60),
-    }));
+    tokio::spawn(run_register(
+        connector.clone(),
+        tokens.clone(),
+        RegisterConfig {
+            device: "dev".to_string(),
+            kind: ServiceKind::App,
+            name: "default".to_string(),
+            client_instance_id: "test-instance".to_string(),
+            local_addr: echo_addr,
+            idle: Duration::from_secs(60),
+        },
+        None,
+    ));
 
     // The backend namespaces the key under the verified user.
     let relay_sock: SocketAddr = relay_addr_s.parse().expect("relay sockaddr");
@@ -333,14 +338,19 @@ async fn cross_user_isolation_and_unauthorized_are_enforced() {
 
     // userA registers the echo under dev/app/default.
     let tokens_a: Arc<dyn TokenProvider> = Arc::new(StaticToken("tok-A".to_string()));
-    tokio::spawn(run_register(connector.clone(), tokens_a, RegisterConfig {
-        device: "dev".to_string(),
-        kind: ServiceKind::App,
-        name: "default".to_string(),
-        client_instance_id: "a".to_string(),
-        local_addr: echo_addr,
-        idle: Duration::from_secs(60),
-    }));
+    tokio::spawn(run_register(
+        connector.clone(),
+        tokens_a,
+        RegisterConfig {
+            device: "dev".to_string(),
+            kind: ServiceKind::App,
+            name: "default".to_string(),
+            client_instance_id: "a".to_string(),
+            local_addr: echo_addr,
+            idle: Duration::from_secs(60),
+        },
+        None,
+    ));
     let relay_sock: SocketAddr = relay_addr_s.parse().expect("relay sockaddr");
     wait_for_key(relay_sock, "pcxu:usera:dev:app:default").await;
 
@@ -358,6 +368,129 @@ async fn cross_user_isolation_and_unauthorized_are_enforced() {
     // nothing either.
     let unauth = subscribe_and_try_echo(connector.clone(), "tok-bogus", b"nope", 20).await;
     assert_eq!(unauth, None, "an unauthorized token must not reach any service");
+
+    relay_shutdown.cancel();
+}
+
+/// The 2026-07-07 storm regression test: a SECOND instance registering the
+/// same device/kind/name must be REFUSED (first-wins) — not evict the
+/// incumbent into an endless leapfrog — while the same instance reconnecting
+/// still takes the key over. Also pins the probe primitive the CLI's
+/// self-hosted pre-flight relies on (`service_connections` reports a healthy
+/// publisher for a live key).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn duplicate_name_register_is_refused_first_wins() {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .try_init();
+    pocket_codex_pb::set_msg_header_key(Some(TEST_KEY)).expect("set msg header key");
+
+    let (relay_addr_s, relay_shutdown) = spawn_relay().await;
+    let verifier = Arc::new(StaticVerifier {
+        token: "tok-A".to_string(),
+        user: "userA".to_string(),
+    });
+    let broker_addr = spawn_broker(verifier, relay_addr_s.clone()).await;
+    let echo_addr = spawn_echo().await;
+    let connector: Arc<dyn Connector> = Arc::new(TcpConnector {
+        addr: broker_addr,
+    });
+    let tokens: Arc<dyn TokenProvider> = Arc::new(StaticToken("tok-A".to_string()));
+
+    let cfg = |instance: &str| RegisterConfig {
+        device: "dev".to_string(),
+        kind: ServiceKind::App,
+        name: "default".to_string(),
+        client_instance_id: instance.to_string(),
+        local_addr: echo_addr,
+        idle: Duration::from_secs(60),
+    };
+
+    // Instance ONE registers and comes up.
+    let (first1_tx, first1_rx) = tokio::sync::oneshot::channel();
+    let reg1 = tokio::spawn(run_register(
+        connector.clone(),
+        tokens.clone(),
+        cfg("inst-one"),
+        Some(first1_tx),
+    ));
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(10), first1_rx)
+            .await
+            .expect("first outcome in time")
+            .expect("first outcome delivered"),
+        Ok(()),
+        "the first instance must register cleanly"
+    );
+    let relay_sock: SocketAddr = relay_addr_s.parse().expect("relay sockaddr");
+    wait_for_key(relay_sock, "pcxu:usera:dev:app:default").await;
+
+    // A DIFFERENT instance claiming the same name is refused fatally: its
+    // register loop returns (no reconnect leapfrog) with the conflict reason.
+    let (first2_tx, first2_rx) = tokio::sync::oneshot::channel();
+    let reg2 = tokio::spawn(run_register(
+        connector.clone(),
+        tokens.clone(),
+        cfg("inst-two"),
+        Some(first2_tx),
+    ));
+    let refused = tokio::time::timeout(Duration::from_secs(10), first2_rx)
+        .await
+        .expect("conflict outcome in time")
+        .expect("conflict outcome delivered")
+        .expect_err("a duplicate instance must be refused");
+    assert!(
+        refused.contains("another live server instance"),
+        "conflict reason should say the key is owned: {refused}"
+    );
+    let fatal = tokio::time::timeout(Duration::from_secs(10), reg2)
+        .await
+        .expect("rejected register loop must RETURN (not retry forever)")
+        .expect("register task join");
+    assert!(fatal.reason.contains("another live server instance"), "fatal: {}", fatal.reason);
+
+    // The incumbent was left untouched: traffic still round-trips through it.
+    let own = subscribe_and_try_echo(connector.clone(), "tok-A", b"still mine", 50).await;
+    assert_eq!(
+        own.as_deref(),
+        Some(b"still mine".as_slice()),
+        "the incumbent must keep serving after a refused duplicate"
+    );
+
+    // The CLI self-hosted pre-flight primitive sees the live publisher.
+    let conns = pocket_codex_pb::service_connections(relay_sock, "pcxu:usera:dev:app:default")
+        .await
+        .expect("relay status query");
+    assert!(
+        conns.iter().any(|c| c.healthy),
+        "a live key must report a healthy publisher connection: {conns:?}"
+    );
+
+    // The SAME instance id reconnecting is a takeover, not a conflict: stop
+    // instance one's loop, then re-register under its id while the server
+    // still holds the old session.
+    reg1.abort();
+    let (first3_tx, first3_rx) = tokio::sync::oneshot::channel();
+    let _reg3 = tokio::spawn(run_register(
+        connector.clone(),
+        tokens.clone(),
+        cfg("inst-one"),
+        Some(first3_tx),
+    ));
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(10), first3_rx)
+            .await
+            .expect("takeover outcome in time")
+            .expect("takeover outcome delivered"),
+        Ok(()),
+        "the same instance id must take its key back over"
+    );
+    let again = subscribe_and_try_echo(connector.clone(), "tok-A", b"back again", 50).await;
+    assert_eq!(
+        again.as_deref(),
+        Some(b"back again".as_slice()),
+        "the taken-over registration must serve traffic"
+    );
 
     relay_shutdown.cancel();
 }

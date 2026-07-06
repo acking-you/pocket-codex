@@ -25,7 +25,7 @@
 
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use pocket_codex_broker_client::{
     run_register, run_subscribe, Connector, RegisterConfig, SubscribeConfig, TokenProvider,
 };
@@ -96,7 +96,8 @@ async fn serve(args: ApiServeArgs) -> Result<()> {
                 local_addr,
                 relay_addr: relay.clone(),
                 codec: args.codec,
-            })?;
+            })
+            .await?;
             print_serve_summary(
                 &api_outcome,
                 &pb_outcome,
@@ -132,16 +133,23 @@ async fn serve_account(backend: &str, device: &str, name: &str, local_addr: Stri
     ui::field("service", &format!("{device}/api/{name}"));
     ui::headline(ui::Tone::Action, "exposing — keep this running, Ctrl-C to stop");
 
-    run_register(connector, tokens, RegisterConfig {
-        device: device.to_string(),
-        kind: ServiceKind::Api,
-        name: name.to_string(),
-        client_instance_id: account::client_instance_id(),
-        local_addr: local,
-        idle: ACCOUNT_DATA_IDLE,
-    })
+    // Runs until a FATAL rejection (e.g. another live instance owns this
+    // name); transient drops reconnect internally.
+    let fatal = run_register(
+        connector,
+        tokens,
+        RegisterConfig {
+            device: device.to_string(),
+            kind: ServiceKind::Api,
+            name: name.to_string(),
+            client_instance_id: account::client_instance_id(),
+            local_addr: local,
+            idle: ACCOUNT_DATA_IDLE,
+        },
+        None,
+    )
     .await;
-    Ok(())
+    bail!("register stopped: {}", fatal.reason);
 }
 
 async fn connect(args: ApiConnectArgs) -> Result<()> {
@@ -178,7 +186,8 @@ async fn connect_self_host(args: ApiConnectArgs, config: &Config, relay: String)
         local_addr: args.local_addr,
         relay_addr: relay,
         codec: false,
-    })?;
+    })
+    .await?;
     if let Some(service_id) = target.service_id {
         let mut state = RuntimeState::load()?;
         state.record_selected_service(ServiceKind::Api, service_id.device, service_id.name);

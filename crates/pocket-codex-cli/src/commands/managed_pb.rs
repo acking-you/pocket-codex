@@ -36,7 +36,7 @@ use std::{
     process::{Command, Stdio},
 };
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use chrono::Utc;
 use pocket_codex_core::{
     paths,
@@ -126,17 +126,24 @@ pub(crate) struct StopFilter {
 }
 
 /// Start or reuse the worker described by `spec`.
-pub(crate) fn ensure(spec: PbWorkerSpec) -> Result<EnsureOutcome> {
-    ensure_with_exe(spec, std::env::current_exe().context("locating current executable")?)
+///
+/// Before SPAWNING a register worker (never on the same-machine reuse path),
+/// the relay is asked whether the key already has a live publisher — starting
+/// a second publisher for the same key would make the two evict each other on
+/// the relay in an endless leapfrog (the duplicate-name register storm), so a
+/// name that is already online elsewhere is refused up front.
+pub(crate) async fn ensure(spec: PbWorkerSpec) -> Result<EnsureOutcome> {
+    ensure_with_exe(spec, std::env::current_exe().context("locating current executable")?).await
 }
 
-fn ensure_with_exe(spec: PbWorkerSpec, exe: PathBuf) -> Result<EnsureOutcome> {
+async fn ensure_with_exe(spec: PbWorkerSpec, exe: PathBuf) -> Result<EnsureOutcome> {
     let mut state = RuntimeState::load()?;
     if let Some(existing) = state.find_pb(spec.role, &spec.key).cloned() {
         if pid_alive(existing.pid) {
             return Ok(EnsureOutcome::Reused(existing));
         }
         state.remove_pb(spec.role, &spec.key);
+        ensure_relay_key_free(&spec).await?;
         let session = spawn_worker(&spec, exe)?;
         state.upsert_pb(session.clone());
         state.save()?;
@@ -146,10 +153,38 @@ fn ensure_with_exe(spec: PbWorkerSpec, exe: PathBuf) -> Result<EnsureOutcome> {
         });
     }
 
+    ensure_relay_key_free(&spec).await?;
     let session = spawn_worker(&spec, exe)?;
     state.upsert_pb(session.clone());
     state.save()?;
     Ok(EnsureOutcome::Spawned(session))
+}
+
+/// Refuse to publish a register key that already has a LIVE publisher on the
+/// relay (another machine/process owns the name). Best-effort and
+/// fail-open: an unreachable relay or an unknown key proves nothing wrong, so
+/// only a positive "healthy publisher connected" answer refuses — the worker's
+/// own register loop handles every transient condition.
+async fn ensure_relay_key_free(spec: &PbWorkerSpec) -> Result<()> {
+    if spec.role != PbRole::Register {
+        return Ok(());
+    }
+    let Ok(mut addrs) = tokio::net::lookup_host(&spec.relay_addr).await else {
+        return Ok(());
+    };
+    let Some(relay) = addrs.next() else {
+        return Ok(());
+    };
+    match pocket_codex_pb::service_connections(relay, &spec.key).await {
+        Ok(conns) if conns.iter().any(|c| c.healthy) => bail!(
+            "`{}` is already registered and online on relay {} — another machine or process owns \
+             this name; stop that publisher or serve under a different name (a just-stopped \
+             publisher frees the key within seconds)",
+            spec.key,
+            spec.relay_addr,
+        ),
+        _ => Ok(()),
+    }
 }
 
 fn spawn_worker(spec: &PbWorkerSpec, exe: PathBuf) -> Result<PbSessionInfo> {

@@ -24,6 +24,10 @@ pub(crate) async fn handshake<S: BrokerStream>(
         .map_err(|_| BrokerError::Timeout("read ack"))??;
     if ack.ok {
         Ok(ack)
+    } else if ack.is_key_conflict() {
+        // Fatal: the key has a live owner; the register loop must stop, not
+        // reconnect (retry-looping is the duplicate-name storm).
+        Err(BrokerError::KeyConflict(ack.error.unwrap_or_else(|| "key conflict".to_string())))
     } else {
         Err(BrokerError::Rejected(ack.error.unwrap_or_else(|| "rejected".to_string())))
     }

@@ -19,7 +19,7 @@ mod conn;
 mod register;
 mod subscribe;
 
-pub use register::{run_register, RegisterConfig};
+pub use register::{run_register, RegisterConfig, RegisterFatal};
 pub use subscribe::{run_subscribe, SubscribeConfig};
 use tokio::io::{AsyncRead, AsyncWrite};
 
@@ -61,4 +61,10 @@ pub enum BrokerError {
     /// The backend rejected the tunnel (transient/relay reason).
     #[error("rejected: {0}")]
     Rejected(String),
+    /// The backend refused the registration because another live instance
+    /// already owns the key. FATAL for the register loop: retrying cannot
+    /// succeed while the owner lives, and retry-looping anyway is exactly the
+    /// duplicate-name leapfrog storm this variant exists to prevent.
+    #[error("key conflict: {0}")]
+    KeyConflict(String),
 }

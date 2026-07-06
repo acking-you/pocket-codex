@@ -69,6 +69,11 @@ pub enum BrokerServerError {
     /// The hello frame was malformed for its purpose.
     #[error("bad hello: {0}")]
     BadHello(&'static str),
+    /// A register control hello named a key that another live instance
+    /// already owns (first-wins: the incumbent keeps the key; the newcomer is
+    /// refused instead of evicting it — see `handle_register_control`).
+    #[error("key conflict: {0}")]
+    KeyConflict(String),
     /// A data tunnel referenced a register session that does not exist.
     #[error("no such register session")]
     NoSession,
@@ -91,8 +96,9 @@ struct RegisterSession {
     /// Epoch assigned at install; bumped on every takeover so a stale data
     /// tunnel from a retired session is fenced off.
     generation: u64,
-    /// Stable per-process id of the owning client (diagnostics / takeover).
-    #[allow(dead_code, reason = "retained for diagnostics and future policy")]
+    /// Stable per-process id of the owning client: a reconnecting hello with
+    /// the same id takes over this session; any other id is refused
+    /// (first-wins — see `handle_register_control`).
     client_instance_id: String,
     /// Cancels the whole session (pb register task + seam accept + control
     /// loop).
@@ -107,6 +113,11 @@ struct Inner {
     relay_addr: String,
     data_idle: Duration,
     registers: Mutex<HashMap<String, Arc<RegisterSession>>>,
+    /// Last time a key-conflict rejection was logged at WARN, per relay key —
+    /// a stuck legacy client retrying in a loop must not flood the journal
+    /// (the 2026-07-07 outage began as a register-storm log flood). Sync
+    /// mutex: the critical section is a map lookup, no awaits.
+    conflict_log: std::sync::Mutex<HashMap<String, std::time::Instant>>,
 }
 
 /// The broker server. Cheap to [`Clone`] (an `Arc` handle) so the backend can
@@ -131,6 +142,7 @@ impl BrokerServer {
                 relay_addr: relay_addr.into(),
                 data_idle,
                 registers: Mutex::new(HashMap::new()),
+                conflict_log: std::sync::Mutex::new(HashMap::new()),
             }),
         }
     }
@@ -157,7 +169,14 @@ impl BrokerServer {
     pub async fn handle_connection<S: ServerStream>(&self, stream: S) {
         let stream: Box<dyn ServerStream> = Box::new(stream);
         if let Err(e) = self.dispatch(stream).await {
-            tracing::warn!(error = %e, "broker connection ended with error");
+            // Key conflicts already emit their own rate-limited WARN at the
+            // rejection site; a per-attempt WARN here would let one stuck
+            // retry-looping client flood the journal.
+            if matches!(e, BrokerServerError::KeyConflict(_)) {
+                tracing::debug!(error = %e, "broker connection rejected");
+            } else {
+                tracing::warn!(error = %e, "broker connection ended with error");
+            }
         }
     }
 
@@ -236,6 +255,73 @@ mod tests {
         fn verify(&self, _token: &str) -> Option<String> {
             None
         }
+    }
+
+    /// A stream that never yields a read and errors every write — models a
+    /// client that vanished (RST) between its register hello and the server's
+    /// ok-ack, so the ack `write_frame` fails.
+    struct FailWrite;
+    impl tokio::io::AsyncRead for FailWrite {
+        fn poll_read(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+            _: &mut tokio::io::ReadBuf<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::task::Poll::Pending
+        }
+    }
+    impl tokio::io::AsyncWrite for FailWrite {
+        fn poll_write(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+            _: &[u8],
+        ) -> std::task::Poll<std::io::Result<usize>> {
+            std::task::Poll::Ready(Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "peer gone",
+            )))
+        }
+        fn poll_flush(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+        fn poll_shutdown(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+    }
+
+    /// Regression: if the ok-ack write fails right after the session is
+    /// installed, the teardown must still evict it. Otherwise the dead session
+    /// lingers in the map (its lease never expires — it never entered the
+    /// control loop) and, under first-wins, PERMANENTLY refuses the key.
+    #[tokio::test]
+    async fn ack_write_failure_does_not_leak_the_register_session() {
+        let broker = BrokerServer::new(Arc::new(RejectAll), "127.0.0.1:1", Duration::from_secs(1));
+        let key = "pcxu:u:dev:app:default".to_string();
+        let hello = BrokerHello {
+            token: "t".to_string(),
+            role: BrokerRole::Register,
+            purpose: TunnelPurpose::RegisterControl,
+            device: "dev".to_string(),
+            kind: pocket_codex_core::service::ServiceKind::App,
+            name: "default".to_string(),
+            client_instance_id: Some("inst-one".to_string()),
+            generation: None,
+            stream_id: None,
+        };
+        let r = broker
+            .handle_register_control(Box::new(FailWrite), hello, key.clone())
+            .await;
+        assert!(r.is_err(), "a failed ack write must surface as an error");
+        assert!(
+            broker.inner.registers.lock().await.get(&key).is_none(),
+            "a failed ack write must NOT leave the session parked in the map"
+        );
     }
 
     #[tokio::test]
