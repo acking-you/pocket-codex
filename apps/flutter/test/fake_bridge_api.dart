@@ -836,4 +836,38 @@ class FakeBridgeApi implements BridgeApi {
     String serviceKey,
     String path,
   ) async => dirTree[path] ?? const [];
+
+  /// Seedable file listing for [metaListFiles], keyed by absolute host dir path.
+  final Map<String, List<HostFileEntry>> fileTree = {};
+
+  /// Seedable file bytes for [metaReadFile], keyed by absolute host file path.
+  final Map<String, Uint8List> fileBytes = {};
+
+  /// Records the last [metaWriteFile] call for assertions.
+  String? lastWriteDir;
+
+  /// Name passed to the last [metaWriteFile].
+  String? lastWriteName;
+
+  @override
+  Future<List<HostFileEntry>> metaListFiles(
+    String serviceKey,
+    String path,
+  ) async => fileTree[path] ?? const [];
+
+  @override
+  Future<Uint8List> metaReadFile(String serviceKey, String path) async =>
+      fileBytes[path] ?? Uint8List(0);
+
+  @override
+  Future<String> metaWriteFile(
+    String serviceKey,
+    String dir,
+    String fileName,
+    Uint8List bytes,
+  ) async {
+    lastWriteDir = dir;
+    lastWriteName = fileName;
+    return '$dir/$fileName';
+  }
 }

@@ -1104,6 +1104,38 @@ class AppLocalizationsZh extends AppLocalizations {
   String get gitRepoLabel => 'Git 仓库';
 
   @override
+  String get hostFiles => '主机文件';
+
+  @override
+  String get fileBrowserEmpty => '此文件夹为空';
+
+  @override
+  String get fileDownload => '下载';
+
+  @override
+  String get fileUpload => '上传';
+
+  @override
+  String fileDownloaded(Object path) {
+    return '已下载到 $path';
+  }
+
+  @override
+  String fileDownloadFailed(Object error) {
+    return '下载失败:$error';
+  }
+
+  @override
+  String fileUploaded(Object name) {
+    return '已上传 $name';
+  }
+
+  @override
+  String hostFileUploadFailed(Object error) {
+    return '上传失败:$error';
+  }
+
+  @override
   String get browseProjectFolder => '浏览项目文件夹';
 
   @override

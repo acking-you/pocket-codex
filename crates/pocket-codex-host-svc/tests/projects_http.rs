@@ -105,3 +105,95 @@ async fn projects_round_trip_and_confined_listing() {
         .expect("list outside");
     assert_eq!(outside.status(), reqwest::StatusCode::FORBIDDEN);
 }
+
+#[tokio::test]
+async fn file_transfer_list_download_upload_confined() {
+    let (base, root, _guard) = spawn().await;
+    let client = reqwest::Client::new();
+
+    // Configure the root.
+    let put = HostConfig {
+        project_roots: vec![root.clone()],
+        default_project: None,
+    };
+    client
+        .put(format!("{base}/projects"))
+        .json(&put)
+        .send()
+        .await
+        .expect("put projects");
+
+    // Seed a file in the root.
+    std::fs::write(std::path::Path::new(&root).join("report.txt"), b"hello").expect("seed file");
+
+    // List files (not the crate-a sub-directory).
+    let resp = client
+        .get(format!("{base}/fs/files"))
+        .query(&[("path", root.as_str())])
+        .send()
+        .await
+        .expect("list files");
+    assert!(resp.status().is_success());
+    let body: serde_json::Value = resp.json().await.expect("decode files");
+    let names: Vec<&str> = body["files"]
+        .as_array()
+        .expect("files array")
+        .iter()
+        .map(|e| e["name"].as_str().expect("name"))
+        .collect();
+    assert_eq!(names, vec!["report.txt"]);
+
+    // Download the file's bytes.
+    let file_path = format!("{root}/report.txt");
+    let dl = client
+        .get(format!("{base}/fs/read"))
+        .query(&[("path", file_path.as_str())])
+        .send()
+        .await
+        .expect("read file");
+    assert!(dl.status().is_success());
+    assert_eq!(dl.bytes().await.expect("bytes").as_ref(), b"hello");
+
+    // Reading outside the roots is refused with 403.
+    let outside = client
+        .get(format!("{base}/fs/read"))
+        .query(&[("path", "/definitely/not/a/root/x")])
+        .send()
+        .await
+        .expect("read outside");
+    assert_eq!(outside.status(), reqwest::StatusCode::FORBIDDEN);
+
+    // Upload a new file into the root.
+    let up = client
+        .post(format!("{base}/fs/write"))
+        .query(&[("dir", root.as_str()), ("name", "note.txt")])
+        .body("uploaded".to_string())
+        .send()
+        .await
+        .expect("write file");
+    assert!(up.status().is_success());
+    assert_eq!(
+        std::fs::read(std::path::Path::new(&root).join("note.txt")).expect("read note"),
+        b"uploaded"
+    );
+
+    // Re-uploading the same name never overwrites → 409.
+    let dup = client
+        .post(format!("{base}/fs/write"))
+        .query(&[("dir", root.as_str()), ("name", "note.txt")])
+        .body("again".to_string())
+        .send()
+        .await
+        .expect("write dup");
+    assert_eq!(dup.status(), reqwest::StatusCode::CONFLICT);
+
+    // Uploading into a directory outside the roots is refused with 403.
+    let out = client
+        .post(format!("{base}/fs/write"))
+        .query(&[("dir", "/definitely/not/a/root"), ("name", "x.txt")])
+        .body("x".to_string())
+        .send()
+        .await
+        .expect("write outside");
+    assert_eq!(out.status(), reqwest::StatusCode::FORBIDDEN);
+}

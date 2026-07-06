@@ -25,6 +25,7 @@ import 'package:pocket_codex/src/image_attachments.dart';
 import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/ui_prefs.dart';
 import 'package:pocket_codex/src/widgets/brand_logo.dart';
+import 'package:pocket_codex/src/widgets/file_browser_panel.dart';
 import 'package:pocket_codex/src/widgets/folder_tree_picker.dart';
 import 'package:pocket_codex/src/widgets/links.dart';
 import 'package:pocket_codex/src/widgets/loading.dart';
@@ -4154,6 +4155,28 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
                             ),
                             onPressed: _sending ? null : _pickFiles,
                           ),
+                          // Browse / transfer host files (download from or
+                          // upload to the host's project folders). Desktop-only
+                          // (uses the save/open dialogs), so gated like saving.
+                          if (canSaveImages)
+                            IconButton(
+                              key: const Key('host-files-btn'),
+                              tooltip: l10n.hostFiles,
+                              visualDensity: VisualDensity.compact,
+                              icon: Icon(
+                                Icons.folder_open_outlined,
+                                size: 20,
+                                color: Theme.of(
+                                  context,
+                                ).colorScheme.onSurfaceVariant,
+                              ),
+                              onPressed: _sending
+                                  ? null
+                                  : () => showFileBrowser(
+                                      context,
+                                      serviceKey: widget.serviceKey,
+                                    ),
+                            ),
                           const SizedBox(width: 4),
                           // The options toggle: a compact summary of the active
                           // config when collapsed, a "hide" affordance when

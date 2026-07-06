@@ -1132,6 +1132,38 @@ class AppLocalizationsEn extends AppLocalizations {
   String get gitRepoLabel => 'Git repository';
 
   @override
+  String get hostFiles => 'Host files';
+
+  @override
+  String get fileBrowserEmpty => 'This folder is empty';
+
+  @override
+  String get fileDownload => 'Download';
+
+  @override
+  String get fileUpload => 'Upload';
+
+  @override
+  String fileDownloaded(Object path) {
+    return 'Downloaded to $path';
+  }
+
+  @override
+  String fileDownloadFailed(Object error) {
+    return 'Couldn\'t download: $error';
+  }
+
+  @override
+  String fileUploaded(Object name) {
+    return 'Uploaded $name';
+  }
+
+  @override
+  String hostFileUploadFailed(Object error) {
+    return 'Couldn\'t upload: $error';
+  }
+
+  @override
   String get browseProjectFolder => 'Browse project folders';
 
   @override

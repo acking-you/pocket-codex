@@ -28,6 +28,20 @@ pub struct DirEntry {
     pub is_git_repo: bool,
 }
 
+/// One file in a listed directory (not a sub-directory), with size + mtime for
+/// the file-transfer panel. `Deserialize` too so the bridge client decodes it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileEntry {
+    /// The file's own name (final path component).
+    pub name: String,
+    /// Absolute host path.
+    pub path: String,
+    /// Size in bytes.
+    pub size: u64,
+    /// Last-modified time in unix seconds (0 when unavailable).
+    pub mtime: i64,
+}
+
 /// Canonicalise `p`, or `None` when it does not exist / cannot be resolved.
 fn canonical(p: &Path) -> Option<PathBuf> {
     std::fs::canonicalize(p).ok()
@@ -49,8 +63,7 @@ pub fn within_roots(path: &Path, roots: &[String]) -> bool {
         return false;
     };
     roots.iter().any(|root| {
-        canonical(Path::new(root))
-            .is_some_and(|root| target == root || target.starts_with(&root))
+        canonical(Path::new(root)).is_some_and(|root| target == root || target.starts_with(&root))
     })
 }
 
@@ -96,9 +109,64 @@ pub fn list_subdirs(dir: &Path) -> Result<Vec<DirEntry>> {
     Ok(out)
 }
 
+/// List the immediate *files* of `dir` (not sub-directories), sorted
+/// case-insensitively by name, each with size + mtime. Hidden dotfiles are
+/// skipped. Errors if `dir` is not a readable directory.
+pub fn list_files(dir: &Path) -> Result<Vec<FileEntry>> {
+    let mut out = Vec::new();
+    let read =
+        std::fs::read_dir(dir).with_context(|| format!("reading directory {}", dir.display()))?;
+    for entry in read {
+        let Ok(entry) = entry else {
+            continue; // skip an unreadable entry rather than fail the listing
+        };
+        let Ok(meta) = entry.metadata() else {
+            continue;
+        };
+        if !meta.is_file() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') {
+            continue;
+        }
+        let mtime = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        out.push(FileEntry {
+            name,
+            path: entry.path().to_string_lossy().into_owned(),
+            size: meta.len(),
+            mtime,
+        });
+    }
+    out.sort_by_key(|e| e.name.to_lowercase());
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lists_only_files_sorted_skipping_hidden() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        std::fs::write(root.join("Beta.txt"), b"bb").expect("write");
+        std::fs::write(root.join("alpha.md"), b"a").expect("write");
+        std::fs::write(root.join(".hidden"), b"x").expect("write");
+        std::fs::create_dir(root.join("subdir")).expect("mkdir");
+
+        let out = list_files(root).expect("list");
+        let names: Vec<_> = out.iter().map(|e| e.name.as_str()).collect();
+        // Case-insensitive sort; dirs + dotfiles excluded.
+        assert_eq!(names, vec!["alpha.md", "Beta.txt"]);
+        let a = out.iter().find(|e| e.name == "alpha.md").expect("alpha");
+        assert_eq!(a.size, 1);
+    }
 
     #[test]
     fn lists_only_subdirs_sorted_skipping_hidden() {

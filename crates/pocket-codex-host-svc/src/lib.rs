@@ -96,6 +96,14 @@ pub async fn serve(
         // root-confined directory listing to drill the host's project tree.
         .route("/projects", get(get_projects).put(put_projects))
         .route("/fs/list", get(list_dir))
+        // File-transfer panel: list the files in a chosen dir, download a
+        // file's bytes, upload a local file into a chosen dir — root-confined.
+        .route("/fs/files", get(list_files_in))
+        .route("/fs/read", get(read_file))
+        .route(
+            "/fs/write",
+            post(write_file).layer(DefaultBodyLimit::max(UPLOAD_BODY_LIMIT)),
+        )
         // Attachment uploads carry whole files; raise the 2 MB default body cap
         // on this route only.
         .route(
@@ -127,6 +135,10 @@ impl IntoResponse for ApiError {
             StatusCode::CONFLICT
         } else if msg.contains("outside the configured project roots") {
             StatusCode::FORBIDDEN
+        } else if msg.contains("already exists") {
+            StatusCode::CONFLICT
+        } else if msg.contains("is not a file") {
+            StatusCode::BAD_REQUEST
         } else {
             StatusCode::INTERNAL_SERVER_ERROR
         };
@@ -264,6 +276,109 @@ async fn list_dir(
     Ok(Json(ListDirResponse {
         path: q.path,
         entries,
+    }))
+}
+
+/// `{ "path": ..., "files": [...] }` — one directory's files (not sub-dirs).
+#[derive(Serialize)]
+struct ListFilesResponse {
+    path: String,
+    files: Vec<fs::FileEntry>,
+}
+
+/// `GET /fs/files?path=<abs>` — the files in `path` (root-confined), for the
+/// file-transfer panel. `403` for a path outside the configured roots.
+async fn list_files_in(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<ListDirQuery>,
+) -> Result<Json<ListFilesResponse>, ApiError> {
+    let roots = state.host.get().await.project_roots;
+    let requested = std::path::PathBuf::from(&q.path);
+    if !fs::within_roots(&requested, &roots) {
+        return Err(ApiError(anyhow!("path is outside the configured project roots")));
+    }
+    let files = tokio::task::spawn_blocking(move || fs::list_files(&requested))
+        .await
+        .context("file-listing task panicked")??;
+    Ok(Json(ListFilesResponse {
+        path: q.path,
+        files,
+    }))
+}
+
+/// `GET /fs/read?path=<file>` — a file's raw bytes (root-confined), to download
+/// a host file to the controller. `403` outside roots, `400` if not a file.
+/// Reads the whole file into memory: project files are the target, so a range
+/// protocol would be premature; the meta tunnel is the only reachable caller.
+async fn read_file(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<ListDirQuery>,
+) -> Result<Vec<u8>, ApiError> {
+    let roots = state.host.get().await.project_roots;
+    let requested = std::path::PathBuf::from(&q.path);
+    if !fs::within_roots(&requested, &roots) {
+        return Err(ApiError(anyhow!("path is outside the configured project roots")));
+    }
+    // within_roots already rejects non-existent paths; reject a directory too
+    // so the error is honest rather than an opaque read failure.
+    if !requested.is_file() {
+        return Err(ApiError(anyhow!("path is not a file")));
+    }
+    let bytes = tokio::fs::read(&requested)
+        .await
+        .with_context(|| format!("reading {}", requested.display()))?;
+    Ok(bytes)
+}
+
+/// Query for `POST /fs/write`.
+#[derive(Deserialize)]
+struct WriteFileQuery {
+    /// Absolute host directory to write into (root-confined).
+    dir: String,
+    /// Client filename; sanitized to a single path component.
+    name: String,
+}
+
+/// `POST /fs/write?dir=<abs>&name=<file>` (body = bytes) — upload a local file
+/// into a chosen host directory (root-confined). Never overwrites: an existing
+/// same-named file yields `409`. `403` for a directory outside the roots.
+async fn write_file(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<WriteFileQuery>,
+    body: axum::body::Bytes,
+) -> Result<Json<UploadResponse>, ApiError> {
+    let roots = state.host.get().await.project_roots;
+    let dir = std::path::PathBuf::from(&q.dir);
+    if !fs::within_roots(&dir, &roots) {
+        return Err(ApiError(anyhow!("path is outside the configured project roots")));
+    }
+    let safe = sanitize_file_name(&q.name)?;
+    let path = dir.join(&safe);
+    // create_new is atomic: an existing same-named file is never silently
+    // overwritten — it errors with AlreadyExists, which maps to 409.
+    use tokio::io::AsyncWriteExt;
+    match tokio::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .await
+    {
+        Ok(mut f) => f
+            .write_all(&body)
+            .await
+            .with_context(|| format!("writing {}", path.display()))?,
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            return Err(ApiError(anyhow!("a file named `{safe}` already exists here")));
+        },
+        Err(e) => {
+            return Err(ApiError(
+                anyhow::Error::from(e).context(format!("creating {}", path.display())),
+            ));
+        },
+    }
+    Ok(Json(UploadResponse {
+        path: path.display().to_string(),
+        size: body.len() as u64,
     }))
 }
 

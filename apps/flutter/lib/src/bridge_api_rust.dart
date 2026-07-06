@@ -773,6 +773,41 @@ class RustBridgeApi implements BridgeApi {
         .toList(growable: false);
   }
 
+  @override
+  Future<List<HostFileEntry>> metaListFiles(
+    String serviceKey,
+    String path,
+  ) async {
+    final files = await frb.metaListFiles(serviceKey: serviceKey, path: path);
+    return files
+        .map(
+          (e) => HostFileEntry(
+            name: e.name,
+            path: e.path,
+            size: e.size.toInt(),
+            mtime: e.mtime.toInt(),
+          ),
+        )
+        .toList(growable: false);
+  }
+
+  @override
+  Future<Uint8List> metaReadFile(String serviceKey, String path) =>
+      frb.metaReadFile(serviceKey: serviceKey, path: path);
+
+  @override
+  Future<String> metaWriteFile(
+    String serviceKey,
+    String dir,
+    String fileName,
+    Uint8List bytes,
+  ) => frb.metaWriteFile(
+    serviceKey: serviceKey,
+    dir: dir,
+    fileName: fileName,
+    bytes: bytes,
+  );
+
   ProjectConfig _projectConfig(frb.ProjectConfigDto c) => ProjectConfig(
     projectRoots: c.projectRoots,
     defaultProject: c.defaultProject,

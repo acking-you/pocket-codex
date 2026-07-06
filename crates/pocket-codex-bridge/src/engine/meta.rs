@@ -15,7 +15,7 @@ use anyhow::{anyhow, Context, Result};
 use once_cell::sync::OnceCell;
 use pocket_codex_core::service::{ServiceId, ServiceKind};
 use pocket_codex_host_svc::{
-    fs::DirEntry,
+    fs::{DirEntry, FileEntry},
     resume::ForceResumeOutcome,
     sessions::{LocalSession, SessionLiveness, TranscriptItem},
     store::{HostConfig, ThreadConfig},
@@ -220,6 +220,68 @@ pub fn list_dir(service_key: &str, path: &str) -> Result<Vec<DirEntry>> {
     url.query_pairs_mut().append_pair("path", path);
     let resp: ListDirResponse = runtime::runtime().block_on(get_json(url))?;
     Ok(resp.entries)
+}
+
+/// `{ "path": ..., "files": [...] }` — one directory's files.
+#[derive(Deserialize)]
+struct ListFilesResponse {
+    files: Vec<FileEntry>,
+}
+
+/// List the files in `path` on the host (root-confined), for the file-transfer
+/// panel. A path outside the configured roots errors (403 in the message).
+pub fn list_files(service_key: &str, path: &str) -> Result<Vec<FileEntry>> {
+    let mut url = endpoint(service_key, &["fs", "files"])?;
+    url.query_pairs_mut().append_pair("path", path);
+    let resp: ListFilesResponse = runtime::runtime().block_on(get_json(url))?;
+    Ok(resp.files)
+}
+
+/// Download a host file's raw bytes (root-confined) to the controller. Reuses
+/// the generous upload timeout since a large file over a relay hop can outlast
+/// [`META_TIMEOUT`].
+pub fn read_file(service_key: &str, path: &str) -> Result<Vec<u8>> {
+    let mut url = endpoint(service_key, &["fs", "read"])?;
+    url.query_pairs_mut().append_pair("path", path);
+    runtime::runtime().block_on(async move {
+        let resp = client()
+            .get(url)
+            .timeout(UPLOAD_TIMEOUT)
+            .send()
+            .await
+            .context("meta GET read")?;
+        let resp = ensure_ok(resp).await?;
+        Ok(resp.bytes().await.context("reading file bytes")?.to_vec())
+    })
+}
+
+/// Upload local `bytes` as `file_name` into host directory `dir`
+/// (root-confined); returns where it landed. Never overwrites (a collision
+/// surfaces the host's 409 in the returned message).
+pub fn write_file(
+    service_key: &str,
+    dir: &str,
+    file_name: &str,
+    bytes: Vec<u8>,
+) -> Result<UploadedFile> {
+    let mut url = endpoint(service_key, &["fs", "write"])?;
+    url.query_pairs_mut()
+        .append_pair("dir", dir)
+        .append_pair("name", file_name);
+    runtime::runtime().block_on(async move {
+        let resp = client()
+            .post(url)
+            .timeout(UPLOAD_TIMEOUT)
+            .body(bytes)
+            .send()
+            .await
+            .context("meta POST write")?;
+        ensure_ok(resp)
+            .await?
+            .json()
+            .await
+            .context("decoding write response")
+    })
 }
 
 /// Read a remote thread's persisted config (all-unset when none stored).
