@@ -641,6 +641,18 @@ class AppLocalizationsEn extends AppLocalizations {
   String get trayQuit => 'Quit';
 
   @override
+  String get windowMinimize => 'Minimize';
+
+  @override
+  String get windowMaximize => 'Maximize';
+
+  @override
+  String get windowRestore => 'Restore';
+
+  @override
+  String get windowClose => 'Close';
+
+  @override
   String get relayRow => 'relay';
 
   @override

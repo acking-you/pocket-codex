@@ -628,6 +628,18 @@ class AppLocalizationsZh extends AppLocalizations {
   String get trayQuit => '退出';
 
   @override
+  String get windowMinimize => '最小化';
+
+  @override
+  String get windowMaximize => '最大化';
+
+  @override
+  String get windowRestore => '还原';
+
+  @override
+  String get windowClose => '关闭';
+
+  @override
   String get relayRow => 'relay';
 
   @override
