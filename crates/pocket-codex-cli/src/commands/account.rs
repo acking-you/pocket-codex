@@ -6,7 +6,10 @@
 //! token (a JWT, persisted in the same 0600 `config.toml` as the relay key) and
 //! the opaque refresh token used to renew it.
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use anyhow::{anyhow, bail, Context, Result};
 use base64::Engine as _;
@@ -113,9 +116,17 @@ async fn login_device(backend_flag: Option<&str>) -> Result<()> {
     ui::field("url", &start.verification_uri);
     ui::code(&format!("open {} and enter {}", start.verification_uri, start.user_code));
 
-    let interval = Duration::from_secs(start.interval_secs.max(1));
+    let mut interval = device_poll_interval(start.interval_secs);
+    let deadline = Instant::now() + device_code_lifetime(start.expires_in_secs);
     loop {
-        tokio::time::sleep(interval).await;
+        let now = Instant::now();
+        if now >= deadline {
+            bail!("device code expired; run `pocket-codex login` again");
+        }
+        tokio::time::sleep(interval.min(deadline.saturating_duration_since(now))).await;
+        if Instant::now() >= deadline {
+            bail!("device code expired; run `pocket-codex login` again");
+        }
         let poll: DevicePollResponse = client
             .post(format!("{base}/auth/device/poll"))
             .json(&pocket_codex_account_proto::http::DevicePollRequest {
@@ -129,9 +140,12 @@ async fn login_device(backend_flag: Option<&str>) -> Result<()> {
             .json()
             .await
             .context("parsing device poll response")?;
+        tracing::debug!(status = ?poll.status, "device login poll response");
         match poll.status {
             DevicePollStatus::Pending => continue,
-            DevicePollStatus::SlowDown => tokio::time::sleep(interval).await,
+            DevicePollStatus::SlowDown => {
+                interval = next_poll_interval_after_slow_down(interval, poll.interval_secs);
+            },
             DevicePollStatus::Authorized => {
                 let cred = poll
                     .credential
@@ -156,6 +170,27 @@ async fn login_device(backend_flag: Option<&str>) -> Result<()> {
             DevicePollStatus::Denied => bail!("access denied on GitHub"),
         }
     }
+}
+
+fn device_poll_interval(interval_secs: u64) -> Duration {
+    Duration::from_secs(interval_secs.max(6))
+}
+
+fn device_code_lifetime(expires_in_secs: u64) -> Duration {
+    Duration::from_secs(if expires_in_secs == 0 { 900 } else { expires_in_secs })
+}
+
+fn slow_down_delay(current: Duration) -> Duration {
+    current + Duration::from_secs(5)
+}
+
+fn next_poll_interval_after_slow_down(
+    current: Duration,
+    server_interval_secs: Option<u64>,
+) -> Duration {
+    server_interval_secs
+        .map(device_poll_interval)
+        .unwrap_or_else(|| slow_down_delay(current))
 }
 
 /// The browser-redirect (authorization-code) flow: bind a loopback callback,
@@ -633,5 +668,26 @@ mod tests {
         let token = format!("h.{payload}.s");
         assert_eq!(jwt_exp(&token), Some(1_700_000_000));
         assert_eq!(jwt_exp("not-a-jwt"), None);
+    }
+
+    #[test]
+    fn device_login_polling_defaults_zero_bounds() {
+        assert_eq!(device_poll_interval(0), Duration::from_secs(6));
+        assert_eq!(device_code_lifetime(0), Duration::from_secs(900));
+    }
+
+    #[test]
+    fn device_login_slow_down_increases_interval_cumulatively() {
+        let mut delay = device_poll_interval(5);
+        delay = next_poll_interval_after_slow_down(delay, None);
+        assert_eq!(delay, Duration::from_secs(11));
+        delay = next_poll_interval_after_slow_down(delay, None);
+        assert_eq!(delay, Duration::from_secs(16));
+    }
+
+    #[test]
+    fn device_login_slow_down_prefers_backend_interval() {
+        let delay = next_poll_interval_after_slow_down(Duration::from_secs(10), Some(21));
+        assert_eq!(delay, Duration::from_secs(21));
     }
 }

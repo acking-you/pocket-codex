@@ -14,6 +14,36 @@ const ACCESS_TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
 const USER_URL: &str = "https://api.github.com/user";
 const DEVICE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
 
+#[derive(Clone)]
+pub(crate) struct GitHubEndpoints {
+    device_code_url: String,
+    authorize_url: String,
+    access_token_url: String,
+    user_url: String,
+}
+
+impl GitHubEndpoints {
+    fn github() -> Self {
+        Self {
+            device_code_url: DEVICE_CODE_URL.to_string(),
+            authorize_url: AUTHORIZE_URL.to_string(),
+            access_token_url: ACCESS_TOKEN_URL.to_string(),
+            user_url: USER_URL.to_string(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_base_url(base_url: &str) -> Self {
+        let base = base_url.trim_end_matches('/');
+        Self {
+            device_code_url: format!("{base}/login/device/code"),
+            authorize_url: format!("{base}/login/oauth/authorize"),
+            access_token_url: format!("{base}/login/oauth/access_token"),
+            user_url: format!("{base}/user"),
+        }
+    }
+}
+
 /// Device-code response from `POST /login/device/code`.
 #[derive(Debug, Deserialize)]
 pub(crate) struct DeviceCode {
@@ -29,7 +59,11 @@ pub(crate) enum PollResult {
     /// Not authorized yet.
     Pending,
     /// Polling too fast.
-    SlowDown,
+    SlowDown {
+        /// Updated minimum seconds before the next token request, when GitHub
+        /// includes it.
+        interval_secs: Option<u64>,
+    },
     /// Authorized; carries the GitHub access token.
     Authorized(String),
     /// The device code expired.
@@ -49,6 +83,7 @@ pub(crate) struct GhUser {
 pub(crate) struct GitHub {
     http: reqwest::Client,
     client_id: String,
+    endpoints: GitHubEndpoints,
 }
 
 impl GitHub {
@@ -56,6 +91,20 @@ impl GitHub {
         Self {
             http,
             client_id,
+            endpoints: GitHubEndpoints::github(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_with_base_url(
+        http: reqwest::Client,
+        client_id: String,
+        base_url: &str,
+    ) -> Self {
+        Self {
+            http,
+            client_id,
+            endpoints: GitHubEndpoints::from_base_url(base_url),
         }
     }
 
@@ -63,7 +112,7 @@ impl GitHub {
     pub(crate) async fn request_device_code(&self, scope: &str) -> Result<DeviceCode> {
         let resp = self
             .http
-            .post(DEVICE_CODE_URL)
+            .post(&self.endpoints.device_code_url)
             .header(reqwest::header::ACCEPT, "application/json")
             .form(&[("client_id", self.client_id.as_str()), ("scope", scope)])
             .send()
@@ -76,7 +125,7 @@ impl GitHub {
     pub(crate) async fn poll_token(&self, device_code: &str) -> Result<PollResult> {
         let resp = self
             .http
-            .post(ACCESS_TOKEN_URL)
+            .post(&self.endpoints.access_token_url)
             .header(reqwest::header::ACCEPT, "application/json")
             .form(&[
                 ("client_id", self.client_id.as_str()),
@@ -91,7 +140,9 @@ impl GitHub {
         }
         match body.get("error").and_then(|v| v.as_str()) {
             Some("authorization_pending") => Ok(PollResult::Pending),
-            Some("slow_down") => Ok(PollResult::SlowDown),
+            Some("slow_down") => Ok(PollResult::SlowDown {
+                interval_secs: body.get("interval").and_then(|v| v.as_u64()),
+            }),
             Some("expired_token") => Ok(PollResult::Expired),
             Some("access_denied") => Ok(PollResult::Denied),
             Some(other) => Err(AuthError::Github(other.to_string())),
@@ -111,7 +162,7 @@ impl GitHub {
             .append_pair("state", state)
             .append_pair("allow_signup", "true")
             .finish();
-        format!("{AUTHORIZE_URL}?{query}")
+        format!("{}?{query}", self.endpoints.authorize_url)
     }
 
     /// Exchange an authorization code for an access token (web flow). Unlike
@@ -125,7 +176,7 @@ impl GitHub {
     ) -> Result<String> {
         let resp = self
             .http
-            .post(ACCESS_TOKEN_URL)
+            .post(&self.endpoints.access_token_url)
             .header(reqwest::header::ACCEPT, "application/json")
             .form(&[
                 ("client_id", self.client_id.as_str()),
@@ -151,7 +202,7 @@ impl GitHub {
     pub(crate) async fn fetch_user(&self, access_token: &str) -> Result<GhUser> {
         let resp = self
             .http
-            .get(USER_URL)
+            .get(&self.endpoints.user_url)
             .header(reqwest::header::ACCEPT, "application/vnd.github+json")
             .bearer_auth(access_token)
             .send()

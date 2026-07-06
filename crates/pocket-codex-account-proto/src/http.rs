@@ -61,6 +61,10 @@ pub enum DevicePollStatus {
 pub struct DevicePollResponse {
     /// Current status of the flow.
     pub status: DevicePollStatus,
+    /// Updated minimum seconds before the next poll, present when the provider
+    /// reports [`DevicePollStatus::SlowDown`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interval_secs: Option<u64>,
     /// The issued session, present iff [`DevicePollStatus::Authorized`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credential: Option<SessionCredential>,
