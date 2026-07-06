@@ -6,6 +6,7 @@ import 'package:file_selector/file_selector.dart' show openFiles;
 import 'package:flutter/foundation.dart'
     show listEquals, defaultTargetPlatform, TargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:pocket_codex/src/widgets/window_title_bar.dart';
 import 'package:flutter/services.dart';
 import 'package:pasteboard/pasteboard.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
@@ -2365,7 +2366,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
       // the swipe start just inside that strip and open the sessions list.
       // (Swipe-to-close already works once the drawer is open.)
       drawerEdgeDragWidth: isMobile ? 56 : null,
-      appBar: AppBar(
+      appBar: WindowTitleBar(
         // Local codex not configured → a warning strip pointing at the wizard.
         bottom: needsCodexSetup ? _codexSetupBar(l10n) : null,
         // Mobile: the leading button OPENS the sessions list (drawer). Desktop:

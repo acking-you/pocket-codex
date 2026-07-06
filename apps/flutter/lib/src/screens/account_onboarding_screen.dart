@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:pocket_codex/src/widgets/window_title_bar.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -259,7 +260,7 @@ class _AccountOnboardingState extends ConsumerState<AccountOnboardingScreen> {
     final theme = Theme.of(context);
     final device = _device;
     return Scaffold(
-      appBar: AppBar(title: Text(l10n.accountSignInTitle)),
+      appBar: WindowTitleBar(title: Text(l10n.accountSignInTitle)),
       body: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 420),

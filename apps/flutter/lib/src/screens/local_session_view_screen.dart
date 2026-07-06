@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:pocket_codex/src/widgets/window_title_bar.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
@@ -199,7 +200,7 @@ class _LocalSessionViewState extends ConsumerState<LocalSessionViewScreen> {
         ? previewWithoutFileRefs(widget.preview!.trim(), l10n.fileOnlyMessage)
         : widget.threadId;
     return Scaffold(
-      appBar: AppBar(
+      appBar: WindowTitleBar(
         title: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
         actions: [
           IconButton(

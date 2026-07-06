@@ -12,26 +12,45 @@ final _scrollbarTheme = ScrollbarThemeData(
   radius: const Radius.circular(3),
 );
 
-/// Light Material 3 theme.
-ThemeData lightTheme() => ThemeData(
-  colorScheme: ColorScheme.fromSeed(
-    seedColor: _seed,
-    brightness: Brightness.light,
-  ),
-  useMaterial3: true,
-  fontFamily: appFontFamily,
-  fontFamilyFallback: cjkFontFallback,
-  scrollbarTheme: _scrollbarTheme,
+/// A flat app bar that blends into the content: same surface colour, no
+/// Material-3 scroll tint, no elevation/shadow. This is what makes the top bar
+/// stop looking like a separate raised strip — with the native title bar hidden
+/// on desktop, the app bar becomes a seamless part of the window.
+AppBarTheme _appBarTheme(ColorScheme scheme) => AppBarTheme(
+  backgroundColor: scheme.surface,
+  surfaceTintColor: Colors.transparent,
+  elevation: 0,
+  scrolledUnderElevation: 0,
 );
 
+/// Light Material 3 theme.
+ThemeData lightTheme() {
+  final scheme = ColorScheme.fromSeed(
+    seedColor: _seed,
+    brightness: Brightness.light,
+  );
+  return ThemeData(
+    colorScheme: scheme,
+    useMaterial3: true,
+    fontFamily: appFontFamily,
+    fontFamilyFallback: cjkFontFallback,
+    scrollbarTheme: _scrollbarTheme,
+    appBarTheme: _appBarTheme(scheme),
+  );
+}
+
 /// Dark Material 3 theme.
-ThemeData darkTheme() => ThemeData(
-  colorScheme: ColorScheme.fromSeed(
+ThemeData darkTheme() {
+  final scheme = ColorScheme.fromSeed(
     seedColor: _seed,
     brightness: Brightness.dark,
-  ),
-  useMaterial3: true,
-  fontFamily: appFontFamily,
-  fontFamilyFallback: cjkFontFallback,
-  scrollbarTheme: _scrollbarTheme,
-);
+  );
+  return ThemeData(
+    colorScheme: scheme,
+    useMaterial3: true,
+    fontFamily: appFontFamily,
+    fontFamilyFallback: cjkFontFallback,
+    scrollbarTheme: _scrollbarTheme,
+    appBarTheme: _appBarTheme(scheme),
+  );
+}

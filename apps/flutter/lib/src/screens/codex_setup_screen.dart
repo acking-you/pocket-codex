@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:pocket_codex/src/widgets/window_title_bar.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -255,7 +256,7 @@ class _CodexSetupScreenState extends ConsumerState<CodexSetupScreen> {
     final status = _status;
     final nonDegraded = status?.promptVariant == 'non_degraded';
     return Scaffold(
-      appBar: AppBar(title: Text(l10n.codexSetup)),
+      appBar: WindowTitleBar(title: Text(l10n.codexSetup)),
       body: SafeArea(
         child: Center(
           child: ConstrainedBox(

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:pocket_codex/src/widgets/window_title_bar.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -26,7 +27,7 @@ class _SettingsState extends ConsumerState<SettingsScreen> {
     final subs =
         ref.watch(subscriptionsProvider).valueOrNull ?? const <SubInfo>[];
     return Scaffold(
-      appBar: AppBar(title: Text(l10n.settingsTitle)),
+      appBar: WindowTitleBar(title: Text(l10n.settingsTitle)),
       body: ListView(
         children: [
           ListTile(

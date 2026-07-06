@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart'
     show defaultTargetPlatform, kIsWeb, TargetPlatform, visibleForTesting;
 import 'package:flutter/material.dart';
+import 'package:pocket_codex/src/widgets/window_title_bar.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
@@ -480,7 +481,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
 
   /// Brand app bar with the manage/settings escape hatches, shared by the
   /// splash and the hero so no home state is ever a dead end.
-  PreferredSizeWidget _homeAppBar(AppLocalizations l10n) => AppBar(
+  PreferredSizeWidget _homeAppBar(AppLocalizations l10n) => WindowTitleBar(
     title: Row(
       mainAxisSize: MainAxisSize.min,
       children: [

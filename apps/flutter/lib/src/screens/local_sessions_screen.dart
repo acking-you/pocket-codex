@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:pocket_codex/src/widgets/window_title_bar.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
@@ -155,7 +156,7 @@ class _LocalSessionsState extends ConsumerState<LocalSessionsScreen> {
     // the body only (refresh is pull-to-refresh + the host picker's button).
     if (widget.embedded) return body;
     return Scaffold(
-      appBar: AppBar(
+      appBar: WindowTitleBar(
         title: Text(l10n.localSessionsTitle),
         actions: [
           IconButton(

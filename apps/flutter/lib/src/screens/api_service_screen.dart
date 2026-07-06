@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:pocket_codex/src/widgets/window_title_bar.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
@@ -147,7 +148,7 @@ class _ApiServiceState extends ConsumerState<ApiServiceScreen> {
     );
     if (widget.embedded) return body;
     return Scaffold(
-      appBar: AppBar(title: Text(l10n.apiServiceTitle)),
+      appBar: WindowTitleBar(title: Text(l10n.apiServiceTitle)),
       body: body,
     );
   }
