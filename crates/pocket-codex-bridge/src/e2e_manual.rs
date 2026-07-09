@@ -45,6 +45,11 @@ fn init_and_host(name: &str, embedded: bool) -> crate::api::bridge::AppServeDto 
         .ok()
         .and_then(|p| p.parse().ok())
         .unwrap_or(0);
+    // Adopting a pre-started codex is inherently EXTERNAL hosting: the
+    // embedded path rejects a taken port outright (it would otherwise publish
+    // a listener it doesn't own), while the external `spawn` adopts a live
+    // listener on the requested port after verifying its /readyz.
+    let embedded = embedded && port == 0;
     let host = api::app_serve_start(port, None, Some(name.into()), None, embedded)
         .expect("app_serve_start");
     println!("hosting: app={} (pid {})", host.app_service_key, host.pid);

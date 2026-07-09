@@ -76,7 +76,9 @@ struct LocalServe {
     app_register: Option<JoinHandle<RegisterFatal>>,
     watchdog: JoinHandle<()>,
     /// The in-process codex app-server task (embedded mode). `None` for an
-    /// external (spawned-binary) host. Aborted on stop.
+    /// external (spawned-binary) host. Aborted on stop. Swapped for a fresh
+    /// task by [`embedded_health_watchdog`] when the server wedges, so this
+    /// always holds the LIVE supervisor.
     embedded: Option<JoinHandle<()>>,
     /// Tails an external codex's log file into the in-app log viewer. `Some`
     /// for an external host, `None` for embedded (whose logs already stream
@@ -306,7 +308,9 @@ fn tunnel_down<T>(handle: &Option<JoinHandle<T>>) -> bool {
 /// proxy use to reach chatgpt.com (`None` = inherit the app's environment).
 /// Run codex's app-server in-process on `listen_url`, restarting it if it ever
 /// exits, until the task is aborted on stop. This is the embedded-mode
-/// equivalent of the spawned `codex` binary plus its health watchdog.
+/// equivalent of the spawned `codex` binary. It only reacts to the task
+/// EXITING (clean return, error, panic); a wedged-but-alive server never
+/// trips it — that is [`embedded_health_watchdog`]'s job.
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 async fn run_embedded_supervised(listen_url: String) {
     // Bounded restart backoff so a persistently-broken embedded codex (bad
@@ -701,12 +705,13 @@ pub fn serve_start(
         clippy::type_complexity,
         reason = "a local bring-up tuple immediately destructured into named bindings"
     )]
-    let (app_local, pid, embedded_task, watchdog, log_tail): (
+    let (app_local, pid, embedded_task, watchdog, log_tail, adopted): (
         SocketAddr,
         u32,
         Option<JoinHandle<()>>,
         JoinHandle<()>,
         Option<JoinHandle<()>>,
+        bool,
     ) = if embedded {
         #[cfg(any(target_os = "windows", target_os = "macos"))]
         {
@@ -742,12 +747,16 @@ pub fn serve_start(
             let app_local: SocketAddr = format!("127.0.0.1:{port}")
                 .parse()
                 .expect("loopback socket addr");
-            // The supervisor self-restarts codex, so there is no separate
-            // process-respawn watchdog; a never-ending task fills the slot.
-            let watchdog = runtime::runtime().spawn(std::future::pending::<()>());
+            // The supervisor only restarts the in-process server when its task
+            // EXITS; a wedged-but-alive server (hung accept loop that stops
+            // answering /readyz) never exits, so — exactly like the external
+            // path — a watchdog probes /readyz and abort+respawns the
+            // supervisor when it goes quiet.
+            let watchdog = runtime::runtime()
+                .spawn(embedded_health_watchdog(name.clone(), app_local.to_string()));
             // Embedded codex's logs already stream through the in-process tracing
             // layer, so there's no separate log file to tail.
-            (app_local, std::process::id(), Some(task), watchdog, None)
+            (app_local, std::process::id(), Some(task), watchdog, None, false)
         }
         #[cfg(not(any(target_os = "windows", target_os = "macos")))]
         {
@@ -819,38 +828,66 @@ pub fn serve_start(
         // the file its stdout/stderr are redirected to, from this run's offset.
         let log_tail =
             tail_codex_log(report.info.log_file.clone(), report.log_offset, name.clone());
-        (app_local, report.info.pid, None, watchdog, Some(log_tail))
+        (app_local, report.info.pid, None, watchdog, Some(log_tail), report.reused)
     };
 
-    // Reserve an ephemeral loopback port for the in-process API proxy and learn
-    // it (so we can register that port). A supervisor task keeps the proxy alive
-    // on that port — re-binding + restarting it with backoff if it ever exits —
-    // so the registered `api:<name>` tunnel keeps forwarding to a live proxy
-    // rather than a dead socket.
-    let api_std = std::net::TcpListener::bind("127.0.0.1:0")
-        .context("binding the in-app API proxy listener")?;
-    api_std
-        .set_nonblocking(true)
-        .context("setting the API proxy listener non-blocking")?;
-    let api_local: SocketAddr = api_std
-        .local_addr()
-        .context("reading the API proxy listener address")?;
+    // The rest of the start can still fail (loopback listener binds, broker
+    // transport). Run those fallible steps as ONE block so a single failure
+    // path can tear the just-brought-up codex back down — a bare `?` here
+    // would DROP (and thereby detach, not abort) the supervisor + watchdog
+    // handles, leaving a live server squatting on the port, out of reach of
+    // `serve_stop` (which only knows registered hosts).
+    //
+    // Reserves an ephemeral loopback port each for the in-process API proxy
+    // and meta service and learns them (so we can register those ports);
+    // supervisor tasks (spawned below, infallibly) keep both alive by
+    // re-binding + restarting with backoff, so the registered `api:<name>` /
+    // `meta:<name>` tunnels keep forwarding to live servers rather than dead
+    // sockets.
+    let bringup_tail = (|| -> Result<_> {
+        let api_std = std::net::TcpListener::bind("127.0.0.1:0")
+            .context("binding the in-app API proxy listener")?;
+        api_std
+            .set_nonblocking(true)
+            .context("setting the API proxy listener non-blocking")?;
+        let api_local: SocketAddr = api_std
+            .local_addr()
+            .context("reading the API proxy listener address")?;
+        let meta_std = std::net::TcpListener::bind("127.0.0.1:0")
+            .context("binding the in-app meta service listener")?;
+        meta_std
+            .set_nonblocking(true)
+            .context("setting the meta service listener non-blocking")?;
+        let meta_local: SocketAddr = meta_std
+            .local_addr()
+            .context("reading the meta service listener address")?;
+        let (connector, tokens) = account::broker_transport(&support)?;
+        Ok((api_std, api_local, meta_std, meta_local, connector, tokens))
+    })();
+    let (api_std, api_local, meta_std, meta_local, connector, tokens) = match bringup_tail {
+        Ok(tail) => tail,
+        Err(e) => {
+            watchdog.abort();
+            if let Some(t) = &log_tail {
+                t.abort();
+            }
+            match &embedded_task {
+                // In-process: aborting the supervisor stops the inner server
+                // (its AbortOnDrop guard) and frees the port.
+                Some(t) => t.abort(),
+                // External: reap the fresh child. An ADOPTED (pre-existing,
+                // reused) server is never ours to kill — mirrors the
+                // verify_ready failure path above.
+                None if !adopted => stop_codex_at(&app_local.to_string()),
+                None => {},
+            }
+            return Err(e);
+        },
+    };
     let api_proxy =
         runtime::runtime().spawn(api_proxy_supervisor(api_local, api_std, proxy.clone()));
-
-    // Reserve an ephemeral loopback port for the in-process meta service the
-    // same way, and keep it alive under a supervisor so the registered
-    // `meta:<name>` tunnel always forwards to a live server. It resumes into the
-    // codex we just spawned (`app_local`) and shares the host-global config
-    // store.
-    let meta_std = std::net::TcpListener::bind("127.0.0.1:0")
-        .context("binding the in-app meta service listener")?;
-    meta_std
-        .set_nonblocking(true)
-        .context("setting the meta service listener non-blocking")?;
-    let meta_local: SocketAddr = meta_std
-        .local_addr()
-        .context("reading the meta service listener address")?;
+    // The meta service resumes into the codex we just brought up (`app_local`)
+    // and shares the host-global config store.
     let meta_svc = runtime::runtime().spawn(meta_svc_supervisor(
         meta_local,
         meta_std,
@@ -858,8 +895,6 @@ pub fn serve_start(
         config_store,
         host_config_store,
     ));
-
-    let (connector, tokens) = account::broker_transport(&support)?;
     let (app_first_tx, app_first_rx) = tokio::sync::oneshot::channel();
     let app_register = Some(spawn_register(
         connector.clone(),
@@ -1155,8 +1190,13 @@ fn stop_host_tasks(ls: LocalServe) {
     if let Some(h) = ls.embedded {
         // Embedded codex is an in-process task: abort it (its supervisor stops
         // and the WS listener closes). Skip the port-targeted process kill — the
-        // listener is our own process.
+        // listener is our own process. The abort is only DELIVERED at the
+        // task's next await, so wait (bounded, like the external path's
+        // stop_codex_at) for the port to actually close: an immediate re-host
+        // on the same port would otherwise race the dying listener and fail
+        // its probe_port_free. Normally this returns in one connect probe.
         h.abort();
+        wait_for_port_closed(&ls.app_local.to_string(), Duration::from_secs(6));
     } else {
         stop_codex_at(&ls.app_local.to_string());
     }
@@ -1289,19 +1329,14 @@ fn proxy_restart_backoff(failures: u32) -> Duration {
 /// `tracing`.
 async fn health_watchdog(local_addr: String, spawn_opts: SpawnOptions) {
     let url = format!("http://{local_addr}/readyz");
-    let client = match reqwest::Client::builder().timeout(HEALTH_TIMEOUT).build() {
-        Ok(client) => client,
-        Err(_) => return,
+    let Some(client) = probe_client() else {
+        return;
     };
     let mut consecutive: u32 = 0;
     let mut restart_failures: u32 = 0;
     loop {
         tokio::time::sleep(HEALTH_INTERVAL).await;
-        let healthy = matches!(
-            client.get(&url).send().await,
-            Ok(resp) if resp.status().is_success()
-        );
-        if healthy {
+        if probe_ready(&client, &url).await {
             consecutive = 0;
             restart_failures = 0;
             continue;
@@ -1322,11 +1357,145 @@ async fn health_watchdog(local_addr: String, spawn_opts: SpawnOptions) {
             },
         }
         consecutive = 0;
-        let backoff = HEALTH_RESTART_GRACE
-            .saturating_mul(1u32 << restart_failures.min(5))
-            .min(MAX_RESTART_BACKOFF);
-        tokio::time::sleep(backoff).await;
+        tokio::time::sleep(health_restart_backoff(restart_failures)).await;
     }
+}
+
+/// Grace before probing resumes after a watchdog-driven restart, doubling per
+/// consecutive failed recovery up to [`MAX_RESTART_BACKOFF`] — shared by the
+/// external and embedded watchdogs so their recovery pacing can't drift apart.
+fn health_restart_backoff(restart_failures: u32) -> Duration {
+    HEALTH_RESTART_GRACE
+        .saturating_mul(1u32 << restart_failures.min(5))
+        .min(MAX_RESTART_BACKOFF)
+}
+
+/// The HTTP client both watchdogs probe `/readyz` with. Built with
+/// `.no_proxy()`: probes only ever target our own loopback server, and the
+/// process environment can carry an upstream proxy (the user's own, or the one
+/// `set_proxy_env` installs for an embedded host) whose `NO_PROXY` doesn't
+/// cover loopback — a proxied probe then fails against a perfectly healthy
+/// server and the watchdog would keep "recovering" it forever.
+fn probe_client() -> Option<reqwest::Client> {
+    reqwest::Client::builder()
+        .timeout(HEALTH_TIMEOUT)
+        .no_proxy()
+        .build()
+        .ok()
+}
+
+/// One `/readyz` probe over `client`: `true` on any 2xx.
+async fn probe_ready(client: &reqwest::Client, url: &str) -> bool {
+    matches!(client.get(url).send().await, Ok(resp) if resp.status().is_success())
+}
+
+/// Poll `/readyz` until it answers 2xx or `timeout` elapses — the async,
+/// in-runtime sibling of `pocket_codex_codex::wait_for_readyz` (which parks a
+/// thread).
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+async fn wait_ready(client: &reqwest::Client, url: &str, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if probe_ready(client, url).await {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
+/// Probe the EMBEDDED codex app-server's `/readyz` and, when it stops
+/// answering, abort + respawn its supervisor task — the embedded twin of
+/// [`health_watchdog`], with the same probe cadence, failure threshold, and
+/// restart backoff.
+///
+/// [`run_embedded_supervised`] only restarts the in-process server when its
+/// task EXITS; a wedged-but-not-exited server (hung accept loop that stops
+/// answering `/readyz`) never trips it, and without this watchdog the
+/// published app/api/meta tunnels would forward to a dead server until the
+/// user restarted hosting by hand. Limit: task abortion is cooperative — an
+/// inner task that never reaches an await can't be cancelled and then keeps
+/// the port bound (the fresh supervisor just retries its bind); every wedge
+/// that still yields recovers.
+///
+/// Returns (stops probing) once its host entry is gone or belongs to a
+/// successor host — `serve_stop` aborts this task anyway; the checks inside
+/// [`respawn_embedded_supervisor`] are the backstop for the window between
+/// entry removal and that abort.
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+async fn embedded_health_watchdog(name: String, local_addr: String) {
+    let url = format!("http://{local_addr}/readyz");
+    let Some(client) = probe_client() else {
+        return;
+    };
+    let mut consecutive: u32 = 0;
+    let mut restart_failures: u32 = 0;
+    loop {
+        tokio::time::sleep(HEALTH_INTERVAL).await;
+        if probe_ready(&client, &url).await {
+            consecutive = 0;
+            restart_failures = 0;
+            continue;
+        }
+        consecutive += 1;
+        if consecutive < HEALTH_FAILURES {
+            continue;
+        }
+        tracing::warn!(
+            %local_addr,
+            "embedded codex app-server failed {HEALTH_FAILURES} health checks; restarting it"
+        );
+        if !respawn_embedded_supervisor(&name, &local_addr) {
+            return;
+        }
+        // The respawn itself cannot fail (it only spawns a task); whether the
+        // server actually came back is only visible on /readyz. Verify that
+        // bounded — the embedded analogue of the external path's
+        // `verify_ready` — so repeated failed recoveries engage the restart
+        // backoff instead of re-aborting at probe cadence.
+        if wait_ready(&client, &url, READY_TIMEOUT).await {
+            tracing::info!(%local_addr, "embedded codex app-server restarted");
+            restart_failures = 0;
+        } else {
+            restart_failures += 1;
+            tracing::warn!(
+                %local_addr,
+                attempt = restart_failures,
+                "restarted embedded codex app-server did not become ready"
+            );
+        }
+        consecutive = 0;
+        tokio::time::sleep(health_restart_backoff(restart_failures)).await;
+    }
+}
+
+/// Abort the embedded supervisor of host `name` and install a fresh one on
+/// the same listen URL, swapping the handle in the host entry so a later
+/// `serve_stop` aborts the LIVE task rather than a dead handle. Aborting the
+/// supervisor also stops the inner app-server (its `AbortOnDrop` guard),
+/// which frees the port for the fresh supervisor's bind-retry loop. Returns
+/// `false` — the calling watchdog must stand down — when the host is gone or
+/// is no longer this embedded server on this address (stopped or replaced
+/// concurrently: an aborted watchdog still runs sync code until its next
+/// await, so it must never touch a successor host's entry).
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+fn respawn_embedded_supervisor(name: &str, local_addr: &str) -> bool {
+    let mut guard = hosts_locked();
+    let Some(ls) = guard.get_mut(name) else {
+        return false;
+    };
+    if ls.app_local.to_string() != local_addr {
+        return false;
+    }
+    let Some(old) = ls.embedded.take() else {
+        return false;
+    };
+    old.abort();
+    let listen_url = format!("ws://{local_addr}");
+    ls.embedded = Some(runtime::runtime().spawn(run_embedded_supervised(listen_url)));
+    true
 }
 
 /// Stop the wedged codex and spawn a fresh one on the same port (escalating to
@@ -1504,6 +1673,149 @@ mod tests {
         // The next-port hint must not overflow at the port ceiling.
         let msg = embedded_not_ready_error(u16::MAX).to_string();
         assert!(msg.contains("retry with a different port"), "{msg}");
+    }
+
+    /// A host entry whose task slots are inert pending futures — enough
+    /// structure to exercise the respawn swap against the real hosts map.
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    fn fake_embedded_host(name: &str, app_local: SocketAddr) -> LocalServe {
+        let rt = runtime::runtime();
+        let dummy: SocketAddr = "127.0.0.1:1".parse().expect("dummy addr");
+        LocalServe {
+            device: "test-device".to_string(),
+            name: name.to_string(),
+            app_key: format!("pcx:test-device:app:{name}"),
+            app_local,
+            pid: std::process::id(),
+            app_register: None,
+            watchdog: rt.spawn(std::future::pending::<()>()),
+            embedded: Some(rt.spawn(std::future::pending::<()>())),
+            log_tail: None,
+            api_key: format!("pcx:test-device:api:{name}"),
+            api_local: dummy,
+            api_proxy: rt.spawn(std::future::pending::<()>()),
+            api_register: None,
+            meta_key: format!("pcx:test-device:meta:{name}"),
+            meta_local: dummy,
+            meta_svc: rt.spawn(std::future::pending::<()>()),
+            meta_register: None,
+            codex_binary: None,
+            proxy: None,
+        }
+    }
+
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    #[test]
+    fn respawn_embedded_supervisor_swaps_in_a_live_task() {
+        crate::engine::runtime::init(std::env::temp_dir()).expect("init runtime");
+        // Hold the app port for the whole test so the respawned supervisor's
+        // inner bind fails-and-retries instead of starting a real app-server
+        // inside the test process.
+        let held = std::net::TcpListener::bind("127.0.0.1:0").expect("hold the app port");
+        let app_local = held.local_addr().expect("local addr");
+        let name = format!("respawn-swap-test-{}", std::process::id());
+        let host = fake_embedded_host(&name, app_local);
+        let old_task = host
+            .embedded
+            .as_ref()
+            .expect("embedded slot")
+            .abort_handle();
+        hosts_locked().insert(name.clone(), host);
+
+        assert!(
+            respawn_embedded_supervisor(&name, &app_local.to_string()),
+            "a live matching host must be respawned"
+        );
+
+        // The wedged (here: pending-forever) supervisor must get aborted...
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !old_task.is_finished() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(old_task.is_finished(), "the old supervisor should be aborted");
+        // ...and the entry must now hold a LIVE replacement — the handle a
+        // later serve_stop aborts.
+        {
+            let guard = hosts_locked();
+            let fresh = guard
+                .get(&name)
+                .expect("host entry survives the swap")
+                .embedded
+                .as_ref()
+                .expect("a fresh embedded task is installed")
+                .abort_handle();
+            assert!(!fresh.is_finished(), "the replacement supervisor should be running");
+        }
+        if let Some(ls) = hosts_locked().remove(&name) {
+            stop_host_tasks(ls);
+        }
+    }
+
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    #[test]
+    fn respawn_embedded_supervisor_stands_down_when_host_is_gone_or_replaced() {
+        crate::engine::runtime::init(std::env::temp_dir()).expect("init runtime");
+        // Unknown name: the host was stopped — nothing to respawn.
+        assert!(!respawn_embedded_supervisor("no-such-host", "127.0.0.1:1"));
+
+        // Same name on a DIFFERENT address (a successor host): a stale
+        // watchdog must not abort the successor's supervisor.
+        let name = format!("respawn-guard-test-{}", std::process::id());
+        let app_local: SocketAddr = "127.0.0.1:2".parse().expect("addr");
+        let host = fake_embedded_host(&name, app_local);
+        let successor = host
+            .embedded
+            .as_ref()
+            .expect("embedded slot")
+            .abort_handle();
+        hosts_locked().insert(name.clone(), host);
+        assert!(!respawn_embedded_supervisor(&name, "127.0.0.1:3"));
+        assert!(
+            !successor.is_finished(),
+            "a stale watchdog must never abort a successor host's supervisor"
+        );
+        if let Some(ls) = hosts_locked().remove(&name) {
+            stop_host_tasks(ls);
+        }
+    }
+
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    #[test]
+    fn wait_ready_sees_a_2xx_and_times_out_on_a_dead_port() {
+        crate::engine::runtime::init(std::env::temp_dir()).expect("init runtime");
+        // A fake /readyz answering 200 for every connection (the poll loop
+        // probes repeatedly). The serving thread leaks; fine for a test.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind fake readyz");
+        let addr = listener.local_addr().expect("local addr");
+        std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            for stream in listener.incoming().flatten() {
+                let mut stream = stream;
+                let mut buf = [0u8; 512];
+                let _ = stream.read(&mut buf);
+                let _ = stream.write_all(
+                    b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+                );
+            }
+        });
+        let client = reqwest::Client::builder()
+            .timeout(HEALTH_TIMEOUT)
+            .build()
+            .expect("build probe client");
+        let url = format!("http://{addr}/readyz");
+        assert!(runtime::runtime().block_on(wait_ready(&client, &url, Duration::from_secs(5))));
+
+        // Nothing listening: false at the deadline, not a hang.
+        let dead = {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+            l.local_addr().expect("local addr")
+        };
+        let url = format!("http://{dead}/readyz");
+        assert!(!runtime::runtime().block_on(wait_ready(
+            &client,
+            &url,
+            Duration::from_millis(400)
+        )));
     }
 
     #[test]
