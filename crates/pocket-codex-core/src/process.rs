@@ -7,18 +7,51 @@
 
 use std::{net::TcpStream, time::Duration};
 
-use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
+use sysinfo::{Pid, ProcessRefreshKind, ProcessStatus, ProcessesToUpdate, System, UpdateKind};
 use tracing::warn;
 
-/// Check whether a process id currently exists on this host.
-pub fn pid_alive(pid: u32) -> bool {
+/// Refresh and return the status of a single process, `None` when no such
+/// process exists. Shared lookup behind [`pid_alive`] / [`pid_running`] so
+/// the sysinfo refresh incantation lives in one place.
+fn process_status(pid: u32) -> Option<ProcessStatus> {
     let mut sys = System::new();
     sys.refresh_processes_specifics(
         ProcessesToUpdate::Some(&[Pid::from_u32(pid)]),
         true,
         ProcessRefreshKind::new(),
     );
-    sys.process(Pid::from_u32(pid)).is_some()
+    sys.process(Pid::from_u32(pid))
+        .map(sysinfo::Process::status)
+}
+
+/// Check whether a process id currently exists on this host.
+pub fn pid_alive(pid: u32) -> bool {
+    process_status(pid).is_some()
+}
+
+/// Like [`pid_alive`], but an exited-yet-unreaped child (a unix zombie)
+/// counts as gone. The supervisors deliberately never `wait()` on the
+/// children they spawn, so on unix a codex that died right after launch
+/// lingers as a zombie for the CLI's lifetime — [`pid_alive`] keeps
+/// reporting it, while this tells the truth: it will never serve.
+pub fn pid_running(pid: u32) -> bool {
+    !matches!(process_status(pid), None | Some(ProcessStatus::Zombie | ProcessStatus::Dead))
+}
+
+/// Host to dial when probing a listener that was bound to `host`: unspecified
+/// binds (`0.0.0.0` / `::`) are reachable over loopback, and a bracketed IPv6
+/// authority (`[::1]`) is unwrapped so `ToSocketAddrs` accepts it. Shared by
+/// [`tcp_port_open`] and the readiness probe so the two can never disagree
+/// about whether the same server is reachable.
+pub fn probe_host(host: &str) -> &str {
+    let host = host
+        .strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(host);
+    match host {
+        "0.0.0.0" | "::" | "" => "127.0.0.1",
+        other => other,
+    }
 }
 
 /// Whether something is currently accepting TCP connections on `host:port`.
@@ -30,10 +63,7 @@ pub fn pid_alive(pid: u32) -> bool {
 /// Unspecified hosts (`0.0.0.0` / `::`) are probed over loopback.
 pub fn tcp_port_open(host: &str, port: u16) -> bool {
     use std::net::ToSocketAddrs;
-    let host = match host {
-        "0.0.0.0" | "::" | "" => "127.0.0.1",
-        other => other,
-    };
+    let host = probe_host(host);
     let Ok(addrs) = (host, port).to_socket_addrs() else {
         return false;
     };
@@ -170,6 +200,28 @@ mod tests {
             l.local_addr().expect("local addr").port()
         };
         assert!(!tcp_port_open("127.0.0.1", port));
+    }
+
+    #[test]
+    fn pid_running_tracks_real_processes() {
+        // Our own process is by definition running (and not a zombie).
+        assert!(pid_running(std::process::id()));
+        // A PID that cannot exist reads as gone. u32::MAX is above every
+        // platform's PID ceiling.
+        assert!(!pid_running(u32::MAX));
+    }
+
+    #[test]
+    fn probe_host_normalizes_unspecified_and_bracketed_hosts() {
+        assert_eq!(probe_host("0.0.0.0"), "127.0.0.1");
+        assert_eq!(probe_host("::"), "127.0.0.1");
+        assert_eq!(probe_host("[::]"), "127.0.0.1");
+        assert_eq!(probe_host(""), "127.0.0.1");
+        assert_eq!(probe_host("[::1]"), "::1");
+        assert_eq!(probe_host("127.0.0.1"), "127.0.0.1");
+        assert_eq!(probe_host("example.test"), "example.test");
+        // A half-bracketed host is left alone rather than mangled.
+        assert_eq!(probe_host("[oops"), "[oops");
     }
 
     #[test]

@@ -23,7 +23,7 @@ use std::{
 use chrono::Utc;
 use pocket_codex_core::{
     paths,
-    process::{find_codex_app_server, pid_alive, send_sigterm, tcp_port_open},
+    process::{find_codex_app_server, pid_alive, pid_running, send_sigterm, tcp_port_open},
     state::{CodexProcessInfo, RuntimeState},
 };
 use tracing::{debug, info, warn};
@@ -39,7 +39,7 @@ const SPAWN_RESOLVE_TIMEOUT: Duration = Duration::from_secs(15);
 /// Parse the `host`/`port` out of a `ws://host:port` listen URL. Returns
 /// `None` for non-websocket transports (e.g. `unix://`), which have no TCP
 /// port to probe and therefore fall back to PID-based tracking.
-fn ws_host_port(listen_url: &str) -> Option<(String, u16)> {
+pub(crate) fn ws_host_port(listen_url: &str) -> Option<(String, u16)> {
     let authority = listen_url.strip_prefix("ws://")?.split('/').next()?;
     let (host, port) = authority.rsplit_once(':')?;
     Some((host.to_string(), port.parse().ok()?))
@@ -50,11 +50,33 @@ fn ws_host_port(listen_url: &str) -> Option<(String, u16)> {
 /// behind an npm/node shim). Falls back to `spawn_pid` if the port never comes
 /// up within [`SPAWN_RESOLVE_TIMEOUT`], so status honestly reports a server
 /// that failed to start rather than silently mislabelling one.
-fn resolve_listener_pid(host: &str, port: u16, listen_url: &str, spawn_pid: u32) -> u32 {
+///
+/// The full wait is cut short only when the launch has *provably* failed:
+/// the direct child is gone AND this run's log already shows the
+/// address-in-use bind error. A dead child alone is deliberately not enough
+/// — an npm shim exits right after handing off to the native binary, which
+/// may still need seconds to bind (cold start, AV scan).
+fn resolve_listener_pid(
+    host: &str,
+    port: u16,
+    listen_url: &str,
+    spawn_pid: u32,
+    log_file: &std::path::Path,
+    log_offset: u64,
+) -> u32 {
     let deadline = Instant::now() + SPAWN_RESOLVE_TIMEOUT;
+    let mut next_death_check = Instant::now() + crate::readiness::DEATH_CHECK_INTERVAL;
     loop {
         if tcp_port_open(host, port) {
             return find_codex_app_server(listen_url).unwrap_or(spawn_pid);
+        }
+        if Instant::now() >= next_death_check {
+            next_death_check = Instant::now() + crate::readiness::DEATH_CHECK_INTERVAL;
+            if !pid_running(spawn_pid)
+                && crate::readiness::bind_failure_logged(log_file, log_offset)
+            {
+                return spawn_pid;
+            }
         }
         if Instant::now() >= deadline {
             return spawn_pid;
@@ -304,7 +326,9 @@ pub fn spawn(opts: SpawnOptions) -> pocket_codex_core::Result<SpawnReport> {
     // come up and record the PID that actually owns it, so status/stop target
     // the real app-server rather than a wrapper that has already exited.
     let pid = match &endpoint {
-        Some((host, port)) => resolve_listener_pid(host, *port, &listen_url, spawn_pid),
+        Some((host, port)) => {
+            resolve_listener_pid(host, *port, &listen_url, spawn_pid, &log_file, log_offset)
+        },
         None => spawn_pid,
     };
 

@@ -31,6 +31,11 @@ pub mod client;
 /// Spawn / inspect / stop the supervised `codex app-server` process.
 pub mod process;
 
+/// Verify a freshly-spawned app-server actually serves (`/readyz`), so
+/// launch commands can fail fast with the real error instead of printing
+/// success for a child that died on boot.
+pub mod readiness;
+
 /// Read codex session rollout files from `CODEX_HOME` and classify their
 /// most-recent-turn state.
 pub mod rollout;
@@ -56,3 +61,4 @@ pub use process::{
     locate_binary, spawn, status, stop, ListenSpec, SpawnOptions, SpawnReport, StatusReport,
     StopOutcome,
 };
+pub use readiness::{verify_ready, StartupFailure, READY_TIMEOUT};

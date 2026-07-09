@@ -41,7 +41,7 @@ use std::{
 
 use anyhow::{bail, Context, Result};
 use pocket_codex_broker_client::{run_register, Connector, RegisterConfig, TokenProvider};
-use pocket_codex_codex::{spawn, stop, ListenSpec, SpawnOptions};
+use pocket_codex_codex::{spawn, stop, verify_ready, ListenSpec, SpawnOptions, READY_TIMEOUT};
 use pocket_codex_core::{
     config::Config,
     process::{find_codex_app_server, force_kill},
@@ -52,7 +52,7 @@ use pocket_codex_core::{
 use crate::{
     cli::ServeArgs,
     commands::{
-        account, api_proxy,
+        account, api_proxy, codex,
         managed_pb::{self, EnsureOutcome, PbWorkerSpec},
         transport::{self, Transport},
         ui,
@@ -107,6 +107,12 @@ pub async fn run(args: ServeArgs) -> Result<()> {
         proxy: effective_proxy.clone(),
     };
     let report = spawn(spawn_opts.clone())?;
+    // Don't publish (or print success for) a child that died on boot —
+    // classically a bind failure on an already-taken port, which used to
+    // surface only minutes later as `codex stale` in `status`. Confirm the
+    // app-server answers /readyz and otherwise fail now, with the child's
+    // own error output.
+    verify_ready(&report, READY_TIMEOUT).map_err(codex::startup_failure_error)?;
     let local_addr = websocket_listen_addr(&report.info.listen).with_context(|| {
         format!("codex listen URL `{}` is not relayable TCP", report.info.listen)
     })?;
@@ -407,6 +413,9 @@ async fn restart_codex(spawn_opts: SpawnOptions) -> Result<()> {
             !report.reused,
             "codex is still holding the listen port; restart did not take effect"
         );
+        // A respawn that dies on boot must count as a FAILED restart — so the
+        // watchdog's backoff engages — not as a success that resets it.
+        verify_ready(&report, READY_TIMEOUT).map_err(|failure| anyhow::anyhow!("{failure}"))?;
         Ok(())
     })
     .await

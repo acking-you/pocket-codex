@@ -1,0 +1,514 @@
+//! Post-spawn readiness verification for a `codex app-server`.
+//!
+//! [`crate::spawn`] deliberately never fails just because the child did not
+//! come up — it records honest state and lets `status` report the truth
+//! later. That is right for the supervisor, but wrong for an interactive
+//! launch: `pocket-codex serve` / `pocket-codex codex start` used to print a
+//! green "✓ codex app-server" the moment the child was forked, even when it
+//! died on the very next tick (classically a bind failure because the listen
+//! port is already taken — `os error 10048` on Windows, `EADDRINUSE` on
+//! unix). The failure then only surfaced minutes later as a stale status,
+//! with the real error buried in the log file.
+//!
+//! [`verify_ready`] closes that gap: after a spawn it polls the app-server's
+//! `/readyz` endpoint (the same one the health watchdog probes) until it
+//! answers, the launch has provably failed, or the timeout elapses. On
+//! failure it returns a [`StartupFailure`] carrying the tail of *this run's*
+//! log output (via [`crate::SpawnReport::log_offset`]) and whether that
+//! output points at an address-already-in-use bind error, so the CLI can
+//! fail fast with the actual cause and a useful hint.
+//!
+//! A dead child PID alone is deliberately NOT treated as failure: when
+//! `codex` is an npm shim, the process we spawned exits right after handing
+//! off to the native binary, which may still need seconds to bind (cold
+//! start, AV scan). The one *provable* early-failure signal is the child
+//! being gone while this run's log already shows the bind error — that pair
+//! fails the launch in a couple of seconds; everything else gets the full
+//! timeout to come up.
+
+use std::{
+    fmt,
+    io::{BufRead, BufReader, Read, Seek, SeekFrom, Write},
+    net::{SocketAddr, TcpStream, ToSocketAddrs},
+    path::{Path, PathBuf},
+    thread,
+    time::{Duration, Instant},
+};
+
+use pocket_codex_core::process::{pid_running, probe_host};
+
+use crate::process::{ws_host_port, SpawnReport};
+
+/// Default overall budget for [`verify_ready`]. [`crate::spawn`] has already
+/// waited for the listen port, so a healthy server answers `/readyz` almost
+/// immediately; the budget only matters for one that is listening but still
+/// warming up.
+pub const READY_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Connect timeout for a single `/readyz` probe (loopback — fast).
+const CONNECT_TIMEOUT: Duration = Duration::from_millis(600);
+
+/// Read/write timeout for a single `/readyz` exchange. More generous than
+/// the connect timeout so a heavily-loaded host that is slow to write the
+/// status line is not misread as unready.
+const IO_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Pause between probes.
+const POLL_INTERVAL: Duration = Duration::from_millis(200);
+
+/// Cadence of the dead-child + log checks inside poll loops. Each check
+/// snapshots process state (sysinfo) and re-reads the log tail, so it runs
+/// once a second rather than on every port/readyz probe.
+pub(crate) const DEATH_CHECK_INTERVAL: Duration = Duration::from_secs(1);
+
+/// How long the unix-socket path watches for a fatal bind error before
+/// reporting OK (it has no HTTP endpoint to confirm readiness against).
+const UNIX_WATCH: Duration = Duration::from_secs(2);
+
+/// Cap on how much of the log file is read back for the failure tail.
+const TAIL_MAX_BYTES: u64 = 16 * 1024;
+
+/// Cap on how many log lines a [`StartupFailure`] carries.
+const TAIL_MAX_LINES: usize = 20;
+
+/// A freshly-launched app-server that never became ready.
+///
+/// `Display` gives the one-line summary; callers render `log_tail` /
+/// `port_in_use` themselves so each front-end (CLI, desktop) can phrase the
+/// remedy in its own terms (e.g. which flag picks another port).
+#[derive(Debug)]
+pub struct StartupFailure {
+    /// The spawned process was observed dead while nothing served the listen
+    /// address — it exited during startup (as opposed to still running but
+    /// unresponsive).
+    pub process_exited: bool,
+
+    /// The log output points at an address-already-in-use bind failure
+    /// (`os error 10048` / `EADDRINUSE` / "address already in use"), i.e.
+    /// retrying on another port would likely succeed.
+    pub port_in_use: bool,
+
+    /// The listen URL that never became ready.
+    pub listen: String,
+
+    /// TCP port parsed out of `listen`, when it is a `ws://` URL — so a
+    /// caller building a "retry with another port" hint doesn't have to
+    /// re-parse the URL.
+    pub port: Option<u16>,
+
+    /// The log file the child's stdout/stderr were redirected to.
+    pub log_file: PathBuf,
+
+    /// Last lines of this run's log output (empty when the child wrote
+    /// nothing before dying).
+    pub log_tail: Vec<String>,
+}
+
+impl fmt::Display for StartupFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.process_exited {
+            write!(f, "codex app-server exited during startup (listen {})", self.listen)
+        } else {
+            write!(f, "codex app-server did not become ready on {} in time", self.listen)
+        }
+    }
+}
+
+impl std::error::Error for StartupFailure {}
+
+/// Wait until the just-spawned app-server actually serves, or explain why it
+/// will not.
+///
+/// Polls `/readyz` on the listen address until it answers 2xx (`Ok`), the
+/// launch provably failed — child gone AND the bind error already in the log
+/// (`Err`, fast) — or `timeout` elapses (`Err`). A reused/adopted server
+/// skips the process-death check — there is no fresh child to watch — but is
+/// still probed, so adopting a wedged listener fails the launch instead of
+/// publishing it. Unix-socket transports have no HTTP endpoint and are only
+/// watched briefly for the fatal-bind-error signal.
+pub fn verify_ready(report: &SpawnReport, timeout: Duration) -> Result<(), StartupFailure> {
+    let Some((host, port)) = ws_host_port(&report.info.listen) else {
+        return verify_unix(report);
+    };
+    let deadline = Instant::now() + timeout;
+    let mut next_death_check = Instant::now();
+    let mut observed_dead = false;
+    loop {
+        let down = match probe_readyz(&host, port) {
+            Probe::Ready => return Ok(()),
+            // Something is listening — a booting server; keep waiting.
+            Probe::NotReady => false,
+            Probe::Down => {
+                if !report.reused && Instant::now() >= next_death_check {
+                    next_death_check = Instant::now() + DEATH_CHECK_INTERVAL;
+                    if !pid_running(report.info.pid) {
+                        observed_dead = true;
+                        if bind_failure_logged(&report.info.log_file, report.log_offset) {
+                            return Err(failure(report, true));
+                        }
+                    }
+                }
+                true
+            },
+        };
+        if Instant::now() >= deadline {
+            // "Exited" only when the child was seen dead and, at the end,
+            // still nothing served — a dead shim in front of a live server
+            // ends in Ready/NotReady instead and never reaches here as such.
+            return Err(failure(report, observed_dead && down));
+        }
+        thread::sleep(POLL_INTERVAL);
+    }
+}
+
+/// Unix-socket verification: there is no HTTP endpoint to probe, and the
+/// recorded PID may be a shim that legitimately exits after handoff, so the
+/// only trustworthy fast-fail signal is the child being gone with the fatal
+/// bind error already in this run's log. Watch for that briefly, then
+/// report OK and leave deeper liveness to the supervisor-level checks.
+fn verify_unix(report: &SpawnReport) -> Result<(), StartupFailure> {
+    if report.reused {
+        return Ok(());
+    }
+    let deadline = Instant::now() + UNIX_WATCH;
+    loop {
+        if !pid_running(report.info.pid)
+            && bind_failure_logged(&report.info.log_file, report.log_offset)
+        {
+            return Err(failure(report, true));
+        }
+        if Instant::now() >= deadline {
+            return Ok(());
+        }
+        thread::sleep(DEATH_CHECK_INTERVAL);
+    }
+}
+
+/// Whether this run's log output already shows a fatal address-in-use bind
+/// failure. Paired with a dead child PID this makes a launch *provably*
+/// failed (a dead PID alone may be a shim that exited after handing off).
+/// Also used by [`crate::spawn`]'s port-wait loop to stop waiting out its
+/// full timeout on a bind that can never succeed.
+pub(crate) fn bind_failure_logged(log_file: &Path, from_offset: u64) -> bool {
+    mentions_addr_in_use(&read_log_tail(log_file, from_offset))
+}
+
+/// Assemble a [`StartupFailure`] from the spawn report and this run's log
+/// output.
+fn failure(report: &SpawnReport, process_exited: bool) -> StartupFailure {
+    let log_tail = read_log_tail(&report.info.log_file, report.log_offset);
+    StartupFailure {
+        process_exited,
+        port_in_use: mentions_addr_in_use(&log_tail),
+        listen: report.info.listen.clone(),
+        port: ws_host_port(&report.info.listen).map(|(_, port)| port),
+        log_file: report.info.log_file.clone(),
+        log_tail,
+    }
+}
+
+/// One `/readyz` observation.
+enum Probe {
+    /// Answered 2xx — the server is up.
+    Ready,
+    /// A listener accepted but did not answer 2xx (still booting, or not a
+    /// ready app-server yet).
+    NotReady,
+    /// Nothing accepted the connection.
+    Down,
+}
+
+/// GET `/readyz` and classify the outcome. Every resolved address is tried
+/// (a dual-stack hostname may serve on only one family): any 2xx wins, and
+/// any accepting listener at all downgrades `Down` to `NotReady`.
+fn probe_readyz(host: &str, port: u16) -> Probe {
+    let host = probe_host(host);
+    let Ok(addrs) = (host, port).to_socket_addrs() else {
+        return Probe::Down;
+    };
+    let mut saw_listener = false;
+    for addr in addrs {
+        match probe_addr(addr, host, port) {
+            Some(true) => return Probe::Ready,
+            Some(false) => saw_listener = true,
+            None => {},
+        }
+    }
+    if saw_listener {
+        Probe::NotReady
+    } else {
+        Probe::Down
+    }
+}
+
+/// One `GET /readyz` exchange against a single address: `None` when nothing
+/// accepted the connection, otherwise whether the answer was 2xx. A
+/// hand-rolled one-line HTTP exchange keeps this crate free of an
+/// HTTP-client dependency; the endpoint is loopback and only the status
+/// line matters.
+fn probe_addr(addr: SocketAddr, host: &str, port: u16) -> Option<bool> {
+    let mut stream = TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT).ok()?;
+    let _ = stream.set_read_timeout(Some(IO_TIMEOUT));
+    let _ = stream.set_write_timeout(Some(IO_TIMEOUT));
+    let request =
+        format!("GET /readyz HTTP/1.1\r\nHost: {host}:{port}\r\nConnection: close\r\n\r\n");
+    if stream.write_all(request.as_bytes()).is_err() {
+        return Some(false);
+    }
+    let mut line = Vec::new();
+    let _ = BufReader::new(stream.take(256)).read_until(b'\n', &mut line);
+    Some(status_is_2xx(&String::from_utf8_lossy(&line)))
+}
+
+/// Whether an HTTP response starts with a 2xx status line.
+fn status_is_2xx(response: &str) -> bool {
+    let mut parts = response.split_whitespace();
+    parts
+        .next()
+        .is_some_and(|version| version.starts_with("HTTP/"))
+        && parts
+            .next()
+            .is_some_and(|code| code.len() == 3 && code.starts_with('2'))
+}
+
+/// Read the last lines this run wrote to `log_file` (from `from_offset`,
+/// where [`crate::spawn`] recorded the pre-spawn length), capped to
+/// [`TAIL_MAX_LINES`] / [`TAIL_MAX_BYTES`]. Best-effort: any I/O problem
+/// yields an empty tail rather than masking the startup failure itself. A
+/// stale offset past EOF (truncated/rotated file) reads as empty too.
+fn read_log_tail(log_file: &Path, from_offset: u64) -> Vec<String> {
+    let Ok(mut file) = std::fs::File::open(log_file) else {
+        return Vec::new();
+    };
+    let len = file.metadata().map(|m| m.len()).unwrap_or(0);
+    let start = from_offset.max(len.saturating_sub(TAIL_MAX_BYTES));
+    if file.seek(SeekFrom::Start(start)).is_err() {
+        return Vec::new();
+    }
+    let mut bytes = Vec::new();
+    if file.take(TAIL_MAX_BYTES).read_to_end(&mut bytes).is_err() {
+        return Vec::new();
+    }
+    let text = String::from_utf8_lossy(&bytes);
+    let lines: Vec<&str> = text
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    lines[lines.len().saturating_sub(TAIL_MAX_LINES)..]
+        .iter()
+        .map(|line| line.trim_end().to_string())
+        .collect()
+}
+
+/// Whether the log output points at an address-already-in-use bind failure.
+/// Covers the raw OS codes (Windows WSAEADDRINUSE 10048, Linux 98, macOS 48 —
+/// the numeric text survives even on localized Windows), the errno name an
+/// npm/node shim prints, and the plain English phrasing.
+fn mentions_addr_in_use(lines: &[String]) -> bool {
+    lines.iter().any(|line| {
+        let lower = line.to_ascii_lowercase();
+        lower.contains("os error 10048")
+            || lower.contains("os error 98")
+            || lower.contains("os error 48")
+            || lower.contains("eaddrinuse")
+            || lower.contains("address already in use")
+            || lower.contains("address in use")
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::TcpListener;
+
+    use pocket_codex_core::state::CodexProcessInfo;
+
+    use super::*;
+
+    /// A one-shot fake `/readyz` endpoint answering with `status_line`.
+    /// Returns the bound port; the listener thread serves a single request.
+    fn fake_readyz(status_line: &'static str) -> u16 {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind fake readyz");
+        let port = listener.local_addr().expect("local addr").port();
+        thread::spawn(move || serve_one(&listener, status_line));
+        port
+    }
+
+    /// Accept one connection and answer with `status_line`.
+    fn serve_one(listener: &TcpListener, status_line: &str) {
+        if let Ok((mut stream, _)) = listener.accept() {
+            let mut buf = [0u8; 512];
+            let _ = stream.read(&mut buf);
+            let _ =
+                stream.write_all(format!("{status_line}\r\nContent-Length: 0\r\n\r\n").as_bytes());
+        }
+    }
+
+    fn report(listen: String, pid: u32, reused: bool, log_file: PathBuf) -> SpawnReport {
+        SpawnReport {
+            info: CodexProcessInfo {
+                pid,
+                listen,
+                log_file,
+                started_at: String::new(),
+            },
+            reused,
+            log_offset: 0,
+        }
+    }
+
+    /// Unique temp path for a test log file.
+    fn temp_log(tag: &str) -> PathBuf {
+        std::env::temp_dir()
+            .join(format!("pocket-codex-readiness-{tag}-{}.log", std::process::id()))
+    }
+
+    #[test]
+    fn verify_ready_passes_on_a_2xx_readyz() {
+        let port = fake_readyz("HTTP/1.1 200 OK");
+        let report = report(
+            format!("ws://127.0.0.1:{port}"),
+            std::process::id(),
+            true,
+            PathBuf::from("does-not-exist.log"),
+        );
+        assert!(verify_ready(&report, Duration::from_secs(5)).is_ok());
+    }
+
+    #[test]
+    fn verify_ready_fails_fast_on_a_dead_child_with_a_bind_error_logged() {
+        // Learn a port nobody listens on.
+        let port = {
+            let l = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+            l.local_addr().expect("local addr").port()
+        };
+        let log = temp_log("bindfail");
+        std::fs::write(&log, "Error: Address already in use (os error 10048)\n")
+            .expect("write log");
+        // u32::MAX is above every platform's PID ceiling → "process is gone".
+        let report = report(format!("ws://127.0.0.1:{port}"), u32::MAX, false, log.clone());
+        let started = Instant::now();
+        let failure =
+            verify_ready(&report, Duration::from_secs(30)).expect_err("bind failure must fail");
+        std::fs::remove_file(&log).ok();
+        assert!(failure.process_exited);
+        assert!(failure.port_in_use);
+        assert_eq!(failure.port, Some(port));
+        assert!(!failure.log_tail.is_empty());
+        // Provably-failed launches must not wait out the (deliberately long)
+        // overall timeout.
+        assert!(started.elapsed() < Duration::from_secs(10));
+    }
+
+    #[test]
+    fn verify_ready_survives_a_shim_handoff() {
+        // The spawned PID is long dead and the log is silent (no bind error):
+        // the launch must NOT be declared failed early — here the "native
+        // binary" starts serving 700ms later and the verification succeeds.
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind fake readyz");
+        let port = listener.local_addr().expect("local addr").port();
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(700));
+            serve_one(&listener, "HTTP/1.1 200 OK");
+        });
+        // No log file at all → empty tail → no fatal-bind evidence.
+        let report = report(
+            format!("ws://127.0.0.1:{port}"),
+            u32::MAX,
+            false,
+            PathBuf::from("does-not-exist.log"),
+        );
+        assert!(verify_ready(&report, Duration::from_secs(10)).is_ok());
+    }
+
+    #[test]
+    fn verify_ready_reports_exited_at_timeout_for_a_silently_dead_child() {
+        let port = {
+            let l = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+            l.local_addr().expect("local addr").port()
+        };
+        let report = report(
+            format!("ws://127.0.0.1:{port}"),
+            u32::MAX,
+            false,
+            PathBuf::from("does-not-exist.log"),
+        );
+        let failure = verify_ready(&report, Duration::from_millis(400))
+            .expect_err("nothing ever served — must fail at timeout");
+        assert!(failure.process_exited, "dead child + silent port at timeout reads as exited");
+        assert!(!failure.port_in_use);
+    }
+
+    #[test]
+    fn verify_unix_fails_only_with_bind_error_evidence() {
+        let log = temp_log("unix");
+        std::fs::write(&log, "Error: Address already in use (os error 98)\n").expect("write log");
+        let dead = report("unix:///tmp/pcx-test.sock".to_string(), u32::MAX, false, log.clone());
+        let failure = verify_ready(&dead, Duration::from_secs(5)).expect_err("must fail");
+        assert!(failure.process_exited && failure.port_in_use);
+        assert_eq!(failure.port, None);
+        std::fs::remove_file(&log).ok();
+
+        // Dead PID with a silent log: could be a shim handoff — passes.
+        let silent = report(
+            "unix:///tmp/pcx-test.sock".to_string(),
+            u32::MAX,
+            false,
+            PathBuf::from("does-not-exist.log"),
+        );
+        assert!(verify_ready(&silent, Duration::from_secs(5)).is_ok());
+    }
+
+    #[test]
+    fn status_line_classification() {
+        assert!(status_is_2xx("HTTP/1.1 200 OK"));
+        assert!(status_is_2xx("HTTP/1.0 204 No Content"));
+        assert!(!status_is_2xx("HTTP/1.1 503 Service Unavailable"));
+        assert!(!status_is_2xx("HTTP/1.1 404 Not Found"));
+        assert!(!status_is_2xx("garbage"));
+        assert!(!status_is_2xx(""));
+    }
+
+    #[test]
+    fn addr_in_use_detection_matches_the_platform_phrasings() {
+        let hit = |s: &str| mentions_addr_in_use(&[s.to_string()]);
+        // Windows (WSAEADDRINUSE), including localized message text.
+        assert!(hit("通常每个套接字地址只允许使用一次。 (os error 10048)"));
+        // Linux / macOS errno.
+        assert!(hit("Error: Address already in use (os error 98)"));
+        // node shim.
+        assert!(hit("Error: listen EADDRINUSE: address already in use 127.0.0.1:18080"));
+        // Unrelated output stays quiet.
+        assert!(!hit("codex app-server listening on ws://127.0.0.1:18080"));
+        assert!(!hit("connection reset by peer (os error 10054)"));
+    }
+
+    #[test]
+    fn log_tail_reads_only_this_runs_lines() {
+        let path = temp_log("tail");
+        let earlier_run = "old line from a previous run\n";
+        let this_run = "boot line\n\nError: Address already in use (os error 10048)\n";
+        std::fs::write(&path, format!("{earlier_run}{this_run}")).expect("write log");
+
+        let tail = read_log_tail(&path, earlier_run.len() as u64);
+        std::fs::remove_file(&path).ok();
+
+        // Blank lines are dropped, earlier runs' lines are not replayed.
+        assert_eq!(tail, vec![
+            "boot line".to_string(),
+            "Error: Address already in use (os error 10048)".to_string(),
+        ]);
+        assert!(mentions_addr_in_use(&tail));
+    }
+
+    #[test]
+    fn log_tail_survives_a_missing_or_truncated_file() {
+        assert!(read_log_tail(Path::new("definitely-not-here.log"), 0).is_empty());
+
+        // Offset beyond EOF (file was truncated/rotated) → empty, no panic.
+        let path = temp_log("trunc");
+        std::fs::write(&path, "short\n").expect("write log");
+        let tail = read_log_tail(&path, 10_000);
+        std::fs::remove_file(&path).ok();
+        assert!(tail.is_empty());
+    }
+}
