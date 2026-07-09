@@ -61,4 +61,4 @@ pub use process::{
     locate_binary, spawn, status, stop, ListenSpec, SpawnOptions, SpawnReport, StatusReport,
     StopOutcome,
 };
-pub use readiness::{verify_ready, StartupFailure, READY_TIMEOUT};
+pub use readiness::{verify_ready, wait_for_readyz, StartupFailure, READY_TIMEOUT};

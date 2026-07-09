@@ -193,6 +193,29 @@ pub fn verify_ready(report: &SpawnReport, timeout: Duration) -> Result<(), Start
     }
 }
 
+/// Poll `/readyz` on `host:port` until it answers 2xx (`true`), or `timeout`
+/// elapses (`false`).
+///
+/// The process-agnostic sibling of [`verify_ready`], for an app-server with no
+/// child PID or log file to consult — the desktop's EMBEDDED (in-process)
+/// codex. Its caller has typically already seen the port accept TCP, but that
+/// alone cannot distinguish "our app-server is up" from "an unrelated process
+/// held the port first" (the embedded bind then fails and quietly retries in
+/// its supervisor while the foreign listener answers the TCP wait) — only a
+/// 2xx `/readyz` proves a codex app-server is the one serving.
+pub fn wait_for_readyz(host: &str, port: u16, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if matches!(probe_readyz(host, port), Probe::Ready) {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        thread::sleep(POLL_INTERVAL);
+    }
+}
+
 /// Unix-socket verification: there is no HTTP endpoint to probe, and the
 /// recorded PID may be a shim that legitimately exits after handoff, so the
 /// only trustworthy fast-fail signal is the child being gone with the fatal
@@ -392,6 +415,41 @@ mod tests {
     fn temp_log(tag: &str) -> PathBuf {
         std::env::temp_dir()
             .join(format!("pocket-codex-readiness-{tag}-{}.log", std::process::id()))
+    }
+
+    /// A fake endpoint that keeps serving `status_line` for every connection
+    /// (a poll loop probes repeatedly, so a one-shot responder would read as
+    /// "down" after its first answer). The thread leaks; fine for a test.
+    fn fake_readyz_forever(status_line: &'static str) -> u16 {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind fake readyz");
+        let port = listener.local_addr().expect("local addr").port();
+        thread::spawn(move || loop {
+            serve_one(&listener, status_line);
+        });
+        port
+    }
+
+    #[test]
+    fn wait_for_readyz_passes_on_a_2xx() {
+        let port = fake_readyz_forever("HTTP/1.1 200 OK");
+        assert!(wait_for_readyz("127.0.0.1", port, Duration::from_secs(5)));
+    }
+
+    #[test]
+    fn wait_for_readyz_rejects_a_foreign_listener() {
+        // Something accepts on the port but is not a codex app-server (a plain
+        // HTTP server 404s /readyz) — must time out false, never true.
+        let port = fake_readyz_forever("HTTP/1.1 404 Not Found");
+        assert!(!wait_for_readyz("127.0.0.1", port, Duration::from_millis(600)));
+    }
+
+    #[test]
+    fn wait_for_readyz_rejects_a_dead_port() {
+        let port = {
+            let l = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+            l.local_addr().expect("local addr").port()
+        };
+        assert!(!wait_for_readyz("127.0.0.1", port, Duration::from_millis(400)));
     }
 
     #[test]

@@ -326,6 +326,11 @@ async fn run_embedded_supervised(listen_url: String) {
         let url = listen_url.clone();
         let handle =
             runtime::runtime().spawn(async move { pocket_codex_codex::embedded::run(&url).await });
+        // Aborting THIS supervisor must stop the server too: dropping a
+        // JoinHandle DETACHES its task, so without this guard an abort (a
+        // failed start, `serve_stop`) would leave the inner app-server
+        // serving the port forever — unsupervised and unpublished.
+        let _abort_inner = AbortOnDrop(handle.abort_handle());
         match handle.await {
             Ok(Ok(())) => {
                 tracing::warn!(%listen_url, "embedded codex app-server exited; restarting")
@@ -354,6 +359,21 @@ async fn run_embedded_supervised(listen_url: String) {
     }
 }
 
+/// Aborts the wrapped task when dropped. Guards a spawned inner task across
+/// an `.await` in its supervisor: if the supervisor is itself aborted at that
+/// point, the drop aborts the inner task too, where dropping the bare
+/// `JoinHandle` would silently DETACH it. Dropping after a completed task is
+/// a no-op abort.
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+struct AbortOnDrop(tokio::task::AbortHandle);
+
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
 /// Block until `host:port` accepts a TCP connection (the embedded WS listener
 /// is up) or `timeout` elapses.
 #[cfg(any(target_os = "windows", target_os = "macos"))]
@@ -373,6 +393,22 @@ fn wait_for_listener(host: &str, port: u16, timeout: Duration) -> Result<()> {
 fn free_loopback_port() -> Result<u16> {
     let l = std::net::TcpListener::bind("127.0.0.1:0").context("reserving a loopback port")?;
     Ok(l.local_addr()?.port())
+}
+
+/// Prove the user-chosen port is actually bindable by binding-and-dropping it,
+/// BEFORE the embedded supervisor exists. The supervisor swallows its bind
+/// failure into a silent retry loop, and neither TCP wait can tell our
+/// listener from a foreign one — this probe fails a taken port in
+/// milliseconds, with the true cause, and also catches holders that never
+/// accept at all (classically a leaked WSL mirrored-networking lease, which
+/// would otherwise burn the whole listener wait and die with a generic
+/// "never listened").
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+fn probe_port_free(port: u16) -> Result<()> {
+    match std::net::TcpListener::bind(("127.0.0.1", port)) {
+        Ok(_) => Ok(()),
+        Err(cause) => Err(embedded_bind_conflict_error(port, &cause)),
+    }
 }
 
 /// This host's own codex log file (each external host gets its own, so one
@@ -678,9 +714,30 @@ pub fn serve_start(
             if let Some(px) = proxy.as_deref() {
                 set_proxy_env(px);
             }
+            // Fail a taken port BEFORE the supervisor exists — its own bind
+            // failure disappears into a silent retry loop, and neither TCP
+            // wait below can tell our listener from a foreign process's.
+            probe_port_free(port)?;
             let listen_url = format!("ws://127.0.0.1:{port}");
             let task = runtime::runtime().spawn(run_embedded_supervised(listen_url));
-            wait_for_listener("127.0.0.1", port, Duration::from_secs(30))?;
+            if let Err(e) = wait_for_listener("127.0.0.1", port, Duration::from_secs(30)) {
+                // Abort the supervisor, or it would keep retrying the bind
+                // forever after this start already failed — and could later
+                // come up unpublished and out of reach of `serve_stop`.
+                task.abort();
+                return Err(e);
+            }
+            // An accepting port is still NOT proof our embedded codex is the
+            // one serving it (the probe→bind handoff has a window a foreign
+            // process could grab; embedded's bind would then quietly retry in
+            // the supervisor while the FOREIGN listener satisfies the TCP
+            // wait) — and the app/api/meta tunnels would publish an unrelated
+            // server. Only a 2xx /readyz proves a live codex app-server
+            // answers before anything is published.
+            if !pocket_codex_codex::wait_for_readyz("127.0.0.1", port, READY_TIMEOUT) {
+                task.abort();
+                return Err(embedded_not_ready_error(port));
+            }
             let app_local: SocketAddr = format!("127.0.0.1:{port}")
                 .parse()
                 .expect("loopback socket addr");
@@ -1285,12 +1342,56 @@ async fn restart_codex(spawn_opts: SpawnOptions) -> Result<()> {
     .context("codex restart task panicked")?
 }
 
+/// The caller's phrasing of the pick-another-port remedy (the hosting form's
+/// port field), shared by the embedded startup errors and
+/// [`startup_failure_error`].
+fn port_retry_hint(port: u16) -> String {
+    match port.checked_add(1) {
+        Some(next) => format!("retry with port {next}, or 0 to pick a free port automatically"),
+        None => "retry with a different port".to_string(),
+    }
+}
+
+/// The hosting error for an embedded start whose port failed the pre-spawn
+/// bind probe: definitively held by another process (or an invisible
+/// port-lease holder), so the in-process app-server can never serve there.
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+fn embedded_bind_conflict_error(port: u16, cause: &std::io::Error) -> anyhow::Error {
+    let retry = port_retry_hint(port);
+    // Mirror StartupFailure::diagnosis's Windows hint: the usual invisible
+    // holder is a WSL mirrored-networking port lease — nothing shows in
+    // netstat, yet binds fail with 10048.
+    #[cfg(windows)]
+    let free_hint = " — or free it (a leaked WSL mirrored-networking lease holds ports invisibly; \
+                     `wsl --shutdown` releases them)";
+    #[cfg(not(windows))]
+    let free_hint = "";
+    anyhow::anyhow!(
+        "port {port} is already in use (binding 127.0.0.1:{port} failed: {cause}), so the \
+         embedded codex app-server cannot serve there — {retry}{free_hint}"
+    )
+}
+
+/// The hosting error for an embedded start whose port passed the bind probe
+/// and got a listener, but where `/readyz` never answered 2xx: either another
+/// process grabbed the port in the probe→bind handoff, or our own app-server
+/// came up wedged. Publishing tunnels to it would be wrong either way.
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+fn embedded_not_ready_error(port: u16) -> anyhow::Error {
+    let retry = port_retry_hint(port);
+    anyhow::anyhow!(
+        "the embedded codex app-server did not become ready on 127.0.0.1:{port} in time (the \
+         listener there never answered codex's /readyz — another process may have grabbed the \
+         port, or the app-server failed to start) — {retry}"
+    )
+}
+
 /// Render a [`StartupFailure`] as the hosting error surfaced to the UI —
 /// [`StartupFailure::diagnosis`] with the remedy phrased as the hosting
 /// form's port field (the CLI sibling phrases it as the `--port` flag).
 fn startup_failure_error(failure: StartupFailure) -> anyhow::Error {
-    let retry = match failure.port.and_then(|port| port.checked_add(1)) {
-        Some(next) => format!("retry with port {next}, or 0 to pick a free port automatically"),
+    let retry = match failure.port {
+        Some(port) => port_retry_hint(port),
         None => "retry with a different port".to_string(),
     };
     anyhow::anyhow!(failure.diagnosis(&retry))
@@ -1334,6 +1435,44 @@ mod tests {
             msg.contains("port 18081, or 0 to pick a free port automatically"),
             "should suggest the next port or an automatic one: {msg}"
         );
+    }
+
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    #[test]
+    fn probe_port_free_fails_a_held_port_with_cause_and_remedy() {
+        // Hold a port, then probe it: must fail with the true cause and the
+        // pick-another-port remedy (matching the external path's phrasing).
+        let held = std::net::TcpListener::bind("127.0.0.1:0").expect("bind a probe target");
+        let port = held.local_addr().expect("local addr").port();
+        let msg = probe_port_free(port)
+            .expect_err("probing a held port must fail")
+            .to_string();
+        assert!(msg.contains(&format!("port {port} is already in use")), "{msg}");
+        assert!(
+            msg.contains(&port_retry_hint(port)),
+            "should suggest the next port or an automatic one: {msg}"
+        );
+        #[cfg(windows)]
+        assert!(msg.contains("wsl --shutdown"), "should carry the WSL-lease hint: {msg}");
+
+        // A freed port probes clean.
+        drop(held);
+        assert!(probe_port_free(port).is_ok());
+    }
+
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    #[test]
+    fn embedded_not_ready_error_names_both_causes_and_the_remedy() {
+        let msg = embedded_not_ready_error(18080).to_string();
+        assert!(msg.contains("did not become ready on 127.0.0.1:18080"), "{msg}");
+        assert!(msg.contains("/readyz"), "{msg}");
+        assert!(
+            msg.contains("retry with port 18081, or 0 to pick a free port automatically"),
+            "should suggest the next port or an automatic one: {msg}"
+        );
+        // The next-port hint must not overflow at the port ceiling.
+        let msg = embedded_not_ready_error(u16::MAX).to_string();
+        assert!(msg.contains("retry with a different port"), "{msg}");
     }
 
     #[test]
