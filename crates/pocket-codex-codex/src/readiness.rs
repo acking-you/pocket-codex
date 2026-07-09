@@ -24,7 +24,14 @@
 //! start, AV scan). The one *provable* early-failure signal is the child
 //! being gone while this run's log already shows the bind error — that pair
 //! fails the launch in a couple of seconds; everything else gets the full
-//! timeout to come up.
+//! timeout to come up — full, that is, unless [`crate::spawn`]'s own port
+//! wait already ran dry without ever seeing a listener
+//! ([`SpawnReport::listener_confirmed`] is `false`), in which case the
+//! budget is capped to a short grace instead of re-waiting on top.
+//!
+//! [`spawn_ready`] fuses [`crate::spawn`] + [`verify_ready`] into the one
+//! call every launch path wants, so a new call site cannot forget the
+//! verification half of the pair.
 
 use std::{
     fmt,
@@ -38,13 +45,25 @@ use std::{
 
 use pocket_codex_core::process::{pid_running, probe_host};
 
-use crate::process::{ws_host_port, SpawnReport};
+use crate::process::{spawn, ws_host_port, SpawnOptions, SpawnReport};
 
 /// Default overall budget for [`verify_ready`]. [`crate::spawn`] has already
 /// waited for the listen port, so a healthy server answers `/readyz` almost
 /// immediately; the budget only matters for one that is listening but still
 /// warming up.
 pub const READY_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Cap on [`verify_ready`]'s budget when [`crate::spawn`]'s own port wait
+/// ended without ever observing a listener
+/// ([`SpawnReport::listener_confirmed`] is `false`) — either it ran its full
+/// course (~15s) or it was cut short by provable failure. The child almost
+/// certainly died during startup, so re-waiting the full ready budget on top
+/// would just block the caller for another stretch before the same failure
+/// surfaces.
+/// The grace still covers the shim-handoff semantics: a couple of the
+/// dead-child-and-bind-error-logged checks, and a final window for a
+/// listener that appears right at the boundary.
+const UNCONFIRMED_LISTENER_GRACE: Duration = Duration::from_secs(2);
 
 /// Connect timeout for a single `/readyz` probe (loopback — fast).
 const CONNECT_TIMEOUT: Duration = Duration::from_millis(600);
@@ -158,10 +177,18 @@ impl std::error::Error for StartupFailure {}
 /// still probed, so adopting a wedged listener fails the launch instead of
 /// publishing it. Unix-socket transports have no HTTP endpoint and are only
 /// watched briefly for the fatal-bind-error signal.
+///
+/// When [`crate::spawn`]'s own port wait already ran dry without seeing a
+/// listener ([`SpawnReport::listener_confirmed`] is `false`), `timeout` is
+/// capped to a short grace — the server had a whole spawn-time wait to bind
+/// and never did, so every caller's worst case shrinks uniformly instead of
+/// stacking a second full wait on the first.
 pub fn verify_ready(report: &SpawnReport, timeout: Duration) -> Result<(), StartupFailure> {
     let Some((host, port)) = ws_host_port(&report.info.listen) else {
         return verify_unix(report);
     };
+    let timeout =
+        if report.listener_confirmed { timeout } else { timeout.min(UNCONFIRMED_LISTENER_GRACE) };
     let deadline = Instant::now() + timeout;
     let mut next_death_check = Instant::now();
     let mut observed_dead = false;
@@ -213,6 +240,75 @@ pub fn wait_for_readyz(host: &str, port: u16, timeout: Duration) -> bool {
             return false;
         }
         thread::sleep(POLL_INTERVAL);
+    }
+}
+
+/// Why [`spawn_ready`] did not yield a ready app-server.
+///
+/// Splits the two phases so callers keep their distinct handling: a spawn
+/// error means no child was started at all (bad binary path, foreign process
+/// on the port, unwritable state), while `NotReady` means a child was
+/// spawned — or a listener adopted — but never verified, and carries the
+/// [`SpawnReport`] so callers can still inspect/reap what was started.
+#[derive(Debug)]
+pub enum SpawnReadyError {
+    /// [`crate::spawn`] itself failed; nothing was started.
+    Spawn(pocket_codex_core::Error),
+
+    /// The spawn succeeded but [`verify_ready`] did not: the app-server
+    /// never answered `/readyz` (or provably died on boot).
+    NotReady {
+        /// What [`crate::spawn`] started or adopted — e.g. so a caller can
+        /// reap a fresh child that is still coming up, or tell an adopted
+        /// (`reused`) listener apart from its own spawn.
+        report: Box<SpawnReport>,
+        /// Why it never became ready, with this run's log tail.
+        failure: Box<StartupFailure>,
+    },
+}
+
+impl fmt::Display for SpawnReadyError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Spawn(e) => e.fmt(f),
+            Self::NotReady {
+                failure, ..
+            } => failure.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for SpawnReadyError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        // Display already renders the inner error verbatim (transparent
+        // wrapper), so expose the inner error's own source — not the inner
+        // error itself — to keep error chains free of duplicate lines.
+        match self {
+            Self::Spawn(e) => e.source(),
+            Self::NotReady {
+                failure, ..
+            } => failure.source(),
+        }
+    }
+}
+
+/// [`crate::spawn`] and [`verify_ready`] fused into one call: start (or
+/// adopt) the app-server, then confirm it actually serves before reporting
+/// success.
+///
+/// Every launch path wants this pairing — a bare `spawn` reports success
+/// even for a child that died on boot (that is right for the supervisor's
+/// honest-state bookkeeping, wrong for anything that tells a user "running"
+/// or publishes the endpoint). Prefer this over hand-pairing the two calls,
+/// which a new call site can silently forget.
+pub fn spawn_ready(opts: SpawnOptions, timeout: Duration) -> Result<SpawnReport, SpawnReadyError> {
+    let report = spawn(opts).map_err(SpawnReadyError::Spawn)?;
+    match verify_ready(&report, timeout) {
+        Ok(()) => Ok(report),
+        Err(failure) => Err(SpawnReadyError::NotReady {
+            report: Box::new(report),
+            failure: Box::new(failure),
+        }),
     }
 }
 
@@ -398,6 +494,10 @@ mod tests {
         }
     }
 
+    /// A [`SpawnReport`] with a confirmed listener — the common production
+    /// case (spawn's port wait saw the port come up, or an adopted server).
+    /// Tests for the unconfirmed path override `listener_confirmed` via
+    /// struct update syntax.
     fn report(listen: String, pid: u32, reused: bool, log_file: PathBuf) -> SpawnReport {
         SpawnReport {
             info: CodexProcessInfo {
@@ -408,6 +508,7 @@ mod tests {
             },
             reused,
             log_offset: 0,
+            listener_confirmed: true,
         }
     }
 
@@ -508,6 +609,56 @@ mod tests {
             PathBuf::from("does-not-exist.log"),
         );
         assert!(verify_ready(&report, Duration::from_secs(10)).is_ok());
+    }
+
+    #[test]
+    fn verify_ready_shrinks_its_budget_when_spawn_never_saw_a_listener() {
+        // spawn's port wait already ran dry (listener_confirmed = false) and
+        // still nothing serves: verify_ready must cap its budget to the short
+        // grace instead of re-waiting the full (here deliberately huge)
+        // timeout on top of the wait spawn already burned.
+        let port = {
+            let l = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+            l.local_addr().expect("local addr").port()
+        };
+        let unconfirmed = SpawnReport {
+            listener_confirmed: false,
+            ..report(
+                format!("ws://127.0.0.1:{port}"),
+                u32::MAX,
+                false,
+                PathBuf::from("does-not-exist.log"),
+            )
+        };
+        let started = Instant::now();
+        let failure = verify_ready(&unconfirmed, Duration::from_secs(60))
+            .expect_err("nothing ever served — must fail");
+        assert!(started.elapsed() < Duration::from_secs(10), "budget must be capped");
+        assert!(failure.process_exited);
+        assert!(!failure.port_in_use);
+    }
+
+    #[test]
+    fn unconfirmed_grace_still_allows_a_late_shim_handoff() {
+        // The capped budget must keep the shim-handoff semantics: a dead PID
+        // with a silent log is not failure, and a native binary that binds
+        // within the grace still verifies OK.
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind fake readyz");
+        let port = listener.local_addr().expect("local addr").port();
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(700));
+            serve_one(&listener, "HTTP/1.1 200 OK");
+        });
+        let unconfirmed = SpawnReport {
+            listener_confirmed: false,
+            ..report(
+                format!("ws://127.0.0.1:{port}"),
+                u32::MAX,
+                false,
+                PathBuf::from("does-not-exist.log"),
+            )
+        };
+        assert!(verify_ready(&unconfirmed, Duration::from_secs(10)).is_ok());
     }
 
     #[test]

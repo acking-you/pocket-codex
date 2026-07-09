@@ -51,6 +51,11 @@ pub(crate) fn ws_host_port(listen_url: &str) -> Option<(String, u16)> {
 /// up within [`SPAWN_RESOLVE_TIMEOUT`], so status honestly reports a server
 /// that failed to start rather than silently mislabelling one.
 ///
+/// The second half of the pair is whether a listener was ever observed on the
+/// port — it feeds [`SpawnReport::listener_confirmed`], so a follow-up
+/// [`crate::verify_ready`] knows this wait already ran dry and shrinks its
+/// own budget instead of re-waiting in full.
+///
 /// The full wait is cut short only when the launch has *provably* failed:
 /// the direct child is gone AND this run's log already shows the
 /// address-in-use bind error. A dead child alone is deliberately not enough
@@ -63,23 +68,23 @@ fn resolve_listener_pid(
     spawn_pid: u32,
     log_file: &std::path::Path,
     log_offset: u64,
-) -> u32 {
+) -> (u32, bool) {
     let deadline = Instant::now() + SPAWN_RESOLVE_TIMEOUT;
     let mut next_death_check = Instant::now() + crate::readiness::DEATH_CHECK_INTERVAL;
     loop {
         if tcp_port_open(host, port) {
-            return find_codex_app_server(listen_url).unwrap_or(spawn_pid);
+            return (find_codex_app_server(listen_url).unwrap_or(spawn_pid), true);
         }
         if Instant::now() >= next_death_check {
             next_death_check = Instant::now() + crate::readiness::DEATH_CHECK_INTERVAL;
             if !pid_running(spawn_pid)
                 && crate::readiness::bind_failure_logged(log_file, log_offset)
             {
-                return spawn_pid;
+                return (spawn_pid, false);
             }
         }
         if Instant::now() >= deadline {
-            return spawn_pid;
+            return (spawn_pid, false);
         }
         thread::sleep(Duration::from_millis(150));
     }
@@ -199,6 +204,15 @@ pub struct SpawnReport {
     /// in append mode and shared across runs). A log tailer starts here to
     /// show this process's output without replaying earlier runs.
     pub log_offset: u64,
+
+    /// Whether [`spawn`] observed the listen endpoint actually accepting
+    /// connections — an adopted live listener, or the fresh child's port
+    /// coming up within the spawn-time port wait. `false` means that wait
+    /// already ran its full course without ever seeing a listener (the child
+    /// most likely died silently during startup), so [`crate::verify_ready`]
+    /// caps its own budget instead of re-waiting in full on top. Unix-socket
+    /// transports have no TCP port to probe and always report `false`.
+    pub listener_confirmed: bool,
 }
 
 /// Spawn `codex app-server`, persist the resulting state and return a
@@ -263,6 +277,7 @@ pub fn spawn(opts: SpawnOptions) -> pocket_codex_core::Result<SpawnReport> {
                 info,
                 reused: true,
                 log_offset,
+                listener_confirmed: true,
             });
         },
         // Unix-socket transport has no TCP port to probe — keep PID-based
@@ -275,6 +290,7 @@ pub fn spawn(opts: SpawnOptions) -> pocket_codex_core::Result<SpawnReport> {
                         info: existing,
                         reused: true,
                         log_offset,
+                        listener_confirmed: false,
                     });
                 }
                 warn!(stale_pid = existing.pid, "previous codex process is gone, restarting");
@@ -325,11 +341,11 @@ pub fn spawn(opts: SpawnOptions) -> pocket_codex_core::Result<SpawnReport> {
     // The PID we just spawned may be a throwaway shim. Wait for the listener to
     // come up and record the PID that actually owns it, so status/stop target
     // the real app-server rather than a wrapper that has already exited.
-    let pid = match &endpoint {
+    let (pid, listener_confirmed) = match &endpoint {
         Some((host, port)) => {
             resolve_listener_pid(host, *port, &listen_url, spawn_pid, &log_file, log_offset)
         },
-        None => spawn_pid,
+        None => (spawn_pid, false),
     };
 
     let info = CodexProcessInfo {
@@ -346,6 +362,7 @@ pub fn spawn(opts: SpawnOptions) -> pocket_codex_core::Result<SpawnReport> {
         info,
         reused: false,
         log_offset,
+        listener_confirmed,
     })
 }
 

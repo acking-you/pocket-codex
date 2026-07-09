@@ -2,8 +2,8 @@
 
 use anyhow::Result;
 use pocket_codex_codex::{
-    spawn, status, stop, verify_ready, ListenSpec, SpawnOptions, StartupFailure, StopOutcome,
-    READY_TIMEOUT,
+    spawn_ready, status, stop, ListenSpec, SpawnOptions, SpawnReadyError, StartupFailure,
+    StopOutcome, READY_TIMEOUT,
 };
 
 use crate::{
@@ -41,11 +41,10 @@ fn start(args: CodexStartArgs) -> Result<()> {
         log_file: None,
         proxy: effective_proxy.clone(),
     };
-    let report = spawn(opts)?;
-    // Don't print success for a child that died on boot (classically a bind
-    // failure on an already-taken port): confirm it answers /readyz first and
-    // otherwise fail now, with the child's own error output.
-    verify_ready(&report, READY_TIMEOUT).map_err(startup_failure_error)?;
+    // Spawn + readiness in one step: don't print success for a child that
+    // died on boot (classically a bind failure on an already-taken port) —
+    // fail now, with the child's own error output.
+    let report = spawn_ready(opts, READY_TIMEOUT).map_err(spawn_ready_error)?;
     ui::headline(ui::Tone::Ok, "codex app-server running");
     ui::field("pid", &report.info.pid.to_string());
     ui::field("listen", &report.info.listen);
@@ -61,6 +60,19 @@ fn start(args: CodexStartArgs) -> Result<()> {
         "pocket-codex pb register --key codex --local-addr {host}:{port} --relay <relay-host:7666>"
     ));
     Ok(())
+}
+
+/// Render a [`SpawnReadyError`] as the launch command's error: a spawn-phase
+/// error passes through unchanged (already an actionable message), a
+/// readiness failure renders via [`startup_failure_error`]. Shared by
+/// `codex start` and `serve` (both launch the app-server and take `--port`).
+pub(crate) fn spawn_ready_error(err: SpawnReadyError) -> anyhow::Error {
+    match err {
+        SpawnReadyError::Spawn(e) => e.into(),
+        SpawnReadyError::NotReady {
+            failure, ..
+        } => startup_failure_error(*failure),
+    }
 }
 
 /// Render a [`StartupFailure`] as the launch command's error —

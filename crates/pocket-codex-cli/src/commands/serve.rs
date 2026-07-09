@@ -41,7 +41,9 @@ use std::{
 
 use anyhow::{bail, Context, Result};
 use pocket_codex_broker_client::{run_register, Connector, RegisterConfig, TokenProvider};
-use pocket_codex_codex::{spawn, stop, verify_ready, ListenSpec, SpawnOptions, READY_TIMEOUT};
+use pocket_codex_codex::{
+    spawn_ready, stop, ListenSpec, SpawnOptions, SpawnReadyError, READY_TIMEOUT,
+};
 use pocket_codex_core::{
     config::Config,
     process::{find_codex_app_server, force_kill},
@@ -106,13 +108,12 @@ pub async fn run(args: ServeArgs) -> Result<()> {
         log_file: None,
         proxy: effective_proxy.clone(),
     };
-    let report = spawn(spawn_opts.clone())?;
-    // Don't publish (or print success for) a child that died on boot —
-    // classically a bind failure on an already-taken port, which used to
-    // surface only minutes later as `codex stale` in `status`. Confirm the
-    // app-server answers /readyz and otherwise fail now, with the child's
-    // own error output.
-    verify_ready(&report, READY_TIMEOUT).map_err(codex::startup_failure_error)?;
+    // Spawn + readiness in one step: don't publish (or print success for) a
+    // child that died on boot — classically a bind failure on an
+    // already-taken port, which used to surface only minutes later as
+    // `codex stale` in `status`. Fail now, with the child's own error output.
+    let report =
+        spawn_ready(spawn_opts.clone(), READY_TIMEOUT).map_err(codex::spawn_ready_error)?;
     let local_addr = websocket_listen_addr(&report.info.listen).with_context(|| {
         format!("codex listen URL `{}` is not relayable TCP", report.info.listen)
     })?;
@@ -406,16 +407,34 @@ async fn restart_codex(spawn_opts: SpawnOptions) -> Result<()> {
                 }
             }
         }
-        let report = spawn(spawn_opts).context("respawning the codex app-server")?;
-        // If spawn adopted the still-bound old process instead of starting a
-        // fresh one, the restart did not take effect.
+        let report = spawn_ready(spawn_opts, READY_TIMEOUT).map_err(|err| match err {
+            SpawnReadyError::Spawn(e) => {
+                anyhow::Error::new(e).context("respawning the codex app-server")
+            },
+            // An adopted (reused) listener means spawn found the OLD process
+            // still bound — the restart did not take effect; report that
+            // precisely rather than as a readiness failure. Otherwise a
+            // respawn that dies on boot must count as a FAILED restart — so
+            // the watchdog's backoff engages — not as a success that resets it.
+            SpawnReadyError::NotReady {
+                report,
+                failure,
+            } => {
+                if report.reused {
+                    anyhow::anyhow!(
+                        "codex is still holding the listen port; restart did not take effect"
+                    )
+                } else {
+                    anyhow::anyhow!("{failure}")
+                }
+            },
+        })?;
+        // Adopted-and-ready reads the same way: the old process survived, so
+        // the restart did not take effect.
         anyhow::ensure!(
             !report.reused,
             "codex is still holding the listen port; restart did not take effect"
         );
-        // A respawn that dies on boot must count as a FAILED restart — so the
-        // watchdog's backoff engages — not as a success that resets it.
-        verify_ready(&report, READY_TIMEOUT).map_err(|failure| anyhow::anyhow!("{failure}"))?;
         Ok(())
     })
     .await

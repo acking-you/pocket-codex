@@ -33,7 +33,8 @@ use pocket_codex_broker_client::{
     run_register, Connector, RegisterConfig, RegisterFatal, TokenProvider,
 };
 use pocket_codex_codex::{
-    locate_binary, spawn, verify_ready, ListenSpec, SpawnOptions, StartupFailure, READY_TIMEOUT,
+    locate_binary, spawn_ready, ListenSpec, SpawnOptions, SpawnReadyError, StartupFailure,
+    READY_TIMEOUT,
 };
 use pocket_codex_core::{
     process::{find_codex_app_server, force_kill, pid_running, send_sigterm, tcp_port_open},
@@ -765,7 +766,36 @@ pub fn serve_start(
             log_file: Some(per_host_log_file(&name)?),
             proxy: proxy.clone(),
         };
-        let report = spawn(spawn_opts.clone()).context("spawning codex app-server")?;
+        // Spawn + readiness in one step: don't publish tunnels to a child
+        // that died on boot (classically a bind failure on an already-taken
+        // port) — fail the start now, with the child's own error output.
+        // Blocking here is fine — this runs on the frb worker thread, like
+        // the port poll inside `spawn`. On failure the tokio tasks need no
+        // teardown (watchdog/tailer/proxy are only spawned after this), but
+        // the fresh child itself does: reap it if it is still coming up, or
+        // a failed start leaves an unsupervised codex squatting on the port,
+        // out of reach of `serve_stop` (which only knows registered hosts).
+        // A pre-existing server adopted by `spawn` is never killed.
+        let report = match spawn_ready(spawn_opts.clone(), READY_TIMEOUT) {
+            Ok(report) => report,
+            Err(SpawnReadyError::Spawn(e)) => {
+                return Err(anyhow::Error::new(e).context("spawning codex app-server"));
+            },
+            Err(SpawnReadyError::NotReady {
+                report,
+                failure,
+            }) => {
+                if !report.reused && !failure.process_exited {
+                    if pid_running(report.info.pid) {
+                        send_sigterm(report.info.pid);
+                    }
+                    if let Some(addr) = spawn_opts.listen.as_socket_addr() {
+                        stop_codex_at(&addr);
+                    }
+                }
+                return Err(startup_failure_error(*failure));
+            },
+        };
         let listen_addr = report
             .info
             .listen
@@ -777,25 +807,6 @@ pub fn serve_start(
         let app_local: SocketAddr = listen_addr
             .parse()
             .with_context(|| format!("codex listen `{listen_addr}` is not a socket address"))?;
-        // Don't publish tunnels to a child that died on boot (classically a
-        // bind failure on an already-taken port): confirm it answers /readyz
-        // first and otherwise fail the start now, with the child's own error
-        // output. Blocking here is fine — this runs on the frb worker thread,
-        // like the port poll inside `spawn`. On failure the tokio tasks need
-        // no teardown (watchdog/tailer/proxy are only spawned after this),
-        // but the fresh child itself does: reap it if it is still coming up,
-        // or a failed start leaves an unsupervised codex squatting on the
-        // port, out of reach of `serve_stop` (which only knows registered
-        // hosts). A pre-existing server adopted by `spawn` is never killed.
-        if let Err(failure) = verify_ready(&report, READY_TIMEOUT) {
-            if !report.reused && !failure.process_exited {
-                if pid_running(report.info.pid) {
-                    send_sigterm(report.info.pid);
-                }
-                stop_codex_at(&app_local.to_string());
-            }
-            return Err(startup_failure_error(failure));
-        }
         // Pin the watchdog's respawn to the resolved codex port.
         let mut watchdog_opts = spawn_opts;
         watchdog_opts.listen = ListenSpec::WebSocket {
@@ -1326,16 +1337,36 @@ async fn restart_codex(spawn_opts: SpawnOptions) -> Result<()> {
         if let Some(addr) = spawn_opts.listen.as_socket_addr() {
             stop_codex_at(&addr);
         }
-        let report = spawn(spawn_opts).context("respawning the codex app-server")?;
+        let report = spawn_ready(spawn_opts, READY_TIMEOUT).map_err(|err| match err {
+            SpawnReadyError::Spawn(e) => {
+                anyhow::Error::new(e).context("respawning the codex app-server")
+            },
+            // An adopted (reused) listener means spawn found the OLD process
+            // still bound — the restart did not take effect; report that
+            // precisely rather than as a readiness failure. Otherwise a
+            // respawn that dies on boot (e.g. something else grabbed the
+            // port while codex was down) must count as a FAILED restart, so
+            // the watchdog's restart backoff engages instead of resetting and
+            // hammering a bind that can never succeed.
+            SpawnReadyError::NotReady {
+                report,
+                failure,
+            } => {
+                if report.reused {
+                    anyhow::anyhow!(
+                        "codex is still holding the listen port; restart did not take effect"
+                    )
+                } else {
+                    startup_failure_error(*failure)
+                }
+            },
+        })?;
+        // Adopted-and-ready reads the same way: the old process survived, so
+        // the restart did not take effect.
         anyhow::ensure!(
             !report.reused,
             "codex is still holding the listen port; restart did not take effect"
         );
-        // A respawn that dies on boot (e.g. something else grabbed the port
-        // while codex was down) must count as a FAILED restart, so the
-        // watchdog's restart backoff engages instead of resetting and
-        // hammering a bind that can never succeed.
-        verify_ready(&report, READY_TIMEOUT).map_err(startup_failure_error)?;
         Ok(())
     })
     .await
