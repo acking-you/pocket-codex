@@ -28,6 +28,7 @@
 
 use std::{
     fmt,
+    fmt::Write as _,
     io::{BufRead, BufReader, Read, Seek, SeekFrom, Write},
     net::{SocketAddr, TcpStream, ToSocketAddrs},
     path::{Path, PathBuf},
@@ -73,9 +74,10 @@ const TAIL_MAX_LINES: usize = 20;
 
 /// A freshly-launched app-server that never became ready.
 ///
-/// `Display` gives the one-line summary; callers render `log_tail` /
-/// `port_in_use` themselves so each front-end (CLI, desktop) can phrase the
-/// remedy in its own terms (e.g. which flag picks another port).
+/// `Display` gives the one-line summary; [`Self::diagnosis`] renders the full
+/// multi-line report, with each front-end (CLI, desktop) supplying its own
+/// phrasing of the pick-another-port remedy (e.g. which flag or form field
+/// picks it).
 #[derive(Debug)]
 pub struct StartupFailure {
     /// The spawned process was observed dead while nothing served the listen
@@ -102,6 +104,36 @@ pub struct StartupFailure {
     /// Last lines of this run's log output (empty when the child wrote
     /// nothing before dying).
     pub log_tail: Vec<String>,
+}
+
+impl StartupFailure {
+    /// The full multi-line diagnosis shared by every front-end: the one-line
+    /// cause, the log location, this run's last output, and — when the listen
+    /// port was already taken — `retry_hint`, the caller's phrasing of the
+    /// pick-another-port remedy (built from [`Self::port`]).
+    pub fn diagnosis(&self, retry_hint: &str) -> String {
+        let mut msg = self.to_string();
+        let _ = write!(msg, "\n    log: {}", self.log_file.display());
+        if self.log_tail.is_empty() {
+            msg.push_str("\n    (this run wrote no log output before it stopped)");
+        } else {
+            msg.push_str("\n    last output:");
+            for line in &self.log_tail {
+                let _ = write!(msg, "\n      {line}");
+            }
+        }
+        if self.port_in_use {
+            let _ = write!(msg, "\n    hint: the listen port is already in use — {retry_hint}");
+            // On Windows the usual invisible holder is a WSL mirrored-networking
+            // port lease: nothing shows in netstat, yet binds fail with 10048.
+            #[cfg(windows)]
+            msg.push_str(
+                " — or free it (a leaked WSL mirrored-networking lease holds ports invisibly; \
+                 `wsl --shutdown` releases them)",
+            );
+        }
+        msg
+    }
 }
 
 impl fmt::Display for StartupFailure {
@@ -456,6 +488,39 @@ mod tests {
             PathBuf::from("does-not-exist.log"),
         );
         assert!(verify_ready(&silent, Duration::from_secs(5)).is_ok());
+    }
+
+    #[test]
+    fn diagnosis_renders_log_location_tail_and_hint() {
+        let failure = StartupFailure {
+            process_exited: true,
+            port_in_use: true,
+            listen: "ws://127.0.0.1:18080".to_string(),
+            port: Some(18080),
+            log_file: PathBuf::from("codex-app-server.log"),
+            log_tail: vec!["Error: Address already in use (os error 10048)".to_string()],
+        };
+        let msg = failure.diagnosis("try the next port");
+        assert!(msg.contains("exited during startup"));
+        assert!(msg.contains("log: codex-app-server.log"));
+        assert!(msg.contains("os error 10048"));
+        assert!(msg.contains("hint: the listen port is already in use — try the next port"));
+    }
+
+    #[test]
+    fn diagnosis_without_a_port_conflict_stays_hint_free() {
+        let failure = StartupFailure {
+            process_exited: false,
+            port_in_use: false,
+            listen: "ws://127.0.0.1:18080".to_string(),
+            port: Some(18080),
+            log_file: PathBuf::from("codex-app-server.log"),
+            log_tail: Vec::new(),
+        };
+        let msg = failure.diagnosis("unused");
+        assert!(msg.contains("did not become ready"));
+        assert!(msg.contains("wrote no log output"));
+        assert!(!msg.contains("hint:"));
     }
 
     #[test]

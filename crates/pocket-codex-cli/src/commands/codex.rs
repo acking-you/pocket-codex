@@ -1,7 +1,5 @@
 //! `pocket-codex codex …` subcommand handlers.
 
-use std::fmt::Write as _;
-
 use anyhow::Result;
 use pocket_codex_codex::{
     spawn, status, stop, verify_ready, ListenSpec, SpawnOptions, StartupFailure, StopOutcome,
@@ -65,36 +63,16 @@ fn start(args: CodexStartArgs) -> Result<()> {
     Ok(())
 }
 
-/// Render a [`StartupFailure`] as the launch command's error: the one-line
-/// cause, the log location, this run's last output, and a `--port` hint when
-/// the listen port was already taken. Shared by `codex start` and `serve`
-/// (both spawn the app-server and both take `--port`).
+/// Render a [`StartupFailure`] as the launch command's error —
+/// [`StartupFailure::diagnosis`] with the remedy phrased as the `--port`
+/// flag. Shared by `codex start` and `serve` (both spawn the app-server and
+/// both take `--port`).
 pub(crate) fn startup_failure_error(failure: StartupFailure) -> anyhow::Error {
-    let mut msg = failure.to_string();
-    let _ = write!(msg, "\n    log: {}", failure.log_file.display());
-    if failure.log_tail.is_empty() {
-        msg.push_str("\n    (this run wrote no log output before it stopped)");
-    } else {
-        msg.push_str("\n    last output:");
-        for line in &failure.log_tail {
-            let _ = write!(msg, "\n      {line}");
-        }
-    }
-    if failure.port_in_use {
-        let retry = match failure.port.and_then(|port| port.checked_add(1)) {
-            Some(next) => format!("retry with `--port {next}` (or any free port)"),
-            None => "retry with `--port <other>`".to_string(),
-        };
-        let _ = write!(msg, "\n    hint: the listen port is already in use — {retry}");
-        // On Windows the usual invisible holder is a WSL mirrored-networking
-        // port lease: nothing shows in netstat, yet binds fail with 10048.
-        #[cfg(windows)]
-        msg.push_str(
-            " — or free it (a leaked WSL mirrored-networking lease holds ports invisibly; `wsl \
-             --shutdown` releases them)",
-        );
-    }
-    anyhow::anyhow!(msg)
+    let retry = match failure.port.and_then(|port| port.checked_add(1)) {
+        Some(next) => format!("retry with `--port {next}` (or any free port)"),
+        None => "retry with `--port <other>`".to_string(),
+    };
+    anyhow::anyhow!(failure.diagnosis(&retry))
 }
 
 fn stop_cmd() -> Result<()> {
@@ -158,21 +136,5 @@ mod tests {
         assert!(msg.contains("codex-app-server.log"));
         assert!(msg.contains("os error 10048"));
         assert!(msg.contains("--port 18081"), "should suggest the next port: {msg}");
-    }
-
-    #[test]
-    fn startup_failure_error_without_a_port_conflict_stays_hint_free() {
-        let failure = StartupFailure {
-            process_exited: false,
-            port_in_use: false,
-            listen: "ws://127.0.0.1:18080".to_string(),
-            port: Some(18080),
-            log_file: std::path::PathBuf::from("codex-app-server.log"),
-            log_tail: Vec::new(),
-        };
-        let msg = startup_failure_error(failure).to_string();
-        assert!(msg.contains("did not become ready"));
-        assert!(msg.contains("wrote no log output"));
-        assert!(!msg.contains("--port"));
     }
 }

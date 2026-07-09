@@ -32,9 +32,11 @@ use once_cell::sync::OnceCell;
 use pocket_codex_broker_client::{
     run_register, Connector, RegisterConfig, RegisterFatal, TokenProvider,
 };
-use pocket_codex_codex::{locate_binary, spawn, ListenSpec, SpawnOptions};
+use pocket_codex_codex::{
+    locate_binary, spawn, verify_ready, ListenSpec, SpawnOptions, StartupFailure, READY_TIMEOUT,
+};
 use pocket_codex_core::{
-    process::{find_codex_app_server, force_kill, send_sigterm, tcp_port_open},
+    process::{find_codex_app_server, force_kill, pid_running, send_sigterm, tcp_port_open},
     service::{default_device_id, ServiceId, ServiceKind},
 };
 use tokio::task::JoinHandle;
@@ -366,8 +368,8 @@ fn wait_for_listener(host: &str, port: u16, timeout: Duration) -> Result<()> {
     bail!("embedded codex app-server never listened on {host}:{port} within {timeout:?}")
 }
 
-/// Reserve a free loopback port (for embedded mode when the caller passed 0).
-#[cfg(any(target_os = "windows", target_os = "macos"))]
+/// Reserve a free loopback port (when the caller passed 0 for an automatic
+/// one).
 fn free_loopback_port() -> Result<u16> {
     let l = std::net::TcpListener::bind("127.0.0.1:0").context("reserving a loopback port")?;
     Ok(l.local_addr()?.port())
@@ -647,6 +649,12 @@ pub fn serve_start(
     let config_store = config_store()?;
     let host_config_store = host_store()?;
 
+    // Resolve an automatic port (0) HERE, for both paths: the external spawn
+    // can't take 0 (codex would bind an ephemeral port that neither `spawn`'s
+    // port wait nor `verify_ready` ever learns), and the hosting form + the
+    // startup-failure hint both promise 0 works.
+    let port = if port == 0 { free_loopback_port()? } else { port };
+
     // Bring up codex serving 127.0.0.1:<port>: in-process (embedded) or as a
     // spawned child binary. Both yield the local app-server socket, a pid (our
     // own for embedded), the embedded task handle (`None` for external), and a
@@ -665,16 +673,15 @@ pub fn serve_start(
     ) = if embedded {
         #[cfg(any(target_os = "windows", target_os = "macos"))]
         {
-            let p = if port == 0 { free_loopback_port()? } else { port };
             // In-process codex reaches chatgpt via the host's proxy from the
             // process environment (the spawned child gets it via its command env).
             if let Some(px) = proxy.as_deref() {
                 set_proxy_env(px);
             }
-            let listen_url = format!("ws://127.0.0.1:{p}");
+            let listen_url = format!("ws://127.0.0.1:{port}");
             let task = runtime::runtime().spawn(run_embedded_supervised(listen_url));
-            wait_for_listener("127.0.0.1", p, Duration::from_secs(30))?;
-            let app_local: SocketAddr = format!("127.0.0.1:{p}")
+            wait_for_listener("127.0.0.1", port, Duration::from_secs(30))?;
+            let app_local: SocketAddr = format!("127.0.0.1:{port}")
                 .parse()
                 .expect("loopback socket addr");
             // The supervisor self-restarts codex, so there is no separate
@@ -713,6 +720,25 @@ pub fn serve_start(
         let app_local: SocketAddr = listen_addr
             .parse()
             .with_context(|| format!("codex listen `{listen_addr}` is not a socket address"))?;
+        // Don't publish tunnels to a child that died on boot (classically a
+        // bind failure on an already-taken port): confirm it answers /readyz
+        // first and otherwise fail the start now, with the child's own error
+        // output. Blocking here is fine — this runs on the frb worker thread,
+        // like the port poll inside `spawn`. On failure the tokio tasks need
+        // no teardown (watchdog/tailer/proxy are only spawned after this),
+        // but the fresh child itself does: reap it if it is still coming up,
+        // or a failed start leaves an unsupervised codex squatting on the
+        // port, out of reach of `serve_stop` (which only knows registered
+        // hosts). A pre-existing server adopted by `spawn` is never killed.
+        if let Err(failure) = verify_ready(&report, READY_TIMEOUT) {
+            if !report.reused && !failure.process_exited {
+                if pid_running(report.info.pid) {
+                    send_sigterm(report.info.pid);
+                }
+                stop_codex_at(&app_local.to_string());
+            }
+            return Err(startup_failure_error(failure));
+        }
         // Pin the watchdog's respawn to the resolved codex port.
         let mut watchdog_opts = spawn_opts;
         watchdog_opts.listen = ListenSpec::WebSocket {
@@ -1248,10 +1274,26 @@ async fn restart_codex(spawn_opts: SpawnOptions) -> Result<()> {
             !report.reused,
             "codex is still holding the listen port; restart did not take effect"
         );
+        // A respawn that dies on boot (e.g. something else grabbed the port
+        // while codex was down) must count as a FAILED restart, so the
+        // watchdog's restart backoff engages instead of resetting and
+        // hammering a bind that can never succeed.
+        verify_ready(&report, READY_TIMEOUT).map_err(startup_failure_error)?;
         Ok(())
     })
     .await
     .context("codex restart task panicked")?
+}
+
+/// Render a [`StartupFailure`] as the hosting error surfaced to the UI —
+/// [`StartupFailure::diagnosis`] with the remedy phrased as the hosting
+/// form's port field (the CLI sibling phrases it as the `--port` flag).
+fn startup_failure_error(failure: StartupFailure) -> anyhow::Error {
+    let retry = match failure.port.and_then(|port| port.checked_add(1)) {
+        Some(next) => format!("retry with port {next}, or 0 to pick a free port automatically"),
+        None => "retry with a different port".to_string(),
+    };
+    anyhow::anyhow!(failure.diagnosis(&retry))
 }
 
 /// Block until nothing accepts on `addr`, or `timeout` elapses (`true` on
@@ -1273,6 +1315,26 @@ fn wait_for_port_closed(addr: &str, timeout: Duration) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn startup_failure_error_carries_log_tail_and_port_hint() {
+        let failure = StartupFailure {
+            process_exited: true,
+            port_in_use: true,
+            listen: "ws://127.0.0.1:18080".to_string(),
+            port: Some(18080),
+            log_file: std::path::PathBuf::from("codex-app-server.log"),
+            log_tail: vec!["Error: Address already in use (os error 10048)".to_string()],
+        };
+        let msg = startup_failure_error(failure).to_string();
+        assert!(msg.contains("exited during startup"));
+        assert!(msg.contains("codex-app-server.log"));
+        assert!(msg.contains("os error 10048"));
+        assert!(
+            msg.contains("port 18081, or 0 to pick a free port automatically"),
+            "should suggest the next port or an automatic one: {msg}"
+        );
+    }
 
     #[test]
     fn hosts_locked_recovers_a_poisoned_lock() {
