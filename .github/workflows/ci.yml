@@ -65,16 +65,27 @@ jobs:
 
       - name: cargo fmt --check
         # Restrict to first-party crates so we don't accidentally fmt
-        # the path-dep tree (deps/uni-stream, deps/kanal, etc.). fmt is
-        # cheap and whole-crate, so we lint all five whenever any Rust
-        # surface changed rather than subsetting.
+        # the path-dep tree (deps/uni-stream, deps/kanal, etc.) — that is
+        # why this is an explicit -p list and not `cargo fmt --all`. fmt
+        # is cheap and whole-crate, so we lint every workspace member
+        # whenever any Rust surface changed rather than subsetting. The
+        # list must stay in sync with `members` in the root `Cargo.toml`
+        # (and with AGENTS.md §7): add new crates in all three places.
         run: |
           cargo fmt --check \
             -p pocket-codex-core \
             -p pocket-codex-codex \
             -p pocket-codex-pb \
+            -p pocket-codex-api-proxy \
+            -p pocket-codex-host-svc \
             -p pocket-codex-cli \
-            -p pocket_codex_bridge
+            -p pocket_codex_bridge \
+            -p pocket-codex-account-proto \
+            -p pocket-codex-store \
+            -p pocket-codex-auth \
+            -p pocket-codex-broker-client \
+            -p pocket-codex-broker-server \
+            -p pocket-codex-backend
 
   clippy:
     name: rust clippy

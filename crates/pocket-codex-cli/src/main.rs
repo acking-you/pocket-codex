@@ -6,6 +6,8 @@
 //! (`pocket-codex-core`, `pocket-codex-codex`, `pocket-codex-pb`)
 //! into the user-facing subcommands documented in `AGENTS.md`.
 
+#![forbid(unsafe_code)]
+
 use anyhow::Result;
 use clap::Parser;
 use tracing_subscriber::EnvFilter;
