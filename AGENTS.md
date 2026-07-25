@@ -28,6 +28,16 @@ Codex login as a relay-reachable Responses API endpoint for any device:
   directly to give every platform a native UI without re-implementing
   the model runtime.
 
+Two ways to wire devices together, both first-class:
+
+- **Self-host** — every device shares one relay address plus a 32-byte
+  `MSG_HEADER_KEY`, and talks to the relay directly under `pcx:…` keys.
+  Selected by an explicit `--relay`.
+- **Hosted account** — the optional `pocket-codex-backend` runs once on a
+  server; devices sign in with GitHub and the backend brokers their
+  tunnels under per-user `pcxu:<user>:…` keys, so the relay's master key
+  never reaches a client and accounts stay isolated from each other.
+
 The repository deliberately does **not** vendor a model runtime; the
 user-supplied `codex` binary (and its login state) is the source of
 truth.
@@ -37,14 +47,8 @@ truth.
 ```
 apps/flutter/              # Flutter UI (FRB-driven, FVM-locked at 3.44.0)
 assets/logo/               # Project artwork (poster.png, logo.png)
-crates/
-  pocket-codex-core/       # shared types, config schema, error helpers,
-                           # paths/state.toml on-disk format
-  pocket-codex-codex/      # codex app-server process manager,
-                           # JSON-RPC envelope types
-  pocket-codex-pb/         # pb-mapper register/subscribe glue
-  pocket-codex-cli/        # `pocket-codex` binary entrypoint
-  pocket-codex-bridge/     # cdylib consumed by flutter_rust_bridge
+crates/                    # all first-party Rust crates; see §3 for who owns what
+deploy/                    # hosted-backend deployment unit + config examples
 deps/
   codex/                   # acking-you/codex fork, branch `pocket-codex`
                            # (git submodule) = upstream openai/codex main +
@@ -53,13 +57,14 @@ deps/
   kanal/                   # fork pinned to a known-good commit; transitively
                            # required by pb-mapper, redirected via [patch]
   uni-stream/              # ditto; transitively required by pb-mapper
-docs/                      # design notes, protocol references
-skills/                    # contributor / agent skill packs
+docs/                      # design notes, protocol references, CLI verification
+scripts/                   # install scripts, local CI, CI affected-surface gate
 ```
 
-`Cargo.toml` is a workspace root. The four `pocket-codex-*` crates and
-`pocket_codex_bridge` are workspace members. Submodules under `deps/`
-are kept **out** of the workspace via the `exclude` list — the pinned
+`Cargo.toml` is a workspace root; every crate under `crates/` is a
+workspace member (see the `members` list for the canonical set).
+Submodules under `deps/` are kept **out** of the workspace via the
+`exclude` list — the pinned
 upstream crates use their own lints/profiles and we depend on them
 through explicit path or git deps where needed. The root manifest's
 `[patch]` table redirects `acking-you/kanal` and `acking-you/uni-stream`
@@ -68,13 +73,28 @@ contributor checkouts and CI even after the upstream forks evolve.
 
 ## 3. Crate responsibilities
 
-| Crate                  | Owns                                                                                           |
-| ---------------------- | ---------------------------------------------------------------------------------------------- |
-| `pocket-codex-core`    | configuration schema, on-disk `state.toml`, well-known paths, error types, `service::{ServiceId, ServiceKind, sanitize_component, default_device_id}` for `pcx:<device>:<kind>:<name>` relay keys — small, dependency-light |
-| `pocket-codex-codex`   | spawning / supervising / inspecting the `codex app-server` child process, JSON-RPC envelope types  |
-| `pocket-codex-pb`      | thin async wrappers around `pb_mapper::local::{server,client}` for register / subscribe / status   |
-| `pocket-codex-cli`     | user-facing `pocket-codex` binary; high-level `serve` / `connect` / `api {serve,connect}` / `services {list,default set}` / `status` / `stop`, low-level `codex {start,stop,status}`, `pb {register,subscribe,status}`, `remote-hint`, `version` |
-| `pocket_codex_bridge`  | `cdylib + staticlib` consumed by Flutter via `flutter_rust_bridge`; auto-generated bindings live in `lib/src/rust` of the Flutter app |
+Shared / host side:
+
+| Crate                       | Owns                                                                                           |
+| --------------------------- | ---------------------------------------------------------------------------------------------- |
+| `pocket-codex-core`         | configuration schema, on-disk `state.toml`, well-known paths, error types, `service::{ServiceId, ServiceKind, sanitize_component, default_device_id}` for `pcx:<device>:<kind>:<name>` relay keys — small, dependency-light |
+| `pocket-codex-codex`        | spawning / supervising / inspecting the `codex app-server` child process (out-of-process *and* the in-process `embedded-codex` path), JSON-RPC envelope types |
+| `pocket-codex-pb`           | thin async wrappers around `pb_mapper::local::{server,client}` for register / subscribe / status   |
+| `pocket-codex-api-proxy`    | local Responses API proxy: forwards `/v1/responses` (HTTP + WS) to ChatGPT's Codex backend, reusing the host's `codex login`; shared by the CLI worker and the in-app host |
+| `pocket-codex-host-svc`     | host-side meta service — remote-viewable codex sessions, per-thread config, attachment upload — exposed through the account broker |
+| `pocket-codex-cli`          | user-facing `pocket-codex` binary; account (`login` / `logout` / `account`), setup (`init`), high-level `serve` / `connect` / `api {serve,connect}` / `services {list,default set}` / `status` / `stop`, low-level `codex {start,stop,status}`, `pb {register,subscribe,status}`, `remote-hint`, `version` |
+| `pocket_codex_bridge`       | `cdylib + staticlib` consumed by Flutter via `flutter_rust_bridge`; auto-generated bindings live in `lib/src/rust` of the Flutter app |
+
+Hosted-account mode (all optional — self-host never touches these):
+
+| Crate                        | Owns                                                                                           |
+| ---------------------------- | ---------------------------------------------------------------------------------------------- |
+| `pocket-codex-account-proto` | wire types and `pcxu:<user>:…` key namespacing shared between the backend and its CLI/app clients |
+| `pocket-codex-auth`          | GitHub device-flow + web auth-code login, session JWTs, refresh tokens                            |
+| `pocket-codex-store`         | SQLite persistence (users, refresh tokens, device flows) for the backend                          |
+| `pocket-codex-broker-client` | client side of the broker tunnel (register / subscribe), shared by the CLI and the bridge         |
+| `pocket-codex-broker-server` | server side of the broker: bridges authenticated tunnels to the loopback relay under per-user keys |
+| `pocket-codex-backend`       | the deployable binary: GitHub-login HTTP API + broker; see [`deploy/`](deploy/README.md)          |
 
 When in doubt, prefer adding a new module to an existing crate over
 introducing a new crate. Crates are free; *boundaries* are not.
@@ -104,14 +124,16 @@ We follow Linus Torvalds–style engineering. In short:
 - No `unwrap()` / `expect()` in non-test code without a `// reason: ...`
   follow-up. `clippy::unwrap_used` is `warn` and we treat it as `deny` in
   reviews.
-- `unsafe` is forbidden by default (`#![forbid(unsafe_code)]` at every
-  crate root). If you really need it, justify it in the PR and gate it
-  behind a Cargo feature.
+- `unsafe` is forbidden by default — crate roots carry
+  `#![forbid(unsafe_code)]`. The sanctioned exception is
+  `pocket_codex_bridge`, whose `flutter_rust_bridge`-generated code emits
+  `unsafe`. If you really need it elsewhere, justify it in review and gate
+  it behind a Cargo feature.
 - Keep functions short and modules shallow. Refactor when nesting
   goes past three levels.
 - Prefer `tracing` over `println!`/`eprintln!` for anything that is not
   CLI output the user explicitly asked for.
-- File paths in handoff messages and PR descriptions follow `path:line`
+- File paths in handoff messages and change descriptions follow `path:line`
   citations (e.g. `crates/pocket-codex-cli/src/main.rs:42`).
 
 ## 6. Workflow checklist
@@ -132,8 +154,8 @@ Use this as the default loop for any non-trivial change:
 6. **Verify.** Run the verification commands below and reflect:
    maintainability, tests, performance, security, backward
    compatibility. Fix issues before handoff.
-7. **Hand off.** Summarise in Chinese (per repo convention), cite
-   `path:line`, list assumptions, state risks and next steps.
+7. **Hand off.** Summarise the change, cite `path:line`, list
+   assumptions, state risks and next steps.
 
 ## 7. Verification commands
 
@@ -156,8 +178,14 @@ do **not** run `cargo fmt --all`; use the explicit first-party package
 list below so path/patch dependencies under `deps/` are never rewritten.
 
 ```bash
-# Rust workspace
-cargo fmt -p pocket-codex-core -p pocket-codex-codex -p pocket-codex-pb -p pocket-codex-cli -p pocket_codex_bridge -- --check
+# Rust workspace — the -p list must cover every workspace member in
+# `Cargo.toml`; add new crates here (and in ci.yml) when you create them.
+cargo fmt --check \
+  -p pocket-codex-core -p pocket-codex-codex -p pocket-codex-pb \
+  -p pocket-codex-api-proxy -p pocket-codex-host-svc -p pocket-codex-cli \
+  -p pocket_codex_bridge -p pocket-codex-account-proto -p pocket-codex-store \
+  -p pocket-codex-auth -p pocket-codex-broker-client \
+  -p pocket-codex-broker-server -p pocket-codex-backend
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace --locked
 
@@ -311,11 +339,20 @@ The order below is our current best guess; it is not a contract.
    Pocket-Codex service keys use `pcx:<device>:<service>:<name>`;
    clients can discover services, set a local default target and choose
    app-server or direct Responses API proxy flows independently.
-6. **Strongly-typed JSON-RPC client (next).** Replace the
+6. **Hosted account mode (done).** Optional `pocket-codex-backend`:
+   GitHub login (device flow + web auth-code), SQLite-backed sessions,
+   and a broker that tunnels each account's services through a loopback
+   relay under `pcxu:<user>:…` keys, so the relay master key never
+   reaches a client. Self-host stays the escape hatch behind `--relay`.
+   Deployment unit lives in [`deploy/`](deploy/README.md).
+7. **Embedded codex (done).** Desktop builds compile codex in-process
+   behind the `embedded-codex` feature, so a machine can host without a
+   separate `codex` install; see §8.1 for the shims this requires.
+8. **Strongly-typed JSON-RPC client (next).** Replace the
    `serde_json::Value` surface in `pocket-codex-codex::protocol` with
    the upstream `codex-app-server-protocol` types so the Flutter UI
    gets compile-time-checked methods.
-7. **Flutter UI evolution.** `apps/flutter` consumes the bridge via
+9. **Flutter UI evolution.** `apps/flutter` consumes the bridge via
    `flutter_rust_bridge`. P1 shipped: onboarding (relay+key, `pcx1:`
    import/export, persisted to `config.toml` 0600), service discovery,
    API-service subscribe (local OpenAI-compatible endpoint), settings,
@@ -332,7 +369,8 @@ this file's roadmap so the source of truth stays in sync.
 
 ## 10. Communication conventions
 
-- Final responses to the user are in **Chinese** (per repo norm).
+- Reply in whatever language the person you are talking to is using.
+  This file does not mandate one.
 - Lead with findings before summaries.
 - Cite files as `path:line`.
 - State assumptions explicitly. If an assumption could change the
