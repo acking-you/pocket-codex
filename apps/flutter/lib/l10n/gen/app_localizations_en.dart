@@ -158,7 +158,10 @@ class AppLocalizationsEn extends AppLocalizations {
   String get send => 'Send';
 
   @override
-  String get hideOptions => 'Hide';
+  String get addAttachment => 'Add';
+
+  @override
+  String get turnSettings => 'Turn settings';
 
   @override
   String get prevTurn => 'Previous turn';

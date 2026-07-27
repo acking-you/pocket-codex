@@ -3,7 +3,6 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:pocket_codex/src/widgets/window_title_bar.dart';
-import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/app_modes.dart';
@@ -15,6 +14,7 @@ import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/screens/local_sessions_screen.dart'
     show SessionSource, resumeLocalSession;
 import 'package:pocket_codex/src/widgets/loading.dart';
+import 'package:pocket_codex/src/widgets/markdown_view.dart';
 import 'package:pocket_codex/src/widgets/message_images.dart';
 import 'package:super_sliver_list/super_sliver_list.dart';
 
@@ -409,7 +409,7 @@ class _TranscriptRow extends StatelessWidget {
       case 'agentMessage':
         return Padding(
           padding: const EdgeInsets.symmetric(vertical: 6),
-          child: MarkdownBody(data: item.text, selectable: false),
+          child: MarkdownView(data: item.text),
         );
       case 'reasoning':
         return Padding(

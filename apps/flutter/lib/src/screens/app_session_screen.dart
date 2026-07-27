@@ -9,7 +9,6 @@ import 'package:flutter/material.dart';
 import 'package:pocket_codex/src/widgets/window_title_bar.dart';
 import 'package:flutter/services.dart';
 import 'package:pasteboard/pasteboard.dart';
-import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
@@ -30,6 +29,7 @@ import 'package:pocket_codex/src/widgets/file_browser_panel.dart';
 import 'package:pocket_codex/src/widgets/folder_tree_picker.dart';
 import 'package:pocket_codex/src/widgets/links.dart';
 import 'package:pocket_codex/src/widgets/loading.dart';
+import 'package:pocket_codex/src/widgets/markdown_view.dart';
 import 'package:pocket_codex/src/widgets/message_images.dart';
 import 'package:pocket_codex/src/widgets/status_dots.dart';
 
@@ -193,18 +193,14 @@ class _PickerOption<T> {
   final String? description;
 }
 
-class _AppSessionState extends ConsumerState<AppSessionScreen> {
+class _AppSessionState extends ConsumerState<AppSessionScreen>
+    with WidgetsBindingObserver {
   final _input = TextEditingController();
   final _inputFocus = FocusNode();
   final _scroll = ScrollController();
   // Index-based scrolling for the transcript (super_sliver_list): powers the
   // prev/next-turn jump buttons via `visibleRange` + `animateToItem`.
   final _listCtl = ListController();
-  // Whether the composer's config pills (model/permission/project/plan/effort)
-  // are expanded. `null` = auto by screen width (collapsed on narrow/mobile so
-  // they don't clutter and block messages; expanded on wide/desktop where
-  // there's room). A tap sets it explicitly, overriding the width default.
-  bool? _optionsExpanded;
   // Ordered timeline + an id→index map for upserting streamed/updated items.
   final List<_Item> _items = [];
   final Map<String, int> _itemIndex = {};
@@ -461,6 +457,12 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
       _seedDefaultCwd();
     }
     _scroll.addListener(_onScroll);
+    // Focusing the composer raises the soft keyboard, which shrinks the
+    // transcript viewport from the bottom — whatever the user was reading
+    // slides up behind the keyboard. Re-pin to the latest message once the
+    // inset has settled so the tail of the conversation stays in view.
+    _inputFocus.addListener(_onComposerFocus);
+    WidgetsBinding.instance.addObserver(this); // keyboard-inset metrics
     // Desktop: intercept Ctrl/Cmd+V so a clipboard image/file also attaches
     // (text paste still works — the handler never consumes the event).
     if (_isDesktop) HardwareKeyboard.instance.addHandler(_onHardwareKey);
@@ -802,6 +804,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
     _elapsedTicker?.cancel();
     _sub?.cancel();
     _input.dispose();
+    WidgetsBinding.instance.removeObserver(this);
+    _inputFocus.removeListener(_onComposerFocus);
     _inputFocus.dispose();
     if (_isDesktop) HardwareKeyboard.instance.removeHandler(_onHardwareKey);
     _scroll.removeListener(_onScroll);
@@ -817,6 +821,24 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
     final atBottom =
         _scroll.position.pixels >= _scroll.position.maxScrollExtent - 80;
     if (atBottom != _atBottom) setState(() => _atBottom = atBottom);
+  }
+
+  /// Keep the tail of the conversation visible when the soft keyboard opens.
+  /// Only when the user was already at the bottom — pulling someone back down
+  /// while they're reading history would be worse than the keyboard.
+  void _onComposerFocus() => _repinForKeyboard();
+
+  /// The keyboard inset animates in over several frames, and each frame shrinks
+  /// the transcript viewport a little more. `_scrollToEnd`'s settle loop gives
+  /// up at the first frame that doesn't grow the extent — which an easing curve
+  /// produces early on — so re-pin on every metrics change too, for as long as
+  /// the composer holds focus.
+  @override
+  void didChangeMetrics() => _repinForKeyboard();
+
+  void _repinForKeyboard() {
+    if (isDesktop || !_inputFocus.hasFocus || !_atBottom) return;
+    _scrollToEnd(force: true);
   }
 
   void _subscribe() {
@@ -3067,6 +3089,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
                     color: scheme.primary,
                     shape: const CircleBorder(),
                     child: InkWell(
+                      key: const Key('new-conversation-btn'),
                       customBorder: const CircleBorder(),
                       onTap: () {
                         closeDrawerIfOpen(ctx);
@@ -4106,96 +4129,32 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
                   isCollapsed: true,
                 ),
               ),
-              const SizedBox(height: 10),
-              // Config pills are collapsible: on a narrow (mobile) screen they
-              // otherwise wrap onto 2–3 rows and eat the message view, so they
-              // default collapsed to a single compact summary that expands on
-              // tap. On a wide screen there's room, so they default expanded.
-              Builder(
-                builder: (context) {
-                  final wide = MediaQuery.of(context).size.width >= 600;
-                  final expanded = _optionsExpanded ?? wide;
-                  return Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      if (expanded) ...[
-                        _configPills(l10n),
-                        const SizedBox(height: 8),
-                      ],
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.end,
-                        children: [
-                          // Attach an image (photo library on mobile, file
-                          // dialog on desktop).
-                          IconButton(
-                            key: const Key('attach-btn'),
-                            tooltip: l10n.attachImage,
-                            visualDensity: VisualDensity.compact,
-                            icon: Icon(
-                              Icons.add_photo_alternate_outlined,
-                              size: 20,
-                              color: Theme.of(
-                                context,
-                              ).colorScheme.onSurfaceVariant,
-                            ),
-                            onPressed: _sending ? null : _pickImages,
-                          ),
-                          // Attach a document/file: uploaded to the host,
-                          // referenced by path so the agent reads it with tools.
-                          IconButton(
-                            key: const Key('attach-file-btn'),
-                            tooltip: l10n.attachFile,
-                            visualDensity: VisualDensity.compact,
-                            icon: Icon(
-                              Icons.attach_file,
-                              size: 20,
-                              color: Theme.of(
-                                context,
-                              ).colorScheme.onSurfaceVariant,
-                            ),
-                            onPressed: _sending ? null : _pickFiles,
-                          ),
-                          // Browse / transfer host files (download from or
-                          // upload to the host's project folders). Desktop-only
-                          // (uses the save/open dialogs), so gated like saving.
-                          if (canSaveImages)
-                            IconButton(
-                              key: const Key('host-files-btn'),
-                              tooltip: l10n.hostFiles,
-                              visualDensity: VisualDensity.compact,
-                              icon: Icon(
-                                Icons.folder_open_outlined,
-                                size: 20,
-                                color: Theme.of(
-                                  context,
-                                ).colorScheme.onSurfaceVariant,
-                              ),
-                              onPressed: _sending
-                                  ? null
-                                  : () => showFileBrowser(
-                                      context,
-                                      serviceKey: widget.serviceKey,
-                                    ),
-                            ),
-                          const SizedBox(width: 4),
-                          // The options toggle: a compact summary of the active
-                          // config when collapsed, a "hide" affordance when
-                          // expanded. Flexible so a long summary ellipsizes
-                          // instead of overflowing the row.
-                          Flexible(
-                            child: Align(
-                              alignment: Alignment.centerLeft,
-                              child: _optionsToggle(l10n, expanded),
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          _sendButton(),
-                        ],
-                      ),
-                    ],
-                  );
-                },
+              const SizedBox(height: 8),
+              // One row at every width. Attachments collapse into a single `+`
+              // menu and the five wrapping config pills collapse into two
+              // chips, so a 360 px phone lays out exactly like the desktop —
+              // no wrapping, no expand/collapse mode to get stuck in.
+              Row(
+                children: [
+                  _attachMenu(l10n),
+                  const SizedBox(width: 2),
+                  // Flexible, not a plain child: a non-flex child takes its
+                  // intrinsic width whatever the row can afford, so a long
+                  // localised permission label would overflow a narrow phone
+                  // instead of ellipsizing.
+                  Flexible(child: _permissionChip(l10n)),
+                  const SizedBox(width: 6),
+                  // Right-aligned next to send, and Flexible so a long model
+                  // name ellipsizes instead of pushing the row into overflow.
+                  Expanded(
+                    child: Align(
+                      alignment: Alignment.centerRight,
+                      child: _modelChip(l10n),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  _sendButton(),
+                ],
               ),
             ],
           ),
@@ -4204,114 +4163,139 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
     );
   }
 
-  /// The full config pill row (model / permission / project / plan / effort),
-  /// shown when the composer options are expanded. Wraps so nothing clips on a
-  /// narrow screen.
-  Widget _configPills(AppLocalizations l10n) => Wrap(
-    spacing: 6,
-    runSpacing: 6,
-    children: [
-      _pill(
-        icon: Icons.auto_awesome,
-        // With no explicit pick, show the model the server actually runs
-        // (thread default) rather than an opaque "default".
-        label:
-            _model?.displayName ??
-            _modelDisplayLabel(_runtime?.model) ??
-            l10n.modelDefault,
-        onTap: _pickModel,
+  /// The `+` attachment menu. One button instead of three icons: on a phone the
+  /// three used to crowd the row, and two of them are rare enough to live a tap
+  /// away.
+  Widget _attachMenu(AppLocalizations l10n) => PopupMenuButton<void>(
+    key: const Key('attach-menu-btn'),
+    tooltip: l10n.addAttachment,
+    enabled: !_sending,
+    icon: Icon(
+      Icons.add,
+      size: 22,
+      color: Theme.of(context).colorScheme.onSurfaceVariant,
+    ),
+    // `_` on purpose: an item's `onTap` fires *after* `Navigator.pop`, so the
+    // menu route's context is already on its way out. Everything below uses
+    // the State's context, which outlives the menu.
+    itemBuilder: (_) => [
+      PopupMenuItem<void>(
+        key: const Key('attach-btn'),
+        onTap: _pickImages,
+        child: _menuRow(Icons.add_photo_alternate_outlined, l10n.attachImage),
       ),
-      _pill(icon: _modeIcon(), label: _mode.label(l10n), onTap: _pickMode),
-      _pill(
-        icon: Icons.folder_outlined,
-        label: _projectName(),
-        onTap: _threadId == null ? _pickProject : null,
+      PopupMenuItem<void>(
+        key: const Key('attach-file-btn'),
+        onTap: _pickFiles,
+        child: _menuRow(Icons.attach_file, l10n.attachFile),
       ),
-      _pill(
-        icon: Icons.checklist_rtl,
-        label: l10n.planMode,
-        active: _plan,
-        onTap: () {
-          setState(() {
-            _plan = !_plan;
-            _planToggledByUser = true;
-          });
-          _rememberDefaults();
-          _persistThreadConfig();
-        },
-      ),
-      _pill(
-        icon: Icons.psychology_outlined,
-        label: _effectiveEffort == null
-            ? l10n.effort
-            : '${l10n.effort} · ${_effectiveEffort!.label(l10n)}',
-        active: _effectiveEffort != null,
-        onTap: _pickEffort,
-      ),
+      // Browsing / transferring host files uses the desktop save/open dialogs,
+      // so it is gated the same way saving is.
+      if (canSaveImages)
+        PopupMenuItem<void>(
+          key: const Key('host-files-btn'),
+          onTap: () => showFileBrowser(context, serviceKey: widget.serviceKey),
+          child: _menuRow(Icons.folder_open_outlined, l10n.hostFiles),
+        ),
     ],
   );
 
-  /// The composer options toggle. Collapsed: a compact one-line summary of the
-  /// active config (model · effort · plan) with a tune icon — the key settings
-  /// stay glanceable while the pills are folded away. Expanded: a "hide"
-  /// affordance. Tapping flips [_optionsExpanded] (overriding the width
-  /// default). The label is Flexible+ellipsized by the caller's [Flexible].
-  Widget _optionsToggle(AppLocalizations l10n, bool expanded) {
-    final scheme = Theme.of(context).colorScheme;
-    final fg = scheme.onSurfaceVariant;
-    final IconData icon;
-    final String label;
-    if (expanded) {
-      icon = Icons.expand_more;
-      label = l10n.hideOptions;
-    } else {
-      icon = Icons.tune;
-      final model =
-          _model?.displayName ??
+  Widget _menuRow(IconData icon, String label) => Row(
+    children: [
+      Icon(icon, size: 19, color: Theme.of(context).colorScheme.primary),
+      const SizedBox(width: 12),
+      Text(label),
+    ],
+  );
+
+  /// Permission stays a chip of its own rather than moving into the model
+  /// menu: "full access" (no sandbox, never ask) must be readable without
+  /// opening anything, which is also why it carries the amber icon.
+  Widget _permissionChip(AppLocalizations l10n) => _pill(
+    pillKey: const Key('permission-chip'),
+    icon: _modeIcon(),
+    label: _mode.label(l10n),
+    warn: _mode == PermissionMode.full,
+    onTap: _pickMode,
+  );
+
+  /// What this turn will run with — model, and effort/plan when they differ
+  /// from the default — plus the menu holding every remaining setting.
+  Widget _modelChip(AppLocalizations l10n) => _pill(
+    pillKey: const Key('model-chip'),
+    icon: Icons.auto_awesome,
+    // With no explicit pick, show the model the server actually runs (the
+    // thread default) rather than an opaque "default".
+    label: [
+      _model?.displayName ??
           _modelDisplayLabel(_runtime?.model) ??
-          l10n.modelDefault;
-      // Order by how safety-relevant / how often it changes: model, permission
-      // (early so it survives ellipsis), effort, plan. Permission is always
-      // shown so "完全放行" (no sandbox, never ask) can't hide off-screen.
-      label = [
-        model,
-        _mode.label(l10n),
-        if (_effectiveEffort != null) _effectiveEffort!.label(l10n),
-        if (_plan) l10n.planMode,
-      ].join(' · ');
-    }
-    // Flag the risky no-sandbox "full access" preset with an amber icon so it's
-    // noticeable even while the pills are collapsed.
-    final flagFull = !expanded && _mode == PermissionMode.full;
-    final iconColor = flagFull ? Colors.amber.shade800 : fg;
-    return Material(
-      color: scheme.surfaceContainerHighest,
-      borderRadius: BorderRadius.circular(20),
-      child: InkWell(
-        key: const Key('options-toggle'),
-        borderRadius: BorderRadius.circular(20),
-        onTap: () => setState(() => _optionsExpanded = !expanded),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(icon, size: 15, color: iconColor),
-              const SizedBox(width: 5),
-              Flexible(
-                child: Text(
-                  label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  softWrap: false,
-                  style: TextStyle(fontSize: 12.5, color: fg),
-                ),
-              ),
-            ],
-          ),
+          l10n.modelDefault,
+      if (_effectiveEffort != null) _effectiveEffort!.label(l10n),
+      if (_plan) l10n.planMode,
+    ].join(' · '),
+    // Plan is the one setting here that changes what a turn *does*, and a long
+    // model name can ellipsize its label away — so it also tints the chip.
+    active: _plan,
+    trailing: Icons.expand_more,
+    onTap: () => _showConfigSheet(l10n),
+  );
+
+  /// The settings the model chip fronts: model, effort, plan, project. A sheet
+  /// rather than a popover because every picker it opens is already a sheet,
+  /// and a popover anchored to a chip near the keyboard is awkward on a phone.
+  Future<void> _showConfigSheet(AppLocalizations l10n) async {
+    final model =
+        _model?.displayName ??
+        _modelDisplayLabel(_runtime?.model) ??
+        l10n.modelDefault;
+    final choice = await _optionSheet<String>(
+      title: l10n.turnSettings,
+      isSelected: (v) => v == 'plan' && _plan,
+      options: [
+        _PickerOption(
+          value: 'model',
+          icon: Icons.auto_awesome,
+          label: l10n.model,
+          description: model,
         ),
-      ),
+        _PickerOption(
+          value: 'effort',
+          icon: Icons.psychology_outlined,
+          label: l10n.effort,
+          description: _effectiveEffort?.label(l10n),
+        ),
+        _PickerOption(
+          value: 'plan',
+          icon: Icons.checklist_rtl,
+          label: l10n.planMode,
+        ),
+        // The working directory is fixed once the thread exists, so offer it
+        // only before the first turn.
+        if (_threadId == null)
+          _PickerOption(
+            value: 'project',
+            icon: Icons.folder_outlined,
+            label: l10n.projectsSection,
+            description: _projectName(),
+          ),
+      ],
     );
+    if (!mounted) return;
+    switch (choice) {
+      case 'model':
+        await _pickModel();
+      case 'effort':
+        await _pickEffort();
+      case 'project':
+        await _pickProject();
+      case 'plan':
+        setState(() {
+          _plan = !_plan;
+          _planToggledByUser = true;
+        });
+        _rememberDefaults();
+        _persistThreadConfig();
+    }
   }
 
   IconData _modeIcon() => _modeIconFor(_mode);
@@ -4353,13 +4337,20 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
     );
   }
 
-  /// A compact, low-chrome setting pill (model / permission / project / plan).
-  /// [active] highlights a toggled-on pill (e.g. plan mode).
+  /// A compact, low-chrome setting pill (permission / model). [active]
+  /// highlights a toggled-on pill; [warn] flags a risky setting (no-sandbox
+  /// "full access"); [trailing] adds a chevron for a pill that opens a menu.
+  ///
+  /// On touch platforms the pill is grown to a 44 px tap target — the desktop
+  /// height reads as a hairline chip under a thumb.
   Widget _pill({
     required IconData icon,
     required String label,
     required VoidCallback? onTap,
+    Key? pillKey,
     bool active = false,
+    bool warn = false,
+    IconData? trailing,
   }) {
     final scheme = Theme.of(context).colorScheme;
     final enabled = onTap != null;
@@ -4368,21 +4359,41 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
         : enabled
         ? scheme.onSurfaceVariant
         : scheme.onSurfaceVariant.withValues(alpha: 0.5);
+    final touch = !isDesktop;
     return Material(
       color: active ? scheme.primaryContainer : scheme.surfaceContainerHighest,
       borderRadius: BorderRadius.circular(20),
       child: InkWell(
+        key: pillKey,
         borderRadius: BorderRadius.circular(20),
         onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(icon, size: 15, color: fg),
-              const SizedBox(width: 5),
-              Text(label, style: TextStyle(fontSize: 12.5, color: fg)),
-            ],
+        child: ConstrainedBox(
+          constraints: BoxConstraints(minHeight: touch ? 44 : 0),
+          child: Padding(
+            padding: EdgeInsets.symmetric(
+              horizontal: touch ? 13 : 11,
+              vertical: 6,
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(icon, size: 15, color: warn ? Colors.amber.shade800 : fg),
+                const SizedBox(width: 5),
+                Flexible(
+                  child: Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    softWrap: false,
+                    style: TextStyle(fontSize: 12.5, color: fg),
+                  ),
+                ),
+                if (trailing != null) ...[
+                  const SizedBox(width: 2),
+                  Icon(trailing, size: 16, color: fg),
+                ],
+              ],
+            ),
           ),
         ),
       ),
@@ -4466,6 +4477,17 @@ class _AppSessionState extends ConsumerState<AppSessionScreen> {
         color: selected ? scheme.primaryContainer : Colors.transparent,
         borderRadius: BorderRadius.circular(12),
         child: InkWell(
+          // Stable handle for tests: the label is localised and, for the turn
+          // settings, repeated by the chip that opened the sheet. Values that
+          // are not scalars fall back to the label — a model row's DTO has no
+          // `toString`, so keying on it would give every model the same key.
+          key: ValueKey(
+            'opt-${switch (o.value) {
+              final String s => s,
+              final Enum e => e.name,
+              _ => o.label,
+            }}',
+          ),
           borderRadius: BorderRadius.circular(12),
           onTap: onTap,
           child: Padding(
@@ -5693,13 +5715,7 @@ class _MessageViewState extends State<_MessageView> {
               ],
               SizedBox(
                 width: double.infinity,
-                child: MarkdownBody(
-                  data: autolinkifyMarkdown(proposal.text),
-                  selectable: false,
-                  styleSheet: _markdownStyle(context),
-                  onTapLink: (text, href, title) =>
-                      onTapMarkdownLink(context, text, href, title),
-                ),
+                child: MarkdownView(data: proposal.text),
               ),
             ],
           );
@@ -6137,13 +6153,7 @@ class _PlanCardState extends State<_PlanCard> {
             if (explanation.isNotEmpty)
               Padding(
                 padding: const EdgeInsets.fromLTRB(14, 0, 14, 8),
-                child: MarkdownBody(
-                  data: autolinkifyMarkdown(explanation),
-                  selectable: true,
-                  styleSheet: _markdownStyle(context),
-                  onTapLink: (text, href, title) =>
-                      onTapMarkdownLink(context, text, href, title),
-                ),
+                child: MarkdownView(data: explanation),
               ),
             if (steps.isNotEmpty)
               Padding(
@@ -6537,36 +6547,4 @@ class _TypingIndicatorState extends State<_TypingIndicator>
       ),
     );
   }
-}
-
-/// Theme-derived Markdown styling: comfortable line height, tinted code blocks.
-MarkdownStyleSheet _markdownStyle(BuildContext context) {
-  final theme = Theme.of(context);
-  final scheme = theme.colorScheme;
-  final body = theme.textTheme.bodyLarge?.copyWith(height: 1.5);
-  return MarkdownStyleSheet.fromTheme(theme).copyWith(
-    p: body,
-    listBullet: body,
-    a: linkStyleOf(context),
-    pPadding: const EdgeInsets.only(bottom: 8),
-    h1Padding: const EdgeInsets.only(top: 8, bottom: 4),
-    h2Padding: const EdgeInsets.only(top: 8, bottom: 4),
-    h3Padding: const EdgeInsets.only(top: 6, bottom: 4),
-    blockSpacing: 10,
-    code: theme.textTheme.bodyMedium?.copyWith(
-      fontFamily: 'monospace',
-      fontFamilyFallback: monoCjkFallback,
-      backgroundColor: scheme.surfaceContainerHighest,
-    ),
-    codeblockDecoration: BoxDecoration(
-      color: scheme.surfaceContainerHighest,
-      borderRadius: BorderRadius.circular(10),
-    ),
-    codeblockPadding: const EdgeInsets.all(14),
-    blockquoteDecoration: BoxDecoration(
-      color: scheme.surfaceContainerHighest,
-      borderRadius: BorderRadius.circular(8),
-      border: Border(left: BorderSide(color: scheme.primary, width: 3)),
-    ),
-  );
 }

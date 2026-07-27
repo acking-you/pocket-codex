@@ -162,6 +162,24 @@ Future<void> _selectSection(WidgetTester t, String label) async {
   await t.pumpAndSettle();
 }
 
+/// Open the composer's turn-settings sheet (fronted by the model chip) and tap
+/// the row for [value] — 'model', 'effort', 'plan' or 'project'. Plan toggles
+/// on the spot; the others open their own picker sheet.
+Future<void> _turnSetting(WidgetTester t, String value) async {
+  await t.tap(find.byKey(const Key('model-chip')));
+  await t.pumpAndSettle();
+  await t.tap(find.byKey(ValueKey('opt-$value')));
+  await t.pumpAndSettle();
+}
+
+/// Open the composer's `+` attachment menu and tap the item keyed [key].
+Future<void> _attachMenu(WidgetTester t, String key) async {
+  await t.tap(find.byKey(const Key('attach-menu-btn')));
+  await t.pumpAndSettle();
+  await t.tap(find.byKey(Key(key)));
+  await t.pumpAndSettle();
+}
+
 void main() {
   // AppSessionScreen keeps per-thread plan/effort memory in process-wide static
   // maps (so a reopened thread restores its mode before the persisted config
@@ -1181,7 +1199,7 @@ void main() {
     );
   });
 
-  testWidgets('composer config pills collapse on mobile and expand on tap', (
+  testWidgets('composer is one row on a 360 px phone, with 44 px targets', (
     t,
   ) async {
     final api = FakeBridgeApi(
@@ -1189,27 +1207,47 @@ void main() {
     );
     await api.appConnect('pcx:lb7666:app:default', 28080);
     t.view.devicePixelRatio = 1.0;
-    t.view.physicalSize = const Size(400, 800); // narrow → collapsed by default
+    t.view.physicalSize = const Size(360, 780); // a small phone
     addTearDown(t.view.reset);
     await t.pumpWidget(
       _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
     );
     await t.pumpAndSettle();
 
-    // Collapsed: the compact options toggle shows; the full pills (e.g. the
-    // permission pill '自动') are folded away so they don't eat the view.
-    expect(find.byKey(const Key('options-toggle')), findsOneWidget);
-    expect(find.text('自动'), findsNothing);
+    // Everything the composer offers is on screen at once — no expand toggle,
+    // no wrapping, nothing pushed off the right edge.
+    for (final k in ['attach-menu-btn', 'permission-chip', 'model-chip']) {
+      final rect = t.getRect(find.byKey(Key(k)));
+      expect(rect.right, lessThanOrEqualTo(360.0), reason: k);
+      expect(rect.height, greaterThanOrEqualTo(44.0), reason: k);
+    }
+    expect(
+      t.getRect(find.byKey(const Key('send-btn'))).right,
+      lessThanOrEqualTo(360.0),
+    );
+    // The three rows share one line.
+    final y = t.getRect(find.byKey(const Key('model-chip'))).center.dy;
+    expect(t.getRect(find.byKey(const Key('permission-chip'))).center.dy, y);
+    expect(t.takeException(), isNull); // no RenderFlex overflow
+  });
 
-    // Tapping the toggle expands the full pill row.
-    await t.tap(find.byKey(const Key('options-toggle')));
+  testWidgets('the attachment menu holds all three sources', (t) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    await t.pumpWidget(
+      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+    );
     await t.pumpAndSettle();
-    expect(find.text('自动'), findsOneWidget); // permission pill now visible
 
-    // Tapping again collapses it back.
-    await t.tap(find.byKey(const Key('options-toggle')));
+    await t.tap(find.byKey(const Key('attach-menu-btn')));
     await t.pumpAndSettle();
-    expect(find.text('自动'), findsNothing);
+    expect(find.byKey(const Key('attach-btn')), findsOneWidget);
+    expect(find.byKey(const Key('attach-file-btn')), findsOneWidget);
+    // Host files is desktop-only (it uses the save/open dialogs); the test
+    // platform is android, so it is absent.
+    expect(find.byKey(const Key('host-files-btn')), findsNothing);
   });
 
   testWidgets(
@@ -1313,7 +1351,7 @@ void main() {
       // 完全放行), not the local default (对话确认).
       expect(find.text('完全放行'), findsOneWidget);
       // The effort pill shows the server's sticky effort.
-      expect(find.text('思考强度 · 高'), findsOneWidget);
+      expect(find.textContaining('· 高'), findsOneWidget);
       // The details sheet reports snapshot provenance (no live update yet).
       await t.tap(chip);
       await t.pumpAndSettle();
@@ -1367,7 +1405,7 @@ void main() {
       // ...the status chip flips to the server-reported plan mode...
       expect(find.text('计划模式'), findsOneWidget);
       // ...and the effort pill follows the server's sticky effort.
-      expect(find.text('思考强度 · 极高'), findsOneWidget);
+      expect(find.textContaining('· 极高'), findsOneWidget);
       // The details sheet reports live confirmation.
       await t.tap(chip);
       await t.pumpAndSettle();
@@ -1467,7 +1505,7 @@ void main() {
       final api = await pumpSession(t);
       picker.files = [XFile.fromData(_tinyPng(), name: 'shot.png')];
 
-      await t.tap(find.byKey(const Key('attach-btn')));
+      await _attachMenu(t, 'attach-btn');
       await t.pumpAndSettle();
       expect(find.byKey(const Key('attachment-0')), findsOneWidget);
 
@@ -1490,7 +1528,7 @@ void main() {
       final api = await pumpSession(t);
       picker.files = [XFile.fromData(_tinyPng(), name: 'shot.png')];
 
-      await t.tap(find.byKey(const Key('attach-btn')));
+      await _attachMenu(t, 'attach-btn');
       await t.pumpAndSettle();
       await t.tap(find.byKey(const Key('send-btn')));
       await t.pumpAndSettle();
@@ -1506,7 +1544,7 @@ void main() {
       await pumpSession(t);
       picker.files = [XFile.fromData(_tinyPng(), name: 'shot.png')];
 
-      await t.tap(find.byKey(const Key('attach-btn')));
+      await _attachMenu(t, 'attach-btn');
       await t.pumpAndSettle();
       await t.tap(find.byKey(const Key('attachment-remove-0')));
       await t.pumpAndSettle();
@@ -1634,7 +1672,7 @@ void main() {
       final api = await pumpSession(t);
       selector.files = [tmpFile('notes.txt', utf8.encode('sentinel-content'))];
 
-      await t.tap(find.byKey(const Key('attach-file-btn')));
+      await _attachMenu(t, 'attach-file-btn');
       await t.pumpAndSettle();
       // Uploaded chip shows the filename.
       expect(find.byKey(const Key('attachment-0')), findsOneWidget);
@@ -1666,7 +1704,7 @@ void main() {
       selector.files = [
         tmpFile('data.bin', [1, 2, 3]),
       ];
-      await t.tap(find.byKey(const Key('attach-file-btn')));
+      await _attachMenu(t, 'attach-file-btn');
       await t.pumpAndSettle();
       await t.tap(find.byKey(const Key('send-btn')));
       await t.pumpAndSettle();
@@ -1686,7 +1724,7 @@ void main() {
       selector.files = [
         tmpFile('x.log', [9]),
       ];
-      await t.tap(find.byKey(const Key('attach-file-btn')));
+      await _attachMenu(t, 'attach-file-btn');
       await t.pumpAndSettle();
 
       expect(find.byKey(const Key('attachment-0')), findsNothing);
@@ -1700,7 +1738,7 @@ void main() {
         'pipeline', (t) async {
       final api = await pumpSession(t);
       selector.files = [tmpFile('shot.png', _tinyPng())];
-      await t.tap(find.byKey(const Key('attach-file-btn')));
+      await _attachMenu(t, 'attach-file-btn');
       await t.pumpAndSettle();
       await t.tap(find.byKey(const Key('send-btn')));
       await t.pumpAndSettle();
@@ -1884,7 +1922,7 @@ void main() {
 
     // Start a brand-new conversation: it inherits the read-only mode the user
     // last chose instead of resetting to the "自动" default.
-    await t.tap(find.byIcon(Icons.add));
+    await t.tap(find.byKey(const Key('new-conversation-btn')));
     await t.pumpAndSettle();
     expect(find.text('只读'), findsOneWidget);
     expect(find.text('自动'), findsNothing);
@@ -2132,8 +2170,9 @@ void main() {
     expect(find.textContaining('用时'), findsOneWidget);
   });
 
-  testWidgets('composer pills are collapsed on mobile and, when expanded, wrap '
-      'fully on-screen', (t) async {
+  testWidgets('a long model name ellipsizes instead of overflowing the row', (
+    t,
+  ) async {
     t.view.devicePixelRatio = 1.0;
     t.view.physicalSize = const Size(360, 760); // a phone-ish viewport
     addTearDown(t.view.reset);
@@ -2152,18 +2191,21 @@ void main() {
     );
     await t.pumpAndSettle();
 
-    // Collapsed by default on a narrow screen — the pills don't eat the view;
-    // the effort pill is folded away behind the options toggle.
-    expect(find.byKey(const Key('options-toggle')), findsOneWidget);
-    expect(find.text('思考强度'), findsNothing); // l10n.effort (zh)
+    // Turn on plan so the chip carries the longest label it ever shows
+    // (model · effort · plan) on the narrowest phone.
+    await _turnSetting(t, 'plan');
+    expect(
+      t.getRect(find.byKey(const Key('model-chip'))).right,
+      lessThanOrEqualTo(360.0),
+    );
+    expect(t.takeException(), isNull);
 
-    // Expanding shows all five pills; the last (effort) wraps onto its own row
-    // and sits fully within the viewport (a horizontal scroll used to clip it).
-    await t.tap(find.byKey(const Key('options-toggle')));
+    // Every setting the old pill row held is still reachable, one tap in.
+    await t.tap(find.byKey(const Key('model-chip')));
     await t.pumpAndSettle();
-    final effort = find.text('思考强度');
-    expect(effort, findsOneWidget);
-    expect(t.getRect(effort).right, lessThanOrEqualTo(360.0));
+    expect(find.byKey(const ValueKey('opt-model')), findsOneWidget);
+    expect(find.byKey(const ValueKey('opt-effort')), findsOneWidget);
+    expect(find.byKey(const ValueKey('opt-plan')), findsOneWidget);
   });
 
   testWidgets('Opening an existing thread resumes it before reading', (
@@ -2521,7 +2563,7 @@ void main() {
     await t.pumpAndSettle();
 
     // Toggle the plan pill on, then send.
-    await t.tap(find.text('计划'));
+    await _turnSetting(t, 'plan');
     await t.pump();
     await t.enterText(find.byType(TextField), 'build a feature');
     await t.pump();
@@ -2595,7 +2637,7 @@ void main() {
       _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
     );
     await t.pumpAndSettle();
-    await t.tap(find.text('计划'));
+    await _turnSetting(t, 'plan');
     await t.pump();
     await t.enterText(find.byType(TextField), 'plan it');
     await t.pump();
@@ -2671,7 +2713,7 @@ void main() {
 
     // The toggle is synced ON from the server mode; tap it OFF and send → the
     // turn carries "default", actually leaving plan mode.
-    await t.tap(find.text('计划')); // planMode pill (zh), currently active
+    await _turnSetting(t, 'plan'); // currently active
     await t.pump();
     await t.enterText(find.byType(TextField), 'continue');
     await t.pump();
@@ -2706,7 +2748,7 @@ void main() {
     await t.pumpAndSettle();
 
     // Enter plan mode in tA and send.
-    await t.tap(find.text('计划'));
+    await _turnSetting(t, 'plan');
     await t.pump();
     await t.enterText(find.byType(TextField), 'plan it');
     await t.pump();
@@ -2721,7 +2763,7 @@ void main() {
     await t.pumpAndSettle();
 
     // Turning plan OFF in tA now sends "default" (proving it was restored ON).
-    await t.tap(find.text('计划'));
+    await _turnSetting(t, 'plan');
     await t.pump();
     await t.enterText(find.byType(TextField), 'stop planning');
     await t.pump();
@@ -2759,9 +2801,7 @@ void main() {
     // Open the effort picker (the chip shows the localized "Effort" label) and
     // choose High; the next turn carries "high". The pills scroll horizontally,
     // so scroll the chip into view before tapping.
-    await t.ensureVisible(find.text('思考强度'));
-    await t.tap(find.text('思考强度'));
-    await t.pumpAndSettle();
+    await _turnSetting(t, 'effort');
     await t.tap(find.text('高'));
     await t.pumpAndSettle();
     await t.enterText(find.byType(TextField), 'think hard');
@@ -2791,9 +2831,7 @@ void main() {
     await t.pumpAndSettle();
 
     // The default model (gpt-5.5 in the fake) supports low/medium/high/xhigh.
-    await t.ensureVisible(find.text('思考强度'));
-    await t.tap(find.text('思考强度'));
-    await t.pumpAndSettle();
+    await _turnSetting(t, 'effort');
     expect(find.text('极高'), findsOneWidget); // xhigh is offered
     expect(find.text('最低'), findsNothing); // minimal: not supported by gpt-5.5
 
@@ -2830,7 +2868,7 @@ void main() {
     );
     await t.pumpAndSettle();
     // The chip reflects the thread's current effort ("Effort · High").
-    expect(find.text('思考强度 · 高'), findsOneWidget);
+    expect(find.textContaining('· 高'), findsOneWidget);
   });
 
   testWidgets('Toggling plan re-asserts the effort instead of wiping it', (
@@ -2853,9 +2891,7 @@ void main() {
     await t.pumpAndSettle();
 
     // Set High and send.
-    await t.ensureVisible(find.text('思考强度'));
-    await t.tap(find.text('思考强度'));
-    await t.pumpAndSettle();
+    await _turnSetting(t, 'effort');
     await t.tap(find.text('高'));
     await t.pumpAndSettle();
     await t.enterText(find.byType(TextField), 'one');
@@ -2866,8 +2902,7 @@ void main() {
 
     // Now toggle plan ON (no new effort pick) and send: the collaborationMode
     // turn must still carry "high", not wipe the thread's effort to null.
-    await t.ensureVisible(find.text('计划'));
-    await t.tap(find.text('计划'));
+    await _turnSetting(t, 'plan');
     await t.pump();
     await t.enterText(find.byType(TextField), 'two');
     await t.pump();
@@ -2897,9 +2932,7 @@ void main() {
     await t.pumpAndSettle();
 
     // Pick xhigh, then send a turn that we hold in-flight via the gate.
-    await t.ensureVisible(find.textContaining('思考强度'));
-    await t.tap(find.textContaining('思考强度'));
-    await t.pumpAndSettle();
+    await _turnSetting(t, 'effort');
     await t.tap(find.text('极高'));
     await t.pumpAndSettle();
     api.turnStartGate = Completer<void>();
@@ -2910,9 +2943,7 @@ void main() {
     expect(api.lastReasoningEffort, 'xhigh');
 
     // While the turn is in flight, change effort to High.
-    await t.ensureVisible(find.textContaining('思考强度'));
-    await t.tap(find.textContaining('思考强度'));
-    await t.pumpAndSettle();
+    await _turnSetting(t, 'effort');
     await t.tap(find.text('高'));
     await t.pumpAndSettle();
 
@@ -3012,17 +3043,15 @@ void main() {
     await t.pumpAndSettle();
 
     // Pick High on tA but DON'T send.
-    await t.ensureVisible(find.text('思考强度'));
-    await t.tap(find.text('思考强度'));
-    await t.pumpAndSettle();
+    await _turnSetting(t, 'effort');
     await t.tap(find.text('高'));
     await t.pumpAndSettle();
-    expect(find.text('思考强度 · 高'), findsOneWidget);
+    expect(find.textContaining('· 高'), findsOneWidget);
 
     // Switch to tB and send: the unsent High pick must NOT carry over.
     await t.tap(find.text('chat B'));
     await t.pumpAndSettle();
-    expect(find.text('思考强度 · 高'), findsNothing);
+    expect(find.textContaining('· 高'), findsNothing);
     await t.enterText(find.byType(TextField), 'hi from B');
     await t.pump();
     await t.tap(find.byKey(const Key('send-btn')));
@@ -3110,7 +3139,7 @@ void main() {
     await t.pumpAndSettle();
 
     // Turn 1: plan mode on → "plan".
-    await t.tap(find.text('计划'));
+    await _turnSetting(t, 'plan');
     await t.pump();
     await t.enterText(find.byType(TextField), 'plan it');
     await t.pump();
@@ -3119,7 +3148,7 @@ void main() {
     expect(api.lastCollaborationMode, 'plan');
 
     // Turn 2: plan mode off → must send "default" to leave sticky plan mode.
-    await t.tap(find.text('计划'));
+    await _turnSetting(t, 'plan');
     await t.pump();
     await t.enterText(find.byType(TextField), 'now normally');
     await t.pump();
@@ -3191,7 +3220,7 @@ void main() {
     );
     await t.pumpAndSettle();
 
-    await t.tap(find.text('计划'));
+    await _turnSetting(t, 'plan');
     await t.pump();
     await t.enterText(find.byType(TextField), 'plan it');
     await t.pump();
@@ -3438,7 +3467,7 @@ void main() {
     expect(api.lastResumed, 't9');
 
     // Tap "new conversation" (+) → clears to an empty conversation.
-    await t.tap(find.byIcon(Icons.add));
+    await t.tap(find.byKey(const Key('new-conversation-btn')));
     await t.pumpAndSettle();
     expect(t.takeException(), isNull);
     // Tapping "new conversation" shows the new-session guidance.

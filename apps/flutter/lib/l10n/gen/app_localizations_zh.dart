@@ -155,7 +155,10 @@ class AppLocalizationsZh extends AppLocalizations {
   String get send => '发送';
 
   @override
-  String get hideOptions => '收起';
+  String get addAttachment => '添加';
+
+  @override
+  String get turnSettings => '本轮设置';
 
   @override
   String get prevTurn => '上一轮对话';

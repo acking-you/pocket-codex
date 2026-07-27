@@ -34,6 +34,11 @@ dependencies:
   # tables) instead of plain chat bubbles. Maintained drop-in for the
   # discontinued flutter_markdown (same `MarkdownBody` API).
   flutter_markdown_plus: ^1.0.3
+  # The CommonMark parser behind flutter_markdown_plus. Declared directly
+  # because lib/src/markdown_cjk.dart registers a custom InlineSyntax with it
+  # (CommonMark's emphasis rules can't bold CJK text next to full-width
+  # punctuation). Must stay compatible with flutter_markdown_plus's own pin.
+  markdown: ^7.3.1
   # Opens URLs in the system browser (tapped links in agent replies / tool
   # output / plain text). url_launcher_windows is bundled and auto-registered.
   url_launcher: ^6.3.1

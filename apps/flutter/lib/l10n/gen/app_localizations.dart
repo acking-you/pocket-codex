@@ -380,11 +380,17 @@ abstract class AppLocalizations {
   /// **'Send'**
   String get send;
 
-  /// No description provided for @hideOptions.
+  /// No description provided for @addAttachment.
   ///
   /// In en, this message translates to:
-  /// **'Hide'**
-  String get hideOptions;
+  /// **'Add'**
+  String get addAttachment;
+
+  /// No description provided for @turnSettings.
+  ///
+  /// In en, this message translates to:
+  /// **'Turn settings'**
+  String get turnSettings;
 
   /// No description provided for @prevTurn.
   ///
