@@ -255,6 +255,28 @@ pub fn read_file(service_key: &str, path: &str) -> Result<Vec<u8>> {
     })
 }
 
+/// Read an image the thread's transcript already references, so it can be
+/// shown inline. Unlike [`read_file`] this is not root-confined — the host
+/// authorises it against the transcript instead (see the host service's
+/// `/fs/thread-image`), which is what lets a pasted screenshot in the OS temp
+/// directory render on a remote controller.
+pub fn read_thread_image(service_key: &str, thread_id: &str, path: &str) -> Result<Vec<u8>> {
+    let mut url = endpoint(service_key, &["fs", "thread-image"])?;
+    url.query_pairs_mut()
+        .append_pair("thread", thread_id)
+        .append_pair("path", path);
+    runtime::runtime().block_on(async move {
+        let resp = client()
+            .get(url)
+            .timeout(UPLOAD_TIMEOUT)
+            .send()
+            .await
+            .context("meta GET thread-image")?;
+        let resp = ensure_ok(resp).await?;
+        Ok(resp.bytes().await.context("reading image bytes")?.to_vec())
+    })
+}
+
 /// Upload local `bytes` as `file_name` into host directory `dir`
 /// (root-confined); returns where it landed. Never overwrites (a collision
 /// surfaces the host's 409 in the returned message).

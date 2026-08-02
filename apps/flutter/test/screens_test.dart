@@ -162,6 +162,12 @@ Future<void> _selectSection(WidgetTester t, String label) async {
   await t.pumpAndSettle();
 }
 
+/// A 1×1 transparent PNG — the smallest thing `Image.memory` will decode, so a
+/// host-image test can assert on a real thumbnail rather than a broken one.
+final Uint8List _onePixelPng = base64Decode(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=',
+);
+
 /// Open the composer's turn-settings sheet (fronted by the model chip) and tap
 /// the row for [value] — 'model', 'effort', 'plan' or 'project'. Plan toggles
 /// on the spot; the others open their own picker sheet.
@@ -1183,7 +1189,7 @@ void main() {
     await t.pumpAndSettle();
 
     // A brand-new conversation shows the guidance view (not a bare hint).
-    expect(find.text('想让远程 Codex 做点什么?'), findsOneWidget);
+    expect(find.text('我们该构建什么?'), findsOneWidget);
 
     await t.enterText(find.byType(TextField), 'hello');
     await t.pump(); // let the send button enable for the non-empty input
@@ -1248,6 +1254,120 @@ void main() {
     // Host files is desktop-only (it uses the save/open dialogs); the test
     // platform is android, so it is absent.
     expect(find.byKey(const Key('host-files-btn')), findsNothing);
+  });
+
+  testWidgets('a message from an IDE client shows the request, not the wire '
+      'context, and its mentioned image becomes an attachment', (t) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    api.readResult = const ThreadHistory(
+      items: [
+        ThreadItem(
+          id: 'u1',
+          itemType: 'userMessage',
+          title: '',
+          text:
+              '# Files mentioned by the user:\n\n'
+              '## shot.png: C:/Users/u/AppData/Local/Temp/shot.png\n\n'
+              '## My request for Codex:\n为什么仍然黑屏',
+        ),
+      ],
+      running: false,
+    );
+    await t.pumpWidget(
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          threadId: 'th-ide',
+        ),
+        api,
+      ),
+    );
+    await t.pumpAndSettle();
+
+    expect(find.text('为什么仍然黑屏'), findsOneWidget);
+    expect(find.textContaining('My request for Codex'), findsNothing);
+    expect(find.textContaining('Files mentioned'), findsNothing);
+    // The mentioned image is surfaced as an attachment, named by its basename.
+    expect(find.textContaining('shot.png'), findsOneWidget);
+  });
+
+  testWidgets('injected fragments are dropped and a voice handoff unwrapped', (
+    t,
+  ) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    api.readResult = const ThreadHistory(
+      items: [
+        ThreadItem(
+          id: 'u1',
+          itemType: 'userMessage',
+          title: '',
+          text:
+              '<recommended_plugins>\n- Box (box@openai)\n</recommended_plugins>',
+        ),
+        ThreadItem(
+          id: 'u2',
+          itemType: 'userMessage',
+          title: '',
+          text:
+              '<realtime_delegation>\n  <input>切换到 Live 模式</input>\n'
+              '  <transcript_delta>user: …</transcript_delta>\n</realtime_delegation>',
+        ),
+      ],
+      running: false,
+    );
+    await t.pumpWidget(
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          threadId: 'th-frag',
+        ),
+        api,
+      ),
+    );
+    await t.pumpAndSettle();
+
+    // The machine-written message is gone; the spoken one shows what was said.
+    expect(find.textContaining('recommended_plugins'), findsNothing);
+    expect(find.textContaining('transcript_delta'), findsNothing);
+    expect(find.text('切换到 Live 模式'), findsOneWidget);
+  });
+
+  testWidgets('a reasoning card renders its summary as markdown', (t) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    api.readResult = const ThreadHistory(
+      items: [
+        ThreadItem(
+          id: 'r1',
+          itemType: 'reasoning',
+          title: '',
+          text: '**Planning emulator restart**\n\nChecking the GPU flag.',
+        ),
+      ],
+      running: false,
+    );
+    await t.pumpWidget(
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          threadId: 'th-reason',
+        ),
+        api,
+      ),
+    );
+    await t.pumpAndSettle();
+
+    // The collapsed peek shows the header with its markup removed.
+    expect(find.text('Planning emulator restart'), findsOneWidget);
+    expect(find.textContaining('**'), findsNothing);
   });
 
   testWidgets(
@@ -1627,9 +1747,99 @@ void main() {
       );
       await t.pumpAndSettle();
 
-      // No pixels crossed the wire — an honest basename chip instead.
+      // No pixels crossed the wire, and the host wouldn't serve the path — an
+      // honest basename chip instead.
       expect(find.text('error.png'), findsOneWidget);
       expect(find.byKey(const Key('msg-image-0')), findsNothing);
+    });
+
+    testWidgets('a host image the host will serve renders as a thumbnail', (
+      t,
+    ) async {
+      final api = FakeBridgeApi(
+        config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+      );
+      await api.appConnect('pcx:lb7666:app:default', 28080);
+      // Inside the project roots, so even a host too old for the
+      // transcript-image route hands the bytes over.
+      api.fileBytes['/proj/shot.png'] = _onePixelPng;
+      api.readResult = const ThreadHistory(
+        items: [
+          ThreadItem(
+            id: 'u1',
+            itemType: 'userMessage',
+            title: '',
+            text: '',
+            images: ['/proj/shot.png'],
+          ),
+        ],
+        running: false,
+      );
+      t.view.devicePixelRatio = 1.0;
+      t.view.physicalSize = const Size(400, 800);
+      addTearDown(t.view.reset);
+      await t.pumpWidget(
+        _host(
+          const AppSessionScreen(
+            serviceKey: 'pcx:lb7666:app:default',
+            threadId: 'thread-8',
+          ),
+          api,
+        ),
+      );
+      await t.pumpAndSettle();
+
+      // The chip gave way to a real thumbnail, and it opens the viewer.
+      expect(find.text('shot.png'), findsNothing);
+      expect(find.byKey(const Key('msg-image-0')), findsOneWidget);
+      await t.tap(find.byKey(const Key('msg-image-0')));
+      await t.pumpAndSettle();
+      expect(find.byKey(const Key('image-viewer-0')), findsOneWidget);
+    });
+
+    testWidgets('a temp-dir image the transcript references still renders', (
+      t,
+    ) async {
+      final api = FakeBridgeApi(
+        config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+      );
+      await api.appConnect('pcx:lb7666:app:default', 28080);
+      // Outside every project root — `metaReadFile` refuses it (the fake
+      // returns no bytes), but the host authorises it against the thread's
+      // own transcript.
+      const temp = 'C:/Users/u/AppData/Local/Temp/codex-clipboard-1.png';
+      api.threadImageBytes[temp] = _onePixelPng;
+      api.readResult = const ThreadHistory(
+        items: [
+          ThreadItem(
+            id: 'u1',
+            itemType: 'userMessage',
+            title: '',
+            text:
+                '# Files mentioned by the user:\n\n'
+                '## codex-clipboard-1.png: $temp\n\n'
+                '## My request for Codex:\n为什么仍然黑屏',
+          ),
+        ],
+        running: false,
+      );
+      t.view.devicePixelRatio = 1.0;
+      t.view.physicalSize = const Size(400, 800);
+      addTearDown(t.view.reset);
+      await t.pumpWidget(
+        _host(
+          const AppSessionScreen(
+            serviceKey: 'pcx:lb7666:app:default',
+            threadId: 'thread-9',
+          ),
+          api,
+        ),
+      );
+      await t.pumpAndSettle();
+
+      expect(find.text('为什么仍然黑屏'), findsOneWidget);
+      expect(find.byKey(const Key('msg-image-0')), findsOneWidget);
+      expect(find.text('codex-clipboard-1.png'), findsNothing);
     });
   });
 
@@ -1894,7 +2104,7 @@ void main() {
     );
     await t.pumpAndSettle();
     // Still the new-session guidance (the foreign event was dropped, no items).
-    expect(find.text('想让远程 Codex 做点什么?'), findsOneWidget);
+    expect(find.text('我们该构建什么?'), findsOneWidget);
     expect(find.textContaining('not mine', findRichText: true), findsNothing);
   });
 
@@ -1958,6 +2168,154 @@ void main() {
     // empty for a just-started thread, so the optimistic one must win).
     expect(find.byIcon(Icons.chat_bubble_outline), findsOneWidget);
     expect(find.text('(未命名)'), findsNothing);
+  });
+
+  testWidgets('Empty-state title is the project switcher', (t) async {
+    final nowS = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    api.appThreads.addAll([
+      ThreadMeta(
+        id: 'a1',
+        preview: 'a',
+        cwd: '/work/alpha',
+        updatedAt: nowS - 60,
+      ),
+      ThreadMeta(
+        id: 'b1',
+        preview: 'b',
+        cwd: '/work/beta',
+        updatedAt: nowS - 600,
+      ),
+    ]);
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(1200, 900);
+    addTearDown(t.view.reset);
+    await t.pumpWidget(
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          cwd: '/work/alpha',
+        ),
+        api,
+      ),
+    );
+    await t.pumpAndSettle();
+
+    // The headline names the project inline, and that name IS the trigger.
+    expect(find.text('alpha'), findsWidgets);
+    await t.tap(find.byKey(const Key('project-switcher-btn')));
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('project-menu-search')), findsOneWidget);
+    expect(find.text('不在项目中工作'), findsOneWidget); // workOutsideProject (zh)
+    expect(find.byKey(const Key('project-menu-new')), findsOneWidget);
+
+    // Switching project retargets the conversation that hasn't started yet.
+    await t.tap(find.byKey(const Key('project-menu-item-/work/beta')));
+    await t.pumpAndSettle();
+    expect(find.text('beta'), findsWidgets);
+  });
+
+  testWidgets('Model chip opens a desktop popover with an effort slider', (
+    t,
+  ) async {
+    // The popover is the desktop treatment; a phone keeps the sheet flow.
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(1200, 900);
+    addTearDown(t.view.reset);
+    await t.pumpWidget(
+      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+    );
+    await t.pumpAndSettle();
+
+    await t.tap(find.byKey(const Key('model-chip')));
+    await t.pumpAndSettle();
+    // Everything on one surface: models, the effort scale, and plan mode —
+    // rather than three levels of sheet.
+    expect(find.byKey(const Key('model-menu-item-gpt-5.5')), findsOneWidget);
+    expect(find.byKey(const Key('model-menu-item-gpt-5')), findsOneWidget);
+    expect(find.byKey(const Key('effort-steps')), findsOneWidget);
+    expect(find.byKey(const Key('plan-toggle-row')), findsOneWidget);
+
+    // Tapping the right end of the stepped selector sets the top level (gpt-5.5
+    // advertises low/medium/high/xhigh → xhigh). The label reflects it.
+    final steps = t.getRect(find.byKey(const Key('effort-steps')));
+    await t.tapAt(Offset(steps.right - 4, steps.center.dy));
+    await t.pumpAndSettle();
+    expect(find.text('极高'), findsWidgets); // effortXhigh (zh)
+
+    // Picking a model updates the chip without leaving the popover flow.
+    await t.tap(find.byKey(const Key('model-menu-item-gpt-5')));
+    await t.pumpAndSettle();
+    expect(find.textContaining('GPT-5'), findsWidgets);
+    // Must be cleared inside the body: the framework's end-of-test invariant
+    // check runs before addTearDown callbacks.
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('Home pane groups conversations under their project', (t) async {
+    final nowS = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    // Two projects, interleaved in time — grouping must beat pure recency.
+    api.appThreads.addAll([
+      ThreadMeta(
+        id: 'a1',
+        preview: 'alpha newest',
+        cwd: '/work/alpha',
+        updatedAt: nowS - 60,
+      ),
+      ThreadMeta(
+        id: 'b1',
+        preview: 'beta middle',
+        cwd: '/work/beta',
+        updatedAt: nowS - 3600,
+      ),
+      ThreadMeta(
+        id: 'a2',
+        preview: 'alpha oldest',
+        cwd: '/work/alpha',
+        updatedAt: nowS - 5 * 86400,
+      ),
+    ]);
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(1200, 900); // wide → left pane inline
+    addTearDown(t.view.reset);
+    await t.pumpWidget(
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          home: true,
+        ),
+        api,
+      ),
+    );
+    await t.pumpAndSettle();
+
+    // A heading per project, not per time bucket.
+    expect(find.text('alpha'), findsOneWidget);
+    expect(find.text('beta'), findsOneWidget);
+    expect(find.text('今天'), findsNothing); // groupToday (zh)
+    expect(find.text('更早'), findsNothing); // groupEarlier (zh)
+
+    // Both of alpha's conversations sit under the alpha heading — including the
+    // 5-day-old one, which recency bucketing would have split off.
+    final alphaY = t.getTopLeft(find.text('alpha')).dy;
+    final betaY = t.getTopLeft(find.text('beta')).dy;
+    expect(alphaY, lessThan(betaY)); // newest project first
+    expect(t.getTopLeft(find.text('alpha newest')).dy, greaterThan(alphaY));
+    final oldestY = t.getTopLeft(find.text('alpha oldest')).dy;
+    expect(oldestY, greaterThan(alphaY));
+    expect(oldestY, lessThan(betaY));
   });
 
   testWidgets(
@@ -3273,16 +3631,123 @@ void main() {
     await t.tap(find.text('10'));
     await t.pumpAndSettle();
     expect(find.text('上下文与用量'), findsOneWidget); // contextUsageTitle (zh)
-    expect(find.text('5 小时额度'), findsOneWidget); // quota5h (zh)
+    // Scoped to the sheet: the same window label also names the always-visible
+    // sidebar quota strip.
+    expect(
+      find.descendant(
+        of: find.byType(Dialog),
+        matching: find.text('5 小时额度'), // quota5h (zh)
+      ),
+      findsOneWidget,
+    );
   });
 
-  testWidgets('Git branch badge shows changes and opens the diff viewer', (
+  testWidgets('A huge file-change card is capped instead of laid out whole', (
     t,
   ) async {
     final api = FakeBridgeApi(
       config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
     );
     await api.appConnect('pcx:lb7666:app:default', 28080);
+    api.readResult = const ThreadHistory(
+      items: [
+        ThreadItem(id: 'u1', itemType: 'userMessage', title: '', text: 'hi'),
+      ],
+      running: false,
+      branch: 'dev',
+      cwd: '/proj',
+    );
+    await t.pumpWidget(
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          threadId: 't-diff',
+        ),
+        api,
+      ),
+    );
+    await t.pumpAndSettle();
+
+    // A 900-line file-change card — the inline card's `_DiffHunks` bounds it so
+    // one huge expansion can't make the transcript drag.
+    final buf = StringBuffer()
+      ..writeln('diff --git a/Cargo.lock b/Cargo.lock')
+      ..writeln('--- a/Cargo.lock')
+      ..writeln('+++ b/Cargo.lock')
+      ..writeln('@@ -1 +1,900 @@');
+    for (var i = 0; i < 900; i++) {
+      buf.writeln('+line $i');
+    }
+    api.pushEvent(
+      'pcx:lb7666:app:default',
+      AppEvent(
+        kind: 'item/completed',
+        threadId: 't-diff',
+        itemId: 'f1',
+        itemType: 'fileChange',
+        title: 'Cargo.lock',
+        text: buf.toString(),
+        raw: '{}',
+      ),
+    );
+    await t.pumpAndSettle();
+    await t.tap(find.text('Cargo.lock'));
+    await t.pumpAndSettle();
+
+    // Capped at 200 rendered rows, with the remainder accounted for rather
+    // than silently dropped. The `@@` hunk header takes one of the 200, so the
+    // last body line rendered is 198 out of 901 parsed rows. The `+` marker
+    // lives in the gutter, so the highlighted row (a RichText) is the code
+    // alone — textContaining skips RichText unless asked to include it.
+    expect(find.textContaining('line 0', findRichText: true), findsOneWidget);
+    expect(find.textContaining('line 198', findRichText: true), findsOneWidget);
+    expect(find.textContaining('line 199', findRichText: true), findsNothing);
+    expect(find.textContaining('另有 701 行未显示'), findsOneWidget);
+  });
+
+  testWidgets('Quota is warm in the sidebar without opening anything', (
+    t,
+  ) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    // 88% of the weekly window used → 12% left, and the weekly window is the
+    // tighter of the two so it is the one the strip shows.
+    api.rateLimitsJson =
+        '{"rateLimits":{'
+        '"primary":{"usedPercent":10,"windowDurationMins":300},'
+        '"secondary":{"usedPercent":88,"windowDurationMins":10080}}}';
+    await t.pumpWidget(
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          threadId: 't1',
+        ),
+        api,
+      ),
+    );
+    await t.pumpAndSettle();
+
+    // No tap, no sheet — the numbers are already on screen because the quota
+    // is fetched with the subscription rather than on demand.
+    expect(find.byKey(const Key('sidebar-quota')), findsOneWidget);
+    expect(find.text('剩余用量'), findsOneWidget); // quotaRemaining (zh)
+    expect(find.text('12%'), findsOneWidget);
+  });
+
+  testWidgets('Git branch badge shows changes and opens the review split', (
+    t,
+  ) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    // Desktop width so the branch chip opens the inline review split (not the
+    // mobile bottom sheet).
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(1400, 900);
+    addTearDown(t.view.reset);
     api.readResult = const ThreadHistory(
       items: [
         ThreadItem(id: 'u1', itemType: 'userMessage', title: '', text: 'hi'),
@@ -3312,15 +3777,28 @@ void main() {
     );
     await t.pumpAndSettle();
 
-    // Branch + change counts in the unified status bar.
-    expect(find.text('feature/x'), findsOneWidget);
+    // Branch + change counts in the unified status bar, and again on the
+    // composer's context line (desktop width).
+    expect(find.text('feature/x'), findsNWidgets(2));
+    expect(find.byKey(const Key('composer-branch-chip')), findsOneWidget);
     expect(find.text('+2'), findsWidgets); // 2 added
     expect(find.text('−1'), findsWidgets); // 1 removed
 
-    // Tapping opens the diff viewer with the file path.
-    await t.tap(find.text('feature/x'));
+    // Tapping the branch chip opens the review split: the file tree names the
+    // changed file, and its diff is shown highlighted (the single changed file
+    // is selected by default).
+    await t.tap(find.byKey(const Key('status-branch-chip')));
     await t.pumpAndSettle();
-    expect(find.text('lib/x.dart'), findsOneWidget);
+    expect(find.text('审阅'), findsOneWidget); // reviewTitle (zh)
+    expect(find.byKey(const Key('review-file-lib/x.dart')), findsOneWidget);
+    // The diff pane renders the changed lines highlighted (RichText).
+    expect(find.textContaining('new', findRichText: true), findsWidgets);
+    expect(find.textContaining('old', findRichText: true), findsWidgets);
+
+    // Closing the review hides it.
+    await t.tap(find.byKey(const Key('review-close')));
+    await t.pumpAndSettle();
+    expect(find.text('审阅'), findsNothing);
   });
 
   testWidgets('Compact menu action calls the bridge after confirm', (t) async {
@@ -3471,7 +3949,7 @@ void main() {
     await t.pumpAndSettle();
     expect(t.takeException(), isNull);
     // Tapping "new conversation" shows the new-session guidance.
-    expect(find.text('想让远程 Codex 做点什么?'), findsOneWidget); // guidance (zh)
+    expect(find.text('我们该构建什么?'), findsOneWidget); // guidance (zh)
   });
 
   testWidgets('Plan renders as a status-iconed checklist', (t) async {
@@ -3744,11 +4222,12 @@ void main() {
     expect(find.text('+2'), findsWidgets);
     expect(find.text('−1'), findsWidgets);
 
-    // Expanding reveals the colored diff lines for review.
+    // Expanding reveals the highlighted diff lines for review — the +/−
+    // markers moved to the gutter, so each row (a RichText) carries just code.
     await t.tap(find.text('lib/x.dart'));
     await t.pumpAndSettle();
-    expect(find.text('+new'), findsOneWidget);
-    expect(find.text('−old'), findsOneWidget);
+    expect(find.textContaining('new', findRichText: true), findsOneWidget);
+    expect(find.textContaining('old', findRichText: true), findsOneWidget);
   });
 
   testWidgets('A compaction item shows a system notice in the transcript', (

@@ -20,6 +20,8 @@
 /// header line is wire format: changing it orphans chips in old transcripts.
 library;
 
+import 'package:pocket_codex/src/ide_context.dart';
+
 /// Header line introducing the attached-files block (English on purpose — it
 /// is model-facing wire text, like codex's own `<image>` markers).
 const String kAttachedFilesHeader =
@@ -88,14 +90,28 @@ String hostPathBasename(String path) {
   return cut < 0 ? path : path.substring(cut + 1);
 }
 
-/// Display form of a session/thread PREVIEW that may carry the attached-files
-/// block. Server previews are the first user message verbatim (possibly
-/// truncated), so a file-only message would surface the raw wire header as a
-/// list title. A preview that IS the block shows [placeholder] instead; a
-/// text+block preview shows just the text. `startsWith` (not a full parse)
-/// also catches server-truncated blocks.
+/// Display form of a session/thread PREVIEW that may carry wire text. Server
+/// previews are the first user message verbatim (possibly truncated), so
+/// without this a list title reads as the raw attached-files header or the
+/// serialized IDE context instead of what the user typed.
+///
+/// A preview that is nothing but an attachment block shows [placeholder];
+/// otherwise the wrappers are stripped the same way the transcript strips
+/// them. `startsWith` (not a full parse) is what catches server-truncated
+/// blocks.
+///
+/// Returns EMPTY when the preview is an injected context fragment: a session
+/// opened from an IDE begins with codex's own `<recommended_plugins>` message,
+/// and calling that a title labelled every such session identically. There is
+/// no title to derive from machinery, so callers fall back to "untitled".
 String previewWithoutFileRefs(String preview, String placeholder) {
   if (preview.trimLeft().startsWith(kAttachedFilesHeader)) return placeholder;
-  final split = splitFileRefs(preview);
-  return split.paths.isEmpty ? preview : split.text;
+  if (isContextFragment(preview)) return '';
+  if (isTruncatedIdeContext(preview)) return placeholder;
+  // A voice handoff is the user's own turn, wrapped — show what they said.
+  final spoken = realtimeDelegationInput(preview);
+  if (spoken != null) return spoken;
+  final text = splitIdeContext(preview).text;
+  final split = splitFileRefs(text);
+  return split.paths.isEmpty ? text : split.text;
 }

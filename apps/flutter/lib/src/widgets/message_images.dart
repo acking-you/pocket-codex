@@ -15,6 +15,10 @@ import 'package:pocket_codex/src/image_attachments.dart';
 class ResolvedImage {
   ResolvedImage._({this.bytes, this.hostPath, this.broken = false});
 
+  /// An image that exists only as a path on the host — a client-side file
+  /// mention (see `ide_context.dart`) rather than a wire attachment.
+  ResolvedImage.hostFile(String path) : this._(hostPath: path);
+
   /// Decoded image bytes for a data URL; null for a host path or broken image.
   final Uint8List? bytes;
 
@@ -86,21 +90,122 @@ Future<void> saveImageBytes(
   }
 }
 
+/// Fetches a host-side image's bytes, or null when it cannot be read (the
+/// host is remote and the path sits outside the shared roots, the file is
+/// gone, or it is too big to be worth pulling over a tunnel).
+typedef HostImageLoader = Future<Uint8List?> Function(String hostPath);
+
+/// Largest image worth loading inline: above this the decoded bitmap costs
+/// more than the preview is worth, and the filename chip stays.
+const int kMaxInlineImageBytes = 8 * 1024 * 1024;
+
+/// [HostImageLoader] for a path on THIS machine. Null when the file is
+/// missing, oversized or unreadable.
+Future<Uint8List?> readLocalImage(String path) async {
+  try {
+    final file = File(path);
+    if (!await file.exists()) return null;
+    final length = await file.length();
+    // An empty file decodes to nothing: the chip is a better answer than a
+    // broken-image tile.
+    if (length == 0 || length > kMaxInlineImageBytes) return null;
+    return await file.readAsBytes();
+  } catch (_) {
+    return null;
+  }
+}
+
 /// Thumbnail strip for a message's image attachments. Tapping a thumbnail
 /// opens the fullscreen [ImageViewerPage] (swipe between the message's
-/// images, pinch to zoom). Host-only images render as filename chips.
-class MessageImagesView extends StatelessWidget {
+/// images, pinch to zoom).
+///
+/// An image that only ever existed as a host path — a `localImage` or a file
+/// the sending client mentioned — has no bytes on the wire. Given a
+/// [hostImageLoader] the strip fetches them so the picture shows like any
+/// other attachment; without one, or when the fetch fails, it falls back to
+/// the honest filename chip.
+class MessageImagesView extends StatefulWidget {
   /// Creates the strip for [images] (resolved once by the item model).
-  const MessageImagesView({super.key, required this.images});
+  const MessageImagesView({
+    super.key,
+    required this.images,
+    this.hostImageLoader,
+  });
 
   /// The message's resolved attachments, in send order.
   final List<ResolvedImage> images;
 
+  /// How to read a host path's bytes; null leaves host images as chips.
+  final HostImageLoader? hostImageLoader;
+
+  @override
+  State<MessageImagesView> createState() => _MessageImagesViewState();
+}
+
+// Host images already fetched, newest last. Bounded because the entries are
+// whole decoded files and a long transcript would otherwise pin every picture
+// it ever scrolled past; the list virtualises, so re-fetching an evicted one
+// is cheap next to holding them all.
+final Map<String, Uint8List?> _hostImageCache = {};
+const _hostImageCacheMax = 24;
+
+class _MessageImagesViewState extends State<MessageImagesView> {
+  // Paths whose fetch is in flight, so a rebuild mid-load doesn't start it
+  // again.
+  final Set<String> _loading = {};
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchHostImages();
+  }
+
+  @override
+  void didUpdateWidget(MessageImagesView old) {
+    super.didUpdateWidget(old);
+    _fetchHostImages();
+  }
+
+  void _fetchHostImages() {
+    final load = widget.hostImageLoader;
+    if (load == null) return;
+    for (final image in widget.images) {
+      final path = image.hostPath;
+      if (path == null) continue;
+      if (_hostImageCache.containsKey(path) || !_loading.add(path)) continue;
+      load(path)
+          .then((bytes) {
+            _hostImageCache[path] = bytes;
+            if (_hostImageCache.length > _hostImageCacheMax) {
+              _hostImageCache.remove(_hostImageCache.keys.first);
+            }
+          })
+          .catchError((_) => _hostImageCache[path] = null)
+          .whenComplete(() {
+            _loading.remove(path);
+            if (mounted) setState(() {});
+          });
+    }
+  }
+
+  /// Bytes to draw for [image]: its own (a data URL) or the host file's, once
+  /// fetched.
+  Uint8List? _bytesFor(ResolvedImage image) =>
+      image.bytes ??
+      (image.hostPath == null ? null : _hostImageCache[image.hostPath]);
+
   @override
   Widget build(BuildContext context) {
+    // Also here, not just on init/update: the cache is bounded, so scrolling a
+    // long transcript can evict an image that is still on screen. Without a
+    // re-request it would silently drop back to a filename chip forever. The
+    // call is idempotent — it starts work only for paths that are neither
+    // cached (null counts) nor already in flight.
+    _fetchHostImages();
+    final images = widget.images;
     final renderable = [
       for (final i in images)
-        if (i.bytes != null) i.bytes!,
+        if (_bytesFor(i) != null) _bytesFor(i)!,
     ];
     // A single image gets a larger preview; several tile as uniform squares.
     final side = renderable.length == 1 ? 180.0 : 96.0;
@@ -110,7 +215,7 @@ class MessageImagesView extends StatelessWidget {
       runSpacing: 6,
       children: [
         for (final image in images)
-          if (image.bytes != null)
+          if (_bytesFor(image) != null)
             _ImageThumb(images: renderable, index: bytesIndex++, side: side)
           else if (image.broken)
             _brokenThumb(context, side)

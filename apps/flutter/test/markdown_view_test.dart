@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/widgets/markdown_view.dart';
 
 /// Everything [MarkdownView] actually painted, concatenated. `includePlaceholders`
@@ -12,6 +13,10 @@ String renderedText(WidgetTester tester) => tester
 Future<void> pumpMarkdown(WidgetTester tester, String data) async {
   await tester.pumpWidget(
     MaterialApp(
+      // Code blocks reach for AppLocalizations (the copy button's tooltip), so
+      // the harness has to supply the delegates a real app would.
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      supportedLocales: AppLocalizations.supportedLocales,
       home: Scaffold(
         body: SelectionArea(
           child: SingleChildScrollView(child: MarkdownView(data: data)),
@@ -91,5 +96,59 @@ void main() {
 
     expect(find.byIcon(Icons.public), findsNothing);
     expect(renderedText(tester), contains('第二节'));
+  });
+
+  testWidgets('a fenced block is syntax-highlighted, with its text intact', (
+    tester,
+  ) async {
+    await pumpMarkdown(
+      tester,
+      '```rust\nfn main() {\n    let x = 1; // note\n}\n```',
+    );
+
+    // Find the block's own RichText (the header carries the language name).
+    final span = tester
+        .widgetList<RichText>(find.byType(RichText))
+        .map((w) => w.text)
+        .firstWhere((s) => s.toPlainText().contains('fn main()'));
+    final colours = <Color>{};
+    void walk(InlineSpan s) {
+      if (s is TextSpan) {
+        final c = s.style?.color;
+        if (c != null) colours.add(c);
+        s.children?.forEach(walk);
+      }
+    }
+
+    walk(span);
+    // More than one colour is the whole point; one would mean the highlighter
+    // never ran and the fallback plain span was rendered.
+    expect(colours.length, greaterThan(1));
+    // And highlighting must not rewrite what the agent wrote.
+    expect(span.toPlainText(), contains('fn main() {\n    let x = 1; // note'));
+  });
+
+  testWidgets('an unfenced block stays plain rather than guessing', (
+    tester,
+  ) async {
+    await pumpMarkdown(tester, '```\nsome free-form output\n```');
+
+    final span = tester
+        .widgetList<RichText>(find.byType(RichText))
+        .map((w) => w.text)
+        .firstWhere((s) => s.toPlainText().contains('free-form'));
+    expect(span.toPlainText(), contains('some free-form output'));
+    // No info string → no grammar → one uniform colour, not a mis-guess.
+    final colours = <Color>{};
+    void walk(InlineSpan s) {
+      if (s is TextSpan) {
+        final c = s.style?.color;
+        if (c != null) colours.add(c);
+        s.children?.forEach(walk);
+      }
+    }
+
+    walk(span);
+    expect(colours.length, lessThanOrEqualTo(1));
   });
 }

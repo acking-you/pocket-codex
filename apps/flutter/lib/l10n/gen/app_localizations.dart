@@ -380,6 +380,42 @@ abstract class AppLocalizations {
   /// **'Send'**
   String get send;
 
+  /// No description provided for @chatRoleYou.
+  ///
+  /// In en, this message translates to:
+  /// **'You'**
+  String get chatRoleYou;
+
+  /// No description provided for @chatRoleAgent.
+  ///
+  /// In en, this message translates to:
+  /// **'Codex'**
+  String get chatRoleAgent;
+
+  /// No description provided for @voiceLive.
+  ///
+  /// In en, this message translates to:
+  /// **'Live voice'**
+  String get voiceLive;
+
+  /// No description provided for @voiceSessionEnded.
+  ///
+  /// In en, this message translates to:
+  /// **'Live voice · ended'**
+  String get voiceSessionEnded;
+
+  /// No description provided for @voiceYou.
+  ///
+  /// In en, this message translates to:
+  /// **'You'**
+  String get voiceYou;
+
+  /// No description provided for @voiceAgent.
+  ///
+  /// In en, this message translates to:
+  /// **'Agent'**
+  String get voiceAgent;
+
   /// No description provided for @addAttachment.
   ///
   /// In en, this message translates to:
@@ -595,6 +631,48 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'New project'**
   String get newProject;
+
+  /// No description provided for @effortFaster.
+  ///
+  /// In en, this message translates to:
+  /// **'Faster'**
+  String get effortFaster;
+
+  /// No description provided for @effortSmarter.
+  ///
+  /// In en, this message translates to:
+  /// **'Smarter'**
+  String get effortSmarter;
+
+  /// No description provided for @searchProjects.
+  ///
+  /// In en, this message translates to:
+  /// **'Search projects'**
+  String get searchProjects;
+
+  /// No description provided for @noMatchingProjects.
+  ///
+  /// In en, this message translates to:
+  /// **'No matching projects'**
+  String get noMatchingProjects;
+
+  /// No description provided for @workOutsideProject.
+  ///
+  /// In en, this message translates to:
+  /// **'Work outside a project'**
+  String get workOutsideProject;
+
+  /// No description provided for @switchProjectTip.
+  ///
+  /// In en, this message translates to:
+  /// **'Switch project'**
+  String get switchProjectTip;
+
+  /// No description provided for @newSessionTitleIn.
+  ///
+  /// In en, this message translates to:
+  /// **'What should we build in {project}?'**
+  String newSessionTitleIn(String project);
 
   /// No description provided for @currentProject.
   ///
@@ -872,6 +950,12 @@ abstract class AppLocalizations {
   /// **'Quota information is unavailable.'**
   String get quotaUnavailable;
 
+  /// No description provided for @quotaRemaining.
+  ///
+  /// In en, this message translates to:
+  /// **'Usage left'**
+  String get quotaRemaining;
+
   /// No description provided for @resetsIn.
   ///
   /// In en, this message translates to:
@@ -1105,6 +1189,78 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'No changes vs the main branch.'**
   String get noChanges;
+
+  /// No description provided for @envTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Environment'**
+  String get envTitle;
+
+  /// No description provided for @envLocal.
+  ///
+  /// In en, this message translates to:
+  /// **'Local'**
+  String get envLocal;
+
+  /// No description provided for @envProject.
+  ///
+  /// In en, this message translates to:
+  /// **'Project'**
+  String get envProject;
+
+  /// No description provided for @envSource.
+  ///
+  /// In en, this message translates to:
+  /// **'Source'**
+  String get envSource;
+
+  /// No description provided for @envRefresh.
+  ///
+  /// In en, this message translates to:
+  /// **'Refresh'**
+  String get envRefresh;
+
+  /// No description provided for @diffTruncated.
+  ///
+  /// In en, this message translates to:
+  /// **'{count} more lines not shown — copy the path to view the full diff'**
+  String diffTruncated(int count);
+
+  /// No description provided for @diffUnmodified.
+  ///
+  /// In en, this message translates to:
+  /// **'{count} unmodified lines'**
+  String diffUnmodified(int count);
+
+  /// No description provided for @diffExpandFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'{count} unmodified lines (couldn\'t load)'**
+  String diffExpandFailed(int count);
+
+  /// No description provided for @reviewTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Review'**
+  String get reviewTitle;
+
+  /// No description provided for @reviewNoFiles.
+  ///
+  /// In en, this message translates to:
+  /// **'No changed files.'**
+  String get reviewNoFiles;
+
+  /// No description provided for @reviewPickFile.
+  ///
+  /// In en, this message translates to:
+  /// **'Pick a file to review its changes.'**
+  String get reviewPickFile;
+
+  /// No description provided for @envFilesChanged.
+  ///
+  /// In en, this message translates to:
+  /// **'{count} files changed'**
+  String envFilesChanged(int count);
 
   /// No description provided for @start.
   ///
@@ -1367,7 +1523,7 @@ abstract class AppLocalizations {
   /// No description provided for @newSessionTitle.
   ///
   /// In en, this message translates to:
-  /// **'What should the remote Codex work on?'**
+  /// **'What should we build?'**
   String get newSessionTitle;
 
   /// No description provided for @newSessionSubtitle.

@@ -9,13 +9,16 @@ import 'package:pocket_codex/src/app_modes.dart';
 import 'package:pocket_codex/src/attachment_refs.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
 import 'package:pocket_codex/src/error_format.dart';
+import 'package:pocket_codex/src/ide_context.dart';
 import 'package:pocket_codex/src/fonts.dart';
 import 'package:pocket_codex/src/providers.dart';
+import 'package:pocket_codex/src/realtime_delegation.dart';
 import 'package:pocket_codex/src/screens/local_sessions_screen.dart'
     show SessionSource, resumeLocalSession;
 import 'package:pocket_codex/src/widgets/loading.dart';
 import 'package:pocket_codex/src/widgets/markdown_view.dart';
 import 'package:pocket_codex/src/widgets/message_images.dart';
+import 'package:pocket_codex/src/widgets/realtime_handoff_card.dart';
 import 'package:super_sliver_list/super_sliver_list.dart';
 
 /// Read-only viewer for a local codex session's transcript, parsed straight from
@@ -196,9 +199,13 @@ class _LocalSessionViewState extends ConsumerState<LocalSessionViewScreen> {
     final l10n = AppLocalizations.of(context);
     // A file-only first message's preview is the raw attached-files wire
     // block — show the placeholder rather than header markup in the app bar.
-    final title = (widget.preview != null && widget.preview!.trim().isNotEmpty)
-        ? previewWithoutFileRefs(widget.preview!.trim(), l10n.fileOnlyMessage)
-        : widget.threadId;
+    final cleaned = widget.preview == null
+        ? ''
+        : previewWithoutFileRefs(
+            widget.preview!.trim(),
+            l10n.fileOnlyMessage,
+          ).trim();
+    final title = cleaned.isEmpty ? widget.threadId : cleaned;
     return Scaffold(
       appBar: WindowTitleBar(
         title: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
@@ -371,10 +378,31 @@ class _TranscriptRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     switch (item.itemType) {
+      case 'userMessage' when parseRealtimeDelegation(item.text) != null:
+        // A Live voice handoff: spoken turns, not a typed message.
+        return Padding(
+          padding: const EdgeInsets.symmetric(vertical: 6),
+          child: RealtimeHandoffCard(
+            handoff: parseRealtimeDelegation(item.text)!,
+          ),
+        );
       case 'userMessage':
         // Document attachments ride the text as a trailing path-reference
-        // block; show them as chips and only the typed text (display-only).
-        final refs = splitFileRefs(item.text);
+        // block, and a client with editor context serializes that context
+        // ahead of the request; show both as chips/thumbnails and only the
+        // typed text (display-only — the rollout on disk is untouched).
+        final ide = splitIdeContext(item.text);
+        final refs = splitFileRefs(ide.text);
+        final shown = [
+          ...images,
+          for (final f in ide.files)
+            if (looksLikeImagePath(f.path)) ResolvedImage.hostFile(f.path),
+        ];
+        final paths = [
+          for (final f in ide.files)
+            if (!looksLikeImagePath(f.path)) f.path,
+          ...refs.paths,
+        ];
         // Cap the bubble to a fraction of the *content* width (the centred
         // column), not the whole screen — otherwise it stretches too wide on a
         // desktop window.
@@ -393,12 +421,18 @@ class _TranscriptRow extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  if (images.isNotEmpty) MessageImagesView(images: images),
-                  if (images.isNotEmpty &&
-                      (refs.text.isNotEmpty || refs.paths.isNotEmpty))
+                  if (shown.isNotEmpty)
+                    MessageImagesView(
+                      images: shown,
+                      // This screen reads a rollout off THIS machine's disk,
+                      // so a host path in it is a local path.
+                      hostImageLoader: readLocalImage,
+                    ),
+                  if (shown.isNotEmpty &&
+                      (refs.text.isNotEmpty || paths.isNotEmpty))
                     const SizedBox(height: 8),
-                  if (refs.paths.isNotEmpty) FileRefChips(paths: refs.paths),
-                  if (refs.paths.isNotEmpty && refs.text.isNotEmpty)
+                  if (paths.isNotEmpty) FileRefChips(paths: paths),
+                  if (paths.isNotEmpty && refs.text.isNotEmpty)
                     const SizedBox(height: 8),
                   if (refs.text.isNotEmpty) Text(refs.text),
                 ],
@@ -412,16 +446,12 @@ class _TranscriptRow extends StatelessWidget {
           child: MarkdownView(data: item.text),
         );
       case 'reasoning':
+        // Reasoning summaries are Markdown prose (they open with a `**bold**`
+        // header), so they render as Markdown in a secondary tint rather than
+        // as literal text with the asterisks showing.
         return Padding(
           padding: const EdgeInsets.symmetric(vertical: 6),
-          child: Text(
-            item.text,
-            style: TextStyle(
-              color: scheme.onSurfaceVariant,
-              fontStyle: FontStyle.italic,
-              fontSize: 13,
-            ),
-          ),
+          child: MarkdownView(data: item.text, muted: true),
         );
       case 'turnContext':
         return _TurnContextCaption(item: item);

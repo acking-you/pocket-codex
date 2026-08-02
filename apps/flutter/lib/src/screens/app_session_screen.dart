@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:file_selector/file_selector.dart' show openFiles;
@@ -17,20 +18,27 @@ import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/app_modes.dart';
 import 'package:pocket_codex/src/attachment_refs.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
+import 'package:pocket_codex/src/code_highlight.dart';
 import 'package:pocket_codex/src/context_status.dart';
 import 'package:pocket_codex/src/error_format.dart';
 import 'package:pocket_codex/src/fonts.dart';
 import 'package:pocket_codex/src/git_diff.dart';
+import 'package:pocket_codex/src/ide_context.dart';
 import 'package:pocket_codex/src/image_attachments.dart';
 import 'package:pocket_codex/src/providers.dart';
+import 'package:pocket_codex/src/realtime_delegation.dart';
 import 'package:pocket_codex/src/ui_prefs.dart';
+import 'package:pocket_codex/src/widgets/adaptive_sheet.dart';
 import 'package:pocket_codex/src/widgets/brand_logo.dart';
+import 'package:pocket_codex/src/widgets/diff_review.dart';
 import 'package:pocket_codex/src/widgets/file_browser_panel.dart';
 import 'package:pocket_codex/src/widgets/folder_tree_picker.dart';
 import 'package:pocket_codex/src/widgets/links.dart';
 import 'package:pocket_codex/src/widgets/loading.dart';
 import 'package:pocket_codex/src/widgets/markdown_view.dart';
 import 'package:pocket_codex/src/widgets/message_images.dart';
+import 'package:pocket_codex/src/widgets/project_menu.dart';
+import 'package:pocket_codex/src/widgets/realtime_handoff_card.dart';
 import 'package:pocket_codex/src/widgets/status_dots.dart';
 
 /// Local port for the app-server ws tunnel (shared with the service screen).
@@ -292,17 +300,35 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   ContextStatus? _ctx;
   RateLimits? _rate;
 
+  /// Bumped whenever [_rate] changes. An open detail panel lives in its own
+  /// route, so a parent setState can't reach it — this can.
+  final ValueNotifier<int> _quotaRev = ValueNotifier<int>(0);
+
   // Git: current branch (seeded from thread/read) + the working-tree-vs-main
   // diff, refreshed after edits (turn/diff/updated, turn/completed, compacted).
   String? _branch;
   DiffModel? _diff;
 
-  // 3-pane layout: left = this project's sessions, right = the diff panel.
-  // Both collapsible; the chat stays centered regardless. _threads backs the
-  // left pane (this project's conversations).
+  // Desktop layout: left = this project's sessions, right = the diff-review
+  // split (a file tree + one file's diff). Both collapsible AND drag-resizable;
+  // the chat stays centered regardless. _threads backs the left pane.
   bool _leftOpen = true;
-  bool _rightOpen = false;
+  bool _reviewOpen = false; // the right-hand review split is showing
+  double _leftWidth = 280;
+  double _reviewWidth = 760; // width of the whole review split (diff + tree)
+  double _treeWidth = 250; // the tree sub-pane inside the review
+  String? _reviewFile; // path selected in the review, null = first changed
+
+  /// Anchors the desktop turn-settings popover to the composer's model chip.
+  final MenuController _modelMenu = MenuController();
+
+  /// Anchors the environment-info popover to the app-bar button.
+  final MenuController _envMenu = MenuController();
   List<ThreadMeta> _threads = const [];
+
+  /// Distinct project roots across every conversation on this service (not
+  /// just the current project's), for the project switcher. See [_loadThreads].
+  List<String> _allProjects = const [];
   // Live filter text for the conversations pane search box.
   String _convQuery = '';
 
@@ -491,6 +517,16 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       final all = await ref
           .read(bridgeApiProvider)
           .appThreadList(widget.serviceKey);
+      // Every project this service has ever been used in, newest first. Taken
+      // from the UNFILTERED list on purpose: the project switcher has to offer
+      // the projects you're not in, which is exactly what `mine` drops below.
+      final projects = <String>[];
+      final seenProjects = <String>{};
+      for (final t in all) {
+        final p = t.cwd.trim();
+        if (p.isNotEmpty && seenProjects.add(p)) projects.add(p);
+      }
+      _allProjects = projects;
       final cwd = _cwd?.trim();
       var mine = (widget.home || cwd == null || cwd.isEmpty)
           ? all
@@ -534,6 +570,11 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
               : t,
       ];
       if (mounted) setState(() => _threads = mine);
+      // Reaching here proves the service answers, which the subscribe-time
+      // quota fetch can't assume on a cold open (it races the connection).
+      // A brand-new conversation never reads a thread, so this is the only
+      // retry it gets.
+      if (_rate == null) _loadQuota();
     } catch (_) {
       // Listing is best-effort; the pane just stays as it is.
     }
@@ -740,7 +781,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       _ctx = null;
       _diff = null;
       _branch = null;
-      _rightOpen = false;
+      _reviewOpen = false;
+      _reviewFile = null;
       _streaming = false;
       // Drop the previous thread's turn id; the engine tracks the active turn
       // per thread, so interrupt still works for a thread that's already
@@ -811,6 +853,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     _scroll.removeListener(_onScroll);
     _scroll.dispose();
     _listCtl.dispose();
+    _quotaRev.dispose();
     super.dispose();
   }
 
@@ -821,6 +864,47 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     final atBottom =
         _scroll.position.pixels >= _scroll.position.maxScrollExtent - 80;
     if (atBottom != _atBottom) setState(() => _atBottom = atBottom);
+  }
+
+  /// Read a host-side image so it can render as a thumbnail instead of a
+  /// filename chip:
+  ///
+  ///  * the host IS this machine (locally hosted service) — read the file off
+  ///    disk, no tunnel involved;
+  ///  * a remote host — ask for it as a transcript-referenced image, which the
+  ///    host authorises against this thread's own user messages, so a pasted
+  ///    screenshot in its temp directory is reachable without granting a
+  ///    general file read;
+  ///  * a host too old to serve that route — fall back to the root-confined
+  ///    file read, which still covers an image that lives in a project folder.
+  ///
+  /// Null on any refusal, so the caller falls back to the chip.
+  Future<Uint8List?> _loadHostImage(String path) async {
+    final local = (ref.read(localServeListProvider).valueOrNull ?? const [])
+        .any((h) => h.appServiceKey == widget.serviceKey);
+    if (local) return readLocalImage(path);
+    final api = ref.read(bridgeApiProvider);
+    final threadId = _threadId;
+    if (threadId != null) {
+      final bytes = await _tryRead(
+        () => api.metaReadThreadImage(widget.serviceKey, threadId, path),
+      );
+      if (bytes != null) return bytes;
+    }
+    return _tryRead(() => api.metaReadFile(widget.serviceKey, path));
+  }
+
+  /// Run a host read, mapping every refusal — outside the roots, unreferenced,
+  /// route missing on an older host, file gone — to null, plus the two byte
+  /// counts that aren't worth drawing.
+  Future<Uint8List?> _tryRead(Future<Uint8List> Function() read) async {
+    try {
+      final bytes = await read();
+      if (bytes.isEmpty || bytes.length > kMaxInlineImageBytes) return null;
+      return bytes;
+    } catch (_) {
+      return null;
+    }
   }
 
   /// Keep the tail of the conversation visible when the soft keyboard opens.
@@ -843,6 +927,11 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
 
   void _subscribe() {
     _sub?.cancel();
+    // Warm the quota with the subscription rather than on the first tap: the
+    // sidebar shows it inline, and a popover that spins for a round-trip every
+    // time reads as the app being slow. From here on `account/rateLimits/
+    // updated` keeps it fresh, so this fetch happens once per connection.
+    _loadQuota();
     _sub = ref
         .read(bridgeApiProvider)
         .appEvents(widget.serviceKey)
@@ -924,6 +1013,15 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
               _items.last.type == 'userMessage' &&
               _items.last.text.trim() == i.text.trim() &&
               listEquals(_items.last.imageUrls, i.images)) {
+            continue;
+          }
+          // codex injects contextual fragments (plugin lists, AGENTS.md,
+          // environment) as user-role messages — machinery, not typed text, so
+          // they are dropped. The rollout reader does this for transcripts we
+          // parse ourselves; history from the app-server arrives raw. A voice
+          // handoff is kept verbatim: it is the person talking, and the view
+          // renders it as its own kind of turn.
+          if (i.itemType == 'userMessage' && isContextFragment(i.text)) {
             continue;
           }
           _itemIndex[i.id] = _items.length;
@@ -1041,6 +1139,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         }
       });
       _loadGit();
+      // The subscribe-time quota fetch races the connection coming up (and
+      // loses, on a cold open). A successful read proves the service is
+      // reachable, so this is the attempt that actually lands.
+      if (_rate == null) _loadQuota();
       _scrollToEnd(force: true);
       // A turn may have completed while we were disconnected: if the reload
       // landed idle with messages still queued, drain the backlog now (turn-end
@@ -1086,6 +1188,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       final r = RateLimits.fromRaw(e.raw);
       if (r != null) {
         setState(() => _rate = _rate == null ? r : _rate!.merge(r));
+        _quotaRev.value++;
       }
       return;
     }
@@ -1850,13 +1953,13 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     }
   }
 
-  /// Open the diff viewer: the inline right pane on desktop (≥1100px), a tall
+  /// Open the diff viewer: the inline review split on desktop (≥1100px), a tall
   /// bottom sheet on narrower screens.
   Future<void> _showDiff() async {
     await _loadGit();
     if (!mounted) return;
     if (MediaQuery.of(context).size.width >= 1100) {
-      setState(() => _rightOpen = true);
+      _openReview();
       return;
     }
     await showModalBottomSheet<void>(
@@ -1865,9 +1968,50 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       isScrollControlled: true,
       builder: (c) => FractionallySizedBox(
         heightFactor: 0.9,
-        child: _DiffView(diff: _diff, branch: _branch),
+        child: _EnvPanel(diff: _diff, branch: _branch, cwd: _cwd),
       ),
     );
+  }
+
+  /// Read a reviewed file's current lines so the review can expand an elided
+  /// gap. The gap lines are unchanged, so the working-tree file holds them
+  /// verbatim; [relPath] is relative to the conversation's cwd. Best-effort:
+  /// returns null when there's no cwd or the host won't serve the read (no meta
+  /// tunnel, or the file sits outside a configured root), and the gap then
+  /// simply stays collapsed.
+  Future<List<String>?> _loadReviewFile(String relPath) async {
+    final cwd = _cwd?.trim();
+    if (cwd == null || cwd.isEmpty) return null;
+    // Join with the host's own separator; leave an already-absolute path alone.
+    final abs =
+        (relPath.startsWith('/') || RegExp(r'^[A-Za-z]:').hasMatch(relPath))
+        ? relPath
+        : cwd.contains('\\')
+        ? '$cwd\\${relPath.replaceAll('/', '\\')}'
+        : '$cwd/$relPath';
+    try {
+      final bytes = await ref
+          .read(bridgeApiProvider)
+          .metaReadFile(widget.serviceKey, abs);
+      return utf8.decode(bytes, allowMalformed: true).split(RegExp(r'\r?\n'));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Open the desktop review split, defaulting the selected file to [path] (or
+  /// the first changed file). Refreshes the diff so the tree is current.
+  void _openReview({String? path}) {
+    setState(() {
+      _reviewOpen = true;
+      final files = _diff?.files ?? const [];
+      _reviewFile =
+          path ??
+          (files.any((f) => f.path == _reviewFile)
+              ? _reviewFile
+              : files.firstOrNull?.path);
+    });
+    _loadGit();
   }
 
   /// Manually compact the conversation after a confirm.
@@ -2168,25 +2312,42 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         '${_fmtTokens(c.contextWindow)} (${c.percent}%)';
   }
 
-  /// Open the context/quota detail sheet (tap on desktop and mobile). Fetches
-  /// the account quota lazily on first open.
-  Future<void> _showContextDetail() async {
-    if (_rate == null) {
-      try {
-        final raw = await ref
-            .read(bridgeApiProvider)
-            .appRateLimits(widget.serviceKey);
-        final r = RateLimits.fromRaw(raw);
-        if (r != null && mounted) setState(() => _rate = r);
-      } catch (_) {
-        // Quota is optional; the sheet still shows context usage.
+  /// Read the account quota into [_rate]. Called once per connection (see
+  /// [_subscribe]) so the numbers are already there whenever the user looks;
+  /// `account/rateLimits/updated` keeps them current afterwards.
+  Future<void> _loadQuota() async {
+    try {
+      final raw = await ref
+          .read(bridgeApiProvider)
+          .appRateLimits(widget.serviceKey)
+          // Bounded: this runs on the open path, and an app-server that never
+          // answers must not be able to wedge a surface waiting on it.
+          .timeout(const Duration(seconds: 8));
+      final r = RateLimits.fromRaw(raw);
+      if (r != null && mounted) {
+        setState(() => _rate = r);
+        _quotaRev.value++;
       }
+    } catch (_) {
+      // Quota is optional (a custom provider may not report one, and an
+      // unreachable host times out); every surface that shows it degrades to
+      // "unavailable" rather than blocking.
     }
-    if (!mounted) return;
-    await showModalBottomSheet<void>(
+  }
+
+  /// Open the context/quota detail sheet (tap on desktop and mobile). Opens
+  /// immediately and fills in: the quota is normally already warm, and when it
+  /// isn't, a panel that appears now and updates beats a tap that hangs.
+  Future<void> _showContextDetail() async {
+    if (_rate == null) unawaited(_loadQuota());
+    await showAdaptivePanel<void>(
       context: context,
-      showDragHandle: true,
-      builder: (c) => _contextSheet(AppLocalizations.of(c)),
+      // Rebuilt on every quota change, so a fetch that lands while the panel
+      // is open fills the bars in place.
+      builder: (c) => ValueListenableBuilder<int>(
+        valueListenable: _quotaRev,
+        builder: (c2, _, _) => _contextSheet(AppLocalizations.of(c2)),
+      ),
     );
   }
 
@@ -2195,45 +2356,48 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     final text = Theme.of(context).textTheme;
     final ctx = _ctx;
     return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 4, 20, 24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(l10n.contextUsageTitle, style: text.titleMedium),
-            const SizedBox(height: 16),
-            if (ctx != null)
-              _quotaRow(
-                l10n.contextLabel,
-                ctx.fraction,
-                '${_fmtTokens(ctx.tokensUsed)} / ${_fmtTokens(ctx.contextWindow)}',
-              ),
-            if (_rate?.primary != null)
-              _quotaRow(
-                l10n.quota5h,
-                _rate!.primary!.fraction,
-                '${_rate!.primary!.usedPercent.round()}%',
-                reset: _resetText(_rate!.primary!, l10n),
-              ),
-            if (_rate?.secondary != null)
-              _quotaRow(
-                l10n.quotaWeekly,
-                _rate!.secondary!.fraction,
-                '${_rate!.secondary!.usedPercent.round()}%',
-                reset: _resetText(_rate!.secondary!, l10n),
-              ),
-            if (_rate == null)
-              Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: Text(
-                  l10n.quotaUnavailable,
-                  style: text.bodySmall?.copyWith(
-                    color: Theme.of(context).colorScheme.outline,
+      // Token counts and reset times are numbers people copy into notes.
+      child: SelectionArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 4, 20, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(l10n.contextUsageTitle, style: text.titleMedium),
+              const SizedBox(height: 16),
+              if (ctx != null)
+                _quotaRow(
+                  l10n.contextLabel,
+                  ctx.fraction,
+                  '${_fmtTokens(ctx.tokensUsed)} / ${_fmtTokens(ctx.contextWindow)}',
+                ),
+              if (_rate?.primary != null)
+                _quotaRow(
+                  l10n.quota5h,
+                  _rate!.primary!.fraction,
+                  '${_rate!.primary!.usedPercent.round()}%',
+                  reset: _resetText(_rate!.primary!, l10n),
+                ),
+              if (_rate?.secondary != null)
+                _quotaRow(
+                  l10n.quotaWeekly,
+                  _rate!.secondary!.fraction,
+                  '${_rate!.secondary!.usedPercent.round()}%',
+                  reset: _resetText(_rate!.secondary!, l10n),
+                ),
+              if (_rate == null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Text(
+                    l10n.quotaUnavailable,
+                    style: text.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.outline,
+                    ),
                   ),
                 ),
-              ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -2458,6 +2622,20 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
               onTap: _showContextDetail,
               tooltip: _contextTooltip(l10n),
             ),
+          // Environment info lives in a popover off this button. It is a
+          // desktop affordance, so it fades + scales away when the window gets
+          // too narrow to host the popover comfortably — reappearing the same
+          // way when there's room again.
+          AnimatedSwitcher(
+            duration: const Duration(milliseconds: 220),
+            transitionBuilder: (child, anim) => FadeTransition(
+              opacity: anim,
+              child: ScaleTransition(scale: anim, child: child),
+            ),
+            child: width >= 900
+                ? _envButton(l10n)
+                : const SizedBox(key: ValueKey('env-hidden'), width: 0),
+          ),
           if (_threadId != null)
             PopupMenuButton<String>(
               tooltip: l10n.moreActions,
@@ -2474,17 +2652,40 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       body: LayoutBuilder(
         builder: (context, c) {
           final canLeft = c.maxWidth >= 600; // tablet+ : inline sessions pane
-          final canRight = c.maxWidth >= 1100; // desktop : inline diff pane
+          final canRight = c.maxWidth >= 1100; // desktop : inline review split
+          // Keep the transcript from being squeezed out when the window is
+          // narrow: the panes give up width before the chat does.
+          final maxLeft = ((c.maxWidth - 420) / 2).clamp(200.0, 520.0);
+          // The review split is the wide one — it must leave the transcript a
+          // readable minimum, but can take most of the window.
+          final maxReview = (c.maxWidth - 360).clamp(400.0, 1200.0);
           return Row(
             children: [
               if (canLeft && _leftOpen) ...[
-                SizedBox(width: 280, child: _sessionsPane(l10n)),
-                const VerticalDivider(width: 1),
+                SizedBox(
+                  width: _leftWidth.clamp(200, maxLeft),
+                  child: _sessionsPane(l10n),
+                ),
+                _splitter(
+                  key: const Key('left-splitter'),
+                  onDrag: (dx) => setState(
+                    () => _leftWidth = (_leftWidth + dx).clamp(200, 520),
+                  ),
+                ),
               ],
               Expanded(child: _dropWrap(_chatPane(l10n), l10n)),
-              if (canRight && _rightOpen) ...[
-                const VerticalDivider(width: 1),
-                SizedBox(width: 420, child: _diffPane(l10n)),
+              if (canRight && _reviewOpen) ...[
+                _splitter(
+                  key: const Key('review-splitter'),
+                  // Dragging left widens a right-hand pane, hence the negation.
+                  onDrag: (dx) => setState(
+                    () => _reviewWidth = (_reviewWidth - dx).clamp(400, 1200),
+                  ),
+                ),
+                SizedBox(
+                  width: _reviewWidth.clamp(400, maxReview),
+                  child: _reviewSplit(l10n),
+                ),
               ],
             ],
           );
@@ -2492,6 +2693,29 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       ),
     );
   }
+
+  /// A pane divider you can drag. Reads as the same hairline as before until
+  /// the pointer is over it: a wider invisible hit area (a 1 px target is
+  /// unhittable) plus a resize cursor, so the affordance appears on hover the
+  /// way a desktop splitter should.
+  Widget _splitter({required Key key, required ValueChanged<double> onDrag}) =>
+      MouseRegion(
+        key: key,
+        cursor: SystemMouseCursors.resizeLeftRight,
+        child: GestureDetector(
+          behavior: HitTestBehavior.translucent,
+          onHorizontalDragUpdate: (d) => onDrag(d.delta.dx),
+          child: SizedBox(
+            width: 7,
+            child: Center(
+              child: VerticalDivider(
+                width: 1,
+                color: Theme.of(context).colorScheme.outlineVariant,
+              ),
+            ),
+          ),
+        ),
+      );
 
   /// One colored status descriptor for the current session state. Reflects the
   /// REAL state — plan mode is driven by `_planActive` (server-side), so the
@@ -2661,6 +2885,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
             Tooltip(
               message: (d != null && !d.isEmpty) ? l10n.viewDiff : _branch!,
               child: InkWell(
+                key: const Key('status-branch-chip'),
                 onTap: _showDiff,
                 borderRadius: BorderRadius.circular(20),
                 child: Padding(
@@ -2825,6 +3050,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                                                   (row as _Item).id,
                                                 ),
                                                 item: row,
+                                                hostImageLoader: _loadHostImage,
                                               );
                                       },
                                     );
@@ -2894,34 +3120,170 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       ),
       (Icons.checklist_rtl, l10n.suggestPlanTitle, l10n.suggestPlanPrompt),
     ];
-    return Center(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 560),
-          child: Column(
+    return LayoutBuilder(
+      builder: (context, c) {
+        // Two columns of cards once there's room for them; a phone-width pane
+        // keeps the single column (a 2-up grid there is unreadable).
+        final twoUp = c.maxWidth >= 560;
+        return Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(maxWidth: twoUp ? 620 : 460),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // A terminal mark, not a sparkle: this drives a real shell on
+                  // a real checkout.
+                  Container(
+                    width: 56,
+                    height: 56,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: scheme.surfaceContainerHighest,
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(
+                        color: scheme.outlineVariant,
+                        width: 0.5,
+                      ),
+                    ),
+                    child: Icon(
+                      Icons.terminal_rounded,
+                      size: 28,
+                      color: scheme.primary,
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  _newSessionHeadline(l10n),
+                  const SizedBox(height: 8),
+                  Text(
+                    l10n.newSessionSubtitle,
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                  const SizedBox(height: 26),
+                  if (twoUp)
+                    // Pair the cards into rows so the two in a row share a
+                    // height regardless of how long each prompt wraps.
+                    for (var i = 0; i < suggestions.length; i += 2) ...[
+                      IntrinsicHeight(
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Expanded(child: _suggestionCard(suggestions[i])),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: i + 1 < suggestions.length
+                                  ? _suggestionCard(suggestions[i + 1])
+                                  : const SizedBox.shrink(),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                    ]
+                  else
+                    for (final s in suggestions) ...[
+                      _suggestionCard(s),
+                      const SizedBox(height: 10),
+                    ],
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  /// The empty state's headline. With a project in effect it names it inline
+  /// and makes that word the project switcher, so changing what the next
+  /// conversation is about is one click on the thing being changed — rather
+  /// than three levels down a settings sheet.
+  Widget _newSessionHeadline(AppLocalizations l10n) {
+    final style = Theme.of(
+      context,
+    ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w600);
+    final project = _cwd?.trim();
+    if (project == null || project.isEmpty) {
+      // No project: nothing to name, so the plain question + a switcher below.
+      return Column(
+        children: [
+          Text(l10n.newSessionTitle, textAlign: TextAlign.center, style: style),
+          const SizedBox(height: 10),
+          _projectSwitcher(l10n, label: l10n.projectsSection, dimmed: true),
+        ],
+      );
+    }
+    final parts = l10n.newSessionTitleIn(_kProjectSlot).split(_kProjectSlot);
+    return Wrap(
+      alignment: WrapAlignment.center,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        if (parts.isNotEmpty && parts.first.isNotEmpty)
+          Text(parts.first, style: style),
+        _projectSwitcher(l10n, label: _projectName(), style: style),
+        if (parts.length > 1 && parts[1].isNotEmpty)
+          Text(parts[1], style: style),
+      ],
+    );
+  }
+
+  /// The project name rendered as a dropdown trigger, wired to [ProjectMenu].
+  Widget _projectSwitcher(
+    AppLocalizations l10n, {
+    required String label,
+    TextStyle? style,
+    bool dimmed = false,
+  }) {
+    final scheme = Theme.of(context).colorScheme;
+    return ProjectMenu(
+      projects: _knownProjects(),
+      current: _cwd?.trim().isEmpty ?? true ? null : _cwd!.trim(),
+      onPick: (p) => setState(() => _cwd = p),
+      onBrowse: () async {
+        final picked = await showFolderPicker(
+          context,
+          serviceKey: widget.serviceKey,
+          initialPath: _cwd,
+        );
+        if (picked != null && mounted) setState(() => _cwd = picked);
+      },
+      onClear: () => setState(() => _cwd = null),
+      builder: (ctx, ctrl) => InkWell(
+        key: const Key('project-switcher-btn'),
+        borderRadius: BorderRadius.circular(8),
+        onTap: () => ctrl.isOpen ? ctrl.close() : ctrl.open(),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+          child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.auto_awesome, size: 30, color: scheme.primary),
-              const SizedBox(height: 14),
-              Text(
-                l10n.newSessionTitle,
-                textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.titleLarge,
-              ),
-              const SizedBox(height: 6),
-              Text(
-                l10n.newSessionSubtitle,
-                textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+              if (dimmed) ...[
+                Icon(
+                  Icons.folder_outlined,
+                  size: 16,
                   color: scheme.onSurfaceVariant,
                 ),
-              ),
-              const SizedBox(height: 22),
-              for (final (icon, title, prompt) in suggestions) ...[
-                _suggestionCard(icon, title, prompt),
-                const SizedBox(height: 10),
+                const SizedBox(width: 6),
               ],
+              Text(
+                label,
+                style:
+                    style?.copyWith(
+                      decoration: TextDecoration.underline,
+                      decorationColor: scheme.outlineVariant,
+                    ) ??
+                    TextStyle(fontSize: 13, color: scheme.onSurfaceVariant),
+              ),
+              const SizedBox(width: 2),
+              Icon(
+                Icons.expand_more,
+                size: style == null ? 16 : 20,
+                color: scheme.onSurfaceVariant,
+              ),
             ],
           ),
         ),
@@ -2929,40 +3291,70 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     );
   }
 
+  /// Projects this host is known to have: every distinct working directory
+  /// across ALL its conversations, most recently used first, with the open
+  /// project pinned to the top. That is the list the user actually works in —
+  /// anything else is reachable via "new project".
+  List<String> _knownProjects() {
+    final seen = <String>{};
+    final out = <String>[];
+    void add(String? raw) {
+      final p = raw?.trim();
+      if (p == null || p.isEmpty) return;
+      if (seen.add(p)) out.add(p);
+    }
+
+    add(_cwd);
+    for (final p in _allProjects) {
+      add(p);
+    }
+    return out;
+  }
+
   /// One tappable starter-prompt card; tapping prefills + focuses the composer.
-  Widget _suggestionCard(IconData icon, String title, String prompt) {
+  Widget _suggestionCard((IconData, String, String) s) {
+    final (icon, title, prompt) = s;
     final scheme = Theme.of(context).colorScheme;
     return Material(
-      color: scheme.surfaceContainerHighest,
-      borderRadius: BorderRadius.circular(14),
+      color: scheme.surfaceContainerHighest.withValues(alpha: 0.6),
+      borderRadius: BorderRadius.circular(12),
       child: InkWell(
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(12),
         onTap: () => _useSuggestion(prompt),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-          child: Row(
+        child: Container(
+          decoration: BoxDecoration(
+            border: Border.all(color: scheme.outlineVariant, width: 0.5),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          padding: const EdgeInsets.fromLTRB(14, 13, 14, 13),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(icon, size: 20, color: scheme.primary),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(title, style: Theme.of(context).textTheme.titleSmall),
-                    const SizedBox(height: 2),
-                    Text(
-                      prompt,
-                      maxLines: 2,
+              Row(
+                children: [
+                  Icon(icon, size: 17, color: scheme.primary),
+                  const SizedBox(width: 9),
+                  Expanded(
+                    child: Text(
+                      title,
+                      maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: scheme.onSurfaceVariant,
-                      ),
+                      style: Theme.of(context).textTheme.titleSmall,
                     ),
-                  ],
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
+              Text(
+                prompt,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: scheme.onSurfaceVariant,
+                  height: 1.35,
                 ),
               ),
-              const SizedBox(width: 8),
-              Icon(Icons.north_east, size: 16, color: scheme.outline),
             ],
           ),
         ),
@@ -3025,30 +3417,49 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
 
     return Builder(
       builder: (ctx) {
-        Widget tile(ThreadMeta t) => _conversationTile(
-          thread: t,
-          running: running.contains(t.id),
-          selected: t.id == _threadId,
-          now: now,
-          l10n: l10n,
-          // The home pane mixes every project, so each row carries its own
-          // project name for orientation; the project-scoped pane doesn't.
-          project: widget.home ? _leafOf(t.cwd) : null,
-          onTap: () {
-            closeDrawerIfOpen(ctx);
-            if (t.id != _threadId) _openThread(t.id, t.cwd);
-          },
-        );
+        Widget tile(ThreadMeta t, {required bool showProject}) =>
+            _conversationTile(
+              thread: t,
+              running: running.contains(t.id),
+              selected: t.id == _threadId,
+              now: now,
+              l10n: l10n,
+              // Only rows NOT already sitting under a project heading carry
+              // their own project name — under one it's just noise.
+              project: showProject ? _leafOf(t.cwd) : null,
+              onTap: () {
+                closeDrawerIfOpen(ctx);
+                if (t.id != _threadId) _openThread(t.id, t.cwd);
+              },
+            );
         final rows = <Widget>[];
-        void group(String label, List<ThreadMeta> items) {
+        void group(
+          String label,
+          List<ThreadMeta> items, {
+          bool showProject = false,
+        }) {
           if (items.isEmpty) return;
           rows.add(_sectionLabel(label));
-          rows.addAll(items.map(tile));
+          rows.addAll(items.map((t) => tile(t, showProject: showProject)));
         }
 
-        group(l10n.groupActive, active);
-        group(l10n.groupToday, today);
-        group(l10n.groupEarlier, earlier);
+        // Running threads always lead, whatever project they belong to — they
+        // are the only rows the user may need to reach urgently.
+        group(l10n.groupActive, active, showProject: widget.home);
+        if (widget.home) {
+          // The home pane spans every project, so the rest reads as a tree:
+          // project → its conversations, newest project first, with the open
+          // project pinned to the top.
+          for (final p in _byProject(<ThreadMeta>[...today, ...earlier])) {
+            rows.add(_projectSectionLabel(p.cwd));
+            rows.addAll(p.threads.map((t) => tile(t, showProject: false)));
+          }
+        } else {
+          // A project-scoped pane already has one project, so recency is the
+          // only axis left worth splitting on.
+          group(l10n.groupToday, today);
+          group(l10n.groupEarlier, earlier);
+        }
 
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -3179,6 +3590,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                       children: rows,
                     ),
             ),
+            // Account quota, always visible rather than buried behind the
+            // gauge: it is warm from connect (see _loadQuota), so this row
+            // costs nothing and answers "how much have I got left" at a glance.
+            ?_quotaStrip(l10n),
             // Home only: everything that used to require navigating away from
             // the chat — management, the host's session browser (incl. force
             // takeover), logs, settings — one tap from the sidebar.
@@ -3232,6 +3647,89 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           ],
         );
       },
+    );
+  }
+
+  /// Sidebar footer: how much account quota is left, on the window that is
+  /// closest to running out. Null when the host reports no quota at all (a
+  /// custom provider), so the footer simply doesn't grow the row.
+  Widget? _quotaStrip(AppLocalizations l10n) {
+    final r = _rate;
+    if (r == null) return null;
+    // Whichever window is furthest along is the one that will actually stop
+    // the user, so that's the one worth showing in a single line.
+    final windows = [
+      if (r.primary != null) (l10n.quota5h, r.primary!),
+      if (r.secondary != null) (l10n.quotaWeekly, r.secondary!),
+    ]..sort((a, b) => b.$2.usedPercent.compareTo(a.$2.usedPercent));
+    if (windows.isEmpty) return null;
+    final (label, w) = windows.first;
+    final scheme = Theme.of(context).colorScheme;
+    final left = (100 - w.usedPercent).clamp(0, 100).round();
+    // Same thresholds as the context gauge, so "amber" means the same thing
+    // everywhere in the app.
+    final color = w.fraction >= 0.9
+        ? scheme.error
+        : w.fraction >= 0.75
+        ? Colors.amber.shade700
+        : scheme.primary;
+    final reset = _resetText(w, l10n);
+    return InkWell(
+      key: const Key('sidebar-quota'),
+      onTap: _showContextDetail,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 6),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  Icons.data_usage,
+                  size: 13,
+                  color: scheme.onSurfaceVariant,
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    l10n.quotaRemaining,
+                    style: TextStyle(
+                      fontSize: 11.5,
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+                Text(
+                  '$left%',
+                  style: TextStyle(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w600,
+                    color: color,
+                    fontFeatures: const [FontFeature.tabularFigures()],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 5),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(3),
+              child: LinearProgressIndicator(
+                value: w.fraction,
+                minHeight: 4,
+                color: color,
+                backgroundColor: scheme.surfaceContainerHighest,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              reset.isEmpty ? label : '$label · $reset',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(fontSize: 10.5, color: scheme.outline),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -3335,6 +3833,61 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     return segs.isEmpty ? c : segs.last;
   }
 
+  /// Bucket [threads] by the project they run in, preserving each bucket's
+  /// incoming (recency) order. The currently-open project leads; the rest
+  /// follow by how recently anything in them was touched.
+  List<({String cwd, List<ThreadMeta> threads})> _byProject(
+    List<ThreadMeta> threads,
+  ) {
+    final buckets = <String, List<ThreadMeta>>{};
+    for (final t in threads) {
+      buckets.putIfAbsent(t.cwd, () => <ThreadMeta>[]).add(t);
+    }
+    final current = _cwd?.trim();
+    final keys = buckets.keys.toList()
+      ..sort((a, b) {
+        if (a == current) return b == current ? 0 : -1;
+        if (b == current) return 1;
+        // Each bucket keeps the source order, so its head IS its newest thread.
+        return buckets[b]!.first.updatedAt.compareTo(
+          buckets[a]!.first.updatedAt,
+        );
+      });
+    return [for (final k in keys) (cwd: k, threads: buckets[k]!)];
+  }
+
+  /// A project heading in the home pane's conversation tree.
+  Widget _projectSectionLabel(String cwd) {
+    final scheme = Theme.of(context).colorScheme;
+    final leaf = _leafOf(cwd);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(8, 12, 8, 4),
+      child: Row(
+        children: [
+          Icon(Icons.folder_outlined, size: 13, color: scheme.onSurfaceVariant),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Tooltip(
+              message: cwd.trim().isEmpty ? '' : cwd,
+              child: Text(
+                leaf.isEmpty
+                    ? AppLocalizations.of(context).defaultFolder
+                    : leaf,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w600,
+                  color: scheme.onSurfaceVariant,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   /// A muted section header for the conversations pane (Active / Today / …).
   Widget _sectionLabel(String text) => Padding(
     padding: const EdgeInsets.fromLTRB(8, 10, 8, 4),
@@ -3367,6 +3920,15 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     final when = running
         ? l10n.running
         : _relativeTime(thread.updatedAt, now, l10n);
+    // Server previews are the first user message verbatim, which may be wire
+    // text (an attachment block) or codex's own machinery (a context
+    // fragment). Both resolve through the cleaner; nothing left means there is
+    // no title to show.
+    final cleaned = previewWithoutFileRefs(
+      thread.preview,
+      l10n.fileOnlyMessage,
+    ).trim();
+    final title = cleaned.isEmpty ? l10n.untitledThread : cleaned;
     // Cross-project pane rows show "project · time" so the user always knows
     // where a conversation lives.
     final subtitle = [
@@ -3396,15 +3958,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        // Server previews are the first user message verbatim
-                        // — for a file-only message that is the raw wire
-                        // block; show the placeholder instead.
-                        thread.preview.isEmpty
-                            ? l10n.untitledThread
-                            : previewWithoutFileRefs(
-                                thread.preview,
-                                l10n.fileOnlyMessage,
-                              ),
+                        title,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
@@ -3466,12 +4020,288 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     return l10n.timeDaysAgo(diff.inDays);
   }
 
-  /// Right pane: the diff viewer (desktop). Collapsible via its close button.
-  Widget _diffPane(AppLocalizations l10n) => _DiffView(
-    diff: _diff,
-    branch: _branch,
-    onClose: () => setState(() => _rightOpen = false),
-  );
+  /// The app-bar environment button + its popover: a floating summary card
+  /// (changes, host, branch) and the changed-file list. Picking a file — or
+  /// "review all" — opens the desktop review split.
+  Widget _envButton(AppLocalizations l10n) {
+    final scheme = Theme.of(context).colorScheme;
+    final d = _diff;
+    final files = d?.files ?? const <DiffFile>[];
+    Widget line(IconData icon, String label, {Widget? trailing}) => Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+      child: Row(
+        children: [
+          Icon(icon, size: 15, color: scheme.onSurfaceVariant),
+          const SizedBox(width: 10),
+          Expanded(child: Text(label, style: const TextStyle(fontSize: 13))),
+          ?trailing,
+        ],
+      ),
+    );
+    return MenuAnchor(
+      controller: _envMenu,
+      alignmentOffset: const Offset(0, 6),
+      style: const MenuStyle(alignment: Alignment.bottomRight),
+      menuChildren: [
+        SizedBox(
+          width: 320,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(14, 10, 14, 4),
+                child: Text(
+                  l10n.envTitle,
+                  style: TextStyle(
+                    fontSize: 10.5,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.7,
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+              line(
+                Icons.difference_outlined,
+                l10n.changesTitle,
+                trailing: (d != null && !d.isEmpty)
+                    ? Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            '+${d.added}',
+                            style: TextStyle(
+                              fontSize: 12.5,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.green.shade600,
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            '−${d.removed}',
+                            style: TextStyle(
+                              fontSize: 12.5,
+                              fontWeight: FontWeight.w600,
+                              color: scheme.error,
+                            ),
+                          ),
+                        ],
+                      )
+                    : Text(
+                        l10n.noChanges,
+                        style: TextStyle(fontSize: 12, color: scheme.outline),
+                      ),
+              ),
+              line(Icons.computer, _hostLabel(l10n)),
+              if (_branch != null) line(Icons.account_tree_outlined, _branch!),
+              if (files.isNotEmpty) ...[
+                const Divider(height: 9),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(14, 4, 14, 4),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          l10n.envSource,
+                          style: TextStyle(
+                            fontSize: 10.5,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 0.7,
+                            color: scheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ),
+                      TextButton(
+                        key: const Key('env-review-all'),
+                        onPressed: () {
+                          _envMenu.close();
+                          _openReview();
+                        },
+                        style: TextButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(horizontal: 8),
+                          minimumSize: Size.zero,
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        ),
+                        child: Text(l10n.reviewTitle),
+                      ),
+                    ],
+                  ),
+                ),
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxHeight: 260),
+                  child: SingleChildScrollView(
+                    primary: false,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        for (final f in files)
+                          InkWell(
+                            key: Key('env-file-${f.path}'),
+                            onTap: () {
+                              _envMenu.close();
+                              _openReview(path: f.path);
+                            },
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 14,
+                                vertical: 6,
+                              ),
+                              child: Row(
+                                children: [
+                                  Icon(
+                                    Icons.description_outlined,
+                                    size: 14,
+                                    color: scheme.onSurfaceVariant,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      f.path,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      textAlign: TextAlign.left,
+                                      style: const TextStyle(
+                                        fontFamily: 'monospace',
+                                        fontFamilyFallback: monoCjkFallback,
+                                        fontSize: 12,
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 6),
+                                  Text(
+                                    '+${f.added}',
+                                    style: TextStyle(
+                                      fontSize: 10.5,
+                                      color: Colors.green.shade600,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 3),
+                                  Text(
+                                    '−${f.removed}',
+                                    style: TextStyle(
+                                      fontSize: 10.5,
+                                      color: scheme.error,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+              const SizedBox(height: 6),
+            ],
+          ),
+        ),
+      ],
+      builder: (ctx, ctrl, _) => IconButton(
+        key: const Key('env-panel-btn'),
+        tooltip: l10n.envTitle,
+        icon: Icon(_reviewOpen ? Icons.difference : Icons.difference_outlined),
+        onPressed: () {
+          if (ctrl.isOpen) {
+            ctrl.close();
+          } else {
+            _loadGit();
+            ctrl.open();
+          }
+        },
+      ),
+    );
+  }
+
+  /// The desktop review split: the selected file's diff beside the changed-file
+  /// tree, with a draggable divider between them and a close button.
+  Widget _reviewSplit(AppLocalizations l10n) {
+    final scheme = Theme.of(context).colorScheme;
+    final files = _diff?.files ?? const <DiffFile>[];
+    final selected =
+        files.where((f) => f.path == _reviewFile).firstOrNull ??
+        files.firstOrNull;
+    return Column(
+      children: [
+        // Review header: title + refresh + close.
+        Container(
+          decoration: BoxDecoration(
+            border: Border(
+              bottom: BorderSide(color: scheme.outlineVariant, width: 1),
+            ),
+          ),
+          padding: const EdgeInsets.fromLTRB(14, 6, 6, 6),
+          child: Row(
+            children: [
+              Icon(Icons.rate_review_outlined, size: 16, color: scheme.primary),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  l10n.reviewTitle,
+                  style: Theme.of(context).textTheme.titleSmall,
+                ),
+              ),
+              IconButton(
+                icon: const Icon(Icons.refresh, size: 17),
+                tooltip: l10n.envRefresh,
+                visualDensity: VisualDensity.compact,
+                onPressed: _loadGit,
+              ),
+              IconButton(
+                key: const Key('review-close'),
+                icon: const Icon(Icons.close, size: 18),
+                tooltip: l10n.cancel,
+                visualDensity: VisualDensity.compact,
+                onPressed: () => setState(() => _reviewOpen = false),
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: files.isEmpty
+              ? Center(
+                  child: Text(
+                    l10n.reviewNoFiles,
+                    style: TextStyle(color: scheme.outline),
+                  ),
+                )
+              : Row(
+                  children: [
+                    Expanded(
+                      child: selected == null
+                          ? Center(
+                              child: Text(
+                                l10n.reviewPickFile,
+                                style: TextStyle(color: scheme.outline),
+                              ),
+                            )
+                          : DiffReviewView(
+                              key: ValueKey(selected.path),
+                              file: selected,
+                              branch: _branch,
+                              onLoadFile: _loadReviewFile,
+                            ),
+                    ),
+                    _splitter(
+                      key: const Key('review-tree-splitter'),
+                      onDrag: (dx) => setState(
+                        () => _treeWidth = (_treeWidth - dx).clamp(180, 420),
+                      ),
+                    ),
+                    SizedBox(
+                      width: _treeWidth.clamp(180, 420),
+                      child: ChangedFileTree(
+                        files: files,
+                        selected: selected?.path,
+                        onSelect: (p) => setState(() => _reviewFile = p),
+                      ),
+                    ),
+                  ],
+                ),
+        ),
+      ],
+    );
+  }
 
   /// The "plan ready — implement?" choice bar shown under a finished plan-mode
   /// turn. Keep planning (dismiss) or implement (start a normal turn).
@@ -4091,14 +4921,19 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
 
   Widget _composer(AppLocalizations l10n) {
     final scheme = Theme.of(context).colorScheme;
+    // A 24 px pill is a phone control. On desktop the composer is a field in a
+    // window, so it squares up and sits tighter against the transcript.
+    final doc = MediaQuery.sizeOf(context).width >= _docLayoutWidth;
     return SafeArea(
       top: false,
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
+        padding: doc
+            ? const EdgeInsets.fromLTRB(16, 4, 16, 14)
+            : const EdgeInsets.fromLTRB(12, 6, 12, 12),
         child: Container(
           decoration: BoxDecoration(
             color: scheme.surfaceContainerHigh,
-            borderRadius: BorderRadius.circular(24),
+            borderRadius: BorderRadius.circular(doc ? 12 : 24),
             border: Border.all(color: scheme.outlineVariant),
           ),
           padding: const EdgeInsets.fromLTRB(14, 10, 10, 10),
@@ -4114,6 +4949,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                 _attachmentStrip(l10n),
                 const SizedBox(height: 8),
               ],
+              // Desktop: where this turn will land — project, host, branch —
+              // sits above the field the turn is typed into. A phone has no
+              // room for it and shows the same facts in the status bar.
+              if (doc) ...[_composerContext(l10n), const SizedBox(height: 8)],
               TextField(
                 key: const Key('composer-input'),
                 controller: _input,
@@ -4161,6 +5000,132 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         ),
       ),
     );
+  }
+
+  /// The composer's context line: which project, which host, which branch this
+  /// turn will run against. Read-only facts except the project, which is still
+  /// changeable up until the thread exists.
+  Widget _composerContext(AppLocalizations l10n) {
+    final scheme = Theme.of(context).colorScheme;
+    final muted = TextStyle(fontSize: 11.5, color: scheme.onSurfaceVariant);
+    Widget chip(
+      IconData icon,
+      String label, {
+      VoidCallback? onTap,
+      Key? key,
+      String? tip,
+    }) {
+      final row = Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 13, color: scheme.onSurfaceVariant),
+          const SizedBox(width: 5),
+          // Flexible, not a bare ConstrainedBox: when the review split narrows
+          // the chat, the label must be able to shrink below its natural width
+          // and ellipsize rather than overflow the row.
+          Flexible(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 200),
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: muted,
+              ),
+            ),
+          ),
+        ],
+      );
+      if (onTap == null) {
+        // Static chips still explain themselves on hover — a phone user reads
+        // the same fact in the status bar, so this is the desktop affordance.
+        return Tooltip(
+          message: tip ?? label,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 3),
+            child: row,
+          ),
+        );
+      }
+      return Tooltip(
+        message: tip ?? label,
+        child: InkWell(
+          key: key,
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(6),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 3),
+            child: row,
+          ),
+        ),
+      );
+    }
+
+    // A conversation's working directory is fixed once the thread exists, so
+    // the project is only switchable before the first turn.
+    final project = _threadId == null
+        ? ProjectMenu(
+            projects: _knownProjects(),
+            current: (_cwd?.trim().isEmpty ?? true) ? null : _cwd!.trim(),
+            onPick: (p) => setState(() => _cwd = p),
+            onBrowse: () async {
+              final picked = await showFolderPicker(
+                context,
+                serviceKey: widget.serviceKey,
+                initialPath: _cwd,
+              );
+              if (picked != null && mounted) setState(() => _cwd = picked);
+            },
+            onClear: () => setState(() => _cwd = null),
+            builder: (ctx, ctrl) => chip(
+              Icons.folder_outlined,
+              _projectName(),
+              key: const Key('composer-project-chip'),
+              tip: l10n.switchProjectTip,
+              onTap: () => ctrl.isOpen ? ctrl.close() : ctrl.open(),
+            ),
+          )
+        : chip(
+            Icons.folder_outlined,
+            _projectName(),
+            tip: '${l10n.currentProject}: ${_cwd ?? _projectName()}',
+          );
+
+    return Row(
+      children: [
+        Flexible(child: project),
+        const SizedBox(width: 10),
+        chip(Icons.computer, _hostLabel(l10n)),
+        if (_branch != null) ...[
+          const SizedBox(width: 10),
+          Flexible(
+            child: chip(
+              Icons.account_tree_outlined,
+              _branch!,
+              key: const Key('composer-branch-chip'),
+              tip: l10n.viewDiff,
+              // The branch is the entry point to what has changed on it.
+              onTap: _showDiff,
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  /// Where the turn runs: "Local" when this service is hosted by this machine,
+  /// else the remote device's own label.
+  String _hostLabel(AppLocalizations l10n) {
+    final locals = ref.watch(localServeListProvider).valueOrNull;
+    final isLocal = (locals ?? const <AppServeStatus>[]).any(
+      (h) => h.appServiceKey == widget.serviceKey,
+    );
+    if (isLocal) return l10n.envLocal;
+    return widget.services
+            .where((s) => s.key == widget.serviceKey)
+            .firstOrNull
+            ?.device ??
+        _serviceLabelFromKey(widget.serviceKey);
   }
 
   /// The `+` attachment menu. One button instead of three icons: on a phone the
@@ -4220,25 +5185,274 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   );
 
   /// What this turn will run with — model, and effort/plan when they differ
-  /// from the default — plus the menu holding every remaining setting.
-  Widget _modelChip(AppLocalizations l10n) => _pill(
-    pillKey: const Key('model-chip'),
-    icon: Icons.auto_awesome,
-    // With no explicit pick, show the model the server actually runs (the
-    // thread default) rather than an opaque "default".
-    label: [
-      _model?.displayName ??
-          _modelDisplayLabel(_runtime?.model) ??
-          l10n.modelDefault,
-      if (_effectiveEffort != null) _effectiveEffort!.label(l10n),
-      if (_plan) l10n.planMode,
-    ].join(' · '),
-    // Plan is the one setting here that changes what a turn *does*, and a long
-    // model name can ellipsize its label away — so it also tints the chip.
-    active: _plan,
-    trailing: Icons.expand_more,
-    onTap: () => _showConfigSheet(l10n),
+  /// from the default — plus the settings it fronts.
+  ///
+  /// Desktop opens them as an anchored popover with everything on one surface;
+  /// a phone keeps the sheet flow, because a popover pinned to a chip that sits
+  /// right above the on-screen keyboard has nowhere to go.
+  Widget _modelChip(AppLocalizations l10n) {
+    Widget pill(VoidCallback onTap) => _pill(
+      pillKey: const Key('model-chip'),
+      icon: Icons.auto_awesome,
+      // With no explicit pick, show the model the server actually runs (the
+      // thread default) rather than an opaque "default".
+      label: [
+        _model?.displayName ??
+            _modelDisplayLabel(_runtime?.model) ??
+            l10n.modelDefault,
+        if (_effectiveEffort != null) _effectiveEffort!.label(l10n),
+        if (_plan) l10n.planMode,
+      ].join(' · '),
+      // Plan is the one setting here that changes what a turn *does*, and a
+      // long model name can ellipsize its label away — so it tints the chip.
+      active: _plan,
+      trailing: Icons.expand_more,
+      onTap: onTap,
+    );
+    if (!_isDesktop) return pill(() => _showConfigSheet(l10n));
+    return MenuAnchor(
+      controller: _modelMenu,
+      alignmentOffset: const Offset(0, 6),
+      menuChildren: [_turnSettingsPanel(l10n)],
+      builder: (ctx, ctrl, _) => pill(() {
+        if (ctrl.isOpen) {
+          ctrl.close();
+          return;
+        }
+        // The list is cached after the first read, so this only round-trips
+        // once; the panel renders with whatever it has and fills in.
+        _ensureModels().then((_) {
+          if (mounted) setState(() {});
+        });
+        ctrl.open();
+      }),
+    );
+  }
+
+  /// The desktop turn-settings popover: model, reasoning effort, plan mode —
+  /// all visible at once rather than three levels down a sheet.
+  Widget _turnSettingsPanel(AppLocalizations l10n) {
+    final scheme = Theme.of(context).colorScheme;
+    final selectedId = _model?.id ?? _runtime?.model ?? _sentModel;
+    // Always show the model the thread actually runs — even one the host's list
+    // doesn't advertise (e.g. a newer `gpt-5.6-*` the server picked). Without
+    // this it wasn't selectable and looked absent though it was the live model.
+    final models = <ModelInfo>[..._models];
+    final activeId = _activeModelStatus()?.id ?? selectedId;
+    if (activeId != null && !models.any((m) => m.id == activeId)) {
+      models.insert(
+        0,
+        ModelInfo(
+          id: activeId,
+          displayName: _modelDisplayLabel(activeId) ?? activeId,
+          description: '',
+        ),
+      );
+    }
+    return SizedBox(
+      width: 320,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _menuHeading(l10n.model),
+          if (models.isEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 2, 14, 8),
+              child: Text(
+                l10n.modelDefault,
+                style: TextStyle(fontSize: 12.5, color: scheme.outline),
+              ),
+            )
+          else
+            // Not a lazy ListView: a menu panel measures its intrinsic width,
+            // which a shrink-wrapped viewport refuses to report.
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 190),
+              // `primary: false`: the menu panel already owns the primary
+              // scroll controller, and a second attach breaks its scrollbar.
+              child: SingleChildScrollView(
+                primary: false,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    for (final m in models)
+                      InkWell(
+                        key: Key('model-menu-item-${m.id}'),
+                        onTap: () => _applyModel(m),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 8,
+                          ),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  m.displayName,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(fontSize: 13),
+                                ),
+                              ),
+                              if (m.id == selectedId)
+                                Icon(
+                                  Icons.check,
+                                  size: 16,
+                                  color: scheme.primary,
+                                ),
+                            ],
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          const Divider(height: 9),
+          _effortSlider(l10n),
+          const Divider(height: 9),
+          // Plan mode changes what a turn DOES, so it is a switch on the face
+          // of the panel rather than another row to drill into.
+          InkWell(
+            key: const Key('plan-toggle-row'),
+            onTap: _togglePlan,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(14, 2, 8, 2),
+              child: Row(
+                children: [
+                  Icon(Icons.checklist_rtl, size: 16, color: scheme.primary),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      l10n.planMode,
+                      style: const TextStyle(fontSize: 13),
+                    ),
+                  ),
+                  Switch(value: _plan, onChanged: (_) => _togglePlan()),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Reasoning effort as a stepped selector over the levels the active model
+  /// advertises (ordered least→most thinking). Falls back to a static label for
+  /// a model that offers exactly one level.
+  Widget _effortSlider(AppLocalizations l10n) {
+    final scheme = Theme.of(context).colorScheme;
+    final model = _model ?? (_models.isNotEmpty ? _models.first : null);
+    final supported = model?.supportedReasoningEfforts ?? const <String>[];
+    final efforts = supported.isEmpty
+        ? ReasoningEffort.known
+        : [for (final w in supported) ReasoningEffort(w)];
+    final current = _effectiveEffort;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(14, 2, 14, 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                Icons.psychology_outlined,
+                size: 16,
+                color: scheme.onSurfaceVariant,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  l10n.effort,
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 0.5,
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+              // Fixed-width so the longest label (极高) can't reflow — let alone
+              // widen — the panel as the level changes.
+              SizedBox(
+                width: 52,
+                child: Text(
+                  current?.label(l10n) ?? l10n.runtimeEffortModelDefault,
+                  textAlign: TextAlign.right,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w600,
+                    color: scheme.primary,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          if (efforts.length > 1)
+            Padding(
+              padding: const EdgeInsets.only(top: 10),
+              child: _EffortSteps(
+                key: const Key('effort-steps'),
+                levels: efforts,
+                current: current,
+                onChanged: _applyEffort,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// Small all-caps heading inside a popover panel.
+  Widget _menuHeading(String text) => Padding(
+    padding: const EdgeInsets.fromLTRB(14, 8, 14, 6),
+    child: Text(
+      text.toUpperCase(),
+      style: TextStyle(
+        fontSize: 10.5,
+        fontWeight: FontWeight.w700,
+        letterSpacing: 0.7,
+        color: Theme.of(context).colorScheme.onSurfaceVariant,
+      ),
+    ),
   );
+
+  /// Select [m] for the next turn, mirroring [_pickModel]'s bookkeeping: hold
+  /// the pick against server syncs until it's sent, and drop an effort the new
+  /// model doesn't support so we never ship a level it would reject.
+  void _applyModel(ModelInfo m) {
+    setState(() {
+      _model = m;
+      _modelPickPending = true;
+      final eff = _effectiveEffort;
+      if (eff != null && !m.supportedReasoningEfforts.contains(eff.wire)) {
+        _effort = ReasoningEffort.fromWire(m.defaultReasoningEffort);
+        _effortActive = null;
+      }
+    });
+    _rememberDefaults();
+    _persistThreadConfig();
+  }
+
+  void _applyEffort(ReasoningEffort e) {
+    if (e == _effectiveEffort) return;
+    setState(() => _effort = e);
+    _rememberDefaults();
+    _persistThreadConfig();
+  }
+
+  void _togglePlan() {
+    setState(() {
+      _plan = !_plan;
+      _planToggledByUser = true;
+    });
+    _rememberDefaults();
+    _persistThreadConfig();
+  }
 
   /// The settings the model chip fronts: model, effort, plan, project. A sheet
   /// rather than a popover because every picker it opens is already a sheet,
@@ -4289,12 +5503,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       case 'project':
         await _pickProject();
       case 'plan':
-        setState(() {
-          _plan = !_plan;
-          _planToggledByUser = true;
-        });
-        _rememberDefaults();
-        _persistThreadConfig();
+        _togglePlan();
     }
   }
 
@@ -4425,8 +5634,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     required bool Function(T value) isSelected,
   }) {
     final scheme = Theme.of(context).colorScheme;
-    return showModalBottomSheet<T>(
+    return showAdaptivePanel<T>(
       context: context,
+      // The body ends in a ListView of options; it scrolls itself.
+      scrollable: false,
       builder: (c) => SafeArea(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -4718,9 +5929,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       if (active != null && modelLabel != active.id) active.id,
       if (rt?.modelProvider != null) rt!.modelProvider!,
     ].join(' · ');
-    showModalBottomSheet<void>(
+    showAdaptivePanel<void>(
       context: context,
-      showDragHandle: true,
       builder: (c) {
         final scheme = Theme.of(c).colorScheme;
         Widget row(IconData icon, String label, String value, {String? sub}) =>
@@ -4735,55 +5945,57 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
             );
         return SafeArea(
           // Scrollable so the rows never overflow a short sheet (small phones,
-          // landscape).
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 4),
-                  child: Text(
-                    l10n.runtimeSheetTitle,
-                    style: Theme.of(c).textTheme.titleMedium,
+          // landscape). Selectable so the model id / provider can be copied.
+          child: SelectionArea(
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 0, 20, 4),
+                    child: Text(
+                      l10n.runtimeSheetTitle,
+                      style: Theme.of(c).textTheme.titleMedium,
+                    ),
                   ),
-                ),
-                row(
-                  Icons.auto_awesome,
-                  l10n.modelLabel,
-                  modelLabel,
-                  sub: modelSub,
-                ),
-                row(Icons.psychology_outlined, l10n.effort, effortText),
-                row(_modeIcon(), l10n.permissionLabel, permText),
-                row(Icons.checklist_rtl, l10n.planMode, planText),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
-                  child: Row(
-                    children: [
-                      Icon(
-                        rt != null && rt.confirmedByUpdate
-                            ? Icons.verified_outlined
-                            : Icons.info_outline,
-                        size: 14,
-                        color: rt != null && rt.confirmedByUpdate
-                            ? Colors.green.shade600
-                            : scheme.onSurfaceVariant,
-                      ),
-                      const SizedBox(width: 6),
-                      Expanded(
-                        child: Text(
-                          provenance,
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: scheme.onSurfaceVariant,
+                  row(
+                    Icons.auto_awesome,
+                    l10n.modelLabel,
+                    modelLabel,
+                    sub: modelSub,
+                  ),
+                  row(Icons.psychology_outlined, l10n.effort, effortText),
+                  row(_modeIcon(), l10n.permissionLabel, permText),
+                  row(Icons.checklist_rtl, l10n.planMode, planText),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
+                    child: Row(
+                      children: [
+                        Icon(
+                          rt != null && rt.confirmedByUpdate
+                              ? Icons.verified_outlined
+                              : Icons.info_outline,
+                          size: 14,
+                          color: rt != null && rt.confirmedByUpdate
+                              ? Colors.green.shade600
+                              : scheme.onSurfaceVariant,
+                        ),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            provenance,
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: scheme.onSurfaceVariant,
+                            ),
                           ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         );
@@ -5286,6 +6498,261 @@ String _fmtTokens(int n) {
   return '${(n / 1000000).toStringAsFixed(1)}M';
 }
 
+/// A stepped effort selector: a track with a stop per level and a thumb that
+/// GLIDES between them when the level changes (tap or drag), rather than a
+/// Material slider that snaps. Fixed layout — nothing here reflows the panel as
+/// the level or its label changes.
+///
+/// Deliberately no `LayoutBuilder`: this lives inside a `MenuAnchor` panel,
+/// which measures intrinsic width, and `LayoutBuilder` can't answer that. All
+/// geometry is fractional (`Align` / `FractionallySizedBox`), which is
+/// intrinsic-safe; a `GlobalKey` reads the track width to map a tap to a level.
+class _EffortSteps extends StatefulWidget {
+  const _EffortSteps({
+    super.key,
+    required this.levels,
+    required this.current,
+    required this.onChanged,
+  });
+
+  final List<ReasoningEffort> levels;
+  final ReasoningEffort? current;
+  final ValueChanged<ReasoningEffort> onChanged;
+
+  @override
+  State<_EffortSteps> createState() => _EffortStepsState();
+}
+
+class _EffortStepsState extends State<_EffortSteps> {
+  static const double _thumbW = 14;
+  static const double _height = 24;
+  final GlobalKey _trackKey = GlobalKey();
+
+  void _selectAt(double localDx) {
+    final n = widget.levels.length;
+    if (n <= 1) return;
+    final box = _trackKey.currentContext?.findRenderObject() as RenderBox?;
+    final w = box?.size.width ?? 0;
+    final usable = w - _thumbW;
+    if (usable <= 0) return;
+    // The stops sit `_thumbW/2` in from each edge (so the thumb never
+    // overflows); map the tap into that usable span.
+    final f = ((localDx - _thumbW / 2) / usable).clamp(0.0, 1.0);
+    final ni = (f * (n - 1)).round();
+    if (widget.levels[ni] != widget.current) {
+      widget.onChanged(widget.levels[ni]);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final l10n = AppLocalizations.of(context);
+    final n = widget.levels.length;
+    // An effort the model doesn't list (an unknown server default) parks the
+    // thumb mid-scale rather than lying about the level.
+    final found = widget.levels.indexWhere((e) => e == widget.current);
+    final idx = found < 0 ? (n - 1) ~/ 2 : found;
+    final target = n <= 1 ? 0.0 : idx / (n - 1);
+    final atMax = idx == n - 1;
+
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTapDown: (d) => _selectAt(d.localPosition.dx),
+      onHorizontalDragUpdate: (d) => _selectAt(d.localPosition.dx),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SizedBox(
+            key: _trackKey,
+            height: _height,
+            // One painter, exact geometry: the thumb sits ON each stop at every
+            // level (Align mapped different-sized children to the bounds, which
+            // drifted the thumb off the dots — worst at 极高). Animate `frac`.
+            child: TweenAnimationBuilder<double>(
+              tween: Tween<double>(end: target),
+              duration: const Duration(milliseconds: 240),
+              curve: Curves.easeOutCubic,
+              builder: (context, frac, _) => CustomPaint(
+                size: const Size(double.infinity, _height),
+                painter: _EffortPainter(
+                  frac: frac,
+                  levels: n,
+                  activeIdx: idx,
+                  thumbW: _thumbW,
+                  atMax: atMax,
+                  track: scheme.surfaceContainerHighest,
+                  thumbFill: scheme.surface,
+                  thumbBorder: scheme.outlineVariant,
+                  shadow: scheme.shadow,
+                  dotOff: scheme.outline,
+                  brightness: Theme.of(context).brightness,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 4),
+          // End labels — the reference's Faster ↔ Smarter poles.
+          Row(
+            children: [
+              Text(
+                l10n.effortFaster,
+                style: TextStyle(
+                  fontSize: 10.5,
+                  color: scheme.onSurfaceVariant,
+                ),
+              ),
+              const Spacer(),
+              Text(
+                l10n.effortSmarter,
+                style: TextStyle(
+                  fontSize: 10.5,
+                  color: scheme.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Paints the effort track: a rounded track, a blue→violet→magenta fill up to
+/// the thumb, a stop per level, and a rounded-square thumb centred exactly on
+/// its stop. At the top level the fill turns vivid and gets a scattered "dither"
+/// shimmer — the reference's Ultracode flourish.
+class _EffortPainter extends CustomPainter {
+  _EffortPainter({
+    required this.frac,
+    required this.levels,
+    required this.activeIdx,
+    required this.thumbW,
+    required this.atMax,
+    required this.track,
+    required this.thumbFill,
+    required this.thumbBorder,
+    required this.shadow,
+    required this.dotOff,
+    required this.brightness,
+  });
+
+  final double frac;
+  final int levels;
+  final int activeIdx;
+  final double thumbW;
+  final bool atMax;
+  final Color track;
+  final Color thumbFill;
+  final Color thumbBorder;
+  final Color shadow;
+  final Color dotOff;
+  final Brightness brightness;
+
+  // The cool gradient — blue → violet → magenta. Warmer/brighter in dark mode.
+  static const _fillStops = <Color>[
+    Color(0xFF4C8DF6),
+    Color(0xFF7A6BF3),
+    Color(0xFFB65BEA),
+  ];
+
+  // A fixed scatter of unit-square offsets for the max-level shimmer, generated
+  // once so it doesn't flicker as `frac` animates.
+  static final List<Offset> _dither = () {
+    final r = math.Random(7);
+    return [
+      for (var i = 0; i < 90; i++) Offset(r.nextDouble(), r.nextDouble()),
+    ];
+  }();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final h = size.height;
+    final cy = h / 2;
+    const trackH = 6.0;
+    const thumbH = 20.0;
+    final usable = size.width - thumbW;
+    double xAt(double f) => thumbW / 2 + usable * f;
+    final cx = xAt(frac);
+
+    // Track.
+    final trackRect = RRect.fromLTRBR(
+      0,
+      cy - trackH / 2,
+      size.width,
+      cy + trackH / 2,
+      const Radius.circular(trackH / 2),
+    );
+    canvas.drawRRect(trackRect, Paint()..color = track);
+
+    // Gradient fill up to the thumb.
+    final fillRight = cx.clamp(trackH, size.width);
+    final fillRect = RRect.fromLTRBR(
+      0,
+      cy - trackH / 2,
+      fillRight,
+      cy + trackH / 2,
+      const Radius.circular(trackH / 2),
+    );
+    final shader = const LinearGradient(
+      colors: _fillStops,
+    ).createShader(Rect.fromLTWH(0, cy - trackH / 2, size.width, trackH));
+    canvas.drawRRect(fillRect, Paint()..shader = shader);
+
+    // Max-level shimmer: scattered translucent squares over the fill.
+    if (atMax) {
+      canvas.save();
+      canvas.clipRRect(fillRect);
+      final dot = Paint()..color = Colors.white.withValues(alpha: 0.28);
+      for (final o in _dither) {
+        final x = o.dx * fillRight;
+        final y = cy - trackH / 2 + o.dy * trackH;
+        canvas.drawRect(Rect.fromLTWH(x, y, 1.4, 1.4), dot);
+      }
+      canvas.restore();
+    }
+
+    // A stop per level, on the track centre-line.
+    for (var i = 0; i < levels; i++) {
+      final x = xAt(levels <= 1 ? 0 : i / (levels - 1));
+      final on = i <= activeIdx;
+      canvas.drawCircle(
+        Offset(x, cy),
+        2,
+        Paint()..color = on ? Colors.white.withValues(alpha: 0.9) : dotOff,
+      );
+    }
+
+    // The thumb — a rounded square, centred exactly on the current stop.
+    final thumbRect = RRect.fromRectAndRadius(
+      Rect.fromCenter(center: Offset(cx, cy), width: thumbW, height: thumbH),
+      const Radius.circular(5),
+    );
+    canvas.drawRRect(
+      thumbRect.shift(const Offset(0, 1)),
+      Paint()
+        ..color = shadow.withValues(alpha: 0.22)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2),
+    );
+    canvas.drawRRect(thumbRect, Paint()..color = thumbFill);
+    canvas.drawRRect(
+      thumbRect,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1
+        ..color = thumbBorder,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_EffortPainter old) =>
+      old.frac != frac ||
+      old.activeIdx != activeIdx ||
+      old.levels != levels ||
+      old.atMax != atMax ||
+      old.brightness != brightness;
+}
+
 /// A small circular context-window gauge for the app bar: a ring filled to the
 /// usage fraction with the percent in the middle. Hover shows [tooltip]
 /// (desktop); tap opens the detail sheet via [onTap].
@@ -5383,103 +6850,315 @@ class _GaugePainter extends CustomPainter {
       old.fraction != fraction || old.color != color || old.track != track;
 }
 
-/// Interactive diff viewer: a list of changed files (each expandable) with
-/// colour-coded hunks and a copyable path. Used by the mobile bottom sheet and
-/// the desktop right pane.
-class _DiffView extends StatelessWidget {
-  const _DiffView({required this.diff, this.branch, this.onClose});
+/// The environment side panel: where this conversation is actually running —
+/// the checkout it acts on, the branch, and everything it has changed there,
+/// with each changed file expandable to its colour-coded hunks.
+///
+/// Every row is state the app genuinely knows; deliberately no commit/push or
+/// pull-request controls, because nothing on the host side implements them and
+/// a button that does nothing is worse than no button.
+class _EnvPanel extends StatelessWidget {
+  const _EnvPanel({required this.diff, this.branch, this.cwd});
   final DiffModel? diff;
   final String? branch;
 
-  /// When set, a close button is shown (used by the desktop right pane; the
-  /// mobile bottom sheet relies on its drag handle instead).
-  final VoidCallback? onClose;
+  /// Project root this conversation runs in (the checkout being changed).
+  final String? cwd;
 
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
     final scheme = Theme.of(context).colorScheme;
     final d = diff;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
+    final hasChanges = d != null && !d.isEmpty;
+    // The whole panel is content to read and copy — branch, path, and above
+    // all the diff. Wrapping it in a SelectionArea makes every bit of that
+    // drag-selectable (desktop) / long-press-selectable (touch), the same as
+    // the transcript.
+    return SelectionArea(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    l10n.envTitle,
+                    style: Theme.of(context).textTheme.titleSmall,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 1),
+          Expanded(child: _body(context, scheme, l10n, hasChanges, d)),
+        ],
+      ),
+    );
+  }
+
+  /// The scrolling body. ONE scrollable, and a lazy one: the file rows are
+  /// built by index so an expanded 1,400-line diff isn't laid out on every
+  /// frame of a scroll through the other 54 files.
+  Widget _body(
+    BuildContext context,
+    ColorScheme scheme,
+    AppLocalizations l10n,
+    bool hasChanges,
+    DiffModel? d,
+  ) {
+    final leading = <Widget>[
+      // Where the work lands: branch + working-tree totals, as one card.
+      Padding(
+        padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
+        child: _card(context, scheme, l10n, hasChanges, d),
+      ),
+      if (cwd != null && cwd!.trim().isNotEmpty) ...[
+        _heading(context, l10n.envProject),
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
           child: Row(
             children: [
               Icon(
-                Icons.account_tree_outlined,
-                size: 16,
+                Icons.folder_outlined,
+                size: 14,
                 color: scheme.onSurfaceVariant,
               ),
-              const SizedBox(width: 6),
+              const SizedBox(width: 7),
               Expanded(
-                child: Text(
-                  branch == null
-                      ? l10n.changesTitle
-                      : '${l10n.changesTitle} · $branch',
-                  style: Theme.of(context).textTheme.titleSmall,
-                  overflow: TextOverflow.ellipsis,
+                child: Tooltip(
+                  message: cwd!,
+                  child: Text(
+                    cwd!,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontFamily: 'monospace',
+                      fontFamilyFallback: monoCjkFallback,
+                      fontSize: 11.5,
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
                 ),
               ),
-              if (d != null && !d.isEmpty) ...[
-                Text(
-                  '+${d.added}',
-                  style: TextStyle(color: Colors.green.shade600),
-                ),
-                const SizedBox(width: 6),
-                Text('−${d.removed}', style: TextStyle(color: scheme.error)),
-              ],
-              if (onClose != null)
-                IconButton(
-                  icon: const Icon(Icons.close, size: 18),
-                  tooltip: l10n.cancel,
-                  onPressed: onClose,
-                ),
             ],
           ),
         ),
-        const Divider(height: 1),
-        Expanded(
-          child: (d == null || d.isEmpty)
-              ? Center(
-                  child: Text(
-                    l10n.noChanges,
-                    style: TextStyle(color: scheme.outline),
-                  ),
-                )
-              : ListView.builder(
-                  itemCount: d.files.length,
-                  itemBuilder: (c, i) => _DiffFileTile(file: d.files[i]),
-                ),
-        ),
       ],
+      _heading(context, l10n.envSource),
+      if (!hasChanges)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+          child: Text(
+            l10n.noChanges,
+            style: TextStyle(fontSize: 12.5, color: scheme.outline),
+          ),
+        ),
+    ];
+    final files = hasChanges ? d!.files : const <DiffFile>[];
+    return ListView.builder(
+      padding: const EdgeInsets.only(bottom: 16),
+      itemCount: leading.length + files.length,
+      itemBuilder: (c, i) {
+        if (i < leading.length) return leading[i];
+        final f = files[i - leading.length];
+        return _DiffFileTile(
+          // Lazy building recycles elements, so the expanded/collapsed state
+          // has to live somewhere that survives scrolling off-screen.
+          key: PageStorageKey<String>('env-diff-${f.path}'),
+          file: f,
+          initiallyExpanded: false,
+        );
+      },
     );
   }
+
+  /// The branch card: which checkout state the agent is writing into.
+  Widget _card(
+    BuildContext context,
+    ColorScheme scheme,
+    AppLocalizations l10n,
+    bool hasChanges,
+    DiffModel? d,
+  ) => Container(
+    padding: const EdgeInsets.fromLTRB(12, 10, 12, 11),
+    decoration: BoxDecoration(
+      color: scheme.surfaceContainerHighest.withValues(alpha: 0.5),
+      border: Border.all(color: scheme.outlineVariant, width: 0.5),
+      borderRadius: BorderRadius.circular(12),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(Icons.computer, size: 14, color: scheme.primary),
+            const SizedBox(width: 7),
+            Text(
+              l10n.envLocal,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: scheme.onSurface,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Icon(
+              Icons.account_tree_outlined,
+              size: 14,
+              color: scheme.onSurfaceVariant,
+            ),
+            const SizedBox(width: 7),
+            Expanded(
+              child: Text(
+                branch ?? '—',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontFamily: 'monospace',
+                  fontFamilyFallback: monoCjkFallback,
+                  fontSize: 12.5,
+                  color: scheme.onSurface,
+                ),
+              ),
+            ),
+          ],
+        ),
+        if (hasChanges) ...[
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Text(
+                '+${d!.added}',
+                style: TextStyle(
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.green.shade600,
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                '−${d.removed}',
+                style: TextStyle(
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w600,
+                  color: scheme.error,
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                ),
+              ),
+              const SizedBox(width: 10),
+              Flexible(
+                child: Text(
+                  l10n.envFilesChanged(d.files.length),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ],
+    ),
+  );
+
+  /// A small all-caps section heading, the panel's only structural chrome.
+  Widget _heading(BuildContext context, String text) => Padding(
+    padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+    child: Text(
+      text.toUpperCase(),
+      style: TextStyle(
+        fontSize: 10.5,
+        fontWeight: FontWeight.w700,
+        letterSpacing: 0.7,
+        color: Theme.of(context).colorScheme.onSurfaceVariant,
+      ),
+    ),
+  );
+}
+
+/// Most diff lines rendered for one expanded file. Everything inside a
+/// [SingleChildScrollView] is laid out whether or not it is on screen, so this
+/// is the cap that keeps one enormous file from making the whole panel drag,
+/// and bounds the one-time highlight cost when a file is expanded.
+const int _maxDiffLines = 200;
+
+/// Directory prefix of a diff path, keeping its trailing separator. Empty for
+/// a file at the repo root.
+String _dirOf(String path) {
+  final i = path.lastIndexOf(RegExp(r'[\\/]'));
+  return i < 0 ? '' : path.substring(0, i + 1);
+}
+
+/// File name of a diff path.
+String _baseOf(String path) {
+  final i = path.lastIndexOf(RegExp(r'[\\/]'));
+  return i < 0 ? path : path.substring(i + 1);
 }
 
 class _DiffFileTile extends StatelessWidget {
-  const _DiffFileTile({required this.file});
+  const _DiffFileTile({
+    super.key,
+    required this.file,
+    this.initiallyExpanded = true,
+  });
   final DiffFile file;
+
+  /// Inline review cards open expanded (the diff IS the point); the side
+  /// panel's file list stays collapsed so a wide change stays scannable.
+  final bool initiallyExpanded;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final l10n = AppLocalizations.of(context);
     return ExpansionTile(
-      initiallyExpanded: true,
+      initiallyExpanded: initiallyExpanded,
       tilePadding: const EdgeInsets.symmetric(horizontal: 12),
       title: Row(
         children: [
+          // The file NAME is what identifies a row, so it never ellipsizes —
+          // the leading directories give way instead. A plain one-line path
+          // clips from the tail, which in a side panel eats exactly the part
+          // the user is scanning for.
           Expanded(
-            child: Text(
-              file.path,
-              style: const TextStyle(
-                fontFamily: 'monospace',
-                fontFamilyFallback: monoCjkFallback,
-                fontSize: 12.5,
-              ),
-              overflow: TextOverflow.ellipsis,
+            child: Row(
+              children: [
+                if (_dirOf(file.path).isNotEmpty)
+                  Flexible(
+                    child: Text(
+                      _dirOf(file.path),
+                      style: TextStyle(
+                        fontFamily: 'monospace',
+                        fontFamilyFallback: monoCjkFallback,
+                        fontSize: 12.5,
+                        color: scheme.onSurfaceVariant,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                Text(
+                  _baseOf(file.path),
+                  style: const TextStyle(
+                    fontFamily: 'monospace',
+                    fontFamilyFallback: monoCjkFallback,
+                    fontSize: 12.5,
+                  ),
+                  maxLines: 1,
+                ),
+              ],
             ),
           ),
           const SizedBox(width: 8),
@@ -5500,58 +7179,206 @@ class _DiffFileTile extends StatelessWidget {
           ),
         ],
       ),
+      children: [_DiffHunks(file: file)],
+    );
+  }
+}
+
+/// Extension of a diff path, fed to the highlighter as its language hint. Empty
+/// for a dotfile or an extensionless name (Dockerfile, LICENSE) — the
+/// highlighter then leaves it plain, which is correct.
+String _languageForPath(String path) {
+  final base = _baseOf(path);
+  final dot = base.lastIndexOf('.');
+  if (dot <= 0) return '';
+  return base.substring(dot + 1);
+}
+
+/// New-file line number a `@@ -a,b +c,d @@` hunk header starts at, or null if
+/// it doesn't parse.
+int? _hunkNewStart(String header) {
+  final m = RegExp(r'@@\s*-\d+(?:,\d+)?\s*\+(\d+)').firstMatch(header);
+  return m == null ? null : int.tryParse(m.group(1)!);
+}
+
+/// One file's diff, rendered as a real code view: syntax-highlighted lines with
+/// a line-number + add/remove gutter, on tinted rows.
+///
+/// The height is BOUNDED (its own scroll box) for a reason beyond looks: when
+/// this lived as one tall child of the panel's outer `ListView.builder`, that
+/// list estimated its total scroll extent from the heights of laid-out
+/// children — and a single ~5,000px expanded `Cargo.lock` made the estimate
+/// balloon and swing as items entered and left, so dragging the scrollbar thumb
+/// (mapped through that estimate) flew across the whole file. Capping the box
+/// keeps every outer item a similar size, so the thumb tracks the pointer. A
+/// box that fits its content has no scroll extent of its own and lets the wheel
+/// fall through to the panel; only a genuinely long diff scrolls internally.
+class _DiffHunks extends StatefulWidget {
+  const _DiffHunks({required this.file});
+  final DiffFile file;
+
+  @override
+  State<_DiffHunks> createState() => _DiffHunksState();
+}
+
+class _DiffHunksState extends State<_DiffHunks> {
+  final ScrollController _v = ScrollController();
+
+  @override
+  void dispose() {
+    _v.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final l10n = AppLocalizations.of(context);
+    final brightness = Theme.of(context).brightness;
+    final lang = _languageForPath(widget.file.path);
+    final shown = widget.file.lines.take(_maxDiffLines).toList();
+
+    final rows = <Widget>[];
+    int? newNo;
+    for (final line in shown) {
+      switch (line.kind) {
+        case DiffLineKind.hunk:
+          newNo = _hunkNewStart(line.text);
+          rows.add(_hunkRow(scheme, line.text));
+        case DiffLineKind.added:
+          rows.add(_codeRow(scheme, brightness, lang, line, newNo));
+          if (newNo != null) newNo++;
+        case DiffLineKind.context:
+          rows.add(_codeRow(scheme, brightness, lang, line, newNo));
+          if (newNo != null) newNo++;
+        case DiffLineKind.removed:
+          rows.add(_codeRow(scheme, brightness, lang, line, null));
+      }
+    }
+
+    // ~18px per single-line row. Fit-to-content for a short diff (no inner
+    // scroll, wheel falls through); capped for a long one (scrolls in place).
+    final boxH = (shown.length * 18.0 + 6).clamp(0.0, 460.0);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              for (final line in file.lines) _diffLineRow(context, line),
-            ],
+        SizedBox(
+          height: boxH,
+          child: Scrollbar(
+            controller: _v,
+            thumbVisibility: true,
+            child: SingleChildScrollView(
+              // Distinct PageStorage identity, per file. Without one each inner
+              // scrollable shares the enclosing ExpansionTile's bucket entry
+              // with its expanded flag, and restoring the offset reads that
+              // bool as a double: "type 'bool' is not a subtype of 'double?'".
+              key: PageStorageKey<String>('diff-v-${widget.file.path}'),
+              controller: _v,
+              child: SingleChildScrollView(
+                key: PageStorageKey<String>('diff-h-${widget.file.path}'),
+                scrollDirection: Axis.horizontal,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: rows,
+                ),
+              ),
+            ),
           ),
         ),
+        if (widget.file.lines.length > _maxDiffLines)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
+            child: Text(
+              l10n.diffTruncated(widget.file.lines.length - _maxDiffLines),
+              style: TextStyle(fontSize: 11.5, color: scheme.outline),
+            ),
+          ),
       ],
     );
   }
 
-  Widget _diffLineRow(BuildContext context, DiffLine line) {
-    final scheme = Theme.of(context).colorScheme;
-    final (bg, fg, prefix) = switch (line.kind) {
+  static const _mono = TextStyle(
+    fontFamily: 'monospace',
+    fontFamilyFallback: monoCjkFallback,
+    fontSize: 12,
+    height: 1.35,
+  );
+
+  Widget _codeRow(
+    ColorScheme scheme,
+    Brightness brightness,
+    String lang,
+    DiffLine line,
+    int? lineNo,
+  ) {
+    final (Color bg, String marker, Color markerColor) = switch (line.kind) {
       DiffLineKind.added => (
-        Colors.green.withValues(alpha: 0.14),
-        Colors.green.shade800,
+        Colors.green.withValues(alpha: 0.13),
         '+',
+        Colors.green.shade600,
       ),
       DiffLineKind.removed => (
-        scheme.error.withValues(alpha: 0.12),
-        scheme.error,
+        scheme.error.withValues(alpha: 0.10),
         '−',
+        scheme.error,
       ),
-      DiffLineKind.hunk => (
-        scheme.primary.withValues(alpha: 0.08),
-        scheme.primary,
-        ' ',
-      ),
-      DiffLineKind.context => (
-        Colors.transparent,
-        scheme.onSurfaceVariant,
-        ' ',
-      ),
+      _ => (Colors.transparent, ' ', scheme.onSurfaceVariant),
     };
+    // The code keeps its syntax colours whatever the row tint — the way a real
+    // diff viewer reads. Removed lines dim slightly so the eye lands on adds.
+    final base = _mono.copyWith(
+      color: line.kind == DiffLineKind.removed
+          ? scheme.onSurfaceVariant
+          : scheme.onSurface,
+    );
+    final span = highlightCode(
+      code: line.text,
+      language: lang,
+      base: base,
+      brightness: brightness,
+    );
     return Container(
       color: bg,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 1),
-      child: Text(
-        line.kind == DiffLineKind.hunk ? line.text : '$prefix${line.text}',
-        style: TextStyle(
-          fontFamily: 'monospace',
-          fontFamilyFallback: monoCjkFallback,
-          fontSize: 12,
-          color: fg,
-        ),
+      padding: const EdgeInsets.symmetric(vertical: 1),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 42,
+            child: Text(
+              lineNo?.toString() ?? '',
+              textAlign: TextAlign.right,
+              style: _mono.copyWith(fontSize: 11, color: scheme.outline),
+            ),
+          ),
+          SizedBox(
+            width: 16,
+            child: Text(
+              marker,
+              textAlign: TextAlign.center,
+              style: _mono.copyWith(color: markerColor),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.only(right: 12),
+            child: Text.rich(span),
+          ),
+        ],
       ),
     );
   }
+
+  // No explicit width: this sits inside a horizontal scroll view, which offers
+  // unbounded width — `double.infinity` there is an error, so the row sizes to
+  // its `@@…@@` text.
+  Widget _hunkRow(ColorScheme scheme, String text) => Container(
+    color: scheme.primary.withValues(alpha: 0.07),
+    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 3),
+    child: Text(
+      text,
+      style: _mono.copyWith(fontSize: 11.5, color: scheme.primary),
+    ),
+  );
 }
 
 /// In plan mode the model wraps its proposal in `<proposed_plan>…</proposed_plan>`
@@ -5569,13 +7396,42 @@ class _DiffFileTile extends StatelessWidget {
   );
 }
 
+/// Width at which the transcript switches from mobile chat bubbles to the
+/// desktop document layout (role labels, accent rails, compact tool rows).
+const double _docLayoutWidth = 720;
+
+/// Stand-in fed to `newSessionTitleIn` so the localized sentence can be split
+/// around the project name and the name rendered as a live dropdown. A private
+///-use codepoint, so it can never collide with real text in any translation.
+const String _kProjectSlot = '';
+
+/// The "this reply is a plan" marker.
+Widget _planBadge(BuildContext context, ColorScheme scheme) => Row(
+  mainAxisSize: MainAxisSize.min,
+  children: [
+    Icon(Icons.checklist_rounded, size: 16, color: scheme.primary),
+    const SizedBox(width: 6),
+    Text(
+      AppLocalizations.of(context).toolPlan,
+      style: TextStyle(
+        fontSize: 12,
+        fontWeight: FontWeight.w600,
+        color: scheme.primary,
+      ),
+    ),
+  ],
+);
+
 /// Renders one timeline entry. Messages render Gemini-style (user = soft
 /// right bubble, agent = full-width Markdown); tool/activity items render as a
 /// collapsible [_ActivityCard]. Message copy fades in on hover (desktop);
 /// touch uses the enclosing [SelectionArea]'s long-press.
 class _MessageView extends StatefulWidget {
-  const _MessageView({super.key, required this.item});
+  const _MessageView({super.key, required this.item, this.hostImageLoader});
   final _Item item;
+
+  /// Reads a host-side image so a mentioned file renders as a picture.
+  final HostImageLoader? hostImageLoader;
 
   @override
   State<_MessageView> createState() => _MessageViewState();
@@ -5645,6 +7501,15 @@ class _MessageViewState extends State<_MessageView> {
 
     final scheme = Theme.of(context).colorScheme;
     final isUser = item.isUser;
+    // A Live voice handoff is a different kind of turn: a stretch of spoken
+    // back-and-forth, not one typed message. It gets its own card.
+    final handoff = isUser ? parseRealtimeDelegation(item.text) : null;
+    if (handoff != null) {
+      return Padding(
+        padding: const EdgeInsets.only(top: 8),
+        child: RealtimeHandoffCard(handoff: handoff),
+      );
+    }
     // A plan-mode proposal streams in wrapped in `<proposed_plan>…</proposed_plan>`
     // tags that codex doesn't strip. Remove them at the display layer and badge
     // the message as a plan, so the UI perceives it as a plan instead of leaking
@@ -5653,29 +7518,62 @@ class _MessageViewState extends State<_MessageView> {
     // Document attachments ride the text as a trailing path-reference block
     // (wire format); render them as chips and show only the typed text —
     // display-only, the stored item text (and the copy action) keep the block.
+    // A message from a client with editor context (IDE extension, desktop app,
+    // codex TUI) arrives with that context serialized ahead of the request;
+    // upstream expects every transcript renderer to strip back to the request
+    // and we surface the files it named as attachments. Display-only — the
+    // stored text, and the copy action, keep the message verbatim.
+    final ide = isUser
+        ? splitIdeContext(item.text)
+        : (text: item.text, files: const <IdeMentionedFile>[]);
     final refs = isUser
-        ? splitFileRefs(item.text)
-        : (text: item.text, paths: const <String>[]);
+        ? splitFileRefs(ide.text)
+        : (text: ide.text, paths: const <String>[]);
+    final images = [
+      ...item.images,
+      for (final f in ide.files)
+        if (looksLikeImagePath(f.path)) ResolvedImage.hostFile(f.path),
+    ];
+    final paths = [
+      for (final f in ide.files)
+        if (!looksLikeImagePath(f.path)) f.path,
+      ...refs.paths,
+    ];
+    // Desktop reads as a document, not as a chat: a coding agent's transcript
+    // is something you scan and scroll back through, so turns are blocks with
+    // a role label and an accent rail rather than iOS bubbles. Narrow windows
+    // keep the bubbles, which is the right idiom for a thumb.
+    final doc = MediaQuery.sizeOf(context).width >= _docLayoutWidth;
+    // The reference desktop app keeps the user's turn as a right-aligned
+    // bubble and leaves the reply as plain prose — same shapes as the phone,
+    // just tighter: a smaller radius and less padding, because a 20 px pill is
+    // a touch-target look that reads as oversized under a pointer.
     final Widget content = isUser
         ? Container(
             constraints: const BoxConstraints(maxWidth: 600),
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
+            padding: EdgeInsets.symmetric(
+              horizontal: doc ? 14 : 16,
+              vertical: doc ? 10 : 11,
+            ),
             decoration: BoxDecoration(
               color: scheme.surfaceContainerHigh,
-              borderRadius: BorderRadius.circular(20),
+              borderRadius: BorderRadius.circular(doc ? 12 : 20),
             ),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
                 // Attached images render above the text; tap for fullscreen.
-                if (item.images.isNotEmpty)
-                  MessageImagesView(images: item.images),
-                if (item.images.isNotEmpty &&
-                    (refs.text.isNotEmpty || refs.paths.isNotEmpty))
+                if (images.isNotEmpty)
+                  MessageImagesView(
+                    images: images,
+                    hostImageLoader: widget.hostImageLoader,
+                  ),
+                if (images.isNotEmpty &&
+                    (refs.text.isNotEmpty || paths.isNotEmpty))
                   const SizedBox(height: 8),
-                if (refs.paths.isNotEmpty) FileRefChips(paths: refs.paths),
-                if (refs.paths.isNotEmpty && refs.text.isNotEmpty)
+                if (paths.isNotEmpty) FileRefChips(paths: paths),
+                if (paths.isNotEmpty && refs.text.isNotEmpty)
                   const SizedBox(height: 8),
                 if (refs.text.isNotEmpty)
                   linkifyText(
@@ -5692,25 +7590,7 @@ class _MessageViewState extends State<_MessageView> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               if (proposal.isPlan) ...[
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      Icons.checklist_rounded,
-                      size: 16,
-                      color: scheme.primary,
-                    ),
-                    const SizedBox(width: 6),
-                    Text(
-                      AppLocalizations.of(context).toolPlan,
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                        color: scheme.primary,
-                      ),
-                    ),
-                  ],
-                ),
+                _planBadge(context, scheme),
                 const SizedBox(height: 6),
               ],
               SizedBox(
@@ -5736,6 +7616,8 @@ class _MessageViewState extends State<_MessageView> {
             child: IgnorePointer(
               ignoring: !visible,
               child: Align(
+                // Document layout runs left-aligned for both roles, so the
+                // copy affordance follows the text rather than the bubble.
                 alignment: isUser
                     ? Alignment.centerRight
                     : Alignment.centerLeft,
@@ -5757,7 +7639,7 @@ class _MessageViewState extends State<_MessageView> {
       onEnter: (_) => _hover.value = true,
       onExit: (_) => _hover.value = false,
       child: Padding(
-        padding: const EdgeInsets.only(top: 8),
+        padding: EdgeInsets.only(top: doc ? 14 : 8),
         child: Column(
           crossAxisAlignment: isUser
               ? CrossAxisAlignment.end
@@ -6367,12 +8249,18 @@ class _ActivityCardState extends State<_ActivityCard> {
     final muted = scheme.onSurfaceVariant;
     final title = item.title.trim();
     final detail = item.text.trim();
+    // Reasoning is prose the model wrote in Markdown (its summaries open with
+    // a `**bold**` header); everything else here is literal output — a command
+    // line, a tool payload, a diff — where a `*` means an asterisk and the
+    // monospace column matters. Only the prose gets rendered as Markdown.
+    final prose = item.type == 'reasoning';
     // One-line value: the title (command/query/tool) or a peek of the detail.
-    final value = title.isNotEmpty
+    final rawValue = title.isNotEmpty
         ? title
         : detail
               .split('\n')
               .firstWhere((s) => s.trim().isNotEmpty, orElse: () => '');
+    final value = prose ? markdownPlainPreview(rawValue) : rawValue;
     // Expandable when there's detail or the value is long enough to truncate.
     final expandable = detail.isNotEmpty || value.length > 56;
     final body = [
@@ -6380,15 +8268,21 @@ class _ActivityCardState extends State<_ActivityCard> {
       if (detail.isNotEmpty) detail,
     ].join('\n\n');
 
-    // A soft bordered card matching the guidance/option cards: an accent icon,
-    // the tool label, a one-line value, and a chevron that expands the detail.
+    // Two idioms. A phone gets a soft bordered card — a comfortable tap target
+    // in a list of them. A desktop transcript gets a timeline: the steps of a
+    // turn are rows hanging off one continuous rail, so a dozen tool calls read
+    // as a sequence instead of a dozen boxes.
+    final doc = MediaQuery.sizeOf(context).width >= _docLayoutWidth;
     return Container(
-      margin: const EdgeInsets.symmetric(vertical: 2),
+      margin: EdgeInsets.symmetric(vertical: doc ? 0 : 2),
+      padding: doc ? const EdgeInsets.only(left: 12) : EdgeInsets.zero,
       decoration: BoxDecoration(
-        border: Border.all(color: scheme.outlineVariant, width: 0.5),
-        borderRadius: BorderRadius.circular(12),
+        border: doc
+            ? Border(left: BorderSide(color: scheme.outlineVariant, width: 1.5))
+            : Border.all(color: scheme.outlineVariant, width: 0.5),
+        borderRadius: doc ? null : BorderRadius.circular(12),
       ),
-      clipBehavior: Clip.antiAlias,
+      clipBehavior: doc ? Clip.none : Clip.antiAlias,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -6397,15 +8291,22 @@ class _ActivityCardState extends State<_ActivityCard> {
                 ? () => setState(() => _expanded = !_expanded)
                 : null,
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              padding: EdgeInsets.symmetric(
+                horizontal: doc ? 0 : 12,
+                vertical: doc ? 4 : 10,
+              ),
               child: Row(
                 children: [
-                  Icon(meta.icon, size: 17, color: scheme.primary),
-                  const SizedBox(width: 10),
+                  Icon(
+                    meta.icon,
+                    size: doc ? 15 : 17,
+                    color: doc ? muted : scheme.primary,
+                  ),
+                  SizedBox(width: doc ? 8 : 10),
                   Text(
                     meta.label,
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: scheme.onSurface,
+                      color: doc ? muted : scheme.onSurface,
                       fontWeight: FontWeight.w500,
                     ),
                   ),
@@ -6416,12 +8317,14 @@ class _ActivityCardState extends State<_ActivityCard> {
                         value,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontFamily: 'monospace',
-                          fontFamilyFallback: monoCjkFallback,
-                          fontSize: 12,
-                          color: muted,
-                        ),
+                        style: prose
+                            ? TextStyle(fontSize: 12.5, color: muted)
+                            : TextStyle(
+                                fontFamily: 'monospace',
+                                fontFamilyFallback: monoCjkFallback,
+                                fontSize: 12,
+                                color: muted,
+                              ),
                       ),
                     ),
                   ] else
@@ -6448,25 +8351,34 @@ class _ActivityCardState extends State<_ActivityCard> {
           if (_expanded && body.isNotEmpty)
             Container(
               width: double.infinity,
+              margin: EdgeInsets.only(bottom: doc ? 6 : 0),
               padding: const EdgeInsets.all(11),
               constraints: const BoxConstraints(maxHeight: 320),
               decoration: BoxDecoration(
-                border: Border(
-                  top: BorderSide(color: scheme.outlineVariant, width: 0.5),
-                ),
+                border: doc
+                    ? null
+                    : Border(
+                        top: BorderSide(
+                          color: scheme.outlineVariant,
+                          width: 0.5,
+                        ),
+                      ),
+                borderRadius: doc ? BorderRadius.circular(8) : null,
                 color: scheme.surfaceContainerHighest.withValues(alpha: 0.4),
               ),
               child: SingleChildScrollView(
-                child: linkifyText(
-                  context,
-                  body,
-                  selectable: true,
-                  style: const TextStyle(
-                    fontFamily: 'monospace',
-                    fontFamilyFallback: monoCjkFallback,
-                    fontSize: 12,
-                  ),
-                ),
+                child: prose
+                    ? MarkdownView(data: body, muted: true)
+                    : linkifyText(
+                        context,
+                        body,
+                        selectable: true,
+                        style: const TextStyle(
+                          fontFamily: 'monospace',
+                          fontFamilyFallback: monoCjkFallback,
+                          fontSize: 12,
+                        ),
+                      ),
               ),
             ),
         ],

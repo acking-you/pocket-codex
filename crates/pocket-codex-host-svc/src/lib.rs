@@ -100,6 +100,9 @@ pub async fn serve(
         // file's bytes, upload a local file into a chosen dir — root-confined.
         .route("/fs/files", get(list_files_in))
         .route("/fs/read", get(read_file))
+        // Inline image previews: not root-confined, but authorised by the
+        // thread's own transcript — see `read_thread_image`.
+        .route("/fs/thread-image", get(read_thread_image))
         .route(
             "/fs/write",
             post(write_file).layer(DefaultBodyLimit::max(UPLOAD_BODY_LIMIT)),
@@ -330,6 +333,98 @@ async fn read_file(
     Ok(bytes)
 }
 
+/// Query for `GET /fs/thread-image`.
+#[derive(Deserialize)]
+struct ThreadImageQuery {
+    /// Thread whose transcript authorises the read.
+    thread: String,
+    /// Absolute host path of the image, exactly as the transcript carries it.
+    path: String,
+}
+
+/// Image suffixes this endpoint will serve. Anything else is a document, and a
+/// document is not what a remote controller needs to *look* at.
+const IMAGE_SUFFIXES: [&str; 6] = ["png", "jpg", "jpeg", "gif", "webp", "bmp"];
+
+/// Largest image this endpoint will inline. Matches the controller's own
+/// ceiling, so the tunnel never carries bytes the UI would throw away.
+const MAX_INLINE_IMAGE_BYTES: u64 = 8 * 1024 * 1024;
+
+/// `GET /fs/thread-image?thread=<id>&path=<file>` — an image's bytes, for a
+/// remote controller to render inline.
+///
+/// Deliberately NOT root-confined, because the images worth showing are
+/// exactly the ones that are not project files: a pasted screenshot lands in
+/// the OS temp directory. The authorisation is narrower instead — the path
+/// must already appear in a USER message of the named thread's transcript.
+/// A remote controller therefore sees only what this conversation itself put
+/// in front of the model, and never gains a general file read:
+///
+///  * only `userMessage` items count, so a path the model merely *wrote* in a
+///    reply is not readable — otherwise a prompt-injected reply could name
+///    `~/.ssh/id_rsa` and have the controller fetch it;
+///  * only image suffixes are served;
+///  * `403` for anything unreferenced, `400` for a non-file.
+async fn read_thread_image(Query(q): Query<ThreadImageQuery>) -> Result<Vec<u8>, ApiError> {
+    let suffix = std::path::Path::new(&q.path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase);
+    if !suffix.is_some_and(|s| IMAGE_SUFFIXES.contains(&s.as_str())) {
+        return Err(ApiError(anyhow!("path is not an image")));
+    }
+    let thread = q.thread.clone();
+    let items = tokio::task::spawn_blocking(move || sessions::transcript(&thread))
+        .await
+        .context("transcript task panicked")??;
+    if !items.iter().any(|i| references_path(i, &q.path)) {
+        return Err(ApiError(anyhow!("path is outside the configured project roots")));
+    }
+    let requested = std::path::PathBuf::from(&q.path);
+    if !requested.is_file() {
+        return Err(ApiError(anyhow!("path is not a file")));
+    }
+    // Cap before reading: the controller discards anything it can't draw
+    // anyway, so a mis-named huge file would otherwise be pulled into host
+    // memory and pushed through the tunnel for nothing.
+    let size = tokio::fs::metadata(&requested)
+        .await
+        .with_context(|| format!("stat {}", requested.display()))?
+        .len();
+    if size > MAX_INLINE_IMAGE_BYTES {
+        return Err(ApiError(anyhow!("path is not a file we will inline")));
+    }
+    let bytes = tokio::fs::read(&requested)
+        .await
+        .with_context(|| format!("reading {}", requested.display()))?;
+    Ok(bytes)
+}
+
+/// Whether `item` is a user message that named `path` — as an attachment or in
+/// its text (where a client's IDE-context block lists mentioned files).
+/// Separators are normalised because a client may write either style on
+/// Windows; nothing else is loosened, since the match IS the authorisation.
+fn references_path(item: &sessions::TranscriptItem, path: &str) -> bool {
+    if item.item_type != "userMessage" {
+        return false;
+    }
+    let want = path.replace('\\', "/");
+    item.images.iter().any(|i| i.replace('\\', "/") == want)
+        || mentions_whole_path(&item.text.replace('\\', "/"), &want)
+}
+
+/// Whether `text` names exactly `want` — not merely a path it is a prefix of.
+/// A bare `contains` would authorise reading `/tmp/a.png` because the message
+/// mentioned `/tmp/a.png.bak`, and this match IS the authorisation.
+fn mentions_whole_path(text: &str, want: &str) -> bool {
+    text.match_indices(want).any(|(at, _)| {
+        text[at + want.len()..]
+            .chars()
+            .next()
+            .is_none_or(|c| !(c.is_alphanumeric() || matches!(c, '.' | '-' | '_' | '/')))
+    })
+}
+
 /// Query for `POST /fs/write`.
 #[derive(Deserialize)]
 struct WriteFileQuery {
@@ -530,5 +625,58 @@ mod upload_tests {
         // prompt and rendered as a chip.
         assert_eq!(a.file_name().and_then(|n| n.to_str()), Some("notes.txt"));
         assert_eq!(b.file_name().and_then(|n| n.to_str()), Some("notes.txt"));
+    }
+
+    fn item(item_type: &str, text: &str, images: &[&str]) -> sessions::TranscriptItem {
+        sessions::TranscriptItem {
+            id: "1".into(),
+            item_type: item_type.into(),
+            title: String::new(),
+            text: text.into(),
+            images: images.iter().map(|s| (*s).to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn thread_image_authorises_only_paths_the_user_sent() {
+        // Attached to a user message, or named in its text (a client's
+        // IDE-context block) — both are things the user put in front of the
+        // model, so both are readable.
+        assert!(references_path(&item("userMessage", "", &["/tmp/shot.png"]), "/tmp/shot.png"));
+        assert!(references_path(
+            &item("userMessage", "## shot.png: /tmp/shot.png", &[]),
+            "/tmp/shot.png"
+        ));
+        // Windows clients write either separator for the same file.
+        assert!(references_path(
+            &item("userMessage", "", &[r"C:\Temp\shot.png"]),
+            "C:/Temp/shot.png"
+        ));
+    }
+
+    #[test]
+    fn thread_image_refuses_paths_the_user_did_not_send() {
+        // The critical case: a path the MODEL wrote is not authorisation. A
+        // prompt-injected reply naming a private file must not become a read.
+        assert!(!references_path(
+            &item("agentMessage", "see /home/u/.ssh/id_rsa.png", &[]),
+            "/home/u/.ssh/id_rsa.png"
+        ));
+        assert!(!references_path(
+            &item("reasoning", "", &["/home/u/.ssh/id_rsa.png"]),
+            "/home/u/.ssh/id_rsa.png"
+        ));
+        // An unrelated user message authorises nothing.
+        assert!(!references_path(&item("userMessage", "look at /tmp/a.png", &[]), "/tmp/b.png"));
+        // Nor does one whose path merely STARTS with the requested one — a bare
+        // substring match would hand over /tmp/a.png on the strength of a
+        // message about /tmp/a.png.bak.
+        assert!(!references_path(&item("userMessage", "see /tmp/a.png.bak", &[]), "/tmp/a.png"));
+        // The real mention still matches at end-of-text and before punctuation.
+        assert!(references_path(&item("userMessage", "see /tmp/a.png", &[]), "/tmp/a.png"));
+        assert!(references_path(
+            &item("userMessage", "## a.png: /tmp/a.png\n\nwhy?", &[]),
+            "/tmp/a.png"
+        ));
     }
 }

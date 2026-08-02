@@ -155,6 +155,24 @@ class AppLocalizationsZh extends AppLocalizations {
   String get send => '发送';
 
   @override
+  String get chatRoleYou => '你';
+
+  @override
+  String get chatRoleAgent => 'Codex';
+
+  @override
+  String get voiceLive => '实时语音';
+
+  @override
+  String get voiceSessionEnded => '实时语音 · 已结束';
+
+  @override
+  String get voiceYou => '你';
+
+  @override
+  String get voiceAgent => '助手';
+
+  @override
   String get addAttachment => '添加';
 
   @override
@@ -282,6 +300,29 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get newProject => '新建项目';
+
+  @override
+  String get effortFaster => '更快';
+
+  @override
+  String get effortSmarter => '更聪明';
+
+  @override
+  String get searchProjects => '搜索项目';
+
+  @override
+  String get noMatchingProjects => '没有匹配的项目';
+
+  @override
+  String get workOutsideProject => '不在项目中工作';
+
+  @override
+  String get switchProjectTip => '切换项目';
+
+  @override
+  String newSessionTitleIn(String project) {
+    return '要在 $project 内开发什么?';
+  }
 
   @override
   String get currentProject => '项目';
@@ -422,6 +463,9 @@ class AppLocalizationsZh extends AppLocalizations {
   String get quotaUnavailable => '暂无额度信息。';
 
   @override
+  String get quotaRemaining => '剩余用量';
+
+  @override
   String resetsIn(String span) {
     return '$span 后重置';
   }
@@ -553,6 +597,50 @@ class AppLocalizationsZh extends AppLocalizations {
   String get noChanges => '与主分支相比没有变更。';
 
   @override
+  String get envTitle => '环境';
+
+  @override
+  String get envLocal => '本地';
+
+  @override
+  String get envProject => '项目';
+
+  @override
+  String get envSource => '来源';
+
+  @override
+  String get envRefresh => '刷新';
+
+  @override
+  String diffTruncated(int count) {
+    return '另有 $count 行未显示 —— 复制路径查看完整差异';
+  }
+
+  @override
+  String diffUnmodified(int count) {
+    return '$count 行未更改';
+  }
+
+  @override
+  String diffExpandFailed(int count) {
+    return '$count 行未更改（无法加载）';
+  }
+
+  @override
+  String get reviewTitle => '审阅';
+
+  @override
+  String get reviewNoFiles => '没有变更的文件。';
+
+  @override
+  String get reviewPickFile => '选择一个文件查看其变更。';
+
+  @override
+  String envFilesChanged(int count) {
+    return '$count 个文件有变更';
+  }
+
+  @override
   String get start => '开始';
 
   @override
@@ -682,7 +770,7 @@ class AppLocalizationsZh extends AppLocalizations {
   String get languageEnglish => 'English';
 
   @override
-  String get newSessionTitle => '想让远程 Codex 做点什么?';
+  String get newSessionTitle => '我们该构建什么?';
 
   @override
   String get newSessionSubtitle => '选一个起点,或直接在下方输入你的任务。';

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:pocket_codex/src/widgets/adaptive_sheet.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
@@ -13,10 +14,11 @@ Future<String?> showFolderPicker(
   BuildContext context, {
   required String serviceKey,
   String? initialPath,
-}) => showModalBottomSheet<String>(
+}) => showAdaptivePanel<String>(
   context: context,
-  isScrollControlled: true,
-  useSafeArea: true,
+  // The body brings its own scrollable list.
+  scrollable: false,
+  maxWidth: 640,
   builder: (_) =>
       _FolderTreePicker(serviceKey: serviceKey, initialPath: initialPath),
 );
@@ -177,89 +179,76 @@ class _FolderTreePickerState extends ConsumerState<_FolderTreePicker> {
           ]
         : _entries;
 
-    return DraggableScrollableSheet(
-      expand: false,
-      initialChildSize: 0.7,
-      minChildSize: 0.4,
-      maxChildSize: 0.95,
-      builder: (context, scrollController) => Column(
-        children: [
-          // Grab handle + title.
-          const SizedBox(height: 8),
-          Container(
-            width: 36,
-            height: 4,
-            decoration: BoxDecoration(
-              color: scheme.outlineVariant,
-              borderRadius: BorderRadius.circular(2),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 10, 8, 4),
-            child: Row(
-              children: [
-                if (!atRoots)
-                  IconButton(
-                    key: const Key('folder-up-btn'),
-                    icon: const Icon(Icons.arrow_back),
-                    tooltip: l10n.folderUp,
-                    onPressed: _loading ? null : _up,
-                  ),
-                Expanded(
-                  child: Text(
-                    _current == null ? l10n.pickFolderTitle : _leaf(_current!),
-                    style: Theme.of(context).textTheme.titleMedium,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
+    // A plain bounded column, so this body works in BOTH forms the adaptive
+    // panel opens: a centred dialog on desktop and a bottom sheet on a phone.
+    // `DraggableScrollableSheet` only works inside a sheet route.
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 10, 8, 4),
+          child: Row(
+            children: [
+              if (!atRoots)
+                IconButton(
+                  key: const Key('folder-up-btn'),
+                  icon: const Icon(Icons.arrow_back),
+                  tooltip: l10n.folderUp,
+                  onPressed: _loading ? null : _up,
                 ),
-              ],
-            ),
-          ),
-          // Current absolute path (so the user always knows where they are).
-          if (_current != null)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
-              child: Align(
-                alignment: Alignment.centerLeft,
+              Expanded(
                 child: Text(
-                  _current!,
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: scheme.onSurfaceVariant,
-                  ),
+                  _current == null ? l10n.pickFolderTitle : _leaf(_current!),
+                  style: Theme.of(context).textTheme.titleMedium,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
-            ),
-          const Divider(height: 1),
-          Expanded(child: _body(l10n, scheme, rows, scrollController)),
-          // "Use this folder" — only meaningful once inside a folder.
-          SafeArea(
-            top: false,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-              child: Row(
-                children: [
-                  TextButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                    child: Text(l10n.cancel),
-                  ),
-                  const Spacer(),
-                  FilledButton.icon(
-                    key: const Key('folder-use-btn'),
-                    onPressed: _current == null
-                        ? null
-                        : () => Navigator.of(context).pop(_current),
-                    icon: const Icon(Icons.check, size: 18),
-                    label: Text(l10n.useThisFolder),
-                  ),
-                ],
+            ],
+          ),
+        ),
+        // Current absolute path (so the user always knows where they are).
+        if (_current != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                _current!,
+                style: Theme.of(
+                  context,
+                ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
               ),
             ),
           ),
-        ],
-      ),
+        const Divider(height: 1),
+        Expanded(child: _body(l10n, scheme, rows, null)),
+        // "Use this folder" — only meaningful once inside a folder.
+        SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+            child: Row(
+              children: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: Text(l10n.cancel),
+                ),
+                const Spacer(),
+                FilledButton.icon(
+                  key: const Key('folder-use-btn'),
+                  onPressed: _current == null
+                      ? null
+                      : () => Navigator.of(context).pop(_current),
+                  icon: const Icon(Icons.check, size: 18),
+                  label: Text(l10n.useThisFolder),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -267,7 +256,7 @@ class _FolderTreePickerState extends ConsumerState<_FolderTreePicker> {
     AppLocalizations l10n,
     ColorScheme scheme,
     List<HostDirEntry> rows,
-    ScrollController scrollController,
+    ScrollController? scrollController,
   ) {
     if (_loading) {
       return const Center(child: CircularProgressIndicator());

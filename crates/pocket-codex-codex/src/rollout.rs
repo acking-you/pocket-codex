@@ -302,7 +302,21 @@ pub fn read_transcript(path: &Path) -> Result<Vec<TranscriptItem>> {
                 if text.trim().is_empty() && images.is_empty() {
                     continue;
                 }
-                let is_user = payload.get("role").and_then(Value::as_str) == Some("user");
+                // Fragment parts are already dropped by
+                // `split_message_content`, so a message that was nothing but
+                // machinery arrived here empty and was skipped above.
+                let role = payload.get("role").and_then(Value::as_str);
+                // `developer` and `system` messages are codex's own plumbing
+                // (permission instructions, app context). They are not turns,
+                // and calling them assistant replies — which the user/other
+                // split below would — puts wire text in the model's mouth.
+                if !matches!(role, Some("user") | Some("assistant")) {
+                    continue;
+                }
+                let is_user = role == Some("user");
+                // A voice handoff is kept VERBATIM here: it carries a whole
+                // stretch of spoken turns, and the UI renders it as its own
+                // kind of card. Only the one-line preview unwraps it.
                 out.push(TranscriptItem {
                     id,
                     item_type: if is_user { "userMessage" } else { "agentMessage" }.to_string(),
@@ -436,6 +450,12 @@ fn split_message_content(payload: &Value) -> (String, Vec<String>) {
     let Some(parts) = payload.get("content").and_then(Value::as_array) else {
         return (String::new(), Vec::new());
     };
+    // Contextual fragments are judged PER CONTENT PART, the way upstream's
+    // `is_contextual_user_fragment` does it — one user message routinely
+    // carries several (the plugin list, then AGENTS.md) ahead of nothing at
+    // all. Joining first and testing the result matches none of them and
+    // leaves a title made of wire.
+    let is_user = payload.get("role").and_then(Value::as_str) == Some("user");
     let is_image = |p: Option<&Value>| {
         p.and_then(|p| p.get("type")).and_then(Value::as_str) == Some("input_image")
     };
@@ -456,6 +476,9 @@ fn split_message_content(payload: &Value) -> (String, Vec<String>) {
         if (open && is_image(parts.get(idx + 1)))
             || (close && idx > 0 && is_image(parts.get(idx - 1)))
         {
+            continue;
+        }
+        if is_user && is_context_fragment(t) {
             continue;
         }
         text.push_str(t);
@@ -696,8 +719,88 @@ fn source_label(source: Option<&Value>) -> Option<String> {
     }
 }
 
+/// Marker pairs codex wraps an injected **contextual user fragment** in. Such a
+/// message carries the user role but was written by codex, not by the person —
+/// so it is neither a preview nor a turn to display.
+///
+/// The set mirrors the wire constants in
+/// `codex-rs/protocol/src/protocol.rs` plus the fragments that declare their
+/// own `type_markers()` under `codex-rs/core/src/context/`. Unknown future
+/// fragments simply show through, which is the safe direction to fail: a stray
+/// machine message is visible, never a hidden human one.
+const CONTEXT_FRAGMENT_MARKERS: [(&str, &str); 17] = [
+    // The project's AGENTS.md, which upstream marks by prose rather than a tag
+    // (`UserInstructions::type_markers`, core/src/context/user_instructions.rs).
+    ("# AGENTS.md instructions", "</INSTRUCTIONS>"),
+    ("<user_instructions>", "</user_instructions>"),
+    ("<environment_context>", "</environment_context>"),
+    ("<apps_instructions>", "</apps_instructions>"),
+    ("<skills_instructions>", "</skills_instructions>"),
+    ("<plugins_instructions>", "</plugins_instructions>"),
+    ("<collaboration_mode>", "</collaboration_mode>"),
+    ("<multi_agent_mode>", "</multi_agent_mode>"),
+    ("<realtime_conversation>", "</realtime_conversation>"),
+    ("<context_window>", "</context_window>"),
+    ("<context_window_guidance>", "</context_window_guidance>"),
+    ("<recommended_plugins>", "</recommended_plugins>"),
+    ("<model_switch>", "</model_switch>"),
+    ("<personality_spec>", "</personality_spec>"),
+    ("<subagent_notification>", "</subagent_notification>"),
+    ("<turn_aborted>", "</turn_aborted>"),
+    ("<user_shell_command>", "</user_shell_command>"),
+];
+
+/// Whether `text` is entirely one injected context fragment.
+///
+/// Mirrors upstream `matches_marked_text`
+/// (`codex-rs/context-fragments/src/fragment.rs:116`): the trimmed text must
+/// both open and close with the pair, matched ASCII-case-insensitively. Text
+/// that merely *contains* a marker is left alone — a user quoting
+/// `<turn_aborted>` in a question is still their message.
+pub fn is_context_fragment(text: &str) -> bool {
+    // Compared as BYTES, never as `&str[..n]`: the marker lengths land inside a
+    // Han glyph in any Chinese message long enough to reach the check, and
+    // string slicing panics on a non-char boundary. A byte slice cannot, and
+    // `eq_ignore_ascii_case` over bytes is exactly upstream's rule — which also
+    // has to be case-insensitive in BOTH directions, since one marker
+    // (`# AGENTS.md instructions`) is not lowercase.
+    fn bounded_by(hay: &str, open: &str, close: &str) -> bool {
+        let (h, o, c) = (hay.as_bytes(), open.as_bytes(), close.as_bytes());
+        h.len() >= o.len() + c.len()
+            && h[..o.len()].eq_ignore_ascii_case(o)
+            && h[h.len() - c.len()..].eq_ignore_ascii_case(c)
+    }
+    let trimmed = text.trim();
+    CONTEXT_FRAGMENT_MARKERS
+        .iter()
+        .any(|(open, close)| bounded_by(trimmed, open, close))
+}
+
+/// The spoken turn inside a `<realtime_delegation>` wrapper.
+///
+/// Voice handoff wraps what the user actually said in `<input>…</input>`
+/// alongside a transcript delta (`codex-rs/core/src/realtime_conversation.rs`).
+/// Unlike the fragments above these ARE the person's words, so they are
+/// unwrapped for display rather than hidden.
+pub fn realtime_delegation_input(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+    if !trimmed.starts_with("<realtime_delegation>") || !trimmed.ends_with("</realtime_delegation>")
+    {
+        return None;
+    }
+    let (_, rest) = trimmed.split_once("<input>")?;
+    let (input, _) = rest.split_once("</input>")?;
+    let input = input.trim();
+    (!input.is_empty()).then(|| input.to_string())
+}
+
 /// Best-effort preview: the first user message text found in the head of
 /// a rollout, trimmed to [`PREVIEW_MAX_CHARS`].
+///
+/// Injected context fragments are skipped. A session started from an IDE opens
+/// with one (`<recommended_plugins>`), so taking the first user-role message
+/// verbatim labelled every such session with the same wire tag instead of what
+/// the person asked.
 fn extract_preview(head: &str) -> String {
     for line in head.lines() {
         if !(line.contains("user_message")
@@ -710,6 +813,10 @@ fn extract_preview(head: &str) -> String {
             continue;
         };
         if let Some(text) = user_text(&value) {
+            if is_context_fragment(&text) {
+                continue;
+            }
+            let text = realtime_delegation_input(&text).unwrap_or(text);
             return truncate_chars(text.trim(), PREVIEW_MAX_CHARS);
         }
     }
@@ -1154,5 +1261,150 @@ mod tests {
         // for a first message that carried an attachment.
         let line = r#"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"look: "},{"type":"input_text","text":"<image>"},{"type":"input_image","image_url":"data:image/png;base64,AA"},{"type":"input_text","text":"</image>"}]}}"#;
         assert_eq!(extract_preview(line), "look:");
+    }
+
+    fn user_line(text: &str) -> String {
+        let payload = serde_json::json!({
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "user",
+                "content": [{ "type": "input_text", "text": text }],
+            },
+        });
+        payload.to_string()
+    }
+
+    #[test]
+    fn preview_skips_injected_context_fragments() {
+        // An IDE-started session opens with codex's own plugin list, so the
+        // first user-role message is not the user's. Every such session used
+        // to be labelled "<recommended_plugins>".
+        let head = format!(
+            "{}\n{}",
+            user_line("<recommended_plugins>\n- Google Drive (gd@openai)\n</recommended_plugins>"),
+            user_line("为什么仍然黑屏"),
+        );
+        assert_eq!(extract_preview(&head), "为什么仍然黑屏");
+    }
+
+    #[test]
+    fn context_fragments_are_recognised_only_when_they_are_the_whole_message() {
+        assert!(is_context_fragment("<turn_aborted>stopped</turn_aborted>"));
+        // Leading/trailing whitespace and tag case are upstream-tolerated.
+        assert!(is_context_fragment("\n  <ENVIRONMENT_CONTEXT>cwd=/x</environment_context>  \n"));
+        // A person quoting a marker is still writing their own message.
+        assert!(!is_context_fragment("why does <turn_aborted> show up in my logs?"));
+        assert!(!is_context_fragment("<recommended_plugins>"));
+        assert!(!is_context_fragment("plain question"));
+    }
+
+    #[test]
+    fn preview_skips_a_message_whose_every_part_is_machinery() {
+        // The real shape from a VS Code session: one user message carrying the
+        // plugin list AND the project's AGENTS.md, then the actual request in
+        // the next message. Judging the joined text matched neither marker
+        // pair, so the list showed a title made of wire.
+        let machinery = serde_json::json!({
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    { "type": "input_text",
+                      "text": "<recommended_plugins>\n- Box (box@openai)\n</recommended_plugins>" },
+                    { "type": "input_text",
+                      "text": "# AGENTS.md instructions for D:\\p\n\n<INSTRUCTIONS>\nbe terse\n</INSTRUCTIONS>" },
+                ],
+            },
+        })
+        .to_string();
+        let head = format!("{machinery}\n{}", user_line("帮忙把最新的代码同步过去"));
+        assert_eq!(extract_preview(&head), "帮忙把最新的代码同步过去");
+    }
+
+    #[test]
+    fn transcript_ignores_developer_and_system_plumbing() {
+        // A developer-role message is codex's own instruction payload. Mapping
+        // "not user" to assistant put it in the model's mouth.
+        let developer = serde_json::json!({
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "developer",
+                "content": [{ "type": "input_text", "text": "<permissions instructions>x</permissions instructions>" }],
+            },
+        })
+        .to_string();
+        let head = format!("{developer}\n{}", user_line("hello"));
+        let path = std::env::temp_dir().join(format!(
+            "pcx-transcript-{}-{}.jsonl",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::write(&path, head).expect("write transcript fixture");
+        let items = read_transcript(&path).expect("read transcript");
+        std::fs::remove_file(&path).ok();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].item_type, "userMessage");
+        assert_eq!(items[0].text, "hello");
+    }
+
+    #[test]
+    fn context_fragment_check_survives_multibyte_text() {
+        // Regression: the marker lengths land inside a Han glyph, so slicing by
+        // byte offset panicked on any Chinese message long enough to reach the
+        // comparison — which is most of them, and the session scan runs this on
+        // every rollout.
+        let long_chinese = "为什么仍然黑屏为什么仍然黑屏为什么仍然黑屏";
+        assert!(long_chinese.len() > 39, "fixture must clear the length guard");
+        assert!(!is_context_fragment(long_chinese));
+        assert!(!is_context_fragment("🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂"));
+        assert_eq!(extract_preview(&user_line(long_chinese)), long_chinese);
+    }
+
+    #[test]
+    fn voice_handoff_shows_what_the_user_said() {
+        // The person really said this — it must be unwrapped, never hidden the
+        // way a machine-written fragment is.
+        let wrapped = "<realtime_delegation>\n  <input>run ls</input>\n  <transcript_delta>user: \
+                       run ls</transcript_delta>\n</realtime_delegation>";
+        assert!(!is_context_fragment(wrapped));
+        assert_eq!(realtime_delegation_input(wrapped).as_deref(), Some("run ls"));
+        // The list needs one line, so the preview unwraps…
+        assert_eq!(extract_preview(&user_line(wrapped)), "run ls");
+        assert_eq!(realtime_delegation_input("plain text"), None);
+
+        // …but the transcript keeps it whole, because the spoken turns inside
+        // are the conversation and the UI renders them as their own card.
+        let path = std::env::temp_dir().join(format!(
+            "pcx-transcript-{}-{}.jsonl",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::write(&path, user_line(wrapped)).expect("write transcript fixture");
+        let items = read_transcript(&path).expect("read transcript");
+        std::fs::remove_file(&path).ok();
+        assert_eq!(items.len(), 1);
+        assert!(items[0].text.contains("<transcript_delta>"));
+    }
+
+    #[test]
+    fn transcript_drops_injected_context_fragments() {
+        let head = format!(
+            "{}\n{}",
+            user_line("<user_instructions>be terse</user_instructions>"),
+            user_line("hello"),
+        );
+        let path = std::env::temp_dir().join(format!(
+            "pcx-transcript-{}-{}.jsonl",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::write(&path, head).expect("write transcript fixture");
+        let items = read_transcript(&path).expect("read transcript");
+        std::fs::remove_file(&path).ok();
+        assert_eq!(items.len(), 1, "the instructions fragment is not a turn");
+        assert_eq!(items[0].text, "hello");
     }
 }

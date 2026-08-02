@@ -859,6 +859,23 @@ class FakeBridgeApi implements BridgeApi {
   Future<Uint8List> metaReadFile(String serviceKey, String path) async =>
       fileBytes[path] ?? Uint8List(0);
 
+  /// Paths the fake host will serve to [metaReadThreadImage] — i.e. the ones
+  /// its transcript references. Anything else throws, like a real host's 403.
+  final Map<String, Uint8List> threadImageBytes = {};
+
+  @override
+  Future<Uint8List> metaReadThreadImage(
+    String serviceKey,
+    String threadId,
+    String path,
+  ) async {
+    final bytes = threadImageBytes[path];
+    if (bytes == null) {
+      throw StateError('403 path is outside the configured project roots');
+    }
+    return bytes;
+  }
+
   @override
   Future<String> metaWriteFile(
     String serviceKey,

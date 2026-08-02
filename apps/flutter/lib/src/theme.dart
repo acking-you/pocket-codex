@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:pocket_codex/src/desktop_theme.dart';
 import 'package:pocket_codex/src/fonts.dart';
 
 /// Brand seed colour for both schemes.
@@ -23,34 +24,27 @@ AppBarTheme _appBarTheme(ColorScheme scheme) => AppBarTheme(
   scrolledUnderElevation: 0,
 );
 
-/// Light Material 3 theme.
-ThemeData lightTheme() {
-  final scheme = ColorScheme.fromSeed(
-    seedColor: _seed,
-    brightness: Brightness.light,
-  );
-  return ThemeData(
-    colorScheme: scheme,
-    useMaterial3: true,
-    fontFamily: appFontFamily,
-    fontFamilyFallback: cjkFontFallback,
-    scrollbarTheme: _scrollbarTheme,
-    appBarTheme: _appBarTheme(scheme),
-  );
-}
+/// Base Material 3 theme for [scheme] — the mobile look, and the substrate the
+/// desktop layer re-tunes.
+ThemeData _base(ColorScheme scheme) => ThemeData(
+  colorScheme: scheme,
+  useMaterial3: true,
+  fontFamily: appFontFamily,
+  fontFamilyFallback: cjkFontFallback,
+  scrollbarTheme: _scrollbarTheme,
+  appBarTheme: _appBarTheme(scheme),
+);
 
-/// Dark Material 3 theme.
-ThemeData darkTheme() {
-  final scheme = ColorScheme.fromSeed(
-    seedColor: _seed,
-    brightness: Brightness.dark,
-  );
-  return ThemeData(
-    colorScheme: scheme,
-    useMaterial3: true,
-    fontFamily: appFontFamily,
-    fontFamilyFallback: cjkFontFallback,
-    scrollbarTheme: _scrollbarTheme,
-    appBarTheme: _appBarTheme(scheme),
-  );
-}
+/// Wrap [base] in the desktop design layer on desktop; leave mobile on stock
+/// Material. See `desktop_theme.dart`.
+ThemeData _forPlatform(ThemeData base) => isDesktop ? desktopize(base) : base;
+
+/// Light theme (desktop-tuned on desktop).
+ThemeData lightTheme() => _forPlatform(
+  _base(ColorScheme.fromSeed(seedColor: _seed, brightness: Brightness.light)),
+);
+
+/// Dark theme (desktop-tuned on desktop).
+ThemeData darkTheme() => _forPlatform(
+  _base(ColorScheme.fromSeed(seedColor: _seed, brightness: Brightness.dark)),
+);

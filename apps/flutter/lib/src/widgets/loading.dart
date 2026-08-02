@@ -1,13 +1,19 @@
 import 'package:flutter/material.dart';
 
-/// A shimmering sweep used for skeleton loaders, so screens fade in with a
-/// smooth "loading" feel instead of a bare spinner. Wrap skeleton shapes
-/// ([SkeletonBox]) in this to animate them.
+/// Drives the sweep for the skeleton shapes ([SkeletonBox]) beneath it, so a
+/// screen waiting on data reads as "content is coming" rather than as a frozen
+/// grey block.
+///
+/// The sweep is painted BY each box, as a gradient fill, rather than masked
+/// over the subtree. A `ShaderMask` looks like the obvious tool and isn't:
+/// `BlendMode.srcATop` keeps the *destination's* alpha, so the shimmer's own
+/// alphas never reach the screen — the highlight can only tint a shape whose
+/// opacity is already fixed, which is why the previous sweep was imperceptible.
 class Shimmer extends StatefulWidget {
-  /// Wraps [child] with an animated highlight sweep.
+  /// Wraps [child]; every [SkeletonBox] inside it shares this sweep.
   const Shimmer({super.key, required this.child});
 
-  /// The skeleton content to shimmer over.
+  /// The skeleton content to animate.
   final Widget child;
 
   @override
@@ -17,8 +23,21 @@ class Shimmer extends StatefulWidget {
 class _ShimmerState extends State<Shimmer> with SingleTickerProviderStateMixin {
   late final AnimationController _c = AnimationController(
     vsync: this,
-    duration: const Duration(milliseconds: 1400),
-  )..repeat();
+    duration: const Duration(milliseconds: 1250),
+  );
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Reduced-motion users keep the skeleton and lose the movement: the shape
+    // is what says "loading", the sweep is only polish.
+    if (MediaQuery.disableAnimationsOf(context)) {
+      _c.stop();
+      _c.value = 0.5;
+    } else if (!_c.isAnimating) {
+      _c.repeat();
+    }
+  }
 
   @override
   void dispose() {
@@ -27,39 +46,30 @@ class _ShimmerState extends State<Shimmer> with SingleTickerProviderStateMixin {
   }
 
   @override
-  Widget build(BuildContext context) {
-    final onSurface = Theme.of(context).colorScheme.onSurface;
-    final base = onSurface.withValues(alpha: 0.06);
-    final highlight = onSurface.withValues(alpha: 0.16);
-    return AnimatedBuilder(
-      animation: _c,
-      builder: (context, child) => ShaderMask(
-        blendMode: BlendMode.srcATop,
-        shaderCallback: (bounds) => LinearGradient(
-          begin: Alignment.centerLeft,
-          end: Alignment.centerRight,
-          colors: [base, highlight, base],
-          stops: const [0.30, 0.5, 0.70],
-          transform: _SlideGradient(_c.value),
-        ).createShader(bounds),
-        child: child,
-      ),
-      child: widget.child,
-    );
-  }
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: _c,
+    builder: (context, child) => _ShimmerPhase(phase: _c.value, child: child!),
+    child: widget.child,
+  );
 }
 
-/// Slides a gradient horizontally from off-screen left to off-screen right as
-/// [t] goes 0→1.
-class _SlideGradient extends GradientTransform {
-  const _SlideGradient(this.t);
-  final double t;
+/// Carries the current sweep position down to the skeleton shapes.
+class _ShimmerPhase extends InheritedWidget {
+  const _ShimmerPhase({required this.phase, required super.child});
+
+  /// 0→1 across one sweep.
+  final double phase;
+
+  static double? maybeOf(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<_ShimmerPhase>()?.phase;
+
   @override
-  Matrix4? transform(Rect bounds, {TextDirection? textDirection}) =>
-      Matrix4.translationValues((t * 2 - 1) * bounds.width, 0, 0);
+  bool updateShouldNotify(_ShimmerPhase old) => old.phase != phase;
 }
 
-/// A solid rounded placeholder shape; group several inside a [Shimmer].
+/// A rounded placeholder shape. Inside a [Shimmer] it carries the animated
+/// sweep; on its own it falls back to a flat tint, so a stray use is dull
+/// rather than broken.
 class SkeletonBox extends StatelessWidget {
   /// Creates a placeholder box.
   const SkeletonBox({super.key, this.width, this.height = 14, this.radius = 7});
@@ -74,14 +84,42 @@ class SkeletonBox extends StatelessWidget {
   final double radius;
 
   @override
-  Widget build(BuildContext context) => Container(
-    width: width,
-    height: height,
-    decoration: BoxDecoration(
-      color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.12),
-      borderRadius: BorderRadius.circular(radius),
-    ),
-  );
+  Widget build(BuildContext context) {
+    final onSurface = Theme.of(context).colorScheme.onSurface;
+    final base = onSurface.withValues(alpha: 0.10);
+    final highlight = onSurface.withValues(alpha: 0.28);
+    final phase = _ShimmerPhase.maybeOf(context);
+    return Container(
+      width: width,
+      height: height,
+      decoration: BoxDecoration(
+        color: phase == null ? base : null,
+        // A band wide enough to register as light travelling across the shape;
+        // the sweep runs from off one edge to off the other, so each box is
+        // plain at the extremes and brightest as the band crosses it.
+        gradient: phase == null
+            ? null
+            : LinearGradient(
+                begin: Alignment.centerLeft,
+                end: Alignment.centerRight,
+                colors: [base, highlight, base],
+                stops: const [0.15, 0.5, 0.85],
+                transform: _SlideGradient(Curves.easeInOut.transform(phase)),
+              ),
+        borderRadius: BorderRadius.circular(radius),
+      ),
+    );
+  }
+}
+
+/// Slides a gradient horizontally from off-shape left to off-shape right as
+/// [t] goes 0→1.
+class _SlideGradient extends GradientTransform {
+  const _SlideGradient(this.t);
+  final double t;
+  @override
+  Matrix4? transform(Rect bounds, {TextDirection? textDirection}) =>
+      Matrix4.translationValues((t * 2 - 1) * bounds.width, 0, 0);
 }
 
 /// A shimmer skeleton mimicking a conversation while a thread loads.

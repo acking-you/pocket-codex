@@ -158,6 +158,24 @@ class AppLocalizationsEn extends AppLocalizations {
   String get send => 'Send';
 
   @override
+  String get chatRoleYou => 'You';
+
+  @override
+  String get chatRoleAgent => 'Codex';
+
+  @override
+  String get voiceLive => 'Live voice';
+
+  @override
+  String get voiceSessionEnded => 'Live voice · ended';
+
+  @override
+  String get voiceYou => 'You';
+
+  @override
+  String get voiceAgent => 'Agent';
+
+  @override
   String get addAttachment => 'Add';
 
   @override
@@ -287,6 +305,29 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get newProject => 'New project';
+
+  @override
+  String get effortFaster => 'Faster';
+
+  @override
+  String get effortSmarter => 'Smarter';
+
+  @override
+  String get searchProjects => 'Search projects';
+
+  @override
+  String get noMatchingProjects => 'No matching projects';
+
+  @override
+  String get workOutsideProject => 'Work outside a project';
+
+  @override
+  String get switchProjectTip => 'Switch project';
+
+  @override
+  String newSessionTitleIn(String project) {
+    return 'What should we build in $project?';
+  }
 
   @override
   String get currentProject => 'Project';
@@ -429,6 +470,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get quotaUnavailable => 'Quota information is unavailable.';
 
   @override
+  String get quotaRemaining => 'Usage left';
+
+  @override
   String resetsIn(String span) {
     return 'resets in $span';
   }
@@ -565,6 +609,50 @@ class AppLocalizationsEn extends AppLocalizations {
   String get noChanges => 'No changes vs the main branch.';
 
   @override
+  String get envTitle => 'Environment';
+
+  @override
+  String get envLocal => 'Local';
+
+  @override
+  String get envProject => 'Project';
+
+  @override
+  String get envSource => 'Source';
+
+  @override
+  String get envRefresh => 'Refresh';
+
+  @override
+  String diffTruncated(int count) {
+    return '$count more lines not shown — copy the path to view the full diff';
+  }
+
+  @override
+  String diffUnmodified(int count) {
+    return '$count unmodified lines';
+  }
+
+  @override
+  String diffExpandFailed(int count) {
+    return '$count unmodified lines (couldn\'t load)';
+  }
+
+  @override
+  String get reviewTitle => 'Review';
+
+  @override
+  String get reviewNoFiles => 'No changed files.';
+
+  @override
+  String get reviewPickFile => 'Pick a file to review its changes.';
+
+  @override
+  String envFilesChanged(int count) {
+    return '$count files changed';
+  }
+
+  @override
   String get start => 'Start';
 
   @override
@@ -695,7 +783,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get languageEnglish => 'English';
 
   @override
-  String get newSessionTitle => 'What should the remote Codex work on?';
+  String get newSessionTitle => 'What should we build?';
 
   @override
   String get newSessionSubtitle =>

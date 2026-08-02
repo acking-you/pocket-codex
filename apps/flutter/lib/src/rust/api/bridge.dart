@@ -580,6 +580,22 @@ Future<Uint8List> metaReadFile({
   path: path,
 );
 
+/// Read an image that `thread_id`'s transcript already references, so the UI
+/// can render it inline instead of naming it. NOT root-confined: the host
+/// authorises the read against that thread's own user messages, which is what
+/// makes a pasted screenshot in the OS temp directory visible to a remote
+/// controller without granting it a general file read. Errors (with a
+/// `403`-carrying message) for a path the transcript never mentioned.
+Future<Uint8List> metaReadThreadImage({
+  required String serviceKey,
+  required String threadId,
+  required String path,
+}) => RustLib.instance.api.crateApiBridgeMetaReadThreadImage(
+  serviceKey: serviceKey,
+  threadId: threadId,
+  path: path,
+);
+
 /// Upload local `bytes` as `file_name` into host directory `dir`
 /// (root-confined) on the host behind `service_key`; returns the absolute HOST
 /// path where it landed. Never overwrites an existing same-named file (a

@@ -53,6 +53,12 @@
   "untitledThread": "(untitled)",
   "messageHint": "Message…",
   "send": "Send",
+  "chatRoleYou": "You",
+  "chatRoleAgent": "Codex",
+  "voiceLive": "Live voice",
+  "voiceSessionEnded": "Live voice · ended",
+  "voiceYou": "You",
+  "voiceAgent": "Agent",
   "addAttachment": "Add",
   "turnSettings": "Turn settings",
   "prevTurn": "Previous turn",
@@ -113,6 +119,16 @@
   "reconnect": "Reconnect",
   "projectsSection": "Projects",
   "newProject": "New project",
+  "effortFaster": "Faster",
+  "effortSmarter": "Smarter",
+  "searchProjects": "Search projects",
+  "noMatchingProjects": "No matching projects",
+  "workOutsideProject": "Work outside a project",
+  "switchProjectTip": "Switch project",
+  "newSessionTitleIn": "What should we build in {project}?",
+  "@newSessionTitleIn": {
+    "placeholders": { "project": { "type": "String" } }
+  },
   "currentProject": "Project",
   "remotePathLabel": "Remote folder path (on the host)",
   "remotePathHint": "e.g. /home/ubuntu/myproject — blank uses the host default",
@@ -159,6 +175,7 @@
   "quota5h": "5-hour limit",
   "quotaWeekly": "Weekly limit",
   "quotaUnavailable": "Quota information is unavailable.",
+  "quotaRemaining": "Usage left",
   "resetsIn": "resets in {span}",
   "@resetsIn": {
     "placeholders": { "span": { "type": "String" } }
@@ -219,6 +236,30 @@
   "viewDiff": "View changes",
   "changesTitle": "Changes",
   "noChanges": "No changes vs the main branch.",
+  "envTitle": "Environment",
+  "envLocal": "Local",
+  "envProject": "Project",
+  "envSource": "Source",
+  "envRefresh": "Refresh",
+  "diffTruncated": "{count} more lines not shown — copy the path to view the full diff",
+  "@diffTruncated": {
+    "placeholders": { "count": { "type": "int" } }
+  },
+  "diffUnmodified": "{count} unmodified lines",
+  "@diffUnmodified": {
+    "placeholders": { "count": { "type": "int" } }
+  },
+  "diffExpandFailed": "{count} unmodified lines (couldn't load)",
+  "@diffExpandFailed": {
+    "placeholders": { "count": { "type": "int" } }
+  },
+  "reviewTitle": "Review",
+  "reviewNoFiles": "No changed files.",
+  "reviewPickFile": "Pick a file to review its changes.",
+  "envFilesChanged": "{count} files changed",
+  "@envFilesChanged": {
+    "placeholders": { "count": { "type": "int" } }
+  },
   "start": "Start",
   "create": "Create",
   "copy": "Copy",
@@ -262,7 +303,7 @@
   "languageSystem": "Follow system",
   "languageChinese": "简体中文",
   "languageEnglish": "English",
-  "newSessionTitle": "What should the remote Codex work on?",
+  "newSessionTitle": "What should we build?",
   "newSessionSubtitle": "Pick a starting point, or just type your task below.",
   "suggestExploreTitle": "Explore the project",
   "suggestExplorePrompt": "Give me an overview of this project — its structure, main modules, and tech stack.",

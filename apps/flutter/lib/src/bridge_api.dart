@@ -1290,6 +1290,18 @@ abstract interface class BridgeApi {
   /// configured roots.
   Future<Uint8List> metaReadFile(String serviceKey, String path);
 
+  /// Read an image that [threadId]'s transcript already references, so it can
+  /// render inline. Unlike [metaReadFile] this is not root-confined — the host
+  /// authorises it against that thread's own user messages, which is what
+  /// makes a pasted screenshot in the OS temp directory visible to a remote
+  /// controller without granting it a general file read. Throws for a path the
+  /// transcript never mentioned, and on a host too old to serve the route.
+  Future<Uint8List> metaReadThreadImage(
+    String serviceKey,
+    String threadId,
+    String path,
+  );
+
   /// Upload local [bytes] as [fileName] into host directory [dir]
   /// (root-confined) on the host behind [serviceKey]; returns the absolute HOST
   /// path where it landed. Throws if [dir] is outside the roots, or on a name

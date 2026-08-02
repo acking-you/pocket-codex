@@ -1,8 +1,11 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:markdown/markdown.dart' as md;
 
+import 'package:pocket_codex/l10n/gen/app_localizations.dart';
+import 'package:pocket_codex/src/code_highlight.dart';
 import 'package:pocket_codex/src/fonts.dart';
 import 'package:pocket_codex/src/markdown_cjk.dart';
 import 'package:pocket_codex/src/widgets/links.dart';
@@ -16,10 +19,14 @@ import 'package:pocket_codex/src/widgets/links.dart';
 /// of that unified selection instead of joining it.
 class MarkdownView extends StatefulWidget {
   /// Renders [data] as Markdown.
-  const MarkdownView({super.key, required this.data});
+  const MarkdownView({super.key, required this.data, this.muted = false});
 
   /// Raw Markdown source, as written by the model.
   final String data;
+
+  /// Secondary text colour, for prose that sits behind the main reply —
+  /// reasoning summaries, an activity card's detail.
+  final bool muted;
 
   @override
   State<MarkdownView> createState() => _MarkdownViewState();
@@ -42,8 +49,11 @@ class _MarkdownViewState extends State<MarkdownView> {
     data: autolinkifyMarkdown(widget.data),
     selectable: false,
     extensionSet: markdownExtensionSet,
-    styleSheet: markdownStyle(context),
-    builders: <String, MarkdownElementBuilder>{'a': _links},
+    styleSheet: markdownStyle(context, muted: widget.muted),
+    builders: <String, MarkdownElementBuilder>{
+      'a': _links,
+      'pre': _CodeBlockBuilder(),
+    },
     // Unreachable while the 'a' builder above owns links, but MarkdownBody
     // also routes image taps here — keep the handler wired.
     onTapLink: (text, href, title) =>
@@ -51,31 +61,38 @@ class _MarkdownViewState extends State<MarkdownView> {
   );
 }
 
-// Last stylesheet handed out, keyed by the theme it came from. Building one
-// costs ~40 TextStyles, and every message in the transcript asks for it on
+// Stylesheets handed out so far, keyed by the theme they came from. Building
+// one costs ~40 TextStyles, and every message in the transcript asks for it on
 // every frame of a streaming turn; the theme only changes on a light/dark or
-// platform switch, so a one-entry memo removes essentially all of that work.
+// platform switch, so memoising removes essentially all of that work.
 ThemeData? _styleTheme;
-MarkdownStyleSheet? _styleCache;
+final Map<bool, MarkdownStyleSheet> _styleCache = {};
 
 /// Theme-derived Markdown styling: comfortable line height, tinted code
 /// blocks, and tables that read as rows of data rather than a spreadsheet
 /// grid — no vertical rules, a divider between rows, left-aligned headers.
-MarkdownStyleSheet markdownStyle(BuildContext context) {
-  final cached = _styleCache;
-  if (cached != null && identical(_styleTheme, Theme.of(context))) {
-    return cached;
+/// [muted] tints body text for prose that sits behind the main reply.
+MarkdownStyleSheet markdownStyle(BuildContext context, {bool muted = false}) {
+  final theme = Theme.of(context);
+  if (!identical(_styleTheme, theme)) {
+    _styleTheme = theme;
+    _styleCache.clear();
   }
-  final built = _buildMarkdownStyle(context);
-  _styleTheme = Theme.of(context);
-  _styleCache = built;
-  return built;
+  return _styleCache.putIfAbsent(
+    muted,
+    () => _buildMarkdownStyle(context, muted),
+  );
 }
 
-MarkdownStyleSheet _buildMarkdownStyle(BuildContext context) {
+MarkdownStyleSheet _buildMarkdownStyle(BuildContext context, bool muted) {
   final theme = Theme.of(context);
   final scheme = theme.colorScheme;
-  final body = theme.textTheme.bodyLarge?.copyWith(height: 1.65);
+  final body = muted
+      ? theme.textTheme.bodyMedium?.copyWith(
+          height: 1.6,
+          color: scheme.onSurfaceVariant,
+        )
+      : theme.textTheme.bodyLarge?.copyWith(height: 1.65);
   // CJK text needs less weight than Latin to read as emphasised: at w700 a
   // bold Han glyph turns into a dark blob at body size.
   final strongWeight = isDesktop ? FontWeight.w600 : FontWeight.w700;
@@ -127,6 +144,136 @@ MarkdownStyleSheet _buildMarkdownStyle(BuildContext context) {
       border: Border(left: BorderSide(color: scheme.primary, width: 3)),
     ),
   );
+}
+
+/// A fenced code block with a header: the language on the left, a copy button
+/// on the right.
+///
+/// This is the affordance a coding agent's transcript is mostly made of —
+/// without it a block of code is an anonymous tinted rectangle you have to
+/// select by hand.
+class _CodeBlockBuilder extends MarkdownElementBuilder {
+  @override
+  bool isBlockElement() => true;
+
+  @override
+  Widget? visitElementAfterWithContext(
+    BuildContext context,
+    md.Element element,
+    TextStyle? preferredStyle,
+    TextStyle? parentStyle,
+  ) {
+    final scheme = Theme.of(context).colorScheme;
+    final code = element.textContent.trimRight();
+    // The parser puts the fence's info string on the inner `<code>` as
+    // `language-<name>`; an unfenced block has none.
+    final child = element.children?.whereType<md.Element>().firstOrNull;
+    final classes = child?.attributes['class'] ?? '';
+    final language = classes.startsWith('language-')
+        ? classes.substring('language-'.length)
+        : '';
+    final mono = TextStyle(
+      fontFamily: 'monospace',
+      fontFamilyFallback: monoCjkFallback,
+      fontSize: 12.5,
+      height: 1.5,
+      color: scheme.onSurface,
+    );
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.symmetric(vertical: 6),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: scheme.outlineVariant, width: 0.5),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const SizedBox(width: 12),
+              Text(
+                language.isEmpty ? 'text' : language,
+                style: TextStyle(
+                  fontFamily: 'monospace',
+                  fontFamilyFallback: monoCjkFallback,
+                  fontSize: 11,
+                  color: scheme.onSurfaceVariant,
+                ),
+              ),
+              const Spacer(),
+              _CopyButton(text: code),
+            ],
+          ),
+          Container(
+            width: double.infinity,
+            decoration: BoxDecoration(
+              border: Border(
+                top: BorderSide(color: scheme.outlineVariant, width: 0.5),
+              ),
+            ),
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+              child: Text.rich(
+                highlightCode(
+                  code: code,
+                  language: language,
+                  base: mono,
+                  brightness: Theme.of(context).brightness,
+                  // Upright: italic comments over a CJK fallback look distorted.
+                  allowItalic: false,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Copies [text] and confirms it, without stealing focus from the transcript.
+class _CopyButton extends StatelessWidget {
+  const _CopyButton({required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    return IconButton(
+      icon: const Icon(Icons.content_copy_outlined, size: 14),
+      iconSize: 14,
+      visualDensity: VisualDensity.compact,
+      tooltip: l10n.copy,
+      color: Theme.of(context).colorScheme.onSurfaceVariant,
+      onPressed: () {
+        Clipboard.setData(ClipboardData(text: text));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(l10n.copied),
+            duration: const Duration(seconds: 1),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// [source] with its Markdown syntax removed, for a place that can only show
+/// one line of plain text — an activity card's collapsed peek. Uses the real
+/// parser rather than a strip-the-asterisks regex, so `**Planning restart**`
+/// reads as `Planning restart` and a stray `*` in prose survives intact.
+String markdownPlainPreview(String source) {
+  final doc = md.Document(
+    extensionSet: markdownExtensionSet,
+    encodeHtml: false,
+  );
+  return doc.parseInline(source).map((n) => n.textContent).join();
 }
 
 /// Renders `<a>` as `favicon + underlined text`, tappable.
