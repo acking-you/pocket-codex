@@ -100,6 +100,10 @@ dependencies:
   # multi-MB base64 through the relay tunnel and the model context. Pure
   # Dart. (Also used by test/gen_icon_test.dart for icon generation.)
   image: ^4.9.1
+  # Syntax highlighting for chat code blocks (~30 grammars, pure Dart). Must
+  # mirror pubspec.yaml or the desktop release build can't resolve
+  # package:re_highlight.
+  re_highlight: ^0.0.3
 
 dev_dependencies:
   flutter_test:
