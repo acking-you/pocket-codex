@@ -69,6 +69,7 @@ or a per-account GitHub login (hosted).
 | `pocket-codex` CLI             | `login`, `logout`, `account`, `init`, `serve`, `connect`, `api {serve,connect}`, `services {list,default set}`, top-level `status`/`stop`, `codex {start,stop,status}`, `pb {register,subscribe,status}`, `remote-hint`, `version` |
 | `pb-mapper` register/subscribe | wired through `deps/pb-mapper`         |
 | `codex app-server` supervision | spawn/stop/status via PID + state.toml |
+| Embedded codex (desktop)       | desktop builds compile codex **in-process** behind the `embedded-codex` feature, so a machine can host without a separate `codex` install (Windows/macOS) |
 | Direct Responses API proxy     | local HTTP/WS proxy registered through pb-mapper |
 | Hosted account (GitHub)        | optional `pocket-codex-backend`: GitHub device-flow login, per-user `pcxu:<user>:…` broker tunnels through the relay (master key never leaves the server); self-host preserved behind `--relay`. See [`deploy/`](deploy/README.md) |
 | Flutter UI (`apps/flutter`)    | chat-first home (opens straight into the latest session; all sessions in the sidebar; auto-connects to the last-used / locally hosted / first reachable host, desktop auto-restores hosting); account onboarding ("Sign in with GitHub") + self-host onboarding (relay+key, `pcx1:` import/export); manage page with service discovery, app-server sessions, API-service subscribe, hosting; settings; responsive Material 3 (light/dark) |

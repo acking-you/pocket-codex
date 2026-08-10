@@ -2,3 +2,14 @@
 # a CRLF shebang (`#!/bin/sh\r`) fails with "bad interpreter" on Linux/macOS,
 # which would break the one-line CLI installer piped to `sh`.
 *.sh text eol=lf
+
+# Keep SQL migrations LF-only for the same reason, but with sharper teeth:
+# sqlx hashes each migration file at compile time and stores that checksum in
+# the database's `_sqlx_migrations` table when the migration is applied. CRLF
+# changes the bytes, so the checksum changes — and a backend built from a CRLF
+# checkout then refuses to start against a database migrated by an LF build:
+#   Error: migration: migration 1 was previously applied but has been modified
+# The migration content is identical; only the line endings differ. This bit a
+# lb7666.top deploy built from a Windows checkout (2026-08-11) and crash-looped
+# the service. CI never sees it — Linux checkouts are LF either way.
+*.sql text eol=lf
