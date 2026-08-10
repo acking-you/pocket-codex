@@ -61,6 +61,7 @@ CLI，或任意 OpenAI 兼容工具——都通过中转访问它**，要么用�
 | `pocket-codex` CLI             | `login`、`logout`、`account`、`init`、`serve`、`connect`、`api {serve,connect}`、`services {list,default set}`、顶层 `status`/`stop`、`codex {start,stop,status}`、`pb {register,subscribe,status}`、`remote-hint`、`version` |
 | `pb-mapper` 注册/订阅          | 经 `deps/pb-mapper` 接通               |
 | `codex app-server` 进程管理    | 通过 PID + state.toml 启动/停止/查状态 |
+| 内嵌 codex（桌面端）           | 桌面端构建通过 `embedded-codex` feature 把 codex **编译进本进程**，无需单独安装 `codex` 即可托管（Windows/macOS） |
 | 直连 Responses API 代理        | 经 pb-mapper 注册的本地 HTTP/WS 代理   |
 | 托管账号（GitHub）             | 可选的 `pocket-codex-backend`：GitHub 设备流登录，按用户隔离的 `pcxu:<user>:…` 经中转打洞（主密钥不离开服务器）；`--relay` 仍保留自建模式。见 [`deploy/`](deploy/README.md) |
 | Flutter 界面（`apps/flutter`） | 聊天优先主屏（打开即进入最近会话；侧栏可选所有会话；自动连接上次使用/本机托管/首个可达的主机，桌面端自动恢复托管）；账号引导（「Sign in with GitHub」）+ 自建引导（中转+密钥、`pcx1:` 导入/导出）；管理页含服务发现、app-server 会话、API 服务订阅、托管；设置；自适应 Material 3（明/暗） |
