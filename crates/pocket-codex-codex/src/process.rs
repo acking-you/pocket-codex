@@ -45,6 +45,32 @@ pub(crate) fn ws_host_port(listen_url: &str) -> Option<(String, u16)> {
     Some((host.to_string(), port.parse().ok()?))
 }
 
+/// Resolve a concrete port for the `--port 0` (auto-select) case by asking the
+/// OS for a free one on `host`.
+///
+/// codex's `--listen ws://host:0` lets the OS pick the port but never reports
+/// the chosen number back to us in any readable form: the PID we spawn may be
+/// an npm/node shim, and the listen URL we record would keep the literal `:0`.
+/// Downstream consumers — the register tunnel's `local_addr`, status/stop, the
+/// health watchdog — would then forward to / probe port 0 and fail with
+/// `WSAEADDRNOTAVAIL` / "address not available". So we reserve a free port
+/// ourselves: bind an ephemeral listener on `host`, read the assigned port, and
+/// drop the listener so codex can bind it. There is a tiny window between
+/// releasing the port and codex re-binding it, but for a freshly-assigned
+/// loopback port a collision is extremely unlikely — and the in-app API-proxy /
+/// meta-service listeners already reserve their ports exactly this way.
+fn resolve_auto_port(host: &str) -> std::io::Result<u16> {
+    use std::net::TcpListener;
+    // Bind the host the caller asked for so the port is free on that interface
+    // (an empty/unspecified host resolves to all interfaces, mirroring codex).
+    let bind_host = match host {
+        "" => "0.0.0.0",
+        other => other,
+    };
+    let listener = TcpListener::bind((bind_host, 0))?;
+    Ok(listener.local_addr()?.port())
+}
+
 /// After a spawn, poll until the listen port is served, then return the PID of
 /// the process that actually owns it (the native app-server, even when it sits
 /// behind an npm/node shim). Falls back to `spawn_pid` if the port never comes
@@ -220,8 +246,34 @@ pub struct SpawnReport {
 ///
 /// If the previous run is still alive (PID matches and process exists)
 /// the existing process is returned untouched.
-pub fn spawn(opts: SpawnOptions) -> pocket_codex_core::Result<SpawnReport> {
+pub fn spawn(mut opts: SpawnOptions) -> pocket_codex_core::Result<SpawnReport> {
     let mut state = RuntimeState::load()?;
+
+    // `--port 0` means "let the OS choose a free port". codex never reports the
+    // chosen port back to us, so resolve a concrete one up front and rewrite the
+    // listen spec to it. Every downstream consumer — the reuse probe below, the
+    // register tunnel's `local_addr`, status/stop, the health watchdog — then
+    // works against a real port instead of the literal `:0` (which otherwise
+    // makes every data tunnel fail to bind).
+    let auto_host = match &opts.listen {
+        ListenSpec::WebSocket {
+            host,
+            port: 0,
+        } => Some(host.clone()),
+        _ => None,
+    };
+    if let Some(host) = auto_host {
+        let port = resolve_auto_port(&host).map_err(|e| {
+            pocket_codex_core::Error::Config(format!(
+                "could not reserve an auto-select (--port 0) port on `{host}`: {e}"
+            ))
+        })?;
+        opts.listen = ListenSpec::WebSocket {
+            host,
+            port,
+        };
+    }
+
     let listen_url = opts.listen.to_listen_url();
     let endpoint = ws_host_port(&listen_url);
 
@@ -604,6 +656,16 @@ mod tests {
             explicit_envs(&command).is_empty(),
             "no env should be set when proxy is None; child inherits the parent's"
         );
+    }
+
+    #[test]
+    fn resolve_auto_port_returns_a_bindable_free_port() {
+        // It must hand back a concrete (non-zero) port for the `--port 0` case…
+        let port = resolve_auto_port("127.0.0.1").expect("resolve a free port");
+        assert_ne!(port, 0, "auto-select must resolve to a concrete port, not 0");
+        // …and the listener must have been released, so codex can bind it next.
+        std::net::TcpListener::bind(("127.0.0.1", port))
+            .expect("the resolved port should be free to bind");
     }
 
     #[test]

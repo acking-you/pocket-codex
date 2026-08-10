@@ -21,9 +21,6 @@ pub async fn run(cmd: CodexCmd) -> Result<()> {
 }
 
 fn start(args: CodexStartArgs) -> Result<()> {
-    let host = args.host.clone();
-    let port = args.port;
-
     // The spawned app-server reads proxy settings only from its environment,
     // never from codex's config.toml, so resolve the effective proxy (explicit
     // flag or env) and inject it via SpawnOptions. Only an explicit `--proxy`
@@ -56,8 +53,15 @@ fn start(args: CodexStartArgs) -> Result<()> {
         api_proxy::SpawnCommand::CodexStart,
     );
     ui::headline(ui::Tone::Action, "next step");
+    // Use the *resolved* listen address (`ws://host:port` minus the scheme) so
+    // the hint shows the real port even when `--port 0` auto-selected one.
+    let local_addr = report
+        .info
+        .listen
+        .strip_prefix("ws://")
+        .unwrap_or(&report.info.listen);
     ui::code(&format!(
-        "pocket-codex pb register --key codex --local-addr {host}:{port} --relay <relay-host:7666>"
+        "pocket-codex pb register --key codex --local-addr {local_addr} --relay <relay-host:7666>"
     ));
     Ok(())
 }
