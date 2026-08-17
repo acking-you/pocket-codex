@@ -13,7 +13,6 @@ import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/screens/api_service_screen.dart';
 import 'package:pocket_codex/src/screens/local_sessions_screen.dart';
 import 'package:pocket_codex/src/theme.dart';
-import 'package:pocket_codex/src/widgets/brand_logo.dart';
 import 'package:pocket_codex/src/widgets/loading.dart';
 import 'package:pocket_codex/src/widgets/local_host_dialog.dart';
 import 'package:pocket_codex/src/widgets/status_dots.dart';
@@ -99,6 +98,7 @@ class _ServicesScreenState extends ConsumerState<ServicesScreen>
     final selectedKey = ref.watch(selectedApiKeyProvider);
     final wide = MediaQuery.of(context).size.width >= 600;
     final account = config?.mode == 'account';
+    final online = Colors.green.shade600;
 
     // Sections shown as responsive tabs. Local hosting only where it's supported
     // (desktop) + in account mode, so the tab set differs by platform — we drive
@@ -132,17 +132,11 @@ class _ServicesScreenState extends ConsumerState<ServicesScreen>
     };
 
     return Scaffold(
+      // A pushed hub page: back + the PAGE title. The brand logo + app name
+      // belong to the root (chat home) title bar only — a page that can pop
+      // must read as a place inside the app, not as the app itself.
       appBar: WindowTitleBar(
-        title: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const BrandLogo(size: 26),
-            const SizedBox(width: 10),
-            Flexible(
-              child: Text(l10n.appTitle, overflow: TextOverflow.ellipsis),
-            ),
-          ],
-        ),
+        title: Text(l10n.manageServices),
         actions: [
           IconButton(
             key: const Key('refresh-btn'),
@@ -208,7 +202,21 @@ class _ServicesScreenState extends ConsumerState<ServicesScreen>
             ),
           ),
           data: (services) {
-            final apiServices = services.where((s) => s.kind == 'api').toList();
+            // The detail pane must honour the same optimistic/durable hiding
+            // as the list: a just-removed or dismissed service should not
+            // linger as the pane's auto-selected subject.
+            final pending = ref.watch(pendingRemovalProvider);
+            final dismissed =
+                ref.watch(dismissedServicesProvider).valueOrNull ??
+                const <String>{};
+            final apiServices = services
+                .where(
+                  (s) =>
+                      s.kind == 'api' &&
+                      !pending.contains(s.key) &&
+                      !dismissed.contains(s.key),
+                )
+                .toList();
             final selected =
                 apiServices.where((s) => s.key == selectedKey).firstOrNull ??
                 apiServices.firstOrNull;
@@ -217,6 +225,9 @@ class _ServicesScreenState extends ConsumerState<ServicesScreen>
               sectionLabel: labelFor(section),
               relay: config?.relay,
               accountLogin: account ? config?.accountLogin : null,
+              // Wide puts the identity block in the side nav; narrow keeps it
+              // at the top of the list.
+              showIdentity: !wide,
               services: services,
               // Only the inline API detail pane (desktop, API tab) has a
               // "current" service worth highlighting; narrow taps push a route.
@@ -247,10 +258,11 @@ class _ServicesScreenState extends ConsumerState<ServicesScreen>
                       Expanded(
                         child: selected == null
                             ? Center(child: Text(l10n.selectApiService))
-                            : Center(
+                            : Align(
+                                alignment: Alignment.topCenter,
                                 child: ConstrainedBox(
                                   constraints: const BoxConstraints(
-                                    maxWidth: 460,
+                                    maxWidth: 520,
                                   ),
                                   child: ApiServiceScreen(
                                     key: ValueKey(selected.key),
@@ -267,26 +279,26 @@ class _ServicesScreenState extends ConsumerState<ServicesScreen>
               onRefresh: () async => ref.invalidate(servicesProvider),
               child: content,
             );
-            // The rail floats on the window background (no divider): the
-            // tonal step between background and the panel cards carries the
-            // separation.
+            // Desktop: a drawer-style side nav (identity block on top,
+            // icon+label tiles below) — labels beside icons read better than
+            // a cramped icon rail, and the identity lives where a desktop
+            // sidebar puts it instead of as a hero banner in the list.
             final body = wide
                 ? Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      NavigationRail(
+                      _SideNav(
+                        relay: config?.relay ?? l10n.relayNotConfigured,
+                        accountLogin: account ? config?.accountLogin : null,
+                        online: online,
                         selectedIndex: selectedIndex,
-                        onDestinationSelected: selectIndex,
-                        labelType: NavigationRailLabelType.all,
-                        minWidth: 84,
-                        groupAlignment: -0.95,
-                        destinations: [
+                        onSelect: selectIndex,
+                        items: [
                           for (final s in sections)
-                            NavigationRailDestination(
-                              icon: Icon(iconFor(s)),
-                              label: Text(labelFor(s)),
-                            ),
+                            (icon: iconFor(s), label: labelFor(s)),
                         ],
                       ),
+                      const VerticalDivider(width: 1),
                       Expanded(child: scrollable),
                     ],
                   )
@@ -378,6 +390,7 @@ class _ServiceList extends ConsumerWidget {
   const _ServiceList({
     required this.section,
     required this.sectionLabel,
+    required this.showIdentity,
     required this.relay,
     required this.accountLogin,
     required this.services,
@@ -392,6 +405,10 @@ class _ServiceList extends ConsumerWidget {
 
   /// The localised section name, rendered as the list's heading.
   final String sectionLabel;
+
+  /// Whether to render the identity card at the top of the list (narrow
+  /// layouts; wide layouts show it in the side nav instead).
+  final bool showIdentity;
   final String? relay;
 
   /// The signed-in GitHub login in account mode (null in self-host mode), shown
@@ -752,33 +769,42 @@ class _ServiceList extends ConsumerWidget {
     final showEnterButton =
         isSelectableSection && !selection.active && removableKeys.isNotEmpty;
     final listView = ListView(
-      padding: const EdgeInsets.fromLTRB(16, 14, 16, 20),
+      padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
       children: [
-        _RelayBanner(
-          relay: relay ?? l10n.relayNotConfigured,
-          accountLogin: accountLogin,
-          online: online,
-        ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(4, 18, 4, 8),
-          child: Text(
-            sectionLabel,
-            style: Theme.of(
-              context,
-            ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
-          ),
-        ),
-        if (showEnterButton)
-          Align(
-            alignment: Alignment.centerRight,
-            child: TextButton.icon(
-              key: const Key('batch-enter-btn'),
-              icon: const Icon(Icons.cleaning_services_outlined, size: 18),
-              label: Text(l10n.batchRemoveEnter),
-              onPressed: () =>
-                  selNotifier.state = const ServiceSelection(active: true),
+        if (showIdentity)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: _IdentityCard(
+              relay: relay ?? l10n.relayNotConfigured,
+              accountLogin: accountLogin,
+              online: online,
             ),
           ),
+        // Section heading with the (conditional) cleanup affordance inline,
+        // so the header stays a single calm row instead of stacked banners.
+        Padding(
+          padding: const EdgeInsets.fromLTRB(4, 8, 0, 10),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  sectionLabel,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w600),
+                ),
+              ),
+              if (showEnterButton)
+                TextButton.icon(
+                  key: const Key('batch-enter-btn'),
+                  icon: const Icon(Icons.cleaning_services_outlined, size: 18),
+                  label: Text(l10n.batchRemoveEnter),
+                  onPressed: () =>
+                      selNotifier.state = const ServiceSelection(active: true),
+                ),
+            ],
+          ),
+        ),
         if (isSelectableSection && selection.active)
           Padding(
             padding: const EdgeInsets.fromLTRB(4, 4, 4, 8),
@@ -1059,11 +1085,12 @@ Future<void> _confirmDeregister(
   }
 }
 
-/// The header card: in account mode the signed-in GitHub identity; in self-host
-/// mode the configured relay. Status is implicitly online — the list only
-/// renders once discovery (which needs a valid session/relay) has succeeded.
-class _RelayBanner extends StatelessWidget {
-  const _RelayBanner({
+/// The connection identity: in account mode the signed-in GitHub login; in
+/// self-host mode the configured relay. Status is implicitly online — this
+/// only renders once discovery (which needs a valid session/relay) succeeded.
+/// A quiet outlined panel, not a hero: status colour is the only accent.
+class _IdentityCard extends StatelessWidget {
+  const _IdentityCard({
     required this.relay,
     required this.accountLogin,
     required this.online,
@@ -1080,41 +1107,42 @@ class _RelayBanner extends StatelessWidget {
     final l10n = AppLocalizations.of(context);
     final scheme = Theme.of(context).colorScheme;
     final account = accountLogin != null;
-    // A flat accent hero: the one place the accent colour speaks at full
-    // volume, anchoring the page the way the logo tile anchors the dock.
     return Container(
-      margin: const EdgeInsets.only(bottom: 4),
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: scheme.primaryContainer,
-        borderRadius: BorderRadius.circular(18),
+        color: surfacePanel(scheme),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.5)),
       ),
       child: Row(
         children: [
-          _IconBadge(
-            icon: account ? Icons.account_circle : Icons.dns,
-            bg: scheme.primary,
-            fg: scheme.onPrimary,
+          CircleAvatar(
+            radius: 18,
+            backgroundColor: scheme.secondaryContainer,
+            child: Icon(
+              account ? Icons.person_outline : Icons.dns_outlined,
+              size: 20,
+              color: scheme.onSecondaryContainer,
+            ),
           ),
-          const SizedBox(width: 14),
+          const SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
                   account ? '@$accountLogin' : relay,
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w600,
-                    color: scheme.onPrimaryContainer,
-                  ),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
-                const SizedBox(height: 2),
+                const SizedBox(height: 1),
                 Text(
                   account ? l10n.accountSection : l10n.relayRow,
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: scheme.onPrimaryContainer.withValues(alpha: 0.75),
+                    color: scheme.onSurfaceVariant,
                   ),
                 ),
               ],
@@ -1123,6 +1151,105 @@ class _RelayBanner extends StatelessWidget {
           const SizedBox(width: 8),
           StatusChip(color: online, label: l10n.statusOnline, filled: true),
         ],
+      ),
+    );
+  }
+}
+
+/// The desktop side navigation: the identity card on top, then one
+/// drawer-style destination tile per section (icon + label, stadium
+/// indicator) — the Material 3 drawer idiom sized for an embedded pane.
+class _SideNav extends StatelessWidget {
+  const _SideNav({
+    required this.relay,
+    required this.accountLogin,
+    required this.online,
+    required this.items,
+    required this.selectedIndex,
+    required this.onSelect,
+  });
+
+  final String relay;
+  final String? accountLogin;
+  final Color online;
+  final List<({IconData icon, String label})> items;
+  final int selectedIndex;
+  final ValueChanged<int> onSelect;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 248,
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+        children: [
+          _IdentityCard(
+            relay: relay,
+            accountLogin: accountLogin,
+            online: online,
+          ),
+          const SizedBox(height: 12),
+          for (var i = 0; i < items.length; i++)
+            _NavTile(
+              icon: items[i].icon,
+              label: items[i].label,
+              selected: i == selectedIndex,
+              onTap: () => onSelect(i),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// One side-nav destination: a stadium-shaped tile with the M3 drawer
+/// treatment (secondary-container indicator when selected, quiet otherwise).
+class _NavTile extends StatelessWidget {
+  const _NavTile({
+    required this.icon,
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final fg = selected ? scheme.onSecondaryContainer : scheme.onSurfaceVariant;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Material(
+        color: selected ? scheme.secondaryContainer : Colors.transparent,
+        borderRadius: BorderRadius.circular(20),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(20),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+            child: Row(
+              children: [
+                Icon(icon, size: 20, color: fg),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    label,
+                    style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                      color: fg,
+                      fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -1184,28 +1311,28 @@ class _ServiceCard extends StatelessWidget {
     final effectiveTap = selecting ? (selectable ? onToggle : null) : onTap;
     final highlight = selected || (selecting && selectable && checked);
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 5),
+      padding: const EdgeInsets.symmetric(vertical: 4),
       child: Opacity(
         opacity: dimmed ? 0.4 : 1,
         child: Material(
           // A tonal panel on the window background; the accent border appears
           // only for the selected/checked card.
           color: surfacePanel(scheme),
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(12),
           child: InkWell(
             onTap: effectiveTap,
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(12),
             child: Container(
               decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(16),
+                borderRadius: BorderRadius.circular(12),
                 border: Border.all(
                   color: highlight
                       ? scheme.primary
-                      : scheme.outlineVariant.withValues(alpha: 0.4),
+                      : scheme.outlineVariant.withValues(alpha: 0.5),
                   width: highlight ? 1.5 : 1,
                 ),
               ),
-              padding: const EdgeInsets.all(14),
+              padding: const EdgeInsets.all(12),
               child: Row(
                 children: [
                   if (selecting && selectable) ...[
@@ -1238,10 +1365,29 @@ class _ServiceCard extends StatelessWidget {
                         ),
                         if (reason != null) ...[
                           const SizedBox(height: 3),
-                          Text(
-                            reason!,
-                            style: Theme.of(context).textTheme.bodySmall
-                                ?.copyWith(color: scheme.error),
+                          // One quiet line, full text on hover/long-press —
+                          // a red paragraph inside a list card shouts.
+                          Tooltip(
+                            message: reason!,
+                            child: Row(
+                              children: [
+                                Icon(
+                                  Icons.error_outline,
+                                  size: 14,
+                                  color: scheme.error,
+                                ),
+                                const SizedBox(width: 4),
+                                Expanded(
+                                  child: Text(
+                                    reason!,
+                                    style: Theme.of(context).textTheme.bodySmall
+                                        ?.copyWith(color: scheme.error),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
                         ],
                       ],
@@ -1297,13 +1443,13 @@ class _IconBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-    width: 44,
-    height: 44,
+    width: 40,
+    height: 40,
     decoration: BoxDecoration(
       color: bg,
-      borderRadius: BorderRadius.circular(13),
+      borderRadius: BorderRadius.circular(10),
     ),
-    child: Icon(icon, size: 22, color: fg),
+    child: Icon(icon, size: 20, color: fg),
   );
 }
 
@@ -1408,23 +1554,23 @@ class _LocalHostCard extends ConsumerWidget {
           );
     }
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 5),
+      padding: const EdgeInsets.symmetric(vertical: 4),
       child: Material(
         color: surfacePanel(scheme),
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(12),
         // The whole card opens the host dialog (stop + details); the per-tunnel
         // buttons inside absorb their own taps.
         child: InkWell(
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(12),
           onTap: () => showDialog<void>(
             context: context,
             builder: (_) => LocalHostDialog(existing: host),
           ),
           child: Container(
             decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(16),
+              borderRadius: BorderRadius.circular(12),
               border: Border.all(
-                color: scheme.outlineVariant.withValues(alpha: 0.4),
+                color: scheme.outlineVariant.withValues(alpha: 0.5),
               ),
             ),
             child: Column(

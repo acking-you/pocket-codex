@@ -639,7 +639,9 @@ void main() {
     );
     await t.pumpWidget(_host(const ServicesScreen(), api));
     await t.pumpAndSettle();
-    expect(find.text('default'), findsOneWidget);
+    // The list card (the wide layout ALSO shows the name in the detail pane,
+    // so presence is asserted on the card key, absence on the text).
+    expect(find.byKey(const Key('svc-pcx:lb7666:api:default')), findsOneWidget);
 
     // Open the card overflow menu → 注销 → cancel: nothing happens.
     await t.tap(find.byIcon(Icons.more_vert).first);
@@ -650,7 +652,7 @@ void main() {
     await t.tap(find.text('取消'));
     await t.pumpAndSettle();
     expect(api.lastDeregistered, isNull);
-    expect(find.text('default'), findsOneWidget);
+    expect(find.byKey(const Key('svc-pcx:lb7666:api:default')), findsOneWidget);
 
     // Re-open → confirm: the service is deregistered + leaves the list.
     await t.tap(find.byIcon(Icons.more_vert).first);
@@ -688,7 +690,10 @@ void main() {
           ..keepOnDeregister = true;
     await t.pumpWidget(_host(const ServicesScreen(), api));
     await t.pumpAndSettle();
-    expect(find.text('orphan'), findsOneWidget);
+    expect(
+      find.byKey(const Key('svc-pcx:otherdev:api:orphan')),
+      findsOneWidget,
+    );
 
     // Overflow → 注销 → the honest "remove unreachable" dialog → confirm.
     await t.tap(find.byIcon(Icons.more_vert).first);
@@ -744,7 +749,10 @@ void main() {
     api.reachable['pcx:otherdev:api:orphan'] = true;
     await t.tap(find.byKey(const Key('refresh-btn')));
     await t.pumpAndSettle();
-    expect(find.text('orphan'), findsOneWidget);
+    expect(
+      find.byKey(const Key('svc-pcx:otherdev:api:orphan')),
+      findsOneWidget,
+    );
   });
 
   testWidgets('batch cleanup: select several unreachable entries and remove '

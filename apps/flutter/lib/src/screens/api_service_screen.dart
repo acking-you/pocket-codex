@@ -75,11 +75,91 @@ class _ApiServiceState extends ConsumerState<ApiServiceScreen> {
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
+    final scheme = Theme.of(context).colorScheme;
+    // `pcx:<device>:api:<name>` (or the account-mode `pcxu:…` variant): the
+    // human-facing bits are the trailing name and the device before the kind.
+    final parts = widget.serviceKey.split(':');
+    final name = parts.isNotEmpty ? parts.last : widget.serviceKey;
+    final device = parts.length >= 3 ? parts[parts.length - 3] : '';
     final body = ListView(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(20),
       children: [
-        Text(widget.serviceKey, style: Theme.of(context).textTheme.bodySmall),
-        const SizedBox(height: 16),
+        // Header: what this service is, in words — the raw relay key follows
+        // as a copyable code row instead of leading the page.
+        Row(
+          children: [
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: scheme.secondaryContainer,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Icon(
+                Icons.api,
+                size: 20,
+                color: scheme.onSecondaryContainer,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    name,
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  if (device.isNotEmpty) ...[
+                    const SizedBox(height: 1),
+                    Text(
+                      device,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color: scheme.surfaceContainerHighest.withValues(alpha: 0.5),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: SelectableText(
+                  widget.serviceKey,
+                  style: TextStyle(
+                    fontFamily: 'monospace',
+                    fontFamilyFallback: monoCjkFallback,
+                    fontSize: 12,
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+              IconButton(
+                icon: const Icon(Icons.copy, size: 16),
+                visualDensity: VisualDensity.compact,
+                onPressed: () =>
+                    Clipboard.setData(ClipboardData(text: widget.serviceKey)),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 20),
         if (_sub == null) ...[
           TextField(
             controller: _port,
@@ -89,11 +169,15 @@ class _ApiServiceState extends ConsumerState<ApiServiceScreen> {
               border: const OutlineInputBorder(),
             ),
           ),
-          const SizedBox(height: 12),
-          FilledButton(
+          const SizedBox(height: 16),
+          FilledButton.icon(
             key: const Key('subscribe-btn'),
             onPressed: _busy ? null : _subscribe,
-            child: Text(l10n.startSubscription),
+            icon: const Icon(Icons.play_arrow_rounded, size: 20),
+            label: Text(l10n.startSubscription),
+            style: FilledButton.styleFrom(
+              minimumSize: const Size.fromHeight(44),
+            ),
           ),
         ] else ...[
           Card(

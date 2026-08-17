@@ -2,10 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:pocket_codex/src/desktop_theme.dart';
 import 'package:pocket_codex/src/fonts.dart';
 
-/// Brand seed colour — teal, sitting between the dark logo's mint signal arcs
-/// and the light logo's cyan ones (`icon/logo_dark.png` / `logo_light.png`),
-/// so accents across the app stay in the logo's family.
-const _seed = Color(0xFF14B8A6);
+/// Brand seed colours, one per brightness, each taken from that theme's logo
+/// variant so app accents and the visible logo always share a family:
+/// light mode follows `icon/logo_light.png`'s indigo-violet signal arcs,
+/// dark mode follows `icon/logo_dark.png`'s mint ones.
+const _seedLight = Color(0xFF6B5CE7);
+const _seedDark = Color(0xFF3EDDA4);
 
 /// A thin, rounded scrollbar shared by both themes — closer to a modern web
 /// chat than the default chunky Material scrollbar. Combined with full-width
@@ -17,15 +19,14 @@ final _scrollbarTheme = ScrollbarThemeData(
 
 /// The colour scheme for [brightness].
 ///
-/// Light keeps the seed-derived scheme: teal accents on a cool mist paper.
-/// Dark swaps the neutral ladder for the brand INK (the dark logo tile,
-/// #10121C — a near-black blue) instead of the seed-derived grey-teal, so the
-/// app and its icon read as one object.
+/// Light keeps the stock tonal-spot scheme (strict Material 3: muted accent,
+/// faintly tinted neutrals). Dark keeps the seeded accent roles but swaps the
+/// neutral ladder for the brand INK (the dark logo tile, #10121C — a
+/// near-black blue), so the app and its icon read as one object.
 ColorScheme _scheme(Brightness brightness) {
   final seeded = ColorScheme.fromSeed(
-    seedColor: _seed,
+    seedColor: brightness == Brightness.light ? _seedLight : _seedDark,
     brightness: brightness,
-    dynamicSchemeVariant: DynamicSchemeVariant.vibrant,
   );
   if (brightness == Brightness.light) return seeded;
   return seeded.copyWith(
