@@ -89,7 +89,7 @@ class _WelcomeGuideScreenState extends ConsumerState<WelcomeGuideScreen> {
             shrinkWrap: true,
             padding: const EdgeInsets.all(24),
             children: [
-              const Center(child: BrandLogo(size: 64, plated: true)),
+              const Center(child: BrandLogo(size: 64)),
               const SizedBox(height: 16),
               Text(
                 l10n.welcomeTitle,

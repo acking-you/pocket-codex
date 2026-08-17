@@ -1,4 +1,4 @@
-# DESKTOP-ONLY manifest. Byte-for-byte identical to pubspec.yaml EXCEPT it adds
+# Desktop build variant of pubspec.yaml: identical dependencies PLUS
 # the bundled Noto Sans SC font (the `fonts:` block at the bottom). The desktop
 # release jobs (.github/workflows/release.yml: app-windows / app-linux /
 # app-macos) copy this over pubspec.yaml before building, so only desktop
@@ -8,7 +8,7 @@
 # KEEP IN SYNC: when you edit dependencies in pubspec.yaml, mirror the change
 # here (everything except the trailing `fonts:` block must match pubspec.yaml).
 name: pocket_codex
-description: "Pocket-Codex Flutter front-end. Drives codex app-server through flutter_rust_bridge."
+description: "PocketCodex Flutter front-end. Drives codex app-server through flutter_rust_bridge."
 publish_to: 'none'
 
 version: 0.1.8+18
@@ -81,14 +81,6 @@ dependencies:
   # builds additionally need libayatana-appindicator3-dev (see release.yml).
   tray_manager: ^0.5.2
   window_manager: ^0.5.1
-  # Desktop drag-and-drop of files onto the chat + clipboard image/file paste.
-  # Must mirror pubspec.yaml (the desktop build copies this manifest over
-  # pubspec.yaml, so a missing dep fails to resolve there).
-  desktop_drop: ^0.7.1
-  pasteboard: ^0.5.0
-  # Native file picker for the "choose codex binary" path in local hosting
-  # (desktop only). Must mirror pubspec.yaml or the desktop release build can't
-  # resolve package:file_selector.
   file_selector: ^1.1.0
   # Message image attachments: pick from the photo library on Android/iOS
   # (PHPicker / system Photo Picker — no runtime permission needed) and a
@@ -100,9 +92,8 @@ dependencies:
   # multi-MB base64 through the relay tunnel and the model context. Pure
   # Dart. (Also used by test/gen_icon_test.dart for icon generation.)
   image: ^4.9.1
-  # Syntax highlighting for chat code blocks (~30 grammars, pure Dart). Must
-  # mirror pubspec.yaml or the desktop release build can't resolve
-  # package:re_highlight.
+  desktop_drop: ^0.7.1
+  pasteboard: ^0.5.0
   re_highlight: ^0.0.3
 
 dev_dependencies:
@@ -119,78 +110,75 @@ dev_dependencies:
   plugin_platform_interface: ^2.1.8
   flutter_launcher_icons: ^0.14.2
   flutter_native_splash: ^2.4.3
-  # Mirrors pubspec.yaml: test/gen_icon_test.dart (opt-in via REGEN_ICONS=1)
-  # rasterises the brand/tray SVGs (flutter_svg) and encodes the Windows tray
-  # .ico (image). Kept in sync so the icon-regen test compiles when this
-  # desktop manifest is the active pubspec.
-  flutter_svg: ^2.0.10
 
 flutter:
   uses-material-design: true
   generate: true
-  # Only the transparent brand mark ships in the bundle. logo.png and
-  # poster.png stay in the repo as icon-generator input / marketing
-  # material — bundling them would add ~2.7 MB of dead weight.
+  # Only the theme-matched brand marks ship in the bundle. logo.png stays in
+  # the repo as marketing material — bundling it would add dead weight.
+  #
+  # The tray icons (tray.png for macOS/Linux, tray.ico for Windows) are tiny and
+  # only loaded on desktop; tray_manager resolves them relative to
+  # data/flutter_assets, so they must ship as bundled assets. Generated from
+  # icon/logo_dark.png by test/gen_icon_test.dart.
   assets:
-    - assets/logo/mark.png
+    - assets/logo/mark_light.png
+    - assets/logo/mark_dark.png
     - assets/tray/tray.png
     - assets/tray/tray.ico
-  # Desktop-only bundled font (this file is the desktop manifest). Noto Sans SC
-  # fixes thin/unevenly-weighted Chinese on Windows; theme.dart registers it as
-  # the app's primary family on desktop (appFontFamily). Mobile omits this and
-  # uses the OS CJK font. ~17 MB — the reason this is desktop-only.
   fonts:
     - family: Noto Sans SC
       fonts:
         - asset: assets/fonts/NotoSansSC-VariableFont_wght.ttf
 
 flutter_launcher_icons:
-  # icon_square.png: edge-to-edge brand plate (#F5F3FE) + glyph, for
-  # platforms that mask their own corners (iOS / legacy Android / web).
-  # icon_rounded.png: rounded plate with transparent corners, for
-  # platforms that show the icon as-is (Windows taskbar, macOS Dock).
-  # Both are composed from icon/adaptive_foreground.png — see
-  # docs in the icon/ directory siblings.
-  image_path: "icon/icon_square.png"
-  # iOS: Apple rejects alpha, so icons stay opaque (icon_square is).
+  # All launcher icons derive from icon/logo_dark.png (the ink tile reads on
+  # light AND dark docks); test/gen_icon_test.dart generates:
+  #   icon_glyph.png        rounded tile + ~10% margin (desktop / web)
+  #   icon_mobile.png       full-bleed opaque tile (iOS + Android legacy)
+  #   icon_adaptive_bg.png  solid tile colour (Android adaptive background)
+  #   icon_adaptive_fg.png  tile shrunk into the safe zone (adaptive fg)
+  image_path: "icon/icon_glyph.png"
+  # iOS: full-bleed opaque tile; remove_alpha is a harmless safety net.
   ios: true
+  image_path_ios: "icon/icon_mobile.png"
   remove_alpha_ios: true
-  # Android: legacy square mipmaps from image_path (pre-API-26) PLUS an
-  # adaptive icon (API 26+) = lavender plate background + transparent
-  # glyph foreground, so it integrates with the launcher's round/squircle
-  # mask instead of showing a white-plate "sticker". The foreground PNG
-  # already bakes a 62% safe-zone margin, so inset is 0 (no double-pad).
+  # Android: legacy square mipmaps from image_path_android (old launchers show
+  # the tile as-is) PLUS an adaptive icon (API 26+) whose foreground keeps the
+  # tile inside the safe zone so a circle/squircle mask never clips it.
   android: true
+  image_path_android: "icon/icon_mobile.png"
   min_sdk_android: 21
-  adaptive_icon_background: "#F5F3FE"
-  adaptive_icon_foreground: "icon/adaptive_foreground.png"
+  adaptive_icon_background: "icon/icon_adaptive_bg.png"
+  adaptive_icon_foreground: "icon/icon_adaptive_fg.png"
   adaptive_icon_foreground_inset: 0
   # Web: PWA icons + manifest colours (replaces the stock Flutter favicon).
   web:
     generate: true
-    image_path: "icon/icon_square.png"
-    background_color: "#F5F3FE"
-    theme_color: "#4C8DF6"
+    image_path: "icon/icon_glyph.png"
+    background_color: "#FFFFFF"
+    theme_color: "#14B8A6"
   # Windows: emits runner/resources/app_icon.ico (window + taskbar).
-  # Bare glyph, no plate: taskbar icons render at 16-32 px, and a
-  # plate would shrink the recognisable shape to half that.
   windows:
     generate: true
     image_path: "icon/icon_glyph.png"
     icon_size: 256
-  # macOS: generates the Runner AppIcon.appiconset. Same rounded plate;
-  # the Dock does not mask square icons either.
+  # macOS: the Dock shows the icon as-is (no mask); the rounded tile carries
+  # the standard ~10% margin baked into icon_glyph.png.
   macos:
     generate: true
-    image_path: "icon/icon_rounded.png"
+    image_path: "icon/icon_glyph.png"
 
-# The splash mark is the transparent glyph: logo.png is opaque, which
-# showed up as a white box on the dark splash background.
+# Theme-matched splash: each mark is its theme's tile, and the background
+# colour equals that tile's interior (sampled + printed by gen_icon_test.dart),
+# so the tile melts into the splash and only the cloud glyph shows.
 flutter_native_splash:
-  image: assets/logo/mark.png
-  color: "#FFFFFF"
-  color_dark: "#101316"
+  image: assets/logo/mark_light.png
+  image_dark: assets/logo/mark_dark.png
+  color: "#FDFDFD"
+  color_dark: "#10121C"
   android_12:
-    image: assets/logo/mark.png
-    color: "#FFFFFF"
-    color_dark: "#101316"
+    image: assets/logo/mark_light.png
+    image_dark: assets/logo/mark_dark.png
+    color: "#FDFDFD"
+    color_dark: "#10121C"

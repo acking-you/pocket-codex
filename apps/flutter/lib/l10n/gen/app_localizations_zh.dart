@@ -770,6 +770,18 @@ class AppLocalizationsZh extends AppLocalizations {
   String get languageEnglish => 'English';
 
   @override
+  String get appearance => '外观';
+
+  @override
+  String get appearanceSystem => '跟随系统';
+
+  @override
+  String get appearanceLight => '明亮';
+
+  @override
+  String get appearanceDark => '暗黑';
+
+  @override
   String get newSessionTitle => '我们该构建什么?';
 
   @override

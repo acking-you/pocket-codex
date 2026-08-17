@@ -485,7 +485,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     title: Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        const BrandLogo(size: 26, plated: false),
+        const BrandLogo(size: 26),
         const SizedBox(width: 10),
         Flexible(child: Text(l10n.appTitle, overflow: TextOverflow.ellipsis)),
       ],
@@ -513,7 +513,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const BrandLogo(size: 72, plated: true),
+          const BrandLogo(size: 72),
           const SizedBox(height: 18),
           Text(l10n.appTitle, style: Theme.of(context).textTheme.titleLarge),
           const SizedBox(height: 22),
@@ -561,7 +561,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const BrandLogo(size: 72, plated: true),
+                const BrandLogo(size: 72),
                 const SizedBox(height: 20),
                 Text(
                   discoverFailed

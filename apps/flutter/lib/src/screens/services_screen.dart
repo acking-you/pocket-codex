@@ -12,6 +12,7 @@ import 'package:pocket_codex/src/error_format.dart';
 import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/screens/api_service_screen.dart';
 import 'package:pocket_codex/src/screens/local_sessions_screen.dart';
+import 'package:pocket_codex/src/theme.dart';
 import 'package:pocket_codex/src/widgets/brand_logo.dart';
 import 'package:pocket_codex/src/widgets/loading.dart';
 import 'package:pocket_codex/src/widgets/local_host_dialog.dart';
@@ -135,7 +136,7 @@ class _ServicesScreenState extends ConsumerState<ServicesScreen>
         title: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const BrandLogo(size: 26, plated: false),
+            const BrandLogo(size: 26),
             const SizedBox(width: 10),
             Flexible(
               child: Text(l10n.appTitle, overflow: TextOverflow.ellipsis),
@@ -213,6 +214,7 @@ class _ServicesScreenState extends ConsumerState<ServicesScreen>
                 apiServices.firstOrNull;
             final list = _ServiceList(
               section: section,
+              sectionLabel: labelFor(section),
               relay: config?.relay,
               accountLogin: account ? config?.accountLogin : null,
               services: services,
@@ -265,6 +267,9 @@ class _ServicesScreenState extends ConsumerState<ServicesScreen>
               onRefresh: () async => ref.invalidate(servicesProvider),
               child: content,
             );
+            // The rail floats on the window background (no divider): the
+            // tonal step between background and the panel cards carries the
+            // separation.
             final body = wide
                 ? Row(
                     children: [
@@ -272,6 +277,8 @@ class _ServicesScreenState extends ConsumerState<ServicesScreen>
                         selectedIndex: selectedIndex,
                         onDestinationSelected: selectIndex,
                         labelType: NavigationRailLabelType.all,
+                        minWidth: 84,
+                        groupAlignment: -0.95,
                         destinations: [
                           for (final s in sections)
                             NavigationRailDestination(
@@ -280,7 +287,6 @@ class _ServicesScreenState extends ConsumerState<ServicesScreen>
                             ),
                         ],
                       ),
-                      const VerticalDivider(width: 1),
                       Expanded(child: scrollable),
                     ],
                   )
@@ -371,6 +377,7 @@ class _SessionsTab extends ConsumerWidget {
 class _ServiceList extends ConsumerWidget {
   const _ServiceList({
     required this.section,
+    required this.sectionLabel,
     required this.relay,
     required this.accountLogin,
     required this.services,
@@ -382,6 +389,9 @@ class _ServiceList extends ConsumerWidget {
   /// Which section's cards this list renders (the selected responsive tab). The
   /// relay/account banner shows on every section.
   final ServicesSection section;
+
+  /// The localised section name, rendered as the list's heading.
+  final String sectionLabel;
   final String? relay;
 
   /// The signed-in GitHub login in account mode (null in self-host mode), shown
@@ -742,12 +752,21 @@ class _ServiceList extends ConsumerWidget {
     final showEnterButton =
         isSelectableSection && !selection.active && removableKeys.isNotEmpty;
     final listView = ListView(
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 16),
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 20),
       children: [
         _RelayBanner(
           relay: relay ?? l10n.relayNotConfigured,
           accountLogin: accountLogin,
           online: online,
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(4, 18, 4, 8),
+          child: Text(
+            sectionLabel,
+            style: Theme.of(
+              context,
+            ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+          ),
         ),
         if (showEnterButton)
           Align(
@@ -773,7 +792,16 @@ class _ServiceList extends ConsumerWidget {
         ...sectionChildren,
       ],
     );
-    if (!isSelectableSection || !selection.active) return listView;
+    // Readable line length on wide windows: the list column caps out and
+    // centres instead of stretching cards across the whole screen.
+    final constrained = Align(
+      alignment: Alignment.topCenter,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 780),
+        child: listView,
+      ),
+    );
+    if (!isSelectableSection || !selection.active) return constrained;
     // Selecting: pin a bottom action bar (cancel · select-all · remove(N)) so
     // the batch action stays reachable while the list scrolls.
     final selected = sectionEntries
@@ -784,7 +812,7 @@ class _ServiceList extends ConsumerWidget {
         selection.keys.length == removableKeys.length;
     return Column(
       children: [
-        Expanded(child: listView),
+        Expanded(child: constrained),
         Material(
           elevation: 8,
           color: scheme.surfaceContainerHigh,
@@ -1052,37 +1080,41 @@ class _RelayBanner extends StatelessWidget {
     final l10n = AppLocalizations.of(context);
     final scheme = Theme.of(context).colorScheme;
     final account = accountLogin != null;
+    // A flat accent hero: the one place the accent colour speaks at full
+    // volume, anchoring the page the way the logo tile anchors the dock.
     return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.all(14),
+      margin: const EdgeInsets.only(bottom: 4),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: scheme.primaryContainer.withValues(alpha: 0.45),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: scheme.primary.withValues(alpha: 0.18)),
+        color: scheme.primaryContainer,
+        borderRadius: BorderRadius.circular(18),
       ),
       child: Row(
         children: [
           _IconBadge(
             icon: account ? Icons.account_circle : Icons.dns,
-            bg: scheme.primaryContainer,
-            fg: scheme.onPrimaryContainer,
+            bg: scheme.primary,
+            fg: scheme.onPrimary,
           ),
-          const SizedBox(width: 12),
+          const SizedBox(width: 14),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
                   account ? '@$accountLogin' : relay,
-                  style: Theme.of(context).textTheme.titleSmall,
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w600,
+                    color: scheme.onPrimaryContainer,
+                  ),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
-                const SizedBox(height: 1),
+                const SizedBox(height: 2),
                 Text(
                   account ? l10n.accountSection : l10n.relayRow,
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: scheme.onSurfaceVariant,
+                    color: scheme.onPrimaryContainer.withValues(alpha: 0.75),
                   ),
                 ),
               ],
@@ -1152,24 +1184,28 @@ class _ServiceCard extends StatelessWidget {
     final effectiveTap = selecting ? (selectable ? onToggle : null) : onTap;
     final highlight = selected || (selecting && selectable && checked);
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
+      padding: const EdgeInsets.symmetric(vertical: 5),
       child: Opacity(
         opacity: dimmed ? 0.4 : 1,
         child: Material(
-          color: scheme.surfaceContainerLow,
-          borderRadius: BorderRadius.circular(14),
+          // A tonal panel on the window background; the accent border appears
+          // only for the selected/checked card.
+          color: surfacePanel(scheme),
+          borderRadius: BorderRadius.circular(16),
           child: InkWell(
             onTap: effectiveTap,
-            borderRadius: BorderRadius.circular(14),
+            borderRadius: BorderRadius.circular(16),
             child: Container(
               decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(14),
+                borderRadius: BorderRadius.circular(16),
                 border: Border.all(
-                  color: highlight ? scheme.primary : scheme.outlineVariant,
-                  width: highlight ? 2 : 1,
+                  color: highlight
+                      ? scheme.primary
+                      : scheme.outlineVariant.withValues(alpha: 0.4),
+                  width: highlight ? 1.5 : 1,
                 ),
               ),
-              padding: const EdgeInsets.all(12),
+              padding: const EdgeInsets.all(14),
               child: Row(
                 children: [
                   if (selecting && selectable) ...[
@@ -1187,7 +1223,8 @@ class _ServiceCard extends StatelessWidget {
                       children: [
                         Text(
                           title,
-                          style: Theme.of(context).textTheme.titleSmall,
+                          style: Theme.of(context).textTheme.titleSmall
+                              ?.copyWith(fontWeight: FontWeight.w600),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),
@@ -1260,11 +1297,11 @@ class _IconBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-    width: 42,
-    height: 42,
+    width: 44,
+    height: 44,
     decoration: BoxDecoration(
       color: bg,
-      borderRadius: BorderRadius.circular(12),
+      borderRadius: BorderRadius.circular(13),
     ),
     child: Icon(icon, size: 22, color: fg),
   );
@@ -1371,22 +1408,24 @@ class _LocalHostCard extends ConsumerWidget {
           );
     }
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
+      padding: const EdgeInsets.symmetric(vertical: 5),
       child: Material(
-        color: scheme.surfaceContainerLow,
-        borderRadius: BorderRadius.circular(14),
+        color: surfacePanel(scheme),
+        borderRadius: BorderRadius.circular(16),
         // The whole card opens the host dialog (stop + details); the per-tunnel
         // buttons inside absorb their own taps.
         child: InkWell(
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(16),
           onTap: () => showDialog<void>(
             context: context,
             builder: (_) => LocalHostDialog(existing: host),
           ),
           child: Container(
             decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: scheme.outlineVariant),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: scheme.outlineVariant.withValues(alpha: 0.4),
+              ),
             ),
             child: Column(
               children: [
@@ -1428,7 +1467,10 @@ class _LocalHostCard extends ConsumerWidget {
                     ],
                   ),
                 ),
-                Divider(height: 1, color: scheme.outlineVariant),
+                Divider(
+                  height: 1,
+                  color: scheme.outlineVariant.withValues(alpha: 0.5),
+                ),
                 _TunnelRow(
                   label: l10n.tunnelAppLabel,
                   addr: host.appListenAddr,
@@ -1441,7 +1483,10 @@ class _LocalHostCard extends ConsumerWidget {
                   ),
                   onReregister: () => _reregister(context, ref, 'app'),
                 ),
-                Divider(height: 1, color: scheme.outlineVariant),
+                Divider(
+                  height: 1,
+                  color: scheme.outlineVariant.withValues(alpha: 0.5),
+                ),
                 _TunnelRow(
                   label: l10n.tunnelApiLabel,
                   addr: host.apiListenAddr,
@@ -1454,7 +1499,10 @@ class _LocalHostCard extends ConsumerWidget {
                   ),
                   onReregister: () => _reregister(context, ref, 'api'),
                 ),
-                Divider(height: 1, color: scheme.outlineVariant),
+                Divider(
+                  height: 1,
+                  color: scheme.outlineVariant.withValues(alpha: 0.5),
+                ),
                 _TunnelRow(
                   label: l10n.tunnelMetaLabel,
                   addr: host.metaListenAddr,

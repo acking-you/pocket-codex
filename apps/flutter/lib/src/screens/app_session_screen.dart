@@ -2583,7 +2583,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           children: [
             // As the home screen, lead with the brand (this IS the app now).
             if (widget.home) ...[
-              const BrandLogo(size: 24, plated: false),
+              const BrandLogo(size: 24),
               const SizedBox(width: 10),
             ],
             Flexible(
@@ -6618,10 +6618,10 @@ class _EffortStepsState extends State<_EffortSteps> {
   }
 }
 
-/// Paints the effort track: a rounded track, a blue→violet→magenta fill up to
-/// the thumb, a stop per level, and a rounded-square thumb centred exactly on
-/// its stop. At the top level the fill turns vivid and gets a scattered "dither"
-/// shimmer — the reference's Ultracode flourish.
+/// Paints the effort track: a rounded track, a flat violet fill up to the
+/// thumb, a stop per level, and a rounded-square thumb centred exactly on
+/// its stop. At the top level the fill gets a scattered "dither" shimmer —
+/// the reference's Ultracode flourish.
 class _EffortPainter extends CustomPainter {
   _EffortPainter({
     required this.frac,
@@ -6649,12 +6649,8 @@ class _EffortPainter extends CustomPainter {
   final Color dotOff;
   final Brightness brightness;
 
-  // The cool gradient — blue → violet → magenta. Warmer/brighter in dark mode.
-  static const _fillStops = <Color>[
-    Color(0xFF4C8DF6),
-    Color(0xFF7A6BF3),
-    Color(0xFFB65BEA),
-  ];
+  // The flat violet fill (no gradients per the brand rules).
+  static const _fillColor = Color(0xFF7A6BF3);
 
   // A fixed scatter of unit-square offsets for the max-level shimmer, generated
   // once so it doesn't flicker as `frac` animates.
@@ -6685,7 +6681,7 @@ class _EffortPainter extends CustomPainter {
     );
     canvas.drawRRect(trackRect, Paint()..color = track);
 
-    // Gradient fill up to the thumb.
+    // Flat fill up to the thumb.
     final fillRight = cx.clamp(trackH, size.width);
     final fillRect = RRect.fromLTRBR(
       0,
@@ -6694,10 +6690,7 @@ class _EffortPainter extends CustomPainter {
       cy + trackH / 2,
       const Radius.circular(trackH / 2),
     );
-    final shader = const LinearGradient(
-      colors: _fillStops,
-    ).createShader(Rect.fromLTWH(0, cy - trackH / 2, size.width, trackH));
-    canvas.drawRRect(fillRect, Paint()..shader = shader);
+    canvas.drawRRect(fillRect, Paint()..color = _fillColor);
 
     // Max-level shimmer: scattered translucent squares over the fill.
     if (atMax) {

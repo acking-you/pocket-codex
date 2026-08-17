@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
 import 'package:pocket_codex/src/providers.dart';
+import 'package:pocket_codex/src/ui_prefs.dart';
 
 /// Settings: language, relay/key, subscription status, export.
 class SettingsScreen extends ConsumerStatefulWidget {
@@ -36,6 +37,18 @@ class _SettingsState extends ConsumerState<SettingsScreen> {
             subtitle: Text(_languageLabel(l10n, locale)),
             trailing: const Icon(Icons.language),
             onTap: () => _pickLanguage(api),
+          ),
+          ListTile(
+            key: const Key('appearance-btn'),
+            title: Text(l10n.appearance),
+            subtitle: Text(
+              _appearanceLabel(
+                l10n,
+                ref.watch(uiPrefsProvider).valueOrNull?.themeMode,
+              ),
+            ),
+            trailing: const Icon(Icons.brightness_6_outlined),
+            onTap: _pickAppearance,
           ),
           ListTile(
             key: const Key('codex-setup-btn'),
@@ -129,6 +142,38 @@ class _SettingsState extends ConsumerState<SettingsScreen> {
     }
   }
 
+  String _appearanceLabel(AppLocalizations l10n, String? mode) {
+    switch (mode) {
+      case 'light':
+        return l10n.appearanceLight;
+      case 'dark':
+        return l10n.appearanceDark;
+      default:
+        return l10n.appearanceSystem;
+    }
+  }
+
+  Future<void> _pickAppearance() async {
+    final l10n = AppLocalizations.of(context);
+    final current =
+        ref.read(uiPrefsProvider).valueOrNull?.themeMode ?? 'system';
+    final choice = await showDialog<String>(
+      context: context,
+      builder: (c) => SimpleDialog(
+        title: Text(l10n.appearance),
+        children: [
+          _choiceOption(c, 'system', l10n.appearanceSystem, current),
+          _choiceOption(c, 'light', l10n.appearanceLight, current),
+          _choiceOption(c, 'dark', l10n.appearanceDark, current),
+        ],
+      ),
+    );
+    if (choice == null) return;
+    ref
+        .read(uiPrefsProvider.notifier)
+        .setThemeMode(choice == 'system' ? null : choice);
+  }
+
   Future<void> _pickLanguage(BridgeApi api) async {
     final l10n = AppLocalizations.of(context);
     final current = ref.read(localeProvider)?.languageCode ?? 'system';
@@ -137,9 +182,9 @@ class _SettingsState extends ConsumerState<SettingsScreen> {
       builder: (c) => SimpleDialog(
         title: Text(l10n.language),
         children: [
-          _langOption(c, 'system', l10n.languageSystem, current),
-          _langOption(c, 'zh', l10n.languageChinese, current),
-          _langOption(c, 'en', l10n.languageEnglish, current),
+          _choiceOption(c, 'system', l10n.languageSystem, current),
+          _choiceOption(c, 'zh', l10n.languageChinese, current),
+          _choiceOption(c, 'en', l10n.languageEnglish, current),
         ],
       ),
     );
@@ -150,7 +195,7 @@ class _SettingsState extends ConsumerState<SettingsScreen> {
     await api.setLocale(choice == 'system' ? '' : choice);
   }
 
-  Widget _langOption(
+  Widget _choiceOption(
     BuildContext c,
     String value,
     String label,

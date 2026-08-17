@@ -13,8 +13,9 @@ import 'package:flutter/material.dart';
 /// skin of any one OS. [DesktopTokens] carries the handful of values shared
 /// widgets read so a bespoke desktop primitive stays consistent with the theme.
 
-/// The desktop corner radius. Small enough to read as a tool, not a phone card.
-const double kDesktopRadius = 7.0;
+/// The desktop corner radius: soft enough to feel modern, tight enough to
+/// read as a tool rather than a phone card.
+const double kDesktopRadius = 10.0;
 
 /// Values a desktop-flavored widget reads to stay in step with the theme. Only
 /// present in the tree on desktop; `context.desktop` is null on mobile.
@@ -40,14 +41,15 @@ class DesktopTokens extends ThemeExtension<DesktopTokens> {
   /// Pointer-hover wash for an interactive row or button.
   final Color hover;
 
-  /// Tokens derived from a colour scheme.
+  /// Tokens derived from a colour scheme. The panel mirrors `surfacePanel`
+  /// in `theme.dart` (kept inline here to avoid a circular import): white
+  /// panels on tinted paper in light mode, tonally raised panels in dark.
   factory DesktopTokens.of(ColorScheme s) => DesktopTokens(
     radius: kDesktopRadius,
-    panel: Color.alphaBlend(
-      s.surfaceContainerHighest.withValues(alpha: 0.5),
-      s.surface,
-    ),
-    border: s.outlineVariant,
+    panel: s.brightness == Brightness.light
+        ? s.surfaceContainerLowest
+        : s.surfaceContainer,
+    border: s.outlineVariant.withValues(alpha: 0.7),
     hover: s.onSurface.withValues(alpha: 0.05),
   );
 
@@ -92,6 +94,10 @@ ThemeData desktopize(ThemeData base) {
     borderRadius: radius,
     side: border,
   );
+  // Menus float above the panels, so they take one tone step more.
+  final menuColor = scheme.brightness == Brightness.light
+      ? scheme.surfaceContainerLowest
+      : scheme.surfaceContainerHigh;
 
   return base.copyWith(
     // Denser rows, buttons, list tiles — desktop packs more per screen.
@@ -101,28 +107,23 @@ ThemeData desktopize(ThemeData base) {
     hoverColor: scheme.onSurface.withValues(alpha: 0.05),
     highlightColor: scheme.onSurface.withValues(alpha: 0.06),
     dividerTheme: base.dividerTheme.copyWith(
-      color: scheme.outlineVariant,
+      color: scheme.outlineVariant.withValues(alpha: 0.7),
       thickness: 1,
       space: 1,
     ),
-    // Surfaces read as bordered panels, not tonally-raised cards.
-    cardTheme: base.cardTheme.copyWith(
-      elevation: 0,
-      color: scheme.surface,
-      surfaceTintColor: Colors.transparent,
-      shape: borderedShape,
-      margin: EdgeInsets.zero,
-    ),
+    // Cards keep the base theme's tonal-panel look (colour + 14px radius);
+    // depth comes from tone, not borders, on desktop too.
     dialogTheme: base.dialogTheme.copyWith(
       elevation: 1,
       surfaceTintColor: Colors.transparent,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(14),
         side: border,
       ),
     ),
     popupMenuTheme: base.popupMenuTheme.copyWith(
       elevation: 2,
+      color: menuColor,
       surfaceTintColor: Colors.transparent,
       shape: borderedShape,
     ),
@@ -130,7 +131,7 @@ ThemeData desktopize(ThemeData base) {
       style: MenuStyle(
         elevation: const WidgetStatePropertyAll(2),
         surfaceTintColor: const WidgetStatePropertyAll(Colors.transparent),
-        backgroundColor: WidgetStatePropertyAll(scheme.surface),
+        backgroundColor: WidgetStatePropertyAll(menuColor),
         shape: WidgetStatePropertyAll(borderedShape),
       ),
     ),

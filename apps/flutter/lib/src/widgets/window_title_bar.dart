@@ -74,20 +74,33 @@ class WindowTitleBar extends StatelessWidget implements PreferredSizeWidget {
     final isMac = defaultTargetPlatform == TargetPlatform.macOS;
     final leadInset = isMac ? _macLeadingInset : 0.0;
 
+    // Materialise the implied back button ourselves: AppBar's own implied
+    // leading knows nothing about the traffic lights and would sit under
+    // them, so every leading — explicit or implied — goes through the inset.
+    final impliedBack =
+        leading == null &&
+            automaticallyImplyLeading &&
+            (ModalRoute.of(context)?.canPop ?? false)
+        ? const BackButton()
+        : null;
+    final effectiveLeading = leading ?? impliedBack;
+
     // Push a leading widget right past the traffic lights; when there is none,
     // inset the title instead so it doesn't start under them.
-    final leadingWidget = leading == null
+    final leadingWidget = effectiveLeading == null
         ? null
         : Padding(
             padding: EdgeInsets.only(left: leadInset),
-            child: leading,
+            child: effectiveLeading,
           );
 
     return AppBar(
-      automaticallyImplyLeading: automaticallyImplyLeading,
-      leadingWidth: leading == null ? null : leadInset + kToolbarHeight,
+      automaticallyImplyLeading: false,
+      leadingWidth: effectiveLeading == null
+          ? null
+          : leadInset + kToolbarHeight,
       leading: leadingWidget,
-      titleSpacing: leading == null
+      titleSpacing: effectiveLeading == null
           ? leadInset + NavigationToolbar.kMiddleSpacing
           : NavigationToolbar.kMiddleSpacing,
       title: title,

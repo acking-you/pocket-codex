@@ -1,42 +1,27 @@
 import 'package:flutter/material.dart';
 
-/// The Pocket-Codex brand mark.
+/// The Pocket-Codex brand mark: the rounded "cloud terminal" tile.
 ///
-/// `assets/logo/mark.png` is the transparent glyph (cropped from the
-/// adaptive-icon foreground), so it can sit directly on any surface.
-/// With [plated] the mark is centred on a rounded plate tinted from the
-/// active [ColorScheme], which keeps the tile in tune with both the
-/// light and dark themes instead of baking in a fixed background.
+/// Two theme-matched variants ship in the bundle (generated from the masters
+/// in `icon/` by `test/gen_icon_test.dart`): `mark_light.png` (white tile,
+/// ink glyph) for light themes and `mark_dark.png` (ink tile, white glyph)
+/// for dark themes, so the logo always reads against the current surface.
+/// Corners are transparent — the rounding is baked into the PNGs.
 class BrandLogo extends StatelessWidget {
   /// Default constructor.
-  const BrandLogo({super.key, this.size = 96, this.plated = true});
+  const BrandLogo({super.key, this.size = 96});
 
   /// Edge length of the (square) widget.
   final double size;
 
-  /// Whether to draw the rounded theme-tinted plate behind the mark.
-  final bool plated;
-
   @override
   Widget build(BuildContext context) {
-    final mark = Image.asset(
-      'assets/logo/mark.png',
-      width: plated ? null : size,
-      height: plated ? null : size,
-      filterQuality: FilterQuality.medium,
-    );
-    if (!plated) return mark;
-    final scheme = Theme.of(context).colorScheme;
-    return Container(
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    return Image.asset(
+      dark ? 'assets/logo/mark_dark.png' : 'assets/logo/mark_light.png',
       width: size,
       height: size,
-      // ~25% corner radius matches the app-icon plate proportions.
-      decoration: BoxDecoration(
-        color: scheme.primaryContainer,
-        borderRadius: BorderRadius.circular(size * 0.25),
-      ),
-      padding: EdgeInsets.all(size * 0.16),
-      child: mark,
+      filterQuality: FilterQuality.medium,
     );
   }
 }

@@ -21,6 +21,7 @@ class UiPrefs {
     this.lastThreadByService = const {},
     this.autoHost,
     this.guideSeen = false,
+    this.themeMode,
   });
 
   /// Full relay key of the app service the user last chatted on.
@@ -38,19 +39,28 @@ class UiPrefs {
   /// the first time it renders, so signing in ever again skips it.
   final bool guideSeen;
 
+  /// Explicit theme choice: `'light'` / `'dark'`, or null to follow the
+  /// system. A string (not the enum) so the on-disk JSON stays readable and
+  /// index-shift-proof.
+  final String? themeMode;
+
   /// Copy with the given fields replaced. `clearAutoHost` removes the
-  /// auto-host record (a plain null argument means "keep").
+  /// auto-host record; `clearThemeMode` returns to follow-system (a plain
+  /// null argument means "keep").
   UiPrefs copyWith({
     String? lastServiceKey,
     Map<String, String>? lastThreadByService,
     AutoHostPrefs? autoHost,
     bool clearAutoHost = false,
     bool? guideSeen,
+    String? themeMode,
+    bool clearThemeMode = false,
   }) => UiPrefs(
     lastServiceKey: lastServiceKey ?? this.lastServiceKey,
     lastThreadByService: lastThreadByService ?? this.lastThreadByService,
     autoHost: clearAutoHost ? null : (autoHost ?? this.autoHost),
     guideSeen: guideSeen ?? this.guideSeen,
+    themeMode: clearThemeMode ? null : (themeMode ?? this.themeMode),
   );
 
   /// Parse from JSON; any shape surprise degrades to defaults.
@@ -72,6 +82,9 @@ class UiPrefs {
           ? AutoHostPrefs.fromJson(rawHost)
           : null,
       guideSeen: json['guideSeen'] == true,
+      themeMode: json['themeMode'] == 'light' || json['themeMode'] == 'dark'
+          ? json['themeMode'] as String
+          : null,
     );
   }
 
@@ -82,6 +95,7 @@ class UiPrefs {
       'lastThreadByService': lastThreadByService,
     if (autoHost != null) 'autoHost': autoHost!.toJson(),
     if (guideSeen) 'guideSeen': true,
+    if (themeMode != null) 'themeMode': themeMode,
   };
 }
 
@@ -170,6 +184,7 @@ class UiPrefsStore extends AsyncNotifier<UiPrefs> {
         autoHost: raced.autoHost ?? loaded.autoHost,
         // Only ever flips false→true, so OR-merging is lossless.
         guideSeen: raced.guideSeen || loaded.guideSeen,
+        themeMode: raced.themeMode ?? loaded.themeMode,
       );
       _enqueueWrite(merged);
       return merged;
@@ -239,6 +254,16 @@ class UiPrefsStore extends AsyncNotifier<UiPrefs> {
   /// Remember the hosting the user just started, for cold-start restore.
   void setAutoHost(AutoHostPrefs host) {
     final next = _current.copyWith(autoHost: host);
+    state = AsyncData(next);
+    _enqueueWrite(next);
+  }
+
+  /// Set the theme: `'light'` / `'dark'`, or null to follow the system.
+  void setThemeMode(String? mode) {
+    if (_current.themeMode == mode) return;
+    final next = mode == null
+        ? _current.copyWith(clearThemeMode: true)
+        : _current.copyWith(themeMode: mode);
     state = AsyncData(next);
     _enqueueWrite(next);
   }

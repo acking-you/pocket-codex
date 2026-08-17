@@ -117,25 +117,39 @@ class StatusChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final muted = Theme.of(context).colorScheme.onSurfaceVariant;
+    final scheme = Theme.of(context).colorScheme;
+    final isLight = scheme.brightness == Brightness.light;
+    // Filled pills speak in the status colour itself (shifted towards the
+    // text pole for contrast); the bare dot+label stays muted.
+    final labelColor = filled
+        ? Color.lerp(color, isLight ? Colors.black : Colors.white, 0.35)!
+        : scheme.onSurfaceVariant;
     final row = Row(
       mainAxisSize: MainAxisSize.min,
       children: [
         pulsing
             ? PulsingDot(color: color, size: 8)
             : StatusDot(color: color, size: 8),
-        const SizedBox(width: 5),
-        Text(label, style: TextStyle(fontSize: 11.5, color: muted)),
+        const SizedBox(width: 6),
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 11.5,
+            color: labelColor,
+            fontWeight: filled ? FontWeight.w600 : FontWeight.w400,
+            letterSpacing: 0.1,
+          ),
+        ),
       ],
     );
     if (!filled) return row;
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4.5),
       decoration: BoxDecoration(
-        // A faint wash of the status colour: enough to read as a pill in both
-        // themes, neutral enough that the label (onSurfaceVariant) stays legible.
-        color: color.withValues(alpha: 0.13),
-        borderRadius: BorderRadius.circular(20),
+        // A wash of the status colour: enough to read as a pill in both
+        // themes without shouting over the card content.
+        color: color.withValues(alpha: isLight ? 0.12 : 0.18),
+        borderRadius: BorderRadius.circular(999),
       ),
       child: row,
     );

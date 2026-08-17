@@ -1,98 +1,154 @@
-// Rasterises the vector brand marks into the transparent PNGs the
-// launcher-icon / splash / tray pipelines consume, so the single SVGs stay the
-// source of truth and every platform render is pixel-identical to them.
+// Derives every launcher / splash / tray / in-app logo asset from the two
+// checked-in brand masters:
+//
+//   icon/logo_light.png  white tile, ink cloud->_ glyph, cyan→violet arcs
+//   icon/logo_dark.png   ink tile, white cloud->_ glyph, mint arcs
+//
+// The masters are AI-generated opaque PNGs (no alpha, black surround, tile
+// inset varies), so this pipeline normalises them: it detects the tile's
+// bounding box against the surround, samples the tile's interior colour, and
+// re-composites with a clean 22% rounded-rect clip (the macOS squircle
+// proportion) at whatever inset each consumer needs.
 //
 // Regeneration is opt-in: PNG encoding is not byte-identical across platforms,
 // so writing on every `flutter test` run would dirty the checked-in assets.
 // Without REGEN_ICONS=1 these tests are skipped.
 //
 // Run: REGEN_ICONS=1 fvm flutter test test/gen_icon_test.dart
-// Outputs (app icon — icon/pocket_mark.svg):
-//   icon/icon_glyph.png          big, bare mark (iOS / desktop / web / legacy)
-//   icon/adaptive_foreground.png mark inside the Android adaptive safe zone
-//   assets/logo/mark.png         in-app BrandLogo + splash glyph
-// Outputs (tray icon — icon/tray_mark.svg):
-//   assets/tray/tray.png         macOS / Linux tray (loaded as a PNG)
-//   assets/tray/tray.ico         Windows tray (multi-size .ico; tray_manager
-//                                feeds it to LoadImage, which needs a real ICO)
+// Outputs (launcher — from logo_dark.png, works on light AND dark docks):
+//   icon/icon_glyph.png        rounded tile + margin (desktop / web)
+//   icon/icon_mobile.png       full-bleed opaque tile (iOS + Android legacy)
+//   icon/icon_adaptive_bg.png  solid tile colour (Android adaptive background)
+//   icon/icon_adaptive_fg.png  tile scaled into the safe zone (adaptive fg)
+// Outputs (in-app + splash — theme-matched):
+//   assets/logo/mark_light.png rounded light tile (light theme / light splash)
+//   assets/logo/mark_dark.png  rounded dark tile  (dark theme / dark splash)
+// Outputs (tray — from logo_dark.png):
+//   assets/tray/tray.png       macOS / Linux tray (loaded as a PNG)
+//   assets/tray/tray.ico       Windows tray (multi-size .ico; tray_manager
+//                              feeds it to LoadImage, which needs a real ICO)
+//
+// It also prints the sampled tile interior colours: keep
+// `flutter_native_splash.color` / `color_dark` in pubspec.yaml in sync with
+// them so the splash tile melts seamlessly into the splash background.
 import 'dart:io';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
-import 'package:flutter_svg/flutter_svg.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
 
-/// Rasterises [svg] centred at [markFraction] of a [size]x[size] transparent
-/// canvas and returns the PNG bytes.
-Future<Uint8List> rasteriseSvg(
-  String svg,
-  double markFraction, {
-  double size = 1024,
-}) async {
-  final info = await vg.loadPicture(SvgStringLoader(svg), null);
-  final src = info.size;
+/// A decoded master plus the geometry/colour facts the compositor needs.
+class Master {
+  Master(this.image, this.pixels, this.tile, this.interior);
 
-  final recorder = ui.PictureRecorder();
-  final canvas = Canvas(recorder, Rect.fromLTWH(0, 0, size, size));
-  final draw = size * markFraction;
-  final scale = draw / src.width;
-  final offset = (size - draw) / 2;
-  canvas.translate(offset, offset);
-  canvas.scale(scale);
-  canvas.drawPicture(info.picture);
+  /// The decoded PNG.
+  final ui.Image image;
 
-  final image = await recorder.endRecording().toImage(
-    size.toInt(),
-    size.toInt(),
-  );
-  final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
-  info.picture.dispose();
-  return bytes!.buffer.asUint8List();
+  /// Raw RGBA bytes of [image].
+  final Uint8List pixels;
+
+  /// Bounding box of the tile (everything that differs from the surround).
+  final Rect tile;
+
+  /// The tile's flat interior colour (sampled inside the tile, off-glyph).
+  final Color interior;
 }
 
-/// Renders [svg] at [markFraction] of a [size] canvas and writes it to [path]
-/// as a PNG.
-Future<void> renderSvg(
-  String svg,
-  String path,
-  double markFraction, {
-  double size = 1024,
-}) async {
-  final bytes = await rasteriseSvg(svg, markFraction, size: size);
-  await File(path).writeAsBytes(bytes);
+Color _pixel(Uint8List rgba, int width, int x, int y) {
+  final i = (y * width + x) * 4;
+  return Color.fromARGB(rgba[i + 3], rgba[i], rgba[i + 1], rgba[i + 2]);
 }
 
-/// Stacks [layers] (each `(svg, markFraction)`, bottom-first) onto one
-/// [size]x[size] transparent canvas and returns the PNG bytes. Each layer is
-/// scaled to [markFraction] of the canvas and centred (the SVGs are square), so
-/// a full-bleed background (1.0) can carry a smaller centred glyph on top.
-Future<Uint8List> compositeSvgs(
-  List<(String, double)> layers, {
-  double size = 1024,
-}) async {
-  final recorder = ui.PictureRecorder();
-  final canvas = Canvas(recorder, Rect.fromLTWH(0, 0, size, size));
-  for (final (svg, markFraction) in layers) {
-    final info = await vg.loadPicture(SvgStringLoader(svg), null);
-    final draw = size * markFraction;
-    final scale = draw / info.size.width;
-    final offset = (size - draw) / 2;
-    canvas.save();
-    canvas.translate(offset, offset);
-    canvas.scale(scale);
-    canvas.drawPicture(info.picture);
-    canvas.restore();
-    info.picture.dispose();
+int _diff(Color a, Color b) {
+  return ((a.r - b.r).abs() + (a.g - b.g).abs() + (a.b - b.b).abs() * 255)
+      .round();
+}
+
+/// Loads a master PNG and derives its tile bbox + interior colour.
+Future<Master> loadMaster(String path) async {
+  final bytes = await File(path).readAsBytes();
+  final codec = await ui.instantiateImageCodec(bytes);
+  final image = (await codec.getNextFrame()).image;
+  final data = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+  final rgba = data!.buffer.asUint8List();
+  final w = image.width, h = image.height;
+
+  // Everything sufficiently different from the corner pixel is "tile".
+  final surround = _pixel(rgba, w, 0, 0);
+  var minX = w, minY = h, maxX = -1, maxY = -1;
+  for (var y = 0; y < h; y++) {
+    for (var x = 0; x < w; x++) {
+      if (_diff(_pixel(rgba, w, x, y), surround) > 30) {
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
+    }
   }
-  final image = await recorder.endRecording().toImage(
-    size.toInt(),
-    size.toInt(),
+  expect(maxX, greaterThan(minX), reason: 'no tile found in $path');
+  final tile = Rect.fromLTRB(
+    minX.toDouble(),
+    minY.toDouble(),
+    (maxX + 1).toDouble(),
+    (maxY + 1).toDouble(),
   );
-  final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
-  return bytes!.buffer.asUint8List();
+
+  // Sample the flat tile colour near the top-left inside the tile — clear of
+  // the centred glyph and of the arcs in the top-right corner.
+  final interior = _pixel(
+    rgba,
+    w,
+    (tile.left + tile.width * 0.14).round(),
+    (tile.top + tile.height * 0.14).round(),
+  );
+  return Master(image, rgba, tile, interior);
 }
+
+/// Draws [m]'s tile centred at [fraction] of a [size] canvas, clipped to a
+/// 22% rounded rect. With a [background] the canvas is opaque (full-bleed
+/// consumers); without one the surround stays transparent.
+Future<Uint8List> compose(
+  Master m, {
+  double size = 1024,
+  double fraction = 1.0,
+  Color? background,
+}) async {
+  final recorder = ui.PictureRecorder();
+  final canvas = Canvas(recorder, Rect.fromLTWH(0, 0, size, size));
+  if (background != null) {
+    canvas.drawRect(
+      Rect.fromLTWH(0, 0, size, size),
+      Paint()..color = background,
+    );
+  }
+  final draw = size * fraction;
+  final offset = (size - draw) / 2;
+  final dst = Rect.fromLTWH(offset, offset, draw, draw);
+  canvas.save();
+  canvas.clipRRect(RRect.fromRectAndRadius(dst, Radius.circular(draw * 0.22)));
+  canvas.drawImageRect(
+    m.image,
+    m.tile,
+    dst,
+    Paint()..filterQuality = FilterQuality.high,
+  );
+  canvas.restore();
+  final out = await recorder.endRecording().toImage(size.toInt(), size.toInt());
+  final png = await out.toByteData(format: ui.ImageByteFormat.png);
+  return png!.buffer.asUint8List();
+}
+
+Future<void> writePng(String path, Uint8List bytes) =>
+    File(path).writeAsBytes(bytes);
+
+String _hex(Color c) =>
+    '#${(c.r * 255).round().toRadixString(16).padLeft(2, '0')}'
+            '${(c.g * 255).round().toRadixString(16).padLeft(2, '0')}'
+            '${(c.b * 255).round().toRadixString(16).padLeft(2, '0')}'
+        .toUpperCase();
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -103,56 +159,67 @@ void main() {
       ? false
       : 'set REGEN_ICONS=1 to regenerate the checked-in icon assets';
 
-  test('rasterise pocket mark into app-icon assets', () async {
-    final svg = File('icon/pocket_mark.svg').readAsStringSync();
-    await renderSvg(svg, 'icon/icon_glyph.png', 0.82);
-    await renderSvg(svg, 'icon/adaptive_foreground.png', 0.58);
-    await renderSvg(svg, 'assets/logo/mark.png', 0.82);
-    expect(File('icon/icon_glyph.png').existsSync(), isTrue);
-    expect(File('icon/adaptive_foreground.png').existsSync(), isTrue);
-    expect(File('assets/logo/mark.png').existsSync(), isTrue);
+  test('derive launcher + in-app assets from the brand masters', () async {
+    final light = await loadMaster('icon/logo_light.png');
+    final dark = await loadMaster('icon/logo_dark.png');
+    // Keep flutter_native_splash color / color_dark in sync with these.
+    debugPrint(
+      'tile interior light=${_hex(light.interior)} '
+      'dark=${_hex(dark.interior)}',
+    );
+
+    // In-app brand marks + splash images, one per theme, transparent corners.
+    await writePng('assets/logo/mark_light.png', await compose(light));
+    await writePng('assets/logo/mark_dark.png', await compose(dark));
+
+    // Launcher icons all come from the dark master: the ink tile reads on
+    // light AND dark docks/launchers, and matches the app's brand surface.
+    // Desktop/web get the usual ~10% margin; mobile is full-bleed opaque
+    // (the OS applies its own mask, and iOS rejects alpha).
+    await writePng('icon/icon_glyph.png', await compose(dark, fraction: 0.9));
+    await writePng(
+      'icon/icon_mobile.png',
+      await compose(dark, background: dark.interior),
+    );
+    // Android adaptive layers: solid tile colour behind, the tile shrunk into
+    // the safe zone in front (masks show only the centre ~66%).
+    await writePng(
+      'icon/icon_adaptive_bg.png',
+      await compose(dark, fraction: 0, background: dark.interior),
+    );
+    await writePng(
+      'icon/icon_adaptive_fg.png',
+      await compose(dark, fraction: 0.72, background: dark.interior),
+    );
+
+    for (final f in [
+      'assets/logo/mark_light.png',
+      'assets/logo/mark_dark.png',
+      'icon/icon_glyph.png',
+      'icon/icon_mobile.png',
+      'icon/icon_adaptive_bg.png',
+      'icon/icon_adaptive_fg.png',
+    ]) {
+      expect(File(f).existsSync(), isTrue, reason: '$f not written');
+    }
   }, skip: skip);
 
-  test('rasterise mobile icon (brand tile + centred white glyph)', () async {
-    final bg = File('icon/mobile_bg.svg').readAsStringSync();
-    final glyph = File('icon/mobile_glyph.svg').readAsStringSync();
-
-    // Legacy Android mipmaps + iOS take a single full-bleed image: the brand
-    // gradient tile with the white >_ centred and small (the launcher / iOS
-    // round the corners). Composited so the glyph sits over the gradient.
-    final mobile = await compositeSvgs([(bg, 1.0), (glyph, 0.76)]);
-    await File('icon/icon_mobile.png').writeAsBytes(mobile);
-
-    // Android adaptive layers (API 26+): the gradient is the full-bleed
-    // background and the white >_ is the foreground. The foreground is rendered
-    // a touch smaller (0.66) because the adaptive safe zone shows less of the
-    // canvas, so the glyph ends up the same on-screen size as the legacy icon.
-    await renderSvg(bg, 'icon/icon_adaptive_bg.png', 1.0);
-    await renderSvg(glyph, 'icon/icon_adaptive_fg.png', 0.66);
-
-    expect(File('icon/icon_mobile.png').existsSync(), isTrue);
-    expect(File('icon/icon_adaptive_bg.png').existsSync(), isTrue);
-    expect(File('icon/icon_adaptive_fg.png').existsSync(), isTrue);
-  }, skip: skip);
-
-  test('rasterise tray mark into tray assets (png + multi-size ico)', () async {
-    final svg = File('icon/tray_mark.svg').readAsStringSync();
+  test('derive tray assets (png + multi-size ico)', () async {
+    final dark = await loadMaster('icon/logo_dark.png');
     Directory('assets/tray').createSync(recursive: true);
 
-    // macOS / Linux load the icon as a PNG. The SVG already bakes its own
-    // padding, so render the full mark (markFraction 1.0); a 256 source scales
-    // down cleanly to the ~18-22 px the tray actually shows.
-    await renderSvg(svg, 'assets/tray/tray.png', 1.0, size: 256);
+    // macOS / Linux load the icon as a PNG; a 256 source scales down cleanly
+    // to the ~18-22 px the tray actually shows.
+    await writePng('assets/tray/tray.png', await compose(dark, size: 256));
 
     // Windows: tray_manager hands the path to LoadImage(IMAGE_ICON,
     // LR_LOADFROMFILE), which needs a true .ico — a .png silently fails to
-    // load. Render each frame size directly from the vector (crisper than
-    // downscaling one big raster) and pack them into a PNG-framed ICO
-    // (supported by Windows Vista+). LoadImage asks for SM_CXSMICON (16-24 px),
-    // so the small frames carry the on-screen look.
+    // load. Render each frame size directly (crisper than downscaling one big
+    // raster) and pack them into a PNG-framed ICO (Vista+). LoadImage asks for
+    // SM_CXSMICON (16-24 px), so the small frames carry the on-screen look.
     final frames = <img.Image>[];
     for (final s in [16, 24, 32, 48, 256]) {
-      final png = await rasteriseSvg(svg, 1.0, size: s.toDouble());
+      final png = await compose(dark, size: s.toDouble());
       frames.add(img.decodePng(png)!);
     }
     final ico = img.IcoEncoder().encodeImages(frames);

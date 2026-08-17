@@ -11,6 +11,7 @@ import 'package:pocket_codex/src/log_manager.dart';
 import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/router.dart';
 import 'package:pocket_codex/src/theme.dart';
+import 'package:pocket_codex/src/ui_prefs.dart';
 import 'package:pocket_codex/src/rust/api/bridge.dart' as frb;
 import 'package:pocket_codex/src/rust/frb_generated.dart';
 
@@ -96,8 +97,8 @@ class _UnsupportedPlatformApp extends StatelessWidget {
   }
 }
 
-/// Root app: Material 3 light/dark following the system, go_router nav,
-/// locale driven by [localeProvider].
+/// Root app: Material 3 light/dark (user-selectable in settings, following
+/// the system by default), go_router nav, locale driven by [localeProvider].
 class PocketCodexApp extends ConsumerStatefulWidget {
   /// [initialLocation] decides onboarding vs services on cold start.
   const PocketCodexApp({super.key, required this.initialLocation});
@@ -117,11 +118,20 @@ class _PocketCodexAppState extends ConsumerState<PocketCodexApp> {
   @override
   Widget build(BuildContext context) {
     final locale = ref.watch(localeProvider);
+    // Explicit light/dark from settings, follow-system by default. While the
+    // prefs file is still loading, follow the system — a saved choice snaps in
+    // one frame later, which beats blocking first paint on disk I/O.
+    final themePref = ref.watch(uiPrefsProvider).valueOrNull?.themeMode;
+    final themeMode = switch (themePref) {
+      'light' => ThemeMode.light,
+      'dark' => ThemeMode.dark,
+      _ => ThemeMode.system,
+    };
     return MaterialApp.router(
       onGenerateTitle: (context) => AppLocalizations.of(context).appTitle,
       theme: lightTheme(),
       darkTheme: darkTheme(),
-      themeMode: ThemeMode.system,
+      themeMode: themeMode,
       locale: locale,
       localizationsDelegates: AppLocalizations.localizationsDelegates,
       supportedLocales: AppLocalizations.supportedLocales,
