@@ -2757,14 +2757,23 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                   onPressed: _backToProjects,
                 ),
               const SizedBox(width: 8),
+              // The title is a label, not a banner: cap it well short of the
+              // bar so a long conversation preview truncates and the rest of
+              // the strip stays empty (and draggable).
               Expanded(
-                child: Text(
-                  _barTitle(l10n),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 420),
+                    child: Text(
+                      _barTitle(l10n),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
                   ),
                 ),
               ),
