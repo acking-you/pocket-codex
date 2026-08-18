@@ -103,11 +103,23 @@ class DesktopTray with TrayListener, WindowListener {
     windowManager.addListener(this);
 
     trayManager.addListener(this);
-    // Windows' Shell_NotifyIcon needs a real .ico (tray_manager feeds the path
-    // to LoadImage); macOS/Linux take a PNG. Both ship as flutter_assets.
-    await trayManager.setIcon(
-      _isWindows ? 'assets/tray/tray.ico' : 'assets/tray/tray.png',
-    );
+    // Per-platform icon: Windows' Shell_NotifyIcon needs a real .ico
+    // (tray_manager feeds the path to LoadImage); Linux takes a PNG. macOS
+    // menu-bar items are TEMPLATE images — black + alpha that the system
+    // tints to match the bar (light/dark mode, highlight) — so it gets the
+    // monochrome glyph. The plugin loads the exact asset key and pins it to
+    // 18pt, so ship the @2x file directly: Retina fills those points and 1x
+    // displays scale it back down cleanly.
+    if (_isMacOS) {
+      await trayManager.setIcon(
+        'assets/tray/tray_template@2x.png',
+        isTemplate: true,
+      );
+    } else {
+      await trayManager.setIcon(
+        _isWindows ? 'assets/tray/tray.ico' : 'assets/tray/tray.png',
+      );
+    }
     // appindicator (Linux) has no hover tooltip; setting one is a harmless
     // no-op, but skip it to keep the platform log clean.
     if (!_isLinux) {
@@ -138,6 +150,18 @@ class DesktopTray with TrayListener, WindowListener {
   }
 
   Future<void> _show() async {
+    if (await windowManager.isMinimized()) {
+      await windowManager.restore();
+    }
+    await windowManager.show();
+    await windowManager.focus();
+    // macOS hides by ordering the window out, which also drops the app from
+    // the foreground. A single show/focus pair sometimes lands while the shell
+    // still owns activation — the click on the tray just gave it away — and
+    // the window stays gone. Confirm it came back and ask once more if not.
+    if (!_isMacOS) return;
+    await Future<void>.delayed(const Duration(milliseconds: 120));
+    if (await windowManager.isVisible()) return;
     await windowManager.show();
     await windowManager.focus();
   }
@@ -180,13 +204,15 @@ class DesktopTray with TrayListener, WindowListener {
   @override
   void onTrayIconMouseDown() {
     // Windows: primary click reveals the window (the menu is on right-click).
-    // macOS: the plugin does NOT auto-attach the status-item menu, so a click
-    // must pop it explicitly — otherwise the icon is inert. Linux/appindicator
-    // opens its menu natively and sends no click events, so it needs nothing.
+    // macOS: the menu-bar convention is that a LEFT click opens the menu, and
+    // it is also the only click the plugin reports reliably there (the status
+    // item's right-click arrives through an NSView subview that doesn't
+    // always receive the event). Linux/appindicator opens its menu natively
+    // and sends no click events, so it needs nothing.
     if (_isWindows) {
       _show();
     } else if (_isMacOS) {
-      trayManager.popUpContextMenu();
+      _popUpMenu();
     }
   }
 
@@ -195,7 +221,16 @@ class DesktopTray with TrayListener, WindowListener {
     // Windows and macOS pop the context menu on (right-)click; Linux's
     // appindicator does it natively.
     if (_isWindows || _isMacOS) {
-      trayManager.popUpContextMenu();
+      _popUpMenu();
     }
+  }
+
+  void _popUpMenu() {
+    // Win32 requires the menu's owner to be the foreground window before
+    // TrackPopupMenu, or the menu stays on screen when the user clicks away.
+    // bringAppToFront is the plugin's only route to SetForegroundWindow; it is
+    // deprecated upstream but still the fix. Harmless elsewhere.
+    // ignore: deprecated_member_use
+    trayManager.popUpContextMenu(bringAppToFront: _isWindows);
   }
 }

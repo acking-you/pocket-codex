@@ -114,7 +114,9 @@ void main() {
     // project's row annotation (the single-service switcher label reads
     // 'devbox · alpha'), so this pins the per-row project tag specifically.
     expect(find.text('old topic'), findsOneWidget);
-    expect(find.text('newest topic'), findsOneWidget);
+    // Twice: the sidebar row and the content top bar, which titles the
+    // (resumed) conversation with its preview.
+    expect(find.text('newest topic'), findsNWidgets(2));
     expect(find.textContaining('beta'), findsWidgets);
   });
 

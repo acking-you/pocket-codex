@@ -14,6 +14,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:super_sliver_list/super_sliver_list.dart';
+import 'package:window_manager/window_manager.dart' show DragToMoveArea;
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/app_modes.dart';
 import 'package:pocket_codex/src/attachment_refs.dart';
@@ -2304,6 +2305,23 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     return parts.isEmpty ? c : parts.last;
   }
 
+  /// Title-bar text: the current conversation, ChatGPT-desktop style. Falls
+  /// back through the server-side thread preview, then the locally echoed
+  /// last user message (a fresh thread's server preview stays empty until its
+  /// first turn round-trips), then "new conversation".
+  String _barTitle(AppLocalizations l10n) {
+    final tid = _threadId;
+    if (tid != null) {
+      final match = _threads.where((t) => t.id == tid);
+      final preview = match.isEmpty ? '' : match.first.preview;
+      for (final candidate in [preview, _lastUserText ?? '']) {
+        final line = candidate.trim().split('\n').first.trim();
+        if (line.isNotEmpty) return line;
+      }
+    }
+    return l10n.newConversation;
+  }
+
   /// Desktop hover text for the context gauge: a one-line token breakdown.
   String _contextTooltip(AppLocalizations l10n) {
     final c = _ctx;
@@ -2538,158 +2556,244 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
     final width = MediaQuery.of(context).size.width;
-    final isMobile = width < 600;
     final needsCodexSetup = _codexNeedsSetup(watch: true);
-    return Scaffold(
-      // On phones the sessions list is a slide-in drawer (hamburger); on wider
-      // screens it's an inline collapsible pane (see the body).
-      drawer: isMobile
-          ? Drawer(child: SafeArea(child: _sessionsPane(l10n, inDrawer: true)))
-          : null,
-      // Widen the edge-swipe-to-open zone (default ~20px). The narrow default
-      // sits under Android's system back-gesture strip, so a left-edge swipe
-      // almost always triggered "back" instead of the drawer; a 56px zone lets
-      // the swipe start just inside that strip and open the sessions list.
-      // (Swipe-to-close already works once the drawer is open.)
-      drawerEdgeDragWidth: isMobile ? 56 : null,
-      appBar: WindowTitleBar(
-        // Local codex not configured → a warning strip pointing at the wizard.
-        bottom: needsCodexSetup ? _codexSetupBar(l10n) : null,
-        // Mobile: the leading button OPENS the sessions list (drawer). Desktop:
-        // as the home there is nothing to go back to, so leading toggles the
-        // inline sessions pane; the classic pushed route keeps back-to-projects
-        // (with the pane toggle in the actions).
-        leading: isMobile
-            ? Builder(
-                builder: (ctx) => IconButton(
-                  tooltip: l10n.conversationsSection,
-                  icon: const Icon(Icons.menu),
-                  onPressed: () => Scaffold.of(ctx).openDrawer(),
-                ),
-              )
-            : widget.home
-            ? IconButton(
-                tooltip: l10n.conversationsSection,
-                icon: Icon(_leftOpen ? Icons.menu_open : Icons.menu),
-                onPressed: () => setState(() => _leftOpen = !_leftOpen),
-              )
-            : IconButton(
-                tooltip: l10n.backToProjects,
-                icon: const Icon(Icons.arrow_back),
-                onPressed: _backToProjects,
+
+    // Phones: classic Scaffold — the sessions list is a slide-in drawer, the
+    // bar is a plain AppBar naming the conversation.
+    if (width < 600) {
+      return Scaffold(
+        drawer: Drawer(
+          child: SafeArea(child: _sessionsPane(l10n, inDrawer: true)),
+        ),
+        // Widen the edge-swipe-to-open zone (default ~20px). The narrow
+        // default sits under Android's system back-gesture strip, so a
+        // left-edge swipe almost always triggered "back" instead of the
+        // drawer; a 56px zone lets the swipe start just inside that strip.
+        drawerEdgeDragWidth: 56,
+        appBar: WindowTitleBar(
+          bottom: needsCodexSetup ? _codexSetupBar(l10n) : null,
+          leading: Builder(
+            builder: (ctx) => IconButton(
+              tooltip: l10n.conversationsSection,
+              icon: const Icon(Icons.menu),
+              onPressed: () => Scaffold.of(ctx).openDrawer(),
+            ),
+          ),
+          title: Text(
+            _barTitle(l10n),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+          ),
+          actions: [
+            if (_ctx != null)
+              _ContextGauge(
+                status: _ctx!,
+                onTap: _showContextDetail,
+                tooltip: _contextTooltip(l10n),
               ),
-        title: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // As the home screen, lead with the brand (this IS the app now).
-            if (widget.home) ...[
-              const BrandLogo(size: 24),
-              const SizedBox(width: 10),
-            ],
-            Flexible(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    widget.home ? l10n.appTitle : l10n.appServiceTitle,
-                    style: const TextStyle(fontSize: 16),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  if (_cwd != null && _cwd!.trim().isNotEmpty)
-                    Text(
-                      '${l10n.currentProject}: ${_projectName()}',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
+            if (_threadId != null)
+              PopupMenuButton<String>(
+                tooltip: l10n.moreActions,
+                onSelected: (v) {
+                  if (v == 'compact') _compact();
+                },
+                itemBuilder: (c) => [
+                  PopupMenuItem(value: 'compact', child: Text(l10n.compact)),
                 ],
+              ),
+            const SizedBox(width: 4),
+          ],
+        ),
+        body: _dropWrap(_chatPane(l10n), l10n),
+      );
+    }
+
+    // Desktop / tablet: no full-width app bar. The sidebar is a full-height
+    // tinted column reaching the window's top edge (the macOS traffic lights
+    // float over its top strip); the content column carries its own slim
+    // header with the conversation title and the session actions.
+    final canRight = width >= 1100; // inline review split
+    // Keep the transcript from being squeezed out when the window is narrow:
+    // the panes give up width before the chat does.
+    final maxLeft = ((width - 420) / 2).clamp(200.0, 520.0);
+    final maxReview = (width - 360).clamp(400.0, 1200.0);
+    return Scaffold(
+      body: Row(
+        children: [
+          if (_leftOpen) ...[
+            SizedBox(
+              width: _leftWidth.clamp(200, maxLeft),
+              child: _sidebar(l10n),
+            ),
+            _splitter(
+              key: const Key('left-splitter'),
+              onDrag: (dx) => setState(
+                () => _leftWidth = (_leftWidth + dx).clamp(200, 520),
               ),
             ),
           ],
-        ),
-        actions: [
-          // Desktop, pushed route only: toggle the inline sessions pane (the
-          // home moves this to the leading slot; mobile opens the drawer).
-          if (!isMobile && !widget.home)
-            IconButton(
-              tooltip: l10n.conversationsSection,
-              icon: Icon(_leftOpen ? Icons.menu_open : Icons.menu),
-              onPressed: () => setState(() => _leftOpen = !_leftOpen),
-            ),
-          if (_ctx != null)
-            _ContextGauge(
-              status: _ctx!,
-              onTap: _showContextDetail,
-              tooltip: _contextTooltip(l10n),
-            ),
-          // Environment info lives in a popover off this button. It is a
-          // desktop affordance, so it fades + scales away when the window gets
-          // too narrow to host the popover comfortably — reappearing the same
-          // way when there's room again.
-          AnimatedSwitcher(
-            duration: const Duration(milliseconds: 220),
-            transitionBuilder: (child, anim) => FadeTransition(
-              opacity: anim,
-              child: ScaleTransition(scale: anim, child: child),
-            ),
-            child: width >= 900
-                ? _envButton(l10n)
-                : const SizedBox(key: ValueKey('env-hidden'), width: 0),
-          ),
-          if (_threadId != null)
-            PopupMenuButton<String>(
-              tooltip: l10n.moreActions,
-              onSelected: (v) {
-                if (v == 'compact') _compact();
-              },
-              itemBuilder: (c) => [
-                PopupMenuItem(value: 'compact', child: Text(l10n.compact)),
+          Expanded(
+            child: Column(
+              children: [
+                _contentTopBar(l10n, width),
+                if (needsCodexSetup) _codexSetupBar(l10n),
+                Expanded(
+                  child: Row(
+                    children: [
+                      Expanded(child: _dropWrap(_chatPane(l10n), l10n)),
+                      if (canRight && _reviewOpen) ...[
+                        _splitter(
+                          key: const Key('review-splitter'),
+                          // Dragging left widens a right-hand pane, hence the
+                          // negation.
+                          onDrag: (dx) => setState(
+                            () => _reviewWidth = (_reviewWidth - dx).clamp(
+                              400,
+                              1200,
+                            ),
+                          ),
+                        ),
+                        SizedBox(
+                          width: _reviewWidth.clamp(400, maxReview),
+                          child: _reviewSplit(l10n),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
               ],
             ),
-          const SizedBox(width: 4),
+          ),
         ],
       ),
-      body: LayoutBuilder(
-        builder: (context, c) {
-          final canLeft = c.maxWidth >= 600; // tablet+ : inline sessions pane
-          final canRight = c.maxWidth >= 1100; // desktop : inline review split
-          // Keep the transcript from being squeezed out when the window is
-          // narrow: the panes give up width before the chat does.
-          final maxLeft = ((c.maxWidth - 420) / 2).clamp(200.0, 520.0);
-          // The review split is the wide one — it must leave the transcript a
-          // readable minimum, but can take most of the window.
-          final maxReview = (c.maxWidth - 360).clamp(400.0, 1200.0);
-          return Row(
+    );
+  }
+
+  /// The full-height left sidebar: a tinted column that reaches the window's
+  /// top edge, ChatGPT-desktop style. Its top strip hosts — once, quietly —
+  /// everything the old title bar duplicated: the macOS traffic lights float
+  /// over its leading inset, then the brand, then the collapse control. The
+  /// strip also drags the window.
+  Widget _sidebar(AppLocalizations l10n) {
+    final scheme = Theme.of(context).colorScheme;
+    final isMac = defaultTargetPlatform == TargetPlatform.macOS;
+    final strip = SizedBox(
+      height: 48,
+      child: Stack(
+        children: [
+          if (isFramelessDesktop)
+            const Positioned.fill(
+              child: DragToMoveArea(child: SizedBox.expand()),
+            ),
+          Row(
             children: [
-              if (canLeft && _leftOpen) ...[
-                SizedBox(
-                  width: _leftWidth.clamp(200, maxLeft),
-                  child: _sessionsPane(l10n),
-                ),
-                _splitter(
-                  key: const Key('left-splitter'),
-                  onDrag: (dx) => setState(
-                    () => _leftWidth = (_leftWidth + dx).clamp(200, 520),
+              SizedBox(width: isFramelessDesktop && isMac ? 76 : 16),
+              const BrandLogo(size: 18),
+              const SizedBox(width: 7),
+              Expanded(
+                child: Text(
+                  l10n.appTitle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
-              ],
-              Expanded(child: _dropWrap(_chatPane(l10n), l10n)),
-              if (canRight && _reviewOpen) ...[
-                _splitter(
-                  key: const Key('review-splitter'),
-                  // Dragging left widens a right-hand pane, hence the negation.
-                  onDrag: (dx) => setState(
-                    () => _reviewWidth = (_reviewWidth - dx).clamp(400, 1200),
-                  ),
-                ),
-                SizedBox(
-                  width: _reviewWidth.clamp(400, maxReview),
-                  child: _reviewSplit(l10n),
-                ),
-              ],
+              ),
+              IconButton(
+                tooltip: l10n.conversationsSection,
+                icon: const Icon(Icons.menu_open, size: 20),
+                onPressed: () => setState(() => _leftOpen = false),
+              ),
+              const SizedBox(width: 4),
             ],
-          );
-        },
+          ),
+        ],
+      ),
+    );
+    return Material(
+      color: scheme.surfaceContainerLow,
+      child: Column(
+        children: [
+          strip,
+          Expanded(child: _sessionsPane(l10n)),
+        ],
+      ),
+    );
+  }
+
+  /// The content pane's slim header (the desktop window has no full-width app
+  /// bar): the conversation title and the few session actions, over a
+  /// drag-to-move area. When the sidebar is collapsed it also carries the
+  /// expand control and — on macOS — the traffic-light inset; on frameless
+  /// Windows it draws the caption buttons at the trailing edge.
+  Widget _contentTopBar(AppLocalizations l10n, double width) {
+    final isMac = defaultTargetPlatform == TargetPlatform.macOS;
+    return SizedBox(
+      height: 48,
+      child: Stack(
+        children: [
+          if (isFramelessDesktop)
+            const Positioned.fill(
+              child: DragToMoveArea(child: SizedBox.expand()),
+            ),
+          Row(
+            children: [
+              SizedBox(
+                width: !_leftOpen && isFramelessDesktop && isMac ? 76 : 8,
+              ),
+              if (!_leftOpen)
+                IconButton(
+                  tooltip: l10n.conversationsSection,
+                  icon: const Icon(Icons.menu, size: 20),
+                  onPressed: () => setState(() => _leftOpen = true),
+                ),
+              if (!widget.home)
+                IconButton(
+                  tooltip: l10n.backToProjects,
+                  icon: const Icon(Icons.arrow_back, size: 20),
+                  onPressed: _backToProjects,
+                ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  _barTitle(l10n),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              if (_ctx != null)
+                _ContextGauge(
+                  status: _ctx!,
+                  onTap: _showContextDetail,
+                  tooltip: _contextTooltip(l10n),
+                ),
+              // Environment info lives in a popover off this button — a
+              // desktop affordance, hidden when the window can't host it.
+              if (width >= 900) _envButton(l10n),
+              if (_threadId != null)
+                PopupMenuButton<String>(
+                  tooltip: l10n.moreActions,
+                  onSelected: (v) {
+                    if (v == 'compact') _compact();
+                  },
+                  itemBuilder: (c) => [
+                    PopupMenuItem(value: 'compact', child: Text(l10n.compact)),
+                  ],
+                ),
+              if (isFramelessDesktop && !isMac)
+                const WindowCaptionButtons()
+              else
+                const SizedBox(width: 8),
+            ],
+          ),
+        ],
       ),
     );
   }
@@ -3481,6 +3585,28 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
               ),
               const Divider(height: 1),
             ],
+            // Mobile drawer only: the brand header (the desktop sidebar's top
+            // strip already carries it).
+            if (inDrawer && widget.home)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+                child: Row(
+                  children: [
+                    const BrandLogo(size: 20),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        l10n.appTitle,
+                        style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.w600,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             // Home only: which host this chat runs on, switchable when several
             // app services are available.
             if (widget.home) _serviceSwitcher(l10n),

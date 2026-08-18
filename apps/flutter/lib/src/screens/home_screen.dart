@@ -479,17 +479,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     }
   }
 
-  /// Brand app bar with the manage/settings escape hatches, shared by the
-  /// splash and the hero so no home state is ever a dead end.
+  /// App bar with the manage/settings escape hatches, shared by the splash
+  /// and the hero so no home state is ever a dead end. Text only — logo tiles
+  /// in a title bar read as clutter; the brand mark lives in the body hero.
   PreferredSizeWidget _homeAppBar(AppLocalizations l10n) => WindowTitleBar(
-    title: Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        const BrandLogo(size: 26),
-        const SizedBox(width: 10),
-        Flexible(child: Text(l10n.appTitle, overflow: TextOverflow.ellipsis)),
-      ],
-    ),
+    title: Text(l10n.appTitle, overflow: TextOverflow.ellipsis),
     actions: [
       IconButton(
         key: const Key('home-manage-btn'),

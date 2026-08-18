@@ -124,7 +124,10 @@ flutter:
   assets:
     - assets/logo/mark_light.png
     - assets/logo/mark_dark.png
+    - assets/logo/glyph_light.png
+    - assets/logo/glyph_dark.png
     - assets/tray/tray.png
+    - assets/tray/tray_template@2x.png
     - assets/tray/tray.ico
   fonts:
     - family: Noto Sans SC

@@ -109,7 +109,7 @@ class WindowTitleBar extends StatelessWidget implements PreferredSizeWidget {
         // macOS keeps its native traffic lights (top-left); Windows lost its
         // native caption buttons to TitleBarStyle.hidden, so draw our own at
         // the trailing edge.
-        if (!isMac) const _WindowCaptionButtons(),
+        if (!isMac) const WindowCaptionButtons(),
       ],
       // The bar's empty space drags the window; the leading/title/actions sit
       // above this layer and keep their own taps.
@@ -122,15 +122,18 @@ class WindowTitleBar extends StatelessWidget implements PreferredSizeWidget {
 /// The minimize / maximize-restore / close buttons drawn at the trailing edge
 /// of the frameless Windows title bar (macOS uses its native traffic lights, so
 /// these are Windows-only). Stateful to swap the maximize glyph for a restore
-/// glyph while the window is maximized, tracked via [WindowListener].
-class _WindowCaptionButtons extends StatefulWidget {
-  const _WindowCaptionButtons();
+/// glyph while the window is maximized, tracked via [WindowListener]. Public
+/// so screens that draw their own top strip (no [WindowTitleBar]) can still
+/// give the frameless Windows window its caption buttons.
+class WindowCaptionButtons extends StatefulWidget {
+  /// Default constructor.
+  const WindowCaptionButtons({super.key});
 
   @override
-  State<_WindowCaptionButtons> createState() => _WindowCaptionButtonsState();
+  State<WindowCaptionButtons> createState() => _WindowCaptionButtonsState();
 }
 
-class _WindowCaptionButtonsState extends State<_WindowCaptionButtons>
+class _WindowCaptionButtonsState extends State<WindowCaptionButtons>
     with WindowListener {
   bool _maximized = false;
 
@@ -258,7 +261,9 @@ class _CaptionButtonState extends State<_CaptionButton> {
           onTap: widget.onTap,
           child: Container(
             width: _CaptionButton.width,
-            height: kToolbarHeight,
+            // Fill whatever strip hosts the buttons (56dp AppBar or a slimmer
+            // custom top bar) — the hover wash must reach both edges.
+            height: double.infinity,
             color: bg,
             alignment: Alignment.center,
             child: Icon(widget.icon, size: widget.iconSize, color: fg),

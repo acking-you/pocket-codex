@@ -144,6 +144,110 @@ Future<Uint8List> compose(
 Future<void> writePng(String path, Uint8List bytes) =>
     File(path).writeAsBytes(bytes);
 
+/// Extracts the transparent GLYPH (cloud + prompt + arcs, no tile) from a
+/// master by chroma-keying out the tile's flat interior colour, trimming to
+/// content and centring on a square transparent canvas with ~8% margins.
+///
+/// In-app brand marks use this: a rounded launcher tile dropped into a page
+/// reads as a pasted app icon, while the bare glyph sits on any surface like
+/// an ordinary illustration. With [recolor] every kept pixel is repainted
+/// (preserving the keyed alpha) — used for the macOS template tray icon,
+/// which must be black + alpha so the menu bar can tint it.
+img.Image glyphFromMaster(String path, {img.ColorRgb8? recolor}) {
+  final src = img.decodePng(File(path).readAsBytesSync())!;
+  int maxDiff(img.Pixel p, num r, num g, num b) => [
+    (p.r - r).abs(),
+    (p.g - g).abs(),
+    (p.b - b).abs(),
+  ].reduce((a, c) => a > c ? a : c).round();
+
+  // Tile bbox: everything sufficiently different from the corner surround.
+  final corner = src.getPixel(0, 0);
+  var minX = src.width, minY = src.height, maxX = -1, maxY = -1;
+  for (final p in src) {
+    if (maxDiff(p, corner.r, corner.g, corner.b) > 30) {
+      if (p.x < minX) minX = p.x;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.y > maxY) maxY = p.y;
+    }
+  }
+  // Inset the crop well past the tile boundary: the tile's rounded corners,
+  // hairline border and the anti-aliased tile→surround transition all differ
+  // from the interior colour and would survive the key as a ghost ring. The
+  // glyph sits centred with generous margins, so 8% per side is safe.
+  final inset = ((maxX - minX + 1) * 0.08).round();
+  final tile = img.copyCrop(
+    src,
+    x: minX + inset,
+    y: minY + inset,
+    width: maxX - minX + 1 - inset * 2,
+    height: maxY - minY + 1 - inset * 2,
+  );
+
+  // Key out the flat tile colour (sampled off-glyph, clear of the arcs); the
+  // 10..60 ramp keeps anti-aliased glyph edges as partial alpha.
+  final interior = tile.getPixel(
+    (tile.width * 0.14).round(),
+    (tile.height * 0.14).round(),
+  );
+  final keyed = img.Image(
+    width: tile.width,
+    height: tile.height,
+    numChannels: 4,
+  );
+  var gMinX = tile.width, gMinY = tile.height, gMaxX = -1, gMaxY = -1;
+  for (final p in tile) {
+    final d = maxDiff(p, interior.r, interior.g, interior.b);
+    final a = (((d - 10) * 255) / 50).clamp(0, 255).round();
+    if (a == 0) continue;
+    keyed.setPixelRgba(
+      p.x,
+      p.y,
+      recolor?.r ?? p.r,
+      recolor?.g ?? p.g,
+      recolor?.b ?? p.b,
+      a,
+    );
+    if (a > 8) {
+      if (p.x < gMinX) gMinX = p.x;
+      if (p.x > gMaxX) gMaxX = p.x;
+      if (p.y < gMinY) gMinY = p.y;
+      if (p.y > gMaxY) gMaxY = p.y;
+    }
+  }
+  final trimmed = img.copyCrop(
+    keyed,
+    x: gMinX,
+    y: gMinY,
+    width: gMaxX - gMinX + 1,
+    height: gMaxY - gMinY + 1,
+  );
+  final side =
+      (trimmed.width > trimmed.height
+              ? trimmed.width * 1.16
+              : trimmed.height * 1.16)
+          .round();
+  final canvas = img.Image(width: side, height: side, numChannels: 4);
+  img.compositeImage(
+    canvas,
+    trimmed,
+    dstX: (side - trimmed.width) ~/ 2,
+    dstY: (side - trimmed.height) ~/ 2,
+  );
+  return canvas;
+}
+
+/// Encodes [image] resized to [size]x[size] (cubic) as PNG bytes.
+Uint8List glyphPng(img.Image image, int size) => img.encodePng(
+  img.copyResize(
+    image,
+    width: size,
+    height: size,
+    interpolation: img.Interpolation.cubic,
+  ),
+);
+
 String _hex(Color c) =>
     '#${(c.r * 255).round().toRadixString(16).padLeft(2, '0')}'
             '${(c.g * 255).round().toRadixString(16).padLeft(2, '0')}'
@@ -168,9 +272,19 @@ void main() {
       'dark=${_hex(dark.interior)}',
     );
 
-    // In-app brand marks + splash images, one per theme, transparent corners.
+    // Splash images, one per theme, transparent corners (the splash background
+    // colour equals the tile interior, so only the glyph shows).
     await writePng('assets/logo/mark_light.png', await compose(light));
     await writePng('assets/logo/mark_dark.png', await compose(dark));
+
+    // In-app brand marks: the bare theme-matched glyph, no tile — a launcher
+    // tile inside a page reads as a pasted app icon.
+    await File(
+      'assets/logo/glyph_light.png',
+    ).writeAsBytes(glyphPng(glyphFromMaster('icon/logo_light.png'), 512));
+    await File(
+      'assets/logo/glyph_dark.png',
+    ).writeAsBytes(glyphPng(glyphFromMaster('icon/logo_dark.png'), 512));
 
     // Launcher icons all come from the dark master: the ink tile reads on
     // light AND dark docks/launchers, and matches the app's brand surface.
@@ -195,6 +309,8 @@ void main() {
     for (final f in [
       'assets/logo/mark_light.png',
       'assets/logo/mark_dark.png',
+      'assets/logo/glyph_light.png',
+      'assets/logo/glyph_dark.png',
       'icon/icon_glyph.png',
       'icon/icon_mobile.png',
       'icon/icon_adaptive_bg.png',
@@ -204,13 +320,24 @@ void main() {
     }
   }, skip: skip);
 
-  test('derive tray assets (png + multi-size ico)', () async {
+  test('derive tray assets (png + template + multi-size ico)', () async {
     final dark = await loadMaster('icon/logo_dark.png');
     Directory('assets/tray').createSync(recursive: true);
 
-    // macOS / Linux load the icon as a PNG; a 256 source scales down cleanly
-    // to the ~18-22 px the tray actually shows.
+    // Linux loads the icon as a PNG; a 256 source scales down cleanly to the
+    // ~18-22 px the tray actually shows.
     await writePng('assets/tray/tray.png', await compose(dark, size: 256));
+
+    // macOS wants a TEMPLATE image (black + alpha; the menu bar tints it to
+    // match light/dark mode and highlight state). tray_manager loads the
+    // exact asset key and pins it to 18pt, so ship the @2x file directly —
+    // Retina fills those points, 1x displays scale it back down cleanly.
+    await File('assets/tray/tray_template@2x.png').writeAsBytes(
+      glyphPng(
+        glyphFromMaster('icon/logo_dark.png', recolor: img.ColorRgb8(0, 0, 0)),
+        36,
+      ),
+    );
 
     // Windows: tray_manager hands the path to LoadImage(IMAGE_ICON,
     // LR_LOADFROMFILE), which needs a true .ico — a .png silently fails to
@@ -226,6 +353,7 @@ void main() {
     await File('assets/tray/tray.ico').writeAsBytes(ico);
 
     expect(File('assets/tray/tray.png').existsSync(), isTrue);
+    expect(File('assets/tray/tray_template@2x.png').existsSync(), isTrue);
     expect(File('assets/tray/tray.ico').existsSync(), isTrue);
   }, skip: skip);
 }

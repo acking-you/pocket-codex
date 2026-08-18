@@ -1204,9 +1204,10 @@ void main() {
     await t.tap(find.byKey(const Key('send-btn')));
     await t.pumpAndSettle();
 
-    // User bubble (plain Text) + the fake's echoed agent reply, which now
-    // renders as Markdown (RichText), so match with findRichText.
-    expect(find.text('hello'), findsOneWidget);
+    // User bubble (plain Text) + the app bar, which titles the conversation
+    // with its preview — the same text. The agent reply renders as Markdown
+    // (RichText), so match with findRichText.
+    expect(find.text('hello'), findsNWidgets(2));
     expect(
       find.textContaining('echo: hello', findRichText: true),
       findsOneWidget,
@@ -1910,8 +1911,10 @@ void main() {
       );
       expect(api.lastTurnImages, isEmpty);
       // The bubble renders a chip + the typed text; the raw block is hidden.
+      // (Two 'check this': the bubble and the top bar, which titles the
+      // conversation with its preview.)
       expect(find.text('notes.txt'), findsOneWidget);
-      expect(find.text('check this'), findsOneWidget);
+      expect(find.text('check this'), findsNWidgets(2));
       expect(find.textContaining(kAttachedFilesHeader), findsNothing);
       // Composer strip cleared.
       expect(find.byKey(const Key('attachment-0')), findsNothing);
