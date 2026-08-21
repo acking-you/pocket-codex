@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
+import 'package:pocket_codex/src/bridge_api.dart';
 import 'package:pocket_codex/src/providers.dart';
 
 /// The app's one failed-and-retryable surface: what went wrong, and a way to
@@ -44,7 +45,6 @@ class ErrorRetry extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final l10n = AppLocalizations.of(context);
     final scheme = Theme.of(context).colorScheme;
     // A live automatic retry, if one is in flight for a host meta request.
     final retrying = ref.watch(metaRetryProvider).valueOrNull;
@@ -70,33 +70,7 @@ class ErrorRetry extends ConsumerWidget {
             ),
             const SizedBox(height: 12),
             if (retrying != null) ...[
-              // Automatic retry underway: say so, with the count, so the user
-              // knows the app is working rather than stuck.
-              Row(
-                key: const Key('retry-progress'),
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  SizedBox(
-                    width: 13,
-                    height: 13,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: scheme.onSurfaceVariant,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    l10n.retryingAttempt(
-                      retrying.attempt,
-                      retrying.maxAttempts,
-                    ),
-                    style: TextStyle(
-                      fontSize: 12.5,
-                      color: scheme.onSurfaceVariant,
-                    ),
-                  ),
-                ],
-              ),
+              _RetryLine(progress: retrying),
               const SizedBox(height: 12),
             ],
             if (busy)
@@ -106,9 +80,76 @@ class ErrorRetry extends ConsumerWidget {
                 child: CircularProgressIndicator(strokeWidth: 2),
               )
             else
-              FilledButton(onPressed: onRetry, child: Text(l10n.retry)),
+              FilledButton(
+                onPressed: onRetry,
+                child: Text(AppLocalizations.of(context).retry),
+              ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// The "retrying n/10" line: a small spinner plus the attempt count.
+class _RetryLine extends StatelessWidget {
+  const _RetryLine({required this.progress});
+
+  final RetryProgress progress;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Row(
+      key: const Key('retry-progress'),
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SizedBox(
+          width: 13,
+          height: 13,
+          child: CircularProgressIndicator(
+            strokeWidth: 2,
+            color: scheme.onSurfaceVariant,
+          ),
+        ),
+        const SizedBox(width: 8),
+        Text(
+          AppLocalizations.of(
+            context,
+          ).retryingAttempt(progress.attempt, progress.maxAttempts),
+          style: TextStyle(fontSize: 12.5, color: scheme.onSurfaceVariant),
+        ),
+      ],
+    );
+  }
+}
+
+/// The spinner shown while a host request is in flight — and the reason it is a
+/// widget rather than a bare `CircularProgressIndicator`.
+///
+/// Retries happen DURING the load, but the bridge broadcasts progress live and
+/// does not replay it. A screen that only mounts [ErrorRetry] in its failure
+/// branch therefore has no subscriber while the retries are actually running,
+/// so every tick is missed — the user waits out the whole budget with no
+/// explanation and then sees a bare error. Watching from the loading state is
+/// what makes the progress reachable at all.
+class LoadingWithRetry extends ConsumerWidget {
+  /// Creates the loading indicator.
+  const LoadingWithRetry({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final retrying = ref.watch(metaRetryProvider).valueOrNull;
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const CircularProgressIndicator(),
+          if (retrying != null) ...[
+            const SizedBox(height: 14),
+            _RetryLine(progress: retrying),
+          ],
+        ],
       ),
     );
   }

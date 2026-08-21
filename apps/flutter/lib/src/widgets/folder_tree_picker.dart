@@ -260,7 +260,9 @@ class _FolderTreePickerState extends ConsumerState<_FolderTreePicker> {
     ScrollController? scrollController,
   ) {
     if (_loading) {
-      return const Center(child: CircularProgressIndicator());
+      // Not a bare spinner: retries happen HERE, and the progress stream is
+      // live-only, so something has to be watching while they run.
+      return const LoadingWithRetry();
     }
     if (_error != null) {
       return ErrorRetry(

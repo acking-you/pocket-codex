@@ -101,4 +101,21 @@ void main() {
     expect(find.text('重试'), findsNothing);
     expect(find.byType(CircularProgressIndicator), findsOneWidget);
   });
+
+  testWidgets('the loading state shows retry progress too', (t) async {
+    final api = FakeBridgeApi();
+    await t.pumpWidget(_host(api, const LoadingWithRetry()));
+    await t.pump();
+    // Just a spinner until something is actually being retried.
+    expect(find.byKey(const Key('retry-progress')), findsNothing);
+
+    // Retries happen while the screen is LOADING, and the bridge stream is
+    // live-only — if nothing is subscribed here, every tick is missed and the
+    // user waits out the whole budget with no explanation.
+    api.pushRetry(3);
+    await t.pump();
+    await t.pump();
+    expect(find.byKey(const Key('retry-progress')), findsOneWidget);
+    expect(find.textContaining('3/10'), findsOneWidget);
+  });
 }
