@@ -7,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/bridge_api_rust.dart';
 import 'package:pocket_codex/src/desktop_tray.dart';
+import 'package:pocket_codex/src/dock_icon.dart';
 import 'package:pocket_codex/src/log_manager.dart';
 import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/router.dart';
@@ -139,6 +140,11 @@ class _PocketCodexAppState extends ConsumerState<PocketCodexApp> {
       // below Localizations, so AppLocalizations.of(context) resolves the
       // current locale; setMenu skips the platform call when nothing changed.
       builder: (context, child) {
+        // Match the Dock icon to the appearance actually in effect. Resolved
+        // here rather than from `themePref` on purpose: this builder sits BELOW
+        // MaterialApp, so "follow system" has already become a concrete
+        // light/dark — and a later OS-level switch rebuilds through here too.
+        DockIcon.apply(Theme.of(context).brightness);
         if (DesktopTray.supported) {
           final l10n = AppLocalizations.of(context);
           DesktopTray.instance.setMenu(
