@@ -42,7 +42,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.12.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 1335273705;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 1372735720;
 
 
 // Section: executor
@@ -2484,6 +2484,44 @@ fn wire__crate__api__bridge__meta_read_thread_image_impl(
         },
     )
 }
+fn wire__crate__api__bridge__meta_retry_events_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "meta_retry_events",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_sink = <StreamSink<
+                crate::api::bridge::RetryProgressDto,
+                flutter_rust_bridge::for_generated::SseCodec,
+            >>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
+                    (move || {
+                        let output_ok = crate::api::bridge::meta_retry_events(api_sink)?;
+                        Ok(output_ok)
+                    })(),
+                )
+            }
+        },
+    )
+}
 fn wire__crate__api__bridge__meta_session_liveness_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -2963,6 +3001,19 @@ impl SseDecode
 
 impl SseDecode
     for StreamSink<crate::api::bridge::LogLineDto, flutter_rust_bridge::for_generated::SseCodec>
+{
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut inner = <String>::sse_decode(deserializer);
+        return StreamSink::deserialize(inner);
+    }
+}
+
+impl SseDecode
+    for StreamSink<
+        crate::api::bridge::RetryProgressDto,
+        flutter_rust_bridge::for_generated::SseCodec,
+    >
 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -3575,6 +3626,18 @@ impl SseDecode for crate::api::bridge::ProjectConfigDto {
     }
 }
 
+impl SseDecode for crate::api::bridge::RetryProgressDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_attempt = <u32>::sse_decode(deserializer);
+        let mut var_maxAttempts = <u32>::sse_decode(deserializer);
+        return crate::api::bridge::RetryProgressDto {
+            attempt: var_attempt,
+            max_attempts: var_maxAttempts,
+        };
+    }
+}
+
 impl SseDecode for crate::api::bridge::ServiceIdDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -3911,34 +3974,35 @@ fn pde_ffi_dispatcher_primary_impl(
         67 => {
             wire__crate__api__bridge__meta_read_thread_image_impl(port, ptr, rust_vec_len, data_len)
         },
-        68 => {
+        68 => wire__crate__api__bridge__meta_retry_events_impl(port, ptr, rust_vec_len, data_len),
+        69 => {
             wire__crate__api__bridge__meta_session_liveness_impl(port, ptr, rust_vec_len, data_len)
         },
-        69 => wire__crate__api__bridge__meta_session_transcript_impl(
+        70 => wire__crate__api__bridge__meta_session_transcript_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        70 => wire__crate__api__bridge__meta_sessions_impl(port, ptr, rust_vec_len, data_len),
-        71 => wire__crate__api__bridge__meta_set_project_config_impl(
+        71 => wire__crate__api__bridge__meta_sessions_impl(port, ptr, rust_vec_len, data_len),
+        72 => wire__crate__api__bridge__meta_set_project_config_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        72 => {
+        73 => {
             wire__crate__api__bridge__meta_thread_config_get_impl(port, ptr, rust_vec_len, data_len)
         },
-        73 => {
+        74 => {
             wire__crate__api__bridge__meta_thread_config_set_impl(port, ptr, rust_vec_len, data_len)
         },
-        74 => wire__crate__api__bridge__meta_upload_file_impl(port, ptr, rust_vec_len, data_len),
-        75 => wire__crate__api__bridge__meta_write_file_impl(port, ptr, rust_vec_len, data_len),
-        76 => wire__crate__api__bridge__set_key_impl(port, ptr, rust_vec_len, data_len),
-        77 => wire__crate__api__bridge__set_locale_impl(port, ptr, rust_vec_len, data_len),
-        78 => wire__crate__api__bridge__set_relay_impl(port, ptr, rust_vec_len, data_len),
-        79 => wire__crate__api__bridge__subscriptions_impl(port, ptr, rust_vec_len, data_len),
+        75 => wire__crate__api__bridge__meta_upload_file_impl(port, ptr, rust_vec_len, data_len),
+        76 => wire__crate__api__bridge__meta_write_file_impl(port, ptr, rust_vec_len, data_len),
+        77 => wire__crate__api__bridge__set_key_impl(port, ptr, rust_vec_len, data_len),
+        78 => wire__crate__api__bridge__set_locale_impl(port, ptr, rust_vec_len, data_len),
+        79 => wire__crate__api__bridge__set_relay_impl(port, ptr, rust_vec_len, data_len),
+        80 => wire__crate__api__bridge__subscriptions_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -4417,6 +4481,24 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::bridge::ProjectConfigDto>
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::bridge::RetryProgressDto {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [self.attempt.into_into_dart().into_dart(), self.max_attempts.into_into_dart().into_dart()]
+            .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::bridge::RetryProgressDto
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::bridge::RetryProgressDto>
+    for crate::api::bridge::RetryProgressDto
+{
+    fn into_into_dart(self) -> crate::api::bridge::RetryProgressDto {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for crate::api::bridge::ServiceIdDto {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
@@ -4658,6 +4740,18 @@ impl SseEncode
 
 impl SseEncode
     for StreamSink<crate::api::bridge::LogLineDto, flutter_rust_bridge::for_generated::SseCodec>
+{
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        unimplemented!("")
+    }
+}
+
+impl SseEncode
+    for StreamSink<
+        crate::api::bridge::RetryProgressDto,
+        flutter_rust_bridge::for_generated::SseCodec,
+    >
 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -5091,6 +5185,14 @@ impl SseEncode for crate::api::bridge::ProjectConfigDto {
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <Vec<String>>::sse_encode(self.project_roots, serializer);
         <Option<String>>::sse_encode(self.default_project, serializer);
+    }
+}
+
+impl SseEncode for crate::api::bridge::RetryProgressDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <u32>::sse_encode(self.attempt, serializer);
+        <u32>::sse_encode(self.max_attempts, serializer);
     }
 }
 

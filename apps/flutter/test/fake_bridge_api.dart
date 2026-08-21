@@ -451,6 +451,17 @@ class FakeBridgeApi implements BridgeApi {
   @override
   Stream<LogLine> logEvents() => _logEvents.stream;
 
+  final StreamController<RetryProgress> _retryEvents =
+      StreamController<RetryProgress>.broadcast();
+
+  @override
+  Stream<RetryProgress> metaRetryEvents() => _retryEvents.stream;
+
+  /// Inject a retry tick, so a test can assert the "retrying n/max" indicator.
+  void pushRetry(int attempt, {int maxAttempts = 10}) => _retryEvents.add(
+    RetryProgress(attempt: attempt, maxAttempts: maxAttempts),
+  );
+
   /// Inject a log line into the live stream (test helper).
   void pushLog(LogLine line) => _logEvents.add(line);
 

@@ -4051,44 +4051,56 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
               const Divider(height: 1),
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                // Each button keeps its own share of the row instead of its
+                // intrinsic width: the sidebar drags down to 200 px, where a
+                // fixed-width row of five (manage / sessions / logs / theme /
+                // settings) would overflow rather than tighten.
                 child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceAround,
                   children: [
-                    _paneShortcut(
-                      key: 'sidebar-manage-btn',
-                      icon: Icons.dns_outlined,
-                      tooltip: l10n.manageServices,
-                      ctx: ctx,
-                      route: '/manage',
+                    Expanded(
+                      child: _paneShortcut(
+                        key: 'sidebar-manage-btn',
+                        icon: Icons.dns_outlined,
+                        tooltip: l10n.manageServices,
+                        ctx: ctx,
+                        route: '/manage',
+                      ),
                     ),
                     // The host session browser rides the meta tunnel, which is
                     // an account-mode feature (mirrors the manage page's
                     // Sessions tab gate).
                     if (ref.watch(configProvider).valueOrNull?.mode ==
                         'account')
-                      _paneShortcut(
-                        key: 'sidebar-history-btn',
-                        icon: Icons.history,
-                        tooltip: l10n.hostSessions,
-                        ctx: ctx,
-                        route: Uri(
-                          path: '/sessions',
-                          queryParameters: {'svc': widget.serviceKey},
-                        ).toString(),
+                      Expanded(
+                        child: _paneShortcut(
+                          key: 'sidebar-history-btn',
+                          icon: Icons.history,
+                          tooltip: l10n.hostSessions,
+                          ctx: ctx,
+                          route: Uri(
+                            path: '/sessions',
+                            queryParameters: {'svc': widget.serviceKey},
+                          ).toString(),
+                        ),
                       ),
-                    _paneShortcut(
-                      key: 'sidebar-logs-btn',
-                      icon: Icons.article_outlined,
-                      tooltip: l10n.logsTitle,
-                      ctx: ctx,
-                      route: '/logs',
+                    Expanded(
+                      child: _paneShortcut(
+                        key: 'sidebar-logs-btn',
+                        icon: Icons.article_outlined,
+                        tooltip: l10n.logsTitle,
+                        ctx: ctx,
+                        route: '/logs',
+                      ),
                     ),
-                    _paneShortcut(
-                      key: 'sidebar-settings-btn',
-                      icon: Icons.settings_outlined,
-                      tooltip: l10n.settingsTitle,
-                      ctx: ctx,
-                      route: '/settings',
+                    Expanded(child: _themeToggle(l10n)),
+                    Expanded(
+                      child: _paneShortcut(
+                        key: 'sidebar-settings-btn',
+                        icon: Icons.settings_outlined,
+                        tooltip: l10n.settingsTitle,
+                        ctx: ctx,
+                        route: '/settings',
+                      ),
                     ),
                   ],
                 ),
@@ -4185,6 +4197,30 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   }
 
   /// One sidebar-footer shortcut: closes the drawer (mobile) then pushes.
+  /// Sidebar footer: flip the app between light and dark without a trip to
+  /// settings — appearance is the one setting people change on a whim (and by
+  /// time of day), so it earns a one-tap control next to the other shortcuts.
+  ///
+  /// Cycles system → light → dark → system rather than a plain two-state
+  /// switch: "follow the OS" is the default, so a toggle that could only ever
+  /// reach light/dark would make it unreachable once tapped. The icon shows
+  /// what is CURRENTLY in effect, and the tooltip names the next state.
+  Widget _themeToggle(AppLocalizations l10n) {
+    final mode = ref.watch(uiPrefsProvider).valueOrNull?.themeMode;
+    final (icon, next, nextLabel) = switch (mode) {
+      'light' => (Icons.light_mode_outlined, 'dark', l10n.appearanceDark),
+      'dark' => (Icons.dark_mode_outlined, null, l10n.appearanceSystem),
+      _ => (Icons.brightness_auto_outlined, 'light', l10n.appearanceLight),
+    };
+    return IconButton(
+      key: const Key('sidebar-theme-btn'),
+      icon: Icon(icon, size: 20),
+      tooltip: '${l10n.appearance} · $nextLabel',
+      visualDensity: VisualDensity.compact,
+      onPressed: () => ref.read(uiPrefsProvider.notifier).setThemeMode(next),
+    );
+  }
+
   Widget _paneShortcut({
     required String key,
     required IconData icon,
@@ -5621,7 +5657,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     }
 
     // A conversation's working directory is fixed once the thread exists, so
-    // the project is only switchable before the first turn.
+    // the project is only switchable before the first turn — and only THEN is
+    // it worth a chip here. Once the thread exists the name is pure repetition:
+    // the sidebar already heads the conversation's project, and a label you
+    // can't act on adds nothing above the field you're typing in.
     final project = _threadId == null
         ? ProjectMenu(
             projects: _knownProjects(),
@@ -5644,16 +5683,14 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
               onTap: () => ctrl.isOpen ? ctrl.close() : ctrl.open(),
             ),
           )
-        : chip(
-            Icons.folder_outlined,
-            _projectName(),
-            tip: '${l10n.currentProject}: ${_cwd ?? _projectName()}',
-          );
+        : null;
 
     return Row(
       children: [
-        Flexible(child: project),
-        const SizedBox(width: 10),
+        if (project != null) ...[
+          Flexible(child: project),
+          const SizedBox(width: 10),
+        ],
         chip(Icons.computer, _hostLabel(l10n)),
         if (_branch != null) ...[
           const SizedBox(width: 10),

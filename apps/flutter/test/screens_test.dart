@@ -4373,6 +4373,83 @@ void main() {
     expect(find.text('12%'), findsOneWidget);
   });
 
+  testWidgets('Sidebar theme button cycles system → light → dark', (t) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(1200, 900); // wide → left pane inline
+    addTearDown(t.view.reset);
+    await t.pumpWidget(
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          home: true,
+        ),
+        api,
+      ),
+    );
+    await t.pumpAndSettle();
+
+    // Follow-system is the default, and the icon says so.
+    final btn = find.byKey(const Key('sidebar-theme-btn'));
+    expect(btn, findsOneWidget);
+    expect(find.byIcon(Icons.brightness_auto_outlined), findsOneWidget);
+
+    await t.tap(btn);
+    await t.pumpAndSettle();
+    expect(find.byIcon(Icons.light_mode_outlined), findsOneWidget);
+
+    await t.tap(btn);
+    await t.pumpAndSettle();
+    expect(find.byIcon(Icons.dark_mode_outlined), findsOneWidget);
+
+    // Third tap returns to follow-system, which a two-state switch could never
+    // reach again once the user left it.
+    await t.tap(btn);
+    await t.pumpAndSettle();
+    expect(find.byIcon(Icons.brightness_auto_outlined), findsOneWidget);
+  });
+
+  testWidgets('The composer drops the project chip once the thread exists', (
+    t,
+  ) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(1200, 900); // wide → desktop composer
+    addTearDown(t.view.reset);
+    await t.pumpWidget(
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          cwd: '/work/alpha',
+        ),
+        api,
+      ),
+    );
+    await t.pumpAndSettle();
+
+    // Before the first turn the project is still switchable, so the chip earns
+    // its place above the field.
+    expect(find.byKey(const Key('composer-project-chip')), findsOneWidget);
+
+    await t.enterText(find.byKey(const Key('composer-input')), 'hello');
+    await t.pump();
+    await t.tap(find.byKey(const Key('send-btn')));
+    await t.pumpAndSettle();
+
+    // Once the thread exists the cwd is fixed, so the chip would be a label you
+    // can't act on — and the sidebar already heads the project.
+    expect(find.byKey(const Key('composer-project-chip')), findsNothing);
+    // The host chip stays: where the turn RUNS is the one fact only the
+    // composer reports, and it isn't repeated in the sidebar.
+    expect(find.byIcon(Icons.computer), findsOneWidget);
+  });
+
   testWidgets('Git branch badge shows changes and opens the review split', (
     t,
   ) async {

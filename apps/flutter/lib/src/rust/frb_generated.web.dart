@@ -35,6 +35,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  RustStreamSink<RetryProgressDto> dco_decode_StreamSink_retry_progress_dto_Sse(
+    dynamic raw,
+  );
+
+  @protected
   String dco_decode_String(dynamic raw);
 
   @protected
@@ -183,6 +188,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ProjectConfigDto dco_decode_project_config_dto(dynamic raw);
 
   @protected
+  RetryProgressDto dco_decode_retry_progress_dto(dynamic raw);
+
+  @protected
   ServiceIdDto dco_decode_service_id_dto(dynamic raw);
 
   @protected
@@ -234,6 +242,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   RustStreamSink<LogLineDto> sse_decode_StreamSink_log_line_dto_Sse(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  RustStreamSink<RetryProgressDto> sse_decode_StreamSink_retry_progress_dto_Sse(
     SseDeserializer deserializer,
   );
 
@@ -422,6 +435,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ProjectConfigDto sse_decode_project_config_dto(SseDeserializer deserializer);
 
   @protected
+  RetryProgressDto sse_decode_retry_progress_dto(SseDeserializer deserializer);
+
+  @protected
   ServiceIdDto sse_decode_service_id_dto(SseDeserializer deserializer);
 
   @protected
@@ -485,6 +501,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_StreamSink_log_line_dto_Sse(
     RustStreamSink<LogLineDto> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_StreamSink_retry_progress_dto_Sse(
+    RustStreamSink<RetryProgressDto> self,
     SseSerializer serializer,
   );
 
@@ -716,6 +738,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_project_config_dto(
     ProjectConfigDto self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_retry_progress_dto(
+    RetryProgressDto self,
     SseSerializer serializer,
   );
 

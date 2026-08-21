@@ -158,6 +158,11 @@ class AppLocalizationsZh extends AppLocalizations {
   String get renameHint => '单击可重命名';
 
   @override
+  String retryingAttempt(int attempt, int max) {
+    return '重试中… $attempt/$max';
+  }
+
+  @override
   String get renameFailed => '重命名失败';
 
   @override

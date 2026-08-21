@@ -54,6 +54,7 @@
   "renameConversation": "重命名",
   "renameConversationHint": "会话名称",
   "renameHint": "单击可重命名",
+  "retryingAttempt": "重试中… {attempt}/{max}",
   "renameFailed": "重命名失败",
   "showMoreCount": "展开显示（{count}）",
   "showLess": "收起",

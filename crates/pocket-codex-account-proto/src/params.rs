@@ -133,6 +133,94 @@ impl RetryBackoff {
     }
 }
 
+/// How many times a *bounded* operation is attempted before giving up.
+///
+/// Ten total attempts (one try + nine retries). Deliberately NOT applied to the
+/// supervisor / register loops: those must retry forever (a host that stops
+/// re-publishing is unreachable until the user notices), and their pacing is
+/// what the 2026-07-07 outage postmortem tuned — see [`REGISTER_BACKOFF_MAX`]
+/// and [`STABLE_SESSION_MIN`]. This bound is for *request-shaped* work, where
+/// there is a caller waiting on an answer and "still trying" eventually has to
+/// become "it failed".
+pub const MAX_ATTEMPTS: u32 = 10;
+
+/// Drives a bounded retry: how long to wait before the next attempt, or
+/// `None` once the attempt budget is spent.
+///
+/// Pairs with [`RetryBackoff`] for the delay curve and adds the two things a
+/// user-facing retry needs that a supervisor loop does not: a hard attempt cap,
+/// and an attempt counter the caller can report so the wait is legible rather
+/// than looking like a hang.
+///
+/// Retryability is the CALLER's decision, not this type's — only the caller
+/// knows whether its request is idempotent. Re-issuing a GET is free;
+/// re-issuing a POST that allocates a fresh upload directory duplicates the
+/// file.
+#[derive(Debug, Clone)]
+pub struct BoundedRetry {
+    backoff: RetryBackoff,
+    attempt: u32,
+    max_attempts: u32,
+}
+
+impl Default for BoundedRetry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl BoundedRetry {
+    /// A budget of [`MAX_ATTEMPTS`] attempts on the default backoff curve.
+    pub fn new() -> Self {
+        Self {
+            backoff: RetryBackoff::new(),
+            attempt: 0,
+            max_attempts: MAX_ATTEMPTS,
+        }
+    }
+
+    /// A budget with custom bounds — for a caller whose work is slower or
+    /// cheaper than the default assumes.
+    pub fn with_bounds(max_attempts: u32, max_delay: Duration) -> Self {
+        Self {
+            backoff: RetryBackoff::with_max(max_delay),
+            attempt: 0,
+            max_attempts,
+        }
+    }
+
+    /// Attempts made so far (0 before the first).
+    pub fn attempts(&self) -> u32 {
+        self.attempt
+    }
+
+    /// The total attempt budget, for progress reporting ("2 / 10").
+    pub fn max_attempts(&self) -> u32 {
+        self.max_attempts
+    }
+
+    /// Record that the attempt just made failed, and return how long to wait
+    /// before the next one — or `None` when the budget is exhausted and the
+    /// caller should surface the error.
+    pub fn fail(&mut self) -> Option<Duration> {
+        self.attempt = self.attempt.saturating_add(1);
+        if self.attempt >= self.max_attempts {
+            return None;
+        }
+        Some(self.backoff.next_delay())
+    }
+
+    /// Like [`Self::fail`] but jittered, for the many-clients-one-backend case
+    /// (see [`RetryBackoff::next_delay_jittered`]).
+    pub fn fail_jittered(&mut self, sample: f64) -> Option<Duration> {
+        self.attempt = self.attempt.saturating_add(1);
+        if self.attempt >= self.max_attempts {
+            return None;
+        }
+        Some(self.backoff.next_delay_jittered(sample))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -170,5 +258,43 @@ mod tests {
         // base 100ms → ~[80, 120] ms (float-safe ranges).
         assert!((79..=81).contains(&lo), "lo={lo}");
         assert!((118..=121).contains(&hi), "hi={hi}");
+    }
+
+    #[test]
+    fn bounded_retry_spends_exactly_max_attempts_then_gives_up() {
+        let mut r = BoundedRetry::new();
+        // Nine waits between ten attempts, then the budget is spent. Returning
+        // None on the LAST failure (not after an extra wait) is what stops the
+        // UI sitting through a final pointless delay before the error appears.
+        let mut waits = 0;
+        while r.fail().is_some() {
+            waits += 1;
+            assert!(waits < MAX_ATTEMPTS, "must terminate");
+        }
+        assert_eq!(waits, MAX_ATTEMPTS - 1);
+        assert_eq!(r.attempts(), MAX_ATTEMPTS);
+        assert_eq!(r.max_attempts(), MAX_ATTEMPTS);
+        // Still exhausted once past the cap — no wrap-around into a fresh budget.
+        assert!(r.fail().is_none());
+    }
+
+    #[test]
+    fn bounded_retry_follows_the_backoff_curve_and_reports_progress() {
+        let mut r = BoundedRetry::new();
+        assert_eq!(r.attempts(), 0);
+        assert_eq!(r.fail().map(|d| d.as_millis()), Some(100));
+        assert_eq!(r.attempts(), 1); // legible as "1 / 10"
+        assert_eq!(r.fail().map(|d| d.as_millis()), Some(200));
+        assert_eq!(r.fail().map(|d| d.as_millis()), Some(400));
+    }
+
+    #[test]
+    fn bounded_retry_honours_custom_bounds() {
+        let mut r = BoundedRetry::with_bounds(2, Duration::from_millis(150));
+        assert_eq!(r.fail().map(|d| d.as_millis()), Some(100));
+        assert!(r.fail().is_none()); // two attempts, one wait
+                                     // A single-attempt budget never waits at all.
+        let mut once = BoundedRetry::with_bounds(1, BACKOFF_MAX);
+        assert!(once.fail().is_none());
     }
 }

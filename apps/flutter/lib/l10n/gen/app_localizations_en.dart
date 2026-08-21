@@ -161,6 +161,11 @@ class AppLocalizationsEn extends AppLocalizations {
   String get renameHint => 'Click to rename';
 
   @override
+  String retryingAttempt(int attempt, int max) {
+    return 'Retrying… $attempt/$max';
+  }
+
+  @override
   String get renameFailed => 'Couldn\'t rename the conversation';
 
   @override
