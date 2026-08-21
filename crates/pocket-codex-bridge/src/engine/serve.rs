@@ -1798,10 +1798,13 @@ mod tests {
                 );
             }
         });
-        let client = reqwest::Client::builder()
-            .timeout(HEALTH_TIMEOUT)
-            .build()
-            .expect("build probe client");
+        // Via `probe_client` rather than a hand-rolled builder, so the test
+        // exercises the SAME client production probes with. Building one here
+        // without `.no_proxy()` made this test fail on any machine with a system
+        // HTTP proxy whose exceptions miss loopback: the probe went to the proxy
+        // instead of the test's own listener — precisely the trap
+        // `probe_client`'s doc comment describes.
+        let client = probe_client().expect("build probe client");
         let url = format!("http://{addr}/readyz");
         assert!(runtime::runtime().block_on(wait_ready(&client, &url, Duration::from_secs(5))));
 

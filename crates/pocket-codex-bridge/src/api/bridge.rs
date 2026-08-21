@@ -778,6 +778,44 @@ pub fn log_events(sink: StreamSink<LogLineDto>) -> Result<()> {
     Ok(())
 }
 
+/// One in-flight retry of a host meta request, mirrored for Dart.
+pub struct RetryProgressDto {
+    /// Attempts made so far (1-based).
+    pub attempt: u32,
+    /// Total attempt budget before the request gives up.
+    pub max_attempts: u32,
+}
+
+/// Stream retry progress for host meta requests, so the UI can show "retrying
+/// 2/10" instead of appearing frozen through the backoff.
+///
+/// Notifications only — the request's own success or failure is still delivered
+/// by whichever call the UI made. A dropped tick is harmless (a newer one
+/// supersedes it), so lag is skipped rather than treated as an error.
+pub fn meta_retry_events(sink: StreamSink<RetryProgressDto>) -> Result<()> {
+    runtime::runtime().spawn(async move {
+        let mut rx = meta::subscribe_retries();
+        loop {
+            match rx.recv().await {
+                Ok(p) => {
+                    if sink
+                        .add(RetryProgressDto {
+                            attempt: p.attempt,
+                            max_attempts: p.max_attempts,
+                        })
+                        .is_err()
+                    {
+                        break;
+                    }
+                },
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    });
+    Ok(())
+}
+
 /// Stream live app-server events (turn/item notifications) for `service_key`.
 /// The Dart side receives one [`AppEventDto`] per notification until the
 /// session is disconnected.

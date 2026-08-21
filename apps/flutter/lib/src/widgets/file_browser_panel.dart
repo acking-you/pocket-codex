@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
+import 'package:pocket_codex/src/widgets/error_retry.dart';
 import 'package:pocket_codex/src/widgets/adaptive_sheet.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
@@ -283,30 +284,15 @@ class _FileBrowserState extends ConsumerState<_FileBrowser> {
     ScrollController? scrollController,
   ) {
     if (_loading) {
-      return const Center(child: CircularProgressIndicator());
+      // Not a bare spinner: retries happen HERE, and the progress stream is
+      // live-only, so something has to be watching while they run.
+      return const LoadingWithRetry();
     }
     if (_error != null) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                _error!,
-                key: const Key('file-browser-error'),
-                textAlign: TextAlign.center,
-                style: TextStyle(color: scheme.error),
-              ),
-              const SizedBox(height: 12),
-              FilledButton(
-                onPressed: () =>
-                    _current == null ? _loadRoots() : _loadDir(_current!),
-                child: Text(l10n.retry),
-              ),
-            ],
-          ),
-        ),
+      return ErrorRetry(
+        message: _error!,
+        errorKey: const Key('file-browser-error'),
+        onRetry: () => _current == null ? _loadRoots() : _loadDir(_current!),
       );
     }
     if (_stack.isEmpty && _roots.isEmpty) {

@@ -386,6 +386,12 @@ abstract class AppLocalizations {
   /// **'Click to rename'**
   String get renameHint;
 
+  /// No description provided for @retryingAttempt.
+  ///
+  /// In en, this message translates to:
+  /// **'Retrying… {attempt}/{max}'**
+  String retryingAttempt(int attempt, int max);
+
   /// No description provided for @renameFailed.
   ///
   /// In en, this message translates to:

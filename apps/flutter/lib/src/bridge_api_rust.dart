@@ -362,6 +362,11 @@ class RustBridgeApi implements BridgeApi {
   );
 
   @override
+  Stream<RetryProgress> metaRetryEvents() => frb.metaRetryEvents().map(
+    (p) => RetryProgress(attempt: p.attempt, maxAttempts: p.maxAttempts),
+  );
+
+  @override
   Future<List<ThreadMeta>> appThreadList(String serviceKey) async {
     final list = await frb.appThreadList(serviceKey: serviceKey);
     return list

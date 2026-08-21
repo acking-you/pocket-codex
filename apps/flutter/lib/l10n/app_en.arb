@@ -54,6 +54,10 @@
   "renameConversation": "Rename",
   "renameConversationHint": "Conversation name",
   "renameHint": "Click to rename",
+  "retryingAttempt": "Retrying… {attempt}/{max}",
+  "@retryingAttempt": {
+    "placeholders": { "attempt": { "type": "int" }, "max": { "type": "int" } }
+  },
   "renameFailed": "Couldn't rename the conversation",
   "showMoreCount": "Show {count} more",
   "@showMoreCount": {

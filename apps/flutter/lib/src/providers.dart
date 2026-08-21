@@ -150,6 +150,34 @@ final pendingRemovalProvider = StateProvider<Set<String>>((ref) => {});
 /// Errors (e.g. not connected yet) surface as an AsyncError; consumers treat a
 /// missing value as the empty set.
 ///
+/// A host meta request currently being retried, or null when nothing is.
+///
+/// Drives the "retrying 2/10" line in `ErrorRetry`. Each tick auto-clears after
+/// a moment: the bridge only reports that an attempt FAILED, never that the
+/// retry finally succeeded (success arrives as the request's own result), so a
+/// sticky value would leave a stale "retrying" line on screen forever.
+final metaRetryProvider = StreamProvider<RetryProgress?>((ref) {
+  final api = ref.watch(bridgeApiProvider);
+  final out = StreamController<RetryProgress?>();
+  Timer? clear;
+  final sub = api.metaRetryEvents().listen((p) {
+    out.add(p);
+    clear?.cancel();
+    // Comfortably longer than the backoff's own ceiling, so consecutive
+    // attempts keep the line up, and a resolved request drops it.
+    clear = Timer(const Duration(seconds: 4), () => out.add(null));
+  }, onError: (_) {});
+  ref.onDispose(() {
+    clear?.cancel();
+    sub.cancel();
+    out.close();
+  });
+  return out.stream;
+});
+
+/// Threads with a turn currently running on [serviceKey], as a live set,
+/// derived purely from the live event stream (see the notes above).
+///
 /// Deliberately NOT autoDispose: the running set is accumulated across events,
 /// and tearing the provider down between rebuilds (e.g. while navigating
 /// picker↔session) would reset it and drop the badge.

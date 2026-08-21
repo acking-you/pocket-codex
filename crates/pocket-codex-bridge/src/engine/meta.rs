@@ -9,10 +9,11 @@
 //! (`pcx:device:app:name`); the matching `meta` key is derived here, so the UI
 //! never has to know the meta tunnel exists.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
 use once_cell::sync::OnceCell;
+use pocket_codex_account_proto::BoundedRetry;
 use pocket_codex_core::service::{ServiceId, ServiceKind};
 use pocket_codex_host_svc::{
     fs::{DirEntry, FileEntry},
@@ -22,17 +23,68 @@ use pocket_codex_host_svc::{
 };
 use reqwest::{Client, Method, Url};
 use serde::{de::DeserializeOwned, Deserialize};
+use tokio::sync::broadcast;
 
 use crate::engine::{runtime, serve};
 
 /// Per-request timeout: a session scan on a busy host plus a relay hop.
 const META_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Upper bound on a retried request END TO END, attempts and backoff included.
+///
+/// The attempt cap alone is not a time bound: against a tunnel that accepts the
+/// connection but never answers, each attempt can burn the whole
+/// [`META_TIMEOUT`], so ten of them would turn a 30-second failure into five
+/// minutes of spinner. Retries exist to paper over a service restart — which
+/// resolves in milliseconds — not to outlast a network blackhole, so the budget
+/// gives up while a user might still be waiting.
+const META_TOTAL_DEADLINE: Duration = Duration::from_secs(45);
+
+/// One retry in progress, so the UI can say "retrying 2 / 10" instead of
+/// looking frozen for the duration of the backoff.
+#[derive(Clone, Copy, Debug)]
+pub struct RetryProgress {
+    /// Attempts made so far (1-based).
+    pub attempt: u32,
+    /// Total attempt budget.
+    pub max_attempts: u32,
+}
+
+/// Retry-progress fan-out. Small backlog: a subscriber that misses a tick has
+/// already been superseded by a newer one, and the terminal state is the
+/// request's own Ok/Err — never a dropped notification.
+static RETRIES: OnceCell<broadcast::Sender<RetryProgress>> = OnceCell::new();
+
+fn retries() -> &'static broadcast::Sender<RetryProgress> {
+    RETRIES.get_or_init(|| broadcast::channel(16).0)
+}
+
+/// Live retry notifications, for the UI's "retrying…" indicator.
+pub fn subscribe_retries() -> broadcast::Receiver<RetryProgress> {
+    retries().subscribe()
+}
+
+fn emit_retry(attempt: u32, max_attempts: u32) {
+    // A send with no subscribers is not an error — nobody is watching yet.
+    let _ = retries().send(RetryProgress {
+        attempt,
+        max_attempts,
+    });
+}
+
+/// The meta client. Built with `.no_proxy()` for the same reason
+/// `serve::probe_client` is: every meta request targets LOOPBACK — either this
+/// app's own host service, or the local end of a subscribed tunnel — but
+/// reqwest honours the process/system proxy by default, and a proxy whose
+/// exception list doesn't cover 127.0.0.1 swallows the request. The symptom is
+/// indistinguishable from a dead host ("connection closed before message
+/// completed"), so it would retry the full budget and still fail.
 fn client() -> &'static Client {
     static CLIENT: OnceCell<Client> = OnceCell::new();
     CLIENT.get_or_init(|| {
         Client::builder()
             .timeout(META_TIMEOUT)
+            .no_proxy()
             .build()
             .unwrap_or_else(|_| Client::new())
     })
@@ -88,13 +140,123 @@ async fn ensure_ok(resp: reqwest::Response) -> Result<reqwest::Response> {
     Err(anyhow!("meta service returned {status}: {body}"))
 }
 
+/// Whether a failed send is worth another attempt.
+///
+/// The meta client holds a pooled keep-alive connection to a service that runs
+/// under a supervisor (see `serve::meta_svc_supervisor`), so a restart leaves
+/// the pool holding a dead socket: the next request reaches "connection closed
+/// before message completed" — sent, never answered. That is a transport
+/// hiccup, not an answer, and re-issuing it on a fresh connection succeeds.
+///
+/// Deliberately narrow. A request that got a real HTTP response (any status)
+/// has been answered and is NOT retried here — the host said something, and
+/// repeating the question won't change it.
+fn is_transient(err: &reqwest::Error) -> bool {
+    // `is_request` covers a connection dropped before the response; timeouts and
+    // connect failures are the other two shapes a restarting service produces.
+    //
+    // `is_body` / `is_decode` are the same drop happening LATER — headers
+    // arrived, then the transfer was cut — which is what a restart looks like on
+    // a big transcript. Both are checked because reqwest classifies a truncated
+    // body under `is_decode` here (verified against this workspace's version,
+    // not assumed from the names).
+    //
+    // `is_decode` cannot mean "bad JSON" on this path: the retried unit only
+    // calls `bytes()`, which never parses — deserialization happens after the
+    // retry returns, so a malformed-but-complete body is reported by serde and
+    // is never retried. Re-sending wouldn't fix that anyway.
+    err.is_timeout() || err.is_connect() || err.is_request() || err.is_body() || err.is_decode()
+}
+
+/// Send an IDEMPOTENT request, retrying transient transport failures with the
+/// shared bounded-retry policy.
+///
+/// Only for requests that are safe to repeat: every GET, and the two
+/// full-replace PUTs. NOT for `POST /uploads/{name}` (allocates a fresh
+/// directory per call, so a retry duplicates the file), `POST /fs/write` (409s
+/// on collision, so a retry after a lost response reports a spurious conflict)
+/// or `POST /sessions/{id}/resume` (evicts processes). Those stay single-shot
+/// by design.
+///
+/// The URL is rebuilt per attempt by the caller's closure rather than captured,
+/// so a retry re-resolves the base — a remote host whose tunnel was
+/// re-subscribed lands on the new local port instead of the stale one.
+///
+/// `run` owns the WHOLE exchange, body included. A response resolves as soon as
+/// its headers arrive, so reading the body outside the retry would let a
+/// connection dropped mid-transfer — the exact failure this exists for, and the
+/// likeliest one on a big transcript — escape the budget entirely.
+///
+/// Bounded by [`META_TOTAL_DEADLINE`] as well as by attempts: against a
+/// blackholed tunnel every attempt can burn the full per-request timeout, and
+/// ten of those would turn a 30-second failure into a five-minute one.
+async fn retry_idempotent<T, F, Fut>(url_for_log: Url, run: F) -> Result<T>
+where
+    F: Fn() -> Fut,
+    Fut: std::future::Future<Output = std::result::Result<T, reqwest::Error>>,
+{
+    let mut retry = BoundedRetry::new();
+    let started = Instant::now();
+    loop {
+        match run().await {
+            Ok(v) => return Ok(v),
+            Err(e) if is_transient(&e) => {
+                let elapsed = started.elapsed();
+                let give_up = retry.fail();
+                // Out of attempts, or out of time — whichever comes first. The
+                // deadline check uses the time ALREADY spent, so a caller never
+                // waits past it just to be told it failed.
+                if give_up.is_none() || elapsed >= META_TOTAL_DEADLINE {
+                    return Err(anyhow!(e)).with_context(|| {
+                        format!(
+                            "meta request to {url_for_log} failed after {} attempts ({:.1}s)",
+                            retry.attempts(),
+                            elapsed.as_secs_f32(),
+                        )
+                    });
+                }
+                let delay = give_up.unwrap_or_default();
+                // Report the attempt ABOUT TO RUN, not the one that just
+                // failed: the UI says "retrying n/10" while it waits, so n has
+                // to name the upcoming try or the count reads one behind and
+                // never reaches the maximum.
+                let next = (retry.attempts() + 1).min(retry.max_attempts());
+                tracing::warn!(
+                    error = %e,
+                    url = %url_for_log,
+                    attempt = next,
+                    max = retry.max_attempts(),
+                    "meta request failed transiently; retrying"
+                );
+                emit_retry(next, retry.max_attempts());
+                tokio::time::sleep(delay).await;
+            },
+            Err(e) => return Err(anyhow!(e)).context("meta request"),
+        }
+    }
+}
+
 async fn get_json<T: DeserializeOwned>(url: Url) -> Result<T> {
-    let resp = client().get(url).send().await.context("meta GET")?;
-    ensure_ok(resp)
-        .await?
-        .json()
-        .await
-        .context("decoding meta response")
+    // Send AND drain inside one retried unit: a body cut short mid-transfer is
+    // the same dropped connection as a failed send, and must spend the same
+    // budget rather than escaping it.
+    //
+    // A non-2xx response is NOT retried (the host answered), but its status and
+    // body still have to reach the caller — so the outcome is carried out of the
+    // retry rather than turned into a reqwest status error, whose message would
+    // drop the body that usually says what the host objected to.
+    let (status, bytes) = retry_idempotent(url.clone(), || async {
+        let resp = client().get(url.clone()).send().await?;
+        let status = resp.status();
+        Ok((status, resp.bytes().await?))
+    })
+    .await
+    .context("meta GET")?;
+    if !status.is_success() {
+        let body = String::from_utf8_lossy(&bytes);
+        return Err(anyhow!("meta service returned {status}: {body}"));
+    }
+    serde_json::from_slice(&bytes).context("decoding meta response")
 }
 
 #[derive(Deserialize)]
@@ -192,18 +354,30 @@ pub fn project_config(service_key: &str) -> Result<HostConfig> {
 pub fn set_project_config(service_key: &str, config: HostConfig) -> Result<HostConfig> {
     let url = endpoint(service_key, &["projects"])?;
     runtime::runtime().block_on(async move {
-        let resp = client()
-            .request(Method::PUT, url)
-            .json(&config)
-            .send()
-            .await
-            .context("meta PUT projects")?;
-        ensure_ok(resp)
-            .await?
-            .json()
-            .await
-            .context("decoding projects response")
+        // A full replace, so repeating it is safe: the second write stores the
+        // same value the first would have.
+        put_json(url, &config).await.context("meta PUT projects")
     })
+}
+
+/// A full-replace PUT plus its JSON response, as ONE retried unit (same
+/// send-and-drain reasoning as [`get_json`]).
+async fn put_json<B: serde::Serialize, T: DeserializeOwned>(url: Url, body: &B) -> Result<T> {
+    let (status, bytes) = retry_idempotent(url.clone(), || async {
+        let resp = client()
+            .request(Method::PUT, url.clone())
+            .json(body)
+            .send()
+            .await?;
+        let status = resp.status();
+        Ok((status, resp.bytes().await?))
+    })
+    .await?;
+    if !status.is_success() {
+        let text = String::from_utf8_lossy(&bytes);
+        return Err(anyhow!("meta service returned {status}: {text}"));
+    }
+    serde_json::from_slice(&bytes).context("decoding meta response")
 }
 
 /// `{ "path": ..., "entries": [...] }` — one directory's browsable children.
@@ -320,17 +494,8 @@ pub fn config_put(
 ) -> Result<ThreadConfig> {
     let url = endpoint(service_key, &["threads", thread_id, "config"])?;
     runtime::runtime().block_on(async move {
-        let resp = client()
-            .request(Method::PUT, url)
-            .json(&config)
-            .send()
-            .await
-            .context("meta PUT config")?;
-        ensure_ok(resp)
-            .await?
-            .json()
-            .await
-            .context("decoding config response")
+        // Full replace, so a retry is safe (same reasoning as the projects PUT).
+        put_json(url, &config).await.context("meta PUT config")
     })
 }
 
@@ -346,5 +511,187 @@ mod tests {
         assert_eq!(meta_key_of("pcx:dev:meta:y").unwrap(), "pcx:dev:meta:y");
         // A non-pocket-codex key is rejected rather than silently mis-derived.
         assert!(meta_key_of("not-a-key").is_err());
+    }
+
+    /// A connection dropped mid-request is exactly what a supervised service
+    /// restart looks like from the client's pool: the request went out and no
+    /// response came back. Retrying on a fresh connection is what recovers it —
+    /// the failure this whole path exists for.
+    #[tokio::test]
+    async fn idempotent_request_survives_a_dropped_connection() {
+        use std::{
+            io::{Read, Write},
+            sync::{
+                atomic::{AtomicU32, Ordering},
+                Arc,
+            },
+        };
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let seen = Arc::new(AtomicU32::new(0));
+        let seen_srv = seen.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let seen = seen_srv.clone();
+                // One thread per connection: a peer that never finishes its
+                // request must not stall the listener for the retry that follows.
+                std::thread::spawn(move || {
+                    let mut stream = stream;
+                    let mut buf = [0u8; 1024];
+                    let _ = stream.read(&mut buf);
+                    let n = seen.fetch_add(1, Ordering::SeqCst);
+                    if n == 0 {
+                        // First attempt: take the request, then hang up without
+                        // answering — "connection closed before message
+                        // completed", exactly what a restarting service does.
+                        return;
+                    }
+                    let _ = stream.write_all(
+                        b"HTTP/1.1 200 OK\r\ncontent-length: 11\r\nconnection: close\r\n\r\n{\"ok\":true}",
+                    );
+                    let _ = stream.flush();
+                });
+            }
+        });
+
+        let url: Url = format!("http://{addr}/sessions").parse().expect("url");
+        let (status, _body) = retry_idempotent(url.clone(), || async {
+            let resp = client().get(url.clone()).send().await?;
+            let status = resp.status();
+            Ok((status, resp.bytes().await?))
+        })
+        .await
+        .expect("the retry should recover the dropped first attempt");
+        assert!(status.is_success());
+        assert_eq!(seen.load(Ordering::SeqCst), 2, "one failure, then one success");
+    }
+
+    /// A response whose headers arrive but whose BODY is cut off must spend the
+    /// retry budget too — reading the body outside the retried unit let this
+    /// escape entirely, and it is the likeliest shape on a large transcript.
+    #[tokio::test]
+    async fn a_truncated_body_is_retried_like_a_dropped_send() {
+        use std::{
+            io::{Read, Write},
+            sync::{
+                atomic::{AtomicU32, Ordering},
+                Arc,
+            },
+        };
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let seen = Arc::new(AtomicU32::new(0));
+        let seen_srv = seen.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let seen = seen_srv.clone();
+                std::thread::spawn(move || {
+                    let mut stream = stream;
+                    let mut buf = [0u8; 1024];
+                    let _ = stream.read(&mut buf);
+                    let n = seen.fetch_add(1, Ordering::SeqCst);
+                    if n == 0 {
+                        // Promise 200 bytes, hang up after 5: headers say 200 OK,
+                        // so only draining the body reveals the failure.
+                        let _ = stream
+                            .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 200\r\n\r\n{\"ok\"");
+                        let _ = stream.flush();
+                        return;
+                    }
+                    let _ = stream.write_all(
+                        b"HTTP/1.1 200 OK\r\ncontent-length: 11\r\n\
+                          connection: close\r\n\r\n{\"ok\":true}",
+                    );
+                    let _ = stream.flush();
+                });
+            }
+        });
+
+        #[derive(Deserialize)]
+        struct Body {
+            ok: bool,
+        }
+        let url: Url = format!("http://{addr}/sessions").parse().expect("url");
+        let out: Body = get_json(url)
+            .await
+            .expect("the truncated body must be retried");
+        assert!(out.ok);
+        assert_eq!(seen.load(Ordering::SeqCst), 2, "truncated, then complete");
+    }
+
+    /// The progress the UI mirrors must name the attempt ABOUT TO RUN: a count
+    /// that lags by one never reaches the maximum, so "10/10" would be
+    /// unreachable and every number would understate what is happening.
+    #[tokio::test]
+    async fn retry_progress_names_the_upcoming_attempt() {
+        use std::io::Read;
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut stream = stream;
+                let mut buf = [0u8; 512];
+                let _ = stream.read(&mut buf);
+                drop(stream); // never answers
+            }
+        });
+
+        let mut rx = subscribe_retries();
+        let url: Url = format!("http://{addr}/sessions").parse().expect("url");
+        let out: Result<serde_json::Value> = get_json(url).await;
+        assert!(out.is_err());
+
+        let first = rx.try_recv().expect("a first retry tick");
+        // The first attempt failed, so the NEXT one is #2 — not #1.
+        assert_eq!(first.attempt, 2);
+        assert_eq!(first.max_attempts, 10);
+        let mut last = first;
+        while let Ok(p) = rx.try_recv() {
+            last = p;
+        }
+        // And the count reaches the cap rather than stopping at 9.
+        assert_eq!(last.attempt, last.max_attempts);
+    }
+
+    /// The budget is finite: a service that never answers must eventually
+    /// surface an error rather than retrying behind a spinner forever.
+    #[tokio::test]
+    async fn a_persistently_dead_service_gives_up_and_reports_attempts() {
+        use std::io::Read;
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut stream = stream;
+                let mut buf = [0u8; 512];
+                let _ = stream.read(&mut buf);
+                drop(stream); // never answers
+            }
+        });
+
+        let url: Url = format!("http://{addr}/sessions").parse().expect("url");
+        // Two attempts rather than the default ten, so the test doesn't sit
+        // through the real backoff curve.
+        let mut retry = BoundedRetry::with_bounds(2, Duration::from_millis(1));
+        let mut attempts = 0;
+        let err = loop {
+            attempts += 1;
+            match client().get(url.clone()).send().await {
+                Ok(_) => panic!("the server must not answer"),
+                Err(e) if is_transient(&e) => {
+                    if retry.fail().is_none() {
+                        break e;
+                    }
+                },
+                Err(e) => break e,
+            }
+        };
+        assert!(is_transient(&err));
+        assert_eq!(attempts, 2);
+        assert_eq!(retry.attempts(), 2);
     }
 }

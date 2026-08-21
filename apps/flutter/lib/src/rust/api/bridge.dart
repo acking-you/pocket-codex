@@ -246,6 +246,15 @@ Future<bool> apiProbeLocal({required String localAddr}) =>
 Stream<LogLineDto> logEvents() =>
     RustLib.instance.api.crateApiBridgeLogEvents();
 
+/// Stream retry progress for host meta requests, so the UI can show "retrying
+/// 2/10" instead of appearing frozen through the backoff.
+///
+/// Notifications only — the request's own success or failure is still delivered
+/// by whichever call the UI made. A dropped tick is harmless (a newer one
+/// supersedes it), so lag is skipped rather than treated as an error.
+Stream<RetryProgressDto> metaRetryEvents() =>
+    RustLib.instance.api.crateApiBridgeMetaRetryEvents();
+
 /// Stream live app-server events (turn/item notifications) for `service_key`.
 /// The Dart side receives one [`AppEventDto`] per notification until the
 /// session is disconnected.
@@ -1591,6 +1600,28 @@ class ProjectConfigDto {
           runtimeType == other.runtimeType &&
           projectRoots == other.projectRoots &&
           defaultProject == other.defaultProject;
+}
+
+/// One in-flight retry of a host meta request, mirrored for Dart.
+class RetryProgressDto {
+  /// Attempts made so far (1-based).
+  final int attempt;
+
+  /// Total attempt budget before the request gives up.
+  final int maxAttempts;
+
+  const RetryProgressDto({required this.attempt, required this.maxAttempts});
+
+  @override
+  int get hashCode => attempt.hashCode ^ maxAttempts.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is RetryProgressDto &&
+          runtimeType == other.runtimeType &&
+          attempt == other.attempt &&
+          maxAttempts == other.maxAttempts;
 }
 
 /// A discovered service, mirrored for Dart.

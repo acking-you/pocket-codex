@@ -380,6 +380,18 @@ class LogLine {
   final int timestampMs;
 }
 
+/// One in-flight retry of a host meta request.
+class RetryProgress {
+  /// Creates a retry progress tick.
+  const RetryProgress({required this.attempt, required this.maxAttempts});
+
+  /// Attempts made so far (1-based).
+  final int attempt;
+
+  /// Total attempt budget before the request gives up.
+  final int maxAttempts;
+}
+
 /// Summary metadata for one app-server thread.
 class ThreadMeta {
   /// Creates thread metadata.
@@ -1110,6 +1122,11 @@ abstract interface class BridgeApi {
   /// Captured `tracing` events for the in-app log viewer: retained recent
   /// history (oldest first) followed by every new event live.
   Stream<LogLine> logEvents();
+
+  /// Retry progress for host meta requests. Notifications only — the request's
+  /// own result still arrives through whichever call was made; this exists so a
+  /// wait can say "retrying 2/10" instead of looking frozen.
+  Stream<RetryProgress> metaRetryEvents();
 
   /// List threads known to the app-server.
   Future<List<ThreadMeta>> appThreadList(String serviceKey);
