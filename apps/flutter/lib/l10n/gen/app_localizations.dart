@@ -368,6 +368,42 @@ abstract class AppLocalizations {
   /// **'(untitled)'**
   String get untitledThread;
 
+  /// No description provided for @renameConversation.
+  ///
+  /// In en, this message translates to:
+  /// **'Rename'**
+  String get renameConversation;
+
+  /// No description provided for @renameConversationHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Conversation name'**
+  String get renameConversationHint;
+
+  /// No description provided for @renameHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Click to rename'**
+  String get renameHint;
+
+  /// No description provided for @renameFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Couldn\'t rename the conversation'**
+  String get renameFailed;
+
+  /// No description provided for @showMoreCount.
+  ///
+  /// In en, this message translates to:
+  /// **'Show {count} more'**
+  String showMoreCount(int count);
+
+  /// No description provided for @showLess.
+  ///
+  /// In en, this message translates to:
+  /// **'Show less'**
+  String get showLess;
+
   /// No description provided for @messageHint.
   ///
   /// In en, this message translates to:

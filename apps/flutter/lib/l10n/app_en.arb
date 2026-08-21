@@ -51,6 +51,15 @@
   "newConversation": "New conversation",
   "noThreads": "No conversations yet",
   "untitledThread": "(untitled)",
+  "renameConversation": "Rename",
+  "renameConversationHint": "Conversation name",
+  "renameHint": "Click to rename",
+  "renameFailed": "Couldn't rename the conversation",
+  "showMoreCount": "Show {count} more",
+  "@showMoreCount": {
+    "placeholders": { "count": { "type": "int" } }
+  },
+  "showLess": "Show less",
   "messageHint": "Message…",
   "send": "Send",
   "chatRoleYou": "You",

@@ -491,6 +491,26 @@ class FakeBridgeApi implements BridgeApi {
   Future<void> appCompact(String serviceKey, String threadId) async =>
       compacted = true;
 
+  /// Names set via [appSetThreadName], keyed by thread id.
+  final Map<String, String> setNames = {};
+
+  /// When true, [appSetThreadName] throws, to exercise the rollback path.
+  bool failSetThreadName = false;
+
+  @override
+  Future<void> appSetThreadName(
+    String serviceKey,
+    String threadId,
+    String name,
+  ) async {
+    if (failSetThreadName) throw Exception('rename refused');
+    setNames[threadId] = name;
+    final i = appThreads.indexWhere((t) => t.id == threadId);
+    if (i >= 0) {
+      appThreads[i] = appThreads[i].withName(name.isEmpty ? null : name);
+    }
+  }
+
   /// When true, [appModelList] returns no models, to exercise the
   /// "can't switch collaboration mode without a model" path.
   bool emptyModelList = false;

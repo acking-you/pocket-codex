@@ -186,6 +186,13 @@ Future<void> _attachMenu(WidgetTester t, String key) async {
   await t.pumpAndSettle();
 }
 
+/// Every conversation row in the sessions pane. Rows carry no leading icon
+/// (each one is a conversation, so a glyph per row was just noise), so counting
+/// them means matching their `conv-tile-<id>` keys.
+Finder _convTiles() => find.byWidgetPredicate(
+  (w) => w.key is ValueKey<String> && '${w.key}'.contains('conv-tile-'),
+);
+
 void main() {
   // AppSessionScreen keeps per-thread plan/effort memory in process-wide static
   // maps (so a reopened thread restores its mode before the persisted config
@@ -2177,7 +2184,7 @@ void main() {
     // The new session shows in the pane as a conversation tile, with its message
     // preserved as the preview (not "(未命名)" — the server preview is still
     // empty for a just-started thread, so the optimistic one must win).
-    expect(find.byIcon(Icons.chat_bubble_outline), findsOneWidget);
+    expect(_convTiles(), findsOneWidget);
     expect(find.text('(未命名)'), findsNothing);
   });
 
@@ -2329,6 +2336,405 @@ void main() {
     expect(oldestY, lessThan(betaY));
   });
 
+  testWidgets('A project heading outranks the conversation rows under it', (
+    t,
+  ) async {
+    final nowS = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    api.appThreads.add(
+      ThreadMeta(
+        id: 'a1',
+        preview: 'a conversation',
+        cwd: '/work/alpha',
+        updatedAt: nowS - 60,
+      ),
+    );
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(1200, 900); // wide → left pane inline
+    addTearDown(t.view.reset);
+    await t.pumpWidget(
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          home: true,
+        ),
+        api,
+      ),
+    );
+    await t.pumpAndSettle();
+
+    // The project is the tree's top level, so its label is genuinely larger
+    // than the conversation titles — not merely bolder.
+    final heading = t.widget<Text>(find.text('alpha'));
+    final row = t.widget<Text>(find.text('a conversation'));
+    expect(heading.style!.fontSize!, greaterThan(row.style!.fontSize!));
+
+    // Rows carry no leading glyph of their own; the heading's chevron is the
+    // tree's only icon.
+    expect(find.byIcon(Icons.chat_bubble_outline), findsNothing);
+    expect(find.byIcon(Icons.keyboard_arrow_down), findsOneWidget);
+  });
+
+  testWidgets('Clicking a project folder collapses its conversations', (
+    t,
+  ) async {
+    final nowS = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    api.appThreads.addAll([
+      ThreadMeta(
+        id: 'a1',
+        preview: 'alpha one',
+        cwd: '/work/alpha',
+        updatedAt: nowS - 60,
+      ),
+      ThreadMeta(
+        id: 'b1',
+        preview: 'beta one',
+        cwd: '/work/beta',
+        updatedAt: nowS - 3600,
+      ),
+    ]);
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(1200, 900); // wide → left pane inline
+    addTearDown(t.view.reset);
+    await t.pumpWidget(
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          home: true,
+        ),
+        api,
+      ),
+    );
+    await t.pumpAndSettle();
+    expect(find.text('alpha one'), findsOneWidget);
+
+    // Collapsing hides only that project's rows; the sibling project stays.
+    await t.tap(find.byKey(const Key('project-header-/work/alpha')));
+    await t.pumpAndSettle();
+    expect(find.text('alpha one'), findsNothing);
+    expect(find.text('beta one'), findsOneWidget);
+    expect(find.text('alpha'), findsOneWidget); // the heading itself remains
+
+    // And clicking again brings them back.
+    await t.tap(find.byKey(const Key('project-header-/work/alpha')));
+    await t.pumpAndSettle();
+    expect(find.text('alpha one'), findsOneWidget);
+  });
+
+  testWidgets('A project shows only its newest few rows until expanded', (
+    t,
+  ) async {
+    final nowS = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    // Seven conversations in one project — two past the 5-row peek.
+    for (var i = 0; i < 7; i++) {
+      api.appThreads.add(
+        ThreadMeta(
+          id: 't$i',
+          preview: 'row $i',
+          cwd: '/work/alpha',
+          updatedAt: nowS - 60 * (i + 1),
+        ),
+      );
+    }
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(1200, 900); // wide → left pane inline
+    addTearDown(t.view.reset);
+    await t.pumpWidget(
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          home: true,
+        ),
+        api,
+      ),
+    );
+    await t.pumpAndSettle();
+
+    // The newest five show; the rest sit behind "show more" (2 hidden).
+    expect(find.text('row 0'), findsOneWidget);
+    expect(find.text('row 4'), findsOneWidget);
+    expect(find.text('row 5'), findsNothing);
+    expect(find.text('row 6'), findsNothing);
+    expect(find.text('展开显示（2）'), findsOneWidget); // showMoreCount (zh)
+
+    await t.tap(find.byKey(const Key('project-peek-/work/alpha')));
+    await t.pumpAndSettle();
+    expect(find.text('row 5'), findsOneWidget);
+    expect(find.text('row 6'), findsOneWidget);
+    expect(find.text('收起'), findsOneWidget); // showLess (zh)
+  });
+
+  testWidgets('The composer card takes a text cursor and focuses on click', (
+    t,
+  ) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(1200, 900); // wide → desktop composer
+    addTearDown(t.view.reset);
+    await t.pumpWidget(
+      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+    );
+    await t.pumpAndSettle();
+
+    // The padding around the field is part of the input, not dead chrome: it
+    // shows a text cursor and clicking it focuses the field.
+    final field = find.byKey(const Key('composer-input'));
+    final card = find
+        .ancestor(of: field, matching: find.byType(MouseRegion))
+        .last;
+    expect(t.widget<MouseRegion>(card).cursor, SystemMouseCursors.text);
+
+    expect(t.widget<TextField>(field).focusNode!.hasFocus, isFalse);
+    // Tap the card's own padding, clear of the field and the button row.
+    final box = t.getRect(
+      find.ancestor(of: field, matching: find.byType(Container)).first,
+    );
+    await t.tapAt(Offset(box.right - 4, box.top + 4));
+    await t.pumpAndSettle();
+    expect(t.widget<TextField>(field).focusNode!.hasFocus, isTrue);
+  });
+
+  testWidgets('The top-bar title hovers as an editable target', (t) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    api.appThreads.add(
+      const ThreadMeta(
+        id: 't1',
+        preview: 'original preview',
+        cwd: '',
+        updatedAt: 0,
+      ),
+    );
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(1200, 900); // wide → desktop top bar
+    addTearDown(t.view.reset);
+    await t.pumpWidget(
+      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+    );
+    await t.pumpAndSettle();
+    await t.tap(find.text('original preview').first);
+    await t.pumpAndSettle();
+
+    // Hovering paints a highlight behind the title and shows a text cursor, so
+    // the label reads as clickable rather than as window-drag chrome.
+    final target = find.byKey(const Key('bar-title-tap'));
+    final tapTarget = t.widget<InkWell>(target);
+    expect(tapTarget.hoverColor, isNotNull);
+    expect(tapTarget.mouseCursor, SystemMouseCursors.text);
+
+    final gesture = await t.createGesture(kind: PointerDeviceKind.mouse);
+    await gesture.addPointer(location: Offset.zero);
+    addTearDown(() => gesture.removePointer());
+    await gesture.moveTo(t.getCenter(target));
+    await t.pumpAndSettle();
+
+    // And one click on the label starts editing — no double-click needed.
+    await t.tap(target);
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('bar-title-field')), findsOneWidget);
+  });
+
+  testWidgets('Only an overflowing title fades at its trailing edge', (
+    t,
+  ) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    api.appThreads.addAll([
+      const ThreadMeta(id: 'short', preview: 'brief', cwd: '', updatedAt: 0),
+      ThreadMeta(
+        id: 'long',
+        preview: 'a very long conversation title ${'that keeps going ' * 6}',
+        cwd: '',
+        updatedAt: 0,
+      ),
+    ]);
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(1200, 900); // wide → desktop top bar
+    addTearDown(t.view.reset);
+    await t.pumpWidget(
+      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+    );
+    await t.pumpAndSettle();
+
+    // A title that fits is painted plainly — no fade to explain away.
+    await t.tap(find.text('brief').first);
+    await t.pumpAndSettle();
+    final bar = find.byKey(const Key('bar-title'));
+    expect(
+      find.descendant(of: bar, matching: find.byType(ShaderMask)),
+      findsNothing,
+    );
+
+    // One that doesn't fit gets the fade, so it reads as text running past the
+    // edge rather than as a short label.
+    await t.tap(find.textContaining('a very long conversation').first);
+    await t.pumpAndSettle();
+    expect(
+      find.descendant(of: bar, matching: find.byType(ShaderMask)),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('Clicking the top-bar title renames the conversation', (t) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    api.appThreads.add(
+      const ThreadMeta(
+        id: 't1',
+        preview: 'original preview',
+        cwd: '',
+        updatedAt: 0,
+      ),
+    );
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(1200, 900); // wide → desktop top bar
+    addTearDown(t.view.reset);
+    await t.pumpWidget(
+      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+    );
+    await t.pumpAndSettle();
+    await t.tap(find.text('original preview').first);
+    await t.pumpAndSettle();
+
+    // The title is a label until clicked, then a text field.
+    expect(find.byKey(const Key('bar-title-field')), findsNothing);
+    await t.tap(find.byKey(const Key('bar-title-tap')));
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('bar-title-field')), findsOneWidget);
+
+    // Submitting persists via the bridge and both the bar and the sidebar row
+    // switch to the new name.
+    await t.enterText(
+      find.byKey(const Key('bar-title-field')),
+      'renamed thread',
+    );
+    await t.testTextInput.receiveAction(TextInputAction.done);
+    await t.pumpAndSettle();
+    expect(api.setNames['t1'], 'renamed thread');
+    expect(find.text('renamed thread'), findsWidgets);
+    expect(find.text('original preview'), findsNothing);
+  });
+
+  testWidgets('A failed rename restores the previous title', (t) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    api.appThreads.add(
+      const ThreadMeta(
+        id: 't1',
+        preview: 'original preview',
+        cwd: '',
+        updatedAt: 0,
+      ),
+    );
+    api.failSetThreadName = true;
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(1200, 900); // wide → desktop top bar
+    addTearDown(t.view.reset);
+    await t.pumpWidget(
+      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+    );
+    await t.pumpAndSettle();
+    await t.tap(find.text('original preview').first);
+    await t.pumpAndSettle();
+
+    await t.tap(find.byKey(const Key('bar-title-tap')));
+    await t.pumpAndSettle();
+    await t.enterText(find.byKey(const Key('bar-title-field')), 'nope');
+    await t.testTextInput.receiveAction(TextInputAction.done);
+    await t.pumpAndSettle();
+
+    // The optimistic rename is rolled back rather than left claiming success.
+    expect(find.text('nope'), findsNothing);
+    expect(find.text('original preview'), findsWidgets);
+    expect(find.textContaining('重命名失败'), findsOneWidget); // renameFailed (zh)
+  });
+
+  testWidgets('A renamed conversation shows its name in the sidebar', (
+    t,
+  ) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    api.appThreads.add(
+      const ThreadMeta(
+        id: 't1',
+        preview: 'raw first message',
+        name: 'My tidy name',
+        cwd: '',
+        updatedAt: 0,
+      ),
+    );
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(1200, 900); // wide → left pane inline
+    addTearDown(t.view.reset);
+    await t.pumpWidget(
+      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+    );
+    await t.pumpAndSettle();
+
+    // The server-set name replaces the preview everywhere it's shown.
+    expect(find.text('My tidy name'), findsWidgets);
+    expect(find.text('raw first message'), findsNothing);
+  });
+
+  testWidgets('Committing the title untouched does not pin a name', (t) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    api.appThreads.add(
+      const ThreadMeta(
+        id: 't1',
+        preview: 'original preview',
+        cwd: '',
+        updatedAt: 0,
+      ),
+    );
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(1200, 900); // wide → desktop top bar
+    addTearDown(t.view.reset);
+    await t.pumpWidget(
+      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+    );
+    await t.pumpAndSettle();
+    await t.tap(find.text('original preview').first);
+    await t.pumpAndSettle();
+
+    await t.tap(find.byKey(const Key('bar-title-tap')));
+    await t.pumpAndSettle();
+    // Submit the seeded text as-is.
+    await t.testTextInput.receiveAction(TextInputAction.done);
+    await t.pumpAndSettle();
+
+    // Nothing was written, so the title keeps tracking the preview.
+    expect(api.setNames, isEmpty);
+    expect(find.byKey(const Key('bar-title-field')), findsNothing);
+    expect(find.text('original preview'), findsWidgets);
+  });
+
   testWidgets(
     'Conversations pane groups by time with relative-time subtitles',
     (t) async {
@@ -2404,7 +2810,7 @@ void main() {
     await t.pumpAndSettle();
     expect(find.text('alpha'), findsNothing);
     expect(find.text('beta'), findsNothing);
-    expect(find.byIcon(Icons.chat_bubble_outline), findsOneWidget);
+    expect(_convTiles(), findsOneWidget);
   });
 
   testWidgets('Tapping a guidance card prefills the composer', (t) async {

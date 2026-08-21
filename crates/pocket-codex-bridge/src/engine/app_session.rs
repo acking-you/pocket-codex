@@ -61,6 +61,9 @@ pub struct ThreadMeta {
     pub id: String,
     /// Preview (usually the first user message).
     pub preview: String,
+    /// User-set title, or `None` when the thread was never renamed (callers
+    /// fall back to [`Self::preview`]).
+    pub name: Option<String>,
     /// Working directory (the "project" the thread controls).
     pub cwd: String,
     /// Unix seconds of last update.
@@ -794,6 +797,13 @@ fn parse_thread_meta(t: &Value) -> Option<ThreadMeta> {
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_string(),
+        // Absent on older app-servers, and null until the thread is renamed.
+        name: t
+            .get("name")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string),
         cwd: t
             .get("cwd")
             .and_then(Value::as_str)
@@ -1358,6 +1368,16 @@ pub fn compact(service_key: &str, thread_id: &str) -> Result<()> {
     let client = client_for(service_key)?;
     runtime::runtime()
         .block_on(client.request("thread/compact/start", json!({ "threadId": thread_id })))?;
+    Ok(())
+}
+
+/// Set a thread's user-facing title. The server persists it and echoes
+/// `thread/name/updated`; an empty `name` clears it back to the preview.
+pub fn set_thread_name(service_key: &str, thread_id: &str, name: &str) -> Result<()> {
+    let client = client_for(service_key)?;
+    runtime::runtime().block_on(
+        client.request("thread/name/set", json!({ "threadId": thread_id, "name": name })),
+    )?;
     Ok(())
 }
 

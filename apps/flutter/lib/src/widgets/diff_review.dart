@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:pocket_codex/src/desktop_theme.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/code_highlight.dart';
 import 'package:pocket_codex/src/fonts.dart';
@@ -285,6 +286,7 @@ class _DiffReviewViewState extends State<DiffReviewView> {
     final canExpand = widget.onLoadFile != null && !_failed;
     final busy = _loading && _expanded.contains(index);
     return InkWell(
+      mouseCursor: clickable,
       key: Key('gap-$index'),
       onTap: canExpand ? () => _toggleGap(index) : null,
       child: Container(
@@ -424,6 +426,7 @@ class ChangedFileTree extends StatelessWidget {
       return Material(
         color: isSel ? scheme.primary.withValues(alpha: 0.12) : null,
         child: InkWell(
+          mouseCursor: clickable,
           key: Key('review-file-${f.path}'),
           onTap: () => onSelect(f.path),
           child: Padding(

@@ -388,6 +388,7 @@ class ThreadMeta {
     required this.preview,
     required this.cwd,
     required this.updatedAt,
+    this.name,
   });
 
   /// Thread id.
@@ -396,11 +397,31 @@ class ThreadMeta {
   /// Preview (usually the first user message).
   final String preview;
 
+  /// User-set title, or null when the conversation was never renamed.
+  final String? name;
+
   /// Working directory — the project this thread controls.
   final String cwd;
 
   /// Unix seconds of last update.
   final int updatedAt;
+
+  /// The name the user gave this conversation, if any — trimmed, and null
+  /// rather than empty so callers can `??` straight through to the preview.
+  String? get title {
+    final n = name?.trim();
+    return (n == null || n.isEmpty) ? null : n;
+  }
+
+  /// Copy with [name] replaced. Used to reflect a rename locally without
+  /// waiting for the next `thread/list`.
+  ThreadMeta withName(String? name) => ThreadMeta(
+    id: id,
+    preview: preview,
+    name: name,
+    cwd: cwd,
+    updatedAt: updatedAt,
+  );
 }
 
 /// A thread's recovered history plus whether a turn is still running, and the
@@ -1107,6 +1128,15 @@ abstract interface class BridgeApi {
   /// Start a manual conversation compaction; the server emits a
   /// `thread/compacted` event when done.
   Future<void> appCompact(String serviceKey, String threadId);
+
+  /// Rename a conversation. The app-server persists the title, so it follows
+  /// the thread rather than the device; an empty [name] clears it and the UI
+  /// falls back to the thread preview.
+  Future<void> appSetThreadName(
+    String serviceKey,
+    String threadId,
+    String name,
+  );
 
   /// Start a new thread / project. [approvalPolicy] is one of
   /// `untrusted`/`on-failure`/`on-request`/`never`; [sandbox] is one of

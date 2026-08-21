@@ -7,6 +7,7 @@ import 'package:file_selector/file_selector.dart' show openFiles;
 import 'package:flutter/foundation.dart'
     show listEquals, defaultTargetPlatform, TargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:pocket_codex/src/desktop_theme.dart';
 import 'package:pocket_codex/src/widgets/window_title_bar.dart';
 import 'package:flutter/services.dart';
 import 'package:pasteboard/pasteboard.dart';
@@ -332,6 +333,22 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   List<String> _allProjects = const [];
   // Live filter text for the conversations pane search box.
   String _convQuery = '';
+
+  // Top-bar title rename: true while the title is a text field (double-click
+  // to enter, Enter/blur to commit, Esc to cancel).
+  bool _editingTitle = false;
+  final TextEditingController _titleCtrl = TextEditingController();
+  final FocusNode _titleFocus = FocusNode();
+
+  /// Project groups the user has collapsed in the sidebar, keyed by cwd, plus
+  /// the ones they expanded past the first [_projectPeek] rows. Both are
+  /// view state only — deliberately not persisted, so a restart reads as the
+  /// same tidy default.
+  final Set<String> _collapsedProjects = {};
+  final Set<String> _expandedProjects = {};
+
+  /// How many conversations a project group shows before "show more".
+  static const int _projectPeek = 5;
 
   bool _streaming = false;
   // Current running turn's id, captured from turn/started — required to
@@ -776,6 +793,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     setState(() {
       _threadId = tid;
       _cwd = cwd;
+      // An open rename belongs to the thread being left, so drop it rather
+      // than let it commit the old title onto the new conversation.
+      _editingTitle = false;
       _items.clear();
       _itemIndex.clear();
       _approvals.clear();
@@ -855,6 +875,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     _scroll.dispose();
     _listCtl.dispose();
     _quotaRev.dispose();
+    _titleCtrl.dispose();
+    _titleFocus.dispose();
     super.dispose();
   }
 
@@ -2313,13 +2335,72 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     final tid = _threadId;
     if (tid != null) {
       final match = _threads.where((t) => t.id == tid);
-      final preview = match.isEmpty ? '' : match.first.preview;
+      final meta = match.isEmpty ? null : match.first;
+      // A user-set name wins outright — that's the whole point of renaming.
+      final named = meta?.title;
+      if (named != null) return named;
+      // Previews are the raw first user message, which may be wire text (an
+      // attachment block); run them through the same cleaner the sidebar uses
+      // so the two never disagree.
+      final preview = meta == null
+          ? ''
+          : previewWithoutFileRefs(meta.preview, l10n.fileOnlyMessage);
       for (final candidate in [preview, _lastUserText ?? '']) {
         final line = candidate.trim().split('\n').first.trim();
         if (line.isNotEmpty) return line;
       }
     }
     return l10n.newConversation;
+  }
+
+  /// Commit a rename typed into the top bar. Empty clears the name (back to
+  /// the preview). Applied locally first so the bar doesn't flicker back to
+  /// the old title while the request is in flight.
+  Future<void> _renameThread(String raw) async {
+    final tid = _threadId;
+    setState(() => _editingTitle = false);
+    if (tid == null) return;
+    final name = raw.trim();
+    final idx = _threads.indexWhere((t) => t.id == tid);
+    final before = idx < 0 ? null : _threads[idx];
+    if (before != null && (before.title ?? '') == name) return;
+    // Opening the field and committing it untouched must stay a no-op: the box
+    // is seeded with the displayed title, and pinning an auto-preview as an
+    // explicit name would silently stop it tracking the conversation.
+    if (before?.title == null &&
+        name == _barTitle(AppLocalizations.of(context)).trim()) {
+      return;
+    }
+    if (before != null) {
+      setState(() {
+        final next = [..._threads];
+        next[idx] = before.withName(name.isEmpty ? null : name);
+        _threads = next;
+      });
+    }
+    try {
+      await ref
+          .read(bridgeApiProvider)
+          .appSetThreadName(widget.serviceKey, tid, name);
+    } catch (e) {
+      // Put the old title back: the server is the source of truth, so a failed
+      // rename must not leave the UI claiming it worked.
+      if (!mounted) return;
+      if (before != null) {
+        final at = _threads.indexWhere((t) => t.id == tid);
+        if (at >= 0) {
+          setState(() {
+            final next = [..._threads];
+            next[at] = before;
+            _threads = next;
+          });
+        }
+      }
+      final l10n = AppLocalizations.of(context);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${l10n.renameFailed}: ${friendlyError(e)}')),
+      );
+    }
   }
 
   /// Desktop hover text for the context gauge: a one-line token breakdown.
@@ -2518,6 +2599,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       child: Material(
         color: scheme.errorContainer,
         child: InkWell(
+          mouseCursor: clickable,
           onTap: _openCodexSetup,
           child: Padding(
             padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
@@ -2764,16 +2846,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                 child: Align(
                   alignment: Alignment.centerLeft,
                   child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 420),
-                    child: Text(
-                      _barTitle(l10n),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
+                    constraints: const BoxConstraints(maxWidth: 280),
+                    child: _barTitleWidget(l10n),
                   ),
                 ),
               ),
@@ -2791,8 +2865,13 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                   tooltip: l10n.moreActions,
                   onSelected: (v) {
                     if (v == 'compact') _compact();
+                    if (v == 'rename') _beginTitleEdit();
                   },
                   itemBuilder: (c) => [
+                    PopupMenuItem(
+                      value: 'rename',
+                      child: Text(l10n.renameConversation),
+                    ),
                     PopupMenuItem(value: 'compact', child: Text(l10n.compact)),
                   ],
                 ),
@@ -2803,6 +2882,141 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
             ],
           ),
         ],
+      ),
+    );
+  }
+
+  /// Enter title-edit mode, seeded with the current title and fully selected
+  /// (so typing replaces it, the way a rename should).
+  void _beginTitleEdit() {
+    if (_threadId == null) return;
+    final l10n = AppLocalizations.of(context);
+    _titleCtrl.text = _barTitle(l10n);
+    _titleCtrl.selection = TextSelection(
+      baseOffset: 0,
+      extentOffset: _titleCtrl.text.length,
+    );
+    setState(() => _editingTitle = true);
+    _titleFocus.requestFocus();
+  }
+
+  /// The top bar's conversation title: a compact label that becomes a text
+  /// field on click (codex-app style). Enter commits, Esc cancels, and losing
+  /// focus commits too — a click elsewhere reads as "done", not "undo".
+  Widget _barTitleWidget(AppLocalizations l10n) {
+    final scheme = Theme.of(context).colorScheme;
+    const style = TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600);
+    if (_editingTitle) {
+      return Shortcuts(
+        shortcuts: const {
+          SingleActivator(LogicalKeyboardKey.escape): _CancelTitleEditIntent(),
+        },
+        child: Actions(
+          actions: {
+            _CancelTitleEditIntent: CallbackAction<_CancelTitleEditIntent>(
+              onInvoke: (_) {
+                setState(() => _editingTitle = false);
+                return null;
+              },
+            ),
+          },
+          child: TextField(
+            key: const Key('bar-title-field'),
+            controller: _titleCtrl,
+            focusNode: _titleFocus,
+            style: style,
+            maxLines: 1,
+            textInputAction: TextInputAction.done,
+            decoration: InputDecoration(
+              isDense: true,
+              hintText: l10n.renameConversationHint,
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 8,
+                vertical: 6,
+              ),
+              border: const OutlineInputBorder(),
+            ),
+            onSubmitted: _renameThread,
+            onTapOutside: (_) {
+              if (_editingTitle) _renameThread(_titleCtrl.text);
+            },
+          ),
+        ),
+      );
+    }
+    // A title too long for the bar fades out at its trailing edge instead of
+    // ending in an ellipsis, so it reads as text continuing past the cap
+    // rather than as a short label. Only when it actually overflows: fading a
+    // title that fits would just look like the text was dimming for no reason.
+    final text = _barTitle(l10n);
+    final title = LayoutBuilder(
+      key: const Key('bar-title'),
+      builder: (ctx, box) {
+        final label = Text(
+          text,
+          maxLines: 1,
+          softWrap: false,
+          overflow: TextOverflow.clip,
+          style: style,
+        );
+        final painter = TextPainter(
+          text: TextSpan(text: text, style: style),
+          maxLines: 1,
+          textDirection: Directionality.of(ctx),
+        )..layout();
+        if (painter.width <= box.maxWidth) return label;
+        // A fixed-width fade, so the ramp looks the same however long the
+        // title is (a percentage would stretch with the text).
+        final fade = (24 / box.maxWidth).clamp(0.0, 1.0);
+        return ShaderMask(
+          shaderCallback: (bounds) => LinearGradient(
+            begin: Alignment.centerLeft,
+            end: Alignment.centerRight,
+            colors: const [Colors.black, Colors.black, Colors.transparent],
+            stops: [0, 1 - fade, 1],
+          ).createShader(bounds),
+          blendMode: BlendMode.dstIn,
+          child: label,
+        );
+      },
+    );
+    // Only a real conversation can be renamed; a fresh one has no id yet.
+    if (_threadId == null) return title;
+    return Tooltip(
+      // A clipped label can't be read in full, so hovering reveals the whole
+      // title with the rename hint underneath it.
+      richMessage: TextSpan(
+        children: [
+          TextSpan(text: text),
+          TextSpan(
+            text: '\n${l10n.renameHint}',
+            style: TextStyle(
+              color: scheme.onInverseSurface.withValues(alpha: 0.7),
+              fontSize: 11,
+            ),
+          ),
+        ],
+      ),
+      waitDuration: const Duration(milliseconds: 500),
+      child: Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(7),
+        child: InkWell(
+          key: const Key('bar-title-tap'),
+          borderRadius: BorderRadius.circular(7),
+          // A single click edits, so the label needs to look clickable on
+          // hover: a soft plate plus a text cursor, since the strip behind it
+          // drags the window and would otherwise claim the whole area. A text
+          // cursor rather than the hand every other target gets — clicking
+          // here puts a caret in the title, it isn't a button.
+          hoverColor: scheme.onSurface.withValues(alpha: 0.06),
+          mouseCursor: SystemMouseCursors.text,
+          onTap: _beginTitleEdit,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+            child: title,
+          ),
+        ),
       ),
     );
   }
@@ -2931,6 +3145,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
             Tooltip(
               message: l10n.activeModelTooltip,
               child: InkWell(
+                mouseCursor: clickable,
                 key: const Key('active-model-chip'),
                 onTap: _showRuntimeSheet,
                 borderRadius: BorderRadius.circular(20),
@@ -2998,6 +3213,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
             Tooltip(
               message: (d != null && !d.isEmpty) ? l10n.viewDiff : _branch!,
               child: InkWell(
+                mouseCursor: clickable,
                 key: const Key('status-branch-chip'),
                 onTap: _showDiff,
                 borderRadius: BorderRadius.circular(20),
@@ -3366,6 +3582,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       },
       onClear: () => setState(() => _cwd = null),
       builder: (ctx, ctrl) => InkWell(
+        mouseCursor: clickable,
         key: const Key('project-switcher-btn'),
         borderRadius: BorderRadius.circular(8),
         onTap: () => ctrl.isOpen ? ctrl.close() : ctrl.open(),
@@ -3432,6 +3649,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       color: scheme.surfaceContainerHighest.withValues(alpha: 0.6),
       borderRadius: BorderRadius.circular(12),
       child: InkWell(
+        mouseCursor: clickable,
         borderRadius: BorderRadius.circular(12),
         onTap: () => _useSuggestion(prompt),
         child: Container(
@@ -3562,10 +3780,31 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         if (widget.home) {
           // The home pane spans every project, so the rest reads as a tree:
           // project → its conversations, newest project first, with the open
-          // project pinned to the top.
+          // project pinned to the top. Each project shows only its newest few
+          // rows unless expanded, so many projects stay scannable at a glance.
+          // A live search is the one case that shows everything: the user is
+          // looking for a specific row, so hiding matches behind "show more"
+          // would be actively unhelpful.
+          final searching = q.isNotEmpty;
           for (final p in _byProject(<ThreadMeta>[...today, ...earlier])) {
-            rows.add(_projectSectionLabel(p.cwd));
-            rows.addAll(p.threads.map((t) => tile(t, showProject: false)));
+            rows.add(_projectSectionLabel(p.cwd, count: p.threads.length));
+            if (_collapsedProjects.contains(p.cwd)) continue;
+            final expanded = searching || _expandedProjects.contains(p.cwd);
+            final shown = expanded
+                ? p.threads
+                : p.threads.take(_projectPeek).toList(growable: false);
+            rows.addAll(shown.map((t) => tile(t, showProject: false)));
+            final hidden = p.threads.length - shown.length;
+            if (!searching && (hidden > 0 || expanded)) {
+              rows.add(
+                _projectPeekToggle(
+                  cwd: p.cwd,
+                  hidden: hidden,
+                  expanded: expanded,
+                  l10n: l10n,
+                ),
+              );
+            }
           }
         } else {
           // A project-scoped pane already has one project, so recency is the
@@ -3635,6 +3874,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                     color: scheme.primary,
                     shape: const CircleBorder(),
                     child: InkWell(
+                      mouseCursor: clickable,
                       key: const Key('new-conversation-btn'),
                       customBorder: const CircleBorder(),
                       onTap: () {
@@ -3810,6 +4050,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         : scheme.primary;
     final reset = _resetText(w, l10n);
     return InkWell(
+      mouseCursor: clickable,
       key: const Key('sidebar-quota'),
       onTap: _showContextDetail,
       child: Padding(
@@ -3991,34 +4232,116 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     return [for (final k in keys) (cwd: k, threads: buckets[k]!)];
   }
 
-  /// A project heading in the home pane's conversation tree.
-  Widget _projectSectionLabel(String cwd) {
+  /// A project heading in the home pane's conversation tree: the folder is the
+  /// hit target, so clicking it collapses/expands the project's conversations
+  /// (codex-app style). [count] is how many rows sit under it, shown while
+  /// collapsed so a folded project still says how much it holds.
+  Widget _projectSectionLabel(String cwd, {required int count}) {
     final scheme = Theme.of(context).colorScheme;
     final leaf = _leafOf(cwd);
+    final collapsed = _collapsedProjects.contains(cwd);
     return Padding(
-      padding: const EdgeInsets.fromLTRB(8, 12, 8, 4),
-      child: Row(
-        children: [
-          Icon(Icons.folder_outlined, size: 13, color: scheme.onSurfaceVariant),
-          const SizedBox(width: 6),
-          Expanded(
-            child: Tooltip(
-              message: cwd.trim().isEmpty ? '' : cwd,
+      padding: const EdgeInsets.only(top: 10, bottom: 2),
+      child: Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(8),
+        child: InkWell(
+          mouseCursor: clickable,
+          key: Key('project-header-$cwd'),
+          borderRadius: BorderRadius.circular(8),
+          onTap: () => setState(() {
+            if (!_collapsedProjects.remove(cwd)) _collapsedProjects.add(cwd);
+          }),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(8, 5, 8, 5),
+            child: Row(
+              children: [
+                // A chevron, not a folder: it states which way the group will
+                // move when clicked, which is what the hit target actually
+                // does. The folder glyph only restated "this is a project",
+                // already obvious from the heading's weight and indent.
+                Icon(
+                  collapsed
+                      ? Icons.keyboard_arrow_right
+                      : Icons.keyboard_arrow_down,
+                  size: 18,
+                  color: scheme.onSurfaceVariant,
+                ),
+                const SizedBox(width: 3),
+                Expanded(
+                  child: Tooltip(
+                    message: cwd.trim().isEmpty ? '' : cwd,
+                    child: Text(
+                      leaf.isEmpty
+                          ? AppLocalizations.of(context).defaultFolder
+                          : leaf,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        // A project is the tree's top level, so it reads a
+                        // notch LARGER than the conversation rows beneath it
+                        // (which are 13) — not just bolder.
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                        color: scheme.onSurface,
+                      ),
+                    ),
+                  ),
+                ),
+                if (collapsed) ...[
+                  const SizedBox(width: 6),
+                  Text(
+                    '$count',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// The "show N more" / "show less" row that ends a partially-shown project
+  /// group. A quiet text link, not a button: it's navigation within a list,
+  /// and the rows above it are what the eye should land on.
+  Widget _projectPeekToggle({
+    required String cwd,
+    required int hidden,
+    required bool expanded,
+    required AppLocalizations l10n,
+  }) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(left: 22, bottom: 2),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: Material(
+          color: Colors.transparent,
+          borderRadius: BorderRadius.circular(6),
+          child: InkWell(
+            mouseCursor: clickable,
+            key: Key('project-peek-$cwd'),
+            borderRadius: BorderRadius.circular(6),
+            onTap: () => setState(() {
+              if (!_expandedProjects.remove(cwd)) _expandedProjects.add(cwd);
+            }),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
               child: Text(
-                leaf.isEmpty
-                    ? AppLocalizations.of(context).defaultFolder
-                    : leaf,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+                expanded ? l10n.showLess : l10n.showMoreCount(hidden),
                 style: TextStyle(
                   fontSize: 11.5,
-                  fontWeight: FontWeight.w600,
                   color: scheme.onSurfaceVariant,
                 ),
               ),
             ),
           ),
-        ],
+        ),
       ),
     );
   }
@@ -4063,7 +4386,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       thread.preview,
       l10n.fileOnlyMessage,
     ).trim();
-    final title = cleaned.isEmpty ? l10n.untitledThread : cleaned;
+    // A user-set name wins over the preview, matching the top bar.
+    final title =
+        thread.title ?? (cleaned.isEmpty ? l10n.untitledThread : cleaned);
     // Cross-project pane rows show "project · time" so the user always knows
     // where a conversation lives.
     final subtitle = [
@@ -4071,23 +4396,28 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       if (when.isNotEmpty) when,
     ].join(' · ');
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 1),
+      // Rows under a project heading are indented, so the folder reads as
+      // their parent rather than as a sibling label.
+      padding: EdgeInsets.only(
+        top: 1,
+        bottom: 1,
+        left: project == null && widget.home ? 14 : 0,
+      ),
       child: Material(
+        key: Key('conv-tile-${thread.id}'),
         color: selected ? scheme.primaryContainer : Colors.transparent,
         borderRadius: BorderRadius.circular(10),
         child: InkWell(
+          mouseCursor: clickable,
           borderRadius: BorderRadius.circular(10),
           onTap: onTap,
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
             child: Row(
               children: [
-                Icon(
-                  Icons.chat_bubble_outline,
-                  size: 17,
-                  color: selected ? scheme.onPrimaryContainer : muted,
-                ),
-                const SizedBox(width: 11),
+                // No leading glyph: every row is a conversation, so an icon per
+                // row was a column of identical noise. The project heading's
+                // chevron is the only icon the tree needs.
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -4271,6 +4601,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                       children: [
                         for (final f in files)
                           InkWell(
+                            mouseCursor: clickable,
                             key: Key('env-file-${f.path}'),
                             onTap: () {
                               _envMenu.close();
@@ -4910,6 +5241,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                       // Tapping a chip pulls it back into the composer to edit —
                       // the recover path on mobile, where there's no Esc.
                       child: InkWell(
+                        mouseCursor: clickable,
                         onTap: () => _restoreQueued(q),
                         child: Text(
                           q.preview,
@@ -4923,6 +5255,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                     Tooltip(
                       message: l10n.removeQueued,
                       child: InkWell(
+                        mouseCursor: clickable,
                         key: Key('queued-remove-${q.id}'),
                         onTap: () => _discardQueued(q.id),
                         borderRadius: BorderRadius.circular(12),
@@ -5028,6 +5361,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                   child: Tooltip(
                     message: att.isFile ? l10n.removeFile : l10n.removeImage,
                     child: InkWell(
+                      mouseCursor: clickable,
                       key: Key('attachment-remove-${att.id}'),
                       onTap: () => setState(() => _attachments.remove(att)),
                       customBorder: const CircleBorder(),
@@ -5065,72 +5399,86 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         padding: doc
             ? const EdgeInsets.fromLTRB(16, 4, 16, 14)
             : const EdgeInsets.fromLTRB(12, 6, 12, 12),
-        child: Container(
-          decoration: BoxDecoration(
-            color: scheme.surfaceContainerHigh,
-            borderRadius: BorderRadius.circular(doc ? 12 : 24),
-            border: Border.all(color: scheme.outlineVariant),
-          ),
-          padding: const EdgeInsets.fromLTRB(14, 10, 10, 10),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              if (_queue.isNotEmpty) ...[
-                _queuedStrip(l10n),
-                const SizedBox(height: 8),
-              ],
-              if (_attachments.isNotEmpty) ...[
-                _attachmentStrip(l10n),
-                const SizedBox(height: 8),
-              ],
-              // Desktop: where this turn will land — project, host, branch —
-              // sits above the field the turn is typed into. A phone has no
-              // room for it and shows the same facts in the status bar.
-              if (doc) ...[_composerContext(l10n), const SizedBox(height: 8)],
-              TextField(
-                key: const Key('composer-input'),
-                controller: _input,
-                focusNode: _inputFocus,
-                minLines: 1,
-                maxLines: 6,
-                textInputAction: TextInputAction.send,
-                onSubmitted: (_) => _submit(),
-                style: Theme.of(context).textTheme.bodyLarge,
-                decoration: InputDecoration(
-                  hintText: l10n.messageHint,
-                  border: InputBorder.none,
-                  isCollapsed: true,
-                ),
+        // The card IS the input, so all of it takes a text cursor and focuses
+        // the field on click — the padding and the slack beside a short line
+        // shouldn't behave like dead chrome. The buttons inside sit deeper in
+        // the tree, so they keep their own click cursor and their own taps.
+        child: MouseRegion(
+          cursor: SystemMouseCursors.text,
+          child: GestureDetector(
+            behavior: HitTestBehavior.translucent,
+            onTap: () => _inputFocus.requestFocus(),
+            child: Container(
+              decoration: BoxDecoration(
+                color: scheme.surfaceContainerHigh,
+                borderRadius: BorderRadius.circular(doc ? 12 : 24),
+                border: Border.all(color: scheme.outlineVariant),
               ),
-              const SizedBox(height: 8),
-              // One row at every width. Attachments collapse into a single `+`
-              // menu and the five wrapping config pills collapse into two
-              // chips, so a 360 px phone lays out exactly like the desktop —
-              // no wrapping, no expand/collapse mode to get stuck in.
-              Row(
+              padding: const EdgeInsets.fromLTRB(14, 10, 10, 10),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _attachMenu(l10n),
-                  const SizedBox(width: 2),
-                  // Flexible, not a plain child: a non-flex child takes its
-                  // intrinsic width whatever the row can afford, so a long
-                  // localised permission label would overflow a narrow phone
-                  // instead of ellipsizing.
-                  Flexible(child: _permissionChip(l10n)),
-                  const SizedBox(width: 6),
-                  // Right-aligned next to send, and Flexible so a long model
-                  // name ellipsizes instead of pushing the row into overflow.
-                  Expanded(
-                    child: Align(
-                      alignment: Alignment.centerRight,
-                      child: _modelChip(l10n),
+                  if (_queue.isNotEmpty) ...[
+                    _queuedStrip(l10n),
+                    const SizedBox(height: 8),
+                  ],
+                  if (_attachments.isNotEmpty) ...[
+                    _attachmentStrip(l10n),
+                    const SizedBox(height: 8),
+                  ],
+                  // Desktop: where this turn will land — project, host, branch —
+                  // sits above the field the turn is typed into. A phone has no
+                  // room for it and shows the same facts in the status bar.
+                  if (doc) ...[
+                    _composerContext(l10n),
+                    const SizedBox(height: 8),
+                  ],
+                  TextField(
+                    key: const Key('composer-input'),
+                    controller: _input,
+                    focusNode: _inputFocus,
+                    minLines: 1,
+                    maxLines: 6,
+                    textInputAction: TextInputAction.send,
+                    onSubmitted: (_) => _submit(),
+                    style: Theme.of(context).textTheme.bodyLarge,
+                    decoration: InputDecoration(
+                      hintText: l10n.messageHint,
+                      border: InputBorder.none,
+                      isCollapsed: true,
                     ),
                   ),
-                  const SizedBox(width: 6),
-                  _sendButton(),
+                  const SizedBox(height: 8),
+                  // One row at every width. Attachments collapse into a single `+`
+                  // menu and the five wrapping config pills collapse into two
+                  // chips, so a 360 px phone lays out exactly like the desktop —
+                  // no wrapping, no expand/collapse mode to get stuck in.
+                  Row(
+                    children: [
+                      _attachMenu(l10n),
+                      const SizedBox(width: 2),
+                      // Flexible, not a plain child: a non-flex child takes its
+                      // intrinsic width whatever the row can afford, so a long
+                      // localised permission label would overflow a narrow phone
+                      // instead of ellipsizing.
+                      Flexible(child: _permissionChip(l10n)),
+                      const SizedBox(width: 6),
+                      // Right-aligned next to send, and Flexible so a long model
+                      // name ellipsizes instead of pushing the row into overflow.
+                      Expanded(
+                        child: Align(
+                          alignment: Alignment.centerRight,
+                          child: _modelChip(l10n),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      _sendButton(),
+                    ],
+                  ),
                 ],
               ),
-            ],
+            ),
           ),
         ),
       ),
@@ -5185,6 +5533,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       return Tooltip(
         message: tip ?? label,
         child: InkWell(
+          mouseCursor: clickable,
           key: key,
           onTap: onTap,
           borderRadius: BorderRadius.circular(6),
@@ -5413,6 +5762,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                   children: [
                     for (final m in models)
                       InkWell(
+                        mouseCursor: clickable,
                         key: Key('model-menu-item-${m.id}'),
                         onTap: () => _applyModel(m),
                         child: Padding(
@@ -5450,6 +5800,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           // Plan mode changes what a turn DOES, so it is a switch on the face
           // of the panel rather than another row to drill into.
           InkWell(
+            mouseCursor: clickable,
             key: const Key('plan-toggle-row'),
             onTap: _togglePlan,
             child: Padding(
@@ -5708,6 +6059,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       color: active ? scheme.primaryContainer : scheme.surfaceContainerHighest,
       borderRadius: BorderRadius.circular(20),
       child: InkWell(
+        mouseCursor: clickable,
         key: pillKey,
         borderRadius: BorderRadius.circular(20),
         onTap: onTap,
@@ -5823,6 +6175,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         color: selected ? scheme.primaryContainer : Colors.transparent,
         borderRadius: BorderRadius.circular(12),
         child: InkWell(
+          mouseCursor: clickable,
           // Stable handle for tests: the label is localised and, for the turn
           // settings, repeated by the chip that opened the sheet. Values that
           // are not scalars fall back to the label — a model row's DTO has no
@@ -6233,6 +6586,11 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     );
     if (ok == true) setState(() => _cwd = ctrl.text.trim());
   }
+}
+
+/// Esc while renaming: leave the title edit without committing.
+class _CancelTitleEditIntent extends Intent {
+  const _CancelTitleEditIntent();
 }
 
 /// A blocking choice box for a server approval request (run a command, edit
@@ -6691,63 +7049,68 @@ class _EffortStepsState extends State<_EffortSteps> {
     final target = n <= 1 ? 0.0 : idx / (n - 1);
     final atMax = idx == n - 1;
 
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTapDown: (d) => _selectAt(d.localPosition.dx),
-      onHorizontalDragUpdate: (d) => _selectAt(d.localPosition.dx),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          SizedBox(
-            key: _trackKey,
-            height: _height,
-            // One painter, exact geometry: the thumb sits ON each stop at every
-            // level (Align mapped different-sized children to the bounds, which
-            // drifted the thumb off the dots — worst at 极高). Animate `frac`.
-            child: TweenAnimationBuilder<double>(
-              tween: Tween<double>(end: target),
-              duration: const Duration(milliseconds: 240),
-              curve: Curves.easeOutCubic,
-              builder: (context, frac, _) => CustomPaint(
-                size: const Size(double.infinity, _height),
-                painter: _EffortPainter(
-                  frac: frac,
-                  levels: n,
-                  activeIdx: idx,
-                  thumbW: _thumbW,
-                  atMax: atMax,
-                  track: scheme.surfaceContainerHighest,
-                  thumbFill: scheme.surface,
-                  thumbBorder: scheme.outlineVariant,
-                  shadow: scheme.shadow,
-                  dotOff: scheme.outline,
-                  brightness: Theme.of(context).brightness,
+    // A bare GestureDetector reports no cursor, so this track would hover as
+    // plain content despite being tappable AND draggable.
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTapDown: (d) => _selectAt(d.localPosition.dx),
+        onHorizontalDragUpdate: (d) => _selectAt(d.localPosition.dx),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            SizedBox(
+              key: _trackKey,
+              height: _height,
+              // One painter, exact geometry: the thumb sits ON each stop at every
+              // level (Align mapped different-sized children to the bounds, which
+              // drifted the thumb off the dots — worst at 极高). Animate `frac`.
+              child: TweenAnimationBuilder<double>(
+                tween: Tween<double>(end: target),
+                duration: const Duration(milliseconds: 240),
+                curve: Curves.easeOutCubic,
+                builder: (context, frac, _) => CustomPaint(
+                  size: const Size(double.infinity, _height),
+                  painter: _EffortPainter(
+                    frac: frac,
+                    levels: n,
+                    activeIdx: idx,
+                    thumbW: _thumbW,
+                    atMax: atMax,
+                    track: scheme.surfaceContainerHighest,
+                    thumbFill: scheme.surface,
+                    thumbBorder: scheme.outlineVariant,
+                    shadow: scheme.shadow,
+                    dotOff: scheme.outline,
+                    brightness: Theme.of(context).brightness,
+                  ),
                 ),
               ),
             ),
-          ),
-          const SizedBox(height: 4),
-          // End labels — the reference's Faster ↔ Smarter poles.
-          Row(
-            children: [
-              Text(
-                l10n.effortFaster,
-                style: TextStyle(
-                  fontSize: 10.5,
-                  color: scheme.onSurfaceVariant,
+            const SizedBox(height: 4),
+            // End labels — the reference's Faster ↔ Smarter poles.
+            Row(
+              children: [
+                Text(
+                  l10n.effortFaster,
+                  style: TextStyle(
+                    fontSize: 10.5,
+                    color: scheme.onSurfaceVariant,
+                  ),
                 ),
-              ),
-              const Spacer(),
-              Text(
-                l10n.effortSmarter,
-                style: TextStyle(
-                  fontSize: 10.5,
-                  color: scheme.onSurfaceVariant,
+                const Spacer(),
+                Text(
+                  l10n.effortSmarter,
+                  style: TextStyle(
+                    fontSize: 10.5,
+                    color: scheme.onSurfaceVariant,
+                  ),
                 ),
-              ),
-            ],
-          ),
-        ],
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -6907,6 +7270,7 @@ class _ContextGauge extends StatelessWidget {
     return Tooltip(
       message: tooltip,
       child: InkResponse(
+        mouseCursor: clickable,
         onTap: onTap,
         radius: 22,
         child: Padding(
@@ -7938,6 +8302,7 @@ class _FileChangeCardState extends State<_FileChangeCard> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           InkWell(
+            mouseCursor: clickable,
             onTap: expandable
                 ? () => setState(() => _expanded = !_expanded)
                 : null,
@@ -8055,6 +8420,7 @@ class _CopyablePath extends StatelessWidget {
           ),
         ),
         InkResponse(
+          mouseCursor: clickable,
           radius: 16,
           onTap: () => Clipboard.setData(ClipboardData(text: path)),
           child: Padding(
@@ -8126,6 +8492,7 @@ class _PlanCardState extends State<_PlanCard> {
         children: [
           // Header: icon + "Plan" + progress, tap to collapse.
           InkWell(
+            mouseCursor: clickable,
             borderRadius: BorderRadius.circular(12),
             onTap: () => setState(() => _expanded = !_expanded),
             child: Padding(
@@ -8280,6 +8647,7 @@ class _GroupedActivityCardState extends State<_GroupedActivityCard> {
             borderRadius: BorderRadius.circular(12),
           ),
           child: InkWell(
+            mouseCursor: clickable,
             borderRadius: BorderRadius.circular(12),
             onTap: () => setState(() => _expanded = !_expanded),
             child: Padding(
@@ -8415,6 +8783,7 @@ class _ActivityCardState extends State<_ActivityCard> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           InkWell(
+            mouseCursor: clickable,
             onTap: expandable
                 ? () => setState(() => _expanded = !_expanded)
                 : null,
