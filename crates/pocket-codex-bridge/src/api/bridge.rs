@@ -551,6 +551,9 @@ pub struct ThreadMetaDto {
     pub id: String,
     /// Preview (usually the first user message).
     pub preview: String,
+    /// User-set title, or `None` when the thread was never renamed (the UI
+    /// falls back to `preview`).
+    pub name: Option<String>,
     /// Working directory (the project the thread controls).
     pub cwd: String,
     /// Unix seconds of last update.
@@ -827,6 +830,7 @@ pub fn app_thread_list(service_key: String) -> Result<Vec<ThreadMetaDto>> {
         .map(|t| ThreadMetaDto {
             id: t.id,
             preview: t.preview,
+            name: t.name,
             cwd: t.cwd,
             updated_at: t.updated_at,
         })
@@ -959,6 +963,13 @@ pub fn app_git_diff(service_key: String, cwd: String) -> Result<String> {
 /// when done.
 pub fn app_compact(service_key: String, thread_id: String) -> Result<()> {
     app_session::compact(&service_key, &thread_id)
+}
+
+/// Rename a conversation. The title is persisted by the app-server (so it
+/// follows the thread across devices); an empty `name` clears it, and the UI
+/// falls back to the thread preview.
+pub fn app_set_thread_name(service_key: String, thread_id: String, name: String) -> Result<()> {
+    app_session::set_thread_name(&service_key, &thread_id, &name)
 }
 
 /// Send a user message (text and/or attached images), starting a model turn.

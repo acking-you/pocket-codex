@@ -369,6 +369,7 @@ class RustBridgeApi implements BridgeApi {
           (t) => ThreadMeta(
             id: t.id,
             preview: t.preview,
+            name: t.name,
             cwd: t.cwd,
             updatedAt: t.updatedAt.toInt(),
           ),
@@ -479,6 +480,17 @@ class RustBridgeApi implements BridgeApi {
   @override
   Future<void> appCompact(String serviceKey, String threadId) =>
       frb.appCompact(serviceKey: serviceKey, threadId: threadId);
+
+  @override
+  Future<void> appSetThreadName(
+    String serviceKey,
+    String threadId,
+    String name,
+  ) => frb.appSetThreadName(
+    serviceKey: serviceKey,
+    threadId: threadId,
+    name: name,
+  );
 
   @override
   Future<void> appTurnStart(

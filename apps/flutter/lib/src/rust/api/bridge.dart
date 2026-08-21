@@ -362,6 +362,19 @@ Future<void> appCompact({
   threadId: threadId,
 );
 
+/// Rename a conversation. The title is persisted by the app-server (so it
+/// follows the thread across devices); an empty `name` clears it, and the UI
+/// falls back to the thread preview.
+Future<void> appSetThreadName({
+  required String serviceKey,
+  required String threadId,
+  required String name,
+}) => RustLib.instance.api.crateApiBridgeAppSetThreadName(
+  serviceKey: serviceKey,
+  threadId: threadId,
+  name: name,
+);
+
 /// Send a user message (text and/or attached images), starting a model turn.
 /// `images` are `data:image/...;base64,...` URLs — the wire form that reaches
 /// BOTH local and relay-tunneled remote app-servers (a host filesystem path
@@ -1903,6 +1916,10 @@ class ThreadMetaDto {
   /// Preview (usually the first user message).
   final String preview;
 
+  /// User-set title, or `None` when the thread was never renamed (the UI
+  /// falls back to `preview`).
+  final String? name;
+
   /// Working directory (the project the thread controls).
   final String cwd;
 
@@ -1912,13 +1929,18 @@ class ThreadMetaDto {
   const ThreadMetaDto({
     required this.id,
     required this.preview,
+    this.name,
     required this.cwd,
     required this.updatedAt,
   });
 
   @override
   int get hashCode =>
-      id.hashCode ^ preview.hashCode ^ cwd.hashCode ^ updatedAt.hashCode;
+      id.hashCode ^
+      preview.hashCode ^
+      name.hashCode ^
+      cwd.hashCode ^
+      updatedAt.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -1927,6 +1949,7 @@ class ThreadMetaDto {
           runtimeType == other.runtimeType &&
           id == other.id &&
           preview == other.preview &&
+          name == other.name &&
           cwd == other.cwd &&
           updatedAt == other.updatedAt;
 }

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:pocket_codex/src/desktop_theme.dart';
 import 'package:pocket_codex/src/widgets/window_title_bar.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -1227,6 +1228,7 @@ class _NavTile extends StatelessWidget {
         color: selected ? scheme.secondaryContainer : Colors.transparent,
         borderRadius: BorderRadius.circular(20),
         child: InkWell(
+          mouseCursor: clickable,
           onTap: onTap,
           borderRadius: BorderRadius.circular(20),
           child: Padding(
@@ -1320,6 +1322,7 @@ class _ServiceCard extends StatelessWidget {
           color: surfacePanel(scheme),
           borderRadius: BorderRadius.circular(12),
           child: InkWell(
+            mouseCursor: clickable,
             onTap: effectiveTap,
             borderRadius: BorderRadius.circular(12),
             child: Container(
@@ -1561,6 +1564,7 @@ class _LocalHostCard extends ConsumerWidget {
         // The whole card opens the host dialog (stop + details); the per-tunnel
         // buttons inside absorb their own taps.
         child: InkWell(
+          mouseCursor: clickable,
           borderRadius: BorderRadius.circular(12),
           onTap: () => showDialog<void>(
             context: context,

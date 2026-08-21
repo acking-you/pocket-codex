@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:pocket_codex/src/desktop_theme.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 
 /// An anchored project switcher — the desktop idiom for "which checkout is
@@ -79,6 +80,7 @@ class _ProjectMenuState extends State<ProjectMenu> {
 
     Widget action(Key key, IconData icon, String label, VoidCallback onTap) =>
         InkWell(
+          mouseCursor: clickable,
           key: key,
           onTap: () {
             _menu.close();
@@ -165,6 +167,7 @@ class _ProjectMenuState extends State<ProjectMenu> {
                       children: [
                         for (final p in matches)
                           InkWell(
+                            mouseCursor: clickable,
                             key: Key('project-menu-item-$p'),
                             onTap: () {
                               _menu.close();

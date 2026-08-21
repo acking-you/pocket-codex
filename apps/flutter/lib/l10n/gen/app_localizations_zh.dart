@@ -149,6 +149,26 @@ class AppLocalizationsZh extends AppLocalizations {
   String get untitledThread => '(未命名)';
 
   @override
+  String get renameConversation => '重命名';
+
+  @override
+  String get renameConversationHint => '会话名称';
+
+  @override
+  String get renameHint => '单击可重命名';
+
+  @override
+  String get renameFailed => '重命名失败';
+
+  @override
+  String showMoreCount(int count) {
+    return '展开显示（$count）';
+  }
+
+  @override
+  String get showLess => '收起';
+
+  @override
   String get messageHint => '输入消息…';
 
   @override

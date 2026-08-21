@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:pocket_codex/src/desktop_theme.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/attachment_refs.dart';
 import 'package:pocket_codex/src/image_attachments.dart';
@@ -392,6 +393,7 @@ class _ImageThumbState extends State<_ImageThumb> {
               child: Material(
                 type: MaterialType.transparency,
                 child: InkWell(
+                  mouseCursor: clickable,
                   onTap: () => ImageViewerPage.show(
                     context,
                     widget.images,
@@ -432,6 +434,7 @@ class _SaveChip extends StatelessWidget {
       color: Colors.black54,
       shape: const CircleBorder(),
       child: InkWell(
+        mouseCursor: clickable,
         customBorder: const CircleBorder(),
         onTap: onPressed,
         child: Padding(

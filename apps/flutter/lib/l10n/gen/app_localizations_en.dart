@@ -152,6 +152,26 @@ class AppLocalizationsEn extends AppLocalizations {
   String get untitledThread => '(untitled)';
 
   @override
+  String get renameConversation => 'Rename';
+
+  @override
+  String get renameConversationHint => 'Conversation name';
+
+  @override
+  String get renameHint => 'Click to rename';
+
+  @override
+  String get renameFailed => 'Couldn\'t rename the conversation';
+
+  @override
+  String showMoreCount(int count) {
+    return 'Show $count more';
+  }
+
+  @override
+  String get showLess => 'Show less';
+
+  @override
   String get messageHint => 'Message…';
 
   @override

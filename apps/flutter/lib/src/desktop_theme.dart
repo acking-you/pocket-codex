@@ -83,6 +83,25 @@ extension DesktopThemeX on BuildContext {
   DesktopTokens? get desktop => Theme.of(this).extension<DesktopTokens>();
 }
 
+/// A pointing hand while enabled, the plain arrow while disabled — what a
+/// desktop pointer should say about a control.
+///
+/// Flutter's own `WidgetStateMouseCursor.adaptiveClickable` resolves to a hand
+/// ONLY on web; on a native desktop build it returns `basic`, so every button,
+/// row and chip hovers as if it were inert text. The button/list themes below
+/// substitute this, and [clickable] is the same value for the ink widgets that
+/// can't be reached from a theme at all — `InkWell` hardcodes
+/// `adaptiveClickable` (see ink_well.dart), so it has to be passed explicitly.
+const WidgetStateMouseCursor clickable = WidgetStateMouseCursor.resolveWith(
+  _clickableCursor,
+  debugDescription: 'desktopClickable',
+);
+
+MouseCursor _clickableCursor(Set<WidgetState> states) =>
+    states.contains(WidgetState.disabled)
+    ? SystemMouseCursors.basic
+    : SystemMouseCursors.click;
+
 /// Re-tune [base] for the desktop design language. Same colour scheme, denser
 /// and flatter chrome.
 ThemeData desktopize(ThemeData base) {
@@ -106,6 +125,27 @@ ThemeData desktopize(ThemeData base) {
     splashFactory: NoSplash.splashFactory,
     hoverColor: scheme.onSurface.withValues(alpha: 0.05),
     highlightColor: scheme.onSurface.withValues(alpha: 0.06),
+    // A pointing hand over anything clickable. Flutter's default for ink
+    // widgets (`WidgetStateMouseCursor.adaptiveClickable`) resolves to a click
+    // cursor ONLY on web — on a native desktop build it returns `basic`, so
+    // every button, list row and chip in the app hovered as if it were inert
+    // content. Set once here rather than per widget: 90-odd call sites would
+    // each have had to remember, and a missed one is invisible until someone
+    // notices the arrow never changes.
+    //
+    // Text and text-like surfaces are NOT affected — `TextField`,
+    // `SelectionArea` and links resolve their own cursor (`textable` /
+    // per-span), so an I-beam still wins where the content is selectable.
+    iconButtonTheme: IconButtonThemeData(
+      style: ButtonStyle(mouseCursor: clickable),
+    ),
+    listTileTheme: base.listTileTheme.copyWith(mouseCursor: clickable),
+    checkboxTheme: base.checkboxTheme.copyWith(mouseCursor: clickable),
+    radioTheme: base.radioTheme.copyWith(mouseCursor: clickable),
+    switchTheme: base.switchTheme.copyWith(mouseCursor: clickable),
+    segmentedButtonTheme: base.segmentedButtonTheme.copyWith(
+      style: ButtonStyle(mouseCursor: clickable),
+    ),
     dividerTheme: base.dividerTheme.copyWith(
       color: scheme.outlineVariant.withValues(alpha: 0.7),
       thickness: 1,
@@ -148,17 +188,22 @@ ThemeData desktopize(ThemeData base) {
       style: FilledButton.styleFrom(
         shape: shape,
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      ),
+      ).copyWith(mouseCursor: clickable),
     ),
     outlinedButtonTheme: OutlinedButtonThemeData(
       style: OutlinedButton.styleFrom(
         shape: shape,
         side: border,
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      ),
+      ).copyWith(mouseCursor: clickable),
     ),
     textButtonTheme: TextButtonThemeData(
-      style: TextButton.styleFrom(shape: shape),
+      style: TextButton.styleFrom(
+        shape: shape,
+      ).copyWith(mouseCursor: clickable),
+    ),
+    elevatedButtonTheme: ElevatedButtonThemeData(
+      style: const ButtonStyle(mouseCursor: clickable),
     ),
     // Inputs are left to the widgets: the composer wants a borderless field
     // inside its own frame, the search pills want a filled borderless look, and

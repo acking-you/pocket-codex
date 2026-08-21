@@ -491,6 +491,43 @@ class FakeBridgeApi implements BridgeApi {
   Future<void> appCompact(String serviceKey, String threadId) async =>
       compacted = true;
 
+  /// Names set via [appSetThreadName], keyed by thread id.
+  final Map<String, String> setNames = {};
+
+  /// When true, [appSetThreadName] throws, to exercise the rollback path.
+  bool failSetThreadName = false;
+
+  /// Fails only the NEXT [appSetThreadName] call, so a test can interleave one
+  /// failing rename with a succeeding one.
+  bool failNextSetThreadName = false;
+
+  /// When set, the next [appSetThreadName] parks until this completes — lets a
+  /// test hold one rename in flight while issuing another.
+  Completer<void>? renameGate;
+
+  @override
+  Future<void> appSetThreadName(
+    String serviceKey,
+    String threadId,
+    String name,
+  ) async {
+    // Capture both switches before the await: they describe THIS call, and a
+    // second call may arrive (and reset them) while this one is parked.
+    final failThis = failSetThreadName || failNextSetThreadName;
+    failNextSetThreadName = false;
+    final gate = renameGate;
+    if (gate != null) {
+      renameGate = null;
+      await gate.future;
+    }
+    if (failThis) throw Exception('rename refused');
+    setNames[threadId] = name;
+    final i = appThreads.indexWhere((t) => t.id == threadId);
+    if (i >= 0) {
+      appThreads[i] = appThreads[i].withName(name.isEmpty ? null : name);
+    }
+  }
+
   /// When true, [appModelList] returns no models, to exercise the
   /// "can't switch collaboration mode without a model" path.
   bool emptyModelList = false;
