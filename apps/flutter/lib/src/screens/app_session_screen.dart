@@ -334,11 +334,19 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   // Live filter text for the conversations pane search box.
   String _convQuery = '';
 
-  // Top-bar title rename: true while the title is a text field (double-click
-  // to enter, Enter/blur to commit, Esc to cancel).
+  // Top-bar title rename: true while the title is a text field (click to
+  // enter, Enter/blur to commit, Esc to cancel).
   bool _editingTitle = false;
   final TextEditingController _titleCtrl = TextEditingController();
   final FocusNode _titleFocus = FocusNode();
+
+  /// Monotonic id for rename requests, so a failure can tell whether it is
+  /// still the newest attempt. Committing re-opens the field immediately, so a
+  /// user can start a second rename while the first is still in flight; rolling
+  /// back unconditionally would then restore a title the user has already
+  /// replaced — and leave the UI disagreeing with the server for good, since
+  /// the second request's success path has nothing left to re-apply.
+  int _renameSeq = 0;
 
   /// Project groups the user has collapsed in the sidebar, keyed by cwd, plus
   /// the ones they expanded past the first [_projectPeek] rows. Both are
@@ -1183,6 +1191,16 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   }
 
   void _onEvent(AppEvent e) {
+    if (!mounted) return;
+    // A rename — possibly from another device, since the server persists the
+    // title — applies to whichever thread it names, so it has to be handled
+    // BEFORE the other-thread guard below: a sidebar row's rename would
+    // otherwise be dropped and the list would keep the old title until the
+    // next reload (nothing polls `_loadThreads`).
+    if (e.kind == 'thread/name/updated') {
+      _applyRemoteName(e);
+      return;
+    }
     // Ignore events belonging to another thread. Before this conversation has a
     // thread id (a brand-new conversation, pre-`thread/start`), the app session
     // is shared and another thread's turn may still be streaming, so drop any
@@ -1192,7 +1210,6 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     if (e.threadId != null && e.threadId != _threadId) {
       return;
     }
-    if (!mounted) return;
     // Server-initiated approval prompt (carries a request id to answer).
     if (e.requestId != null) {
       setState(() => _approvals.add(e));
@@ -2371,6 +2388,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         name == _barTitle(AppLocalizations.of(context)).trim()) {
       return;
     }
+    final seq = ++_renameSeq;
     if (before != null) {
       setState(() {
         final next = [..._threads];
@@ -2384,8 +2402,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           .appSetThreadName(widget.serviceKey, tid, name);
     } catch (e) {
       // Put the old title back: the server is the source of truth, so a failed
-      // rename must not leave the UI claiming it worked.
-      if (!mounted) return;
+      // rename must not leave the UI claiming it worked. Only when this is
+      // still the newest attempt, though — a later rename has already replaced
+      // what we'd be restoring, and its own request owns the outcome now.
+      if (!mounted || seq != _renameSeq) return;
       if (before != null) {
         final at = _threads.indexWhere((t) => t.id == tid);
         if (at >= 0) {
@@ -2400,6 +2420,46 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('${l10n.renameFailed}: ${friendlyError(e)}')),
       );
+    }
+  }
+
+  /// Adopt a `thread/name/updated` notification: the server persists titles, so
+  /// this is how a rename made on ANOTHER device (or in another window) reaches
+  /// this list. The echo of our OWN rename carries the name we already applied
+  /// optimistically, so the equality check below makes it a no-op.
+  void _applyRemoteName(AppEvent e) {
+    final tid = e.threadId ?? _threadIdFromRaw(e.raw);
+    if (tid == null) return;
+    final idx = _threads.indexWhere((t) => t.id == tid);
+    if (idx < 0) return;
+    final name = _nameFromRaw(e.raw);
+    if ((_threads[idx].title ?? '') == (name ?? '')) return;
+    setState(() {
+      final next = [..._threads];
+      next[idx] = next[idx].withName(name);
+      _threads = next;
+    });
+  }
+
+  /// `threadId` out of a notification's raw JSON, when the typed field is unset.
+  String? _threadIdFromRaw(String raw) => _rawString(raw, 'threadId');
+
+  /// The `name` a `thread/name/updated` carries; null when cleared or absent.
+  String? _nameFromRaw(String raw) {
+    final n = _rawString(raw, 'name')?.trim();
+    return (n == null || n.isEmpty) ? null : n;
+  }
+
+  /// One string field out of an event's raw JSON params, or null on any shape
+  /// surprise (a malformed notification must not take the screen down).
+  String? _rawString(String raw, String key) {
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return null;
+      final v = decoded[key];
+      return v is String ? v : null;
+    } catch (_) {
+      return null;
     }
   }
 
@@ -3726,6 +3786,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         : _threads
               .where(
                 (t) =>
+                    // A renamed conversation must be findable by the name the
+                    // user gave it — that's the text the row actually shows,
+                    // and searching the preview alone would miss it entirely.
+                    (t.title?.toLowerCase().contains(q) ?? false) ||
                     t.preview.toLowerCase().contains(q) ||
                     // The home pane spans projects, so let the filter reach
                     // the project path too (mirrors the project tree's search).
@@ -3788,11 +3852,22 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           final searching = q.isNotEmpty;
           for (final p in _byProject(<ThreadMeta>[...today, ...earlier])) {
             rows.add(_projectSectionLabel(p.cwd, count: p.threads.length));
-            if (_collapsedProjects.contains(p.cwd)) continue;
+            // A search overrides a collapsed project: these rows already
+            // matched the query, so hiding them would answer "no results" to a
+            // search that DID find something.
+            if (!searching && _collapsedProjects.contains(p.cwd)) continue;
             final expanded = searching || _expandedProjects.contains(p.cwd);
-            final shown = expanded
+            var shown = expanded
                 ? p.threads
                 : p.threads.take(_projectPeek).toList(growable: false);
+            // Never truncate away the conversation that's actually open: the
+            // sidebar would show no selection at all, and the user loses where
+            // they are. It's the newest rows that are worth previewing, so keep
+            // them and append the open one rather than reordering.
+            if (!expanded && !shown.any((t) => t.id == _threadId)) {
+              final open = p.threads.where((t) => t.id == _threadId);
+              if (open.isNotEmpty) shown = [...shown, open.first];
+            }
             rows.addAll(shown.map((t) => tile(t, showProject: false)));
             final hidden = p.threads.length - shown.length;
             if (!searching && (hidden > 0 || expanded)) {

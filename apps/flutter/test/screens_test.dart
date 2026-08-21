@@ -2671,6 +2671,226 @@ void main() {
     expect(find.textContaining('重命名失败'), findsOneWidget); // renameFailed (zh)
   });
 
+  testWidgets('A stale rename failure does not clobber a newer rename', (
+    t,
+  ) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    api.appThreads.add(
+      const ThreadMeta(
+        id: 't1',
+        preview: 'original preview',
+        cwd: '',
+        updatedAt: 0,
+      ),
+    );
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(1200, 900); // wide → desktop top bar
+    addTearDown(t.view.reset);
+    await t.pumpWidget(
+      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+    );
+    await t.pumpAndSettle();
+    await t.tap(find.text('original preview').first);
+    await t.pumpAndSettle();
+
+    // Rename twice, with the first request still in flight so its failure
+    // lands AFTER the second rename was already applied.
+    final gate = Completer<void>();
+    api.renameGate = gate;
+    api.failNextSetThreadName = true;
+    await t.tap(find.byKey(const Key('bar-title-tap')));
+    await t.pumpAndSettle();
+    await t.enterText(find.byKey(const Key('bar-title-field')), 'first try');
+    await t.testTextInput.receiveAction(TextInputAction.done);
+    await t.pump(); // dispatched, parked on the gate
+
+    await t.tap(find.byKey(const Key('bar-title-tap')));
+    await t.pumpAndSettle();
+    await t.enterText(find.byKey(const Key('bar-title-field')), 'second try');
+    await t.testTextInput.receiveAction(TextInputAction.done);
+    await t.pumpAndSettle();
+
+    gate.complete(); // now let the FIRST request fail
+    await t.pumpAndSettle();
+
+    // The newer rename owns the outcome: rolling back to the pre-first-request
+    // title would leave the UI permanently disagreeing with the server, which
+    // stored "second try".
+    expect(api.setNames['t1'], 'second try');
+    expect(find.text('second try'), findsWidgets);
+    expect(find.text('original preview'), findsNothing);
+  });
+
+  testWidgets('A search reaches conversations inside a collapsed project', (
+    t,
+  ) async {
+    final nowS = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    for (var i = 0; i < 8; i++) {
+      api.appThreads.add(
+        ThreadMeta(
+          id: 't$i',
+          preview: i == 7 ? 'findme needle' : 'row $i',
+          cwd: '/work/alpha',
+          updatedAt: nowS - 60 * (i + 1),
+        ),
+      );
+    }
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(1200, 900); // wide → left pane inline
+    addTearDown(t.view.reset);
+    await t.pumpWidget(
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          home: true,
+        ),
+        api,
+      ),
+    );
+    await t.pumpAndSettle();
+
+    await t.tap(find.byKey(const Key('project-header-/work/alpha')));
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('conv-tile-t0')), findsNothing); // collapsed
+
+    // A collapsed project must not swallow search hits: the filter found this
+    // row, so hiding it would answer "nothing found" to a search that did.
+    await t.enterText(find.byKey(const Key('conv-search')), 'findme');
+    await t.pumpAndSettle();
+    expect(find.text('findme needle'), findsOneWidget);
+
+    // Clearing the query returns the project to its collapsed state.
+    await t.enterText(find.byKey(const Key('conv-search')), '');
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('conv-tile-t0')), findsNothing);
+  });
+
+  testWidgets('The open conversation stays visible past the project peek', (
+    t,
+  ) async {
+    final nowS = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    // 8 rows in one project; the open one is the OLDEST, so the newest-5 peek
+    // would otherwise bury it and the sidebar would show no selection at all.
+    for (var i = 0; i < 8; i++) {
+      api.appThreads.add(
+        ThreadMeta(
+          id: 't$i',
+          preview: 'row $i',
+          cwd: '/work/alpha',
+          updatedAt: nowS - 60 * (i + 1),
+        ),
+      );
+    }
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(1200, 900); // wide → left pane inline
+    addTearDown(t.view.reset);
+    await t.pumpWidget(
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          threadId: 't7',
+          home: true,
+        ),
+        api,
+      ),
+    );
+    await t.pumpAndSettle();
+
+    expect(find.byKey(const Key('conv-tile-t7')), findsOneWidget);
+    // The peek still previews the newest rows, and still offers the rest.
+    expect(find.byKey(const Key('conv-tile-t0')), findsOneWidget);
+    expect(find.byKey(const Key('project-peek-/work/alpha')), findsOneWidget);
+  });
+
+  testWidgets('A conversation is searchable by the name the user gave it', (
+    t,
+  ) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    api.appThreads.addAll([
+      const ThreadMeta(
+        id: 'n1',
+        preview: 'aaa original preview',
+        name: 'zzz custom name',
+        cwd: '',
+        updatedAt: 10,
+      ),
+      // Enough rows for the search box to appear (>6).
+      for (var i = 0; i < 7; i++)
+        ThreadMeta(id: 'f$i', preview: 'filler $i', cwd: '', updatedAt: 9 - i),
+    ]);
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(1200, 900); // wide → left pane inline
+    addTearDown(t.view.reset);
+    await t.pumpWidget(
+      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+    );
+    await t.pumpAndSettle();
+
+    // The row shows the user's name, so that's the text a search must match —
+    // filtering on the preview alone would miss it entirely.
+    await t.enterText(find.byKey(const Key('conv-search')), 'zzz custom');
+    await t.pumpAndSettle();
+    expect(find.text('zzz custom name'), findsOneWidget);
+    expect(find.byKey(const Key('conv-tile-f0')), findsNothing);
+  });
+
+  testWidgets('A rename from another device updates the list', (t) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    api.appThreads.add(
+      const ThreadMeta(
+        id: 't1',
+        preview: 'original preview',
+        cwd: '',
+        updatedAt: 0,
+      ),
+    );
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(1200, 900); // wide → left pane inline
+    addTearDown(t.view.reset);
+    await t.pumpWidget(
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          threadId: 't1',
+        ),
+        api,
+      ),
+    );
+    await t.pumpAndSettle();
+
+    // Titles live on the server, so a rename elsewhere arrives as a
+    // notification. Nothing polls the thread list, so ignoring it would leave
+    // the old title on screen indefinitely.
+    api.pushEvent(
+      'pcx:lb7666:app:default',
+      const AppEvent(
+        kind: 'thread/name/updated',
+        threadId: 't1',
+        raw: '{"threadId":"t1","name":"renamed elsewhere"}',
+      ),
+    );
+    await t.pumpAndSettle();
+    expect(find.text('renamed elsewhere'), findsWidgets);
+    expect(find.text('original preview'), findsNothing);
+  });
+
   testWidgets('A renamed conversation shows its name in the sidebar', (
     t,
   ) async {

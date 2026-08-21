@@ -497,13 +497,30 @@ class FakeBridgeApi implements BridgeApi {
   /// When true, [appSetThreadName] throws, to exercise the rollback path.
   bool failSetThreadName = false;
 
+  /// Fails only the NEXT [appSetThreadName] call, so a test can interleave one
+  /// failing rename with a succeeding one.
+  bool failNextSetThreadName = false;
+
+  /// When set, the next [appSetThreadName] parks until this completes — lets a
+  /// test hold one rename in flight while issuing another.
+  Completer<void>? renameGate;
+
   @override
   Future<void> appSetThreadName(
     String serviceKey,
     String threadId,
     String name,
   ) async {
-    if (failSetThreadName) throw Exception('rename refused');
+    // Capture both switches before the await: they describe THIS call, and a
+    // second call may arrive (and reset them) while this one is parked.
+    final failThis = failSetThreadName || failNextSetThreadName;
+    failNextSetThreadName = false;
+    final gate = renameGate;
+    if (gate != null) {
+      renameGate = null;
+      await gate.future;
+    }
+    if (failThis) throw Exception('rename refused');
     setNames[threadId] = name;
     final i = appThreads.indexWhere((t) => t.id == threadId);
     if (i >= 0) {
