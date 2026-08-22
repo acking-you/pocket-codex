@@ -487,6 +487,10 @@ class RustBridgeApi implements BridgeApi {
       frb.appCompact(serviceKey: serviceKey, threadId: threadId);
 
   @override
+  Future<String?> appThreadSummary(String serviceKey, String threadId) =>
+      frb.appThreadSummary(serviceKey: serviceKey, threadId: threadId);
+
+  @override
   Future<void> appSetThreadName(
     String serviceKey,
     String threadId,

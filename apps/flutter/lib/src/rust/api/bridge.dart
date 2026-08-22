@@ -371,6 +371,21 @@ Future<void> appCompact({
   threadId: threadId,
 );
 
+/// A one-line gist of where a thread got to (the opening sentence of its most
+/// recent agent message), or `None` when it has produced none.
+///
+/// Its own call rather than a field on [`app_thread_list`] because the upstream
+/// `thread/list` carries no summary: the only source is a full `thread/read`, so
+/// the UI fetches these lazily for the rows it actually shows instead of paying
+/// for every conversation up front.
+Future<String?> appThreadSummary({
+  required String serviceKey,
+  required String threadId,
+}) => RustLib.instance.api.crateApiBridgeAppThreadSummary(
+  serviceKey: serviceKey,
+  threadId: threadId,
+);
+
 /// Rename a conversation. The title is persisted by the app-server (so it
 /// follows the thread across devices); an empty `name` clears it, and the UI
 /// falls back to the thread preview.

@@ -67,8 +67,9 @@ void main() {
   ) async {
     await _openViewer(tester, _png(w: 20, h: 20));
     expect(find.byType(ImageViewerPage), findsOneWidget);
-    // Tap the backdrop (bottom-centre, away from the centred image + AppBar).
-    await tester.tapAt(const Offset(400, 550));
+    // Bottom-LEFT, not bottom-centre: away from the centred image, the AppBar,
+    // and the zoom pill that now floats at the bottom centre.
+    await tester.tapAt(const Offset(80, 550));
     await tester.pumpAndSettle();
     expect(find.byType(ImageViewerPage), findsNothing);
   });
@@ -82,6 +83,54 @@ void main() {
     await tester.tap(find.byType(Image), warnIfMissed: false);
     await tester.pumpAndSettle();
     expect(find.byType(ImageViewerPage), findsNothing);
+  });
+
+  testWidgets('the viewer zoom bar steps, clamps and resets', (tester) async {
+    await _openViewer(tester, _png(w: 40, h: 40));
+    expect(find.byKey(const Key('image-zoom-bar')), findsOneWidget);
+    expect(find.text('100%'), findsOneWidget);
+
+    // Zooming out is disabled only at the floor, so it works from 100%.
+    await tester.tap(find.byKey(const Key('image-zoom-out')));
+    await tester.pumpAndSettle();
+    expect(find.text('80%'), findsOneWidget);
+
+    // In twice: 80 → 100 → 125.
+    await tester.tap(find.byKey(const Key('image-zoom-in')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('image-zoom-in')));
+    await tester.pumpAndSettle();
+    expect(find.text('125%'), findsOneWidget);
+
+    // Tapping the readout snaps back to 100% — the fast way out of a
+    // deep zoom.
+    await tester.tap(find.byKey(const Key('image-zoom-reset')));
+    await tester.pumpAndSettle();
+    expect(find.text('100%'), findsOneWidget);
+  });
+
+  testWidgets('the zoom bar disables its buttons at the limits', (
+    tester,
+  ) async {
+    await _openViewer(tester, _png(w: 40, h: 40));
+    // Walk to the ceiling; the step is multiplicative so this terminates well
+    // before the loop bound.
+    for (var i = 0; i < 12; i++) {
+      final btn = tester.widget<IconButton>(
+        find.byKey(const Key('image-zoom-in')),
+      );
+      if (btn.onPressed == null) break;
+      await tester.tap(find.byKey(const Key('image-zoom-in')));
+      await tester.pumpAndSettle();
+    }
+    expect(find.text('600%'), findsOneWidget);
+    expect(
+      tester
+          .widget<IconButton>(find.byKey(const Key('image-zoom-in')))
+          .onPressed,
+      isNull,
+      reason: 'at max zoom the + button must say so, not silently no-op',
+    );
   });
 
   testWidgets('thumbnail reveals a save button on hover (desktop)', (

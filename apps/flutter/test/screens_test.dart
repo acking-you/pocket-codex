@@ -23,6 +23,7 @@ import 'package:pocket_codex/src/ui_prefs.dart';
 import 'package:pocket_codex/src/screens/account_onboarding_screen.dart';
 import 'package:pocket_codex/src/screens/api_service_screen.dart';
 import 'package:pocket_codex/src/image_attachments.dart';
+import 'package:pocket_codex/src/widgets/message_images.dart';
 import 'package:pocket_codex/src/screens/app_session_screen.dart';
 import 'package:pocket_codex/src/screens/app_service_screen.dart';
 import 'package:pocket_codex/src/screens/services_screen.dart';
@@ -1660,6 +1661,43 @@ void main() {
       expect(find.byKey(const Key('attachment-0')), findsNothing);
     });
 
+    testWidgets('a sent message renders its image OUTSIDE the text bubble', (
+      t,
+    ) async {
+      await pumpSession(t);
+      picker.files = [XFile.fromData(_tinyPng(), name: 'shot.png')];
+
+      await _attachMenu(t, 'attach-btn');
+      await t.pumpAndSettle();
+      await t.enterText(find.byType(TextField), 'who is this?');
+      await t.pump();
+      await t.tap(find.byKey(const Key('send-btn')));
+      await t.pumpAndSettle();
+
+      final thumb = find.byKey(const Key('msg-image-0'));
+      expect(thumb, findsOneWidget);
+      // `find.text` also matches the top-bar conversation title (it previews
+      // the first message), so scope to the linkified body in the transcript.
+      final body = find.descendant(
+        of: find.byType(Linkify),
+        matching: find.text('who is this?'),
+      );
+      expect(body, findsOneWidget);
+      final bubble = find
+          .ancestor(of: body, matching: find.byType(Container))
+          .first;
+      // The image is a sibling of the bubble, not a descendant: nesting it made
+      // the picture inherit the bubble's padding and background, and left an
+      // image-only message as a mostly-empty bubble.
+      expect(
+        find.descendant(of: bubble, matching: thumb),
+        findsNothing,
+        reason: 'thumbnail must not live inside the text bubble',
+      );
+      // And it sits ABOVE the text, matching the reference layout.
+      expect(t.getCenter(thumb).dy, lessThan(t.getCenter(body).dy));
+    });
+
     testWidgets('an image-only message can be sent (no text)', (t) async {
       final api = await pumpSession(t);
       picker.files = [XFile.fromData(_tinyPng(), name: 'shot.png')];
@@ -1672,6 +1710,34 @@ void main() {
       expect(api.lastTurnText, '');
       expect(api.lastTurnImages, hasLength(1));
       expect(find.byKey(const Key('msg-image-0')), findsOneWidget);
+    });
+
+    testWidgets('a staged image opens the viewer before it is sent', (t) async {
+      await pumpSession(t);
+      picker.files = [
+        XFile.fromData(_tinyPng(), name: 'one.png'),
+        XFile.fromData(_tinyPng(), name: 'two.png'),
+      ];
+
+      await _attachMenu(t, 'attach-btn');
+      await t.pumpAndSettle();
+      expect(find.byKey(const Key('attachment-0')), findsOneWidget);
+      expect(find.byKey(const Key('attachment-1')), findsOneWidget);
+
+      // Clicking the SECOND staged tile previews that one — checking what you
+      // attached without having to send it first.
+      await t.tap(find.byKey(const Key('attachment-1')));
+      await t.pumpAndSettle();
+      expect(find.byType(ImageViewerPage), findsOneWidget);
+      // Both staged images are pageable, opened at the one clicked.
+      expect(find.text('2/2'), findsOneWidget);
+
+      // Closing returns to the composer with the attachments still staged.
+      await t.tapAt(const Offset(40, 700));
+      await t.pumpAndSettle();
+      expect(find.byType(ImageViewerPage), findsNothing);
+      expect(find.byKey(const Key('attachment-0')), findsOneWidget);
+      expect(find.byKey(const Key('attachment-1')), findsOneWidget);
     });
 
     testWidgets('removing the pending attachment disables an image-only send', (
@@ -1892,6 +1958,21 @@ void main() {
       await t.pumpAndSettle();
       return api;
     }
+
+    testWidgets('a staged FILE has no preview (no pixels to show)', (t) async {
+      await pumpSession(t);
+      selector.files = [tmpFile('notes.txt', utf8.encode('x'))];
+
+      await _attachMenu(t, 'attach-file-btn');
+      await t.pumpAndSettle();
+      expect(find.byKey(const Key('attachment-0')), findsOneWidget);
+
+      // Clicking it is inert: a document has no pixels, so there is nothing to
+      // preview and the viewer must not open on an empty list.
+      await t.tap(find.byKey(const Key('attachment-0')));
+      await t.pumpAndSettle();
+      expect(find.byType(ImageViewerPage), findsNothing);
+    });
 
     testWidgets('attach uploads to the host and the turn text carries the '
         'path-reference block', (t) async {
@@ -2426,6 +2507,381 @@ void main() {
     await t.tap(find.byKey(const Key('project-header-/work/alpha')));
     await t.pumpAndSettle();
     expect(find.text('alpha one'), findsOneWidget);
+  });
+
+  testWidgets(
+    'A failed startup listing retries instead of stranding the pane',
+    (t) async {
+      final nowS = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      final api = FakeBridgeApi(
+        config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+      );
+      await api.appConnect('pcx:lb7666:app:default', 28080);
+      api.appThreads.add(
+        ThreadMeta(
+          id: 'a1',
+          preview: 'alpha one',
+          cwd: '/work/alpha',
+          updatedAt: nowS - 300,
+        ),
+      );
+      // The very first listing fails — the app opened before the host was
+      // reachable, or the host restarted underneath it.
+      api.failNextThreadList = true;
+      t.view.devicePixelRatio = 1.0;
+      t.view.physicalSize = const Size(1200, 900);
+      addTearDown(t.view.reset);
+      await t.pumpWidget(
+        _host(
+          const AppSessionScreen(
+            serviceKey: 'pcx:lb7666:app:default',
+            home: true,
+          ),
+          api,
+        ),
+      );
+      await t.pumpAndSettle();
+      // Nothing yet: the one shot at listing failed and was swallowed.
+      expect(_convTiles(), findsNothing);
+
+      // The retry lands and the pane fills itself in. Without it the sidebar
+      // stayed empty for the whole session — nothing else re-lists unless the
+      // user sends a message.
+      await t.pump(const Duration(seconds: 2));
+      await t.pumpAndSettle();
+      expect(find.byKey(const Key('conv-tile-a1')), findsOneWidget);
+      expect(find.text('alpha one'), findsWidgets);
+    },
+  );
+
+  testWidgets('A failed default-folder seed retries instead of rooting a new '
+      'conversation in the wrong folder', (t) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    api.projectConfigs['pcx:lb7666:app:default'] = const ProjectConfig(
+      projectRoots: ['/work'],
+      defaultProject: '/work/alpha',
+    );
+    // The meta tunnel isn't up on the first attempt — the cold-open race.
+    api.failNextProjectConfig = true;
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(1200, 900);
+    addTearDown(t.view.reset);
+    // No threadId and no cwd: a brand-new conversation, which is the only case
+    // that seeds a default folder.
+    await t.pumpWidget(
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          home: true,
+        ),
+        api,
+      ),
+    );
+    await t.pumpAndSettle();
+    // The seed failed, so the folder is still unset ("default folder").
+    expect(find.text('alpha'), findsNothing);
+
+    // The retry lands and the conversation adopts the host's default. Without
+    // it the chat would silently run in the wrong directory for the whole
+    // session — the agent reading and editing files the user never chose.
+    await t.pump(const Duration(seconds: 2));
+    await t.pumpAndSettle();
+    expect(find.text('alpha'), findsWidgets);
+  });
+
+  testWidgets('A settled default-folder seed stops retrying', (t) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    // A host with NO default configured: answering is settled, even though
+    // nothing was seeded. Retrying would just ask the same question five times.
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(1200, 900);
+    addTearDown(t.view.reset);
+    await t.pumpWidget(
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          home: true,
+        ),
+        api,
+      ),
+    );
+    await t.pumpAndSettle();
+    final after = api.projectConfigCalls;
+    await t.pump(const Duration(seconds: 20));
+    await t.pumpAndSettle();
+    expect(api.projectConfigCalls, after, reason: 'no retry once answered');
+  });
+
+  testWidgets('A reconnect re-lists the sidebar, not just the transcript', (
+    t,
+  ) async {
+    final nowS = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(1200, 900);
+    addTearDown(t.view.reset);
+    await t.pumpWidget(
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          home: true,
+        ),
+        api,
+      ),
+    );
+    await t.pumpAndSettle();
+    expect(_convTiles(), findsNothing, reason: 'host had nothing to list yet');
+
+    // The host restarts and now HAS history — exactly the case that left the
+    // pane empty: the app listed once at startup against a host with no data
+    // (or no connection), and nothing re-listed afterwards.
+    await api.appDisconnect('pcx:lb7666:app:default');
+    api.appThreads.add(
+      ThreadMeta(
+        id: 'a1',
+        preview: 'alpha one',
+        cwd: '/work/alpha',
+        updatedAt: nowS - 300,
+      ),
+    );
+
+    // The health timer notices the dead socket and reconnects.
+    await t.pump(const Duration(seconds: 13));
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('conv-tile-a1')), findsOneWidget);
+  });
+
+  testWidgets('The activity view groups by day and summarizes each row', (
+    t,
+  ) async {
+    final now = DateTime.now();
+    int at(Duration ago) => now.subtract(ago).millisecondsSinceEpoch ~/ 1000;
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    api.appThreads.addAll([
+      ThreadMeta(
+        id: 'a1',
+        preview: 'alpha one',
+        cwd: '/work/alpha',
+        updatedAt: at(const Duration(minutes: 5)),
+      ),
+      // Comfortably inside yesterday whatever time the test runs at.
+      ThreadMeta(
+        id: 'b1',
+        preview: 'beta one',
+        cwd: '/work/beta',
+        updatedAt: at(Duration(hours: 24 + now.hour, minutes: now.minute)),
+      ),
+    ]);
+    api.summaries['a1'] = 'Rewrote the retry loop.';
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(1200, 900); // wide → left pane inline
+    addTearDown(t.view.reset);
+    await t.pumpWidget(
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          home: true,
+        ),
+        api,
+      ),
+    );
+    await t.pumpAndSettle();
+
+    // The project tree is the default, so no summaries are fetched for it —
+    // one thread/read per row is far too much to spend on a sidebar nobody
+    // asked to see this way.
+    expect(api.summaryCalls, isEmpty);
+    expect(find.byKey(const Key('project-header-/work/alpha')), findsOneWidget);
+
+    await t.tap(find.byKey(const Key('activity-view-btn')));
+    await t.pumpAndSettle();
+
+    // Day headings replace the project headings.
+    expect(find.byKey(const Key('project-header-/work/alpha')), findsNothing);
+    expect(find.text('今天'), findsOneWidget);
+    expect(find.text('昨天'), findsOneWidget);
+    // Both rows are present, each under its own day.
+    expect(find.byKey(const Key('activity-tile-a1')), findsOneWidget);
+    expect(find.byKey(const Key('activity-tile-b1')), findsOneWidget);
+    // The summary is the agent's own last line, not the user's first message.
+    expect(find.text('Rewrote the retry loop.'), findsOneWidget);
+    expect(api.summaryCalls, containsAll(<String>['a1', 'b1']));
+
+    // And the toggle goes back to the project tree.
+    await t.tap(find.byKey(const Key('activity-view-btn')));
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('project-header-/work/alpha')), findsOneWidget);
+    expect(find.byKey(const Key('activity-tile-a1')), findsNothing);
+  });
+
+  testWidgets('The activity view keeps one row shape, Active group included', (
+    t,
+  ) async {
+    final nowS = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    api.appThreads.addAll([
+      ThreadMeta(
+        id: 'a1',
+        preview: 'alpha one',
+        cwd: '/work/alpha',
+        updatedAt: nowS - 300,
+      ),
+      ThreadMeta(
+        id: 'a2',
+        preview: 'alpha two',
+        cwd: '/work/alpha',
+        updatedAt: nowS - 600,
+      ),
+    ]);
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(1200, 900);
+    addTearDown(t.view.reset);
+    await t.pumpWidget(
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          home: true,
+        ),
+        api,
+      ),
+    );
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('activity-view-btn')));
+    await t.pumpAndSettle();
+
+    // a1 starts a turn, so it moves up into the "Active" group.
+    api.pushEvent(
+      'pcx:lb7666:app:default',
+      const AppEvent(kind: 'turn/started', threadId: 'a1', raw: '{}'),
+    );
+    await t.pump();
+    await t.pump();
+    expect(find.text('进行中'), findsOneWidget); // groupActive (zh)
+
+    // Both rows are activity tiles: the Active group must not fall back to the
+    // project tree's compact row while the rest of the list is summarized.
+    expect(find.byKey(const Key('activity-tile-a1')), findsOneWidget);
+    expect(find.byKey(const Key('activity-tile-a2')), findsOneWidget);
+    expect(_convTiles(), findsNothing);
+  });
+
+  testWidgets('A finished turn refreshes that row\'s cached summary', (
+    t,
+  ) async {
+    final nowS = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    api.appThreads.add(
+      ThreadMeta(
+        id: 'a1',
+        preview: 'alpha one',
+        cwd: '/work/alpha',
+        updatedAt: nowS - 300,
+      ),
+    );
+    api.summaries['a1'] = 'Looked at the retry loop.';
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(1200, 900);
+    addTearDown(t.view.reset);
+    await t.pumpWidget(
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          threadId: 'a1',
+          home: true,
+        ),
+        api,
+      ),
+    );
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('activity-view-btn')));
+    await t.pumpAndSettle();
+    expect(find.text('Looked at the retry loop.'), findsOneWidget);
+    expect(api.summaryCalls, ['a1']);
+
+    // A turn runs and produces a newer reply. The cached line now describes the
+    // previous turn, so it has to be re-read rather than kept forever.
+    api.summaries['a1'] = 'Rewrote the retry loop.';
+    api.pushEvent(
+      'pcx:lb7666:app:default',
+      const AppEvent(kind: 'turn/started', threadId: 'a1', raw: '{}'),
+    );
+    await t.pump();
+    api.pushEvent(
+      'pcx:lb7666:app:default',
+      const AppEvent(kind: 'turn/completed', threadId: 'a1', raw: '{}'),
+    );
+    await t.pumpAndSettle();
+
+    expect(find.text('Rewrote the retry loop.'), findsOneWidget);
+    expect(find.text('Looked at the retry loop.'), findsNothing);
+    expect(api.summaryCalls, ['a1', 'a1']); // re-read exactly once
+  });
+
+  testWidgets('An activity row stays readable before its summary arrives', (
+    t,
+  ) async {
+    final nowS = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    api.appThreads.add(
+      ThreadMeta(
+        id: 'a1',
+        preview: 'alpha one',
+        cwd: '/work/alpha',
+        name: 'Retry work',
+        updatedAt: nowS - 300,
+      ),
+    );
+    api.summaries['a1'] = 'Rewrote the retry loop.';
+    // Hold the summary in flight so the pre-load row is observable.
+    final gate = Completer<void>();
+    api.summaryGate = gate;
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(1200, 900);
+    addTearDown(t.view.reset);
+    await t.pumpWidget(
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          home: true,
+        ),
+        api,
+      ),
+    );
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('activity-view-btn')));
+    await t.pumpAndSettle();
+
+    // Loading: the name leads and the preview stands in for the summary, so
+    // the row reads immediately and the layout won't jump when the real one
+    // lands.
+    expect(find.text('Retry work'), findsOneWidget);
+    expect(find.text('alpha one'), findsOneWidget);
+
+    gate.complete();
+    await t.pumpAndSettle();
+    expect(find.text('Rewrote the retry loop.'), findsOneWidget);
+    expect(find.text('alpha one'), findsNothing);
   });
 
   testWidgets('A project shows only its newest few rows until expanded', (
@@ -4373,7 +4829,7 @@ void main() {
     expect(find.text('12%'), findsOneWidget);
   });
 
-  testWidgets('Sidebar theme button cycles system → light → dark', (t) async {
+  testWidgets('Sidebar theme button flips between light and dark', (t) async {
     final api = FakeBridgeApi(
       config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
     );
@@ -4381,35 +4837,56 @@ void main() {
     t.view.devicePixelRatio = 1.0;
     t.view.physicalSize = const Size(1200, 900); // wide → left pane inline
     addTearDown(t.view.reset);
+    // Its own host rather than `_host`: the button reads the brightness in
+    // EFFECT, so the app has to actually carry a light and a dark theme (and
+    // honour the stored mode) the way main.dart does.
     await t.pumpWidget(
-      _host(
-        const AppSessionScreen(
-          serviceKey: 'pcx:lb7666:app:default',
-          home: true,
+      ProviderScope(
+        overrides: [bridgeApiProvider.overrideWithValue(api)],
+        child: Consumer(
+          builder: (context, ref, _) {
+            final pref = ref.watch(uiPrefsProvider).valueOrNull?.themeMode;
+            return MaterialApp(
+              locale: const Locale('zh'),
+              theme: ThemeData(brightness: Brightness.light),
+              darkTheme: ThemeData(brightness: Brightness.dark),
+              themeMode: switch (pref) {
+                'light' => ThemeMode.light,
+                'dark' => ThemeMode.dark,
+                _ => ThemeMode.system,
+              },
+              localizationsDelegates: AppLocalizations.localizationsDelegates,
+              supportedLocales: AppLocalizations.supportedLocales,
+              home: const AppSessionScreen(
+                serviceKey: 'pcx:lb7666:app:default',
+                home: true,
+              ),
+            );
+          },
         ),
-        api,
       ),
     );
     await t.pumpAndSettle();
 
-    // Follow-system is the default, and the icon says so.
+    // Two states only — no third "auto" icon to land on.
     final btn = find.byKey(const Key('sidebar-theme-btn'));
     expect(btn, findsOneWidget);
-    expect(find.byIcon(Icons.brightness_auto_outlined), findsOneWidget);
+    expect(find.byIcon(Icons.brightness_auto_outlined), findsNothing);
 
-    await t.tap(btn);
-    await t.pumpAndSettle();
+    // The test platform reports light, so the button offers dark and the icon
+    // shows what is currently in effect.
     expect(find.byIcon(Icons.light_mode_outlined), findsOneWidget);
-
     await t.tap(btn);
     await t.pumpAndSettle();
     expect(find.byIcon(Icons.dark_mode_outlined), findsOneWidget);
+    expect(find.byIcon(Icons.light_mode_outlined), findsNothing);
 
-    // Third tap returns to follow-system, which a two-state switch could never
-    // reach again once the user left it.
+    // And back — tapping twice returns to where it started rather than
+    // advancing into a third state.
     await t.tap(btn);
     await t.pumpAndSettle();
-    expect(find.byIcon(Icons.brightness_auto_outlined), findsOneWidget);
+    expect(find.byIcon(Icons.light_mode_outlined), findsOneWidget);
+    expect(find.byIcon(Icons.brightness_auto_outlined), findsNothing);
   });
 
   testWidgets('The composer drops the project chip once the thread exists', (

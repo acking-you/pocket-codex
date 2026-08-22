@@ -14,6 +14,7 @@ import 'package:pasteboard/pasteboard.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:intl/intl.dart' show DateFormat;
 import 'package:super_sliver_list/super_sliver_list.dart';
 import 'package:window_manager/window_manager.dart' show DragToMoveArea;
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
@@ -49,6 +50,17 @@ import 'package:pocket_codex/src/widgets/status_dots.dart';
 /// first service bind; the rest would hit the probe-bind failure. See
 /// [BridgeApi.appConnect].
 const appLocalPort = 0;
+
+// Cold-open loads that retry on their own schedule when the first attempt loses
+// the race against the connection. See `_retryOpenLoad`.
+const String _kThreadsLoad = 'threads';
+const String _kCwdSeed = 'cwd';
+
+/// Attempts each cold-open load gets before giving up (1/2/4/8/16s apart).
+/// Reaches ~31s of coverage, which is what a desktop auto-host restore needs:
+/// the host is a child process this app spawns, and it took ~30s to become
+/// ready in the field.
+const int _kOpenLoadMaxRetries = 5;
 
 /// A live conversation with a remote codex app-server thread.
 ///
@@ -328,6 +340,12 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   final MenuController _envMenu = MenuController();
   List<ThreadMeta> _threads = const [];
 
+  /// Cold-open loads still waiting to succeed → attempts spent so far, plus
+  /// each one's pending timer. A key present means "not settled yet"; the
+  /// loader removes its key on success. See [_retryOpenLoad].
+  final Map<String, int> _openLoadRetries = {};
+  final Map<String, Timer> _openLoadTimers = {};
+
   /// Distinct project roots across every conversation on this service (not
   /// just the current project's), for the project switcher. See [_loadThreads].
   List<String> _allProjects = const [];
@@ -357,6 +375,12 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
 
   /// How many conversations a project group shows before "show more".
   static const int _projectPeek = 5;
+
+  /// True while the sidebar groups conversations by WHEN they happened (with a
+  /// one-line gist each) instead of by which project they belong to. View state
+  /// only — a restart returns to the project tree, which is the default because
+  /// it answers "where am I working".
+  bool _activityView = false;
 
   bool _streaming = false;
   // Current running turn's id, captured from turn/started — required to
@@ -596,14 +620,58 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
               : t,
       ];
       if (mounted) setState(() => _threads = mine);
+      _openLoadDone(_kThreadsLoad);
       // Reaching here proves the service answers, which the subscribe-time
       // quota fetch can't assume on a cold open (it races the connection).
       // A brand-new conversation never reads a thread, so this is the only
       // retry it gets.
       if (_rate == null) _loadQuota();
     } catch (_) {
-      // Listing is best-effort; the pane just stays as it is.
+      // Listing is best-effort for the CONTENT — a failure leaves whatever the
+      // pane already had. But a cold open racing the connection (or a host that
+      // isn't up yet) must not strand the pane empty: nothing else re-lists
+      // except a reconnect or a sent message, so retry a few times here.
+      if (mounted) _retryOpenLoad(_kThreadsLoad);
     }
+  }
+
+  /// Re-attempt a cold-open load that failed, with a widening backoff.
+  ///
+  /// Every load kicked off in `initState` races the connection: the screen
+  /// mounts and fires immediately, while the socket may still be handshaking —
+  /// and on desktop the host itself can be a CHILD PROCESS THIS APP IS STILL
+  /// SPAWNING (auto-host restore takes ~30s, far longer than the first
+  /// attempt). Those loads all `catch (_)` because none of them is worth an
+  /// error banner, which meant one lost race stranded the surface for the whole
+  /// session: an empty conversation list, or a new chat silently rooted in the
+  /// wrong folder.
+  ///
+  /// [key] identifies the load, so each retries on its own schedule and a
+  /// success stops only its own chain. Retries stop once the load succeeds
+  /// (the loader clears the key) or the budget runs out; a later failure with
+  /// data already in hand is left alone, since something is on screen and the
+  /// reconnect path will refresh it.
+  void _retryOpenLoad(String key) {
+    final attempt = _openLoadRetries[key] ?? 0;
+    if (attempt >= _kOpenLoadMaxRetries) return;
+    _openLoadRetries[key] = attempt + 1;
+    _openLoadTimers[key]?.cancel();
+    _openLoadTimers[key] = Timer(Duration(seconds: 1 << attempt), () {
+      // 1/2/4/8/16s
+      if (!mounted || !_openLoadRetries.containsKey(key)) return;
+      switch (key) {
+        case _kThreadsLoad:
+          _loadThreads();
+        case _kCwdSeed:
+          _seedDefaultCwd();
+      }
+    });
+  }
+
+  /// Mark a cold-open load as settled, so its retry chain stops.
+  void _openLoadDone(String key) {
+    _openLoadRetries.remove(key);
+    _openLoadTimers.remove(key)?.cancel();
   }
 
   /// Seed a brand-new conversation's settings from the user's last choices
@@ -872,6 +940,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   @override
   void dispose() {
     _healthTimer?.cancel();
+    for (final t in _openLoadTimers.values) {
+      t.cancel();
+    }
     _elapsedTicker?.cancel();
     _sub?.cancel();
     _input.dispose();
@@ -1326,6 +1397,11 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         });
         _maybeFlushQueue(); // send the next queued message, if any
         _loadGit(); // edits from the turn may have changed the diff
+        // The turn just produced a new agent reply, so the cached one-line
+        // summary now describes the turn BEFORE it. Drop it and let the
+        // activity view re-read on its next build; without this the cache is
+        // permanently stale for the thread the user is actually working in.
+        _invalidateSummary(e.threadId);
       case 'turn/failed':
         setState(() {
           _streaming = false;
@@ -1344,6 +1420,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           }
         });
         _maybeFlushQueue(); // send the next queued message, if any
+        // An interrupted or failed turn can still have streamed a reply before
+        // it stopped, so the cached summary is just as stale as on success.
+        _invalidateSummary(e.threadId);
       default:
         _handleItemEvent(e);
     }
@@ -2127,6 +2206,20 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         await api.appConnect(widget.serviceKey, appLocalPort);
         _subscribe();
         if (reload && _threadId != null) await _resumeAndLoad();
+        // Re-list too, not just the open transcript. `_loadThreads` runs once at
+        // initState and is best-effort: if the host wasn't reachable then (it
+        // restarted, or the app opened first), the failure was swallowed and
+        // the pane stayed empty FOREVER — nothing else re-lists except sending
+        // a message. A reconnect is exactly the moment the data became
+        // available, so this is where it has to be retried.
+        await _loadThreads();
+        // Same reasoning for the other cold-open loads: a reconnect is the
+        // moment their data became reachable. Both are no-ops once settled —
+        // the cwd seed won't override a folder the user picked, and the quota
+        // just refreshes.
+        if (_openLoadRetries.containsKey(_kCwdSeed)) await _seedDefaultCwd();
+        if (_rate == null) unawaited(_loadQuota());
+        _loadGit(); // the working tree may have moved on while we were away
         if (mounted) {
           setState(() {
             _reconnecting = false;
@@ -2490,7 +2583,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     } catch (_) {
       // Quota is optional (a custom provider may not report one, and an
       // unreachable host times out); every surface that shows it degrades to
-      // "unavailable" rather than blocking.
+      // "unavailable" rather than blocking. No retry of its own is needed: a
+      // successful listing re-fetches it (see `_loadThreads`), and that listing
+      // now retries — so the quota rides along.
     }
   }
 
@@ -3827,6 +3922,19 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                 if (t.id != _threadId) _openThread(t.id, t.cwd);
               },
             );
+        // The activity view's taller row: name in bold over a one-line summary
+        // of where the conversation got to.
+        Widget activityTile(ThreadMeta t) => _activityTile(
+          thread: t,
+          running: running.contains(t.id),
+          selected: t.id == _threadId,
+          now: now,
+          l10n: l10n,
+          onTap: () {
+            closeDrawerIfOpen(ctx);
+            if (t.id != _threadId) _openThread(t.id, t.cwd);
+          },
+        );
         final rows = <Widget>[];
         void group(
           String label,
@@ -3835,13 +3943,29 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         }) {
           if (items.isEmpty) return;
           rows.add(_sectionLabel(label));
-          rows.addAll(items.map((t) => tile(t, showProject: showProject)));
+          rows.addAll(
+            // Whichever view is on, one list means one row shape — an Active
+            // group in compact rows above summarized ones would read as two
+            // lists stapled together.
+            items.map(
+              (t) => _activityView
+                  ? activityTile(t)
+                  : tile(t, showProject: showProject),
+            ),
+          );
         }
 
         // Running threads always lead, whatever project they belong to — they
         // are the only rows the user may need to reach urgently.
         group(l10n.groupActive, active, showProject: widget.home);
-        if (widget.home) {
+        if (_activityView) {
+          // "When was I working on this", grouped by the day it last moved.
+          // Each row carries a one-line summary of the newest agent reply, so
+          // the list answers "what happened" without opening anything.
+          for (final d in _byDay(<ThreadMeta>[...today, ...earlier], now)) {
+            group(d.label, d.threads);
+          }
+        } else if (widget.home) {
           // The home pane spans every project, so the rest reads as a tree:
           // project → its conversations, newest project first, with the open
           // project pinned to the top. Each project shows only its newest few
@@ -3941,10 +4065,32 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                 children: [
                   Expanded(
                     child: Text(
-                      l10n.conversationsSection,
+                      _activityView
+                          ? l10n.activityView
+                          : l10n.conversationsSection,
                       style: Theme.of(context).textTheme.titleSmall,
                     ),
                   ),
+                  // Group by project, or by when it happened. Two ways of
+                  // asking "what was I doing", so it's a toggle rather than a
+                  // replacement — the project tree answers "where", this
+                  // answers "when".
+                  IconButton(
+                    key: const Key('activity-view-btn'),
+                    icon: Icon(
+                      _activityView
+                          ? Icons.folder_outlined
+                          : Icons.history_toggle_off,
+                      size: 18,
+                    ),
+                    tooltip: _activityView
+                        ? l10n.conversationsSection
+                        : l10n.activityView,
+                    visualDensity: VisualDensity.compact,
+                    onPressed: () =>
+                        setState(() => _activityView = !_activityView),
+                  ),
+                  const SizedBox(width: 2),
                   Material(
                     color: scheme.primary,
                     shape: const CircleBorder(),
@@ -4196,31 +4342,49 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     );
   }
 
-  /// One sidebar-footer shortcut: closes the drawer (mobile) then pushes.
   /// Sidebar footer: flip the app between light and dark without a trip to
   /// settings — appearance is the one setting people change on a whim (and by
   /// time of day), so it earns a one-tap control next to the other shortcuts.
   ///
-  /// Cycles system → light → dark → system rather than a plain two-state
-  /// switch: "follow the OS" is the default, so a toggle that could only ever
-  /// reach light/dark would make it unreachable once tapped. The icon shows
-  /// what is CURRENTLY in effect, and the tooltip names the next state.
+  /// Two states, not three. It used to cycle system → light → dark to keep
+  /// "follow the OS" reachable, but a control whose next state you can't
+  /// predict from its icon is a worse trade than losing one-tap access to a
+  /// default that Settings still offers. The icon shows what is in effect now;
+  /// tapping shows the other one.
   Widget _themeToggle(AppLocalizations l10n) {
-    final mode = ref.watch(uiPrefsProvider).valueOrNull?.themeMode;
-    final (icon, next, nextLabel) = switch (mode) {
-      'light' => (Icons.light_mode_outlined, 'dark', l10n.appearanceDark),
-      'dark' => (Icons.dark_mode_outlined, null, l10n.appearanceSystem),
-      _ => (Icons.brightness_auto_outlined, 'light', l10n.appearanceLight),
-    };
+    // Keyed off what is actually ON SCREEN, not the stored preference: while
+    // following the system there is no stored value, and a button that reads
+    // "switch to light" over an already-light UI would be nonsense. This also
+    // makes the first tap out of follow-system do the obvious thing — flip to
+    // the opposite of what the user is looking at.
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final next = dark ? 'light' : 'dark';
     return IconButton(
       key: const Key('sidebar-theme-btn'),
-      icon: Icon(icon, size: 20),
-      tooltip: '${l10n.appearance} · $nextLabel',
+      // Cross-fade + rotate rather than a hard swap: the whole UI is mid-
+      // transition for 200 ms, so an icon that jumped would be the one thing
+      // in the window that didn't move.
+      icon: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 250),
+        transitionBuilder: (child, animation) => RotationTransition(
+          turns: Tween(begin: 0.75, end: 1.0).animate(animation),
+          child: FadeTransition(opacity: animation, child: child),
+        ),
+        child: Icon(
+          dark ? Icons.dark_mode_outlined : Icons.light_mode_outlined,
+          // The key is what makes the switcher animate: same type + no key
+          // reads as the same widget and swaps silently.
+          key: ValueKey(dark),
+          size: 20,
+        ),
+      ),
+      tooltip: dark ? l10n.appearanceLight : l10n.appearanceDark,
       visualDensity: VisualDensity.compact,
       onPressed: () => ref.read(uiPrefsProvider.notifier).setThemeMode(next),
     );
   }
 
+  /// One sidebar-footer shortcut: closes the drawer (mobile) then pushes.
   Widget _paneShortcut({
     required String key,
     required IconData icon,
@@ -4341,6 +4505,61 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         );
       });
     return [for (final k in keys) (cwd: k, threads: buckets[k]!)];
+  }
+
+  /// Drops the cached activity-view summary for [threadId], so the next build
+  /// re-reads it. Called when a turn ends: the summary is the newest agent
+  /// reply, and that is exactly what just changed.
+  void _invalidateSummary(String? threadId) {
+    if (threadId == null || threadId.isEmpty) return;
+    ref.invalidate(
+      threadSummaryProvider(threadSummaryKey(widget.serviceKey, threadId)),
+    );
+  }
+
+  /// Buckets threads by the calendar day they last moved, newest day first —
+  /// the activity view's spine.
+  ///
+  /// Labels lean on the calendar rather than elapsed time: "Today" /
+  /// "Yesterday", then the weekday name for the rest of the past week (a date
+  /// that recent reads better as "Thursday"), and a plain date beyond that.
+  /// Threads with no timestamp land in one trailing "Earlier" bucket instead of
+  /// claiming the epoch as their day.
+  List<({String label, List<ThreadMeta> threads})> _byDay(
+    List<ThreadMeta> threads,
+    DateTime now,
+  ) {
+    final l10n = AppLocalizations.of(context);
+    final locale = l10n.localeName;
+    final today = DateTime(now.year, now.month, now.day);
+    // Insertion order IS the output order: the input arrives newest-first, so
+    // each new day appends after the days already seen.
+    final buckets = <String, List<ThreadMeta>>{};
+    final undated = <ThreadMeta>[];
+    for (final t in threads) {
+      if (t.updatedAt <= 0) {
+        undated.add(t);
+        continue;
+      }
+      final at = DateTime.fromMillisecondsSinceEpoch(t.updatedAt * 1000);
+      final day = DateTime(at.year, at.month, at.day);
+      final label = switch (today.difference(day).inDays) {
+        <= 0 => l10n.groupToday,
+        1 => l10n.groupYesterday,
+        // Weekday names only stay unambiguous inside one week — past that
+        // "Thursday" could be any Thursday, so switch to a date.
+        < 7 => DateFormat.EEEE(locale).format(day),
+        _ => DateFormat.yMMMd(locale).format(day),
+      };
+      buckets.putIfAbsent(label, () => <ThreadMeta>[]).add(t);
+    }
+    return [
+      for (final e in buckets.entries) (label: e.key, threads: e.value),
+      // Undated rows can't claim a day, and they sort nowhere in particular in
+      // the source order — so they go last under one catch-all heading rather
+      // than splitting the timeline wherever the first one happened to appear.
+      if (undated.isNotEmpty) (label: l10n.groupEarlier, threads: undated),
+    ];
   }
 
   /// A project heading in the home pane's conversation tree: the folder is the
@@ -4551,6 +4770,121 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                             fontSize: 11.5,
+                            color: running ? scheme.primary : muted,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                if (running) ...[
+                  const SizedBox(width: 8),
+                  PulsingDot(color: scheme.primary, size: 7),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// One activity-view row: the conversation's name in bold over a one-line
+  /// summary of where it got to, plus its project and time.
+  ///
+  /// The summary needs a `thread/read` per row, which is far too much to fetch
+  /// for a whole sidebar up front — so it loads when the row is first built
+  /// (i.e. when it scrolls into range) and Riverpod keeps it cached for the rest
+  /// of the session. Until it arrives the row shows the first user message,
+  /// which is already in hand: the layout never jumps, and a row is readable
+  /// immediately rather than blank behind a spinner.
+  Widget _activityTile({
+    required ThreadMeta thread,
+    required bool running,
+    required bool selected,
+    required DateTime now,
+    required AppLocalizations l10n,
+    required VoidCallback onTap,
+  }) {
+    final scheme = Theme.of(context).colorScheme;
+    final fg = selected ? scheme.onPrimaryContainer : scheme.onSurface;
+    final muted = selected
+        ? scheme.onPrimaryContainer.withValues(alpha: 0.75)
+        : scheme.onSurfaceVariant;
+    final cleaned = previewWithoutFileRefs(
+      thread.preview,
+      l10n.fileOnlyMessage,
+    ).trim();
+    final title =
+        thread.title ?? (cleaned.isEmpty ? l10n.untitledThread : cleaned);
+    final summary =
+        ref
+            .watch(
+              threadSummaryProvider(
+                threadSummaryKey(widget.serviceKey, thread.id),
+              ),
+            )
+            .valueOrNull ??
+        // Fall back to the preview — unless the title already IS the preview,
+        // in which case repeating it twice tells the user nothing.
+        (thread.title == null ? '' : cleaned);
+    final when = running
+        ? l10n.running
+        : _relativeTime(thread.updatedAt, now, l10n);
+    // The home pane spans projects, so its rows say where they live; a
+    // project-scoped pane has only one, and repeating it per row is noise.
+    final meta = [
+      if (widget.home) _leafOf(thread.cwd),
+      if (when.isNotEmpty) when,
+    ].where((s) => s.isNotEmpty).join(' · ');
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 1),
+      child: Material(
+        key: Key('activity-tile-${thread.id}'),
+        color: selected ? scheme.primaryContainer : Colors.transparent,
+        borderRadius: BorderRadius.circular(10),
+        child: InkWell(
+          mouseCursor: clickable,
+          borderRadius: BorderRadius.circular(10),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 13,
+                          // Heavier than the project tree's rows: here the
+                          // title has a summary under it to stand apart from.
+                          fontWeight: FontWeight.w600,
+                          color: fg,
+                        ),
+                      ),
+                      if (summary.isNotEmpty) ...[
+                        const SizedBox(height: 3),
+                        Text(
+                          summary,
+                          key: Key('activity-summary-${thread.id}'),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(fontSize: 12, color: muted),
+                        ),
+                      ],
+                      if (meta.isNotEmpty) ...[
+                        const SizedBox(height: 3),
+                        Text(
+                          meta,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 11,
                             color: running ? scheme.primary : muted,
                           ),
                         ),
@@ -5392,14 +5726,33 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   Widget _attachmentStrip(AppLocalizations l10n) {
     final scheme = Theme.of(context).colorScheme;
     final scale = MediaQuery.of(context).devicePixelRatio;
+    // Every staged IMAGE, in strip order — the set a preview can page through,
+    // so opening one and swiping reaches the others (a per-tile viewer would
+    // strand each image alone). Files have no pixels, so they aren't in it.
+    final staged = [
+      for (final a in _attachments)
+        if (!a.isFile)
+          if (a.processed case final p?) p.bytes,
+    ];
     return SizedBox(
-      height: 72,
+      // The remove button overhangs the tile's top corner, so the strip is
+      // taller than the tiles it holds.
+      height: kAttachmentTileSide + 8,
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
         itemCount: _attachments.length,
         separatorBuilder: (_, _) => const SizedBox(width: 8),
         itemBuilder: (context, i) {
           final att = _attachments[i];
+          // Where this tile's image sits among the previewable ones. Counted
+          // over the same filter as `staged` so a mixed strip (a file between
+          // two images) still opens the picture the user actually clicked.
+          final previewIndex = att.isFile || att.processed == null
+              ? -1
+              : _attachments
+                    .take(i)
+                    .where((a) => !a.isFile && a.processed != null)
+                    .length;
           final Widget body;
           if (!att.ready) {
             body = const Center(
@@ -5441,7 +5794,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
               fit: BoxFit.cover,
               // 2× the box so a landscape image's SHORT edge reaches the
               // square cover box without upscaling.
-              cacheWidth: (72 * scale * 2).round(),
+              cacheWidth: (kAttachmentTileSide * scale * 2).round(),
               gaplessPlayback: true,
             );
           } else {
@@ -5449,50 +5802,19 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
             // set — kept bang-free per repo style.
             body = const SizedBox.shrink();
           }
-          return SizedBox(
+          return AttachmentTile(
             key: Key('attachment-${att.id}'),
-            width: 72,
-            height: 72,
-            child: Stack(
-              children: [
-                Container(
-                  width: 72,
-                  height: 72,
-                  clipBehavior: Clip.antiAlias,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(12),
-                    color: scheme.surfaceContainerHighest,
-                    border: Border.all(color: scheme.outlineVariant),
-                  ),
-                  child: body,
-                ),
-                Positioned(
-                  top: 2,
-                  right: 2,
-                  child: Tooltip(
-                    message: att.isFile ? l10n.removeFile : l10n.removeImage,
-                    child: InkWell(
-                      mouseCursor: clickable,
-                      key: Key('attachment-remove-${att.id}'),
-                      onTap: () => setState(() => _attachments.remove(att)),
-                      customBorder: const CircleBorder(),
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: scheme.scrim.withValues(alpha: 0.55),
-                          shape: BoxShape.circle,
-                        ),
-                        padding: const EdgeInsets.all(3),
-                        child: Icon(
-                          Icons.close,
-                          size: 13,
-                          color: scheme.surface,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
+            removeKey: Key('attachment-remove-${att.id}'),
+            removeTooltip: att.isFile ? l10n.removeFile : l10n.removeImage,
+            onRemove: () => setState(() => _attachments.remove(att)),
+            // A staged image opens the same viewer a sent one does, so you can
+            // check what you attached BEFORE sending it. A file has no pixels
+            // to show, and an image still processing has none yet.
+            onTap: previewIndex < 0
+                ? null
+                : () => ImageViewerPage.show(context, staged, previewIndex),
+            tapTooltip: previewIndex < 0 ? null : l10n.previewImage,
+            child: body,
           );
         },
       ),
@@ -6612,13 +6934,23 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       final cfg = await ref
           .read(bridgeApiProvider)
           .metaProjectConfig(widget.serviceKey);
+      // Answered, so there is nothing left to retry — whether or not a default
+      // is configured. Settling here (not only on the happy path) stops a host
+      // that legitimately has no default from being asked five times.
+      _openLoadDone(_kCwdSeed);
       final def = cfg.defaultProject?.trim();
       if (!mounted || def == null || def.isEmpty) return;
       if (_threadId == null && (_cwd == null || _cwd!.trim().isEmpty)) {
         setState(() => _cwd = def);
       }
     } catch (_) {
-      // No reachable meta / no default configured → keep the codex default.
+      // No reachable meta → keep the codex default for now, but retry: this
+      // runs at mount, so on a cold open it can lose the race against the
+      // connection. Failing silently and permanently would leave a NEW
+      // conversation rooted in the wrong folder — the agent would then read and
+      // edit files somewhere the user never chose, which is worse than a slow
+      // seed. The guard above keeps a folder the user picked meanwhile.
+      if (mounted) _retryOpenLoad(_kCwdSeed);
     }
   }
 
@@ -8152,43 +8484,63 @@ class _MessageViewState extends State<_MessageView> {
     // bubble and leaves the reply as plain prose — same shapes as the phone,
     // just tighter: a smaller radius and less padding, because a 20 px pill is
     // a touch-target look that reads as oversized under a pointer.
+    // Attachments sit ABOVE the bubble, not inside it. An image wrapped in the
+    // text bubble made the bubble a container for two unlike things — the
+    // picture picked up the bubble's padding and background, and a
+    // picture-only message rendered as a mostly-empty bubble. Separating them
+    // also keeps the thumbnail identical to the one staged in the composer.
+    final Widget? attachments = images.isEmpty && paths.isEmpty
+        ? null
+        : Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              if (images.isNotEmpty)
+                MessageImagesView(
+                  images: images,
+                  hostImageLoader: widget.hostImageLoader,
+                ),
+              if (images.isNotEmpty && paths.isNotEmpty)
+                const SizedBox(height: 6),
+              if (paths.isNotEmpty) FileRefChips(paths: paths),
+            ],
+          );
     final Widget content = isUser
-        ? Container(
-            constraints: const BoxConstraints(maxWidth: 600),
-            padding: EdgeInsets.symmetric(
-              horizontal: doc ? 14 : 16,
-              vertical: doc ? 10 : 11,
-            ),
-            decoration: BoxDecoration(
-              color: scheme.surfaceContainerHigh,
-              borderRadius: BorderRadius.circular(doc ? 12 : 20),
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                // Attached images render above the text; tap for fullscreen.
-                if (images.isNotEmpty)
-                  MessageImagesView(
-                    images: images,
-                    hostImageLoader: widget.hostImageLoader,
+        ? Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              if (attachments != null) ...[
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 600),
+                  child: attachments,
+                ),
+                // Only when text follows: a bare attachment shouldn't leave
+                // trailing space under the last row.
+                if (refs.text.isNotEmpty) const SizedBox(height: 6),
+              ],
+              // A message with no text at all is just its attachments — an
+              // empty bubble under them would be a visible artifact.
+              if (refs.text.isNotEmpty)
+                Container(
+                  constraints: const BoxConstraints(maxWidth: 600),
+                  padding: EdgeInsets.symmetric(
+                    horizontal: doc ? 14 : 16,
+                    vertical: doc ? 10 : 11,
                   ),
-                if (images.isNotEmpty &&
-                    (refs.text.isNotEmpty || paths.isNotEmpty))
-                  const SizedBox(height: 8),
-                if (paths.isNotEmpty) FileRefChips(paths: paths),
-                if (paths.isNotEmpty && refs.text.isNotEmpty)
-                  const SizedBox(height: 8),
-                if (refs.text.isNotEmpty)
-                  linkifyText(
+                  decoration: BoxDecoration(
+                    color: scheme.surfaceContainerHigh,
+                    borderRadius: BorderRadius.circular(doc ? 12 : 20),
+                  ),
+                  child: linkifyText(
                     context,
                     refs.text,
                     style: Theme.of(
                       context,
                     ).textTheme.bodyLarge?.copyWith(height: 1.45),
                   ),
-              ],
-            ),
+                ),
+            ],
           )
         : Column(
             crossAxisAlignment: CrossAxisAlignment.start,

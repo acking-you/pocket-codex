@@ -416,6 +416,44 @@ fn probe_port_free(port: u16) -> Result<()> {
     }
 }
 
+/// Size at which a running host's log file is truncated by its tailer.
+///
+/// Deliberately a SIZE bound and not a time window. "Keep the last six hours"
+/// sounds like the right rule and isn't: the burst that prompted this peaked at
+/// 72 MB/min, which is 25 GB over six hours — a time rule bounds nothing on a
+/// disk. 8 MB is far more than the in-app viewer can show (its ring holds 2000
+/// lines) and comfortably more than a normal session writes, while staying
+/// negligible on any disk.
+const MAX_HOST_LOG_BYTES: u64 = 8 * 1024 * 1024;
+
+/// Whether a host log of `len` bytes has outgrown [`MAX_HOST_LOG_BYTES`].
+/// Trivial, but split out so the threshold is asserted somewhere rather than
+/// living only inside an async poll loop no unit test can reach.
+fn over_log_cap(len: u64) -> bool {
+    len > MAX_HOST_LOG_BYTES
+}
+
+/// Truncate a live host's log to zero, returning whether it worked.
+///
+/// `set_len(0)` and not `remove_file`: the child holds this file open, so
+/// unlinking would leave it appending to a deleted inode and the blocks would
+/// stay allocated until the host stopped — the opposite of what a disk-pressure
+/// guard should do. Truncating frees them now, and the child's next append
+/// lands at offset 0, which the caller's `len < pos` resync already handles.
+async fn truncate_host_log(log_file: &std::path::Path) -> bool {
+    match tokio::fs::OpenOptions::new()
+        .write(true)
+        .open(log_file)
+        .await
+    {
+        Ok(f) => f.set_len(0).await.is_ok(),
+        Err(cause) => {
+            tracing::debug!(?log_file, %cause, "could not truncate oversized host log");
+            false
+        },
+    }
+}
+
 /// This host's own codex log file (each external host gets its own, so one
 /// tailer never picks up another host's — or an earlier run's — interleaved
 /// output from the shared default file).
@@ -451,7 +489,22 @@ fn tail_codex_log(log_file: std::path::PathBuf, start_pos: u64, name: String) ->
             let Ok(meta) = tokio::fs::metadata(&log_file).await else {
                 continue;
             };
-            let len = meta.len();
+            let mut len = meta.len();
+            // Enforce the size cap HERE, not only at spawn. The spawn-time check
+            // alone is useless against the case that actually hurt: one host
+            // running for hours. The burst that prompted this wrote 4.9 GB in a
+            // single ~12h session, peaking at 72 MB/min — a check that only runs
+            // between sessions never fired once.
+            //
+            // Truncate in place rather than unlink: the child holds this file
+            // open, so removing it would leave the writer appending to a deleted
+            // inode (the space never comes back until the host stops, which is
+            // exactly the wrong behaviour for a disk-pressure guard). `set_len(0)`
+            // frees the blocks immediately and the child's next append lands at 0.
+            if over_log_cap(len) && truncate_host_log(&log_file).await {
+                tracing::info!(?log_file, bytes = len, "host log passed its size cap; truncated");
+                len = 0;
+            }
             if len < pos {
                 // Truncated / rotated — resync to the new end (don't replay the
                 // whole file).
@@ -1635,6 +1688,46 @@ mod tests {
             msg.contains("port 18081, or 0 to pick a free port automatically"),
             "should suggest the next port or an automatic one: {msg}"
         );
+    }
+
+    #[test]
+    fn host_log_cap_triggers_just_past_the_threshold() {
+        assert!(!over_log_cap(0));
+        assert!(!over_log_cap(MAX_HOST_LOG_BYTES), "at the cap is still fine");
+        assert!(over_log_cap(MAX_HOST_LOG_BYTES + 1), "one byte over trips it");
+        // The threshold itself is a size rather than a time window on purpose:
+        // the burst that prompted this peaked at 72 MB/min, so "keep the last
+        // six hours" would permit ~25 GB. Asserting the constant's value here
+        // would be a tautology (clippy rightly flags it) — the guard that keeps
+        // it honest is that this cap is measured in bytes at all.
+    }
+
+    #[test]
+    fn truncating_a_live_host_log_frees_it_in_place() {
+        let dir = std::env::temp_dir().join(format!("pcx-logcap-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("tmp dir");
+        let log = dir.join("codex-default.log");
+        std::fs::write(&log, vec![b'x'; 1024]).expect("write");
+
+        // Hold the file open the way the spawned child does, so this exercises
+        // the case that rules out `remove_file`.
+        let writer = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&log)
+            .expect("open writer");
+
+        assert!(runtime::runtime().block_on(truncate_host_log(&log)));
+        assert_eq!(std::fs::metadata(&log).expect("meta").len(), 0, "space is freed now");
+
+        // The still-open writer keeps working, and its next append lands at 0 —
+        // which the tailer's `len < pos` branch resyncs to.
+        use std::io::Write as _;
+        let mut writer = writer;
+        writer.write_all(b"after\n").expect("append after truncate");
+        writer.flush().expect("flush");
+        assert_eq!(std::fs::read(&log).expect("read"), b"after\n");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[cfg(any(target_os = "windows", target_os = "macos"))]
