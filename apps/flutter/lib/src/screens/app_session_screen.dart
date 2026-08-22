@@ -51,6 +51,17 @@ import 'package:pocket_codex/src/widgets/status_dots.dart';
 /// [BridgeApi.appConnect].
 const appLocalPort = 0;
 
+// Cold-open loads that retry on their own schedule when the first attempt loses
+// the race against the connection. See `_retryOpenLoad`.
+const String _kThreadsLoad = 'threads';
+const String _kCwdSeed = 'cwd';
+
+/// Attempts each cold-open load gets before giving up (1/2/4/8/16s apart).
+/// Reaches ~31s of coverage, which is what a desktop auto-host restore needs:
+/// the host is a child process this app spawns, and it took ~30s to become
+/// ready in the field.
+const int _kOpenLoadMaxRetries = 5;
+
 /// A live conversation with a remote codex app-server thread.
 ///
 /// New conversations let the user pick model / permission mode / remote project
@@ -329,6 +340,12 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   final MenuController _envMenu = MenuController();
   List<ThreadMeta> _threads = const [];
 
+  /// Cold-open loads still waiting to succeed → attempts spent so far, plus
+  /// each one's pending timer. A key present means "not settled yet"; the
+  /// loader removes its key on success. See [_retryOpenLoad].
+  final Map<String, int> _openLoadRetries = {};
+  final Map<String, Timer> _openLoadTimers = {};
+
   /// Distinct project roots across every conversation on this service (not
   /// just the current project's), for the project switcher. See [_loadThreads].
   List<String> _allProjects = const [];
@@ -603,14 +620,58 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
               : t,
       ];
       if (mounted) setState(() => _threads = mine);
+      _openLoadDone(_kThreadsLoad);
       // Reaching here proves the service answers, which the subscribe-time
       // quota fetch can't assume on a cold open (it races the connection).
       // A brand-new conversation never reads a thread, so this is the only
       // retry it gets.
       if (_rate == null) _loadQuota();
     } catch (_) {
-      // Listing is best-effort; the pane just stays as it is.
+      // Listing is best-effort for the CONTENT — a failure leaves whatever the
+      // pane already had. But a cold open racing the connection (or a host that
+      // isn't up yet) must not strand the pane empty: nothing else re-lists
+      // except a reconnect or a sent message, so retry a few times here.
+      if (mounted) _retryOpenLoad(_kThreadsLoad);
     }
+  }
+
+  /// Re-attempt a cold-open load that failed, with a widening backoff.
+  ///
+  /// Every load kicked off in `initState` races the connection: the screen
+  /// mounts and fires immediately, while the socket may still be handshaking —
+  /// and on desktop the host itself can be a CHILD PROCESS THIS APP IS STILL
+  /// SPAWNING (auto-host restore takes ~30s, far longer than the first
+  /// attempt). Those loads all `catch (_)` because none of them is worth an
+  /// error banner, which meant one lost race stranded the surface for the whole
+  /// session: an empty conversation list, or a new chat silently rooted in the
+  /// wrong folder.
+  ///
+  /// [key] identifies the load, so each retries on its own schedule and a
+  /// success stops only its own chain. Retries stop once the load succeeds
+  /// (the loader clears the key) or the budget runs out; a later failure with
+  /// data already in hand is left alone, since something is on screen and the
+  /// reconnect path will refresh it.
+  void _retryOpenLoad(String key) {
+    final attempt = _openLoadRetries[key] ?? 0;
+    if (attempt >= _kOpenLoadMaxRetries) return;
+    _openLoadRetries[key] = attempt + 1;
+    _openLoadTimers[key]?.cancel();
+    _openLoadTimers[key] = Timer(Duration(seconds: 1 << attempt), () {
+      // 1/2/4/8/16s
+      if (!mounted || !_openLoadRetries.containsKey(key)) return;
+      switch (key) {
+        case _kThreadsLoad:
+          _loadThreads();
+        case _kCwdSeed:
+          _seedDefaultCwd();
+      }
+    });
+  }
+
+  /// Mark a cold-open load as settled, so its retry chain stops.
+  void _openLoadDone(String key) {
+    _openLoadRetries.remove(key);
+    _openLoadTimers.remove(key)?.cancel();
   }
 
   /// Seed a brand-new conversation's settings from the user's last choices
@@ -879,6 +940,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   @override
   void dispose() {
     _healthTimer?.cancel();
+    for (final t in _openLoadTimers.values) {
+      t.cancel();
+    }
     _elapsedTicker?.cancel();
     _sub?.cancel();
     _input.dispose();
@@ -2142,6 +2206,20 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         await api.appConnect(widget.serviceKey, appLocalPort);
         _subscribe();
         if (reload && _threadId != null) await _resumeAndLoad();
+        // Re-list too, not just the open transcript. `_loadThreads` runs once at
+        // initState and is best-effort: if the host wasn't reachable then (it
+        // restarted, or the app opened first), the failure was swallowed and
+        // the pane stayed empty FOREVER — nothing else re-lists except sending
+        // a message. A reconnect is exactly the moment the data became
+        // available, so this is where it has to be retried.
+        await _loadThreads();
+        // Same reasoning for the other cold-open loads: a reconnect is the
+        // moment their data became reachable. Both are no-ops once settled —
+        // the cwd seed won't override a folder the user picked, and the quota
+        // just refreshes.
+        if (_openLoadRetries.containsKey(_kCwdSeed)) await _seedDefaultCwd();
+        if (_rate == null) unawaited(_loadQuota());
+        _loadGit(); // the working tree may have moved on while we were away
         if (mounted) {
           setState(() {
             _reconnecting = false;
@@ -2505,7 +2583,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     } catch (_) {
       // Quota is optional (a custom provider may not report one, and an
       // unreachable host times out); every surface that shows it degrades to
-      // "unavailable" rather than blocking.
+      // "unavailable" rather than blocking. No retry of its own is needed: a
+      // successful listing re-fetches it (see `_loadThreads`), and that listing
+      // now retries — so the quota rides along.
     }
   }
 
@@ -6854,13 +6934,23 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       final cfg = await ref
           .read(bridgeApiProvider)
           .metaProjectConfig(widget.serviceKey);
+      // Answered, so there is nothing left to retry — whether or not a default
+      // is configured. Settling here (not only on the happy path) stops a host
+      // that legitimately has no default from being asked five times.
+      _openLoadDone(_kCwdSeed);
       final def = cfg.defaultProject?.trim();
       if (!mounted || def == null || def.isEmpty) return;
       if (_threadId == null && (_cwd == null || _cwd!.trim().isEmpty)) {
         setState(() => _cwd = def);
       }
     } catch (_) {
-      // No reachable meta / no default configured → keep the codex default.
+      // No reachable meta → keep the codex default for now, but retry: this
+      // runs at mount, so on a cold open it can lose the race against the
+      // connection. Failing silently and permanently would leave a NEW
+      // conversation rooted in the wrong folder — the agent would then read and
+      // edit files somewhere the user never chose, which is worse than a slow
+      // seed. The guard above keeps a folder the user picked meanwhile.
+      if (mounted) _retryOpenLoad(_kCwdSeed);
     }
   }
 

@@ -2511,6 +2511,156 @@ void main() {
     expect(find.text('alpha one'), findsOneWidget);
   });
 
+  testWidgets('A failed startup listing retries instead of stranding the pane', (
+    t,
+  ) async {
+    final nowS = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    api.appThreads.add(
+      ThreadMeta(
+        id: 'a1',
+        preview: 'alpha one',
+        cwd: '/work/alpha',
+        updatedAt: nowS - 300,
+      ),
+    );
+    // The very first listing fails — the app opened before the host was
+    // reachable, or the host restarted underneath it.
+    api.failNextThreadList = true;
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(1200, 900);
+    addTearDown(t.view.reset);
+    await t.pumpWidget(
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          home: true,
+        ),
+        api,
+      ),
+    );
+    await t.pumpAndSettle();
+    // Nothing yet: the one shot at listing failed and was swallowed.
+    expect(_convTiles(), findsNothing);
+
+    // The retry lands and the pane fills itself in. Without it the sidebar
+    // stayed empty for the whole session — nothing else re-lists unless the
+    // user sends a message.
+    await t.pump(const Duration(seconds: 2));
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('conv-tile-a1')), findsOneWidget);
+    expect(find.text('alpha one'), findsWidgets);
+  });
+
+  testWidgets('A failed default-folder seed retries instead of rooting a new '
+      'conversation in the wrong folder', (t) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    api.projectConfigs['pcx:lb7666:app:default'] = const ProjectConfig(
+      projectRoots: ['/work'],
+      defaultProject: '/work/alpha',
+    );
+    // The meta tunnel isn't up on the first attempt — the cold-open race.
+    api.failNextProjectConfig = true;
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(1200, 900);
+    addTearDown(t.view.reset);
+    // No threadId and no cwd: a brand-new conversation, which is the only case
+    // that seeds a default folder.
+    await t.pumpWidget(
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          home: true,
+        ),
+        api,
+      ),
+    );
+    await t.pumpAndSettle();
+    // The seed failed, so the folder is still unset ("default folder").
+    expect(find.text('alpha'), findsNothing);
+
+    // The retry lands and the conversation adopts the host's default. Without
+    // it the chat would silently run in the wrong directory for the whole
+    // session — the agent reading and editing files the user never chose.
+    await t.pump(const Duration(seconds: 2));
+    await t.pumpAndSettle();
+    expect(find.text('alpha'), findsWidgets);
+  });
+
+  testWidgets('A settled default-folder seed stops retrying', (t) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    // A host with NO default configured: answering is settled, even though
+    // nothing was seeded. Retrying would just ask the same question five times.
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(1200, 900);
+    addTearDown(t.view.reset);
+    await t.pumpWidget(
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          home: true,
+        ),
+        api,
+      ),
+    );
+    await t.pumpAndSettle();
+    final after = api.projectConfigCalls;
+    await t.pump(const Duration(seconds: 20));
+    await t.pumpAndSettle();
+    expect(api.projectConfigCalls, after, reason: 'no retry once answered');
+  });
+
+  testWidgets('A reconnect re-lists the sidebar, not just the transcript', (
+    t,
+  ) async {
+    final nowS = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(1200, 900);
+    addTearDown(t.view.reset);
+    await t.pumpWidget(
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          home: true,
+        ),
+        api,
+      ),
+    );
+    await t.pumpAndSettle();
+    expect(_convTiles(), findsNothing, reason: 'host had nothing to list yet');
+
+    // The host restarts and now HAS history — exactly the case that left the
+    // pane empty: the app listed once at startup against a host with no data
+    // (or no connection), and nothing re-listed afterwards.
+    await api.appDisconnect('pcx:lb7666:app:default');
+    api.appThreads.add(
+      ThreadMeta(
+        id: 'a1',
+        preview: 'alpha one',
+        cwd: '/work/alpha',
+        updatedAt: nowS - 300,
+      ),
+    );
+
+    // The health timer notices the dead socket and reconnects.
+    await t.pump(const Duration(seconds: 13));
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('conv-tile-a1')), findsOneWidget);
+  });
+
   testWidgets('The activity view groups by day and summarizes each row', (
     t,
   ) async {
