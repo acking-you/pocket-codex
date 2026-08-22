@@ -210,11 +210,7 @@ class AttachmentTile extends StatelessWidget {
 /// hairline ring, so it stays legible over a light OR dark thumbnail without
 /// needing to know what it's sitting on.
 class _RemoveButton extends StatelessWidget {
-  const _RemoveButton({
-    required this.onPressed,
-    this.tooltip,
-    this.buttonKey,
-  });
+  const _RemoveButton({required this.onPressed, this.tooltip, this.buttonKey});
 
   final VoidCallback onPressed;
   final String? tooltip;
@@ -225,9 +221,7 @@ class _RemoveButton extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final button = Material(
       color: scheme.inverseSurface,
-      shape: CircleBorder(
-        side: BorderSide(color: scheme.surface, width: 1.5),
-      ),
+      shape: CircleBorder(side: BorderSide(color: scheme.surface, width: 1.5)),
       child: InkWell(
         mouseCursor: clickable,
         key: buttonKey,
@@ -239,9 +233,7 @@ class _RemoveButton extends StatelessWidget {
         ),
       ),
     );
-    return tooltip == null
-        ? button
-        : Tooltip(message: tooltip!, child: button);
+    return tooltip == null ? button : Tooltip(message: tooltip!, child: button);
   }
 }
 
@@ -783,10 +775,7 @@ class _ImageViewerPageState extends State<ImageViewerPage> {
               customBorder: const StadiumBorder(),
               onTap: () => _setZoom(1),
               child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 8,
-                  vertical: 6,
-                ),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
                 child: Text(
                   '${(scale * 100).round()}%',
                   style: const TextStyle(

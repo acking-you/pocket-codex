@@ -1712,9 +1712,7 @@ void main() {
       expect(find.byKey(const Key('msg-image-0')), findsOneWidget);
     });
 
-    testWidgets('a staged image opens the viewer before it is sent', (
-      t,
-    ) async {
+    testWidgets('a staged image opens the viewer before it is sent', (t) async {
       await pumpSession(t);
       picker.files = [
         XFile.fromData(_tinyPng(), name: 'one.png'),
@@ -2511,49 +2509,50 @@ void main() {
     expect(find.text('alpha one'), findsOneWidget);
   });
 
-  testWidgets('A failed startup listing retries instead of stranding the pane', (
-    t,
-  ) async {
-    final nowS = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-    final api = FakeBridgeApi(
-      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
-    );
-    await api.appConnect('pcx:lb7666:app:default', 28080);
-    api.appThreads.add(
-      ThreadMeta(
-        id: 'a1',
-        preview: 'alpha one',
-        cwd: '/work/alpha',
-        updatedAt: nowS - 300,
-      ),
-    );
-    // The very first listing fails — the app opened before the host was
-    // reachable, or the host restarted underneath it.
-    api.failNextThreadList = true;
-    t.view.devicePixelRatio = 1.0;
-    t.view.physicalSize = const Size(1200, 900);
-    addTearDown(t.view.reset);
-    await t.pumpWidget(
-      _host(
-        const AppSessionScreen(
-          serviceKey: 'pcx:lb7666:app:default',
-          home: true,
+  testWidgets(
+    'A failed startup listing retries instead of stranding the pane',
+    (t) async {
+      final nowS = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      final api = FakeBridgeApi(
+        config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+      );
+      await api.appConnect('pcx:lb7666:app:default', 28080);
+      api.appThreads.add(
+        ThreadMeta(
+          id: 'a1',
+          preview: 'alpha one',
+          cwd: '/work/alpha',
+          updatedAt: nowS - 300,
         ),
-        api,
-      ),
-    );
-    await t.pumpAndSettle();
-    // Nothing yet: the one shot at listing failed and was swallowed.
-    expect(_convTiles(), findsNothing);
+      );
+      // The very first listing fails — the app opened before the host was
+      // reachable, or the host restarted underneath it.
+      api.failNextThreadList = true;
+      t.view.devicePixelRatio = 1.0;
+      t.view.physicalSize = const Size(1200, 900);
+      addTearDown(t.view.reset);
+      await t.pumpWidget(
+        _host(
+          const AppSessionScreen(
+            serviceKey: 'pcx:lb7666:app:default',
+            home: true,
+          ),
+          api,
+        ),
+      );
+      await t.pumpAndSettle();
+      // Nothing yet: the one shot at listing failed and was swallowed.
+      expect(_convTiles(), findsNothing);
 
-    // The retry lands and the pane fills itself in. Without it the sidebar
-    // stayed empty for the whole session — nothing else re-lists unless the
-    // user sends a message.
-    await t.pump(const Duration(seconds: 2));
-    await t.pumpAndSettle();
-    expect(find.byKey(const Key('conv-tile-a1')), findsOneWidget);
-    expect(find.text('alpha one'), findsWidgets);
-  });
+      // The retry lands and the pane fills itself in. Without it the sidebar
+      // stayed empty for the whole session — nothing else re-lists unless the
+      // user sends a message.
+      await t.pump(const Duration(seconds: 2));
+      await t.pumpAndSettle();
+      expect(find.byKey(const Key('conv-tile-a1')), findsOneWidget);
+      expect(find.text('alpha one'), findsWidgets);
+    },
+  );
 
   testWidgets('A failed default-folder seed retries instead of rooting a new '
       'conversation in the wrong folder', (t) async {
@@ -2665,8 +2664,7 @@ void main() {
     t,
   ) async {
     final now = DateTime.now();
-    int at(Duration ago) =>
-        now.subtract(ago).millisecondsSinceEpoch ~/ 1000;
+    int at(Duration ago) => now.subtract(ago).millisecondsSinceEpoch ~/ 1000;
     final api = FakeBridgeApi(
       config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
     );

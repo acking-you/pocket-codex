@@ -8489,8 +8489,7 @@ class _MessageViewState extends State<_MessageView> {
     // picture picked up the bubble's padding and background, and a
     // picture-only message rendered as a mostly-empty bubble. Separating them
     // also keeps the thumbnail identical to the one staged in the composer.
-    final Widget? attachments =
-        images.isEmpty && paths.isEmpty
+    final Widget? attachments = images.isEmpty && paths.isEmpty
         ? null
         : Column(
             mainAxisSize: MainAxisSize.min,
