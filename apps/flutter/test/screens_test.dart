@@ -2428,6 +2428,231 @@ void main() {
     expect(find.text('alpha one'), findsOneWidget);
   });
 
+  testWidgets('The activity view groups by day and summarizes each row', (
+    t,
+  ) async {
+    final now = DateTime.now();
+    int at(Duration ago) =>
+        now.subtract(ago).millisecondsSinceEpoch ~/ 1000;
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    api.appThreads.addAll([
+      ThreadMeta(
+        id: 'a1',
+        preview: 'alpha one',
+        cwd: '/work/alpha',
+        updatedAt: at(const Duration(minutes: 5)),
+      ),
+      // Comfortably inside yesterday whatever time the test runs at.
+      ThreadMeta(
+        id: 'b1',
+        preview: 'beta one',
+        cwd: '/work/beta',
+        updatedAt: at(Duration(hours: 24 + now.hour, minutes: now.minute)),
+      ),
+    ]);
+    api.summaries['a1'] = 'Rewrote the retry loop.';
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(1200, 900); // wide → left pane inline
+    addTearDown(t.view.reset);
+    await t.pumpWidget(
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          home: true,
+        ),
+        api,
+      ),
+    );
+    await t.pumpAndSettle();
+
+    // The project tree is the default, so no summaries are fetched for it —
+    // one thread/read per row is far too much to spend on a sidebar nobody
+    // asked to see this way.
+    expect(api.summaryCalls, isEmpty);
+    expect(find.byKey(const Key('project-header-/work/alpha')), findsOneWidget);
+
+    await t.tap(find.byKey(const Key('activity-view-btn')));
+    await t.pumpAndSettle();
+
+    // Day headings replace the project headings.
+    expect(find.byKey(const Key('project-header-/work/alpha')), findsNothing);
+    expect(find.text('今天'), findsOneWidget);
+    expect(find.text('昨天'), findsOneWidget);
+    // Both rows are present, each under its own day.
+    expect(find.byKey(const Key('activity-tile-a1')), findsOneWidget);
+    expect(find.byKey(const Key('activity-tile-b1')), findsOneWidget);
+    // The summary is the agent's own last line, not the user's first message.
+    expect(find.text('Rewrote the retry loop.'), findsOneWidget);
+    expect(api.summaryCalls, containsAll(<String>['a1', 'b1']));
+
+    // And the toggle goes back to the project tree.
+    await t.tap(find.byKey(const Key('activity-view-btn')));
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('project-header-/work/alpha')), findsOneWidget);
+    expect(find.byKey(const Key('activity-tile-a1')), findsNothing);
+  });
+
+  testWidgets('The activity view keeps one row shape, Active group included', (
+    t,
+  ) async {
+    final nowS = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    api.appThreads.addAll([
+      ThreadMeta(
+        id: 'a1',
+        preview: 'alpha one',
+        cwd: '/work/alpha',
+        updatedAt: nowS - 300,
+      ),
+      ThreadMeta(
+        id: 'a2',
+        preview: 'alpha two',
+        cwd: '/work/alpha',
+        updatedAt: nowS - 600,
+      ),
+    ]);
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(1200, 900);
+    addTearDown(t.view.reset);
+    await t.pumpWidget(
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          home: true,
+        ),
+        api,
+      ),
+    );
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('activity-view-btn')));
+    await t.pumpAndSettle();
+
+    // a1 starts a turn, so it moves up into the "Active" group.
+    api.pushEvent(
+      'pcx:lb7666:app:default',
+      const AppEvent(kind: 'turn/started', threadId: 'a1', raw: '{}'),
+    );
+    await t.pump();
+    await t.pump();
+    expect(find.text('进行中'), findsOneWidget); // groupActive (zh)
+
+    // Both rows are activity tiles: the Active group must not fall back to the
+    // project tree's compact row while the rest of the list is summarized.
+    expect(find.byKey(const Key('activity-tile-a1')), findsOneWidget);
+    expect(find.byKey(const Key('activity-tile-a2')), findsOneWidget);
+    expect(_convTiles(), findsNothing);
+  });
+
+  testWidgets('A finished turn refreshes that row\'s cached summary', (
+    t,
+  ) async {
+    final nowS = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    api.appThreads.add(
+      ThreadMeta(
+        id: 'a1',
+        preview: 'alpha one',
+        cwd: '/work/alpha',
+        updatedAt: nowS - 300,
+      ),
+    );
+    api.summaries['a1'] = 'Looked at the retry loop.';
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(1200, 900);
+    addTearDown(t.view.reset);
+    await t.pumpWidget(
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          threadId: 'a1',
+          home: true,
+        ),
+        api,
+      ),
+    );
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('activity-view-btn')));
+    await t.pumpAndSettle();
+    expect(find.text('Looked at the retry loop.'), findsOneWidget);
+    expect(api.summaryCalls, ['a1']);
+
+    // A turn runs and produces a newer reply. The cached line now describes the
+    // previous turn, so it has to be re-read rather than kept forever.
+    api.summaries['a1'] = 'Rewrote the retry loop.';
+    api.pushEvent(
+      'pcx:lb7666:app:default',
+      const AppEvent(kind: 'turn/started', threadId: 'a1', raw: '{}'),
+    );
+    await t.pump();
+    api.pushEvent(
+      'pcx:lb7666:app:default',
+      const AppEvent(kind: 'turn/completed', threadId: 'a1', raw: '{}'),
+    );
+    await t.pumpAndSettle();
+
+    expect(find.text('Rewrote the retry loop.'), findsOneWidget);
+    expect(find.text('Looked at the retry loop.'), findsNothing);
+    expect(api.summaryCalls, ['a1', 'a1']); // re-read exactly once
+  });
+
+  testWidgets('An activity row stays readable before its summary arrives', (
+    t,
+  ) async {
+    final nowS = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    api.appThreads.add(
+      ThreadMeta(
+        id: 'a1',
+        preview: 'alpha one',
+        cwd: '/work/alpha',
+        name: 'Retry work',
+        updatedAt: nowS - 300,
+      ),
+    );
+    api.summaries['a1'] = 'Rewrote the retry loop.';
+    // Hold the summary in flight so the pre-load row is observable.
+    final gate = Completer<void>();
+    api.summaryGate = gate;
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(1200, 900);
+    addTearDown(t.view.reset);
+    await t.pumpWidget(
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          home: true,
+        ),
+        api,
+      ),
+    );
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('activity-view-btn')));
+    await t.pumpAndSettle();
+
+    // Loading: the name leads and the preview stands in for the summary, so
+    // the row reads immediately and the layout won't jump when the real one
+    // lands.
+    expect(find.text('Retry work'), findsOneWidget);
+    expect(find.text('alpha one'), findsOneWidget);
+
+    gate.complete();
+    await t.pumpAndSettle();
+    expect(find.text('Rewrote the retry loop.'), findsOneWidget);
+    expect(find.text('alpha one'), findsNothing);
+  });
+
   testWidgets('A project shows only its newest few rows until expanded', (
     t,
   ) async {
@@ -4373,7 +4598,7 @@ void main() {
     expect(find.text('12%'), findsOneWidget);
   });
 
-  testWidgets('Sidebar theme button cycles system → light → dark', (t) async {
+  testWidgets('Sidebar theme button flips between light and dark', (t) async {
     final api = FakeBridgeApi(
       config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
     );
@@ -4381,35 +4606,56 @@ void main() {
     t.view.devicePixelRatio = 1.0;
     t.view.physicalSize = const Size(1200, 900); // wide → left pane inline
     addTearDown(t.view.reset);
+    // Its own host rather than `_host`: the button reads the brightness in
+    // EFFECT, so the app has to actually carry a light and a dark theme (and
+    // honour the stored mode) the way main.dart does.
     await t.pumpWidget(
-      _host(
-        const AppSessionScreen(
-          serviceKey: 'pcx:lb7666:app:default',
-          home: true,
+      ProviderScope(
+        overrides: [bridgeApiProvider.overrideWithValue(api)],
+        child: Consumer(
+          builder: (context, ref, _) {
+            final pref = ref.watch(uiPrefsProvider).valueOrNull?.themeMode;
+            return MaterialApp(
+              locale: const Locale('zh'),
+              theme: ThemeData(brightness: Brightness.light),
+              darkTheme: ThemeData(brightness: Brightness.dark),
+              themeMode: switch (pref) {
+                'light' => ThemeMode.light,
+                'dark' => ThemeMode.dark,
+                _ => ThemeMode.system,
+              },
+              localizationsDelegates: AppLocalizations.localizationsDelegates,
+              supportedLocales: AppLocalizations.supportedLocales,
+              home: const AppSessionScreen(
+                serviceKey: 'pcx:lb7666:app:default',
+                home: true,
+              ),
+            );
+          },
         ),
-        api,
       ),
     );
     await t.pumpAndSettle();
 
-    // Follow-system is the default, and the icon says so.
+    // Two states only — no third "auto" icon to land on.
     final btn = find.byKey(const Key('sidebar-theme-btn'));
     expect(btn, findsOneWidget);
-    expect(find.byIcon(Icons.brightness_auto_outlined), findsOneWidget);
+    expect(find.byIcon(Icons.brightness_auto_outlined), findsNothing);
 
-    await t.tap(btn);
-    await t.pumpAndSettle();
+    // The test platform reports light, so the button offers dark and the icon
+    // shows what is currently in effect.
     expect(find.byIcon(Icons.light_mode_outlined), findsOneWidget);
-
     await t.tap(btn);
     await t.pumpAndSettle();
     expect(find.byIcon(Icons.dark_mode_outlined), findsOneWidget);
+    expect(find.byIcon(Icons.light_mode_outlined), findsNothing);
 
-    // Third tap returns to follow-system, which a two-state switch could never
-    // reach again once the user left it.
+    // And back — tapping twice returns to where it started rather than
+    // advancing into a third state.
     await t.tap(btn);
     await t.pumpAndSettle();
-    expect(find.byIcon(Icons.brightness_auto_outlined), findsOneWidget);
+    expect(find.byIcon(Icons.light_mode_outlined), findsOneWidget);
+    expect(find.byIcon(Icons.brightness_auto_outlined), findsNothing);
   });
 
   testWidgets('The composer drops the project chip once the thread exists', (

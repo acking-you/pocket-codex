@@ -1003,6 +1003,17 @@ pub fn app_compact(service_key: String, thread_id: String) -> Result<()> {
     app_session::compact(&service_key, &thread_id)
 }
 
+/// A one-line gist of where a thread got to (the opening sentence of its most
+/// recent agent message), or `None` when it has produced none.
+///
+/// Its own call rather than a field on [`app_thread_list`] because the upstream
+/// `thread/list` carries no summary: the only source is a full `thread/read`,
+/// so the UI fetches these lazily for the rows it actually shows instead of
+/// paying for every conversation up front.
+pub fn app_thread_summary(service_key: String, thread_id: String) -> Result<Option<String>> {
+    app_session::thread_summary(&service_key, &thread_id)
+}
+
 /// Rename a conversation. The title is persisted by the app-server (so it
 /// follows the thread across devices); an empty `name` clears it, and the UI
 /// falls back to the thread preview.

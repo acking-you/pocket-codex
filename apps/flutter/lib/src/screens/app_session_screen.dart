@@ -14,6 +14,7 @@ import 'package:pasteboard/pasteboard.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:intl/intl.dart' show DateFormat;
 import 'package:super_sliver_list/super_sliver_list.dart';
 import 'package:window_manager/window_manager.dart' show DragToMoveArea;
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
@@ -357,6 +358,12 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
 
   /// How many conversations a project group shows before "show more".
   static const int _projectPeek = 5;
+
+  /// True while the sidebar groups conversations by WHEN they happened (with a
+  /// one-line gist each) instead of by which project they belong to. View state
+  /// only — a restart returns to the project tree, which is the default because
+  /// it answers "where am I working".
+  bool _activityView = false;
 
   bool _streaming = false;
   // Current running turn's id, captured from turn/started — required to
@@ -1326,6 +1333,11 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         });
         _maybeFlushQueue(); // send the next queued message, if any
         _loadGit(); // edits from the turn may have changed the diff
+        // The turn just produced a new agent reply, so the cached one-line
+        // summary now describes the turn BEFORE it. Drop it and let the
+        // activity view re-read on its next build; without this the cache is
+        // permanently stale for the thread the user is actually working in.
+        _invalidateSummary(e.threadId);
       case 'turn/failed':
         setState(() {
           _streaming = false;
@@ -1344,6 +1356,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           }
         });
         _maybeFlushQueue(); // send the next queued message, if any
+        // An interrupted or failed turn can still have streamed a reply before
+        // it stopped, so the cached summary is just as stale as on success.
+        _invalidateSummary(e.threadId);
       default:
         _handleItemEvent(e);
     }
@@ -3827,6 +3842,19 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                 if (t.id != _threadId) _openThread(t.id, t.cwd);
               },
             );
+        // The activity view's taller row: name in bold over a one-line summary
+        // of where the conversation got to.
+        Widget activityTile(ThreadMeta t) => _activityTile(
+          thread: t,
+          running: running.contains(t.id),
+          selected: t.id == _threadId,
+          now: now,
+          l10n: l10n,
+          onTap: () {
+            closeDrawerIfOpen(ctx);
+            if (t.id != _threadId) _openThread(t.id, t.cwd);
+          },
+        );
         final rows = <Widget>[];
         void group(
           String label,
@@ -3835,13 +3863,29 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         }) {
           if (items.isEmpty) return;
           rows.add(_sectionLabel(label));
-          rows.addAll(items.map((t) => tile(t, showProject: showProject)));
+          rows.addAll(
+            // Whichever view is on, one list means one row shape — an Active
+            // group in compact rows above summarized ones would read as two
+            // lists stapled together.
+            items.map(
+              (t) => _activityView
+                  ? activityTile(t)
+                  : tile(t, showProject: showProject),
+            ),
+          );
         }
 
         // Running threads always lead, whatever project they belong to — they
         // are the only rows the user may need to reach urgently.
         group(l10n.groupActive, active, showProject: widget.home);
-        if (widget.home) {
+        if (_activityView) {
+          // "When was I working on this", grouped by the day it last moved.
+          // Each row carries a one-line summary of the newest agent reply, so
+          // the list answers "what happened" without opening anything.
+          for (final d in _byDay(<ThreadMeta>[...today, ...earlier], now)) {
+            group(d.label, d.threads);
+          }
+        } else if (widget.home) {
           // The home pane spans every project, so the rest reads as a tree:
           // project → its conversations, newest project first, with the open
           // project pinned to the top. Each project shows only its newest few
@@ -3941,10 +3985,32 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                 children: [
                   Expanded(
                     child: Text(
-                      l10n.conversationsSection,
+                      _activityView
+                          ? l10n.activityView
+                          : l10n.conversationsSection,
                       style: Theme.of(context).textTheme.titleSmall,
                     ),
                   ),
+                  // Group by project, or by when it happened. Two ways of
+                  // asking "what was I doing", so it's a toggle rather than a
+                  // replacement — the project tree answers "where", this
+                  // answers "when".
+                  IconButton(
+                    key: const Key('activity-view-btn'),
+                    icon: Icon(
+                      _activityView
+                          ? Icons.folder_outlined
+                          : Icons.history_toggle_off,
+                      size: 18,
+                    ),
+                    tooltip: _activityView
+                        ? l10n.conversationsSection
+                        : l10n.activityView,
+                    visualDensity: VisualDensity.compact,
+                    onPressed: () =>
+                        setState(() => _activityView = !_activityView),
+                  ),
+                  const SizedBox(width: 2),
                   Material(
                     color: scheme.primary,
                     shape: const CircleBorder(),
@@ -4361,6 +4427,61 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     return [for (final k in keys) (cwd: k, threads: buckets[k]!)];
   }
 
+  /// Drops the cached activity-view summary for [threadId], so the next build
+  /// re-reads it. Called when a turn ends: the summary is the newest agent
+  /// reply, and that is exactly what just changed.
+  void _invalidateSummary(String? threadId) {
+    if (threadId == null || threadId.isEmpty) return;
+    ref.invalidate(
+      threadSummaryProvider(threadSummaryKey(widget.serviceKey, threadId)),
+    );
+  }
+
+  /// Buckets threads by the calendar day they last moved, newest day first —
+  /// the activity view's spine.
+  ///
+  /// Labels lean on the calendar rather than elapsed time: "Today" /
+  /// "Yesterday", then the weekday name for the rest of the past week (a date
+  /// that recent reads better as "Thursday"), and a plain date beyond that.
+  /// Threads with no timestamp land in one trailing "Earlier" bucket instead of
+  /// claiming the epoch as their day.
+  List<({String label, List<ThreadMeta> threads})> _byDay(
+    List<ThreadMeta> threads,
+    DateTime now,
+  ) {
+    final l10n = AppLocalizations.of(context);
+    final locale = l10n.localeName;
+    final today = DateTime(now.year, now.month, now.day);
+    // Insertion order IS the output order: the input arrives newest-first, so
+    // each new day appends after the days already seen.
+    final buckets = <String, List<ThreadMeta>>{};
+    final undated = <ThreadMeta>[];
+    for (final t in threads) {
+      if (t.updatedAt <= 0) {
+        undated.add(t);
+        continue;
+      }
+      final at = DateTime.fromMillisecondsSinceEpoch(t.updatedAt * 1000);
+      final day = DateTime(at.year, at.month, at.day);
+      final label = switch (today.difference(day).inDays) {
+        <= 0 => l10n.groupToday,
+        1 => l10n.groupYesterday,
+        // Weekday names only stay unambiguous inside one week — past that
+        // "Thursday" could be any Thursday, so switch to a date.
+        < 7 => DateFormat.EEEE(locale).format(day),
+        _ => DateFormat.yMMMd(locale).format(day),
+      };
+      buckets.putIfAbsent(label, () => <ThreadMeta>[]).add(t);
+    }
+    return [
+      for (final e in buckets.entries) (label: e.key, threads: e.value),
+      // Undated rows can't claim a day, and they sort nowhere in particular in
+      // the source order — so they go last under one catch-all heading rather
+      // than splitting the timeline wherever the first one happened to appear.
+      if (undated.isNotEmpty) (label: l10n.groupEarlier, threads: undated),
+    ];
+  }
+
   /// A project heading in the home pane's conversation tree: the folder is the
   /// hit target, so clicking it collapses/expands the project's conversations
   /// (codex-app style). [count] is how many rows sit under it, shown while
@@ -4569,6 +4690,121 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                             fontSize: 11.5,
+                            color: running ? scheme.primary : muted,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                if (running) ...[
+                  const SizedBox(width: 8),
+                  PulsingDot(color: scheme.primary, size: 7),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// One activity-view row: the conversation's name in bold over a one-line
+  /// summary of where it got to, plus its project and time.
+  ///
+  /// The summary needs a `thread/read` per row, which is far too much to fetch
+  /// for a whole sidebar up front — so it loads when the row is first built
+  /// (i.e. when it scrolls into range) and Riverpod keeps it cached for the rest
+  /// of the session. Until it arrives the row shows the first user message,
+  /// which is already in hand: the layout never jumps, and a row is readable
+  /// immediately rather than blank behind a spinner.
+  Widget _activityTile({
+    required ThreadMeta thread,
+    required bool running,
+    required bool selected,
+    required DateTime now,
+    required AppLocalizations l10n,
+    required VoidCallback onTap,
+  }) {
+    final scheme = Theme.of(context).colorScheme;
+    final fg = selected ? scheme.onPrimaryContainer : scheme.onSurface;
+    final muted = selected
+        ? scheme.onPrimaryContainer.withValues(alpha: 0.75)
+        : scheme.onSurfaceVariant;
+    final cleaned = previewWithoutFileRefs(
+      thread.preview,
+      l10n.fileOnlyMessage,
+    ).trim();
+    final title =
+        thread.title ?? (cleaned.isEmpty ? l10n.untitledThread : cleaned);
+    final summary =
+        ref
+            .watch(
+              threadSummaryProvider(
+                threadSummaryKey(widget.serviceKey, thread.id),
+              ),
+            )
+            .valueOrNull ??
+        // Fall back to the preview — unless the title already IS the preview,
+        // in which case repeating it twice tells the user nothing.
+        (thread.title == null ? '' : cleaned);
+    final when = running
+        ? l10n.running
+        : _relativeTime(thread.updatedAt, now, l10n);
+    // The home pane spans projects, so its rows say where they live; a
+    // project-scoped pane has only one, and repeating it per row is noise.
+    final meta = [
+      if (widget.home) _leafOf(thread.cwd),
+      if (when.isNotEmpty) when,
+    ].where((s) => s.isNotEmpty).join(' · ');
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 1),
+      child: Material(
+        key: Key('activity-tile-${thread.id}'),
+        color: selected ? scheme.primaryContainer : Colors.transparent,
+        borderRadius: BorderRadius.circular(10),
+        child: InkWell(
+          mouseCursor: clickable,
+          borderRadius: BorderRadius.circular(10),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 13,
+                          // Heavier than the project tree's rows: here the
+                          // title has a summary under it to stand apart from.
+                          fontWeight: FontWeight.w600,
+                          color: fg,
+                        ),
+                      ),
+                      if (summary.isNotEmpty) ...[
+                        const SizedBox(height: 3),
+                        Text(
+                          summary,
+                          key: Key('activity-summary-${thread.id}'),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(fontSize: 12, color: muted),
+                        ),
+                      ],
+                      if (meta.isNotEmpty) ...[
+                        const SizedBox(height: 3),
+                        Text(
+                          meta,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 11,
                             color: running ? scheme.primary : muted,
                           ),
                         ),

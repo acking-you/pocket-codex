@@ -539,6 +539,27 @@ class FakeBridgeApi implements BridgeApi {
     }
   }
 
+  /// Summaries returned by [appThreadSummary], keyed by thread id. A thread
+  /// with no entry summarizes to null, like one whose history has no agent
+  /// reply yet.
+  final Map<String, String> summaries = {};
+
+  /// Thread ids [appThreadSummary] was called for, in call order — lets a test
+  /// assert the activity view only fetches the rows it actually built.
+  final List<String> summaryCalls = [];
+
+  /// When set, every [appThreadSummary] parks on this, so a test can inspect
+  /// the pre-summary row.
+  Completer<void>? summaryGate;
+
+  @override
+  Future<String?> appThreadSummary(String serviceKey, String threadId) async {
+    summaryCalls.add(threadId);
+    final gate = summaryGate;
+    if (gate != null) await gate.future;
+    return summaries[threadId];
+  }
+
   /// When true, [appModelList] returns no models, to exercise the
   /// "can't switch collaboration mode without a model" path.
   bool emptyModelList = false;

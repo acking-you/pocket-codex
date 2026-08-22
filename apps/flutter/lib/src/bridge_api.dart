@@ -1146,6 +1146,14 @@ abstract interface class BridgeApi {
   /// `thread/compacted` event when done.
   Future<void> appCompact(String serviceKey, String threadId);
 
+  /// A one-line gist of where a thread got to (the first sentence of its most
+  /// recent agent reply), or null when it has produced none.
+  ///
+  /// Its own call because `thread/list` carries no summary — the only source is
+  /// a full thread read, so callers fetch these lazily per visible row rather
+  /// than for every conversation.
+  Future<String?> appThreadSummary(String serviceKey, String threadId);
+
   /// Rename a conversation. The app-server persists the title, so it follows
   /// the thread rather than the device; an empty [name] clears it and the UI
   /// falls back to the thread preview.

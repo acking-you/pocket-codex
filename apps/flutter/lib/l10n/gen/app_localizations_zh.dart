@@ -852,7 +852,13 @@ class AppLocalizationsZh extends AppLocalizations {
   String get groupToday => '今天';
 
   @override
+  String get groupYesterday => '昨天';
+
+  @override
   String get groupEarlier => '更早';
+
+  @override
+  String get activityView => '动态';
 
   @override
   String get running => '运行中…';

@@ -1676,11 +1676,23 @@ abstract class AppLocalizations {
   /// **'Today'**
   String get groupToday;
 
+  /// No description provided for @groupYesterday.
+  ///
+  /// In en, this message translates to:
+  /// **'Yesterday'**
+  String get groupYesterday;
+
   /// No description provided for @groupEarlier.
   ///
   /// In en, this message translates to:
   /// **'Earlier'**
   String get groupEarlier;
+
+  /// No description provided for @activityView.
+  ///
+  /// In en, this message translates to:
+  /// **'Activity'**
+  String get activityView;
 
   /// No description provided for @running.
   ///
