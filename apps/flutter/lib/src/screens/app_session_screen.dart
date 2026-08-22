@@ -4196,31 +4196,49 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     );
   }
 
-  /// One sidebar-footer shortcut: closes the drawer (mobile) then pushes.
   /// Sidebar footer: flip the app between light and dark without a trip to
   /// settings — appearance is the one setting people change on a whim (and by
   /// time of day), so it earns a one-tap control next to the other shortcuts.
   ///
-  /// Cycles system → light → dark → system rather than a plain two-state
-  /// switch: "follow the OS" is the default, so a toggle that could only ever
-  /// reach light/dark would make it unreachable once tapped. The icon shows
-  /// what is CURRENTLY in effect, and the tooltip names the next state.
+  /// Two states, not three. It used to cycle system → light → dark to keep
+  /// "follow the OS" reachable, but a control whose next state you can't
+  /// predict from its icon is a worse trade than losing one-tap access to a
+  /// default that Settings still offers. The icon shows what is in effect now;
+  /// tapping shows the other one.
   Widget _themeToggle(AppLocalizations l10n) {
-    final mode = ref.watch(uiPrefsProvider).valueOrNull?.themeMode;
-    final (icon, next, nextLabel) = switch (mode) {
-      'light' => (Icons.light_mode_outlined, 'dark', l10n.appearanceDark),
-      'dark' => (Icons.dark_mode_outlined, null, l10n.appearanceSystem),
-      _ => (Icons.brightness_auto_outlined, 'light', l10n.appearanceLight),
-    };
+    // Keyed off what is actually ON SCREEN, not the stored preference: while
+    // following the system there is no stored value, and a button that reads
+    // "switch to light" over an already-light UI would be nonsense. This also
+    // makes the first tap out of follow-system do the obvious thing — flip to
+    // the opposite of what the user is looking at.
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final next = dark ? 'light' : 'dark';
     return IconButton(
       key: const Key('sidebar-theme-btn'),
-      icon: Icon(icon, size: 20),
-      tooltip: '${l10n.appearance} · $nextLabel',
+      // Cross-fade + rotate rather than a hard swap: the whole UI is mid-
+      // transition for 200 ms, so an icon that jumped would be the one thing
+      // in the window that didn't move.
+      icon: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 250),
+        transitionBuilder: (child, animation) => RotationTransition(
+          turns: Tween(begin: 0.75, end: 1.0).animate(animation),
+          child: FadeTransition(opacity: animation, child: child),
+        ),
+        child: Icon(
+          dark ? Icons.dark_mode_outlined : Icons.light_mode_outlined,
+          // The key is what makes the switcher animate: same type + no key
+          // reads as the same widget and swaps silently.
+          key: ValueKey(dark),
+          size: 20,
+        ),
+      ),
+      tooltip: dark ? l10n.appearanceLight : l10n.appearanceDark,
       visualDensity: VisualDensity.compact,
       onPressed: () => ref.read(uiPrefsProvider.notifier).setThemeMode(next),
     );
   }
 
+  /// One sidebar-footer shortcut: closes the drawer (mobile) then pushes.
   Widget _paneShortcut({
     required String key,
     required IconData icon,
