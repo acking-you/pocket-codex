@@ -96,6 +96,155 @@ Future<void> saveImageBytes(
 /// gone, or it is too big to be worth pulling over a tunnel).
 typedef HostImageLoader = Future<Uint8List?> Function(String hostPath);
 
+/// Side of a composer attachment tile, and of a multi-image message thumbnail.
+/// One constant because the two are meant to read as the same object: what you
+/// staged in the composer is what appears in the sent message.
+const double kAttachmentTileSide = 72;
+
+/// Corner radius shared by every attachment tile and thumbnail.
+const double kAttachmentTileRadius = 12;
+
+/// The rounded-square frame every attachment tile and message thumbnail sits
+/// in, optionally with a remove button in its top-right corner.
+///
+/// Exists so the composer strip and the transcript can't drift apart: they used
+/// to hand-roll the same Container + Stack with different radii, borders and
+/// button styling, which is exactly how a "staged image" and a "sent image"
+/// ended up looking like two unrelated controls.
+class AttachmentTile extends StatelessWidget {
+  /// Creates a framed tile around [child].
+  const AttachmentTile({
+    super.key,
+    required this.child,
+    this.side = kAttachmentTileSide,
+    this.onRemove,
+    this.removeTooltip,
+    this.removeKey,
+    this.onTap,
+    this.tapTooltip,
+  });
+
+  /// What the frame contains — usually an `Image.memory`.
+  final Widget child;
+
+  /// Width and height of the square frame.
+  final double side;
+
+  /// Removes this attachment; null hides the corner button (sent messages).
+  final VoidCallback? onRemove;
+
+  /// Tooltip for the remove button.
+  final String? removeTooltip;
+
+  /// Key for the remove button, so a test can target this specific tile.
+  final Key? removeKey;
+
+  /// Opens this attachment (preview); null leaves the tile inert.
+  final VoidCallback? onTap;
+
+  /// Tooltip for the tile itself.
+  final String? tapTooltip;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final radius = BorderRadius.circular(kAttachmentTileRadius);
+    Widget frame = Container(
+      width: side,
+      height: side,
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        borderRadius: radius,
+        color: scheme.surfaceContainerHighest,
+        border: Border.all(color: scheme.outlineVariant),
+      ),
+      child: child,
+    );
+    if (onTap != null) {
+      // A transparent Material ON TOP of the (opaque) image, so the tap ripple
+      // is visible — ink on an ancestor Material would paint underneath it.
+      frame = Stack(
+        children: [
+          frame,
+          Positioned.fill(
+            child: Material(
+              type: MaterialType.transparency,
+              child: InkWell(
+                mouseCursor: clickable,
+                borderRadius: radius,
+                onTap: onTap,
+                child: tapTooltip == null
+                    ? null
+                    : Tooltip(message: tapTooltip!),
+              ),
+            ),
+          ),
+        ],
+      );
+    }
+    if (onRemove == null) return frame;
+    // The button overhangs the frame's corner rather than sitting inside it, so
+    // it doesn't cover the picture it belongs to (matches the reference app).
+    return SizedBox(
+      width: side + 8,
+      height: side + 8,
+      child: Stack(
+        children: [
+          Positioned(left: 0, top: 8, child: frame),
+          Positioned(
+            right: 0,
+            top: 0,
+            child: _RemoveButton(
+              buttonKey: removeKey,
+              tooltip: removeTooltip,
+              onPressed: onRemove!,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The circular ✕ that removes a staged attachment. A filled disc with a
+/// hairline ring, so it stays legible over a light OR dark thumbnail without
+/// needing to know what it's sitting on.
+class _RemoveButton extends StatelessWidget {
+  const _RemoveButton({
+    required this.onPressed,
+    this.tooltip,
+    this.buttonKey,
+  });
+
+  final VoidCallback onPressed;
+  final String? tooltip;
+  final Key? buttonKey;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final button = Material(
+      color: scheme.inverseSurface,
+      shape: CircleBorder(
+        side: BorderSide(color: scheme.surface, width: 1.5),
+      ),
+      child: InkWell(
+        mouseCursor: clickable,
+        key: buttonKey,
+        customBorder: const CircleBorder(),
+        onTap: onPressed,
+        child: Padding(
+          padding: const EdgeInsets.all(3),
+          child: Icon(Icons.close, size: 12, color: scheme.onInverseSurface),
+        ),
+      ),
+    );
+    return tooltip == null
+        ? button
+        : Tooltip(message: tooltip!, child: button);
+  }
+}
+
 /// Largest image worth loading inline: above this the decoded bitmap costs
 /// more than the preview is worth, and the filename chip stays.
 const int kMaxInlineImageBytes = 8 * 1024 * 1024;
@@ -361,11 +510,13 @@ class _ImageThumbState extends State<_ImageThumb> {
     return MouseRegion(
       onEnter: (_) => setState(() => _hovering = true),
       onExit: (_) => setState(() => _hovering = false),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(10),
-        child: Stack(
-          children: [
-            Image.memory(
+      child: Stack(
+        children: [
+          AttachmentTile(
+            side: widget.side,
+            onTap: () =>
+                ImageViewerPage.show(context, widget.images, widget.index),
+            child: Image.memory(
               bytes,
               key: Key('msg-image-${widget.index}'),
               width: widget.side,
@@ -377,46 +528,26 @@ class _ImageThumbState extends State<_ImageThumb> {
               // box (cacheWidth alone would decode it too short and blurry).
               cacheWidth: (widget.side * scale * 2).round(),
               gaplessPlayback: true,
-              errorBuilder: (context, _, _) => SizedBox(
-                width: widget.side,
-                height: widget.side,
-                child: Icon(
-                  Icons.broken_image_outlined,
-                  color: Theme.of(context).colorScheme.outline,
+              errorBuilder: (context, _, _) => Icon(
+                Icons.broken_image_outlined,
+                color: Theme.of(context).colorScheme.outline,
+              ),
+            ),
+          ),
+          if (canSaveImages && _hovering)
+            Positioned(
+              top: 4,
+              right: 4,
+              child: _SaveChip(
+                onPressed: () => saveImageBytes(
+                  context,
+                  bytes,
+                  suggestedName:
+                      'image-${widget.index + 1}.${sniffImageExtension(bytes)}',
                 ),
               ),
             ),
-            // A local transparent Material ON TOP of the opaque image so the
-            // tap ripple is actually visible (ink on the distant Scaffold
-            // Material would paint underneath the bubble and image).
-            Positioned.fill(
-              child: Material(
-                type: MaterialType.transparency,
-                child: InkWell(
-                  mouseCursor: clickable,
-                  onTap: () => ImageViewerPage.show(
-                    context,
-                    widget.images,
-                    widget.index,
-                  ),
-                ),
-              ),
-            ),
-            if (canSaveImages && _hovering)
-              Positioned(
-                top: 4,
-                right: 4,
-                child: _SaveChip(
-                  onPressed: () => saveImageBytes(
-                    context,
-                    bytes,
-                    suggestedName:
-                        'image-${widget.index + 1}.${sniffImageExtension(bytes)}',
-                  ),
-                ),
-              ),
-          ],
-        ),
+        ],
       ),
     );
   }
@@ -492,10 +623,44 @@ class _ImageViewerPageState extends State<ImageViewerPage> {
   );
   late int _index = widget.initialIndex;
 
+  // One controller per page, so the −/+ buttons and the pinch gesture drive the
+  // same transform (a button that fought the gesture would be worse than no
+  // button) and so leaving a page resets its zoom.
+  final Map<int, TransformationController> _zoom = {};
+
+  /// Zoom steps the buttons walk through. Multiplicative rather than additive:
+  /// +25 percentage points is a huge jump at 0.5× and a nudge at 6×.
+  static const double _zoomStep = 1.25;
+  static const double _minZoom = 0.5;
+  static const double _maxZoom = 6;
+
+  TransformationController _controllerFor(int i) =>
+      _zoom.putIfAbsent(i, TransformationController.new);
+
   @override
   void dispose() {
     _pager.dispose();
+    for (final c in _zoom.values) {
+      c.dispose();
+    }
     super.dispose();
+  }
+
+  /// Current scale of the visible page (the matrix is uniform-scale only —
+  /// InteractiveViewer never shears — so the x-scale IS the zoom).
+  double get _scale => _controllerFor(_index).value.getMaxScaleOnAxis();
+
+  void _setZoom(double target) {
+    final next = target.clamp(_minZoom, _maxZoom);
+    // Scale about the viewport centre, which is what the buttons imply — the
+    // default origin is the top-left, which would walk the image off-screen.
+    final box = context.findRenderObject() as RenderBox?;
+    final size = box?.size ?? Size.zero;
+    _controllerFor(_index).value = Matrix4.identity()
+      ..translateByDouble(size.width / 2, size.height / 2, 0, 1)
+      ..scaleByDouble(next, next, next, 1)
+      ..translateByDouble(-size.width / 2, -size.height / 2, 0, 1);
+    setState(() {});
   }
 
   Future<void> _save() {
@@ -549,30 +714,114 @@ class _ImageViewerPageState extends State<ImageViewerPage> {
             ),
         ],
       ),
-      // A tap anywhere over a page pops the viewer, so the backdrop and margins
-      // close it — not just the X button. Pinch and double-tap still zoom;
-      // those are scale gestures, distinct from a no-move tap.
-      body: PageView.builder(
-        controller: _pager,
-        itemCount: widget.images.length,
-        onPageChanged: (i) => setState(() => _index = i),
-        itemBuilder: (context, i) => GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTap: () => Navigator.of(context).maybePop(),
-          child: InteractiveViewer(
-            key: Key('image-viewer-$i'),
-            minScale: 0.5,
-            maxScale: 6,
-            child: Center(
-              child: Image.memory(
-                widget.images[i],
-                gaplessPlayback: true,
-                errorBuilder: (context, _, _) => _brokenViewer(context),
+      body: Stack(
+        children: [
+          // A tap anywhere over a page pops the viewer, so the backdrop and
+          // margins close it — not just the X button. Pinch and double-tap
+          // still zoom; those are scale gestures, distinct from a no-move tap.
+          PageView.builder(
+            controller: _pager,
+            itemCount: widget.images.length,
+            onPageChanged: (i) => setState(() => _index = i),
+            itemBuilder: (context, i) => GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () => Navigator.of(context).maybePop(),
+              child: InteractiveViewer(
+                key: Key('image-viewer-$i'),
+                transformationController: _controllerFor(i),
+                minScale: _minZoom,
+                maxScale: _maxZoom,
+                // Keep the readout honest while the user pinches, not just
+                // when a button is pressed.
+                onInteractionEnd: (_) => setState(() {}),
+                child: Center(
+                  child: Image.memory(
+                    widget.images[i],
+                    gaplessPlayback: true,
+                    errorBuilder: (context, _, _) => _brokenViewer(context),
+                  ),
+                ),
               ),
             ),
           ),
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 24,
+            child: Center(child: _zoomBar()),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// The floating −/percentage/+ pill. Tapping the readout resets to 100%,
+  /// which is the fastest way back after over-zooming.
+  Widget _zoomBar() {
+    final scale = _scale;
+    return Material(
+      key: const Key('image-zoom-bar'),
+      color: Colors.black.withValues(alpha: 0.62),
+      shape: const StadiumBorder(),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _zoomButton(
+              buttonKey: const Key('image-zoom-out'),
+              icon: Icons.remove,
+              // Disabled at the stop rather than silently doing nothing, so the
+              // control says where the limit is.
+              onPressed: scale <= _minZoom + 0.001
+                  ? null
+                  : () => _setZoom(scale / _zoomStep),
+            ),
+            InkWell(
+              mouseCursor: clickable,
+              key: const Key('image-zoom-reset'),
+              customBorder: const StadiumBorder(),
+              onTap: () => _setZoom(1),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 8,
+                  vertical: 6,
+                ),
+                child: Text(
+                  '${(scale * 100).round()}%',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 12.5,
+                    // Tabular-ish: a fixed width stops the pill resizing as the
+                    // number goes 98% → 100% → 125% mid-pinch.
+                    fontFeatures: [FontFeature.tabularFigures()],
+                  ),
+                ),
+              ),
+            ),
+            _zoomButton(
+              buttonKey: const Key('image-zoom-in'),
+              icon: Icons.add,
+              onPressed: scale >= _maxZoom - 0.001
+                  ? null
+                  : () => _setZoom(scale * _zoomStep),
+            ),
+          ],
         ),
       ),
     );
   }
+
+  Widget _zoomButton({
+    required Key buttonKey,
+    required IconData icon,
+    required VoidCallback? onPressed,
+  }) => IconButton(
+    key: buttonKey,
+    icon: Icon(icon, size: 18),
+    color: Colors.white,
+    disabledColor: Colors.white30,
+    visualDensity: VisualDensity.compact,
+    onPressed: onPressed,
+  );
 }

@@ -518,6 +518,12 @@ abstract class AppLocalizations {
   /// **'Save image'**
   String get imageSave;
 
+  /// No description provided for @previewImage.
+  ///
+  /// In en, this message translates to:
+  /// **'Click to preview'**
+  String get previewImage;
+
   /// No description provided for @imageLoadFailed.
   ///
   /// In en, this message translates to:

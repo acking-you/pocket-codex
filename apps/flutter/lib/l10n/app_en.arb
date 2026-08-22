@@ -85,6 +85,7 @@
     "placeholders": { "count": { "type": "int" } }
   },
   "imageSave": "Save image",
+  "previewImage": "Click to preview",
   "imageLoadFailed": "Couldn't load this image",
   "imageSaved": "Saved to {path}",
   "@imageSaved": {

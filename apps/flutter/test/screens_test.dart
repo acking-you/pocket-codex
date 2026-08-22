@@ -23,6 +23,7 @@ import 'package:pocket_codex/src/ui_prefs.dart';
 import 'package:pocket_codex/src/screens/account_onboarding_screen.dart';
 import 'package:pocket_codex/src/screens/api_service_screen.dart';
 import 'package:pocket_codex/src/image_attachments.dart';
+import 'package:pocket_codex/src/widgets/message_images.dart';
 import 'package:pocket_codex/src/screens/app_session_screen.dart';
 import 'package:pocket_codex/src/screens/app_service_screen.dart';
 import 'package:pocket_codex/src/screens/services_screen.dart';
@@ -1660,6 +1661,43 @@ void main() {
       expect(find.byKey(const Key('attachment-0')), findsNothing);
     });
 
+    testWidgets('a sent message renders its image OUTSIDE the text bubble', (
+      t,
+    ) async {
+      await pumpSession(t);
+      picker.files = [XFile.fromData(_tinyPng(), name: 'shot.png')];
+
+      await _attachMenu(t, 'attach-btn');
+      await t.pumpAndSettle();
+      await t.enterText(find.byType(TextField), 'who is this?');
+      await t.pump();
+      await t.tap(find.byKey(const Key('send-btn')));
+      await t.pumpAndSettle();
+
+      final thumb = find.byKey(const Key('msg-image-0'));
+      expect(thumb, findsOneWidget);
+      // `find.text` also matches the top-bar conversation title (it previews
+      // the first message), so scope to the linkified body in the transcript.
+      final body = find.descendant(
+        of: find.byType(Linkify),
+        matching: find.text('who is this?'),
+      );
+      expect(body, findsOneWidget);
+      final bubble = find
+          .ancestor(of: body, matching: find.byType(Container))
+          .first;
+      // The image is a sibling of the bubble, not a descendant: nesting it made
+      // the picture inherit the bubble's padding and background, and left an
+      // image-only message as a mostly-empty bubble.
+      expect(
+        find.descendant(of: bubble, matching: thumb),
+        findsNothing,
+        reason: 'thumbnail must not live inside the text bubble',
+      );
+      // And it sits ABOVE the text, matching the reference layout.
+      expect(t.getCenter(thumb).dy, lessThan(t.getCenter(body).dy));
+    });
+
     testWidgets('an image-only message can be sent (no text)', (t) async {
       final api = await pumpSession(t);
       picker.files = [XFile.fromData(_tinyPng(), name: 'shot.png')];
@@ -1672,6 +1710,36 @@ void main() {
       expect(api.lastTurnText, '');
       expect(api.lastTurnImages, hasLength(1));
       expect(find.byKey(const Key('msg-image-0')), findsOneWidget);
+    });
+
+    testWidgets('a staged image opens the viewer before it is sent', (
+      t,
+    ) async {
+      await pumpSession(t);
+      picker.files = [
+        XFile.fromData(_tinyPng(), name: 'one.png'),
+        XFile.fromData(_tinyPng(), name: 'two.png'),
+      ];
+
+      await _attachMenu(t, 'attach-btn');
+      await t.pumpAndSettle();
+      expect(find.byKey(const Key('attachment-0')), findsOneWidget);
+      expect(find.byKey(const Key('attachment-1')), findsOneWidget);
+
+      // Clicking the SECOND staged tile previews that one — checking what you
+      // attached without having to send it first.
+      await t.tap(find.byKey(const Key('attachment-1')));
+      await t.pumpAndSettle();
+      expect(find.byType(ImageViewerPage), findsOneWidget);
+      // Both staged images are pageable, opened at the one clicked.
+      expect(find.text('2/2'), findsOneWidget);
+
+      // Closing returns to the composer with the attachments still staged.
+      await t.tapAt(const Offset(40, 700));
+      await t.pumpAndSettle();
+      expect(find.byType(ImageViewerPage), findsNothing);
+      expect(find.byKey(const Key('attachment-0')), findsOneWidget);
+      expect(find.byKey(const Key('attachment-1')), findsOneWidget);
     });
 
     testWidgets('removing the pending attachment disables an image-only send', (
@@ -1892,6 +1960,21 @@ void main() {
       await t.pumpAndSettle();
       return api;
     }
+
+    testWidgets('a staged FILE has no preview (no pixels to show)', (t) async {
+      await pumpSession(t);
+      selector.files = [tmpFile('notes.txt', utf8.encode('x'))];
+
+      await _attachMenu(t, 'attach-file-btn');
+      await t.pumpAndSettle();
+      expect(find.byKey(const Key('attachment-0')), findsOneWidget);
+
+      // Clicking it is inert: a document has no pixels, so there is nothing to
+      // preview and the viewer must not open on an empty list.
+      await t.tap(find.byKey(const Key('attachment-0')));
+      await t.pumpAndSettle();
+      expect(find.byType(ImageViewerPage), findsNothing);
+    });
 
     testWidgets('attach uploads to the host and the turn text carries the '
         'path-reference block', (t) async {

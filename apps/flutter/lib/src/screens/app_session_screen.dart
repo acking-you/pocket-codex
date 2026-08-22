@@ -5646,14 +5646,33 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   Widget _attachmentStrip(AppLocalizations l10n) {
     final scheme = Theme.of(context).colorScheme;
     final scale = MediaQuery.of(context).devicePixelRatio;
+    // Every staged IMAGE, in strip order — the set a preview can page through,
+    // so opening one and swiping reaches the others (a per-tile viewer would
+    // strand each image alone). Files have no pixels, so they aren't in it.
+    final staged = [
+      for (final a in _attachments)
+        if (!a.isFile)
+          if (a.processed case final p?) p.bytes,
+    ];
     return SizedBox(
-      height: 72,
+      // The remove button overhangs the tile's top corner, so the strip is
+      // taller than the tiles it holds.
+      height: kAttachmentTileSide + 8,
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
         itemCount: _attachments.length,
         separatorBuilder: (_, _) => const SizedBox(width: 8),
         itemBuilder: (context, i) {
           final att = _attachments[i];
+          // Where this tile's image sits among the previewable ones. Counted
+          // over the same filter as `staged` so a mixed strip (a file between
+          // two images) still opens the picture the user actually clicked.
+          final previewIndex = att.isFile || att.processed == null
+              ? -1
+              : _attachments
+                    .take(i)
+                    .where((a) => !a.isFile && a.processed != null)
+                    .length;
           final Widget body;
           if (!att.ready) {
             body = const Center(
@@ -5695,7 +5714,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
               fit: BoxFit.cover,
               // 2× the box so a landscape image's SHORT edge reaches the
               // square cover box without upscaling.
-              cacheWidth: (72 * scale * 2).round(),
+              cacheWidth: (kAttachmentTileSide * scale * 2).round(),
               gaplessPlayback: true,
             );
           } else {
@@ -5703,50 +5722,19 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
             // set — kept bang-free per repo style.
             body = const SizedBox.shrink();
           }
-          return SizedBox(
+          return AttachmentTile(
             key: Key('attachment-${att.id}'),
-            width: 72,
-            height: 72,
-            child: Stack(
-              children: [
-                Container(
-                  width: 72,
-                  height: 72,
-                  clipBehavior: Clip.antiAlias,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(12),
-                    color: scheme.surfaceContainerHighest,
-                    border: Border.all(color: scheme.outlineVariant),
-                  ),
-                  child: body,
-                ),
-                Positioned(
-                  top: 2,
-                  right: 2,
-                  child: Tooltip(
-                    message: att.isFile ? l10n.removeFile : l10n.removeImage,
-                    child: InkWell(
-                      mouseCursor: clickable,
-                      key: Key('attachment-remove-${att.id}'),
-                      onTap: () => setState(() => _attachments.remove(att)),
-                      customBorder: const CircleBorder(),
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: scheme.scrim.withValues(alpha: 0.55),
-                          shape: BoxShape.circle,
-                        ),
-                        padding: const EdgeInsets.all(3),
-                        child: Icon(
-                          Icons.close,
-                          size: 13,
-                          color: scheme.surface,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
+            removeKey: Key('attachment-remove-${att.id}'),
+            removeTooltip: att.isFile ? l10n.removeFile : l10n.removeImage,
+            onRemove: () => setState(() => _attachments.remove(att)),
+            // A staged image opens the same viewer a sent one does, so you can
+            // check what you attached BEFORE sending it. A file has no pixels
+            // to show, and an image still processing has none yet.
+            onTap: previewIndex < 0
+                ? null
+                : () => ImageViewerPage.show(context, staged, previewIndex),
+            tapTooltip: previewIndex < 0 ? null : l10n.previewImage,
+            child: body,
           );
         },
       ),
@@ -8406,43 +8394,64 @@ class _MessageViewState extends State<_MessageView> {
     // bubble and leaves the reply as plain prose — same shapes as the phone,
     // just tighter: a smaller radius and less padding, because a 20 px pill is
     // a touch-target look that reads as oversized under a pointer.
+    // Attachments sit ABOVE the bubble, not inside it. An image wrapped in the
+    // text bubble made the bubble a container for two unlike things — the
+    // picture picked up the bubble's padding and background, and a
+    // picture-only message rendered as a mostly-empty bubble. Separating them
+    // also keeps the thumbnail identical to the one staged in the composer.
+    final Widget? attachments =
+        images.isEmpty && paths.isEmpty
+        ? null
+        : Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              if (images.isNotEmpty)
+                MessageImagesView(
+                  images: images,
+                  hostImageLoader: widget.hostImageLoader,
+                ),
+              if (images.isNotEmpty && paths.isNotEmpty)
+                const SizedBox(height: 6),
+              if (paths.isNotEmpty) FileRefChips(paths: paths),
+            ],
+          );
     final Widget content = isUser
-        ? Container(
-            constraints: const BoxConstraints(maxWidth: 600),
-            padding: EdgeInsets.symmetric(
-              horizontal: doc ? 14 : 16,
-              vertical: doc ? 10 : 11,
-            ),
-            decoration: BoxDecoration(
-              color: scheme.surfaceContainerHigh,
-              borderRadius: BorderRadius.circular(doc ? 12 : 20),
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                // Attached images render above the text; tap for fullscreen.
-                if (images.isNotEmpty)
-                  MessageImagesView(
-                    images: images,
-                    hostImageLoader: widget.hostImageLoader,
+        ? Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              if (attachments != null) ...[
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 600),
+                  child: attachments,
+                ),
+                // Only when text follows: a bare attachment shouldn't leave
+                // trailing space under the last row.
+                if (refs.text.isNotEmpty) const SizedBox(height: 6),
+              ],
+              // A message with no text at all is just its attachments — an
+              // empty bubble under them would be a visible artifact.
+              if (refs.text.isNotEmpty)
+                Container(
+                  constraints: const BoxConstraints(maxWidth: 600),
+                  padding: EdgeInsets.symmetric(
+                    horizontal: doc ? 14 : 16,
+                    vertical: doc ? 10 : 11,
                   ),
-                if (images.isNotEmpty &&
-                    (refs.text.isNotEmpty || paths.isNotEmpty))
-                  const SizedBox(height: 8),
-                if (paths.isNotEmpty) FileRefChips(paths: paths),
-                if (paths.isNotEmpty && refs.text.isNotEmpty)
-                  const SizedBox(height: 8),
-                if (refs.text.isNotEmpty)
-                  linkifyText(
+                  decoration: BoxDecoration(
+                    color: scheme.surfaceContainerHigh,
+                    borderRadius: BorderRadius.circular(doc ? 12 : 20),
+                  ),
+                  child: linkifyText(
                     context,
                     refs.text,
                     style: Theme.of(
                       context,
                     ).textTheme.bodyLarge?.copyWith(height: 1.45),
                   ),
-              ],
-            ),
+                ),
+            ],
           )
         : Column(
             crossAxisAlignment: CrossAxisAlignment.start,

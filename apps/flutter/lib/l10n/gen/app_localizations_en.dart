@@ -233,6 +233,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get imageSave => 'Save image';
 
   @override
+  String get previewImage => 'Click to preview';
+
+  @override
   String get imageLoadFailed => 'Couldn\'t load this image';
 
   @override

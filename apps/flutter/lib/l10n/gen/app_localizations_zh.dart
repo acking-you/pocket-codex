@@ -230,6 +230,9 @@ class AppLocalizationsZh extends AppLocalizations {
   String get imageSave => '保存图片';
 
   @override
+  String get previewImage => '点击预览';
+
+  @override
   String get imageLoadFailed => '无法加载此图片';
 
   @override

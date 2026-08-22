@@ -882,9 +882,23 @@ class FakeBridgeApi implements BridgeApi {
   /// its immediate sub-directories. A path with no entry lists empty.
   final Map<String, List<HostDirEntry>> dirTree = {};
 
+  /// Fails the next [metaProjectConfig] call, then resets — simulates the
+  /// cold-open race where the meta tunnel isn't up yet.
+  bool failNextProjectConfig = false;
+
+  /// How many times [metaProjectConfig] has been called, so a test can assert
+  /// a retry happened (and that it stops once answered).
+  int projectConfigCalls = 0;
+
   @override
-  Future<ProjectConfig> metaProjectConfig(String serviceKey) async =>
-      projectConfigs[serviceKey] ?? const ProjectConfig();
+  Future<ProjectConfig> metaProjectConfig(String serviceKey) async {
+    projectConfigCalls++;
+    if (failNextProjectConfig) {
+      failNextProjectConfig = false;
+      throw StateError('meta tunnel not ready');
+    }
+    return projectConfigs[serviceKey] ?? const ProjectConfig();
+  }
 
   @override
   Future<ProjectConfig> metaSetProjectConfig(
