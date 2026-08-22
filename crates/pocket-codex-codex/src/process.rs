@@ -41,10 +41,10 @@ const SPAWN_RESOLVE_TIMEOUT: Duration = Duration::from_secs(15);
 /// rather than a blanket level.
 pub const SPAN_NOISE_DIRECTIVE: &str = "codex_app_server::app_server_tracing=warn";
 
-/// Size at which a host's log file is rolled aside at spawn time. Big enough to
-/// hold plenty of history for the in-app viewer, small enough that two
-/// generations of it are noise on any disk.
-pub const MAX_LOG_BYTES: u64 = 16 * 1024 * 1024;
+/// Size at which a host's log file is discarded at spawn time. Matches the
+/// tailer's live cap, so the bound doesn't depend on which layer noticed first
+/// — see [`discard_log_if_oversized`].
+pub const MAX_LOG_BYTES: u64 = 8 * 1024 * 1024;
 
 /// The `RUST_LOG` to set on a spawned app-server, given the ambient one
 /// (`None` when unset). Returns `None` to leave the child's environment alone.
@@ -87,33 +87,49 @@ fn child_log_filter(ambient: Option<&std::ffi::OsStr>) -> Option<String> {
     Some(format!("{inherited},{SPAN_NOISE_DIRECTIVE}"))
 }
 
-/// Roll [`log_file`] aside to `<name>.1` when it has grown past
-/// [`MAX_LOG_BYTES`], so the fresh run appends to an empty file.
+/// Delete [`log_file`] when it has grown past [`MAX_LOG_BYTES`], so the fresh
+/// run appends to an empty file.
 ///
-/// Rolling at spawn rather than continuously: nothing here owns the file while
-/// a host runs (the child holds the write end, and it may outlive this process
-/// entirely), so a spawn is the one moment the size can be acted on safely.
-/// Keeping one previous generation means the run that filled the file — often
-/// the interesting one — is still readable afterwards.
+/// Deleted, not rotated. Nothing ever reads a byte written before the current
+/// run: the tailer starts at this run's `log_offset` and only forwards appended
+/// bytes, and failure diagnosis reads at most the last 16 KB / 20 lines from
+/// that same offset. Keeping a `.1` generation would therefore preserve bytes
+/// with no reader — on the machine that prompted this, a 4.6 GB copy on a disk
+/// with 10 GB free, which is the same disk-space problem wearing a hat.
 ///
-/// Best-effort by design: a failure to rename or remove must not stop a host
-/// from starting. The worst case is the old behaviour, an oversized file.
-fn roll_log_if_oversized(log_file: &std::path::Path) {
+/// This is the second of two layers, and it covers what the other can't. A live
+/// host's log is bounded by its tailer, which truncates in place every poll —
+/// but the tailer only runs while the app has that host registered, and a host
+/// is deliberately detached (PPID 1) and keeps writing after the app quits.
+/// That unattended growth is precisely the case that produced a 4.9 GB file,
+/// and this is where it gets caught: on the next launch, before the tailer
+/// exists.
+///
+/// Removing rather than truncating is safe here specifically because no writer
+/// holds the file yet — this runs before the spawn. The tailer must truncate
+/// instead, since unlinking under a live child would leave it appending to a
+/// deleted inode and never free the space.
+///
+/// Best-effort by design: a failure to remove must not stop a host from
+/// starting. The worst case is the old behaviour, an oversized file.
+fn discard_log_if_oversized(log_file: &std::path::Path) {
     let Ok(meta) = std::fs::metadata(log_file) else {
-        return; // no file yet — nothing to roll
+        return; // no file yet — nothing to discard
     };
     if meta.len() <= MAX_LOG_BYTES {
         return;
     }
-    let previous = log_file.with_extension(match log_file.extension() {
-        Some(ext) => format!("{}.1", ext.to_string_lossy()),
-        None => "1".to_string(),
-    });
-    // A rename over an existing target replaces it on both Unix and Windows
-    // (Windows only when nothing holds the target open), which is exactly the
-    // "keep one generation" behaviour wanted here.
-    if let Err(cause) = std::fs::rename(log_file, &previous) {
-        tracing::debug!(?log_file, %cause, "could not roll oversized codex log aside");
+    // The child that wrote it is gone (this runs before the new spawn), so
+    // unlinking frees the space immediately rather than leaving a live writer
+    // holding a deleted inode.
+    if let Err(cause) = std::fs::remove_file(log_file) {
+        tracing::debug!(?log_file, %cause, "could not discard oversized codex log");
+    } else {
+        tracing::info!(
+            ?log_file,
+            bytes = meta.len(),
+            "discarded oversized codex log; it predates this run and has no reader"
+        );
     }
 }
 
@@ -370,7 +386,7 @@ pub fn spawn(mut opts: SpawnOptions) -> pocket_codex_core::Result<SpawnReport> {
     if let Some(parent) = log_file.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    roll_log_if_oversized(&log_file);
+    discard_log_if_oversized(&log_file);
     // The byte offset where this run's log lines will begin (the file is opened
     // in append mode and shared across runs). A tailer starts here to show only
     // this process's output, not earlier runs'.
@@ -762,36 +778,30 @@ mod tests {
     }
 
     #[test]
-    fn oversized_log_rolls_aside_and_keeps_one_generation() {
+    fn oversized_log_is_discarded_leaving_nothing_behind() {
         let dir = tempfile::tempdir().expect("tempdir");
         let log = dir.path().join("codex-default.log");
 
-        // Under the cap: left exactly as it is, so a tailer's offset stays valid.
+        // Under the cap: left byte-for-byte, so a tailer's offset stays valid.
         std::fs::write(&log, b"small").expect("write");
-        roll_log_if_oversized(&log);
+        discard_log_if_oversized(&log);
         assert_eq!(std::fs::read(&log).expect("read"), b"small");
-        assert!(!log.with_extension("log.1").exists());
 
-        // Over the cap: moved aside, so the next run starts from an empty file.
+        // Over the cap: gone, and NOT rotated to a sibling. Nothing reads bytes
+        // from before the current run, so a kept generation would just be a
+        // second copy of the disk-space problem.
         std::fs::write(&log, vec![b'x'; (MAX_LOG_BYTES + 1) as usize]).expect("write big");
-        roll_log_if_oversized(&log);
-        assert!(!log.exists(), "the oversized file is moved out of the way");
-        let rolled = log.with_extension("log.1");
-        assert_eq!(
-            std::fs::metadata(&rolled).expect("rolled").len(),
-            MAX_LOG_BYTES + 1,
-            "the run that filled the file is still readable"
-        );
-
-        // Rolling again replaces the previous generation rather than piling up.
-        std::fs::write(&log, vec![b'y'; (MAX_LOG_BYTES + 1) as usize]).expect("write big again");
-        roll_log_if_oversized(&log);
-        assert_eq!(std::fs::read(&rolled).expect("read rolled")[0], b'y');
+        discard_log_if_oversized(&log);
+        assert!(!log.exists(), "the oversized file is removed");
         assert_eq!(
             std::fs::read_dir(dir.path()).expect("dir").count(),
-            1,
-            "exactly one generation is kept"
+            0,
+            "no .1 (or any other) copy is left holding the bytes"
         );
+
+        // A missing file is a no-op, not an error — the first-ever spawn.
+        discard_log_if_oversized(&log);
+        assert!(!log.exists());
     }
 
     #[test]
