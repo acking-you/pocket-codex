@@ -1013,10 +1013,16 @@ fn track_pending_approval(pending: &Mutex<HashMap<String, Value>>, inbound: &Inb
 
 /// Resume an existing thread, loading it from disk into the live session.
 ///
-/// `thread/list` enumerates persisted threads, but `thread/read` and
-/// `turn/start` only see threads loaded into the server's thread manager — on
-/// an unresumed thread they fail with "thread not found". Call this first when
-/// opening an existing conversation.
+/// Required before `turn/start`: sending into an unresumed thread fails, since
+/// the server can only run a turn on a thread in its live thread manager. Call
+/// this first when opening an existing conversation.
+///
+/// `thread/read` no longer needs it. This doc used to say reads of an unresumed
+/// thread fail with "thread not found", and that is stale — verified against
+/// codex 0.146 by listing on a freshly-spawned server and reading 15 threads it
+/// had never resumed: all 15 returned their turns. [`thread_summary`] relies on
+/// that, so if a future upstream ever reinstates the restriction, the activity
+/// view's gists are what break first.
 pub fn thread_resume(service_key: &str, thread_id: &str) -> Result<()> {
     let client = client_for(service_key)?;
     let res = runtime::runtime()
@@ -1275,23 +1281,65 @@ fn first_sentence(text: &str) -> Option<String> {
 
 /// Whether `chars[i]` ends a sentence.
 ///
-/// CJK terminators always do. An ASCII `.` only counts when what FOLLOWS looks
-/// like a break — end of text, or whitespace then a capital/CJK character.
-/// Keying on the following character rather than on how much text came before
-/// is what keeps "v1.2 已发布。" from being cut at the version dot: a length
-/// floor would also have swallowed the genuinely short sentence after it.
+/// CJK terminators always do. An ASCII `.` needs BOTH sides to agree:
+///
+/// * what follows looks like a break — end of text, or a space then a
+///   capital/CJK character. Keying on this (rather than on how much text came
+///   before) is what keeps "v1.2 已发布。" from being cut at the version dot; a
+///   length floor would also have swallowed the short sentence after it.
+/// * the word it closes isn't a known abbreviation. Looking only forward made
+///   "Dr. Smith fixed the issue." summarize to "Dr." — a capitalised proper
+///   noun after an abbreviation is ordinary English, not a sentence boundary.
 fn is_sentence_end(chars: &[char], i: usize) -> bool {
     match chars[i] {
         '。' | '！' | '？' => true,
-        '.' | '!' | '?' => match chars.get(i + 1) {
-            None => true,
-            Some(' ') => chars
-                .get(i + 2)
-                .is_none_or(|c| c.is_uppercase() || !c.is_ascii()),
-            _ => false,
+        '.' | '!' | '?' => {
+            let breaks_after = match chars.get(i + 1) {
+                None => true,
+                Some(' ') => chars
+                    .get(i + 2)
+                    .is_none_or(|c| c.is_uppercase() || !c.is_ascii()),
+                _ => false,
+            };
+            // `!`/`?` are never part of an abbreviation, so only `.` looks back.
+            breaks_after && (chars[i] != '.' || !closes_abbreviation(chars, i))
         },
         _ => false,
     }
+}
+
+/// Abbreviations whose trailing period is not a sentence end. Lowercase,
+/// without the final dot; a multi-dot form like `u.s.` is matched whole.
+const ABBREVIATIONS: &[&str] = &[
+    "mr", "mrs", "ms", "dr", "prof", "sr", "jr", "st", "vs", "etc", "eg", "ie", "e.g", "i.e",
+    "approx", "no", "fig", "al", "inc", "ltd", "co", "corp", "dept", "est", "min", "max", "u.s",
+    "u.k", "a.m", "p.m", "cf", "resp", "ca",
+];
+
+/// Whether the `.` at `chars[i]` closes a token in [`ABBREVIATIONS`].
+///
+/// Walks back over the word, keeping interior dots so `U.S.` and `e.g.` match
+/// as single tokens rather than as a bare trailing `s` / `g`. A single-letter
+/// word counts too: `A. Smith` is an initial, not a sentence.
+fn closes_abbreviation(chars: &[char], i: usize) -> bool {
+    let mut start = i;
+    while start > 0 {
+        let prev = chars[start - 1];
+        if prev.is_alphanumeric() || prev == '.' {
+            start -= 1;
+        } else {
+            break;
+        }
+    }
+    if start == i {
+        return false; // a lone "." with no word before it
+    }
+    let word: String = chars[start..i].iter().collect::<String>().to_lowercase();
+    // "A." / "J." — an initial in a name, never a sentence end.
+    if word.chars().count() == 1 && word.chars().all(char::is_alphabetic) {
+        return true;
+    }
+    ABBREVIATIONS.contains(&word.as_str())
 }
 
 /// Extract `(tokens_in_context, context_window)` from a `tokenUsage` value
@@ -2029,6 +2077,41 @@ mod tests {
         );
         // Trailing period with nothing after it still ends the sentence.
         assert_eq!(first_sentence("Done.").as_deref(), Some("Done."));
+    }
+
+    #[test]
+    fn summary_keeps_going_past_an_abbreviation() {
+        // A capitalised word after an abbreviation is ordinary English, not a
+        // boundary. Looking only at the FOLLOWING character cut these to
+        // "Dr." / "U.S." / "E.g.", which told the reader nothing.
+        assert_eq!(
+            first_sentence("Dr. Smith fixed the issue.").as_deref(),
+            Some("Dr. Smith fixed the issue.")
+        );
+        assert_eq!(
+            first_sentence("U.S. Government policy changed.").as_deref(),
+            Some("U.S. Government policy changed.")
+        );
+        assert_eq!(
+            first_sentence("E.g. Use the builder.").as_deref(),
+            Some("E.g. Use the builder.")
+        );
+        // An initial in a name is the same shape as an abbreviation.
+        assert_eq!(
+            first_sentence("See A. Smith for details. That is all.").as_deref(),
+            Some("See A. Smith for details.")
+        );
+        // Mid-sentence abbreviations too, not just leading ones.
+        assert_eq!(
+            first_sentence("Added etc. handling. Shipped.").as_deref(),
+            Some("Added etc. handling.")
+        );
+        // …and a real boundary right after an abbreviation still splits: the
+        // abbreviation is the word before THIS period, not somewhere earlier.
+        assert_eq!(
+            first_sentence("Talked to Dr. Smith. Then shipped.").as_deref(),
+            Some("Talked to Dr. Smith.")
+        );
     }
 
     #[test]

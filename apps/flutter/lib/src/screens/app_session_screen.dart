@@ -346,6 +346,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   final Map<String, int> _openLoadRetries = {};
   final Map<String, Timer> _openLoadTimers = {};
 
+  /// Debounce for the post-turn thread re-list. See [_scheduleThreadsRefresh].
+  Timer? _threadsRefreshTimer;
+
   /// Distinct project roots across every conversation on this service (not
   /// just the current project's), for the project switcher. See [_loadThreads].
   List<String> _allProjects = const [];
@@ -943,6 +946,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     for (final t in _openLoadTimers.values) {
       t.cancel();
     }
+    _threadsRefreshTimer?.cancel();
     _elapsedTicker?.cancel();
     _sub?.cancel();
     _input.dispose();
@@ -1279,6 +1283,15 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     // (append messages/approvals, flip `_streaming`/`_turnId`). Truly global
     // events (no threadId — e.g. account/rate-limit updates) always pass.
     if (e.threadId != null && e.threadId != _threadId) {
+      // ...with one exception. A turn ending on ANOTHER thread changes that
+      // thread's newest agent reply, which is exactly what its cached activity
+      // summary holds. The cache is deliberately not auto-disposed, so without
+      // this its row would show the previous reply for the rest of the session.
+      // Dropping a cache entry can't pollute this conversation's state — the
+      // reason the guard exists — so it is safe on this side of it.
+      if (e.kind == 'turn/completed' || e.kind == 'turn/failed') {
+        _invalidateSummary(e.threadId);
+      }
       return;
     }
     // Server-initiated approval prompt (carries a request id to answer).
@@ -3935,22 +3948,28 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
             if (t.id != _threadId) _openThread(t.id, t.cwd);
           },
         );
-        final rows = <Widget>[];
+        // Row BUILDERS, not built rows. The activity view's tiles each read a
+        // thread summary (a full `thread/read` server-side) while building, so a
+        // pre-built list would fire one per conversation the moment the view is
+        // toggled — 500 transcripts across a relay tunnel to fill one viewport.
+        // Deferring construction lets `ListView.builder` create only the rows it
+        // actually shows, which is what makes the lazy fetch lazy.
+        final rows = <Widget Function()>[];
         void group(
           String label,
           List<ThreadMeta> items, {
           bool showProject = false,
         }) {
           if (items.isEmpty) return;
-          rows.add(_sectionLabel(label));
+          rows.add(() => _sectionLabel(label));
           rows.addAll(
             // Whichever view is on, one list means one row shape — an Active
             // group in compact rows above summarized ones would read as two
             // lists stapled together.
             items.map(
               (t) => _activityView
-                  ? activityTile(t)
-                  : tile(t, showProject: showProject),
+                  ? () => activityTile(t)
+                  : () => tile(t, showProject: showProject),
             ),
           );
         }
@@ -3975,7 +3994,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           // would be actively unhelpful.
           final searching = q.isNotEmpty;
           for (final p in _byProject(<ThreadMeta>[...today, ...earlier])) {
-            rows.add(_projectSectionLabel(p.cwd, count: p.threads.length));
+            rows.add(
+              () => _projectSectionLabel(p.cwd, count: p.threads.length),
+            );
             // A search overrides a collapsed project: these rows already
             // matched the query, so hiding them would answer "no results" to a
             // search that DID find something.
@@ -3992,11 +4013,16 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
               final open = p.threads.where((t) => t.id == _threadId);
               if (open.isNotEmpty) shown = [...shown, open.first];
             }
-            rows.addAll(shown.map((t) => tile(t, showProject: false)));
+            rows.addAll(
+              shown.map(
+                (t) =>
+                    () => tile(t, showProject: false),
+              ),
+            );
             final hidden = p.threads.length - shown.length;
             if (!searching && (hidden > 0 || expanded)) {
               rows.add(
-                _projectPeekToggle(
+                () => _projectPeekToggle(
                   cwd: p.cwd,
                   hidden: hidden,
                   expanded: expanded,
@@ -4181,9 +4207,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                         style: TextStyle(color: scheme.outline),
                       ),
                     )
-                  : ListView(
+                  : ListView.builder(
                       padding: const EdgeInsets.fromLTRB(8, 2, 8, 8),
-                      children: rows,
+                      itemCount: rows.length,
+                      itemBuilder: (_, i) => rows[i](),
                     ),
             ),
             // Account quota, always visible rather than buried behind the
@@ -4515,6 +4542,24 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     ref.invalidate(
       threadSummaryProvider(threadSummaryKey(widget.serviceKey, threadId)),
     );
+    // A finished turn also moves the thread's `updatedAt`, which the activity
+    // view groups BY — so a conversation resumed from an older day would keep
+    // sitting under that old day, with a stale relative time and sort position,
+    // until something else happened to re-list.
+    _scheduleThreadsRefresh();
+  }
+
+  /// Re-list threads shortly, coalescing bursts into one request.
+  ///
+  /// Debounced because several threads can finish within moments of each other
+  /// (queued sends, parallel conversations) and each end would otherwise issue
+  /// its own `thread/list`. The delay also lets the server commit the turn
+  /// before we ask for the timestamps it just changed.
+  void _scheduleThreadsRefresh() {
+    _threadsRefreshTimer?.cancel();
+    _threadsRefreshTimer = Timer(const Duration(milliseconds: 400), () {
+      if (mounted) _loadThreads();
+    });
   }
 
   /// Buckets threads by the calendar day they last moved, newest day first —
