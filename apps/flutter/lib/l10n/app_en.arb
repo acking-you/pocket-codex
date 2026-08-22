@@ -85,6 +85,7 @@
     "placeholders": { "count": { "type": "int" } }
   },
   "imageSave": "Save image",
+  "previewImage": "Click to preview",
   "imageLoadFailed": "Couldn't load this image",
   "imageSaved": "Saved to {path}",
   "@imageSaved": {
@@ -335,7 +336,9 @@
   "noMatchingThreads": "No matching conversations",
   "groupActive": "Active",
   "groupToday": "Today",
+  "groupYesterday": "Yesterday",
   "groupEarlier": "Earlier",
+  "activityView": "Activity",
   "running": "Running…",
   "timeJustNow": "just now",
   "timeMinutesAgo": "{n}m ago",

@@ -36,6 +36,103 @@ use crate::protocol::Message as _ProtocolMessage;
 /// start without hanging an interactive `serve` indefinitely.
 const SPAWN_RESOLVE_TIMEOUT: Duration = Duration::from_secs(15);
 
+/// Appended to an inherited `RUST_LOG` to silence codex's per-request span
+/// traffic. See [`child_log_filter`] for why this is a targeted directive
+/// rather than a blanket level.
+pub const SPAN_NOISE_DIRECTIVE: &str = "codex_app_server::app_server_tracing=warn";
+
+/// Size at which a host's log file is discarded at spawn time. Matches the
+/// tailer's live cap, so the bound doesn't depend on which layer noticed first
+/// — see [`discard_log_if_oversized`].
+pub const MAX_LOG_BYTES: u64 = 8 * 1024 * 1024;
+
+/// The `RUST_LOG` to set on a spawned app-server, given the ambient one
+/// (`None` when unset). Returns `None` to leave the child's environment alone.
+///
+/// Only acts when a level is already in play. codex installs its stderr layer
+/// with `FmtSpan::FULL`, so at `info` or above EVERY JSON-RPC request emits a
+/// full `enter` and `exit` line, each repeating the whole span field set. That
+/// is not a rounding error: measured against this codex, 20 `thread/list` calls
+/// wrote 45.8 MB at `RUST_LOG=info`, 66,488 of those lines being span events.
+/// Silencing just that module took the same load to 113 KB — a 405× reduction —
+/// with every other `info` line intact.
+///
+/// Hence a targeted directive rather than a blanket level: someone who exported
+/// `RUST_LOG=info` wants codex's info logs, not its span bookkeeping, and a
+/// blanket `warn` would throw away what they asked for. An unset `RUST_LOG`
+/// needs nothing — codex's own default is already quiet (222 bytes for the same
+/// load), so there is nothing to fix and no reason to start filtering.
+///
+/// A later directive wins in `EnvFilter`, so appending overrides a broad `info`
+/// while a caller who names this module explicitly
+/// (`...app_server_tracing=trace`) still loses to our append — deliberate: the
+/// file this feeds only ever appends, and one run at that verbosity can cost
+/// gigabytes.
+///
+/// Split out as a pure function so the decision is testable: mutating the
+/// process-wide `RUST_LOG` from a test needs `unsafe` on this edition, and this
+/// crate forbids it.
+fn child_log_filter(ambient: Option<&std::ffi::OsStr>) -> Option<String> {
+    // Blank is what an `unset`-by-shell-script leaves behind, and EnvFilter
+    // reads it as "no directives" — same as absent. Either way codex falls back
+    // to its own quiet default, so leave it be.
+    let inherited = ambient.and_then(|v| v.to_str()).unwrap_or("").trim();
+    if inherited.is_empty() {
+        return None;
+    }
+    // Already asking for this module to be quiet — don't stack a duplicate.
+    if inherited.contains(SPAN_NOISE_DIRECTIVE) {
+        return None;
+    }
+    Some(format!("{inherited},{SPAN_NOISE_DIRECTIVE}"))
+}
+
+/// Delete [`log_file`] when it has grown past [`MAX_LOG_BYTES`], so the fresh
+/// run appends to an empty file.
+///
+/// Deleted, not rotated. Nothing ever reads a byte written before the current
+/// run: the tailer starts at this run's `log_offset` and only forwards appended
+/// bytes, and failure diagnosis reads at most the last 16 KB / 20 lines from
+/// that same offset. Keeping a `.1` generation would therefore preserve bytes
+/// with no reader — on the machine that prompted this, a 4.6 GB copy on a disk
+/// with 10 GB free, which is the same disk-space problem wearing a hat.
+///
+/// This is the second of two layers, and it covers what the other can't. A live
+/// host's log is bounded by its tailer, which truncates in place every poll —
+/// but the tailer only runs while the app has that host registered, and a host
+/// is deliberately detached (PPID 1) and keeps writing after the app quits.
+/// That unattended growth is precisely the case that produced a 4.9 GB file,
+/// and this is where it gets caught: on the next launch, before the tailer
+/// exists.
+///
+/// Removing rather than truncating is safe here specifically because no writer
+/// holds the file yet — this runs before the spawn. The tailer must truncate
+/// instead, since unlinking under a live child would leave it appending to a
+/// deleted inode and never free the space.
+///
+/// Best-effort by design: a failure to remove must not stop a host from
+/// starting. The worst case is the old behaviour, an oversized file.
+fn discard_log_if_oversized(log_file: &std::path::Path) {
+    let Ok(meta) = std::fs::metadata(log_file) else {
+        return; // no file yet — nothing to discard
+    };
+    if meta.len() <= MAX_LOG_BYTES {
+        return;
+    }
+    // The child that wrote it is gone (this runs before the new spawn), so
+    // unlinking frees the space immediately rather than leaving a live writer
+    // holding a deleted inode.
+    if let Err(cause) = std::fs::remove_file(log_file) {
+        tracing::debug!(?log_file, %cause, "could not discard oversized codex log");
+    } else {
+        tracing::info!(
+            ?log_file,
+            bytes = meta.len(),
+            "discarded oversized codex log; it predates this run and has no reader"
+        );
+    }
+}
+
 /// Parse the `host`/`port` out of a `ws://host:port` listen URL. Returns
 /// `None` for non-websocket transports (e.g. `unix://`), which have no TCP
 /// port to probe and therefore fall back to PID-based tracking.
@@ -282,6 +379,14 @@ pub fn spawn(mut opts: SpawnOptions) -> pocket_codex_core::Result<SpawnReport> {
         .clone()
         .map(Ok)
         .unwrap_or_else(paths::codex_log_file)?;
+    // Roll BEFORE measuring: `log_offset` below is where this run's lines start,
+    // and rolling afterwards would leave it pointing past the end of the new
+    // (empty) file — the tailer would then wait forever for the file to reach an
+    // offset it never will, showing no logs at all for this host.
+    if let Some(parent) = log_file.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    discard_log_if_oversized(&log_file);
     // The byte offset where this run's log lines will begin (the file is opened
     // in append mode and shared across runs). A tailer starts here to show only
     // this process's output, not earlier runs'.
@@ -467,6 +572,14 @@ fn build_command(
         }
     }
 
+    // Keep an inherited RUST_LOG from turning the host's log file into gigabytes
+    // of span bookkeeping. We redirect this child's stdout/stderr into a file
+    // that only ever appends, so a verbosity that is merely noisy in a terminal
+    // is a disk-space problem here. See `child_log_filter` for the measurements.
+    if let Some(filter) = child_log_filter(std::env::var_os("RUST_LOG").as_deref()) {
+        command.env("RUST_LOG", filter);
+    }
+
     // Windows: `codex` is typically an npm shim (codex.cmd → node), and a
     // windowless GUI parent (the Flutter desktop app) launching a console child
     // makes Windows allocate a visible black console window that stays open for
@@ -578,7 +691,11 @@ fn _proto_anchor(_msg: _ProtocolMessage) {}
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, ffi::OsString, path::Path};
+    use std::{
+        collections::HashMap,
+        ffi::{OsStr, OsString},
+        path::Path,
+    };
 
     use super::*;
 
@@ -620,6 +737,74 @@ mod tests {
     }
 
     #[test]
+    fn child_log_filter_only_silences_spans_when_a_level_is_set() {
+        // Unset / blank: codex's own default is already quiet, so touching
+        // RUST_LOG would start filtering something nobody asked to filter.
+        assert_eq!(child_log_filter(None), None);
+        assert_eq!(child_log_filter(Some(OsStr::new("   "))), None);
+
+        // A level IS set: keep it, and append the span silencer. A later
+        // directive wins in EnvFilter, so the append is what takes effect.
+        assert_eq!(
+            child_log_filter(Some(OsStr::new("info"))).as_deref(),
+            Some("info,codex_app_server::app_server_tracing=warn"),
+            "at info, FmtSpan::FULL writes an enter+exit line PER REQUEST — measured at 45.8 MB \
+             for 20 thread/list calls"
+        );
+        // The user's other directives survive; only the span module is muted.
+        assert_eq!(
+            child_log_filter(Some(OsStr::new("warn,codex_core=debug"))).as_deref(),
+            Some("warn,codex_core=debug,codex_app_server::app_server_tracing=warn")
+        );
+        // Already handled — don't stack a duplicate directive.
+        assert_eq!(
+            child_log_filter(Some(OsStr::new("info,codex_app_server::app_server_tracing=warn"))),
+            None
+        );
+    }
+
+    #[test]
+    fn build_command_applies_the_span_filter_it_computed() {
+        let command = build_command(Path::new("codex"), "ws://127.0.0.1:1", &[], None);
+        let set = explicit_envs(&command)
+            .get(&OsString::from("RUST_LOG"))
+            .and_then(|v| v.clone());
+        // Mirrors the ambient env, so this holds on a clean machine and under a
+        // developer's exported RUST_LOG alike.
+        match child_log_filter(std::env::var_os("RUST_LOG").as_deref()) {
+            Some(expected) => assert_eq!(set, Some(OsString::from(expected))),
+            None => assert_eq!(set, None),
+        }
+    }
+
+    #[test]
+    fn oversized_log_is_discarded_leaving_nothing_behind() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let log = dir.path().join("codex-default.log");
+
+        // Under the cap: left byte-for-byte, so a tailer's offset stays valid.
+        std::fs::write(&log, b"small").expect("write");
+        discard_log_if_oversized(&log);
+        assert_eq!(std::fs::read(&log).expect("read"), b"small");
+
+        // Over the cap: gone, and NOT rotated to a sibling. Nothing reads bytes
+        // from before the current run, so a kept generation would just be a
+        // second copy of the disk-space problem.
+        std::fs::write(&log, vec![b'x'; (MAX_LOG_BYTES + 1) as usize]).expect("write big");
+        discard_log_if_oversized(&log);
+        assert!(!log.exists(), "the oversized file is removed");
+        assert_eq!(
+            std::fs::read_dir(dir.path()).expect("dir").count(),
+            0,
+            "no .1 (or any other) copy is left holding the bytes"
+        );
+
+        // A missing file is a no-op, not an error — the first-ever spawn.
+        discard_log_if_oversized(&log);
+        assert!(!log.exists());
+    }
+
+    #[test]
     fn build_command_injects_proxy_env_when_set() {
         let command = build_command(
             Path::new("codex"),
@@ -649,13 +834,29 @@ mod tests {
     }
 
     #[test]
-    fn build_command_leaves_env_untouched_without_proxy() {
+    fn build_command_leaves_proxy_env_untouched_without_proxy() {
         let command = build_command(Path::new("codex"), "ws://127.0.0.1:18080", &[], None);
+        let envs = explicit_envs(&command);
 
-        assert!(
-            explicit_envs(&command).is_empty(),
-            "no env should be set when proxy is None; child inherits the parent's"
-        );
+        // No PROXY var is set when none was asked for; the child inherits the
+        // parent's. RUST_LOG is deliberately excluded from this claim — it is
+        // capped independently of the proxy (see `child_log_filter`), because an
+        // unfiltered child grows its log file without bound.
+        for key in [
+            "HTTPS_PROXY",
+            "https_proxy",
+            "HTTP_PROXY",
+            "http_proxy",
+            "ALL_PROXY",
+            "all_proxy",
+            "NO_PROXY",
+            "no_proxy",
+        ] {
+            assert!(
+                !envs.contains_key(&OsString::from(key)),
+                "{key} must not be set when proxy is None"
+            );
+        }
     }
 
     #[test]

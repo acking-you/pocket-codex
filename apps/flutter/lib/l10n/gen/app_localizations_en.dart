@@ -233,6 +233,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get imageSave => 'Save image';
 
   @override
+  String get previewImage => 'Click to preview';
+
+  @override
   String get imageLoadFailed => 'Couldn\'t load this image';
 
   @override
@@ -870,7 +873,13 @@ class AppLocalizationsEn extends AppLocalizations {
   String get groupToday => 'Today';
 
   @override
+  String get groupYesterday => 'Yesterday';
+
+  @override
   String get groupEarlier => 'Earlier';
+
+  @override
+  String get activityView => 'Activity';
 
   @override
   String get running => 'Running…';

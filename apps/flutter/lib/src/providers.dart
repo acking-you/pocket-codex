@@ -141,15 +141,37 @@ final codexSetupStatusProvider = FutureProvider<CodexSetupStatus>((ref) async {
 /// (a still-running host re-registers, and hiding it would strand a live entry).
 final pendingRemovalProvider = StateProvider<Set<String>>((ref) => {});
 
-/// The set of thread ids on [serviceKey] that currently have an in-flight turn,
-/// derived purely from the live event stream: `turn/started` adds a thread,
-/// `turn/completed` / `turn/failed` removes it. Lets the session lists show a
-/// running indicator BEFORE a session is opened, and animate when several run
-/// at once. Subscribing here is safe alongside the session screen's own
-/// listener — each `appEvents` call gets an independent broadcast receiver.
-/// Errors (e.g. not connected yet) surface as an AsyncError; consumers treat a
-/// missing value as the empty set.
+/// A conversation's one-line summary, fetched on demand and cached.
 ///
+/// Keyed by `serviceKey|threadId`. Deliberately NOT autoDispose: a row scrolled
+/// out and back must not re-read the thread, and the whole point of fetching
+/// lazily is to pay for each conversation at most once per session. The read is
+/// expensive (a full thread history server-side), so the activity view asks for
+/// these only for rows it actually renders.
+///
+/// A failure yields null rather than an error state: a missing gist is a row
+/// with one less line, not something to interrupt the list for.
+final threadSummaryProvider = FutureProvider.family<String?, String>((
+  ref,
+  key,
+) async {
+  final sep = key.indexOf('|');
+  if (sep <= 0) return null;
+  final serviceKey = key.substring(0, sep);
+  final threadId = key.substring(sep + 1);
+  try {
+    return await ref
+        .watch(bridgeApiProvider)
+        .appThreadSummary(serviceKey, threadId);
+  } catch (_) {
+    return null;
+  }
+});
+
+/// Cache key for [threadSummaryProvider].
+String threadSummaryKey(String serviceKey, String threadId) =>
+    '$serviceKey|$threadId';
+
 /// A host meta request currently being retried, or null when nothing is.
 ///
 /// Drives the "retrying 2/10" line in `ErrorRetry`. Each tick auto-clears after
@@ -176,7 +198,13 @@ final metaRetryProvider = StreamProvider<RetryProgress?>((ref) {
 });
 
 /// Threads with a turn currently running on [serviceKey], as a live set,
-/// derived purely from the live event stream (see the notes above).
+/// derived purely from the live event stream: `turn/started` adds a thread,
+/// `turn/completed` / `turn/failed` removes it. Lets the session lists show a
+/// running indicator BEFORE a session is opened, and animate when several run
+/// at once. Subscribing here is safe alongside the session screen's own
+/// listener — each `appEvents` call gets an independent broadcast receiver.
+/// Errors (e.g. not connected yet) surface as an AsyncError; consumers treat a
+/// missing value as the empty set.
 ///
 /// Deliberately NOT autoDispose: the running set is accumulated across events,
 /// and tearing the provider down between rebuilds (e.g. while navigating

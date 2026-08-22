@@ -133,6 +133,12 @@ class _PocketCodexAppState extends ConsumerState<PocketCodexApp> {
       theme: lightTheme(),
       darkTheme: darkTheme(),
       themeMode: themeMode,
+      // Material already cross-fades every themed colour; these just make it
+      // read as a deliberate transition rather than a fast dissolve. Eased
+      // rather than linear so the change settles instead of stopping dead —
+      // a whole-window colour shift is the most visible animation in the app.
+      themeAnimationDuration: const Duration(milliseconds: 350),
+      themeAnimationCurve: Curves.easeInOutCubic,
       locale: locale,
       localizationsDelegates: AppLocalizations.localizationsDelegates,
       supportedLocales: AppLocalizations.supportedLocales,

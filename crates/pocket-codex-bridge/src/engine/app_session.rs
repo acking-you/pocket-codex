@@ -1013,10 +1013,16 @@ fn track_pending_approval(pending: &Mutex<HashMap<String, Value>>, inbound: &Inb
 
 /// Resume an existing thread, loading it from disk into the live session.
 ///
-/// `thread/list` enumerates persisted threads, but `thread/read` and
-/// `turn/start` only see threads loaded into the server's thread manager — on
-/// an unresumed thread they fail with "thread not found". Call this first when
-/// opening an existing conversation.
+/// Required before `turn/start`: sending into an unresumed thread fails, since
+/// the server can only run a turn on a thread in its live thread manager. Call
+/// this first when opening an existing conversation.
+///
+/// `thread/read` no longer needs it. This doc used to say reads of an unresumed
+/// thread fail with "thread not found", and that is stale — verified against
+/// codex 0.146 by listing on a freshly-spawned server and reading 15 threads it
+/// had never resumed: all 15 returned their turns. [`thread_summary`] relies on
+/// that, so if a future upstream ever reinstates the restriction, the activity
+/// view's gists are what break first.
 pub fn thread_resume(service_key: &str, thread_id: &str) -> Result<()> {
     let client = client_for(service_key)?;
     let res = runtime::runtime()
@@ -1177,6 +1183,163 @@ pub fn thread_read(service_key: &str, thread_id: &str) -> Result<ThreadHistory> 
         sandbox_mode: runtime.sandbox_mode,
         config_confirmed: runtime.confirmed_by_update,
     })
+}
+
+/// A one-line gist of where a thread got to: the opening sentence of its most
+/// recent agent message, or `None` when it has produced none yet.
+///
+/// Exists as its own call rather than a field on `thread_list` because the
+/// upstream `thread/list` doesn't carry a summary — the only source is
+/// `thread/read`, which returns the WHOLE history. Doing that per row would be
+/// far too expensive, so the UI fetches these lazily for the rows it actually
+/// shows and this returns just the sentence rather than shipping a transcript
+/// across the bridge for the caller to trim.
+pub fn thread_summary(service_key: &str, thread_id: &str) -> Result<Option<String>> {
+    let client = client_for(service_key)?;
+    let res = runtime::runtime().block_on(
+        client.request("thread/read", json!({ "threadId": thread_id, "includeTurns": true })),
+    )?;
+    let turns = res
+        .get("thread")
+        .and_then(|t| t.get("turns"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    // Walk backwards: the newest agent message is the interesting one, and
+    // stopping at the first hit avoids parsing a long history twice over.
+    for turn in turns.iter().rev() {
+        let Some(items) = turn.get("items").and_then(Value::as_array) else {
+            continue;
+        };
+        for item in items.iter().rev() {
+            let is_agent = item
+                .get("type")
+                .or_else(|| item.get("itemType"))
+                .and_then(Value::as_str)
+                .is_some_and(|t| t.contains("agentMessage"));
+            if !is_agent {
+                continue;
+            }
+            if let Some(text) = agent_text_of(item) {
+                if let Some(line) = first_sentence(&text) {
+                    return Ok(Some(line));
+                }
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// The text of an `agentMessage` item, whichever shape the server used.
+fn agent_text_of(item: &Value) -> Option<String> {
+    for key in ["text", "message", "content"] {
+        if let Some(s) = item.get(key).and_then(Value::as_str) {
+            if !s.trim().is_empty() {
+                return Some(s.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// The first sentence of `text`, collapsed to one line and length-capped.
+///
+/// Markdown structure is stripped rather than rendered: this lands in a
+/// two-line list row, where a heading marker or bullet would read as noise.
+fn first_sentence(text: &str) -> Option<String> {
+    let flat = text
+        .lines()
+        .map(str::trim)
+        // Skip fences, headings and blank lines — a summary that opens with
+        // "```" or "##" tells the reader nothing.
+        .filter(|l| !l.is_empty() && !l.starts_with("```") && !l.starts_with('#'))
+        .map(|l| l.trim_start_matches(['-', '*', '>', ' ']).trim())
+        .filter(|l| !l.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let flat = flat.trim();
+    if flat.is_empty() {
+        return None;
+    }
+    // Cut at the first sentence end (CJK punctuation included, since the app is
+    // used in Chinese), else fall back to a hard cap.
+    const MAX: usize = 160;
+    let chars: Vec<char> = flat.chars().collect();
+    let mut out = String::new();
+    for (i, ch) in chars.iter().enumerate() {
+        out.push(*ch);
+        if is_sentence_end(&chars, i) {
+            break;
+        }
+        if out.chars().count() >= MAX {
+            out.push('…');
+            break;
+        }
+    }
+    Some(out.trim().to_string())
+}
+
+/// Whether `chars[i]` ends a sentence.
+///
+/// CJK terminators always do. An ASCII `.` needs BOTH sides to agree:
+///
+/// * what follows looks like a break — end of text, or a space then a
+///   capital/CJK character. Keying on this (rather than on how much text came
+///   before) is what keeps "v1.2 已发布。" from being cut at the version dot; a
+///   length floor would also have swallowed the short sentence after it.
+/// * the word it closes isn't a known abbreviation. Looking only forward made
+///   "Dr. Smith fixed the issue." summarize to "Dr." — a capitalised proper
+///   noun after an abbreviation is ordinary English, not a sentence boundary.
+fn is_sentence_end(chars: &[char], i: usize) -> bool {
+    match chars[i] {
+        '。' | '！' | '？' => true,
+        '.' | '!' | '?' => {
+            let breaks_after = match chars.get(i + 1) {
+                None => true,
+                Some(' ') => chars
+                    .get(i + 2)
+                    .is_none_or(|c| c.is_uppercase() || !c.is_ascii()),
+                _ => false,
+            };
+            // `!`/`?` are never part of an abbreviation, so only `.` looks back.
+            breaks_after && (chars[i] != '.' || !closes_abbreviation(chars, i))
+        },
+        _ => false,
+    }
+}
+
+/// Abbreviations whose trailing period is not a sentence end. Lowercase,
+/// without the final dot; a multi-dot form like `u.s.` is matched whole.
+const ABBREVIATIONS: &[&str] = &[
+    "mr", "mrs", "ms", "dr", "prof", "sr", "jr", "st", "vs", "etc", "eg", "ie", "e.g", "i.e",
+    "approx", "no", "fig", "al", "inc", "ltd", "co", "corp", "dept", "est", "min", "max", "u.s",
+    "u.k", "a.m", "p.m", "cf", "resp", "ca",
+];
+
+/// Whether the `.` at `chars[i]` closes a token in [`ABBREVIATIONS`].
+///
+/// Walks back over the word, keeping interior dots so `U.S.` and `e.g.` match
+/// as single tokens rather than as a bare trailing `s` / `g`. A single-letter
+/// word counts too: `A. Smith` is an initial, not a sentence.
+fn closes_abbreviation(chars: &[char], i: usize) -> bool {
+    let mut start = i;
+    while start > 0 {
+        let prev = chars[start - 1];
+        if prev.is_alphanumeric() || prev == '.' {
+            start -= 1;
+        } else {
+            break;
+        }
+    }
+    if start == i {
+        return false; // a lone "." with no word before it
+    }
+    let word: String = chars[start..i].iter().collect::<String>().to_lowercase();
+    // "A." / "J." — an initial in a name, never a sentence end.
+    if word.chars().count() == 1 && word.chars().all(char::is_alphabetic) {
+        return true;
+    }
+    ABBREVIATIONS.contains(&word.as_str())
 }
 
 /// Extract `(tokens_in_context, context_window)` from a `tokenUsage` value
@@ -1884,6 +2047,86 @@ fn recursive_text(v: &Value) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn summary_takes_the_first_sentence_and_drops_markdown_scaffolding() {
+        // A heading / fence opener says nothing in a two-line list row.
+        let md =
+            "## 结论\n\n判断为 GitHub 解封后粉丝关系已恢复，但主页计数尚未同步。后续建议等待。";
+        assert_eq!(
+            first_sentence(md).as_deref(),
+            Some("判断为 GitHub 解封后粉丝关系已恢复，但主页计数尚未同步。")
+        );
+        // Bullets are flattened onto one line rather than kept as markers.
+        assert_eq!(first_sentence("- 已完成提交\n- 已推送").as_deref(), Some("已完成提交 已推送"));
+        // Nothing usable stays None instead of an empty row.
+        assert!(first_sentence("```\n\n#\n").is_none());
+    }
+
+    #[test]
+    fn summary_splits_english_but_not_abbreviations_or_versions() {
+        // A period followed by space + capital is a real boundary.
+        assert_eq!(
+            first_sentence("Pushed the fix. Docs follow.").as_deref(),
+            Some("Pushed the fix.")
+        );
+        // A version or decimal is not, even though it contains a period.
+        assert_eq!(
+            first_sentence("Bumped to 0.1.9 and tagged it").as_deref(),
+            Some("Bumped to 0.1.9 and tagged it")
+        );
+        // Trailing period with nothing after it still ends the sentence.
+        assert_eq!(first_sentence("Done.").as_deref(), Some("Done."));
+    }
+
+    #[test]
+    fn summary_keeps_going_past_an_abbreviation() {
+        // A capitalised word after an abbreviation is ordinary English, not a
+        // boundary. Looking only at the FOLLOWING character cut these to
+        // "Dr." / "U.S." / "E.g.", which told the reader nothing.
+        assert_eq!(
+            first_sentence("Dr. Smith fixed the issue.").as_deref(),
+            Some("Dr. Smith fixed the issue.")
+        );
+        assert_eq!(
+            first_sentence("U.S. Government policy changed.").as_deref(),
+            Some("U.S. Government policy changed.")
+        );
+        assert_eq!(
+            first_sentence("E.g. Use the builder.").as_deref(),
+            Some("E.g. Use the builder.")
+        );
+        // An initial in a name is the same shape as an abbreviation.
+        assert_eq!(
+            first_sentence("See A. Smith for details. That is all.").as_deref(),
+            Some("See A. Smith for details.")
+        );
+        // Mid-sentence abbreviations too, not just leading ones.
+        assert_eq!(
+            first_sentence("Added etc. handling. Shipped.").as_deref(),
+            Some("Added etc. handling.")
+        );
+        // …and a real boundary right after an abbreviation still splits: the
+        // abbreviation is the word before THIS period, not somewhere earlier.
+        assert_eq!(
+            first_sentence("Talked to Dr. Smith. Then shipped.").as_deref(),
+            Some("Talked to Dr. Smith.")
+        );
+    }
+
+    #[test]
+    fn summary_caps_a_runaway_sentence() {
+        // No sentence end for a long stretch: cut with an ellipsis rather than
+        // letting an entire paragraph into the row.
+        let long = "字".repeat(400);
+        let out = first_sentence(&long).expect("some text");
+        assert!(out.ends_with('…'), "{out}");
+        assert!(out.chars().count() <= 161, "{}", out.chars().count());
+        // An early period is NOT a sentence end (e.g. "v1.2"), so a short
+        // fragment keeps reading to something meaningful.
+        let out = first_sentence("v1.2 已发布。细节见文档。").expect("some text");
+        assert_eq!(out, "v1.2 已发布。");
+    }
     use super::*;
 
     #[test]

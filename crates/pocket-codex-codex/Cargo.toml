@@ -41,6 +41,9 @@ codex-config = { path = "../../deps/codex/codex-rs/config", optional = true }
 codex-utils-cli = { path = "../../deps/codex/codex-rs/utils/cli", optional = true }
 codex-protocol = { path = "../../deps/codex/codex-rs/protocol", optional = true }
 
+[dev-dependencies]
+tempfile = "3"
+
 [features]
 # Self-contained desktop: run codex in-process. External-codex (spawn) stays the
 # default path and is unaffected by this feature.

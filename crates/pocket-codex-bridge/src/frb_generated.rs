@@ -42,7 +42,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.12.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 1372735720;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -574599125;
 
 
 // Section: executor
@@ -1504,6 +1504,43 @@ fn wire__crate__api__bridge__app_thread_start_impl(
                             api_approval_policy,
                             api_sandbox,
                         )?;
+                        Ok(output_ok)
+                    })(),
+                )
+            }
+        },
+    )
+}
+fn wire__crate__api__bridge__app_thread_summary_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "app_thread_summary",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_service_key = <String>::sse_decode(&mut deserializer);
+            let api_thread_id = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
+                    (move || {
+                        let output_ok =
+                            crate::api::bridge::app_thread_summary(api_service_key, api_thread_id)?;
                         Ok(output_ok)
                     })(),
                 )
@@ -3931,78 +3968,79 @@ fn pde_ffi_dispatcher_primary_impl(
         37 => wire__crate__api__bridge__app_thread_read_impl(port, ptr, rust_vec_len, data_len),
         38 => wire__crate__api__bridge__app_thread_resume_impl(port, ptr, rust_vec_len, data_len),
         40 => wire__crate__api__bridge__app_thread_start_impl(port, ptr, rust_vec_len, data_len),
-        41 => wire__crate__api__bridge__app_turn_interrupt_impl(port, ptr, rust_vec_len, data_len),
-        42 => wire__crate__api__bridge__app_turn_start_impl(port, ptr, rust_vec_len, data_len),
-        44 => wire__crate__api__bridge__codex_auth_status_impl(port, ptr, rust_vec_len, data_len),
-        45 => wire__crate__api__bridge__codex_locate_impl(port, ptr, rust_vec_len, data_len),
-        46 => wire__crate__api__bridge__codex_login_cancel_impl(port, ptr, rust_vec_len, data_len),
-        47 => wire__crate__api__bridge__codex_login_chatgpt_start_impl(
+        41 => wire__crate__api__bridge__app_thread_summary_impl(port, ptr, rust_vec_len, data_len),
+        42 => wire__crate__api__bridge__app_turn_interrupt_impl(port, ptr, rust_vec_len, data_len),
+        43 => wire__crate__api__bridge__app_turn_start_impl(port, ptr, rust_vec_len, data_len),
+        45 => wire__crate__api__bridge__codex_auth_status_impl(port, ptr, rust_vec_len, data_len),
+        46 => wire__crate__api__bridge__codex_locate_impl(port, ptr, rust_vec_len, data_len),
+        47 => wire__crate__api__bridge__codex_login_cancel_impl(port, ptr, rust_vec_len, data_len),
+        48 => wire__crate__api__bridge__codex_login_chatgpt_start_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        48 => wire__crate__api__bridge__codex_logout_impl(port, ptr, rust_vec_len, data_len),
-        49 => {
+        49 => wire__crate__api__bridge__codex_logout_impl(port, ptr, rust_vec_len, data_len),
+        50 => {
             wire__crate__api__bridge__codex_prompt_variant_impl(port, ptr, rust_vec_len, data_len)
         },
-        50 => wire__crate__api__bridge__codex_set_prompt_variant_impl(
+        51 => wire__crate__api__bridge__codex_set_prompt_variant_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        51 => {
+        52 => {
             wire__crate__api__bridge__codex_setup_provider_impl(port, ptr, rust_vec_len, data_len)
         },
-        52 => wire__crate__api__bridge__codex_setup_status_impl(port, ptr, rust_vec_len, data_len),
-        53 => wire__crate__api__bridge__discover_services_impl(port, ptr, rust_vec_len, data_len),
-        54 => {
+        53 => wire__crate__api__bridge__codex_setup_status_impl(port, ptr, rust_vec_len, data_len),
+        54 => wire__crate__api__bridge__discover_services_impl(port, ptr, rust_vec_len, data_len),
+        55 => {
             wire__crate__api__bridge__embedded_codex_version_impl(port, ptr, rust_vec_len, data_len)
         },
-        55 => wire__crate__api__bridge__export_config_impl(port, ptr, rust_vec_len, data_len),
-        56 => wire__crate__api__bridge__get_config_impl(port, ptr, rust_vec_len, data_len),
-        58 => wire__crate__api__bridge__import_config_impl(port, ptr, rust_vec_len, data_len),
-        59 => wire__crate__api__simple__init_app_impl(port, ptr, rust_vec_len, data_len),
-        60 => wire__crate__api__bridge__init_bridge_impl(port, ptr, rust_vec_len, data_len),
-        61 => wire__crate__api__bridge__log_events_impl(port, ptr, rust_vec_len, data_len),
-        62 => wire__crate__api__bridge__meta_force_resume_impl(port, ptr, rust_vec_len, data_len),
-        63 => wire__crate__api__bridge__meta_list_dir_impl(port, ptr, rust_vec_len, data_len),
-        64 => wire__crate__api__bridge__meta_list_files_impl(port, ptr, rust_vec_len, data_len),
-        65 => wire__crate__api__bridge__meta_project_config_impl(port, ptr, rust_vec_len, data_len),
-        66 => wire__crate__api__bridge__meta_read_file_impl(port, ptr, rust_vec_len, data_len),
-        67 => {
+        56 => wire__crate__api__bridge__export_config_impl(port, ptr, rust_vec_len, data_len),
+        57 => wire__crate__api__bridge__get_config_impl(port, ptr, rust_vec_len, data_len),
+        59 => wire__crate__api__bridge__import_config_impl(port, ptr, rust_vec_len, data_len),
+        60 => wire__crate__api__simple__init_app_impl(port, ptr, rust_vec_len, data_len),
+        61 => wire__crate__api__bridge__init_bridge_impl(port, ptr, rust_vec_len, data_len),
+        62 => wire__crate__api__bridge__log_events_impl(port, ptr, rust_vec_len, data_len),
+        63 => wire__crate__api__bridge__meta_force_resume_impl(port, ptr, rust_vec_len, data_len),
+        64 => wire__crate__api__bridge__meta_list_dir_impl(port, ptr, rust_vec_len, data_len),
+        65 => wire__crate__api__bridge__meta_list_files_impl(port, ptr, rust_vec_len, data_len),
+        66 => wire__crate__api__bridge__meta_project_config_impl(port, ptr, rust_vec_len, data_len),
+        67 => wire__crate__api__bridge__meta_read_file_impl(port, ptr, rust_vec_len, data_len),
+        68 => {
             wire__crate__api__bridge__meta_read_thread_image_impl(port, ptr, rust_vec_len, data_len)
         },
-        68 => wire__crate__api__bridge__meta_retry_events_impl(port, ptr, rust_vec_len, data_len),
-        69 => {
+        69 => wire__crate__api__bridge__meta_retry_events_impl(port, ptr, rust_vec_len, data_len),
+        70 => {
             wire__crate__api__bridge__meta_session_liveness_impl(port, ptr, rust_vec_len, data_len)
         },
-        70 => wire__crate__api__bridge__meta_session_transcript_impl(
+        71 => wire__crate__api__bridge__meta_session_transcript_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        71 => wire__crate__api__bridge__meta_sessions_impl(port, ptr, rust_vec_len, data_len),
-        72 => wire__crate__api__bridge__meta_set_project_config_impl(
+        72 => wire__crate__api__bridge__meta_sessions_impl(port, ptr, rust_vec_len, data_len),
+        73 => wire__crate__api__bridge__meta_set_project_config_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        73 => {
+        74 => {
             wire__crate__api__bridge__meta_thread_config_get_impl(port, ptr, rust_vec_len, data_len)
         },
-        74 => {
+        75 => {
             wire__crate__api__bridge__meta_thread_config_set_impl(port, ptr, rust_vec_len, data_len)
         },
-        75 => wire__crate__api__bridge__meta_upload_file_impl(port, ptr, rust_vec_len, data_len),
-        76 => wire__crate__api__bridge__meta_write_file_impl(port, ptr, rust_vec_len, data_len),
-        77 => wire__crate__api__bridge__set_key_impl(port, ptr, rust_vec_len, data_len),
-        78 => wire__crate__api__bridge__set_locale_impl(port, ptr, rust_vec_len, data_len),
-        79 => wire__crate__api__bridge__set_relay_impl(port, ptr, rust_vec_len, data_len),
-        80 => wire__crate__api__bridge__subscriptions_impl(port, ptr, rust_vec_len, data_len),
+        76 => wire__crate__api__bridge__meta_upload_file_impl(port, ptr, rust_vec_len, data_len),
+        77 => wire__crate__api__bridge__meta_write_file_impl(port, ptr, rust_vec_len, data_len),
+        78 => wire__crate__api__bridge__set_key_impl(port, ptr, rust_vec_len, data_len),
+        79 => wire__crate__api__bridge__set_locale_impl(port, ptr, rust_vec_len, data_len),
+        80 => wire__crate__api__bridge__set_relay_impl(port, ptr, rust_vec_len, data_len),
+        81 => wire__crate__api__bridge__subscriptions_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -4017,8 +4055,8 @@ fn pde_ffi_dispatcher_sync_impl(
     match func_id {
         19 => wire__crate__api__bridge__app_is_connected_impl(ptr, rust_vec_len, data_len),
         39 => wire__crate__api__bridge__app_thread_runtime_config_impl(ptr, rust_vec_len, data_len),
-        43 => wire__crate__api__simple__bridge_version_impl(ptr, rust_vec_len, data_len),
-        57 => wire__crate__api__simple__greet_impl(ptr, rust_vec_len, data_len),
+        44 => wire__crate__api__simple__bridge_version_impl(ptr, rust_vec_len, data_len),
+        58 => wire__crate__api__simple__greet_impl(ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
