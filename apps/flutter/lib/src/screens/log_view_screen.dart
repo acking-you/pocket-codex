@@ -5,6 +5,7 @@ import 'package:pocket_codex/src/widgets/window_title_bar.dart';
 import 'package:flutter/services.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
+import 'package:pocket_codex/src/fonts.dart';
 import 'package:pocket_codex/src/log_manager.dart';
 
 /// Real-time viewer for the app's captured runtime logs (`tracing` events from
@@ -265,7 +266,10 @@ class _LogViewScreenState extends State<LogViewScreen> {
               padding: const EdgeInsets.only(bottom: 3),
               child: SelectableText.rich(
                 TextSpan(
-                  style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+                  style: const TextStyle(
+                    fontFamily: monoFontFamily,
+                    fontSize: 12,
+                  ),
                   children: [
                     TextSpan(
                       text: '${log.level.padRight(5)} ',

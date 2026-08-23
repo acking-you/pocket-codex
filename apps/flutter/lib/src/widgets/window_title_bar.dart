@@ -35,7 +35,16 @@ class WindowTitleBar extends StatelessWidget implements PreferredSizeWidget {
     this.actions,
     this.bottom,
     this.automaticallyImplyLeading = true,
+    this.backgroundColor,
+    this.foregroundColor,
   });
+
+  /// Overrides the themed bar colour — for a surface that isn't the page, like
+  /// the black image viewer. Null keeps the theme's flat app-bar colour.
+  final Color? backgroundColor;
+
+  /// Overrides the themed ink for the bar's title and icons.
+  final Color? foregroundColor;
 
   /// Leading widget (e.g. a hamburger or back button), as on [AppBar].
   final Widget? leading;
@@ -68,6 +77,8 @@ class WindowTitleBar extends StatelessWidget implements PreferredSizeWidget {
         actions: actions,
         bottom: bottom,
         automaticallyImplyLeading: automaticallyImplyLeading,
+        backgroundColor: backgroundColor,
+        foregroundColor: foregroundColor,
       );
     }
 
@@ -96,6 +107,8 @@ class WindowTitleBar extends StatelessWidget implements PreferredSizeWidget {
 
     return AppBar(
       automaticallyImplyLeading: false,
+      backgroundColor: backgroundColor,
+      foregroundColor: foregroundColor,
       leadingWidth: effectiveLeading == null
           ? null
           : leadInset + kToolbarHeight,

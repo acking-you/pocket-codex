@@ -578,6 +578,9 @@ class ThreadItem {
     required this.title,
     required this.text,
     this.images = const [],
+    this.turnId = '',
+    this.turnCompletedAt,
+    this.turnDurationMs,
   });
 
   /// Item id.
@@ -597,6 +600,19 @@ class ThreadItem {
   /// inline; a host-local path renders as a filename chip. Empty for every
   /// other item kind.
   final List<String> images;
+
+  /// Id of the turn this item belongs to — the server's own boundary, since
+  /// `thread/read` nests items under their turn. Empty when unknown (an item
+  /// recovered from the live stream buffer, or read from a rollout file on
+  /// disk, neither of which carries a turn envelope).
+  final String turnId;
+
+  /// Unix seconds when this item's turn completed; null while it still runs, or
+  /// when the source carried no turn.
+  final int? turnCompletedAt;
+
+  /// This item's turn duration in milliseconds, when the server reported it.
+  final int? turnDurationMs;
 }
 
 /// A process holding a session's rollout file open — a would-be force-takeover
@@ -1097,6 +1113,14 @@ abstract interface class BridgeApi {
   /// uses this so a registered-but-dead app-server shows as unreachable instead
   /// of a false "online". A live session short-circuits to true.
   Future<bool> appProbe(String serviceKey);
+
+  /// Why [appProbe] found a service unreachable, or null when it is reachable.
+  ///
+  /// A bare false can only be reported as "the app-server didn't respond", which
+  /// is misleading when the tunnel answered and REFUSED the handshake — a relay
+  /// rejecting a missing or stale authentication code needs a different fix from
+  /// a dead backend, and the user can't tell them apart otherwise.
+  Future<String?> appProbeReason(String serviceKey);
 
   /// Probe whether an API proxy is actually reachable — its host answers a
   /// minimal HTTP request — rather than merely registered on the relay, so a

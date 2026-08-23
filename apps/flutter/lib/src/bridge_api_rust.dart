@@ -323,6 +323,10 @@ class RustBridgeApi implements BridgeApi {
       frb.appProbe(serviceKey: serviceKey);
 
   @override
+  Future<String?> appProbeReason(String serviceKey) =>
+      frb.appProbeReason(serviceKey: serviceKey);
+
+  @override
   Future<bool> apiProbe(String serviceKey) =>
       frb.apiProbe(serviceKey: serviceKey);
 
@@ -435,6 +439,9 @@ class RustBridgeApi implements BridgeApi {
               title: i.title,
               text: i.text,
               images: i.images,
+              turnId: i.turnId,
+              turnCompletedAt: i.turnCompletedAt?.toInt(),
+              turnDurationMs: i.turnDurationMs?.toInt(),
             ),
           )
           .toList(),
@@ -626,6 +633,9 @@ class RustBridgeApi implements BridgeApi {
             title: i.title,
             text: i.text,
             images: i.images,
+            turnId: i.turnId,
+            turnCompletedAt: i.turnCompletedAt?.toInt(),
+            turnDurationMs: i.turnDurationMs?.toInt(),
           ),
         )
         .toList();
@@ -693,6 +703,9 @@ class RustBridgeApi implements BridgeApi {
             title: i.title,
             text: i.text,
             images: i.images,
+            turnId: i.turnId,
+            turnCompletedAt: i.turnCompletedAt?.toInt(),
+            turnDurationMs: i.turnDurationMs?.toInt(),
           ),
         )
         .toList();

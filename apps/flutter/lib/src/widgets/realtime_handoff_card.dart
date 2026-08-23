@@ -25,7 +25,7 @@ class RealtimeHandoffCard extends StatelessWidget {
       width: double.infinity,
       margin: const EdgeInsets.symmetric(vertical: 4),
       decoration: BoxDecoration(
-        color: scheme.surfaceContainerHighest.withValues(alpha: 0.5),
+        color: scheme.surfaceContainerLow,
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: scheme.outlineVariant, width: 0.5),
       ),

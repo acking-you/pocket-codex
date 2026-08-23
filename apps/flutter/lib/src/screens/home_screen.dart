@@ -259,10 +259,21 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       String? lastError;
       for (final s in ranked) {
         try {
-          if (await api.appProbe(s.key)) {
+          // Ask WHY rather than just whether: an unreachable service that
+          // answered and refused us needs a different fix from a dead one, and
+          // the generic fallback below can't tell the user which it was.
+          final reason = await api.appProbeReason(s.key);
+          if (reason == null) {
             target = s;
             break;
           }
+          if (!mounted) return;
+          final l10n = AppLocalizations.of(context);
+          lastError = isRelayAuthRejection(reason)
+              ? l10n.unreachableAuthRejected
+              : isProbeTimeout(reason)
+              ? l10n.unreachableSilent
+              : friendlyError(reason);
         } catch (e) {
           lastError = friendlyError(e);
         }

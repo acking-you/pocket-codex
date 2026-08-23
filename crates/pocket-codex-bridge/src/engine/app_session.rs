@@ -102,6 +102,19 @@ pub struct ThreadItem {
     /// inline; a host-local path (from a `localImage` input) renders as a
     /// filename chip. Empty for every other item kind.
     pub images: Vec<String>,
+    /// Id of the turn this item belongs to.
+    ///
+    /// `thread/read` returns items nested under their turn, so this is the
+    /// server's own turn boundary rather than something inferred from the item
+    /// sequence — the UI groups one turn's reply into one block with it. Empty
+    /// for an item recovered from the live stream buffer, which arrives outside
+    /// any turn payload.
+    pub turn_id: String,
+    /// Unix seconds when this item's turn completed; `None` while it is still
+    /// running (or for a buffered item with no turn).
+    pub turn_completed_at: Option<i64>,
+    /// How long this item's turn took, in milliseconds, when the server knows.
+    pub turn_duration_ms: Option<i64>,
 }
 
 struct Session {
@@ -314,6 +327,24 @@ fn buffer_item(transcript: &Mutex<HashMap<String, Vec<ThreadItem>>>, inbound: &I
     // proposal message re-reads as a misplaced plan. Buffer the same singleton
     // `plan` item `map_event` builds (stable id per turn) so `thread_read`
     // restores it at the tail, where it lived.
+    // An item notification names its turn (`turnId`) and, on completion, when
+    // the item itself finished (`completedAtMs`). The turn's own duration isn't
+    // known until it closes, so that arrives later via `thread/read`.
+    //
+    // Read `turnId` only — NOT via `extract_turn_id`, whose `id` fallback would
+    // pick up this notification's own item id here.
+    let live_turn = TurnStamp {
+        id: params
+            .get("turnId")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+        completed_at: params
+            .get("completedAtMs")
+            .and_then(Value::as_i64)
+            .map(|ms| ms / 1000),
+        duration_ms: None,
+    };
     let parsed = if inbound.method == "turn/plan/updated" {
         ThreadItem {
             id: plan_item_id(params),
@@ -321,9 +352,15 @@ fn buffer_item(transcript: &Mutex<HashMap<String, Vec<ThreadItem>>>, inbound: &I
             title: String::new(),
             text: encode_plan(params),
             images: Vec::new(),
+            turn_id: live_turn.id.clone(),
+            turn_completed_at: None,
+            turn_duration_ms: None,
         }
     } else {
-        let Some(parsed) = params.get("item").and_then(parse_item) else {
+        let Some(parsed) = params
+            .get("item")
+            .and_then(|i| parse_turn_item(i, &live_turn))
+        else {
             return;
         };
         parsed
@@ -384,41 +421,52 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
 /// died — the registration is a hollow shell. This verifies the real backend by
 /// opening a transient pb-mapper tunnel and performing the `initialize`
 /// handshake (bounded by [`PROBE_TIMEOUT`] so a dead backend can't hang it),
-/// then tearing the tunnel down. A live session counts as reachable. Returns
-/// `false` on any failure: dead backend, relay forward failure, or timeout.
-pub fn probe(service_key: String, local_port: u16, relay: String) -> bool {
+/// then tearing the tunnel down. A live session counts as reachable.
+///
+/// Returns the failure REASON (`None` when reachable) rather than a bare bool:
+/// a far end that answered and refused the handshake needs a different remedy
+/// from one that is simply down, and the UI can only say so if the transport's
+/// own words survive this far.
+pub fn probe_reason(service_key: String, local_port: u16, relay: String) -> Option<String> {
     if is_connected(&service_key) {
-        return true;
+        return None;
     }
     // Subscribe through a TRANSIENT tunnel that isn't in the shared registry,
     // so this probe can never reuse a real connection's tunnel nor abort it on
     // teardown — a `connect`/`appConnect` racing this probe for the same
     // service key keeps its own separate entry.
-    let Ok((local_addr, handle)) =
-        runtime::subscribe_transient(service_key.clone(), local_port, relay)
-    else {
-        return false;
-    };
-    let ok = probe_endpoint(&local_addr);
+    let (local_addr, handle) =
+        match runtime::subscribe_transient(service_key.clone(), local_port, relay) {
+            Ok(v) => v,
+            Err(e) => return Some(format!("{e:#}")),
+        };
+    let reason = probe_endpoint_error(&local_addr);
     // Tear down ONLY this probe's own transient tunnel.
     handle.abort();
-    ok
+    reason
 }
 
-/// Account-mode analogue of [`probe`]: reachability via a transient broker
-/// tunnel.
-pub fn probe_account(service_key: String, local_port: u16, support_dir: &std::path::Path) -> bool {
+/// Account-mode analogue of [`probe_reason`]: reachability via a transient
+/// broker tunnel, reporting WHY it failed so the UI can name the reason instead
+/// of assuming the far end is down. `None` means reachable.
+pub fn probe_account_reason(
+    service_key: String,
+    local_port: u16,
+    support_dir: &std::path::Path,
+) -> Option<String> {
     if is_connected(&service_key) {
-        return true;
+        return None;
     }
-    let Ok((local_addr, handle)) =
-        runtime::subscribe_account_transient(service_key.clone(), local_port, support_dir)
-    else {
-        return false;
-    };
-    let ok = probe_endpoint(&local_addr);
+    let (local_addr, handle) =
+        match runtime::subscribe_account_transient(service_key.clone(), local_port, support_dir) {
+            Ok(v) => v,
+            // The tunnel itself never came up: a relay/broker problem, which is
+            // a different failure from "the tunnel opened and the far end said no".
+            Err(e) => return Some(format!("{e:#}")),
+        };
+    let reason = probe_endpoint_error(&local_addr);
     handle.abort();
-    ok
+    reason
 }
 
 /// Open a transient JSON-RPC client over `ws://<local_addr>` and run the
@@ -455,6 +503,45 @@ pub fn probe_endpoint(local_addr: &str) -> bool {
         Ok::<(), anyhow::Error>(())
     });
     outcome.is_ok()
+}
+
+/// Why a probe failed, or `None` when it succeeded.
+///
+/// [`probe_endpoint`] collapses every failure to `false`, which left the UI
+/// with nothing to say beyond "the app-server did not respond" — wrong, and
+/// unhelpful, when the tunnel actually answered and REFUSED us (a relay that
+/// rejects the handshake, e.g. a missing or stale authentication code, is the
+/// common case).
+pub fn probe_endpoint_error(local_addr: &str) -> Option<String> {
+    let ws_url = format!("ws://{local_addr}");
+    let outcome = runtime::runtime().block_on(async {
+        let (client, _notify_rx) = tokio::time::timeout(PROBE_TIMEOUT, AppClient::connect(&ws_url))
+            .await
+            .context("probe: connect timed out")??;
+        tokio::time::timeout(
+            PROBE_TIMEOUT,
+            client.request(
+                "initialize",
+                json!({
+                    "clientInfo": {
+                        "name": "pocket-codex",
+                        "title": "Pocket-Codex",
+                        "version": env!("CARGO_PKG_VERSION"),
+                    },
+                    "capabilities": { "experimentalApi": true },
+                }),
+            ),
+        )
+        .await
+        .context("probe: initialize timed out")??;
+        Ok::<(), anyhow::Error>(())
+    });
+    match outcome {
+        Ok(()) => None,
+        // The chain carries the transport's own words (the relay's HTTP status
+        // and body), which is the only place the real reason survives.
+        Err(e) => Some(format!("{e:#}")),
+    }
 }
 
 /// Account-mode reachability of an API proxy: a transient broker tunnel + a
@@ -1091,12 +1178,16 @@ pub fn thread_read(service_key: &str, thread_id: &str) -> Result<ThreadHistory> 
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
+    // Flattened for the UI, but each item keeps its turn's id and timing: the
+    // nesting IS the server's turn boundary, and dropping it forced the UI to
+    // re-infer turns from the item sequence and to invent its own timestamps.
     let mut items = Vec::new();
     for turn in &turns {
         let turn_items = turn.get("items").and_then(Value::as_array);
         let Some(turn_items) = turn_items else { continue };
+        let stamp = TurnStamp::of(turn);
         for item in turn_items {
-            if let Some(parsed) = parse_item(item) {
+            if let Some(parsed) = parse_turn_item(item, &stamp) {
                 items.push(parsed);
             }
         }
@@ -1818,8 +1909,42 @@ fn error_message(params: &Value) -> Option<String> {
         .map(str::to_string)
 }
 
-/// Parse one `ThreadItem` JSON value into a [`ThreadItem`].
+/// [`parse_turn_item`] with no turn envelope — for tests that exercise item
+/// parsing itself, where the turn stamp is not what is under test.
+#[cfg(test)]
 fn parse_item(item: &Value) -> Option<ThreadItem> {
+    parse_turn_item(item, &TurnStamp::default())
+}
+
+/// The turn-level facts every item in a `thread/read` turn payload inherits.
+///
+/// `ThreadItem` carries no time of its own in the protocol — the timestamps
+/// live on the enclosing `Turn` (`startedAt` / `completedAt` / `durationMs`),
+/// so they have to be stamped onto each item as the turns are flattened or
+/// they are lost.
+#[derive(Clone, Debug, Default)]
+struct TurnStamp {
+    id: String,
+    completed_at: Option<i64>,
+    duration_ms: Option<i64>,
+}
+
+impl TurnStamp {
+    /// Read the stamp off a `Turn` object.
+    fn of(turn: &Value) -> Self {
+        Self {
+            id: turn
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            completed_at: turn.get("completedAt").and_then(Value::as_i64),
+            duration_ms: turn.get("durationMs").and_then(Value::as_i64),
+        }
+    }
+}
+
+fn parse_turn_item(item: &Value, turn: &TurnStamp) -> Option<ThreadItem> {
     item.get("type").and_then(Value::as_str)?;
     let id = item
         .get("id")
@@ -1833,6 +1958,9 @@ fn parse_item(item: &Value) -> Option<ThreadItem> {
         title,
         text,
         images: item_images(item),
+        turn_id: turn.id.clone(),
+        turn_completed_at: turn.completed_at,
+        turn_duration_ms: turn.duration_ms,
     })
 }
 
@@ -2552,5 +2680,34 @@ mod tests {
         assert_eq!(parse_item(&user).unwrap().text, "hi there");
         assert_eq!(parse_item(&agent).unwrap().item_type, "agentMessage");
         assert_eq!(parse_item(&agent).unwrap().text, "hello");
+    }
+
+    #[test]
+    fn items_inherit_their_turns_id_and_timing() {
+        // `thread/read` nests items under their turn, and ONLY the turn carries
+        // timing (`ThreadItem` has no time field in the protocol). Flattening
+        // for the UI must therefore stamp each item, or the turn boundary and
+        // every timestamp are lost — which is what forced the UI to re-infer
+        // turns from item adjacency and to invent its own clock.
+        let turn = json!({
+            "id": "turn-7",
+            "completedAt": 1_770_000_000_i64,
+            "durationMs": 4_200_i64,
+            "items": [{"type":"agentMessage","id":"a1","text":"part one"}],
+        });
+        let stamp = TurnStamp::of(&turn);
+        let item = &turn["items"][0];
+        let parsed = parse_turn_item(item, &stamp).expect("parses");
+        assert_eq!(parsed.turn_id, "turn-7");
+        assert_eq!(parsed.turn_completed_at, Some(1_770_000_000));
+        assert_eq!(parsed.turn_duration_ms, Some(4_200));
+
+        // A turn still running reports no completion time, and the UI has to be
+        // able to tell that apart from "completed at epoch".
+        let running = json!({"id":"turn-8","items":[]});
+        let stamp = TurnStamp::of(&running);
+        assert_eq!(stamp.id, "turn-8");
+        assert_eq!(stamp.completed_at, None);
+        assert_eq!(stamp.duration_ms, None);
     }
 }

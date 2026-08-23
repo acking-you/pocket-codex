@@ -129,7 +129,7 @@ MarkdownStyleSheet _buildMarkdownStyle(BuildContext context, bool muted) {
     tableCellsPadding: const EdgeInsets.fromLTRB(0, 10, 28, 10),
     tablePadding: const EdgeInsets.only(bottom: 10),
     code: theme.textTheme.bodyMedium?.copyWith(
-      fontFamily: 'monospace',
+      fontFamily: monoFontFamily,
       fontFamilyFallback: monoCjkFallback,
       backgroundColor: scheme.surfaceContainerHighest,
     ),
@@ -173,7 +173,7 @@ class _CodeBlockBuilder extends MarkdownElementBuilder {
         ? classes.substring('language-'.length)
         : '';
     final mono = TextStyle(
-      fontFamily: 'monospace',
+      fontFamily: monoFontFamily,
       fontFamilyFallback: monoCjkFallback,
       fontSize: 12.5,
       height: 1.5,
@@ -197,7 +197,7 @@ class _CodeBlockBuilder extends MarkdownElementBuilder {
               Text(
                 language.isEmpty ? 'text' : language,
                 style: TextStyle(
-                  fontFamily: 'monospace',
+                  fontFamily: monoFontFamily,
                   fontFamilyFallback: monoCjkFallback,
                   fontSize: 11,
                   color: scheme.onSurfaceVariant,

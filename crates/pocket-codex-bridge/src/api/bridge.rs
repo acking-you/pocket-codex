@@ -590,6 +590,15 @@ pub struct ThreadItemDto {
     /// inline; a host-local path (from a `localImage` input) renders as a
     /// filename chip. Empty for every other item kind.
     pub images: Vec<String>,
+    /// Id of the turn this item belongs to — the server's own turn boundary
+    /// (`thread/read` nests items under their turn), so the UI can render one
+    /// turn's reply as one block instead of inferring boundaries from the item
+    /// sequence. Empty when the item came from the live stream buffer.
+    pub turn_id: String,
+    /// Unix seconds when this item's turn completed; `None` while it runs.
+    pub turn_completed_at: Option<i64>,
+    /// This item's turn duration in milliseconds, when the server reports it.
+    pub turn_duration_ms: Option<i64>,
 }
 
 /// A thread's recovered history + whether a turn is still running, plus the
@@ -681,13 +690,25 @@ pub fn app_disconnect(service_key: String) {
 /// of a false "online". Opens a transient tunnel + `initialize` with a timeout,
 /// then tears it down; a live session short-circuits to `true`.
 pub fn app_probe(service_key: String) -> Result<bool> {
+    Ok(app_probe_reason(service_key)?.is_none())
+}
+
+/// Why [`app_probe`] considers a service unreachable, or `None` when it is
+/// reachable.
+///
+/// A bare `false` made the UI say "the app-server did not respond", which is
+/// wrong whenever the tunnel DID answer and refused us — a relay rejecting the
+/// handshake (missing or stale authentication code) is the common case, and it
+/// needs a different fix from a dead backend. This hands the transport's own
+/// words to the UI so it can name the actual problem.
+pub fn app_probe_reason(service_key: String) -> Result<Option<String>> {
     let dir = runtime::support_dir()?;
     if config::load_config(&dir)?.account_mode() == Mode::Account {
-        return Ok(app_session::probe_account(service_key, 0, &dir));
+        return Ok(app_session::probe_account_reason(service_key, 0, &dir));
     }
     apply_key()?;
     let relay = current_relay()?;
-    Ok(app_session::probe(service_key, 0, relay))
+    Ok(app_session::probe_reason(service_key, 0, relay))
 }
 
 /// Probe whether an API proxy is actually REACHABLE — its host answers a
@@ -948,6 +969,9 @@ pub fn app_thread_read(service_key: String, thread_id: String) -> Result<ThreadH
                 title: i.title,
                 text: i.text,
                 images: i.images,
+                turn_id: i.turn_id,
+                turn_completed_at: i.turn_completed_at,
+                turn_duration_ms: i.turn_duration_ms,
             })
             .collect(),
         running: h.running,
@@ -1210,6 +1234,11 @@ pub fn app_local_session_transcript(thread_id: String) -> Result<Vec<ThreadItemD
             title: i.title,
             text: i.text,
             images: i.images,
+            // A rollout file on disk has no turn envelope, so these read as
+            // "unknown" rather than being reconstructed from the item order.
+            turn_id: String::new(),
+            turn_completed_at: None,
+            turn_duration_ms: None,
         })
         .collect())
 }
@@ -1334,6 +1363,11 @@ pub fn meta_session_transcript(
             title: i.title,
             text: i.text,
             images: i.images,
+            // A rollout file on disk has no turn envelope, so these read as
+            // "unknown" rather than being reconstructed from the item order.
+            turn_id: String::new(),
+            turn_completed_at: None,
+            turn_duration_ms: None,
         })
         .collect())
 }

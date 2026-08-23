@@ -156,4 +156,23 @@ void main() {
       debugDefaultTargetPlatformOverride = null;
     }
   });
+
+  testWidgets('the viewer keeps the Windows caption buttons', (tester) async {
+    // The viewer fills the window, so it replaces the title bar. On Windows the
+    // native caption buttons are gone (TitleBarStyle.hidden), so a viewer that
+    // doesn't redraw them leaves the window with no way to be closed, minimised
+    // or maximised for as long as an image is open.
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    try {
+      await _openViewer(tester, _png());
+      // Asserted by tooltip, not by icon: the zoom bar's own −/+ controls reuse
+      // Icons.remove, so an icon finder can't tell them from a caption button.
+      final l10n = await AppLocalizations.delegate.load(const Locale('en'));
+      expect(find.byTooltip(l10n.windowMinimize), findsOneWidget);
+      expect(find.byTooltip(l10n.windowMaximize), findsOneWidget);
+      expect(find.byTooltip(l10n.windowClose), findsOneWidget);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
 }

@@ -1184,6 +1184,18 @@ abstract class AppLocalizations {
   /// **'Still registered on the relay, but the remote app-server isn\'t responding — it may not be running, or has crashed.'**
   String get unreachableReason;
 
+  /// No description provided for @unreachableAuthRejected.
+  ///
+  /// In en, this message translates to:
+  /// **'The relay refused the connection: the authentication code is missing or no longer valid. The tunnel itself works and the remote host is not down — sign in again, or re-enter the relay key, under Manage services.'**
+  String get unreachableAuthRejected;
+
+  /// No description provided for @unreachableSilent.
+  ///
+  /// In en, this message translates to:
+  /// **'The tunnel is up, but the remote app-server didn\'t answer before the timeout — it may still be starting, wedged, or gone.'**
+  String get unreachableSilent;
+
   /// No description provided for @apiUnreachableReason.
   ///
   /// In en, this message translates to:
@@ -1225,6 +1237,18 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'View changes'**
   String get viewDiff;
+
+  /// No description provided for @loadingDiff.
+  ///
+  /// In en, this message translates to:
+  /// **'Loading changes…'**
+  String get loadingDiff;
+
+  /// No description provided for @cancelDiffLoad.
+  ///
+  /// In en, this message translates to:
+  /// **'Cancel loading changes'**
+  String get cancelDiffLoad;
 
   /// No description provided for @changesTitle.
   ///

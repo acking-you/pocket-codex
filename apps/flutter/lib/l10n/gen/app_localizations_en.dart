@@ -606,6 +606,14 @@ class AppLocalizationsEn extends AppLocalizations {
       'Still registered on the relay, but the remote app-server isn\'t responding — it may not be running, or has crashed.';
 
   @override
+  String get unreachableAuthRejected =>
+      'The relay refused the connection: the authentication code is missing or no longer valid. The tunnel itself works and the remote host is not down — sign in again, or re-enter the relay key, under Manage services.';
+
+  @override
+  String get unreachableSilent =>
+      'The tunnel is up, but the remote app-server didn\'t answer before the timeout — it may still be starting, wedged, or gone.';
+
+  @override
   String get apiUnreachableReason =>
       'Still registered on the relay, but the remote API service isn\'t responding — it may not be running, or has crashed.';
 
@@ -629,6 +637,12 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get viewDiff => 'View changes';
+
+  @override
+  String get loadingDiff => 'Loading changes…';
+
+  @override
+  String get cancelDiffLoad => 'Cancel loading changes';
 
   @override
   String get changesTitle => 'Changes';

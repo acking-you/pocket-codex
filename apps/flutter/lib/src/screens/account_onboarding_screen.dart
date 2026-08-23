@@ -90,16 +90,22 @@ class _AccountOnboardingState extends ConsumerState<AccountOnboardingScreen> {
         return;
       }
     } on PlatformException catch (e) {
-      // Android Custom Tabs have no timeout: when GitHub won't load (a flaky /
-      // proxied network where the in-app browser tab can't reach github.com),
-      // the user closes the tab and we get CANCELED. Don't fail silently —
-      // point them at the device code, which reaches GitHub through the backend
-      // and stays reliable when the in-app browser can't.
+      // The browser hand-off didn't come back. CANCELED is the user dismissing
+      // the tab — on Android that is also what a GitHub page that won't load
+      // looks like, since a Custom Tab has no timeout of its own. Either way the
+      // remedy is the same, and it is the one thing that still works when the
+      // in-app browser can't reach GitHub: the device code, which goes through
+      // the backend.
       failure = e.code == 'CANCELED'
           ? l10n.accountWebTrouble
           : friendlyError(e);
     } catch (e) {
-      failure = friendlyError(e);
+      // Includes the desktop loopback listener giving up (see the timeout in
+      // web_authenticator.dart) and a redirect that never arrived because the
+      // browser opened a profile that isn't signed in. Lead with the remedy, but
+      // keep the cause: a raw transport error is what makes a real bug
+      // diagnosable when someone reports it.
+      failure = '${l10n.accountWebTrouble}\n\n${friendlyError(e)}';
     }
     if (mounted) {
       setState(() {
@@ -216,6 +222,23 @@ class _AccountOnboardingState extends ConsumerState<AccountOnboardingScreen> {
   /// still in flight, degrading to "not seen" — showing the guide twice is a
   /// far smaller cost than never showing it.
   Future<void> _goAfterSignIn() async {
+    // The token was just written to config.toml by Rust, but `configProvider`
+    // is a FutureProvider that already resolved — without invalidating it every
+    // screen we navigate to keeps reading the pre-login snapshot, so the app
+    // still believes nobody is signed in (`mode` stays off `account`, the
+    // Settings account section stays hidden, and the guide has no account to
+    // show). Await the refreshed value so the next route builds from it.
+    ref.invalidate(configProvider);
+    try {
+      await ref.read(configProvider.future).timeout(const Duration(seconds: 2));
+    } catch (_) {
+      // A slow/failed re-read must not strand the user on the login screen;
+      // the destination re-reads config itself.
+    }
+    if (!mounted) return;
+    // Service discovery and reachability were resolved against the old
+    // (tokenless) config too, so they'd report nothing available.
+    ref.invalidate(servicesProvider);
     var seen = ref.read(uiPrefsProvider).valueOrNull?.guideSeen;
     if (seen == null) {
       try {
@@ -280,17 +303,38 @@ class _AccountOnboardingState extends ConsumerState<AccountOnboardingScreen> {
                   ),
                   const SizedBox(height: 16),
                 ],
+                // Which sign-in leads depends on the platform, because the two
+                // idioms don't cost the same on each. A phone has one browser,
+                // shared cookies and a working app-redirect, so the tap-through
+                // is fewest steps. A desktop's redirect must round-trip through
+                // a loopback listener and often lands in a different browser
+                // profile than the one signed into GitHub; the device code has
+                // no redirect at all and reaches GitHub via the backend, which
+                // is why it stays reliable behind a proxy or VPN.
                 if (device == null) ...[
-                  FilledButton.icon(
-                    onPressed: _busy ? null : _startWeb,
-                    icon: const Icon(Icons.login),
-                    label: Text(l10n.accountSignInButton),
-                  ),
-                  const SizedBox(height: 4),
-                  TextButton(
-                    onPressed: _busy ? null : _startDevice,
-                    child: Text(l10n.accountUseDeviceCode),
-                  ),
+                  if (prefersDeviceCodeLogin) ...[
+                    FilledButton.icon(
+                      onPressed: _busy ? null : _startDevice,
+                      icon: const Icon(Icons.pin_outlined),
+                      label: Text(l10n.accountUseDeviceCode),
+                    ),
+                    const SizedBox(height: 4),
+                    TextButton(
+                      onPressed: _busy ? null : _startWeb,
+                      child: Text(l10n.accountSignInButton),
+                    ),
+                  ] else ...[
+                    FilledButton.icon(
+                      onPressed: _busy ? null : _startWeb,
+                      icon: const Icon(Icons.login),
+                      label: Text(l10n.accountSignInButton),
+                    ),
+                    const SizedBox(height: 4),
+                    TextButton(
+                      onPressed: _busy ? null : _startDevice,
+                      child: Text(l10n.accountUseDeviceCode),
+                    ),
+                  ],
                   if (_busy) ...[
                     const SizedBox(height: 12),
                     const Center(

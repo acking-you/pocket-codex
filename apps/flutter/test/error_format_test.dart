@@ -77,4 +77,30 @@ void main() {
       );
     });
   });
+
+  group('probe failure classification', () {
+    test('a relay auth rejection is told apart from a dead backend', () {
+      // What the relay actually answers the WebSocket upgrade with when the
+      // authentication code is missing or stale — the tunnel carried bytes, so
+      // the remedy is re-supplying the credential, NOT restarting the host.
+      expect(
+        isRelayAuthRejection(
+          'probe: connect timed out: HTTP error: 403 Forbidden: '
+          'missing or invalid authentication code',
+        ),
+        isTrue,
+      );
+      expect(isRelayAuthRejection('403 Forbidden'), isTrue);
+
+      // A genuinely silent far end must NOT be reported as an auth problem.
+      expect(isRelayAuthRejection('probe: initialize timed out'), isFalse);
+      expect(isRelayAuthRejection('connection refused'), isFalse);
+    });
+
+    test('a silent far end is classified as a timeout', () {
+      expect(isProbeTimeout('probe: initialize timed out'), isTrue);
+      expect(isProbeTimeout('probe: connect timed out'), isTrue);
+      expect(isProbeTimeout('connection refused'), isFalse);
+    });
+  });
 }

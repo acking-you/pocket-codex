@@ -4,6 +4,7 @@ import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/code_highlight.dart';
 import 'package:pocket_codex/src/fonts.dart';
 import 'package:pocket_codex/src/git_diff.dart';
+import 'package:pocket_codex/src/theme.dart';
 
 /// The desktop diff-review surface: a changed-file tree beside a single file's
 /// syntax-highlighted diff, focused on the changed hunks. Composed by the
@@ -202,7 +203,7 @@ class _DiffReviewViewState extends State<DiffReviewView> {
                   file.path,
                   maxLines: 1,
                   style: TextStyle(
-                    fontFamily: 'monospace',
+                    fontFamily: monoFontFamily,
                     fontFamilyFallback: monoCjkFallback,
                     fontSize: 12.5,
                     color: scheme.onSurface,
@@ -215,7 +216,7 @@ class _DiffReviewViewState extends State<DiffReviewView> {
                 style: TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w600,
-                  color: Colors.green.shade600,
+                  color: additionColor(scheme),
                 ),
               ),
               const SizedBox(width: 6),
@@ -290,7 +291,7 @@ class _DiffReviewViewState extends State<DiffReviewView> {
       key: Key('gap-$index'),
       onTap: canExpand ? () => _toggleGap(index) : null,
       child: Container(
-        color: scheme.surfaceContainerHighest.withValues(alpha: 0.5),
+        color: scheme.surfaceContainerLow,
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
         child: Row(
           children: [
@@ -331,9 +332,9 @@ class _DiffReviewViewState extends State<DiffReviewView> {
   ) {
     final (Color bg, String marker, Color markerColor) = switch (line.kind) {
       DiffLineKind.added => (
-        Colors.green.withValues(alpha: 0.13),
+        additionColor(scheme).withValues(alpha: 0.13),
         '+',
-        Colors.green.shade600,
+        additionColor(scheme),
       ),
       DiffLineKind.removed => (
         scheme.error.withValues(alpha: 0.10),
@@ -343,7 +344,7 @@ class _DiffReviewViewState extends State<DiffReviewView> {
       _ => (Colors.transparent, ' ', scheme.onSurfaceVariant),
     };
     final base = TextStyle(
-      fontFamily: 'monospace',
+      fontFamily: monoFontFamily,
       fontFamilyFallback: monoCjkFallback,
       fontSize: 12.5,
       height: 1.4,
@@ -455,7 +456,7 @@ class ChangedFileTree extends StatelessWidget {
                   '+${f.added}',
                   style: TextStyle(
                     fontSize: 10.5,
-                    color: Colors.green.shade600,
+                    color: additionColor(scheme),
                   ),
                 ),
                 const SizedBox(width: 3),

@@ -29,6 +29,7 @@ import 'package:pocket_codex/src/git_diff.dart';
 import 'package:pocket_codex/src/ide_context.dart';
 import 'package:pocket_codex/src/image_attachments.dart';
 import 'package:pocket_codex/src/providers.dart';
+import 'package:pocket_codex/src/theme.dart';
 import 'package:pocket_codex/src/realtime_delegation.dart';
 import 'package:pocket_codex/src/ui_prefs.dart';
 import 'package:pocket_codex/src/widgets/adaptive_sheet.dart';
@@ -43,6 +44,7 @@ import 'package:pocket_codex/src/widgets/message_images.dart';
 import 'package:pocket_codex/src/widgets/project_menu.dart';
 import 'package:pocket_codex/src/widgets/realtime_handoff_card.dart';
 import 'package:pocket_codex/src/widgets/status_dots.dart';
+import 'package:pocket_codex/src/widgets/theme_toggle.dart';
 
 /// Local port for the app-server ws tunnel (shared with the service screen).
 /// `0` is a sentinel: the bridge assigns a free OS port *per service* so several
@@ -133,6 +135,8 @@ class _Item {
     this.effortWire,
     this.modelConfirmed = false,
     this.modelRerouted = false,
+    this.turnId = '',
+    this.turnCompletedAt,
   });
   final String id;
   String type; // userMessage | agentMessage | commandExecution | webSearch | …
@@ -153,6 +157,14 @@ class _Item {
   String? effortWire;
   bool modelConfirmed;
   bool modelRerouted;
+
+  /// The turn this item belongs to, per the server (`thread/read` nests items
+  /// under their turn). Empty when the source carried no turn envelope — a
+  /// locally synthesized marker, or a rollout file read from disk.
+  String turnId;
+
+  /// Unix seconds when this item's turn completed, when the server said.
+  int? turnCompletedAt;
 
   bool get isUser => type == 'userMessage';
   bool get isAgent => type == 'agentMessage';
@@ -323,6 +335,16 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   String? _branch;
   DiffModel? _diff;
 
+  // A user-initiated diff fetch that the review is waiting on. Fetching a diff
+  // on a large repo over the relay takes long enough to need both a spinner and
+  // a way out, so the badge becomes a cancel control while this is set.
+  //
+  // Cancellation is cooperative: the bridge call can't be aborted, so the token
+  // is what the completion checks against — a superseded or cancelled fetch
+  // still returns, and is then discarded instead of opening the review.
+  int _diffFetch = 0;
+  bool _diffLoading = false;
+
   // Desktop layout: left = this project's sessions, right = the diff-review
   // split (a file tree + one file's diff). Both collapsible AND drag-resizable;
   // the chat stays centered regardless. _threads backs the left pane.
@@ -484,7 +506,28 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     var i = 0;
     while (i < _items.length) {
       final it = _items[i];
-      // Messages and standalone notices are never grouped.
+      // One reply, one block. A turn's prose arrives as several `agentMessage`
+      // items (the server gives each its own id — a preamble before a tool
+      // batch, then the final answer), and rendering one block per item chopped
+      // a single answer into pieces that each carried their own hover actions.
+      //
+      // The run is bounded by the server's own `turnId` where it is known, so
+      // this is the real turn boundary rather than "consecutive agent prose".
+      // Items whose turn is unknown (empty id — a rollout file read from disk,
+      // or a live item that arrived before `turn/started`) fall back to
+      // adjacency, which is what the sequence can tell us.
+      if (it.isAgent) {
+        var j = i + 1;
+        while (j < _items.length &&
+            _items[j].isAgent &&
+            _items[j].turnId == it.turnId) {
+          j++;
+        }
+        out.add(j - i >= 2 ? _AgentTurn(_items.sublist(i, j)) : it);
+        i = j;
+        continue;
+      }
+      // User messages and standalone notices are never grouped.
       if (it.isMessage || it.isNotice) {
         out.add(it);
         i++;
@@ -1139,6 +1182,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
               text: i.text,
               images: resolveImageUrls(i.images),
               imageUrls: i.images,
+              turnId: i.turnId,
+              turnCompletedAt: i.turnCompletedAt,
             ),
           );
         }
@@ -1509,6 +1554,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
             title: e.title ?? '',
             text: e.text ?? '',
             streaming: type == 'agentMessage' ? true : running,
+            // The live turn this item belongs to, so a reply that streams in as
+            // several items groups the same way it will after a reload.
+            turnId: _turnId ?? '',
           ),
         );
         _itemIndex[id] = _items.length - 1;
@@ -2085,25 +2133,75 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     }
   }
 
+  /// Abandon the in-flight diff fetch. The bridge call itself keeps running to
+  /// completion — it can't be aborted — but bumping the token means its result
+  /// is dropped and the review never opens.
+  void _cancelDiff() {
+    if (!_diffLoading) return;
+    _diffFetch++;
+    setState(() => _diffLoading = false);
+  }
+
+  /// Re-read the diff for an already-open review, showing (and allowing the
+  /// cancellation of) the fetch. Unlike [_showDiff] this never opens anything.
+  Future<void> _refreshDiff() async {
+    if (_diffLoading) return;
+    final token = ++_diffFetch;
+    setState(() => _diffLoading = true);
+    await _loadGit();
+    if (!mounted || token != _diffFetch) return;
+    setState(() => _diffLoading = false);
+  }
+
   /// Open the diff viewer: the inline review split on desktop (≥1100px), a tall
   /// bottom sheet on narrower screens.
+  ///
+  /// Opens on whatever diff is already in hand and refreshes behind the review,
+  /// rather than making every press wait on a `gitDiffToRemote` round-trip. The
+  /// badge only shows change counts once a diff has been read, so by the time
+  /// this is reachable there is nearly always something to show — and it stays
+  /// current anyway, since turn/diff/updated and turn/completed both refresh it.
+  ///
+  /// Only a cold open (no diff read yet) blocks, and that one shows the spinner
+  /// and can be cancelled by pressing again.
   Future<void> _showDiff() async {
-    await _loadGit();
-    if (!mounted) return;
-    if (MediaQuery.of(context).size.width >= 1100) {
-      _openReview();
+    if (_diffLoading) {
+      _cancelDiff();
       return;
     }
-    await showModalBottomSheet<void>(
-      context: context,
-      showDragHandle: true,
-      isScrollControlled: true,
-      builder: (c) => FractionallySizedBox(
-        heightFactor: 0.9,
-        child: _EnvPanel(diff: _diff, branch: _branch, cwd: _cwd),
-      ),
-    );
+    final compact = MediaQuery.of(context).size.width < 1100;
+    // The sheet takes a snapshot of the diff when it's built, so a refresh
+    // behind it couldn't reach the open sheet — only the review split, which
+    // rebuilds from state, gets the background update.
+    if (_diff != null && !compact) {
+      _openReview();
+      _refreshDiff();
+      return;
+    }
+    final token = ++_diffFetch;
+    setState(() => _diffLoading = true);
+    await _loadGit();
+    // Superseded or cancelled while the fetch was in flight: the newer caller
+    // (or the cancel) owns the UI now, so this one must not touch it.
+    if (!mounted || token != _diffFetch) return;
+    setState(() => _diffLoading = false);
+    if (compact) {
+      await _showDiffSheet();
+    } else {
+      _openReview();
+    }
   }
+
+  /// The narrow-screen diff viewer.
+  Future<void> _showDiffSheet() => showModalBottomSheet<void>(
+    context: context,
+    showDragHandle: true,
+    isScrollControlled: true,
+    builder: (c) => FractionallySizedBox(
+      heightFactor: 0.9,
+      child: _EnvPanel(diff: _diff, branch: _branch, cwd: _cwd),
+    ),
+  );
 
   /// Read a reviewed file's current lines so the review can expand an elided
   /// gap. The gap lines are unchanged, so the working-tree file holds them
@@ -2132,7 +2230,12 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   }
 
   /// Open the desktop review split, defaulting the selected file to [path] (or
-  /// the first changed file). Refreshes the diff so the tree is current.
+  /// the first changed file).
+  ///
+  /// Deliberately does NOT fetch: every caller either just awaited a fetch or is
+  /// opening on data it already has. Refreshing here as well meant one press
+  /// paid for two round-trips of the same `gitDiffToRemote`, the second of which
+  /// nobody was waiting on but which still had to finish.
   void _openReview({String? path}) {
     setState(() {
       _reviewOpen = true;
@@ -2143,7 +2246,6 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
               ? _reviewFile
               : files.firstOrNull?.path);
     });
-    _loadGit();
   }
 
   /// Manually compact the conversation after a confirm.
@@ -2405,37 +2507,47 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           onPressed: onTap,
           icon: Icon(icon),
         );
-    return Material(
-      elevation: 2,
-      color: scheme.surfaceContainerHigh,
-      borderRadius: BorderRadius.circular(24),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (showTurnNav) ...[
-              btn(
-                const Key('nav-prev-turn'),
-                Icons.keyboard_arrow_up,
-                l10n.prevTurn,
-                () => _gotoAdjacentTurn(next: false),
-              ),
-              btn(
-                const Key('nav-next-turn'),
-                Icons.keyboard_arrow_down,
-                l10n.nextTurn,
-                () => _gotoAdjacentTurn(next: true),
-              ),
+    // Opaque, and a shadow rather than a Material elevation: this floats over
+    // the scrolling transcript, so a translucent ground would let text read
+    // through it — and Material can't composite a wash against the page anyway.
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(24),
+        // Stronger than a panel's: this one floats over moving content.
+        boxShadow: panelShadow(scheme, blur: 12),
+      ),
+      child: Material(
+        elevation: 0,
+        color: scheme.surfaceBright,
+        borderRadius: BorderRadius.circular(24),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (showTurnNav) ...[
+                btn(
+                  const Key('nav-prev-turn'),
+                  Icons.keyboard_arrow_up,
+                  l10n.prevTurn,
+                  () => _gotoAdjacentTurn(next: false),
+                ),
+                btn(
+                  const Key('nav-next-turn'),
+                  Icons.keyboard_arrow_down,
+                  l10n.nextTurn,
+                  () => _gotoAdjacentTurn(next: true),
+                ),
+              ],
+              if (!_atBottom)
+                btn(
+                  const Key('nav-to-bottom'),
+                  Icons.vertical_align_bottom,
+                  l10n.jumpToLatest,
+                  () => _scrollToEnd(force: true),
+                ),
             ],
-            if (!_atBottom)
-              btn(
-                const Key('nav-to-bottom'),
-                Icons.vertical_align_bottom,
-                l10n.jumpToLatest,
-                () => _scrollToEnd(force: true),
-              ),
-          ],
+          ),
         ),
       ),
     );
@@ -2626,7 +2738,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       // Token counts and reset times are numbers people copy into notes.
       child: SelectionArea(
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 4, 20, 24),
+          // The panel owns the top inset (a drag handle on a sheet, breathing
+          // room in a dialog), so this only sets the sides and the base.
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -2842,6 +2956,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                 onTap: _showContextDetail,
                 tooltip: _contextTooltip(l10n),
               ),
+            // Same place as on desktop. It has to be here rather than in the
+            // sessions pane, which on a phone lives behind the drawer.
+            const ThemeToggle(),
             if (_threadId != null)
               PopupMenuButton<String>(
                 tooltip: l10n.moreActions,
@@ -2964,7 +3081,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       ),
     );
     return Material(
-      color: scheme.surfaceContainerLow,
+      // A wash over the page rather than the page itself, so the rail reads as
+      // a distinct column; the splitter's hairline carries the actual edge.
+      color: Color.alphaBlend(scheme.surfaceContainer, scheme.surface),
       child: Column(
         children: [
           strip,
@@ -3028,6 +3147,11 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
               // Environment info lives in a popover off this button — a
               // desktop affordance, hidden when the window can't host it.
               if (width >= 900) _envButton(l10n),
+              // Appearance sits with the window's own controls rather than in
+              // the sidebar footer: it acts on the whole window, and it was the
+              // one frequently-used control that moved (or vanished) with the
+              // sidebar.
+              const ThemeToggle(),
               if (_threadId != null)
                 PopupMenuButton<String>(
                   tooltip: l10n.moreActions,
@@ -3193,37 +3317,42 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// the pointer is over it: a wider invisible hit area (a 1 px target is
   /// unhittable) plus a resize cursor, so the affordance appears on hover the
   /// way a desktop splitter should.
-  Widget _splitter({required Key key, required ValueChanged<double> onDrag}) =>
-      MouseRegion(
-        key: key,
-        cursor: SystemMouseCursors.resizeLeftRight,
-        child: GestureDetector(
-          behavior: HitTestBehavior.translucent,
-          onHorizontalDragUpdate: (d) => onDrag(d.delta.dx),
-          child: SizedBox(
-            width: 7,
-            child: Center(
-              child: VerticalDivider(
-                width: 1,
-                color: Theme.of(context).colorScheme.outlineVariant,
-              ),
-            ),
+  Widget _splitter({
+    required Key key,
+    required ValueChanged<double> onDrag,
+  }) => MouseRegion(
+    key: key,
+    cursor: SystemMouseCursors.resizeLeftRight,
+    child: GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onHorizontalDragUpdate: (d) => onDrag(d.delta.dx),
+      child: SizedBox(
+        width: 7,
+        child: Center(
+          // The firmer hairline, not outlineVariant: this separates two
+          // near-identical grounds, so the faint one disappears between them.
+          child: VerticalDivider(
+            width: 1,
+            color: Theme.of(context).colorScheme.outline,
           ),
         ),
-      );
+      ),
+    ),
+  );
 
   /// One colored status descriptor for the current session state. Reflects the
   /// REAL state — plan mode is driven by `_planActive` (server-side), so the
   /// indicator never disagrees with how the agent is actually behaving.
-  ({Color color, String label, IconData icon}) _sessionState(
+  ({Color color, String label, IconData icon, bool nominal}) _sessionState(
     AppLocalizations l10n,
   ) {
     final scheme = Theme.of(context).colorScheme;
     if (_reconnecting) {
       return (
-        color: Colors.amber.shade800,
+        color: cautionColor(scheme),
         label: l10n.stateReconnecting,
         icon: Icons.autorenew,
+        nominal: false,
       );
     }
     if (_connectionLost) {
@@ -3231,6 +3360,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         color: scheme.error,
         label: l10n.stateDisconnected,
         icon: Icons.cloud_off,
+        nominal: false,
       );
     }
     if (_streaming) {
@@ -3238,19 +3368,26 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         color: scheme.primary,
         label: _planActive ? l10n.statePlanning : l10n.stateWorking,
         icon: Icons.autorenew,
+        nominal: false,
       );
     }
     if (_planActive) {
       return (
-        color: Colors.amber.shade800,
+        color: cautionColor(scheme),
         label: l10n.statePlanMode,
         icon: Icons.checklist_rtl,
+        nominal: false,
       );
     }
+    // At rest, and therefore drawn in ink rather than a hue: this is the state
+    // the bar sits in nearly all the time, so tinting it would make the least
+    // urgent thing on screen the loudest. Colour escalates from here —
+    // accent while working, amber while degraded, error when disconnected.
     return (
-      color: Colors.green.shade600,
+      color: scheme.onSurfaceVariant,
       label: l10n.stateReady,
-      icon: Icons.check_circle,
+      icon: Icons.check_circle_outline,
+      nominal: true,
     );
   }
 
@@ -3291,7 +3428,15 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     final activeModel = _activeModelStatus();
     return Container(
       width: double.infinity,
-      color: st.color.withValues(alpha: 0.10),
+      // At rest the bar is part of the page — a faint ink wash under a hairline,
+      // like any other chrome. A state that needs attention tints the whole
+      // strip, so colour arriving here means something actually changed.
+      decoration: BoxDecoration(
+        color: st.nominal
+            ? scheme.surfaceContainerLowest
+            : st.color.withValues(alpha: 0.10),
+        border: Border(bottom: BorderSide(color: scheme.outlineVariant)),
+      ),
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
       child: Row(
         children: [
@@ -3302,7 +3447,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
             style: TextStyle(
               fontSize: 12,
               color: st.color,
-              fontWeight: FontWeight.w600,
+              // Resting state reads as a label, not an alert.
+              fontWeight: st.nominal ? FontWeight.w500 : FontWeight.w600,
             ),
           ),
           const Spacer(),
@@ -3316,7 +3462,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                 mouseCursor: clickable,
                 key: const Key('active-model-chip'),
                 onTap: _showRuntimeSheet,
-                borderRadius: BorderRadius.circular(20),
+                borderRadius: BorderRadius.circular(kControlRadius),
                 child: Padding(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 6,
@@ -3349,7 +3495,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                             : Icons.hourglass_empty,
                         size: 11,
                         color: activeModel.confirmed
-                            ? Colors.green.shade600
+                            ? additionColor(scheme)
                             : scheme.onSurfaceVariant,
                       ),
                     ],
@@ -3379,12 +3525,16 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           // app-bar chip), so the status bar is the one source of truth.
           if (_branch != null)
             Tooltip(
-              message: (d != null && !d.isEmpty) ? l10n.viewDiff : _branch!,
+              message: _diffLoading
+                  ? l10n.cancelDiffLoad
+                  : (d != null && !d.isEmpty)
+                  ? l10n.viewDiff
+                  : _branch!,
               child: InkWell(
                 mouseCursor: clickable,
                 key: const Key('status-branch-chip'),
                 onTap: _showDiff,
-                borderRadius: BorderRadius.circular(20),
+                borderRadius: BorderRadius.circular(kControlRadius),
                 child: Padding(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 6,
@@ -3393,11 +3543,24 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(
-                        Icons.account_tree_outlined,
-                        size: 12,
-                        color: scheme.onSurfaceVariant,
-                      ),
+                      // While the diff is loading the badge IS the cancel
+                      // control: a spinner in place of the branch glyph, so the
+                      // press that started it can also stop it.
+                      if (_diffLoading)
+                        SizedBox(
+                          width: 12,
+                          height: 12,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 1.6,
+                            color: scheme.primary,
+                          ),
+                        )
+                      else
+                        Icon(
+                          Icons.account_tree_outlined,
+                          size: 12,
+                          color: scheme.onSurfaceVariant,
+                        ),
                       const SizedBox(width: 4),
                       ConstrainedBox(
                         constraints: const BoxConstraints(maxWidth: 160),
@@ -3416,7 +3579,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                           '+${d.added}',
                           style: TextStyle(
                             fontSize: 11.5,
-                            color: Colors.green.shade600,
+                            color: additionColor(scheme),
                             fontFeatures: const [FontFeature.tabularFigures()],
                           ),
                         ),
@@ -3534,21 +3697,41 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                                         // A group keys off its first item's stable
                                         // id plus length so expand/collapse and
                                         // run-growth produce a fresh measurement.
-                                        return row is _Group
-                                            ? _GroupedActivityCard(
-                                                key: ValueKey(
-                                                  'g:${row.items.first.id}:'
-                                                  '${row.items.length}',
-                                                ),
-                                                group: row,
-                                              )
-                                            : _MessageView(
-                                                key: ValueKey(
-                                                  (row as _Item).id,
-                                                ),
-                                                item: row,
-                                                hostImageLoader: _loadHostImage,
-                                              );
+                                        if (row is _Group) {
+                                          return _GroupedActivityCard(
+                                            key: ValueKey(
+                                              'g:${row.items.first.id}:'
+                                              '${row.items.length}',
+                                            ),
+                                            group: row,
+                                          );
+                                        }
+                                        // A merged reply renders through the
+                                        // same view as a single one, so the two
+                                        // can't drift apart: it is presented as
+                                        // one item whose text is the whole turn.
+                                        if (row is _AgentTurn) {
+                                          return _MessageView(
+                                            key: ValueKey(
+                                              't:${row.items.first.id}:'
+                                              '${row.items.length}',
+                                            ),
+                                            item: _Item(
+                                              id: row.items.first.id,
+                                              type: 'agentMessage',
+                                              text: row.text,
+                                              streaming: row.streaming,
+                                              turnId: row.items.first.turnId,
+                                              turnCompletedAt: row.completedAt,
+                                            ),
+                                            hostImageLoader: _loadHostImage,
+                                          );
+                                        }
+                                        return _MessageView(
+                                          key: ValueKey((row as _Item).id),
+                                          item: row,
+                                          hostImageLoader: _loadHostImage,
+                                        );
                                       },
                                     );
                                   },
@@ -3638,7 +3821,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                     alignment: Alignment.center,
                     decoration: BoxDecoration(
                       color: scheme.surfaceContainerHighest,
-                      borderRadius: BorderRadius.circular(16),
+                      borderRadius: BorderRadius.circular(kPanelRadius),
                       border: Border.all(
                         color: scheme.outlineVariant,
                         width: 0.5,
@@ -3814,16 +3997,20 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     final (icon, title, prompt) = s;
     final scheme = Theme.of(context).colorScheme;
     return Material(
-      color: scheme.surfaceContainerHighest.withValues(alpha: 0.6),
-      borderRadius: BorderRadius.circular(12),
+      // The page ground under the wash: the container ladder is a translucent
+      // ink, and Material composites its colour against nothing, so a wash
+      // handed to it directly would paint as flat dark ink.
+      color: scheme.surface,
+      borderRadius: BorderRadius.circular(kPanelRadius),
       child: InkWell(
         mouseCursor: clickable,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(kPanelRadius),
         onTap: () => _useSuggestion(prompt),
         child: Container(
           decoration: BoxDecoration(
-            border: Border.all(color: scheme.outlineVariant, width: 0.5),
-            borderRadius: BorderRadius.circular(12),
+            color: scheme.surfaceContainerLow,
+            border: Border.all(color: scheme.outlineVariant),
+            borderRadius: BorderRadius.circular(kPanelRadius),
           ),
           padding: const EdgeInsets.fromLTRB(14, 13, 14, 13),
           child: Column(
@@ -4193,7 +4380,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                     fillColor: scheme.surfaceContainerHighest,
                     contentPadding: const EdgeInsets.symmetric(vertical: 9),
                     border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(10),
+                      borderRadius: BorderRadius.circular(kControlRadius),
                       borderSide: BorderSide.none,
                     ),
                   ),
@@ -4265,7 +4452,6 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                         route: '/logs',
                       ),
                     ),
-                    Expanded(child: _themeToggle(l10n)),
                     Expanded(
                       child: _paneShortcut(
                         key: 'sidebar-settings-btn',
@@ -4306,7 +4492,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     final color = w.fraction >= 0.9
         ? scheme.error
         : w.fraction >= 0.75
-        ? Colors.amber.shade700
+        ? cautionColor(scheme)
         : scheme.primary;
     final reset = _resetText(w, l10n);
     return InkWell(
@@ -4378,39 +4564,6 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// predict from its icon is a worse trade than losing one-tap access to a
   /// default that Settings still offers. The icon shows what is in effect now;
   /// tapping shows the other one.
-  Widget _themeToggle(AppLocalizations l10n) {
-    // Keyed off what is actually ON SCREEN, not the stored preference: while
-    // following the system there is no stored value, and a button that reads
-    // "switch to light" over an already-light UI would be nonsense. This also
-    // makes the first tap out of follow-system do the obvious thing — flip to
-    // the opposite of what the user is looking at.
-    final dark = Theme.of(context).brightness == Brightness.dark;
-    final next = dark ? 'light' : 'dark';
-    return IconButton(
-      key: const Key('sidebar-theme-btn'),
-      // Cross-fade + rotate rather than a hard swap: the whole UI is mid-
-      // transition for 200 ms, so an icon that jumped would be the one thing
-      // in the window that didn't move.
-      icon: AnimatedSwitcher(
-        duration: const Duration(milliseconds: 250),
-        transitionBuilder: (child, animation) => RotationTransition(
-          turns: Tween(begin: 0.75, end: 1.0).animate(animation),
-          child: FadeTransition(opacity: animation, child: child),
-        ),
-        child: Icon(
-          dark ? Icons.dark_mode_outlined : Icons.light_mode_outlined,
-          // The key is what makes the switcher animate: same type + no key
-          // reads as the same widget and swaps silently.
-          key: ValueKey(dark),
-          size: 20,
-        ),
-      ),
-      tooltip: dark ? l10n.appearanceLight : l10n.appearanceDark,
-      visualDensity: VisualDensity.compact,
-      onPressed: () => ref.read(uiPrefsProvider.notifier).setThemeMode(next),
-    );
-  }
-
   /// One sidebar-footer shortcut: closes the drawer (mobile) then pushes.
   Widget _paneShortcut({
     required String key,
@@ -4781,10 +4934,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       child: Material(
         key: Key('conv-tile-${thread.id}'),
         color: selected ? scheme.primaryContainer : Colors.transparent,
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(kControlRadius),
         child: InkWell(
           mouseCursor: clickable,
-          borderRadius: BorderRadius.circular(10),
+          borderRadius: BorderRadius.circular(kControlRadius),
           onTap: onTap,
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
@@ -4887,10 +5040,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       child: Material(
         key: Key('activity-tile-${thread.id}'),
         color: selected ? scheme.primaryContainer : Colors.transparent,
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(kControlRadius),
         child: InkWell(
           mouseCursor: clickable,
-          borderRadius: BorderRadius.circular(10),
+          borderRadius: BorderRadius.circular(kControlRadius),
           onTap: onTap,
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
@@ -5028,7 +5181,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                             style: TextStyle(
                               fontSize: 12.5,
                               fontWeight: FontWeight.w600,
-                              color: Colors.green.shade600,
+                              color: additionColor(scheme),
                             ),
                           ),
                           const SizedBox(width: 6),
@@ -5117,7 +5270,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                                       overflow: TextOverflow.ellipsis,
                                       textAlign: TextAlign.left,
                                       style: const TextStyle(
-                                        fontFamily: 'monospace',
+                                        fontFamily: monoFontFamily,
                                         fontFamilyFallback: monoCjkFallback,
                                         fontSize: 12,
                                       ),
@@ -5128,7 +5281,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                                     '+${f.added}',
                                     style: TextStyle(
                                       fontSize: 10.5,
-                                      color: Colors.green.shade600,
+                                      color: additionColor(scheme),
                                     ),
                                   ),
                                   const SizedBox(width: 3),
@@ -5197,12 +5350,31 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                   style: Theme.of(context).textTheme.titleSmall,
                 ),
               ),
-              IconButton(
-                icon: const Icon(Icons.refresh, size: 17),
-                tooltip: l10n.envRefresh,
-                visualDensity: VisualDensity.compact,
-                onPressed: _loadGit,
-              ),
+              // Refreshing in place: the same cancellable fetch as the badge, so
+              // a slow re-read spins here and can be called off, rather than
+              // leaving the tree looking current while it isn't.
+              if (_diffLoading)
+                IconButton(
+                  key: const Key('review-refresh-cancel'),
+                  icon: SizedBox(
+                    width: 15,
+                    height: 15,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 1.6,
+                      color: scheme.primary,
+                    ),
+                  ),
+                  tooltip: l10n.cancelDiffLoad,
+                  visualDensity: VisualDensity.compact,
+                  onPressed: _cancelDiff,
+                )
+              else
+                IconButton(
+                  icon: const Icon(Icons.refresh, size: 17),
+                  tooltip: l10n.envRefresh,
+                  visualDensity: VisualDensity.compact,
+                  onPressed: _refreshDiff,
+                ),
               IconButton(
                 key: const Key('review-close'),
                 icon: const Icon(Icons.close, size: 18),
@@ -5267,7 +5439,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       decoration: BoxDecoration(
         color: scheme.primaryContainer,
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(kPanelRadius),
       ),
       padding: const EdgeInsets.fromLTRB(16, 10, 12, 10),
       child: Row(
@@ -5304,7 +5476,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       decoration: BoxDecoration(
         color: scheme.errorContainer,
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(kPanelRadius),
       ),
       padding: const EdgeInsets.fromLTRB(16, 6, 8, 6),
       child: Row(
@@ -5534,7 +5706,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
         decoration: BoxDecoration(
           color: scheme.surfaceContainerHighest,
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(kPanelRadius),
           border: Border.all(color: scheme.primary, width: 2),
         ),
         child: Row(
@@ -5720,7 +5892,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                 constraints: const BoxConstraints(maxWidth: 260),
                 decoration: BoxDecoration(
                   color: scheme.surfaceContainerHighest,
-                  borderRadius: BorderRadius.circular(14),
+                  borderRadius: BorderRadius.circular(kPanelRadius),
                   border: Border.all(color: scheme.outlineVariant),
                 ),
                 padding: const EdgeInsets.fromLTRB(10, 5, 4, 5),
@@ -5886,11 +6058,15 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           child: GestureDetector(
             behavior: HitTestBehavior.translucent,
             onTap: () => _inputFocus.requestFocus(),
+            // The raised card: opaque so it lifts off the page, a hairline to
+            // hold the edge, and the design's soft offsetless shadow instead of
+            // a Material elevation.
             child: Container(
               decoration: BoxDecoration(
-                color: scheme.surfaceContainerHigh,
-                borderRadius: BorderRadius.circular(doc ? 12 : 24),
-                border: Border.all(color: scheme.outlineVariant),
+                color: scheme.surfaceBright,
+                borderRadius: BorderRadius.circular(kComposerRadius),
+                border: Border.all(color: scheme.outline),
+                boxShadow: panelShadow(scheme),
               ),
               padding: const EdgeInsets.fromLTRB(14, 10, 10, 10),
               child: Column(
@@ -5975,11 +6151,22 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       VoidCallback? onTap,
       Key? key,
       String? tip,
+      bool busy = false,
     }) {
       final row = Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 13, color: scheme.onSurfaceVariant),
+          if (busy)
+            SizedBox(
+              width: 13,
+              height: 13,
+              child: CircularProgressIndicator(
+                strokeWidth: 1.6,
+                color: scheme.primary,
+              ),
+            )
+          else
+            Icon(icon, size: 13, color: scheme.onSurfaceVariant),
           const SizedBox(width: 5),
           // Flexible, not a bare ConstrainedBox: when the review split narrows
           // the chat, the label must be able to shrink below its natural width
@@ -6066,7 +6253,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
               Icons.account_tree_outlined,
               _branch!,
               key: const Key('composer-branch-chip'),
-              tip: l10n.viewDiff,
+              tip: _diffLoading ? l10n.cancelDiffLoad : l10n.viewDiff,
+              busy: _diffLoading,
               // The branch is the entry point to what has changed on it.
               onTap: _showDiff,
             ),
@@ -6534,13 +6722,17 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         ? scheme.onSurfaceVariant
         : scheme.onSurfaceVariant.withValues(alpha: 0.5);
     final touch = !isDesktop;
+    // These sit inside the composer card, so the raised card is the ground the
+    // resting wash composites against.
     return Material(
-      color: active ? scheme.primaryContainer : scheme.surfaceContainerHighest,
-      borderRadius: BorderRadius.circular(20),
+      color: active
+          ? scheme.primaryContainer
+          : Color.alphaBlend(scheme.surfaceContainer, scheme.surfaceBright),
+      borderRadius: BorderRadius.circular(kControlRadius),
       child: InkWell(
         mouseCursor: clickable,
         key: pillKey,
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(kControlRadius),
         onTap: onTap,
         child: ConstrainedBox(
           constraints: BoxConstraints(minHeight: touch ? 44 : 0),
@@ -6552,7 +6744,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(icon, size: 15, color: warn ? Colors.amber.shade800 : fg),
+                Icon(icon, size: 15, color: warn ? cautionColor(scheme) : fg),
                 const SizedBox(width: 5),
                 Flexible(
                   child: Text(
@@ -6604,6 +6796,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       context: context,
       // The body ends in a ListView of options; it scrolls itself.
       scrollable: false,
+      // It also draws its own grab bar, which is its top edge.
+      insetTop: false,
       builder: (c) => SafeArea(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -6945,7 +7139,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                               : Icons.info_outline,
                           size: 14,
                           color: rt != null && rt.confirmedByUpdate
-                              ? Colors.green.shade600
+                              ? additionColor(scheme)
                               : scheme.onSurfaceVariant,
                         ),
                         const SizedBox(width: 6),
@@ -7219,7 +7413,7 @@ class _UserInputCardState extends State<_UserInputCard> {
       decoration: BoxDecoration(
         color: scheme.surfaceContainerHigh,
         border: Border.all(color: scheme.outlineVariant, width: 0.5),
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(kPanelRadius),
       ),
       child: Padding(
         padding: const EdgeInsets.all(14),
@@ -7401,7 +7595,7 @@ class _ApprovalCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: scheme.surfaceContainerHigh,
         border: Border.all(color: scheme.outlineVariant, width: 0.5),
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(kPanelRadius),
       ),
       child: Padding(
         padding: const EdgeInsets.all(14),
@@ -7439,7 +7633,7 @@ class _ApprovalCard extends StatelessWidget {
                   _detail(),
                   selectable: true,
                   style: const TextStyle(
-                    fontFamily: 'monospace',
+                    fontFamily: monoFontFamily,
                     fontFamilyFallback: monoCjkFallback,
                     fontSize: 12,
                   ),
@@ -7573,6 +7767,8 @@ class _EffortStepsState extends State<_EffortSteps> {
                     shadow: scheme.shadow,
                     dotOff: scheme.outline,
                     brightness: Theme.of(context).brightness,
+                    fill: scheme.primary,
+                    onFill: scheme.onPrimary,
                   ),
                 ),
               ),
@@ -7622,6 +7818,8 @@ class _EffortPainter extends CustomPainter {
     required this.shadow,
     required this.dotOff,
     required this.brightness,
+    required this.fill,
+    required this.onFill,
   });
 
   final double frac;
@@ -7636,8 +7834,15 @@ class _EffortPainter extends CustomPainter {
   final Color dotOff;
   final Brightness brightness;
 
-  // The flat violet fill (no gradients per the brand rules).
-  static const _fillColor = Color(0xFF7A6BF3);
+  /// The flat fill up to the thumb — the theme's accent, so the slider belongs
+  /// to the palette instead of being the one violet thing on screen. Flat, not
+  /// a gradient, per the design's rules.
+  final Color fill;
+
+  /// Ink drawn ON the fill (the passed stops and the max-level shimmer). Taken
+  /// from the theme rather than assumed white: the accent is light enough that
+  /// white-on-accent barely shows.
+  final Color onFill;
 
   // A fixed scatter of unit-square offsets for the max-level shimmer, generated
   // once so it doesn't flicker as `frac` animates.
@@ -7677,13 +7882,13 @@ class _EffortPainter extends CustomPainter {
       cy + trackH / 2,
       const Radius.circular(trackH / 2),
     );
-    canvas.drawRRect(fillRect, Paint()..color = _fillColor);
+    canvas.drawRRect(fillRect, Paint()..color = fill);
 
     // Max-level shimmer: scattered translucent squares over the fill.
     if (atMax) {
       canvas.save();
       canvas.clipRRect(fillRect);
-      final dot = Paint()..color = Colors.white.withValues(alpha: 0.28);
+      final dot = Paint()..color = onFill.withValues(alpha: 0.28);
       for (final o in _dither) {
         final x = o.dx * fillRight;
         final y = cy - trackH / 2 + o.dy * trackH;
@@ -7699,7 +7904,7 @@ class _EffortPainter extends CustomPainter {
       canvas.drawCircle(
         Offset(x, cy),
         2,
-        Paint()..color = on ? Colors.white.withValues(alpha: 0.9) : dotOff,
+        Paint()..color = on ? onFill.withValues(alpha: 0.9) : dotOff,
       );
     }
 
@@ -7730,7 +7935,10 @@ class _EffortPainter extends CustomPainter {
       old.activeIdx != activeIdx ||
       old.levels != levels ||
       old.atMax != atMax ||
-      old.brightness != brightness;
+      old.brightness != brightness ||
+      // Follows the theme, so it changes on a light/dark switch.
+      old.fill != fill ||
+      old.onFill != onFill;
 }
 
 /// A small circular context-window gauge for the app bar: a ring filled to the
@@ -7754,7 +7962,7 @@ class _ContextGauge extends StatelessWidget {
     final color = f >= 0.9
         ? scheme.error
         : f >= 0.75
-        ? Colors.amber.shade700
+        ? cautionColor(scheme)
         : scheme.primary;
     return Tooltip(
       message: tooltip,
@@ -7917,7 +8125,7 @@ class _EnvPanel extends StatelessWidget {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
-                      fontFamily: 'monospace',
+                      fontFamily: monoFontFamily,
                       fontFamilyFallback: monoCjkFallback,
                       fontSize: 11.5,
                       color: scheme.onSurfaceVariant,
@@ -7967,7 +8175,7 @@ class _EnvPanel extends StatelessWidget {
   ) => Container(
     padding: const EdgeInsets.fromLTRB(12, 10, 12, 11),
     decoration: BoxDecoration(
-      color: scheme.surfaceContainerHighest.withValues(alpha: 0.5),
+      color: scheme.surfaceContainerLow,
       border: Border.all(color: scheme.outlineVariant, width: 0.5),
       borderRadius: BorderRadius.circular(12),
     ),
@@ -8003,7 +8211,7 @@ class _EnvPanel extends StatelessWidget {
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
-                  fontFamily: 'monospace',
+                  fontFamily: monoFontFamily,
                   fontFamilyFallback: monoCjkFallback,
                   fontSize: 12.5,
                   color: scheme.onSurface,
@@ -8021,7 +8229,7 @@ class _EnvPanel extends StatelessWidget {
                 style: TextStyle(
                   fontSize: 12.5,
                   fontWeight: FontWeight.w600,
-                  color: Colors.green.shade600,
+                  color: additionColor(scheme),
                   fontFeatures: const [FontFeature.tabularFigures()],
                 ),
               ),
@@ -8121,7 +8329,7 @@ class _DiffFileTile extends StatelessWidget {
                     child: Text(
                       _dirOf(file.path),
                       style: TextStyle(
-                        fontFamily: 'monospace',
+                        fontFamily: monoFontFamily,
                         fontFamilyFallback: monoCjkFallback,
                         fontSize: 12.5,
                         color: scheme.onSurfaceVariant,
@@ -8133,7 +8341,7 @@ class _DiffFileTile extends StatelessWidget {
                 Text(
                   _baseOf(file.path),
                   style: const TextStyle(
-                    fontFamily: 'monospace',
+                    fontFamily: monoFontFamily,
                     fontFamilyFallback: monoCjkFallback,
                     fontSize: 12.5,
                   ),
@@ -8145,7 +8353,7 @@ class _DiffFileTile extends StatelessWidget {
           const SizedBox(width: 8),
           Text(
             '+${file.added}',
-            style: TextStyle(fontSize: 11, color: Colors.green.shade600),
+            style: TextStyle(fontSize: 11, color: additionColor(scheme)),
           ),
           const SizedBox(width: 4),
           Text(
@@ -8279,7 +8487,7 @@ class _DiffHunksState extends State<_DiffHunks> {
   }
 
   static const _mono = TextStyle(
-    fontFamily: 'monospace',
+    fontFamily: monoFontFamily,
     fontFamilyFallback: monoCjkFallback,
     fontSize: 12,
     height: 1.35,
@@ -8294,9 +8502,9 @@ class _DiffHunksState extends State<_DiffHunks> {
   ) {
     final (Color bg, String marker, Color markerColor) = switch (line.kind) {
       DiffLineKind.added => (
-        Colors.green.withValues(alpha: 0.13),
+        additionColor(scheme).withValues(alpha: 0.13),
         '+',
-        Colors.green.shade600,
+        additionColor(scheme),
       ),
       DiffLineKind.removed => (
         scheme.error.withValues(alpha: 0.10),
@@ -8429,6 +8637,25 @@ class _MessageViewState extends State<_MessageView> {
   void dispose() {
     _hover.dispose();
     super.dispose();
+  }
+
+  /// A turn's completion time, from `Turn.completedAt` (Unix seconds).
+  ///
+  /// Today's turns show only the clock — the date would be noise in a
+  /// conversation you are still having. Anything older leads with the weekday
+  /// (this week) or the date, so scrolling back through a long thread tells you
+  /// when each answer happened.
+  String _fmtTurnTime(int unixSeconds) {
+    final at = DateTime.fromMillisecondsSinceEpoch(unixSeconds * 1000);
+    final now = DateTime.now();
+    final locale = Localizations.localeOf(context).toLanguageTag();
+    final clock = DateFormat.Hm(locale).format(at);
+    final sameDay =
+        at.year == now.year && at.month == now.month && at.day == now.day;
+    if (sameDay) return clock;
+    final age = now.difference(at);
+    if (age.inDays < 7) return '${DateFormat.EEEE(locale).format(at)} $clock';
+    return '${DateFormat.Md(locale).format(at)} $clock';
   }
 
   void _copy() {
@@ -8569,20 +8796,22 @@ class _MessageViewState extends State<_MessageView> {
               if (refs.text.isNotEmpty)
                 Container(
                   constraints: const BoxConstraints(maxWidth: 600),
-                  padding: EdgeInsets.symmetric(
-                    horizontal: doc ? 14 : 16,
-                    vertical: doc ? 10 : 11,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 10,
                   ),
                   decoration: BoxDecoration(
-                    color: scheme.surfaceContainerHigh,
-                    borderRadius: BorderRadius.circular(doc ? 12 : 20),
+                    color: scheme.surfaceContainerLow,
+                    borderRadius: BorderRadius.circular(kPanelRadius),
                   ),
+                  // The tighter 1.3 line: a bubble is a transcription of one
+                  // utterance, not a paragraph to read down.
                   child: linkifyText(
                     context,
                     refs.text,
                     style: Theme.of(
                       context,
-                    ).textTheme.bodyLarge?.copyWith(height: 1.45),
+                    ).textTheme.bodyLarge?.copyWith(height: 1.3),
                   ),
                 ),
             ],
@@ -8622,12 +8851,28 @@ class _MessageViewState extends State<_MessageView> {
                 alignment: isUser
                     ? Alignment.centerRight
                     : Alignment.centerLeft,
-                child: IconButton(
-                  icon: const Icon(Icons.content_copy_outlined, size: 16),
-                  visualDensity: VisualDensity.compact,
-                  color: scheme.onSurfaceVariant,
-                  tooltip: AppLocalizations.of(context).copy,
-                  onPressed: _copy,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _MessageAction(
+                      icon: Icons.content_copy_outlined,
+                      tooltip: AppLocalizations.of(context).copy,
+                      onPressed: _copy,
+                    ),
+                    // The turn's completion time, from the server's own
+                    // `Turn.completedAt` — so it survives a reload, unlike the
+                    // locally-observed duration marker.
+                    if (item.turnCompletedAt != null) ...[
+                      const SizedBox(width: 6),
+                      Text(
+                        _fmtTurnTime(item.turnCompletedAt!),
+                        style: TextStyle(
+                          fontSize: 11.5,
+                          color: onSurfaceMuted(scheme),
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
               ),
             ),
@@ -8712,7 +8957,8 @@ class _TurnDurationFooter extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
-    final muted = Theme.of(context).colorScheme.onSurfaceVariant;
+    final scheme = Theme.of(context).colorScheme;
+    final muted = scheme.onSurfaceVariant;
     final effort = ReasoningEffort.fromWire(effortWire);
     final modelText = model == null
         ? null
@@ -8764,7 +9010,7 @@ class _TurnDurationFooter extends StatelessWidget {
                   Icon(
                     Icons.sync_problem,
                     size: 11,
-                    color: Colors.amber.shade800,
+                    color: cautionColor(scheme),
                   ),
                 ],
               ],
@@ -8835,7 +9081,7 @@ class _FileChangeCardState extends State<_FileChangeCard> {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        fontFamily: 'monospace',
+                        fontFamily: monoFontFamily,
                         fontFamilyFallback: monoCjkFallback,
                         fontSize: 12,
                         color: muted,
@@ -8847,7 +9093,7 @@ class _FileChangeCardState extends State<_FileChangeCard> {
                       '+${diff.added}',
                       style: TextStyle(
                         fontSize: 11.5,
-                        color: Colors.green.shade600,
+                        color: additionColor(scheme),
                       ),
                     ),
                     const SizedBox(width: 3),
@@ -8875,9 +9121,13 @@ class _FileChangeCardState extends State<_FileChangeCard> {
                 ),
               ),
               // Color goes on a Material (not the box) so the diff's
-              // ListTile-based tiles paint their ink/background correctly.
+              // ListTile-based tiles paint their ink/background correctly —
+              // which also means it has to be opaque, blended over the page.
               child: Material(
-                color: scheme.surfaceContainerHighest.withValues(alpha: 0.4),
+                color: Color.alphaBlend(
+                  scheme.surfaceContainerLow,
+                  scheme.surface,
+                ),
                 child: hasDiff
                     ? Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -8922,7 +9172,7 @@ class _CopyablePath extends StatelessWidget {
           child: SelectableText(
             path,
             style: const TextStyle(
-              fontFamily: 'monospace',
+              fontFamily: monoFontFamily,
               fontFamilyFallback: monoCjkFallback,
               fontSize: 12,
             ),
@@ -8992,7 +9242,7 @@ class _PlanCardState extends State<_PlanCard> {
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 4),
       decoration: BoxDecoration(
-        color: scheme.surfaceContainerHigh.withValues(alpha: 0.5),
+        color: scheme.surfaceContainerLow,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: scheme.outlineVariant),
       ),
@@ -9058,7 +9308,7 @@ class _PlanCardState extends State<_PlanCard> {
   Widget _stepRow(_PlanStep s) {
     final scheme = Theme.of(context).colorScheme;
     final (icon, color) = switch (s.status) {
-      'completed' => (Icons.check_circle_rounded, Colors.green.shade600),
+      'completed' => (Icons.check_circle_rounded, additionColor(scheme)),
       'in_progress' => (Icons.timelapse_rounded, scheme.primary),
       _ => (Icons.radio_button_unchecked, scheme.onSurfaceVariant),
     };
@@ -9102,6 +9352,81 @@ class _Group {
   _Group(this.type, this.items);
   final String type;
   final List<_Item> items;
+}
+
+/// One glyph in a message's hover action row.
+///
+/// A washed square on hover rather than a bare icon: the reference app's row of
+/// actions reads as a set of small controls, and an icon that only changes ink
+/// gives no target to aim at under a pointer.
+class _MessageAction extends StatefulWidget {
+  const _MessageAction({
+    required this.icon,
+    required this.tooltip,
+    required this.onPressed,
+  });
+
+  final IconData icon;
+  final String tooltip;
+  final VoidCallback onPressed;
+
+  @override
+  State<_MessageAction> createState() => _MessageActionState();
+}
+
+class _MessageActionState extends State<_MessageAction> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Tooltip(
+      message: widget.tooltip,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => _hovered = true),
+        onExit: (_) => setState(() => _hovered = false),
+        child: GestureDetector(
+          onTap: widget.onPressed,
+          child: Container(
+            padding: const EdgeInsets.all(5),
+            decoration: BoxDecoration(
+              // Off-state is the wash at zero alpha, not transparent: Material
+              // lerps through transparent BLACK, which flashes a dark box.
+              color: _hovered
+                  ? scheme.surfaceContainerHigh
+                  : scheme.surfaceContainerHigh.withValues(alpha: 0),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Icon(
+              widget.icon,
+              size: 15,
+              color: _hovered ? scheme.onSurface : onSurfaceMuted(scheme),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// A run of ≥2 consecutive `agentMessage` items — one turn's reply, split
+/// across several server items — rendered as a single block.
+class _AgentTurn {
+  _AgentTurn(this.items);
+  final List<_Item> items;
+
+  /// Still producing text: the block keeps its actions hidden until the whole
+  /// reply has settled, not just its first part.
+  bool get streaming => items.any((i) => i.streaming);
+
+  /// When the turn finished, per the server.
+  int? get completedAt => items.first.turnCompletedAt;
+
+  /// The reply as one document. Blank parts are dropped so a placeholder item
+  /// can't open the block with an empty paragraph.
+  String get text =>
+      items.map((i) => i.text.trim()).where((t) => t.isNotEmpty).join('\n\n');
 }
 
 /// Collapses a run of same-type tool calls (e.g. several shell commands) into a
@@ -9326,7 +9651,7 @@ class _ActivityCardState extends State<_ActivityCard> {
                         style: prose
                             ? TextStyle(fontSize: 12.5, color: muted)
                             : TextStyle(
-                                fontFamily: 'monospace',
+                                fontFamily: monoFontFamily,
                                 fontFamilyFallback: monoCjkFallback,
                                 fontSize: 12,
                                 color: muted,
@@ -9370,7 +9695,7 @@ class _ActivityCardState extends State<_ActivityCard> {
                         ),
                       ),
                 borderRadius: doc ? BorderRadius.circular(8) : null,
-                color: scheme.surfaceContainerHighest.withValues(alpha: 0.4),
+                color: scheme.surfaceContainerLowest,
               ),
               child: SingleChildScrollView(
                 child: prose
@@ -9380,7 +9705,7 @@ class _ActivityCardState extends State<_ActivityCard> {
                         body,
                         selectable: true,
                         style: const TextStyle(
-                          fontFamily: 'monospace',
+                          fontFamily: monoFontFamily,
                           fontFamilyFallback: monoCjkFallback,
                           fontSize: 12,
                         ),

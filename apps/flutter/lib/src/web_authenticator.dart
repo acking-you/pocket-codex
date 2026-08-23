@@ -4,6 +4,8 @@ library;
 
 import 'dart:io' show Platform;
 
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, defaultTargetPlatform, kIsWeb;
 import 'package:flutter_web_auth_2/flutter_web_auth_2.dart';
 
 /// The custom URL scheme registered for the browser-redirect login deep link
@@ -33,6 +35,25 @@ WebAuthCallback webAuthCallback() {
   return (redirectUri: '$appAuthScheme://auth', callbackScheme: appAuthScheme);
 }
 
+/// Whether the device code should be the DEFAULT sign-in, with the browser
+/// redirect offered as the alternative.
+///
+/// True on desktop. The two idioms don't cost the same per platform: a phone has
+/// one browser with shared cookies and a deep link that returns straight to the
+/// app, so tapping through is the shortest path. On a desktop the redirect has
+/// to come back through a loopback listener or a custom scheme, and it usually
+/// opens whichever browser profile is default — often not the one signed into
+/// GitHub. The device code has no redirect at all and reaches GitHub through the
+/// backend, so it also survives a proxy or VPN that the in-app browser can't.
+///
+/// Gated on `defaultTargetPlatform` (not `dart:io`) so `flutter test` — which
+/// reports android — exercises the mobile default deterministically.
+bool get prefersDeviceCodeLogin =>
+    !kIsWeb &&
+    (defaultTargetPlatform == TargetPlatform.windows ||
+        defaultTargetPlatform == TargetPlatform.macOS ||
+        defaultTargetPlatform == TargetPlatform.linux);
+
 /// Drives the system browser / in-app auth tab for the browser-redirect login.
 /// Abstracted behind an interface so widget tests can supply a fake instead of
 /// the real (platform-channel) plugin.
@@ -58,14 +79,76 @@ class FlutterWebAuthenticator implements WebAuthenticator {
   }) => FlutterWebAuth2.authenticate(
     url: url,
     callbackUrlScheme: callbackUrlScheme,
-    // CRITICAL for desktop: flutter_web_auth_2 v4 defaults useWebview=true, which
-    // on Windows/Linux routes to an embedded webview that matches the callback by
-    // scheme ONLY (`uri.scheme != callbackUrlScheme`). Our desktop callback is a
-    // full `http://localhost:{port}`, whose scheme is just `http`, so it would
-    // NEVER match and the flow would hang. useWebview=false selects the loopback
-    // HTTP-server path (system browser + 127.0.0.1:{port} listener) — exactly the
-    // design here. The option is desktop-only; mobile/macOS native sessions
-    // (custom `pocketcodex` scheme) ignore it.
-    options: const FlutterWebAuth2Options(useWebview: false),
+    options: FlutterWebAuth2Options(
+      // CRITICAL for desktop: flutter_web_auth_2 v4 defaults useWebview=true,
+      // which on Windows/Linux routes to an embedded webview that matches the
+      // callback by scheme ONLY (`uri.scheme != callbackUrlScheme`). Our desktop
+      // callback is a full `http://localhost:{port}`, whose scheme is just
+      // `http`, so it would NEVER match and the flow would hang.
+      // useWebview=false selects the loopback HTTP-server path (system browser +
+      // 127.0.0.1:{port} listener) — exactly the design here. The option is
+      // desktop-only; mobile/macOS native sessions ignore it.
+      useWebview: false,
+      // Android only. Adds FLAG_ACTIVITY_NO_HISTORY to the Custom Tab, so the
+      // tab leaves no entry in the back stack: once the redirect fires, Back
+      // returns to the app instead of to a spent authorize page the user then
+      // can't get out of.
+      intentFlags: ephemeralIntentFlags,
+      // Windows/Linux only. The loopback listener otherwise waits out the
+      // plugin's 5-minute default with no way to give up, which reads as a hung
+      // app when the browser never comes back (a redirect that landed in another
+      // profile, or a network that can't reach GitHub). 90s is long enough to
+      // type a password and a 2FA code, short enough to fail visibly — and the
+      // failure lands on the device-code hint.
+      timeout: 90,
+      // Windows/Linux only: what the browser shows after the redirect. The
+      // plugin's stock page is a bare English "You may now close this page";
+      // this one names the app and says the app is already continuing, so the
+      // user knows the browser is done rather than wondering what to do next.
+      landingPageHtml: _landingPage,
+    ),
   );
 }
+
+/// The page the desktop loopback listener serves once GitHub redirects back.
+///
+/// Deliberately self-contained (no network, no fonts to fetch): it renders on a
+/// machine that may have just failed to reach the internet. Text is bilingual
+/// rather than localized — this is served by a plain HTTP listener that has no
+/// access to the app's l10n, and a signed-in user reads it for two seconds.
+const String _landingPage = '''
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pocket-Codex</title>
+  <style>
+    html, body { margin: 0; padding: 0; background: #F9F9F7; }
+    main {
+      display: flex; flex-direction: column; align-items: center;
+      justify-content: center; min-height: 100vh; gap: 0.75rem;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica,
+                   Arial, sans-serif;
+      color: #1A1A19; text-align: center; padding: 0 1.5rem;
+    }
+    h1 { font-size: 1.25rem; font-weight: 600; margin: 0; }
+    p { margin: 0; color: rgba(26, 26, 25, 0.75); line-height: 1.5; }
+    .sub { font-size: 0.875rem; color: rgba(26, 26, 25, 0.5); }
+    @media (prefers-color-scheme: dark) {
+      html, body { background: #171717; }
+      main { color: #FFFFFF; }
+      p { color: rgba(255, 255, 255, 0.75); }
+      .sub { color: rgba(255, 255, 255, 0.5); }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Pocket-Codex</h1>
+    <p>已登录，可以关闭此页面。</p>
+    <p class="sub">Signed in. You can close this page and return to the app.</p>
+  </main>
+</body>
+</html>
+''';

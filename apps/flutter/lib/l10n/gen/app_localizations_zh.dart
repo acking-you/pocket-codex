@@ -596,6 +596,14 @@ class AppLocalizationsZh extends AppLocalizations {
   String get unreachableReason => '中继上的注册仍在,但远端 app-server 没有响应——它可能未启动,或已经宕机。';
 
   @override
+  String get unreachableAuthRejected =>
+      '中继拒绝了这次连接:认证码缺失或已失效。隧道本身是通的,远端并没有宕机——请在「服务管理」里重新登录账号,或重新填写中继密钥。';
+
+  @override
+  String get unreachableSilent =>
+      '隧道已建立,但远端 app-server 在超时前没有应答——它可能正在启动、已卡死,或已经退出。';
+
+  @override
   String get apiUnreachableReason => '中继上的注册仍在,但远端 API 服务没有响应——它可能未启动,或已经宕机。';
 
   @override
@@ -617,6 +625,12 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get viewDiff => '查看变更';
+
+  @override
+  String get loadingDiff => '正在加载变更…';
+
+  @override
+  String get cancelDiffLoad => '取消加载变更';
 
   @override
   String get changesTitle => '变更';

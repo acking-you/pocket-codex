@@ -1138,6 +1138,45 @@ void main() {
     ); // can retry the browser too
   });
 
+  testWidgets('onboarding: a browser sign-in that never returns also guides to '
+      'the device code', (t) async {
+    // Not every browser failure is a dismissal: the desktop loopback listener
+    // can time out, and a redirect can land in a browser profile that isn't
+    // signed in. Those used to surface as a raw transport error with no next
+    // step, even though the remedy is the same as CANCELED's.
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: '', hasKey: false),
+    );
+    await t.pumpWidget(
+      _routerHost(
+        api,
+        initial: '/onboarding',
+        routes: [
+          GoRoute(
+            path: '/onboarding',
+            builder: (_, _) => const AccountOnboardingScreen(),
+          ),
+          _stub('/', 'HOME-ROUTE'),
+        ],
+        overrides: [
+          webAuthenticatorProvider.overrideWithValue(
+            _FakeWebAuthenticator('', error: StateError('listener timed out')),
+          ),
+        ],
+      ),
+    );
+    await t.pumpAndSettle();
+    await t.tap(find.text('使用 GitHub 登录'));
+    await t.pumpAndSettle();
+
+    expect(find.text('HOME-ROUTE'), findsNothing);
+    // Leads with the remedy, and the device-code button is still reachable.
+    expect(find.textContaining('设备码'), findsWidgets);
+    expect(find.text('改用设备码登录'), findsOneWidget);
+    // The cause is kept, so a real bug stays diagnosable from a screenshot.
+    expect(find.textContaining('listener timed out'), findsOneWidget);
+  });
+
   testWidgets('settings: account sign-out clears the user and returns to '
       'onboarding', (t) async {
     final api = FakeBridgeApi(
@@ -1164,6 +1203,118 @@ void main() {
     await t.pumpAndSettle();
     expect(api.accountUser, isNull); // accountLogout ran
     expect(find.text('ONBOARDING-ROUTE'), findsOneWidget); // back to onboarding
+  });
+
+  testWidgets('onboarding: signing in makes the app SEE the account', (
+    t,
+  ) async {
+    // The bug this locks: config is a FutureProvider that had already resolved
+    // (tokenless) before the login, and nothing invalidated it afterwards. The
+    // token reached config.toml, but every `mode == 'account'` gate in the app
+    // — Settings' account section, the home hosting CTA, the Sessions/Hosting
+    // tabs — kept reading the pre-login snapshot and behaved as signed out.
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: '', hasKey: false),
+    )..accountPollStatus = 'authorized';
+    await t.pumpWidget(
+      _routerHost(
+        api,
+        initial: '/onboarding',
+        routes: [
+          GoRoute(
+            path: '/onboarding',
+            builder: (_, _) => const AccountOnboardingScreen(),
+          ),
+          _stub('/', 'HOME-ROUTE'),
+          // Land on the real Settings screen: it is the visible symptom, and it
+          // renders the identity only when the config says we're signed in.
+          GoRoute(path: '/welcome', builder: (_, _) => const SettingsScreen()),
+        ],
+      ),
+    );
+    await t.pumpAndSettle();
+    final container = ProviderScope.containerOf(
+      t.element(find.byType(AccountOnboardingScreen)),
+    );
+    container.read(uiPrefsProvider.notifier).setLastService('seed');
+
+    // Warm the config cache the way the real app does — reading it BEFORE the
+    // login is what made the stale value stick.
+    await container.read(configProvider.future);
+    expect(container.read(configProvider).valueOrNull?.mode, 'unconfigured');
+
+    await t.tap(find.text('改用设备码登录'));
+    await t.pump();
+    await t.pump();
+    await t.pump(const Duration(seconds: 6));
+    await t.pump();
+    await t.pumpAndSettle();
+
+    // The provider re-read the post-login config, so the identity is on screen.
+    expect(container.read(configProvider).valueOrNull?.mode, 'account');
+    expect(find.text('@octocat'), findsOneWidget);
+  });
+
+  testWidgets('Manage services carries the theme toggle too', (t) async {
+    // It acts on the whole window, so it belongs on every full-window surface —
+    // not only the chat screen. Regression guard for it living in one place.
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(1200, 900);
+    addTearDown(t.view.reset);
+    await t.pumpWidget(_host(const ServicesScreen(), api));
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('theme-toggle-btn')), findsOneWidget);
+  });
+
+  testWidgets('onboarding: desktop leads with the device code, mobile with the '
+      'browser', (t) async {
+    // The two idioms don't cost the same per platform: a desktop redirect comes
+    // back through a loopback listener and usually opens whichever browser
+    // profile is default — often not the one signed into GitHub — while the
+    // device code has no redirect at all. On a phone the deep link returns
+    // straight to the app, so tapping through is the shortest path.
+    Future<void> mount() async {
+      await t.pumpWidget(
+        _routerHost(
+          FakeBridgeApi(config: const ConfigInfo(relay: '', hasKey: false)),
+          initial: '/onboarding',
+          routes: [
+            GoRoute(
+              path: '/onboarding',
+              builder: (_, _) => const AccountOnboardingScreen(),
+            ),
+          ],
+        ),
+      );
+      await t.pumpAndSettle();
+    }
+
+    // Primary action = the FilledButton; the other stays available as a
+    // TextButton, so neither platform loses a way in.
+    String primaryLabel() => t
+        .widget<Text>(
+          find.descendant(
+            of: find.byType(FilledButton),
+            matching: find.byType(Text),
+          ),
+        )
+        .data!;
+
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    try {
+      await mount();
+      expect(primaryLabel(), '改用设备码登录'); // accountUseDeviceCode
+      expect(find.byType(TextButton), findsWidgets); // browser still offered
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+
+    // The harness reports android, which is the mobile default.
+    await mount();
+    expect(primaryLabel(), '使用 GitHub 登录'); // accountSignInButton
   });
 
   testWidgets('ApiService rejects an out-of-range port before subscribing', (
@@ -2140,6 +2291,88 @@ void main() {
     await t.tap(find.byIcon(Icons.content_copy_outlined).last);
     await t.pump();
     expect(copied, isNotEmpty);
+  });
+
+  testWidgets('One turn is one block, however many items it arrives in', (
+    t,
+  ) async {
+    final copied = <String>[];
+    t.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        if (call.method == 'Clipboard.setData') {
+          copied.add((call.arguments as Map)['text'] as String);
+        }
+        return null;
+      },
+    );
+    addTearDown(
+      () => t.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      ),
+    );
+
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    // One reply the server split across three items, the way it does when a
+    // preamble precedes a tool batch and the answer follows it.
+    api.readResult = const ThreadHistory(
+      items: [
+        ThreadItem(id: 'u1', itemType: 'userMessage', title: '', text: 'ask'),
+        ThreadItem(
+          id: 'a1',
+          itemType: 'agentMessage',
+          title: '',
+          text: 'part one',
+        ),
+        ThreadItem(
+          id: 'a2',
+          itemType: 'agentMessage',
+          title: '',
+          text: 'part two',
+        ),
+        ThreadItem(
+          id: 'a3',
+          itemType: 'agentMessage',
+          title: '',
+          text: 'part three',
+        ),
+      ],
+      running: false,
+    );
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(1400, 900);
+    addTearDown(t.view.reset);
+    await t.pumpWidget(
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          threadId: 'th-merge',
+        ),
+        api,
+      ),
+    );
+    await t.pumpAndSettle();
+
+    // All three parts are on screen, but as ONE rendered block — not three,
+    // each with its own hover actions.
+    expect(find.textContaining('part one', findRichText: true), findsWidgets);
+    expect(find.textContaining('part three', findRichText: true), findsWidgets);
+    expect(find.byType(MarkdownBody), findsOneWidget);
+
+    // And copying takes the whole turn, not just the part under the pointer.
+    final gesture = await t.createGesture(kind: PointerDeviceKind.mouse);
+    await gesture.addPointer(location: Offset.zero);
+    addTearDown(() => gesture.removePointer());
+    await gesture.moveTo(t.getCenter(find.byType(MarkdownBody)));
+    await t.pumpAndSettle();
+    await t.tap(find.byIcon(Icons.content_copy_outlined).last);
+    await t.pump();
+    expect(copied.single, contains('part one'));
+    expect(copied.single, contains('part three'));
   });
 
   testWidgets('Agent replies render as Markdown (headings, not a bubble)', (
@@ -5010,7 +5243,7 @@ void main() {
     expect(find.text('12%'), findsOneWidget);
   });
 
-  testWidgets('Sidebar theme button flips between light and dark', (t) async {
+  testWidgets('Theme button flips between light and dark', (t) async {
     final api = FakeBridgeApi(
       config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
     );
@@ -5050,7 +5283,7 @@ void main() {
     await t.pumpAndSettle();
 
     // Two states only — no third "auto" icon to land on.
-    final btn = find.byKey(const Key('sidebar-theme-btn'));
+    final btn = find.byKey(const Key('theme-toggle-btn'));
     expect(btn, findsOneWidget);
     expect(find.byIcon(Icons.brightness_auto_outlined), findsNothing);
 
@@ -5068,6 +5301,12 @@ void main() {
     await t.pumpAndSettle();
     expect(find.byIcon(Icons.light_mode_outlined), findsOneWidget);
     expect(find.byIcon(Icons.brightness_auto_outlined), findsNothing);
+
+    // It lives with the window's controls, not in the sessions pane, so
+    // collapsing the sidebar must not take appearance away with it.
+    await t.tap(find.byIcon(Icons.menu_open));
+    await t.pumpAndSettle();
+    expect(btn, findsOneWidget);
   });
 
   testWidgets('The composer drops the project chip once the thread exists', (
@@ -5171,6 +5410,125 @@ void main() {
     await t.tap(find.byKey(const Key('review-close')));
     await t.pumpAndSettle();
     expect(find.text('审阅'), findsNothing);
+  });
+
+  testWidgets('A slow diff load spins on the badge and can be cancelled', (
+    t,
+  ) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(1400, 900);
+    addTearDown(t.view.reset);
+    api.readResult = const ThreadHistory(
+      items: [
+        ThreadItem(id: 'u1', itemType: 'userMessage', title: '', text: 'hi'),
+      ],
+      running: false,
+      branch: 'feature/x',
+      cwd: '/proj',
+      tokensUsed: 5000,
+      contextWindow: 100000,
+    );
+    api.gitDiffText =
+        'diff --git a/lib/x.dart b/lib/x.dart\n'
+        '--- a/lib/x.dart\n'
+        '+++ b/lib/x.dart\n'
+        '@@ -1 +1,2 @@\n'
+        '-old\n'
+        '+new\n';
+    // Gate the diff from the very start, so the screen reaches the badge with
+    // NO diff read yet — the only case that has to block on a fetch.
+    final gate = Completer<void>();
+    api.gitDiffGate = gate;
+    await t.pumpWidget(
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          threadId: 'thread-cancel',
+        ),
+        api,
+      ),
+    );
+    await t.pump();
+    await t.pump(const Duration(milliseconds: 100));
+
+    await t.tap(find.byKey(const Key('status-branch-chip')));
+    await t.pump();
+
+    // The press is acknowledged immediately: the badge spins instead of sitting
+    // inert until the diff lands.
+    expect(find.byType(CircularProgressIndicator), findsWidgets);
+    expect(find.text('审阅'), findsNothing); // review not open yet
+
+    // Tapping again while it's in flight cancels: the spinner goes away and the
+    // review never opens, even once the underlying call finally returns.
+    await t.tap(find.byKey(const Key('status-branch-chip')));
+    await t.pump();
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+
+    gate.complete();
+    await t.pumpAndSettle();
+    expect(find.text('审阅'), findsNothing);
+
+    // A fresh press still works — cancelling doesn't wedge the badge.
+    api.gitDiffGate = null;
+    await t.tap(find.byKey(const Key('status-branch-chip')));
+    await t.pumpAndSettle();
+    expect(find.text('审阅'), findsOneWidget);
+  });
+
+  testWidgets('Reopening the review does not wait on another diff fetch', (
+    t,
+  ) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(1400, 900);
+    addTearDown(t.view.reset);
+    api.readResult = const ThreadHistory(
+      items: [
+        ThreadItem(id: 'u1', itemType: 'userMessage', title: '', text: 'hi'),
+      ],
+      running: false,
+      branch: 'feature/x',
+      cwd: '/proj',
+      tokensUsed: 5000,
+      contextWindow: 100000,
+    );
+    api.gitDiffText =
+        'diff --git a/lib/x.dart b/lib/x.dart\n'
+        '--- a/lib/x.dart\n'
+        '+++ b/lib/x.dart\n'
+        '@@ -1 +1,2 @@\n'
+        '-old\n'
+        '+new\n';
+    await t.pumpWidget(
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          threadId: 'thread-warm',
+        ),
+        api,
+      ),
+    );
+    await t.pumpAndSettle();
+
+    // A diff is already in hand, so hanging every subsequent fetch must not stop
+    // the review from opening: it shows what it has and refreshes behind itself.
+    final stuck = Completer<void>();
+    api.gitDiffGate = stuck;
+    await t.tap(find.byKey(const Key('status-branch-chip')));
+    await t.pump();
+    expect(find.text('审阅'), findsOneWidget);
+    expect(find.byKey(const Key('review-file-lib/x.dart')), findsOneWidget);
+
+    stuck.complete();
+    await t.pumpAndSettle();
   });
 
   testWidgets('Compact menu action calls the bridge after confirm', (t) async {

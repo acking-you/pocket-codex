@@ -211,6 +211,17 @@ Future<void> appDisconnect({required String serviceKey}) =>
 Future<bool> appProbe({required String serviceKey}) =>
     RustLib.instance.api.crateApiBridgeAppProbe(serviceKey: serviceKey);
 
+/// Why [`app_probe`] considers a service unreachable, or `None` when it is
+/// reachable.
+///
+/// A bare `false` made the UI say "the app-server did not respond", which is
+/// wrong whenever the tunnel DID answer and refused us — a relay rejecting the
+/// handshake (missing or stale authentication code) is the common case, and it
+/// needs a different fix from a dead backend. This hands the transport's own
+/// words to the UI so it can name the actual problem.
+Future<String?> appProbeReason({required String serviceKey}) =>
+    RustLib.instance.api.crateApiBridgeAppProbeReason(serviceKey: serviceKey);
+
 /// Probe whether an API proxy is actually REACHABLE — its host answers a
 /// minimal HTTP request — rather than merely registered on the relay. The
 /// services list uses this so a registered-but-dead API proxy (a live relay
@@ -375,9 +386,9 @@ Future<void> appCompact({
 /// recent agent message), or `None` when it has produced none.
 ///
 /// Its own call rather than a field on [`app_thread_list`] because the upstream
-/// `thread/list` carries no summary: the only source is a full `thread/read`, so
-/// the UI fetches these lazily for the rows it actually shows instead of paying
-/// for every conversation up front.
+/// `thread/list` carries no summary: the only source is a full `thread/read`,
+/// so the UI fetches these lazily for the rows it actually shows instead of
+/// paying for every conversation up front.
 Future<String?> appThreadSummary({
   required String serviceKey,
   required String threadId,
@@ -1926,12 +1937,27 @@ class ThreadItemDto {
   /// filename chip. Empty for every other item kind.
   final List<String> images;
 
+  /// Id of the turn this item belongs to — the server's own turn boundary
+  /// (`thread/read` nests items under their turn), so the UI can render one
+  /// turn's reply as one block instead of inferring boundaries from the item
+  /// sequence. Empty when the item came from the live stream buffer.
+  final String turnId;
+
+  /// Unix seconds when this item's turn completed; `None` while it runs.
+  final PlatformInt64? turnCompletedAt;
+
+  /// This item's turn duration in milliseconds, when the server reports it.
+  final PlatformInt64? turnDurationMs;
+
   const ThreadItemDto({
     required this.id,
     required this.itemType,
     required this.title,
     required this.text,
     required this.images,
+    required this.turnId,
+    this.turnCompletedAt,
+    this.turnDurationMs,
   });
 
   @override
@@ -1940,7 +1966,10 @@ class ThreadItemDto {
       itemType.hashCode ^
       title.hashCode ^
       text.hashCode ^
-      images.hashCode;
+      images.hashCode ^
+      turnId.hashCode ^
+      turnCompletedAt.hashCode ^
+      turnDurationMs.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -1951,7 +1980,10 @@ class ThreadItemDto {
           itemType == other.itemType &&
           title == other.title &&
           text == other.text &&
-          images == other.images;
+          images == other.images &&
+          turnId == other.turnId &&
+          turnCompletedAt == other.turnCompletedAt &&
+          turnDurationMs == other.turnDurationMs;
 }
 
 /// Thread summary mirrored for Dart.

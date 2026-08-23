@@ -67,3 +67,25 @@ bool isHostNameConflict(String message) {
       lower.contains('already owns') ||
       lower.contains('already registered and online');
 }
+
+/// True when a reachability probe failed because the far end ANSWERED and
+/// refused the handshake over the relay — the tunnel carried bytes, but the
+/// relay rejected us (a missing or stale authentication code). This is not a
+/// dead backend, and the fix is different: the key/token has to be re-supplied,
+/// not the host restarted.
+///
+/// The relay answers the WebSocket upgrade with `403 missing or invalid
+/// authentication code`, which reaches us through the transport's error chain.
+bool isRelayAuthRejection(String message) {
+  final lower = message.toLowerCase();
+  return lower.contains('authentication code') ||
+      (lower.contains('403') && lower.contains('forbidden'));
+}
+
+/// True when the probe never got an answer at all — the far end is genuinely
+/// silent (not listening, wedged, or gone). Distinct from
+/// [isRelayAuthRejection], where it answered and said no.
+bool isProbeTimeout(String message) {
+  final lower = message.toLowerCase();
+  return lower.contains('timed out') || lower.contains('timeout');
+}

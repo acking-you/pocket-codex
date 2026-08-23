@@ -7,6 +7,7 @@ import 'package:pocket_codex/src/desktop_theme.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/attachment_refs.dart';
 import 'package:pocket_codex/src/image_attachments.dart';
+import 'package:pocket_codex/src/widgets/window_title_bar.dart';
 
 /// One message attachment resolved from its wire URL: either renderable
 /// pixels (a `data:image/...` URL, decoded once here) or a host-side file we
@@ -502,44 +503,52 @@ class _ImageThumbState extends State<_ImageThumb> {
     return MouseRegion(
       onEnter: (_) => setState(() => _hovering = true),
       onExit: (_) => setState(() => _hovering = false),
-      child: Stack(
-        children: [
-          AttachmentTile(
-            side: widget.side,
-            onTap: () =>
-                ImageViewerPage.show(context, widget.images, widget.index),
-            child: Image.memory(
-              bytes,
-              key: Key('msg-image-${widget.index}'),
-              width: widget.side,
-              height: widget.side,
-              fit: BoxFit.cover,
-              // Decode near thumbnail resolution — full-res frames for every
-              // thumb would hold megabytes of pixels per message. 2× the box so
-              // a landscape image's SHORT edge still reaches the square cover
-              // box (cacheWidth alone would decode it too short and blurry).
-              cacheWidth: (widget.side * scale * 2).round(),
-              gaplessPlayback: true,
-              errorBuilder: (context, _, _) => Icon(
-                Icons.broken_image_outlined,
-                color: Theme.of(context).colorScheme.outline,
-              ),
-            ),
-          ),
-          if (canSaveImages && _hovering)
-            Positioned(
-              top: 4,
-              right: 4,
-              child: _SaveChip(
-                onPressed: () => saveImageBytes(
-                  context,
-                  bytes,
-                  suggestedName:
-                      'image-${widget.index + 1}.${sniffImageExtension(bytes)}',
+      // Sized to the tile so the overlaid button positions against the picture's
+      // own edges. Left to the Stack's default sizing it anchored to whatever
+      // the largest child measured, which put the disc half outside the frame.
+      child: SizedBox(
+        width: widget.side,
+        height: widget.side,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            AttachmentTile(
+              side: widget.side,
+              onTap: () =>
+                  ImageViewerPage.show(context, widget.images, widget.index),
+              child: Image.memory(
+                bytes,
+                key: Key('msg-image-${widget.index}'),
+                width: widget.side,
+                height: widget.side,
+                fit: BoxFit.cover,
+                // Decode near thumbnail resolution — full-res frames for every
+                // thumb would hold megabytes of pixels per message. 2× the box so
+                // a landscape image's SHORT edge still reaches the square cover
+                // box (cacheWidth alone would decode it too short and blurry).
+                cacheWidth: (widget.side * scale * 2).round(),
+                gaplessPlayback: true,
+                errorBuilder: (context, _, _) => Icon(
+                  Icons.broken_image_outlined,
+                  color: Theme.of(context).colorScheme.outline,
                 ),
               ),
             ),
-        ],
+            if (canSaveImages && _hovering)
+              Positioned(
+                top: 4,
+                right: 4,
+                child: _SaveChip(
+                  onPressed: () => saveImageBytes(
+                    context,
+                    bytes,
+                    suggestedName:
+                        'image-${widget.index + 1}.${sniffImageExtension(bytes)}',
+                  ),
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -690,7 +699,13 @@ class _ImageViewerPageState extends State<ImageViewerPage> {
     final l10n = AppLocalizations.of(context);
     return Scaffold(
       backgroundColor: Colors.black,
-      appBar: AppBar(
+      // The viewer fills the window, so it needs the app's own title bar rather
+      // than a bare AppBar: on macOS that insets the close button past the
+      // native traffic lights, and on Windows — where TitleBarStyle.hidden
+      // removed the native caption buttons — it redraws minimise/maximise/close.
+      // A plain AppBar left the window with no way to be closed or maximised
+      // for as long as the viewer was open.
+      appBar: WindowTitleBar(
         backgroundColor: Colors.black,
         foregroundColor: Colors.white,
         title: widget.images.length > 1

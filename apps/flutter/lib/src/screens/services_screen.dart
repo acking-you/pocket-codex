@@ -17,6 +17,7 @@ import 'package:pocket_codex/src/theme.dart';
 import 'package:pocket_codex/src/widgets/loading.dart';
 import 'package:pocket_codex/src/widgets/local_host_dialog.dart';
 import 'package:pocket_codex/src/widgets/status_dots.dart';
+import 'package:pocket_codex/src/widgets/theme_toggle.dart';
 
 /// Management hub (`/manage`): lists discovered services on the configured
 /// relay, plus the Sessions browser and desktop local hosting. The chat-first
@@ -168,6 +169,9 @@ class _ServicesScreenState extends ConsumerState<ServicesScreen>
             tooltip: l10n.logsTitle,
             onPressed: () => context.push('/logs'),
           ),
+          // Appearance sits with the window's own controls here too, so it is
+          // in the same place on every full-window surface.
+          const ThemeToggle(),
           IconButton(
             key: const Key('settings-btn'),
             icon: const Icon(Icons.settings),
@@ -841,8 +845,8 @@ class _ServiceList extends ConsumerWidget {
       children: [
         Expanded(child: constrained),
         Material(
-          elevation: 8,
-          color: scheme.surfaceContainerHigh,
+          elevation: 0,
+          color: scheme.surfaceBright,
           child: SafeArea(
             top: false,
             child: Padding(
@@ -1113,7 +1117,7 @@ class _IdentityCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: surfacePanel(scheme),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.5)),
+        border: Border.all(color: scheme.outlineVariant),
       ),
       child: Row(
         children: [
@@ -1329,9 +1333,7 @@ class _ServiceCard extends StatelessWidget {
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(
-                  color: highlight
-                      ? scheme.primary
-                      : scheme.outlineVariant.withValues(alpha: 0.5),
+                  color: highlight ? scheme.primary : scheme.outlineVariant,
                   width: highlight ? 1.5 : 1,
                 ),
               ),
@@ -1573,9 +1575,7 @@ class _LocalHostCard extends ConsumerWidget {
           child: Container(
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(
-                color: scheme.outlineVariant.withValues(alpha: 0.5),
-              ),
+              border: Border.all(color: scheme.outlineVariant),
             ),
             child: Column(
               children: [
@@ -1617,10 +1617,7 @@ class _LocalHostCard extends ConsumerWidget {
                     ],
                   ),
                 ),
-                Divider(
-                  height: 1,
-                  color: scheme.outlineVariant.withValues(alpha: 0.5),
-                ),
+                Divider(height: 1, color: scheme.outlineVariant),
                 _TunnelRow(
                   label: l10n.tunnelAppLabel,
                   addr: host.appListenAddr,
@@ -1633,10 +1630,7 @@ class _LocalHostCard extends ConsumerWidget {
                   ),
                   onReregister: () => _reregister(context, ref, 'app'),
                 ),
-                Divider(
-                  height: 1,
-                  color: scheme.outlineVariant.withValues(alpha: 0.5),
-                ),
+                Divider(height: 1, color: scheme.outlineVariant),
                 _TunnelRow(
                   label: l10n.tunnelApiLabel,
                   addr: host.apiListenAddr,
@@ -1649,10 +1643,7 @@ class _LocalHostCard extends ConsumerWidget {
                   ),
                   onReregister: () => _reregister(context, ref, 'api'),
                 ),
-                Divider(
-                  height: 1,
-                  color: scheme.outlineVariant.withValues(alpha: 0.5),
-                ),
+                Divider(height: 1, color: scheme.outlineVariant),
                 _TunnelRow(
                   label: l10n.tunnelMetaLabel,
                   addr: host.metaListenAddr,

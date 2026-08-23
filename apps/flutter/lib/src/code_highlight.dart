@@ -42,8 +42,6 @@ import 'package:re_highlight/languages/typescript.dart';
 import 'package:re_highlight/languages/xml.dart';
 import 'package:re_highlight/languages/yaml.dart';
 import 'package:re_highlight/re_highlight.dart';
-import 'package:re_highlight/styles/atom-one-dark.dart';
-import 'package:re_highlight/styles/atom-one-light.dart';
 
 /// The registry, built once. Grammar compilation is not free, and a streaming
 /// turn re-renders every code block in the transcript on every chunk.
@@ -129,6 +127,62 @@ const Map<String, String> _aliases = {
 /// trade — the block is a log dump, not something anyone reads as code.
 const int _maxHighlightChars = 20000;
 
+/// The design system's syntax palette: eight roles, each an opaque resolved
+/// colour rather than an ink alpha — code has to hold its hue against the
+/// block's own ground, so these are the one part of the palette that doesn't
+/// composite. Plain code carries no role and inherits the base style's ink.
+///
+/// highlight.js emits far more token names than the design names roles for, so
+/// the map below folds them onto the eight. Anything unmapped stays plain,
+/// which is the intended behaviour: an unrecognised token is not a colour.
+Map<String, TextStyle> _syntaxTheme(Brightness brightness) {
+  final dark = brightness == Brightness.dark;
+  final keyword = dark ? const Color(0xFFEF6E9F) : const Color(0xFFA62457);
+  final type = dark ? const Color(0xFFD9A054) : const Color(0xFF96540A);
+  final function = dark ? const Color(0xFFB49AEC) : const Color(0xFF6E4DBE);
+  final string = dark ? const Color(0xFF5BC4AF) : const Color(0xFF0E7264);
+  final number = dark ? const Color(0xFF74A9EC) : const Color(0xFF1F63BC);
+  final comment = dark ? const Color(0xFF8A8177) : const Color(0xFF8C8579);
+  final meta = dark ? const Color(0xFF8FA3CE) : const Color(0xFF5F6E8C);
+  final punctuation = dark ? const Color(0xFF938D82) : const Color(0xFF6F6A60);
+
+  return {
+    'keyword': TextStyle(color: keyword),
+    'literal': TextStyle(color: keyword),
+    'selector-tag': TextStyle(color: keyword),
+    'section': TextStyle(color: keyword),
+    'strong': TextStyle(color: keyword, fontWeight: FontWeight.w600),
+    'type': TextStyle(color: type),
+    'class-title': TextStyle(color: type),
+    'title': TextStyle(color: function),
+    'name': TextStyle(color: function),
+    'attr': TextStyle(color: function),
+    'attribute': TextStyle(color: function),
+    'selector-class': TextStyle(color: function),
+    'selector-id': TextStyle(color: function),
+    'selector-attr': TextStyle(color: function),
+    'selector-pseudo': TextStyle(color: function),
+    'string': TextStyle(color: string),
+    'meta-string': TextStyle(color: string),
+    'regexp': TextStyle(color: string),
+    'addition': TextStyle(color: string),
+    'symbol': TextStyle(color: string),
+    'bullet': TextStyle(color: string),
+    'link': TextStyle(color: string),
+    'number': TextStyle(color: number),
+    'formula': TextStyle(color: number),
+    'comment': TextStyle(color: comment),
+    'quote': TextStyle(color: comment),
+    'doctag': TextStyle(color: comment),
+    'meta': TextStyle(color: meta),
+    'variable': TextStyle(color: meta),
+    'template-variable': TextStyle(color: meta),
+    'subst': TextStyle(color: meta),
+    'deletion': TextStyle(color: meta),
+    'emphasis': TextStyle(color: punctuation),
+  };
+}
+
 /// [code] as a highlighted span, or a plain one when the language is unknown,
 /// unsupported, or the block is too long to be worth sweeping.
 ///
@@ -149,10 +203,7 @@ TextSpan highlightCode({
   }
   try {
     final result = _hl.highlight(code: code, language: lang);
-    final renderer = TextSpanRenderer(
-      base,
-      brightness == Brightness.dark ? atomOneDarkTheme : atomOneLightTheme,
-    );
+    final renderer = TextSpanRenderer(base, _syntaxTheme(brightness));
     result.render(renderer);
     // The renderer yields null for input it produced no nodes for (an empty
     // block); fall back rather than render nothing.

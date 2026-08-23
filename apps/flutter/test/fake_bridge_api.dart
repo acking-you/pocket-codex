@@ -191,11 +191,26 @@ class FakeBridgeApi implements BridgeApi {
   ) async {
     if (accountPollStatus == 'authorized') {
       accountUser = const AccountUser(login: 'octocat', accountId: '42');
+      _signIn(accountUser!);
     }
     return AccountPoll(
       status: accountPollStatus,
       login: accountUser?.login,
       accountId: accountUser?.accountId,
+    );
+  }
+
+  /// Mirror what Rust does on a successful login: persist the token, which flips
+  /// `mode` to `account`. Without this the fake left `mode: unconfigured`, so a
+  /// test could never catch the UI reading a stale config after signing in.
+  void _signIn(AccountUser user) {
+    _config = ConfigInfo(
+      relay: _config.relay,
+      hasKey: _config.hasKey,
+      locale: _config.locale,
+      mode: 'account',
+      accountLogin: user.login,
+      hasAccountToken: true,
     );
   }
 
@@ -223,6 +238,7 @@ class FakeBridgeApi implements BridgeApi {
     required String backend,
   }) async {
     accountUser = const AccountUser(login: 'octocat', accountId: '42');
+    _signIn(accountUser!);
     return accountUser!;
   }
 
@@ -230,7 +246,16 @@ class FakeBridgeApi implements BridgeApi {
   Future<AccountUser?> accountCurrentUser() async => accountUser;
 
   @override
-  Future<void> accountLogout() async => accountUser = null;
+  Future<void> accountLogout() async {
+    accountUser = null;
+    // The token goes with it, so the mode derives back off `account`.
+    _config = ConfigInfo(
+      relay: _config.relay,
+      hasKey: _config.hasKey,
+      locale: _config.locale,
+      mode: _config.relay == null ? 'unconfigured' : 'self_host',
+    );
+  }
 
   @override
   Future<List<AccountService>> accountServices() async => accountServiceList;
@@ -424,6 +449,16 @@ class FakeBridgeApi implements BridgeApi {
   Future<bool> appProbe(String serviceKey) async =>
       _appConnected.contains(serviceKey) || (reachable[serviceKey] ?? true);
 
+  /// Seedable failure reason for [appProbeReason]; null falls back to a generic
+  /// one so an unreachable fake still exercises the "we know why" path.
+  final Map<String, String> probeReason = {};
+
+  @override
+  Future<String?> appProbeReason(String serviceKey) async =>
+      await appProbe(serviceKey)
+      ? null
+      : (probeReason[serviceKey] ?? 'probe: initialize timed out');
+
   @override
   Future<bool> apiProbe(String serviceKey) async =>
       reachable[serviceKey] ?? true;
@@ -491,9 +526,16 @@ class FakeBridgeApi implements BridgeApi {
   /// Unified diff returned by [appGitDiff] (tests can override).
   String gitDiffText = '';
 
+  /// When set, [appGitDiff] waits on this before returning — so a test can hold
+  /// the fetch open and assert on the loading state, then complete it.
+  Completer<void>? gitDiffGate;
+
   @override
-  Future<String> appGitDiff(String serviceKey, String threadId) async =>
-      gitDiffText;
+  Future<String> appGitDiff(String serviceKey, String threadId) async {
+    final gate = gitDiffGate;
+    if (gate != null) await gate.future;
+    return gitDiffText;
+  }
 
   /// Records whether [appCompact] was called.
   bool compacted = false;

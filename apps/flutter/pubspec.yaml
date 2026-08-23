@@ -120,6 +120,33 @@ flutter:
     - assets/tray/tray.png
     - assets/tray/tray_template@2x.png
     - assets/tray/tray.ico
+  # The design system's typefaces (SIL OFL, see assets/fonts/OFL-*.txt): Figtree
+  # for prose, Geist Mono for code. Static instances rather than the variable
+  # TTFs — Flutter maps FontWeight to the nearest *declared* weight and would
+  # not interpolate a weight axis. ~740 KB total, so unlike Noto Sans SC these
+  # ship on every platform; neither face has any CJK glyph, so Chinese falls
+  # through to the fallback chain in lib/src/fonts.dart.
+  fonts:
+    - family: Figtree
+      fonts:
+        - asset: assets/fonts/Figtree-Light.ttf
+          weight: 300
+        - asset: assets/fonts/Figtree-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/Figtree-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/Figtree-SemiBold.ttf
+          weight: 600
+        - asset: assets/fonts/Figtree-Bold.ttf
+          weight: 700
+    - family: GeistMono
+      fonts:
+        - asset: assets/fonts/GeistMono-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/GeistMono-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/GeistMono-SemiBold.ttf
+          weight: 600
 
 flutter_launcher_icons:
   # All launcher icons derive from icon/logo_dark.png (the ink tile reads on
@@ -147,7 +174,7 @@ flutter_launcher_icons:
     generate: true
     image_path: "icon/icon_glyph.png"
     background_color: "#FFFFFF"
-    theme_color: "#14B8A6"
+    theme_color: "#E071A7"
   # Windows: emits runner/resources/app_icon.ico (window + taskbar).
   windows:
     generate: true
@@ -166,9 +193,9 @@ flutter_native_splash:
   image: assets/logo/mark_light.png
   image_dark: assets/logo/mark_dark.png
   color: "#FDFDFD"
-  color_dark: "#10121C"
+  color_dark: "#1E1E1E"
   android_12:
     image: assets/logo/mark_light.png
     image_dark: assets/logo/mark_dark.png
     color: "#FDFDFD"
-    color_dark: "#10121C"
+    color_dark: "#1E1E1E"

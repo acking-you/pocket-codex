@@ -134,7 +134,7 @@ class _ApiServiceState extends ConsumerState<ApiServiceScreen> {
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
           decoration: BoxDecoration(
-            color: scheme.surfaceContainerHighest.withValues(alpha: 0.5),
+            color: scheme.surfaceContainerLow,
             borderRadius: BorderRadius.circular(8),
           ),
           child: Row(
@@ -143,7 +143,7 @@ class _ApiServiceState extends ConsumerState<ApiServiceScreen> {
                 child: SelectableText(
                   widget.serviceKey,
                   style: TextStyle(
-                    fontFamily: 'monospace',
+                    fontFamily: monoFontFamily,
                     fontFamilyFallback: monoCjkFallback,
                     fontSize: 12,
                     color: scheme.onSurfaceVariant,
@@ -273,7 +273,7 @@ class _ProviderSnippet extends StatelessWidget {
               snippet,
               selectable: true,
               style: const TextStyle(
-                fontFamily: 'monospace',
+                fontFamily: monoFontFamily,
                 fontFamilyFallback: monoCjkFallback,
                 fontSize: 12,
               ),

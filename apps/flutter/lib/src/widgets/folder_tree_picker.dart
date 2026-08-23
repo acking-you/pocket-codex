@@ -19,6 +19,8 @@ Future<String?> showFolderPicker(
   context: context,
   // The body brings its own scrollable list.
   scrollable: false,
+  // And its own header row, which is its top edge.
+  insetTop: false,
   maxWidth: 640,
   builder: (_) =>
       _FolderTreePicker(serviceKey: serviceKey, initialPath: initialPath),

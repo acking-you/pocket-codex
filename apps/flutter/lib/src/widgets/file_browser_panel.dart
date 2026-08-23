@@ -23,6 +23,8 @@ Future<void> showFileBrowser(
   context: context,
   // The body brings its own scrollable list.
   scrollable: false,
+  // And its own header row, which is its top edge.
+  insetTop: false,
   maxWidth: 720,
   builder: (_) => _FileBrowser(serviceKey: serviceKey),
 );

@@ -13,9 +13,30 @@ import 'package:flutter/material.dart';
 /// skin of any one OS. [DesktopTokens] carries the handful of values shared
 /// widgets read so a bespoke desktop primitive stays consistent with the theme.
 
-/// The desktop corner radius: soft enough to feel modern, tight enough to
-/// read as a tool rather than a phone card.
-const double kDesktopRadius = 10.0;
+/// The design's corner radii. Spacing is deliberately not tokenised — each
+/// widget bakes its own metrics from the design — but these recur often enough
+/// that a literal at every site drifts. They live here rather than in
+/// `theme.dart` because that file imports this one.
+
+/// Cards, panels, code blocks, message bubbles, menus.
+const double kPanelRadius = 12.0;
+
+/// The composer card and other large raised frames.
+const double kComposerRadius = 24.0;
+
+/// Small controls: chips, pills, suggestion rows, hover chips.
+const double kControlRadius = 8.0;
+
+/// The desktop corner radius. Follows the design's control radius so a
+/// desktop-tuned button and a chat-surface chip round the same amount.
+const double kDesktopRadius = kControlRadius;
+
+/// Every lift in the design is a single offsetless shadow of the ink at a low
+/// alpha — there is no Material `elevation` anywhere. A wider blur is for
+/// content that floats over scrolling material.
+List<BoxShadow> panelShadow(ColorScheme scheme, {double blur = 12}) => [
+  BoxShadow(color: scheme.onSurface.withValues(alpha: 0.02), blurRadius: blur),
+];
 
 /// Values a desktop-flavored widget reads to stay in step with the theme. Only
 /// present in the tree on desktop; `context.desktop` is null on mobile.
@@ -41,16 +62,14 @@ class DesktopTokens extends ThemeExtension<DesktopTokens> {
   /// Pointer-hover wash for an interactive row or button.
   final Color hover;
 
-  /// Tokens derived from a colour scheme. The panel mirrors `surfacePanel`
-  /// in `theme.dart` (kept inline here to avoid a circular import): white
-  /// panels on tinted paper in light mode, tonally raised panels in dark.
+  /// Tokens derived from a colour scheme. The panel is the design's raised
+  /// card — opaque in both themes, so it lifts off the page rather than
+  /// tinting it.
   factory DesktopTokens.of(ColorScheme s) => DesktopTokens(
     radius: kDesktopRadius,
-    panel: s.brightness == Brightness.light
-        ? s.surfaceContainerLowest
-        : s.surfaceContainer,
-    border: s.outlineVariant.withValues(alpha: 0.7),
-    hover: s.onSurface.withValues(alpha: 0.05),
+    panel: s.surfaceBright,
+    border: s.outlineVariant,
+    hover: s.surfaceContainer,
   );
 
   @override
@@ -109,22 +128,24 @@ ThemeData desktopize(ThemeData base) {
   final border = BorderSide(color: scheme.outlineVariant, width: 1);
   final radius = BorderRadius.circular(kDesktopRadius);
   final shape = RoundedRectangleBorder(borderRadius: radius);
-  final borderedShape = RoundedRectangleBorder(
-    borderRadius: radius,
-    side: border,
+  // Menus float over arbitrary content, so they sit on the opaque raised card
+  // rather than a wash — a translucent menu would let text read through it.
+  final menuColor = scheme.surfaceBright;
+  // A menu's hairline is a step firmer than a panel's, for the same reason.
+  final menuShape = RoundedRectangleBorder(
+    borderRadius: BorderRadius.circular(kPanelRadius),
+    side: BorderSide(color: scheme.outline),
   );
-  // Menus float above the panels, so they take one tone step more.
-  final menuColor = scheme.brightness == Brightness.light
-      ? scheme.surfaceContainerLowest
-      : scheme.surfaceContainerHigh;
 
   return base.copyWith(
     // Denser rows, buttons, list tiles — desktop packs more per screen.
     visualDensity: VisualDensity.compact,
     // Hover is the desktop's primary affordance; the ripple is a touch idiom.
+    // Both are ink washes off the container ladder, so they composite correctly
+    // on the page and on a raised card alike.
     splashFactory: NoSplash.splashFactory,
-    hoverColor: scheme.onSurface.withValues(alpha: 0.05),
-    highlightColor: scheme.onSurface.withValues(alpha: 0.06),
+    hoverColor: scheme.surfaceContainer,
+    highlightColor: scheme.surfaceContainerHigh,
     // A pointing hand over anything clickable. Flutter's default for ink
     // widgets (`WidgetStateMouseCursor.adaptiveClickable`) resolves to a click
     // cursor ONLY on web — on a native desktop build it returns `basic`, so
@@ -147,32 +168,33 @@ ThemeData desktopize(ThemeData base) {
       style: ButtonStyle(mouseCursor: clickable),
     ),
     dividerTheme: base.dividerTheme.copyWith(
-      color: scheme.outlineVariant.withValues(alpha: 0.7),
+      color: scheme.outlineVariant,
       thickness: 1,
       space: 1,
     ),
-    // Cards keep the base theme's tonal-panel look (colour + 14px radius);
-    // depth comes from tone, not borders, on desktop too.
+    // Cards keep the base theme's panel look (raised card + panel radius);
+    // the lift is a soft shadow, not a Material elevation, on desktop too.
     dialogTheme: base.dialogTheme.copyWith(
-      elevation: 1,
+      elevation: 0,
+      backgroundColor: scheme.surfaceBright,
       surfaceTintColor: Colors.transparent,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(14),
-        side: border,
+        borderRadius: BorderRadius.circular(kPanelRadius),
+        side: BorderSide(color: scheme.outline),
       ),
     ),
     popupMenuTheme: base.popupMenuTheme.copyWith(
-      elevation: 2,
+      elevation: 0,
       color: menuColor,
       surfaceTintColor: Colors.transparent,
-      shape: borderedShape,
+      shape: menuShape,
     ),
     menuTheme: MenuThemeData(
       style: MenuStyle(
-        elevation: const WidgetStatePropertyAll(2),
+        elevation: const WidgetStatePropertyAll(0),
         surfaceTintColor: const WidgetStatePropertyAll(Colors.transparent),
         backgroundColor: WidgetStatePropertyAll(menuColor),
-        shape: WidgetStatePropertyAll(borderedShape),
+        shape: WidgetStatePropertyAll(menuShape),
       ),
     ),
     // A quick, quiet tooltip — no long delay, no heavy chrome.

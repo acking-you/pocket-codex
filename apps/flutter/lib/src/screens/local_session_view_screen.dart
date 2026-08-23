@@ -545,7 +545,7 @@ class _CommandBlock extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final mono = TextStyle(
-      fontFamily: 'monospace',
+      fontFamily: monoFontFamily,
       fontFamilyFallback: monoCjkFallback,
       fontSize: 12.5,
       color: scheme.onSurface,
