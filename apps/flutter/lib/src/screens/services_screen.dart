@@ -539,6 +539,9 @@ class _ServiceList extends ConsumerWidget {
         final r = ref.watch(apiReachableProvider(s.key));
         return r.hasError || r.valueOrNull == false;
       }
+      // Same caveat as the status row: a conversation that saw the link drop
+      // knows more than the session's cached health flag.
+      if (ref.watch(observedDisconnectedProvider).contains(s.key)) return true;
       if (bridge.appIsConnected(s.key)) return false;
       final r = ref.watch(appReachableProvider(s.key));
       return r.hasError || r.valueOrNull == false;
@@ -674,7 +677,15 @@ class _ServiceList extends ConsumerWidget {
       // "本地托管" with the host icon instead of "远程控制", so it reads as the
       // same instance the 本地托管 section manages, not a separate one.
       final isLocal = localTunnels.containsKey(s.key);
-      final connected = bridge.appIsConnected(s.key);
+      // `appIsConnected` reports a CACHED health flag on the session object, not
+      // the state of the wire — so a link that has actually dropped can still
+      // read connected. An open conversation knows better (it holds the live
+      // event stream), so its observation overrides the flag; otherwise this row
+      // stayed green while the transcript on top of it said "reconnecting".
+      final observedDown = ref
+          .watch(observedDisconnectedProvider)
+          .contains(s.key);
+      final connected = !observedDown && bridge.appIsConnected(s.key);
       // "Registered on the relay" is NOT "reachable": a pb-register worker can
       // outlive the codex app-server it forwards to, leaving a hollow
       // registration. Probe the real backend so a dead one reads "unreachable"
@@ -689,6 +700,8 @@ class _ServiceList extends ConsumerWidget {
       // link is the remote app-server, not the relay.
       final (Color statusColor, String statusLabel, String? reason) = connected
           ? (online, l10n.statusConnected, null)
+          : observedDown
+          ? (scheme.error, l10n.statusUnreachable, l10n.unreachableReason)
           : reach.when(
               data: (ok) => ok
                   ? (online, l10n.statusOnline, null)

@@ -1255,6 +1255,56 @@ void main() {
     expect(find.text('@octocat'), findsOneWidget);
   });
 
+  testWidgets('Manage services agrees with a conversation that lost its link', (
+    t,
+  ) async {
+    // The bug: the services list read `appIsConnected`, a CACHED health flag on
+    // the session object, and short-circuited to a green "connected" on it. A
+    // link that had actually dropped still satisfied that flag, so this row
+    // stayed green while the conversation on top of it showed "reconnecting" —
+    // two screens reporting opposite states for one service.
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+      services: const [
+        ServiceEntry(
+          device: 'lb7666',
+          kind: 'app',
+          name: 'default',
+          key: 'pcx:lb7666:app:default',
+        ),
+      ],
+    );
+    // Connected as far as the session object is concerned.
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    t.view.devicePixelRatio = 1.0;
+    t.view.physicalSize = const Size(1200, 900);
+    addTearDown(t.view.reset);
+    await t.pumpWidget(_host(const ServicesScreen(), api));
+    await t.pumpAndSettle();
+
+    final container = ProviderScope.containerOf(
+      t.element(find.byType(ServicesScreen)),
+    );
+    // The screen opens on the API section; the app-server rows are the ones a
+    // conversation runs on.
+    container.read(servicesSectionProvider.notifier).state =
+        ServicesSection.appServer;
+    await t.pumpAndSettle();
+    // Baseline: the stale flag alone reads as connected.
+    expect(find.text('已连接'), findsOneWidget); // statusConnected
+
+    // A conversation observes the link go down — what the session screen
+    // publishes when it enters reconnect or gives up.
+    container.read(observedDisconnectedProvider.notifier).state = {
+      'pcx:lb7666:app:default',
+    };
+    await t.pumpAndSettle();
+
+    // The list now agrees instead of contradicting the transcript.
+    expect(find.text('已连接'), findsNothing);
+    expect(find.text('不可达'), findsOneWidget); // statusUnreachable
+  });
+
   testWidgets('Manage services carries the theme toggle too', (t) async {
     // It acts on the whole window, so it belongs on every full-window surface —
     // not only the chat screen. Regression guard for it living in one place.

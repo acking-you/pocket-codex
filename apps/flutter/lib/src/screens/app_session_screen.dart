@@ -984,6 +984,21 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   }
 
   @override
+  void deactivate() {
+    // Stop claiming this link is down once nobody is watching it: the flag is an
+    // OBSERVATION by an open conversation, and leaving it set would keep the
+    // service red on the strength of a screen that no longer exists.
+    //
+    // Here rather than in `dispose`: Riverpod forbids touching `ref` once the
+    // element is disposed, and doing so threw while finalizing the widget tree.
+    final observed = ref.read(observedDisconnectedProvider.notifier);
+    if (observed.state.contains(widget.serviceKey)) {
+      observed.state = {...observed.state}..remove(widget.serviceKey);
+    }
+    super.deactivate();
+  }
+
+  @override
   void dispose() {
     _healthTimer?.cancel();
     for (final t in _openLoadTimers.values) {
@@ -2277,12 +2292,35 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     } catch (e) {
       if (mounted) {
         final msg = friendlyError(e);
+        final lost = _looksDisconnected(msg);
         setState(() {
           _error = msg;
-          if (_looksDisconnected(msg)) _connectionLost = true;
+          if (lost) _connectionLost = true;
         });
+        if (lost) _publishLinkState(down: true);
       }
     }
+  }
+
+  /// Publish whether this conversation's link is down, so the services list
+  /// agrees with what the transcript is showing.
+  ///
+  /// Called from every place the local flags move. Kept as one helper because
+  /// the two used to drift: the flags lived only in this widget, so a service
+  /// could read "online" in the list while this screen said "reconnecting".
+  ///
+  /// A reconnect in progress counts as down — the link genuinely isn't carrying
+  /// traffic yet, and the alternative is a green row next to a spinner.
+  void _publishLinkState({required bool down}) {
+    final notifier = ref.read(observedDisconnectedProvider.notifier);
+    final current = notifier.state;
+    final has = current.contains(widget.serviceKey);
+    if (down == has) return;
+    notifier.state = down ? {...current, widget.serviceKey} : {...current}
+      ..remove(widget.serviceKey);
+    // The cached probe answered before the link changed, so it would otherwise
+    // keep reporting the stale verdict for as long as the cache lives.
+    ref.invalidate(appReachableProvider(widget.serviceKey));
   }
 
   /// Re-establish the connection automatically, with a few backoff retries.
@@ -2310,6 +2348,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         _error = null;
         _retry = null;
       });
+      _publishLinkState(down: true);
     }
     final api = ref.read(bridgeApiProvider);
     for (var attempt = 0; attempt < 4; attempt++) {
@@ -2341,6 +2380,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
             _connectionLost = false;
             _error = null;
           });
+          _publishLinkState(down: false);
         }
         return;
       } catch (_) {
@@ -2355,6 +2395,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         _error = AppLocalizations.of(context).connectionLost;
         _retry = _autoReconnect;
       });
+      _publishLinkState(down: true);
     }
   }
 

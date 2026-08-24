@@ -68,6 +68,20 @@ final subscriptionsProvider = FutureProvider<List<SubInfo>>((ref) async {
   return ref.watch(bridgeApiProvider).subscriptions();
 });
 
+/// Service keys an open conversation has OBSERVED to be disconnected.
+///
+/// The session screen learns a link is down first and most reliably: it holds
+/// the live event stream, so a closed socket or a failed health tick reaches it
+/// immediately. That knowledge used to stay in the screen's own state, which is
+/// why the services list could keep a service green while the conversation on
+/// top of it was showing "reconnecting" — the two read unrelated things and
+/// neither could see the other.
+///
+/// Publishing it here makes the best-informed party the source of truth, and
+/// gives the services list something to react to instead of waiting out a cache
+/// that had no reason to expire.
+final observedDisconnectedProvider = StateProvider<Set<String>>((_) => {});
+
 /// Whether an app-server service's backend is actually REACHABLE — it answers a
 /// handshake — rather than merely registered on the relay. A `pb-register`
 /// worker stays registered (so the relay lists the key) even when the codex
