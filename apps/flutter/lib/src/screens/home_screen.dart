@@ -15,11 +15,13 @@ import 'package:pocket_codex/src/screens/app_session_screen.dart';
 import 'package:pocket_codex/src/ui_prefs.dart';
 import 'package:pocket_codex/src/widgets/brand_logo.dart';
 import 'package:pocket_codex/src/widgets/local_host_dialog.dart';
+import 'package:pocket_codex/src/widgets/utility_page.dart';
 
-/// Chat-first home: resolves the right app service (last used → locally
-/// hosted → first reachable), connects, picks the latest conversation, and
-/// lands the user straight in the chat — the phone opens ready to talk, the
-/// desktop opens as a two-pane chat with every session in the sidebar.
+/// Chat-first home: resolves the right app service (explicit default → last
+/// used → locally hosted → first reachable), connects, picks the latest
+/// conversation, and lands the user straight in the chat — the phone opens
+/// ready to talk, the desktop opens as a two-pane chat with every session in
+/// the sidebar.
 ///
 /// When nothing is connectable it degrades to a branded hero with the ONE
 /// action that fixes it (desktop: start hosting; phone: pointer to the
@@ -166,9 +168,19 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
         services = await ref.read(servicesProvider.future);
       } catch (e) {
         if (!mounted || gen != _generation) return;
+        final message = friendlyError(e);
+        if (isAccountSessionExpired(message)) {
+          // A stored account still makes config.mode `account`, so cold-start
+          // routing cannot know its refresh token has expired. Discovery is the
+          // first authenticated operation that can tell us; return directly to
+          // the existing sign-in flow instead of trapping the user on a retry
+          // hero whose retries can never succeed.
+          context.go('/onboarding');
+          return;
+        }
         setState(() {
           _phase = _Phase.discoverFailed;
-          _error = friendlyError(e);
+          _error = message;
         });
         return;
       }
@@ -233,7 +245,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
         return;
       }
 
-      // 3. Rank: pinned switch > last used > hosted on this machine > rest.
+      // 3. Rank: explicit default > last used > hosted here > the rest. A
+      // one-off switch still wins for this resolve through [forceKey], without
+      // silently overwriting the user's durable default choice.
       final prefs = await _prefs();
       final localKeys = <String>{};
       try {
@@ -246,9 +260,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       if (!mounted || gen != _generation) return;
       int rank(ServiceEntry s) {
         if (s.key == forceKey) return 0;
-        if (s.key == prefs.lastServiceKey) return 1;
-        if (localKeys.contains(s.key)) return 2;
-        return 3;
+        if (s.key == prefs.preferredAppServiceKey) return 1;
+        if (s.key == prefs.lastServiceKey) return 2;
+        if (localKeys.contains(s.key)) return 3;
+        return 4;
       }
 
       final ranked = [...apps]..sort((a, b) => rank(a).compareTo(rank(b)));
@@ -473,20 +488,23 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                   .toList(growable: false);
         // The chat IS the home. Keyed by service so a switch rebuilds the
         // session state from scratch (connections stay alive underneath).
-        return AppSessionScreen(
-          key: ValueKey('home-$_serviceKey'),
-          serviceKey: _serviceKey!,
-          threadId: _threadId,
-          cwd: _cwd,
-          home: true,
-          services: candidates,
-          onSwitchService: _switchService,
+        return AppPageShortcuts(
+          currentRoute: '/',
+          child: AppSessionScreen(
+            key: ValueKey('home-$_serviceKey'),
+            serviceKey: _serviceKey!,
+            threadId: _threadId,
+            cwd: _cwd,
+            home: true,
+            services: candidates,
+            onSwitchService: _switchService,
+          ),
         );
       case _Phase.resolving:
-        return _splash(l10n);
+        return AppPageShortcuts(currentRoute: '/', child: _splash(l10n));
       case _Phase.noService:
       case _Phase.discoverFailed:
-        return _hero(l10n);
+        return AppPageShortcuts(currentRoute: '/', child: _hero(l10n));
     }
   }
 

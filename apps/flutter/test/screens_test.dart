@@ -1305,18 +1305,31 @@ void main() {
     expect(find.text('不可达'), findsOneWidget); // statusUnreachable
   });
 
-  testWidgets('Manage services carries the theme toggle too', (t) async {
-    // It acts on the whole window, so it belongs on every full-window surface —
-    // not only the chat screen. Regression guard for it living in one place.
-    final api = FakeBridgeApi(
-      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
-    );
-    t.view.devicePixelRatio = 1.0;
-    t.view.physicalSize = const Size(1200, 900);
-    addTearDown(t.view.reset);
-    await t.pumpWidget(_host(const ServicesScreen(), api));
-    await t.pumpAndSettle();
-    expect(find.byKey(const Key('theme-toggle-btn')), findsOneWidget);
+  testWidgets('Manage services keeps theme switching in the page menu', (
+    t,
+  ) async {
+    // Secondary desktop pages keep cross-page + appearance controls in one
+    // quiet menu instead of repeating a row of unrelated icon buttons.
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    try {
+      final api = FakeBridgeApi(
+        config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+      );
+      t.view.devicePixelRatio = 1.0;
+      t.view.physicalSize = const Size(1200, 900);
+      addTearDown(t.view.reset);
+      await t.pumpWidget(_host(const ServicesScreen(), api));
+      await t.pumpAndSettle();
+
+      expect(find.byKey(const Key('theme-toggle-btn')), findsNothing);
+      expect(find.byKey(const Key('utility-page-menu')), findsOneWidget);
+      await t.tap(find.byKey(const Key('utility-page-menu')));
+      await t.pumpAndSettle();
+      expect(find.text('页面'), findsOneWidget);
+      expect(find.text('暗黑'), findsOneWidget);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
   });
 
   testWidgets('onboarding: desktop leads with the device code, mobile with the '

@@ -1,17 +1,18 @@
 import 'package:flutter/material.dart';
-import 'package:pocket_codex/src/widgets/window_title_bar.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/attachment_refs.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
 import 'package:pocket_codex/src/error_format.dart';
+import 'package:pocket_codex/src/fonts.dart';
 import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/screens/app_session_screen.dart'
     show appLocalPort;
 import 'package:pocket_codex/src/time_ago.dart';
 import 'package:pocket_codex/src/widgets/loading.dart';
 import 'package:pocket_codex/src/widgets/status_dots.dart';
+import 'package:pocket_codex/src/widgets/utility_page.dart';
 
 /// Where a sessions view reads from: this machine's `CODEX_HOME` directly
 /// ([SessionSource.local]), or a (possibly remote) host's CODEX_HOME over its
@@ -90,6 +91,7 @@ class _LocalSessionsState extends ConsumerState<LocalSessionsScreen> {
   String? _error;
   List<LocalSession> _sessions = const [];
   String _query = '';
+  _SessionViewFilter _filter = _SessionViewFilter.all;
 
   @override
   void initState() {
@@ -155,18 +157,17 @@ class _LocalSessionsState extends ConsumerState<LocalSessionsScreen> {
     // Embedded in the Sessions tab: the parent provides the chrome, so render
     // the body only (refresh is pull-to-refresh + the host picker's button).
     if (widget.embedded) return body;
-    return Scaffold(
-      appBar: WindowTitleBar(
-        title: Text(l10n.localSessionsTitle),
-        actions: [
-          IconButton(
-            key: const Key('local-sessions-refresh'),
-            icon: const Icon(Icons.refresh),
-            tooltip: l10n.refreshStatus,
-            onPressed: _loading ? null : _load,
-          ),
-        ],
-      ),
+    return UtilityPage(
+      route: '/sessions',
+      title: l10n.localSessionsTitle,
+      actions: [
+        IconButton(
+          key: const Key('local-sessions-refresh'),
+          icon: const Icon(Icons.refresh),
+          tooltip: l10n.refreshStatus,
+          onPressed: _loading ? null : _load,
+        ),
+      ],
       body: body,
     );
   }
@@ -208,6 +209,7 @@ class _LocalSessionsState extends ConsumerState<LocalSessionsScreen> {
 
   Widget _buildList(AppLocalizations l10n) {
     final scheme = Theme.of(context).colorScheme;
+    final desktop = isDesktop && MediaQuery.sizeOf(context).width >= 840;
     final now = (widget.clock ?? DateTime.now)();
     final q = _query.trim().toLowerCase();
     bool matches(LocalSession s) {
@@ -215,7 +217,20 @@ class _LocalSessionsState extends ConsumerState<LocalSessionsScreen> {
       return has(s.preview) || has(s.cwd) || has(s.source);
     }
 
-    final filtered = q.isEmpty ? _sessions : _sessions.where(matches).toList();
+    bool matchesFilter(LocalSession session) => switch (_filter) {
+      _SessionViewFilter.all => true,
+      _SessionViewFilter.active => session.safety == 'ownedRunning',
+      _SessionViewFilter.resumable =>
+        session.allowsResume && !session.requiresTakeover,
+      _SessionViewFilter.takeover => session.requiresTakeover,
+    };
+
+    final filtered = _sessions
+        .where(
+          (session) =>
+              (q.isEmpty || matches(session)) && matchesFilter(session),
+        )
+        .toList();
 
     // Group by activity time, mirroring the conversation list: actively-running
     // first, then today, then earlier. The source list is already sorted
@@ -234,13 +249,14 @@ class _LocalSessionsState extends ConsumerState<LocalSessionsScreen> {
     }
 
     final rows = <Widget>[
-      Padding(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-        child: Text(
-          l10n.localSessionsHint,
-          style: Theme.of(context).textTheme.bodySmall,
+      if (!desktop)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+          child: Text(
+            l10n.localSessionsHint,
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
         ),
-      ),
     ];
     void section(String label, List<LocalSession> items) {
       if (items.isEmpty) return;
@@ -264,8 +280,12 @@ class _LocalSessionsState extends ConsumerState<LocalSessionsScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // Quick filter — shown once there are enough sessions to scan.
-        if (_sessions.length > 6) _searchBox(l10n),
+        if (desktop)
+          _desktopToolbar(l10n)
+        // Quick filter on compact layouts is shown only when it pays for its
+        // vertical space. Desktop always keeps search + state filters visible.
+        else if (_sessions.length > 6)
+          _searchBox(l10n),
         Expanded(
           child: filtered.isEmpty
               ? Center(
@@ -273,6 +293,21 @@ class _LocalSessionsState extends ConsumerState<LocalSessionsScreen> {
                   child: Text(
                     l10n.noMatchingThreads,
                     style: TextStyle(color: scheme.outline),
+                  ),
+                )
+              : desktop
+              ? Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
+                  child: Card(
+                    clipBehavior: Clip.antiAlias,
+                    child: RefreshIndicator(
+                      key: const ValueKey('local-list'),
+                      onRefresh: _load,
+                      child: ListView(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        children: rows,
+                      ),
+                    ),
                   ),
                 )
               : RefreshIndicator(
@@ -288,30 +323,62 @@ class _LocalSessionsState extends ConsumerState<LocalSessionsScreen> {
     );
   }
 
-  Widget _searchBox(AppLocalizations l10n) {
+  Widget _desktopToolbar(AppLocalizations l10n) {
     final scheme = Theme.of(context).colorScheme;
+    Widget filter(_SessionViewFilter value, String label) => ChoiceChip(
+      key: Key('session-filter-${value.name}'),
+      label: Text(label),
+      selected: _filter == value,
+      onSelected: (_) => setState(() => _filter = value),
+      showCheckmark: false,
+      side: BorderSide(color: scheme.outlineVariant),
+    );
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
+      child: Row(
+        children: [
+          Expanded(child: _searchField(l10n)),
+          const SizedBox(width: 10),
+          filter(_SessionViewFilter.all, l10n.logsLevelAll),
+          const SizedBox(width: 6),
+          filter(_SessionViewFilter.active, l10n.groupActive),
+          const SizedBox(width: 6),
+          filter(_SessionViewFilter.resumable, l10n.sessionResumable),
+          const SizedBox(width: 6),
+          filter(_SessionViewFilter.takeover, l10n.forceTakeover),
+        ],
+      ),
+    );
+  }
+
+  Widget _searchBox(AppLocalizations l10n) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
-      child: TextField(
-        key: const Key('local-search'),
-        onChanged: (v) => setState(() => _query = v),
-        style: const TextStyle(fontSize: 13),
-        decoration: InputDecoration(
-          isDense: true,
-          prefixIcon: const Icon(Icons.search, size: 18),
-          prefixIconConstraints: const BoxConstraints(
-            minWidth: 34,
-            minHeight: 34,
-          ),
-          hintText: l10n.searchLocalSessions,
-          hintStyle: TextStyle(fontSize: 13, color: scheme.onSurfaceVariant),
-          filled: true,
-          fillColor: scheme.surfaceContainerHighest,
-          contentPadding: const EdgeInsets.symmetric(vertical: 9),
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(10),
-            borderSide: BorderSide.none,
-          ),
+      child: _searchField(l10n),
+    );
+  }
+
+  Widget _searchField(AppLocalizations l10n) {
+    final scheme = Theme.of(context).colorScheme;
+    return TextField(
+      key: const Key('local-search'),
+      onChanged: (v) => setState(() => _query = v),
+      style: const TextStyle(fontSize: 13),
+      decoration: InputDecoration(
+        isDense: true,
+        prefixIcon: const Icon(Icons.search, size: 18),
+        prefixIconConstraints: const BoxConstraints(
+          minWidth: 34,
+          minHeight: 34,
+        ),
+        hintText: l10n.searchLocalSessions,
+        hintStyle: TextStyle(fontSize: 13, color: scheme.onSurfaceVariant),
+        filled: true,
+        fillColor: scheme.surfaceContainerHighest,
+        contentPadding: const EdgeInsets.symmetric(vertical: 9),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: BorderSide.none,
         ),
       ),
     );
@@ -328,6 +395,8 @@ class _LocalSessionsState extends ConsumerState<LocalSessionsScreen> {
     ),
   );
 }
+
+enum _SessionViewFilter { all, active, resumable, takeover }
 
 /// One session row: preview + cwd/source/time, a resume-safety chip, and a
 /// resume / force-takeover action when allowed.

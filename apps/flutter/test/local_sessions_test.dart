@@ -76,6 +76,8 @@ void main() {
     await t.pumpWidget(_host(const LocalSessionsScreen(), api));
     await _settle(t);
 
+    // The shared top bar is the only page heading.
+    expect(find.text('本地会话'), findsOneWidget);
     // Each session shows its preview...
     expect(find.text('free finished session'), findsOneWidget);
     expect(find.text('desktop-held session'), findsOneWidget);

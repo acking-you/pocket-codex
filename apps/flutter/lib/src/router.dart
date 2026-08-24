@@ -22,10 +22,9 @@ GoRouter? _appRouter;
 /// Open the settings screen from outside the widget tree (the desktop tray).
 /// Safe to call before the router exists (no-op) and needs no BuildContext.
 ///
-/// Uses `push`, not `go`: settings is a top-level route, so `go` would REPLACE
-/// the stack, leaving the screen with nothing to pop — its AppBar shows no back
-/// button and the user is stranded there. `push` mirrors the in-app settings
-/// button (`context.push('/settings')`), so the back button works.
+/// Uses `push`, not `go`, so compact layouts retain their conventional back
+/// path. Wide desktop settings has its explicit Conversation origin button,
+/// while mobile still relies on the pushed route's implied back button.
 void openSettingsFromTray() {
   final router = _appRouter;
   if (router == null) return;

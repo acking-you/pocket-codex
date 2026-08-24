@@ -3,21 +3,22 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:pocket_codex/src/desktop_theme.dart';
-import 'package:pocket_codex/src/widgets/window_title_bar.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
 import 'package:pocket_codex/src/dismissed_services.dart';
 import 'package:pocket_codex/src/error_format.dart';
+import 'package:pocket_codex/src/fonts.dart';
 import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/screens/api_service_screen.dart';
 import 'package:pocket_codex/src/screens/local_sessions_screen.dart';
 import 'package:pocket_codex/src/theme.dart';
+import 'package:pocket_codex/src/ui_prefs.dart';
 import 'package:pocket_codex/src/widgets/loading.dart';
 import 'package:pocket_codex/src/widgets/local_host_dialog.dart';
 import 'package:pocket_codex/src/widgets/status_dots.dart';
-import 'package:pocket_codex/src/widgets/theme_toggle.dart';
+import 'package:pocket_codex/src/widgets/utility_page.dart';
 
 /// Management hub (`/manage`): lists discovered services on the configured
 /// relay, plus the Sessions browser and desktop local hosting. The chat-first
@@ -41,6 +42,7 @@ class _ServicesScreenState extends ConsumerState<ServicesScreen>
   static const _reprobeInterval = Duration(seconds: 15);
 
   Timer? _reprobeTimer;
+  String? _selectedDevice;
 
   @override
   void initState() {
@@ -98,7 +100,9 @@ class _ServicesScreenState extends ConsumerState<ServicesScreen>
     final servicesAsync = ref.watch(servicesProvider);
     final config = ref.watch(configProvider).valueOrNull;
     final selectedKey = ref.watch(selectedApiKeyProvider);
-    final wide = MediaQuery.of(context).size.width >= 600;
+    final width = MediaQuery.of(context).size.width;
+    final wide = width >= 600;
+    final deviceFirst = isDesktop && width >= 900;
     final account = config?.mode == 'account';
     final online = Colors.green.shade600;
 
@@ -133,52 +137,41 @@ class _ServicesScreenState extends ConsumerState<ServicesScreen>
       ServicesSection.hosting => l10n.navHosting,
     };
 
-    return Scaffold(
-      // A pushed hub page: back + the PAGE title. The brand logo + app name
-      // belong to the root (chat home) title bar only — a page that can pop
-      // must read as a place inside the app, not as the app itself.
-      appBar: WindowTitleBar(
-        title: Text(l10n.manageServices),
-        actions: [
-          IconButton(
-            key: const Key('refresh-btn'),
-            icon: const Icon(Icons.refresh),
-            tooltip: l10n.refreshStatus,
-            // Re-discover services, re-read subscription health, and re-probe
-            // every app-server's backend reachability, then rebuild so each
-            // status re-evaluates.
-            onPressed: () {
-              ref.invalidate(servicesProvider);
-              ref.invalidate(subscriptionsProvider);
-              ref.invalidate(appReachableProvider);
-              ref.invalidate(apiReachableProvider);
-              ref.invalidate(appReachableLocalProvider);
-              ref.invalidate(apiReachableLocalProvider);
-              ref.invalidate(localServeListProvider);
-            },
+    return UtilityPage(
+      route: '/manage',
+      title: l10n.manageServices,
+      actions: [
+        IconButton(
+          key: const Key('refresh-btn'),
+          icon: const Icon(Icons.refresh),
+          tooltip: l10n.refreshStatus,
+          // Re-discover services, re-read subscription health, and re-probe
+          // every app-server's backend reachability, then rebuild so each
+          // status re-evaluates.
+          onPressed: () {
+            ref.invalidate(servicesProvider);
+            ref.invalidate(subscriptionsProvider);
+            ref.invalidate(appReachableProvider);
+            ref.invalidate(apiReachableProvider);
+            ref.invalidate(appReachableLocalProvider);
+            ref.invalidate(apiReachableLocalProvider);
+            ref.invalidate(localServeListProvider);
+          },
+        ),
+        if (deviceFirst && _hostingSupported && account)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: FilledButton.icon(
+              key: const Key('host-this-device-btn'),
+              onPressed: () => showDialog<void>(
+                context: context,
+                builder: (_) => const LocalHostDialog(),
+              ),
+              icon: const Icon(Icons.add, size: 18),
+              label: Text(l10n.servicesHostThisDevice),
+            ),
           ),
-          IconButton(
-            key: const Key('local-sessions-btn'),
-            icon: const Icon(Icons.history),
-            tooltip: l10n.localSessions,
-            onPressed: () => context.push('/sessions'),
-          ),
-          IconButton(
-            key: const Key('logs-btn'),
-            icon: const Icon(Icons.article_outlined),
-            tooltip: l10n.logsTitle,
-            onPressed: () => context.push('/logs'),
-          ),
-          // Appearance sits with the window's own controls here too, so it is
-          // in the same place on every full-window surface.
-          const ThemeToggle(),
-          IconButton(
-            key: const Key('settings-btn'),
-            icon: const Icon(Icons.settings),
-            onPressed: () => context.push('/settings'),
-          ),
-        ],
-      ),
+      ],
       // Mobile: bottom tab bar. Desktop uses a side rail in the body (below).
       bottomNavigationBar: wide
           ? null
@@ -207,6 +200,22 @@ class _ServicesScreenState extends ConsumerState<ServicesScreen>
             ),
           ),
           data: (services) {
+            if (deviceFirst) {
+              return KeyedSubtree(
+                key: const ValueKey('svc-data'),
+                child: _DeviceFirstServices(
+                  services: services,
+                  relay: config?.relay,
+                  accountLogin: account ? config?.accountLogin : null,
+                  selectedDevice: _selectedDevice,
+                  onSelectDevice: (device) {
+                    if (_selectedDevice != device) {
+                      setState(() => _selectedDevice = device);
+                    }
+                  },
+                ),
+              );
+            }
             // The detail pane must honour the same optimistic/durable hiding
             // as the list: a just-removed or dismissed service should not
             // linger as the pane's auto-selected subject.
@@ -310,6 +319,908 @@ class _ServicesScreenState extends ConsumerState<ServicesScreen>
                 : scrollable;
             return KeyedSubtree(key: const ValueKey('svc-data'), child: body);
           },
+        ),
+      ),
+    );
+  }
+}
+
+/// Wide desktop inventory organized around devices rather than protocol tabs.
+/// App/API remain the real discovered services; session sharing is presented
+/// as a capability derived from an account-mode app host, because meta is
+/// intentionally not returned by service discovery.
+class _DeviceFirstServices extends ConsumerWidget {
+  const _DeviceFirstServices({
+    required this.services,
+    required this.relay,
+    required this.accountLogin,
+    required this.selectedDevice,
+    required this.onSelectDevice,
+  });
+
+  final List<ServiceEntry> services;
+  final String? relay;
+  final String? accountLogin;
+  final String? selectedDevice;
+  final ValueChanged<String> onSelectDevice;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final l10n = AppLocalizations.of(context);
+    final scheme = Theme.of(context).colorScheme;
+    final account = accountLogin != null;
+    final pending = ref.watch(pendingRemovalProvider);
+    final dismissed =
+        ref.watch(dismissedServicesProvider).valueOrNull ?? const <String>{};
+    final localHosts =
+        ref.watch(localServeListProvider).valueOrNull ??
+        const <AppServeStatus>[];
+    ref.listen(servicesProvider, (_, next) {
+      final data = next.valueOrNull;
+      if (data == null) return;
+      final present = {for (final service in data) service.key};
+      final current = ref.read(pendingRemovalProvider);
+      final stillHidden = current.intersection(present);
+      if (stillHidden.length != current.length) {
+        ref.read(pendingRemovalProvider.notifier).state = stillHidden;
+      }
+    });
+
+    final visible = <ServiceEntry>[
+      for (final service in services)
+        if (!pending.contains(service.key) && !dismissed.contains(service.key))
+          service,
+    ];
+    // A freshly-started host can precede the next relay discovery refresh.
+    // Synthesize only its actually-published app/API entries so the device and
+    // its capabilities appear immediately without inventing remote services.
+    for (final host in localHosts) {
+      if (host.appRegistered &&
+          !pending.contains(host.appServiceKey) &&
+          !visible.any((service) => service.key == host.appServiceKey)) {
+        visible.add(
+          ServiceEntry(
+            device: host.device,
+            kind: 'app',
+            name: host.name,
+            key: host.appServiceKey,
+          ),
+        );
+      }
+      if (host.apiRegistered &&
+          !pending.contains(host.apiServiceKey) &&
+          !visible.any((service) => service.key == host.apiServiceKey)) {
+        visible.add(
+          ServiceEntry(
+            device: host.device,
+            kind: 'api',
+            name: host.name,
+            key: host.apiServiceKey,
+          ),
+        );
+      }
+    }
+
+    // A dismissed orphan should reappear if its backend later recovers. This
+    // mirrors the compact layout's recovery contract.
+    if (dismissed.isNotEmpty) {
+      final recovered = <String>[
+        for (final service in services)
+          if (dismissed.contains(service.key) &&
+              (service.kind == 'app'
+                          ? ref.watch(appReachableProvider(service.key))
+                          : ref.watch(apiReachableProvider(service.key)))
+                      .valueOrNull ==
+                  true)
+            service.key,
+      ];
+      if (recovered.isNotEmpty) {
+        final notifier = ref.read(dismissedServicesProvider.notifier);
+        Future.microtask(() => notifier.restore(recovered));
+      }
+    }
+
+    final devices = <String>{
+      for (final service in visible) service.device,
+      for (final host in localHosts) host.device,
+    }.toList()..sort();
+    final localDevices = {for (final host in localHosts) host.device};
+    final preferredKey = ref.watch(
+      uiPrefsProvider.select(
+        (prefs) => prefs.valueOrNull?.preferredAppServiceKey,
+      ),
+    );
+    final preferredDevice = visible
+        .where((service) => service.key == preferredKey)
+        .firstOrNull
+        ?.device;
+    devices.sort((a, b) {
+      int rank(String device) {
+        if (device == preferredDevice) return 0;
+        if (localDevices.contains(device)) return 1;
+        return 2;
+      }
+
+      final byRank = rank(a).compareTo(rank(b));
+      return byRank == 0 ? a.compareTo(b) : byRank;
+    });
+    final activeDevice = devices.contains(selectedDevice)
+        ? selectedDevice
+        : preferredDevice != null && devices.contains(preferredDevice)
+        ? preferredDevice
+        : devices.firstOrNull;
+    final deviceEntries =
+        visible.where((service) => service.device == activeDevice).toList()
+          ..sort((a, b) {
+            final byName = a.name.compareTo(b.name);
+            return byName == 0 ? a.kind.compareTo(b.kind) : byName;
+          });
+    final apps = deviceEntries
+        .where((service) => service.kind == 'app')
+        .toList();
+    final apis = deviceEntries
+        .where((service) => service.kind == 'api')
+        .toList();
+    final capabilityCount =
+        apps.length + apis.length + (account ? apps.length : 0);
+
+    final localAppAddr = <String, String>{
+      for (final host in localHosts) host.appServiceKey: host.appListenAddr,
+    };
+    final localApiAddr = <String, String>{
+      for (final host in localHosts) host.apiServiceKey: host.apiListenAddr,
+    };
+    final localTunnels = <String, ({String name, String kind})>{
+      for (final host in localHosts) ...{
+        host.appServiceKey: (name: host.name, kind: 'app'),
+        host.apiServiceKey: (name: host.name, kind: 'api'),
+      },
+    };
+    final subscriptions = {
+      for (final sub
+          in ref.watch(subscriptionsProvider).valueOrNull ?? const <SubInfo>[])
+        sub.key: sub,
+    };
+    final bridge = ref.watch(bridgeApiProvider);
+    final observedDown = ref.watch(observedDisconnectedProvider);
+    final online = Colors.green.shade600;
+
+    Widget appStatus(ServiceEntry service) {
+      if (!observedDown.contains(service.key) &&
+          bridge.appIsConnected(service.key)) {
+        return StatusChip(
+          color: online,
+          label: l10n.statusConnected,
+          filled: true,
+        );
+      }
+      final localAddr = localAppAddr[service.key];
+      final reach = localAddr == null
+          ? ref.watch(appReachableProvider(service.key))
+          : ref.watch(appReachableLocalProvider(localAddr));
+      return reach.when(
+        data: (ok) => StatusChip(
+          color: ok ? online : scheme.error,
+          label: ok ? l10n.statusOnline : l10n.statusUnreachable,
+          filled: true,
+        ),
+        loading: () => StatusChip(
+          color: scheme.outline,
+          label: l10n.statusChecking,
+          filled: true,
+        ),
+        error: (_, _) => StatusChip(
+          color: scheme.error,
+          label: l10n.statusUnreachable,
+          filled: true,
+        ),
+      );
+    }
+
+    Widget apiStatus(ServiceEntry service) {
+      final sub = subscriptions[service.key];
+      if (sub != null) {
+        return StatusChip(
+          color: sub.alive ? online : scheme.error,
+          label: sub.alive ? l10n.subscribedAlive : l10n.subscribedDead,
+          filled: true,
+        );
+      }
+      final localAddr = localApiAddr[service.key];
+      final reach = localAddr == null
+          ? ref.watch(apiReachableProvider(service.key))
+          : ref.watch(apiReachableLocalProvider(localAddr));
+      return reach.when(
+        data: (ok) => StatusChip(
+          color: ok ? online : scheme.error,
+          label: ok ? l10n.statusOnline : l10n.statusUnreachable,
+          filled: true,
+        ),
+        loading: () => StatusChip(
+          color: scheme.outline,
+          label: l10n.statusChecking,
+          filled: true,
+        ),
+        error: (_, _) => StatusChip(
+          color: scheme.error,
+          label: l10n.statusUnreachable,
+          filled: true,
+        ),
+      );
+    }
+
+    bool unreachable(ServiceEntry service) {
+      final local = localTunnels.containsKey(service.key);
+      if (local) return false;
+      if (service.kind == 'app' && observedDown.contains(service.key)) {
+        return true;
+      }
+      final probe = service.kind == 'app'
+          ? ref.watch(appReachableProvider(service.key))
+          : ref.watch(apiReachableProvider(service.key));
+      return probe.hasError || probe.valueOrNull == false;
+    }
+
+    final unreachableEntries = deviceEntries
+        .where(unreachable)
+        .toList(growable: false);
+    final capabilityRows = <Widget>[
+      for (final service in apps)
+        _CapabilityRow(
+          key: Key('device-capability-${service.key}'),
+          icon: Icons.chat_bubble_outline,
+          title: l10n.servicesChatCapability,
+          protocol: 'App-server · ${service.name}',
+          description: l10n.servicesChatCapabilityDescription,
+          status: appStatus(service),
+          isDefault: service.key == preferredKey,
+          onSetDefault: () => ref
+              .read(uiPrefsProvider.notifier)
+              .setPreferredAppService(service.key),
+          actionLabel: l10n.servicesOpen,
+          onAction: () =>
+              context.push('/app/${Uri.encodeComponent(service.key)}'),
+          onDeregister: () => _confirmDeregister(
+            context,
+            ref,
+            service,
+            localTunnel: localTunnels[service.key],
+            unreachable: unreachableEntries.any(
+              (entry) => entry.key == service.key,
+            ),
+          ),
+        ),
+      for (final service in apis)
+        _CapabilityRow(
+          key: Key('device-capability-${service.key}'),
+          icon: Icons.bolt_outlined,
+          title: l10n.servicesApiCapability,
+          protocol: 'API · ${service.name}',
+          description: l10n.servicesApiCapabilityDescription,
+          status: apiStatus(service),
+          actionLabel: l10n.servicesManage,
+          onAction: () =>
+              context.push('/api/${Uri.encodeComponent(service.key)}'),
+          onDeregister: () => _confirmDeregister(
+            context,
+            ref,
+            service,
+            localTunnel: localTunnels[service.key],
+            unreachable: unreachableEntries.any(
+              (entry) => entry.key == service.key,
+            ),
+          ),
+        ),
+      if (account)
+        for (final service in apps)
+          _CapabilityRow(
+            key: Key('device-capability-meta-${service.key}'),
+            icon: Icons.forum_outlined,
+            title: l10n.servicesSessionsCapability,
+            protocol: 'Meta · ${service.name}',
+            description: l10n.servicesSessionsCapabilityDescription,
+            detail: l10n.servicesProvidedWithHost,
+            actionLabel: l10n.servicesBrowse,
+            onAction: () => context.pushReplacement(
+              Uri(
+                path: '/sessions',
+                queryParameters: {'svc': service.key},
+              ).toString(),
+            ),
+          ),
+    ];
+
+    return Align(
+      alignment: Alignment.topCenter,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 1160),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 18, 24, 24),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              SizedBox(
+                width: 260,
+                child: _DeviceColumn(
+                  relay: relay ?? l10n.relayNotConfigured,
+                  accountLogin: accountLogin,
+                  devices: devices,
+                  activeDevice: activeDevice,
+                  localDevices: localDevices,
+                  capabilityCount: (device) {
+                    final entries = visible
+                        .where((service) => service.device == device)
+                        .toList();
+                    final appCount = entries
+                        .where((service) => service.kind == 'app')
+                        .length;
+                    return entries.length + (account ? appCount : 0);
+                  },
+                  onSelect: onSelectDevice,
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: ListView(
+                  children: [
+                    _DeviceDetailHeader(
+                      device: activeDevice,
+                      local:
+                          activeDevice != null &&
+                          localDevices.contains(activeDevice),
+                      capabilityCount: capabilityCount,
+                      isDefault:
+                          activeDevice != null &&
+                          activeDevice == preferredDevice,
+                      onClean: unreachableEntries.isEmpty
+                          ? null
+                          : () => _batchRemove(
+                              context,
+                              ref,
+                              unreachableEntries,
+                              ServicesSection.api,
+                            ),
+                    ),
+                    Card(
+                      clipBehavior: Clip.antiAlias,
+                      child: Column(
+                        children: [
+                          _CardHeading(
+                            title: l10n.servicesCapabilities,
+                            subtitle: l10n.servicesCapabilitiesSummary(
+                              capabilityCount,
+                            ),
+                            trailing: _CountPill(
+                              label: l10n.servicesDeviceCapabilityCount(
+                                capabilityCount,
+                              ),
+                            ),
+                          ),
+                          if (capabilityRows.isEmpty)
+                            Padding(
+                              padding: const EdgeInsets.all(32),
+                              child: Text(
+                                l10n.servicesNoCapabilities,
+                                style: TextStyle(
+                                  color: scheme.onSurfaceVariant,
+                                ),
+                              ),
+                            )
+                          else
+                            ...capabilityRows,
+                        ],
+                      ),
+                    ),
+                    if (_hostingSupported && account) ...[
+                      const SizedBox(height: 12),
+                      Card(
+                        clipBehavior: Clip.antiAlias,
+                        child: Column(
+                          children: [
+                            _CardHeading(
+                              title: l10n.localHostingSection,
+                              subtitle: l10n.servicesLocalHostingDescription,
+                              trailing: localHosts.isEmpty
+                                  ? null
+                                  : StatusChip(
+                                      color: online,
+                                      label: l10n.localHostRunning,
+                                      filled: true,
+                                    ),
+                            ),
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+                              child: Column(
+                                children: [
+                                  for (final host in localHosts)
+                                    _LocalHostCard(
+                                      key: Key('local-host-${host.name}'),
+                                      host: host,
+                                    ),
+                                  const _AddLocalHostCard(),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _DeviceColumn extends StatelessWidget {
+  const _DeviceColumn({
+    required this.relay,
+    required this.accountLogin,
+    required this.devices,
+    required this.activeDevice,
+    required this.localDevices,
+    required this.capabilityCount,
+    required this.onSelect,
+  });
+
+  final String relay;
+  final String? accountLogin;
+  final List<String> devices;
+  final String? activeDevice;
+  final Set<String> localDevices;
+  final int Function(String device) capabilityCount;
+  final ValueChanged<String> onSelect;
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    final scheme = Theme.of(context).colorScheme;
+    final online = Colors.green.shade600;
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: Row(
+              children: [
+                CircleAvatar(
+                  radius: 18,
+                  backgroundColor: scheme.primaryContainer,
+                  child: Icon(
+                    accountLogin == null
+                        ? Icons.dns_outlined
+                        : Icons.person_outline,
+                    size: 19,
+                    color: scheme.onPrimaryContainer,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        accountLogin == null ? relay : '@$accountLogin',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                      Text(
+                        accountLogin == null
+                            ? l10n.servicesSelfHostMode
+                            : l10n.servicesAccountMode,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                StatusChip(
+                  color: online,
+                  label: l10n.statusOnline,
+                  filled: true,
+                ),
+              ],
+            ),
+          ),
+          Divider(height: 1, color: scheme.outlineVariant),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 13, 14, 7),
+            child: Text(
+              l10n.servicesDevices.toUpperCase(),
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                color: scheme.onSurfaceVariant,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          Expanded(
+            child: ListView(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              children: [
+                for (final device in devices)
+                  _DeviceTile(
+                    key: Key('device-$device'),
+                    device: device,
+                    subtitle: [
+                      if (localDevices.contains(device))
+                        l10n.servicesLocalDevice,
+                      l10n.servicesDeviceCapabilityCount(
+                        capabilityCount(device),
+                      ),
+                    ].join(' · '),
+                    selected: device == activeDevice,
+                    onTap: () => onSelect(device),
+                  ),
+                ListTile(
+                  key: const Key('connect-other-device'),
+                  leading: const Icon(Icons.add_circle_outline),
+                  title: Text(l10n.servicesConnectOtherDevice),
+                  subtitle: Text(l10n.servicesConnectOtherDeviceHint),
+                  onTap: () => ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(l10n.servicesConnectOtherDeviceHint),
+                    ),
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(kControlRadius),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.all(14),
+            child: Text(
+              l10n.servicesDeviceHelp,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: scheme.onSurface.withValues(alpha: 0.38),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DeviceTile extends StatelessWidget {
+  const _DeviceTile({
+    super.key,
+    required this.device,
+    required this.subtitle,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String device;
+  final String subtitle;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Material(
+        color: selected ? scheme.primaryContainer : Colors.transparent,
+        borderRadius: BorderRadius.circular(kControlRadius),
+        child: InkWell(
+          mouseCursor: clickable,
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(kControlRadius),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 9),
+            child: Row(
+              children: [
+                Container(
+                  width: 32,
+                  height: 32,
+                  decoration: BoxDecoration(
+                    color: surfacePanel(scheme),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: scheme.outlineVariant),
+                  ),
+                  child: Icon(
+                    Icons.dns_outlined,
+                    size: 17,
+                    color: selected
+                        ? scheme.onPrimaryContainer
+                        : scheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        device,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                          color: selected
+                              ? scheme.onPrimaryContainer
+                              : scheme.onSurface,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        subtitle,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _DeviceDetailHeader extends StatelessWidget {
+  const _DeviceDetailHeader({
+    required this.device,
+    required this.local,
+    required this.capabilityCount,
+    required this.isDefault,
+    required this.onClean,
+  });
+
+  final String? device;
+  final bool local;
+  final int capabilityCount;
+  final bool isDefault;
+  final VoidCallback? onClean;
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Row(
+        children: [
+          Container(
+            width: 42,
+            height: 42,
+            decoration: BoxDecoration(
+              color: scheme.primaryContainer,
+              borderRadius: BorderRadius.circular(11),
+            ),
+            child: Icon(Icons.dns_outlined, color: scheme.onPrimaryContainer),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  device ?? l10n.servicesDevices,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w600),
+                ),
+                Text(
+                  [
+                    if (local) l10n.servicesLocalDevice,
+                    l10n.servicesDeviceCapabilityCount(capabilityCount),
+                  ].join(' · '),
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (isDefault) _CountPill(label: l10n.servicesDefault, accent: true),
+          if (onClean != null) ...[
+            const SizedBox(width: 8),
+            TextButton.icon(
+              key: const Key('device-clean-unreachable'),
+              onPressed: onClean,
+              icon: const Icon(Icons.cleaning_services_outlined, size: 17),
+              label: Text(l10n.batchRemoveEnter),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _CardHeading extends StatelessWidget {
+  const _CardHeading({
+    required this.title,
+    required this.subtitle,
+    this.trailing,
+  });
+
+  final String title;
+  final String subtitle;
+  final Widget? trailing;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      constraints: const BoxConstraints(minHeight: 58),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: scheme.outlineVariant)),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  subtitle,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          ?trailing,
+        ],
+      ),
+    );
+  }
+}
+
+class _CapabilityRow extends StatelessWidget {
+  const _CapabilityRow({
+    super.key,
+    required this.icon,
+    required this.title,
+    required this.protocol,
+    required this.description,
+    required this.actionLabel,
+    required this.onAction,
+    this.status,
+    this.detail,
+    this.isDefault = false,
+    this.onSetDefault,
+    this.onDeregister,
+  });
+
+  final IconData icon;
+  final String title;
+  final String protocol;
+  final String description;
+  final String actionLabel;
+  final VoidCallback onAction;
+  final Widget? status;
+  final String? detail;
+  final bool isDefault;
+  final VoidCallback? onSetDefault;
+  final VoidCallback? onDeregister;
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      constraints: const BoxConstraints(minHeight: 76),
+      padding: const EdgeInsets.fromLTRB(12, 9, 7, 9),
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: scheme.outlineVariant)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              color: scheme.primaryContainer,
+              borderRadius: BorderRadius.circular(9),
+            ),
+            child: Icon(icon, size: 18, color: scheme.onPrimaryContainer),
+          ),
+          const SizedBox(width: 11),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
+                Text(
+                  protocol,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+                Text(
+                  [description, ?detail].join(' · '),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: scheme.onSurface.withValues(alpha: 0.38),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (status != null) ...[status!, const SizedBox(width: 8)],
+          if (isDefault)
+            _CountPill(label: l10n.servicesDefault, accent: true)
+          else if (onSetDefault != null)
+            OutlinedButton(
+              onPressed: onSetDefault,
+              child: Text(l10n.servicesSetDefault),
+            ),
+          const SizedBox(width: 6),
+          TextButton(onPressed: onAction, child: Text(actionLabel)),
+          if (onDeregister != null)
+            PopupMenuButton<String>(
+              tooltip: l10n.moreActions,
+              icon: const Icon(Icons.more_horiz),
+              onSelected: (_) => onDeregister!(),
+              itemBuilder: (_) => [
+                PopupMenuItem<String>(
+                  value: 'deregister',
+                  child: Text(
+                    l10n.deregister,
+                    style: TextStyle(color: scheme.error),
+                  ),
+                ),
+              ],
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CountPill extends StatelessWidget {
+  const _CountPill({required this.label, this.accent = false});
+
+  final String label;
+  final bool accent;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+      decoration: BoxDecoration(
+        color: accent ? scheme.primaryContainer : scheme.surfaceContainer,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: scheme.outlineVariant),
+      ),
+      child: Text(
+        label,
+        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+          color: accent ? scheme.onPrimaryContainer : scheme.onSurfaceVariant,
+          fontWeight: accent ? FontWeight.w600 : FontWeight.w400,
         ),
       ),
     );

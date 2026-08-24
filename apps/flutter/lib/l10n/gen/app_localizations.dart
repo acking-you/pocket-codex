@@ -1478,6 +1478,168 @@ abstract class AppLocalizations {
   /// **'Settings'**
   String get settingsTitle;
 
+  /// No description provided for @utilityChat.
+  ///
+  /// In en, this message translates to:
+  /// **'Conversation'**
+  String get utilityChat;
+
+  /// No description provided for @utilityPages.
+  ///
+  /// In en, this message translates to:
+  /// **'Pages'**
+  String get utilityPages;
+
+  /// No description provided for @utilitySwitchPage.
+  ///
+  /// In en, this message translates to:
+  /// **'Switch page'**
+  String get utilitySwitchPage;
+
+  /// No description provided for @settingsGeneral.
+  ///
+  /// In en, this message translates to:
+  /// **'General'**
+  String get settingsGeneral;
+
+  /// No description provided for @settingsGeneralDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Appearance, language, and common preferences.'**
+  String get settingsGeneralDescription;
+
+  /// No description provided for @settingsCodexDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Provider, authentication, and Codex behavior.'**
+  String get settingsCodexDescription;
+
+  /// No description provided for @settingsAccountConnection.
+  ///
+  /// In en, this message translates to:
+  /// **'Account & connection'**
+  String get settingsAccountConnection;
+
+  /// No description provided for @settingsAccountConnectionDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Manage the account, relay, and connection key in one place.'**
+  String get settingsAccountConnectionDescription;
+
+  /// No description provided for @settingsServicesSubscriptions.
+  ///
+  /// In en, this message translates to:
+  /// **'Services & subscriptions'**
+  String get settingsServicesSubscriptions;
+
+  /// No description provided for @settingsServicesSubscriptionsDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'View active service connections on this device.'**
+  String get settingsServicesSubscriptionsDescription;
+
+  /// No description provided for @settingsAdvanced.
+  ///
+  /// In en, this message translates to:
+  /// **'Advanced'**
+  String get settingsAdvanced;
+
+  /// No description provided for @settingsAdvancedDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Configuration export and diagnostics.'**
+  String get settingsAdvancedDescription;
+
+  /// No description provided for @settingsAppearanceDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'The same information hierarchy in light and dark themes.'**
+  String get settingsAppearanceDescription;
+
+  /// No description provided for @settingsLanguageDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Interface display language'**
+  String get settingsLanguageDescription;
+
+  /// No description provided for @settingsUsingAccountBroker.
+  ///
+  /// In en, this message translates to:
+  /// **'Using the account broker · no self-hosted relay fallback'**
+  String get settingsUsingAccountBroker;
+
+  /// No description provided for @settingsUsingAccountBrokerWithRelay.
+  ///
+  /// In en, this message translates to:
+  /// **'Using the account broker · self-hosted relay fallback: {relay}'**
+  String settingsUsingAccountBrokerWithRelay(String relay);
+
+  /// No description provided for @settingsSelfHostedRelay.
+  ///
+  /// In en, this message translates to:
+  /// **'Self-hosted relay fallback'**
+  String get settingsSelfHostedRelay;
+
+  /// No description provided for @settingsSelfHostedKey.
+  ///
+  /// In en, this message translates to:
+  /// **'Self-hosted relay key'**
+  String get settingsSelfHostedKey;
+
+  /// No description provided for @settingsSelfHostedKeySet.
+  ///
+  /// In en, this message translates to:
+  /// **'Self-hosted relay fallback key is set'**
+  String get settingsSelfHostedKeySet;
+
+  /// No description provided for @settingsSelfHostedKeyNotSet.
+  ///
+  /// In en, this message translates to:
+  /// **'Self-hosted relay fallback key is not set'**
+  String get settingsSelfHostedKeyNotSet;
+
+  /// No description provided for @settingsRemoveCredentials.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove the account credentials saved on this device.'**
+  String get settingsRemoveCredentials;
+
+  /// No description provided for @settingsExportDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Copy a pcx1: configuration string for another device.'**
+  String get settingsExportDescription;
+
+  /// No description provided for @settingsExportUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Configure a self-hosted relay and 32-byte key first.'**
+  String get settingsExportUnavailable;
+
+  /// No description provided for @settingsOperationFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Operation failed: {error}'**
+  String settingsOperationFailed(String error);
+
+  /// No description provided for @settingsDiagnostics.
+  ///
+  /// In en, this message translates to:
+  /// **'Diagnostics'**
+  String get settingsDiagnostics;
+
+  /// No description provided for @settingsConfigure.
+  ///
+  /// In en, this message translates to:
+  /// **'Configure'**
+  String get settingsConfigure;
+
+  /// No description provided for @settingsEdit.
+  ///
+  /// In en, this message translates to:
+  /// **'Edit'**
+  String get settingsEdit;
+
   /// No description provided for @trayShow.
   ///
   /// In en, this message translates to:
@@ -2264,6 +2426,12 @@ abstract class AppLocalizations {
   /// **'Runtime logs'**
   String get logsTitle;
 
+  /// No description provided for @logsLive.
+  ///
+  /// In en, this message translates to:
+  /// **'Live capture'**
+  String get logsLive;
+
   /// No description provided for @logsLevel.
   ///
   /// In en, this message translates to:
@@ -2329,6 +2497,162 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Manage services'**
   String get manageServices;
+
+  /// No description provided for @servicesHostThisDevice.
+  ///
+  /// In en, this message translates to:
+  /// **'Host this device'**
+  String get servicesHostThisDevice;
+
+  /// No description provided for @servicesDevices.
+  ///
+  /// In en, this message translates to:
+  /// **'Devices'**
+  String get servicesDevices;
+
+  /// No description provided for @servicesDeviceCapabilityCount.
+  ///
+  /// In en, this message translates to:
+  /// **'{count} capabilities'**
+  String servicesDeviceCapabilityCount(int count);
+
+  /// No description provided for @servicesCurrentDevice.
+  ///
+  /// In en, this message translates to:
+  /// **'Current device'**
+  String get servicesCurrentDevice;
+
+  /// No description provided for @servicesLocalDevice.
+  ///
+  /// In en, this message translates to:
+  /// **'This device'**
+  String get servicesLocalDevice;
+
+  /// No description provided for @servicesConnectOtherDevice.
+  ///
+  /// In en, this message translates to:
+  /// **'Connect another device'**
+  String get servicesConnectOtherDevice;
+
+  /// No description provided for @servicesConnectOtherDeviceHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Discovered automatically on this account'**
+  String get servicesConnectOtherDeviceHint;
+
+  /// No description provided for @servicesDeviceHelp.
+  ///
+  /// In en, this message translates to:
+  /// **'Services are organized by device; protocol types such as App-server and API appear within device capabilities.'**
+  String get servicesDeviceHelp;
+
+  /// No description provided for @servicesCapabilities.
+  ///
+  /// In en, this message translates to:
+  /// **'Available capabilities'**
+  String get servicesCapabilities;
+
+  /// No description provided for @servicesCapabilitiesSummary.
+  ///
+  /// In en, this message translates to:
+  /// **'This device provides {count} capabilities'**
+  String servicesCapabilitiesSummary(int count);
+
+  /// No description provided for @servicesChatCapability.
+  ///
+  /// In en, this message translates to:
+  /// **'Conversation service'**
+  String get servicesChatCapability;
+
+  /// No description provided for @servicesChatCapabilityDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'PocketCodex conversations and live approvals'**
+  String get servicesChatCapabilityDescription;
+
+  /// No description provided for @servicesApiCapability.
+  ///
+  /// In en, this message translates to:
+  /// **'Responses API'**
+  String get servicesApiCapability;
+
+  /// No description provided for @servicesApiCapabilityDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'OpenAI-compatible /v1/responses endpoint'**
+  String get servicesApiCapabilityDescription;
+
+  /// No description provided for @servicesSessionsCapability.
+  ///
+  /// In en, this message translates to:
+  /// **'Session sharing'**
+  String get servicesSessionsCapability;
+
+  /// No description provided for @servicesSessionsCapabilityDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Browse sessions and attachments on this host'**
+  String get servicesSessionsCapabilityDescription;
+
+  /// No description provided for @servicesProvidedWithHost.
+  ///
+  /// In en, this message translates to:
+  /// **'Provided with the conversation host'**
+  String get servicesProvidedWithHost;
+
+  /// No description provided for @servicesDefault.
+  ///
+  /// In en, this message translates to:
+  /// **'Default'**
+  String get servicesDefault;
+
+  /// No description provided for @servicesSetDefault.
+  ///
+  /// In en, this message translates to:
+  /// **'Set as default'**
+  String get servicesSetDefault;
+
+  /// No description provided for @servicesOpen.
+  ///
+  /// In en, this message translates to:
+  /// **'Open'**
+  String get servicesOpen;
+
+  /// No description provided for @servicesManage.
+  ///
+  /// In en, this message translates to:
+  /// **'Manage'**
+  String get servicesManage;
+
+  /// No description provided for @servicesBrowse.
+  ///
+  /// In en, this message translates to:
+  /// **'Browse'**
+  String get servicesBrowse;
+
+  /// No description provided for @servicesNoCapabilities.
+  ///
+  /// In en, this message translates to:
+  /// **'No capabilities are currently available on this device'**
+  String get servicesNoCapabilities;
+
+  /// No description provided for @servicesLocalHostingDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Run services on this device for your other devices to use.'**
+  String get servicesLocalHostingDescription;
+
+  /// No description provided for @servicesAccountMode.
+  ///
+  /// In en, this message translates to:
+  /// **'Account mode'**
+  String get servicesAccountMode;
+
+  /// No description provided for @servicesSelfHostMode.
+  ///
+  /// In en, this message translates to:
+  /// **'Self-hosted relay'**
+  String get servicesSelfHostMode;
 
   /// No description provided for @hostSessions.
   ///

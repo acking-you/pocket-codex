@@ -755,6 +755,91 @@ class AppLocalizationsZh extends AppLocalizations {
   String get settingsTitle => '设置';
 
   @override
+  String get utilityChat => '对话';
+
+  @override
+  String get utilityPages => '页面';
+
+  @override
+  String get utilitySwitchPage => '切换页面';
+
+  @override
+  String get settingsGeneral => '通用';
+
+  @override
+  String get settingsGeneralDescription => '外观、语言与常用偏好。';
+
+  @override
+  String get settingsCodexDescription => 'Provider、认证方式与 Codex 行为。';
+
+  @override
+  String get settingsAccountConnection => '账户与连接';
+
+  @override
+  String get settingsAccountConnectionDescription => '集中管理账户、Relay 与连接密钥。';
+
+  @override
+  String get settingsServicesSubscriptions => '服务与订阅';
+
+  @override
+  String get settingsServicesSubscriptionsDescription => '查看当前设备上的活跃服务连接。';
+
+  @override
+  String get settingsAdvanced => '高级';
+
+  @override
+  String get settingsAdvancedDescription => '配置导出与诊断工具。';
+
+  @override
+  String get settingsAppearanceDescription => '明暗主题保持一致的信息层级。';
+
+  @override
+  String get settingsLanguageDescription => '界面显示语言';
+
+  @override
+  String get settingsUsingAccountBroker => '当前使用账户 Broker · 自建 Relay 备用未配置';
+
+  @override
+  String settingsUsingAccountBrokerWithRelay(String relay) {
+    return '当前使用账户 Broker · 自建 Relay 备用：$relay';
+  }
+
+  @override
+  String get settingsSelfHostedRelay => '自建 Relay 备用';
+
+  @override
+  String get settingsSelfHostedKey => '自建 Relay 密钥';
+
+  @override
+  String get settingsSelfHostedKeySet => '自建 Relay 备用密钥已设置';
+
+  @override
+  String get settingsSelfHostedKeyNotSet => '自建 Relay 备用密钥未设置';
+
+  @override
+  String get settingsRemoveCredentials => '移除本机保存的账户凭据。';
+
+  @override
+  String get settingsExportDescription => '复制可用于其它设备的 pcx1: 配置分享串。';
+
+  @override
+  String get settingsExportUnavailable => '需要先配置自建 Relay 地址和 32 字节密钥。';
+
+  @override
+  String settingsOperationFailed(String error) {
+    return '操作失败：$error';
+  }
+
+  @override
+  String get settingsDiagnostics => '诊断';
+
+  @override
+  String get settingsConfigure => '配置';
+
+  @override
+  String get settingsEdit => '编辑';
+
+  @override
   String get trayShow => '显示主窗口';
 
   @override
@@ -1184,6 +1269,9 @@ class AppLocalizationsZh extends AppLocalizations {
   String get logsTitle => '运行日志';
 
   @override
+  String get logsLive => '实时采集';
+
+  @override
   String get logsLevel => '级别';
 
   @override
@@ -1219,6 +1307,88 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get manageServices => '服务管理';
+
+  @override
+  String get servicesHostThisDevice => '托管本机';
+
+  @override
+  String get servicesDevices => '设备';
+
+  @override
+  String servicesDeviceCapabilityCount(int count) {
+    return '$count 项能力';
+  }
+
+  @override
+  String get servicesCurrentDevice => '当前设备';
+
+  @override
+  String get servicesLocalDevice => '本机';
+
+  @override
+  String get servicesConnectOtherDevice => '连接其他设备';
+
+  @override
+  String get servicesConnectOtherDeviceHint => '使用相同账户自动发现';
+
+  @override
+  String get servicesDeviceHelp => '服务按设备组织；App-server、API 等协议类型只在设备能力中出现。';
+
+  @override
+  String get servicesCapabilities => '可用能力';
+
+  @override
+  String servicesCapabilitiesSummary(int count) {
+    return '该设备向你提供 $count 项能力';
+  }
+
+  @override
+  String get servicesChatCapability => '对话服务';
+
+  @override
+  String get servicesChatCapabilityDescription => '打开 PocketCodex 对话与实时审批';
+
+  @override
+  String get servicesApiCapability => 'Responses API';
+
+  @override
+  String get servicesApiCapabilityDescription => 'OpenAI 兼容的 /v1/responses 端点';
+
+  @override
+  String get servicesSessionsCapability => '会话共享';
+
+  @override
+  String get servicesSessionsCapabilityDescription => '浏览该主机上的会话与附件';
+
+  @override
+  String get servicesProvidedWithHost => '随对话主机提供';
+
+  @override
+  String get servicesDefault => '默认';
+
+  @override
+  String get servicesSetDefault => '设为默认';
+
+  @override
+  String get servicesOpen => '打开';
+
+  @override
+  String get servicesManage => '管理';
+
+  @override
+  String get servicesBrowse => '浏览';
+
+  @override
+  String get servicesNoCapabilities => '此设备暂时没有可用能力';
+
+  @override
+  String get servicesLocalHostingDescription => '在本机运行服务，供其他设备连接。';
+
+  @override
+  String get servicesAccountMode => '账户模式';
+
+  @override
+  String get servicesSelfHostMode => '自建 Relay';
 
   @override
   String get hostSessions => '主机历史会话';

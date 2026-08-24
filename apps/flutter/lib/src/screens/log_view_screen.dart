@@ -1,12 +1,13 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:pocket_codex/src/widgets/window_title_bar.dart';
 import 'package:flutter/services.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
 import 'package:pocket_codex/src/fonts.dart';
 import 'package:pocket_codex/src/log_manager.dart';
+import 'package:pocket_codex/src/widgets/status_dots.dart';
+import 'package:pocket_codex/src/widgets/utility_page.dart';
 
 /// Real-time viewer for the app's captured runtime logs (`tracing` events from
 /// the Rust bridge — hosting, tunnels, sessions, embedded codex, …). Reads the
@@ -126,32 +127,62 @@ class _LogViewScreenState extends State<LogViewScreen> {
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
     final scheme = Theme.of(context).colorScheme;
-    return Scaffold(
-      appBar: WindowTitleBar(
-        title: Text(l10n.logsTitle),
-        actions: [
-          IconButton(
-            tooltip: l10n.logsCopy,
-            icon: const Icon(Icons.copy_all_outlined),
-            onPressed: _filtered.isEmpty ? null : _copy,
+    final desktop = isDesktop && MediaQuery.sizeOf(context).width >= 840;
+    final content = Column(
+      children: [
+        _toolbar(l10n),
+        Expanded(
+          child: desktop
+              ? Container(
+                  margin: const EdgeInsets.fromLTRB(12, 4, 12, 0),
+                  decoration: BoxDecoration(
+                    color: scheme.surfaceBright,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: scheme.outlineVariant),
+                  ),
+                  clipBehavior: Clip.antiAlias,
+                  child: _list(scheme),
+                )
+              : _list(scheme),
+        ),
+        _bottomBar(l10n, scheme),
+      ],
+    );
+    return UtilityPage(
+      route: '/logs',
+      title: l10n.logsTitle,
+      actions: [
+        if (desktop)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 6),
+            child: StatusChip(
+              color: Colors.green.shade600,
+              label: l10n.logsLive,
+              filled: true,
+            ),
           ),
-          IconButton(
-            tooltip: l10n.logsClear,
-            icon: const Icon(Icons.clear_all),
-            onPressed: () {
-              _logs.clear();
-              _applyFilters();
-            },
-          ),
-        ],
-      ),
-      body: Column(
-        children: [
-          _toolbar(l10n),
-          Expanded(child: _list(scheme)),
-          _bottomBar(l10n, scheme),
-        ],
-      ),
+        IconButton(
+          tooltip: l10n.logsCopy,
+          icon: const Icon(Icons.copy_all_outlined),
+          onPressed: _filtered.isEmpty ? null : _copy,
+        ),
+        IconButton(
+          tooltip: l10n.logsClear,
+          icon: const Icon(Icons.clear_all),
+          onPressed: () {
+            _logs.clear();
+            _applyFilters();
+          },
+        ),
+      ],
+      body: desktop
+          ? Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 1120),
+                child: SizedBox.expand(child: content),
+              ),
+            )
+          : content,
       floatingActionButton: _followTail
           ? null
           : FloatingActionButton.small(

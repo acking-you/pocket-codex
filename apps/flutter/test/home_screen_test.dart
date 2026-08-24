@@ -232,6 +232,25 @@ void main() {
     expect(api.appIsConnected(_app1.key), isTrue);
   });
 
+  testWidgets('An explicit default host outranks the last-used host', (
+    t,
+  ) async {
+    final api = FakeBridgeApi(config: _accountConfig, services: [_app1, _app2]);
+    await _pumpHome(
+      t,
+      api,
+      seed: (container) {
+        final prefs = container.read(uiPrefsProvider.notifier);
+        prefs.setLastService(_app1.key);
+        prefs.setPreferredAppService(_app2.key);
+      },
+    );
+    await t.pumpAndSettle();
+
+    expect(api.appIsConnected(_app2.key), isTrue);
+    expect(api.appIsConnected(_app1.key), isFalse);
+  });
+
   testWidgets('Sidebar switcher moves the chat to another host', (t) async {
     final api = FakeBridgeApi(config: _accountConfig, services: [_app1, _app2]);
     final container = await _pumpHome(t, api);
@@ -352,5 +371,27 @@ void main() {
     await t.tap(find.byKey(const Key('home-retry-btn')));
     await t.pumpAndSettle();
     expect(find.byKey(const Key('send-btn')), findsOneWidget);
+  });
+
+  testWidgets('Expired account session returns directly to sign-in', (t) async {
+    final api = FakeBridgeApi(config: _accountConfig)
+      ..discoverError = StateError('session expired; sign in again');
+    await _pumpHome(t, api, extraRoutes: [_stub('/onboarding', 'login')]);
+    await t.pumpAndSettle();
+
+    expect(find.textContaining('stub:login'), findsOneWidget);
+    expect(find.byKey(const Key('home-hero-title')), findsNothing);
+  });
+
+  testWidgets('Rejected services token also returns directly to sign-in', (
+    t,
+  ) async {
+    final api = FakeBridgeApi(config: _accountConfig)
+      ..discoverError = StateError('/v1/services failed: 401 Unauthorized');
+    await _pumpHome(t, api, extraRoutes: [_stub('/onboarding', 'login')]);
+    await t.pumpAndSettle();
+
+    expect(find.textContaining('stub:login'), findsOneWidget);
+    expect(find.byKey(const Key('home-retry-btn')), findsNothing);
   });
 }

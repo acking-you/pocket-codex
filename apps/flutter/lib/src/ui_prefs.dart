@@ -6,9 +6,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path_provider/path_provider.dart';
 
 /// Durable, device-local UI preferences backing the chat-first home screen:
-/// which app service the user last talked to, the last-open thread per
-/// service, and the parameters of the local host the user left running (so a
-/// desktop restart can bring hosting back up without a trip through the
+/// which app service the user prefers and last talked to, the last-open thread
+/// per service, and the parameters of the local host the user left running (so
+/// a desktop restart can bring hosting back up without a trip through the
 /// manage page).
 ///
 /// Small JSON file in the app-support dir (same pattern as
@@ -17,12 +17,16 @@ import 'package:path_provider/path_provider.dart';
 class UiPrefs {
   /// Creates a prefs snapshot.
   const UiPrefs({
+    this.preferredAppServiceKey,
     this.lastServiceKey,
     this.lastThreadByService = const {},
     this.autoHost,
     this.guideSeen = false,
     this.themeMode,
   });
+
+  /// Full relay key of the app service explicitly chosen as the default host.
+  final String? preferredAppServiceKey;
 
   /// Full relay key of the app service the user last chatted on.
   final String? lastServiceKey;
@@ -48,6 +52,7 @@ class UiPrefs {
   /// auto-host record; `clearThemeMode` returns to follow-system (a plain
   /// null argument means "keep").
   UiPrefs copyWith({
+    String? preferredAppServiceKey,
     String? lastServiceKey,
     Map<String, String>? lastThreadByService,
     AutoHostPrefs? autoHost,
@@ -56,6 +61,8 @@ class UiPrefs {
     String? themeMode,
     bool clearThemeMode = false,
   }) => UiPrefs(
+    preferredAppServiceKey:
+        preferredAppServiceKey ?? this.preferredAppServiceKey,
     lastServiceKey: lastServiceKey ?? this.lastServiceKey,
     lastThreadByService: lastThreadByService ?? this.lastThreadByService,
     autoHost: clearAutoHost ? null : (autoHost ?? this.autoHost),
@@ -74,6 +81,9 @@ class UiPrefs {
     }
     final rawHost = json['autoHost'];
     return UiPrefs(
+      preferredAppServiceKey: json['preferredAppServiceKey'] is String
+          ? json['preferredAppServiceKey'] as String
+          : null,
       lastServiceKey: json['lastServiceKey'] is String
           ? json['lastServiceKey'] as String
           : null,
@@ -90,6 +100,8 @@ class UiPrefs {
 
   /// JSON for persistence.
   Map<String, dynamic> toJson() => {
+    if (preferredAppServiceKey != null)
+      'preferredAppServiceKey': preferredAppServiceKey,
     if (lastServiceKey != null) 'lastServiceKey': lastServiceKey,
     if (lastThreadByService.isNotEmpty)
       'lastThreadByService': lastThreadByService,
@@ -176,6 +188,8 @@ class UiPrefsStore extends AsyncNotifier<UiPrefs> {
     _loaded = true;
     if (raced != null) {
       final merged = UiPrefs(
+        preferredAppServiceKey:
+            raced.preferredAppServiceKey ?? loaded.preferredAppServiceKey,
         lastServiceKey: raced.lastServiceKey ?? loaded.lastServiceKey,
         lastThreadByService: {
           ...loaded.lastThreadByService,
@@ -220,6 +234,14 @@ class UiPrefsStore extends AsyncNotifier<UiPrefs> {
   }
 
   UiPrefs get _current => state.valueOrNull ?? const UiPrefs();
+
+  /// Choose the app service that chat-first home should try before all others.
+  void setPreferredAppService(String serviceKey) {
+    if (_current.preferredAppServiceKey == serviceKey) return;
+    final next = _current.copyWith(preferredAppServiceKey: serviceKey);
+    state = AsyncData(next);
+    _enqueueWrite(next);
+  }
 
   /// Record the app service the user is chatting on.
   void setLastService(String serviceKey) {

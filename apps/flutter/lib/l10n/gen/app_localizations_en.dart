@@ -768,6 +768,103 @@ class AppLocalizationsEn extends AppLocalizations {
   String get settingsTitle => 'Settings';
 
   @override
+  String get utilityChat => 'Conversation';
+
+  @override
+  String get utilityPages => 'Pages';
+
+  @override
+  String get utilitySwitchPage => 'Switch page';
+
+  @override
+  String get settingsGeneral => 'General';
+
+  @override
+  String get settingsGeneralDescription =>
+      'Appearance, language, and common preferences.';
+
+  @override
+  String get settingsCodexDescription =>
+      'Provider, authentication, and Codex behavior.';
+
+  @override
+  String get settingsAccountConnection => 'Account & connection';
+
+  @override
+  String get settingsAccountConnectionDescription =>
+      'Manage the account, relay, and connection key in one place.';
+
+  @override
+  String get settingsServicesSubscriptions => 'Services & subscriptions';
+
+  @override
+  String get settingsServicesSubscriptionsDescription =>
+      'View active service connections on this device.';
+
+  @override
+  String get settingsAdvanced => 'Advanced';
+
+  @override
+  String get settingsAdvancedDescription =>
+      'Configuration export and diagnostics.';
+
+  @override
+  String get settingsAppearanceDescription =>
+      'The same information hierarchy in light and dark themes.';
+
+  @override
+  String get settingsLanguageDescription => 'Interface display language';
+
+  @override
+  String get settingsUsingAccountBroker =>
+      'Using the account broker · no self-hosted relay fallback';
+
+  @override
+  String settingsUsingAccountBrokerWithRelay(String relay) {
+    return 'Using the account broker · self-hosted relay fallback: $relay';
+  }
+
+  @override
+  String get settingsSelfHostedRelay => 'Self-hosted relay fallback';
+
+  @override
+  String get settingsSelfHostedKey => 'Self-hosted relay key';
+
+  @override
+  String get settingsSelfHostedKeySet =>
+      'Self-hosted relay fallback key is set';
+
+  @override
+  String get settingsSelfHostedKeyNotSet =>
+      'Self-hosted relay fallback key is not set';
+
+  @override
+  String get settingsRemoveCredentials =>
+      'Remove the account credentials saved on this device.';
+
+  @override
+  String get settingsExportDescription =>
+      'Copy a pcx1: configuration string for another device.';
+
+  @override
+  String get settingsExportUnavailable =>
+      'Configure a self-hosted relay and 32-byte key first.';
+
+  @override
+  String settingsOperationFailed(String error) {
+    return 'Operation failed: $error';
+  }
+
+  @override
+  String get settingsDiagnostics => 'Diagnostics';
+
+  @override
+  String get settingsConfigure => 'Configure';
+
+  @override
+  String get settingsEdit => 'Edit';
+
+  @override
   String get trayShow => 'Show window';
 
   @override
@@ -1209,6 +1306,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get logsTitle => 'Runtime logs';
 
   @override
+  String get logsLive => 'Live capture';
+
+  @override
   String get logsLevel => 'Level';
 
   @override
@@ -1244,6 +1344,95 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get manageServices => 'Manage services';
+
+  @override
+  String get servicesHostThisDevice => 'Host this device';
+
+  @override
+  String get servicesDevices => 'Devices';
+
+  @override
+  String servicesDeviceCapabilityCount(int count) {
+    return '$count capabilities';
+  }
+
+  @override
+  String get servicesCurrentDevice => 'Current device';
+
+  @override
+  String get servicesLocalDevice => 'This device';
+
+  @override
+  String get servicesConnectOtherDevice => 'Connect another device';
+
+  @override
+  String get servicesConnectOtherDeviceHint =>
+      'Discovered automatically on this account';
+
+  @override
+  String get servicesDeviceHelp =>
+      'Services are organized by device; protocol types such as App-server and API appear within device capabilities.';
+
+  @override
+  String get servicesCapabilities => 'Available capabilities';
+
+  @override
+  String servicesCapabilitiesSummary(int count) {
+    return 'This device provides $count capabilities';
+  }
+
+  @override
+  String get servicesChatCapability => 'Conversation service';
+
+  @override
+  String get servicesChatCapabilityDescription =>
+      'PocketCodex conversations and live approvals';
+
+  @override
+  String get servicesApiCapability => 'Responses API';
+
+  @override
+  String get servicesApiCapabilityDescription =>
+      'OpenAI-compatible /v1/responses endpoint';
+
+  @override
+  String get servicesSessionsCapability => 'Session sharing';
+
+  @override
+  String get servicesSessionsCapabilityDescription =>
+      'Browse sessions and attachments on this host';
+
+  @override
+  String get servicesProvidedWithHost => 'Provided with the conversation host';
+
+  @override
+  String get servicesDefault => 'Default';
+
+  @override
+  String get servicesSetDefault => 'Set as default';
+
+  @override
+  String get servicesOpen => 'Open';
+
+  @override
+  String get servicesManage => 'Manage';
+
+  @override
+  String get servicesBrowse => 'Browse';
+
+  @override
+  String get servicesNoCapabilities =>
+      'No capabilities are currently available on this device';
+
+  @override
+  String get servicesLocalHostingDescription =>
+      'Run services on this device for your other devices to use.';
+
+  @override
+  String get servicesAccountMode => 'Account mode';
+
+  @override
+  String get servicesSelfHostMode => 'Self-hosted relay';
 
   @override
   String get hostSessions => 'Host session history';
