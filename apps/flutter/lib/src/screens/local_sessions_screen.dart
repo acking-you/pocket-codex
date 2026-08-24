@@ -248,16 +248,7 @@ class _LocalSessionsState extends ConsumerState<LocalSessionsScreen> {
       }
     }
 
-    final rows = <Widget>[
-      if (!desktop)
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-          child: Text(
-            l10n.localSessionsHint,
-            style: Theme.of(context).textTheme.bodySmall,
-          ),
-        ),
-    ];
+    final rows = <Widget>[];
     void section(String label, List<LocalSession> items) {
       if (items.isEmpty) return;
       rows.add(_sectionLabel(label));

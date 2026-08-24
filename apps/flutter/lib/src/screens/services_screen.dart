@@ -571,7 +571,6 @@ class _DeviceFirstServices extends ConsumerWidget {
           icon: Icons.chat_bubble_outline,
           title: l10n.servicesChatCapability,
           protocol: 'App-server · ${service.name}',
-          description: l10n.servicesChatCapabilityDescription,
           status: appStatus(service),
           isDefault: service.key == preferredKey,
           onSetDefault: () => ref
@@ -596,7 +595,6 @@ class _DeviceFirstServices extends ConsumerWidget {
           icon: Icons.bolt_outlined,
           title: l10n.servicesApiCapability,
           protocol: 'API · ${service.name}',
-          description: l10n.servicesApiCapabilityDescription,
           status: apiStatus(service),
           actionLabel: l10n.servicesManage,
           onAction: () =>
@@ -618,8 +616,6 @@ class _DeviceFirstServices extends ConsumerWidget {
             icon: Icons.forum_outlined,
             title: l10n.servicesSessionsCapability,
             protocol: 'Meta · ${service.name}',
-            description: l10n.servicesSessionsCapabilityDescription,
-            detail: l10n.servicesProvidedWithHost,
             actionLabel: l10n.servicesBrowse,
             onAction: () => context.pushReplacement(
               Uri(
@@ -668,7 +664,6 @@ class _DeviceFirstServices extends ConsumerWidget {
                       local:
                           activeDevice != null &&
                           localDevices.contains(activeDevice),
-                      capabilityCount: capabilityCount,
                       isDefault:
                           activeDevice != null &&
                           activeDevice == preferredDevice,
@@ -687,9 +682,6 @@ class _DeviceFirstServices extends ConsumerWidget {
                         children: [
                           _CardHeading(
                             title: l10n.servicesCapabilities,
-                            subtitle: l10n.servicesCapabilitiesSummary(
-                              capabilityCount,
-                            ),
                             trailing: _CountPill(
                               label: l10n.servicesDeviceCapabilityCount(
                                 capabilityCount,
@@ -719,7 +711,6 @@ class _DeviceFirstServices extends ConsumerWidget {
                           children: [
                             _CardHeading(
                               title: l10n.localHostingSection,
-                              subtitle: l10n.servicesLocalHostingDescription,
                               trailing: localHosts.isEmpty
                                   ? null
                                   : StatusChip(
@@ -802,24 +793,11 @@ class _DeviceColumn extends StatelessWidget {
                 ),
                 const SizedBox(width: 10),
                 Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        accountLogin == null ? relay : '@$accountLogin',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontWeight: FontWeight.w600),
-                      ),
-                      Text(
-                        accountLogin == null
-                            ? l10n.servicesSelfHostMode
-                            : l10n.servicesAccountMode,
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: scheme.onSurfaceVariant,
-                        ),
-                      ),
-                    ],
+                  child: Text(
+                    accountLogin == null ? relay : '@$accountLogin',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.w600),
                   ),
                 ),
                 StatusChip(
@@ -859,30 +837,7 @@ class _DeviceColumn extends StatelessWidget {
                     selected: device == activeDevice,
                     onTap: () => onSelect(device),
                   ),
-                ListTile(
-                  key: const Key('connect-other-device'),
-                  leading: const Icon(Icons.add_circle_outline),
-                  title: Text(l10n.servicesConnectOtherDevice),
-                  subtitle: Text(l10n.servicesConnectOtherDeviceHint),
-                  onTap: () => ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(l10n.servicesConnectOtherDeviceHint),
-                    ),
-                  ),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(kControlRadius),
-                  ),
-                ),
               ],
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(14),
-            child: Text(
-              l10n.servicesDeviceHelp,
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: scheme.onSurface.withValues(alpha: 0.38),
-              ),
             ),
           ),
         ],
@@ -978,14 +933,12 @@ class _DeviceDetailHeader extends StatelessWidget {
   const _DeviceDetailHeader({
     required this.device,
     required this.local,
-    required this.capabilityCount,
     required this.isDefault,
     required this.onClean,
   });
 
   final String? device;
   final bool local;
-  final int capabilityCount;
   final bool isDefault;
   final VoidCallback? onClean;
 
@@ -1008,27 +961,15 @@ class _DeviceDetailHeader extends StatelessWidget {
           ),
           const SizedBox(width: 12),
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  device ?? l10n.servicesDevices,
-                  style: Theme.of(
-                    context,
-                  ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w600),
-                ),
-                Text(
-                  [
-                    if (local) l10n.servicesLocalDevice,
-                    l10n.servicesDeviceCapabilityCount(capabilityCount),
-                  ].join(' · '),
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: scheme.onSurfaceVariant,
-                  ),
-                ),
-              ],
+            child: Text(
+              device ?? l10n.servicesDevices,
+              style: Theme.of(
+                context,
+              ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w600),
             ),
           ),
+          if (local) _CountPill(label: l10n.servicesLocalDevice),
+          if (local && isDefault) const SizedBox(width: 8),
           if (isDefault) _CountPill(label: l10n.servicesDefault, accent: true),
           if (onClean != null) ...[
             const SizedBox(width: 8),
@@ -1046,44 +987,26 @@ class _DeviceDetailHeader extends StatelessWidget {
 }
 
 class _CardHeading extends StatelessWidget {
-  const _CardHeading({
-    required this.title,
-    required this.subtitle,
-    this.trailing,
-  });
+  const _CardHeading({required this.title, this.trailing});
 
   final String title;
-  final String subtitle;
   final Widget? trailing;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Container(
-      constraints: const BoxConstraints(minHeight: 58),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      constraints: const BoxConstraints(minHeight: 46),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
       decoration: BoxDecoration(
         border: Border(bottom: BorderSide(color: scheme.outlineVariant)),
       ),
       child: Row(
         children: [
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(
-                  title,
-                  style: const TextStyle(fontWeight: FontWeight.w600),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  subtitle,
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: scheme.onSurfaceVariant,
-                  ),
-                ),
-              ],
+            child: Text(
+              title,
+              style: const TextStyle(fontWeight: FontWeight.w600),
             ),
           ),
           ?trailing,
@@ -1099,11 +1022,9 @@ class _CapabilityRow extends StatelessWidget {
     required this.icon,
     required this.title,
     required this.protocol,
-    required this.description,
     required this.actionLabel,
     required this.onAction,
     this.status,
-    this.detail,
     this.isDefault = false,
     this.onSetDefault,
     this.onDeregister,
@@ -1112,11 +1033,9 @@ class _CapabilityRow extends StatelessWidget {
   final IconData icon;
   final String title;
   final String protocol;
-  final String description;
   final String actionLabel;
   final VoidCallback onAction;
   final Widget? status;
-  final String? detail;
   final bool isDefault;
   final VoidCallback? onSetDefault;
   final VoidCallback? onDeregister;
@@ -1126,8 +1045,8 @@ class _CapabilityRow extends StatelessWidget {
     final l10n = AppLocalizations.of(context);
     final scheme = Theme.of(context).colorScheme;
     return Container(
-      constraints: const BoxConstraints(minHeight: 76),
-      padding: const EdgeInsets.fromLTRB(12, 9, 7, 9),
+      constraints: const BoxConstraints(minHeight: 64),
+      padding: const EdgeInsets.fromLTRB(12, 8, 7, 8),
       decoration: BoxDecoration(
         border: Border(bottom: BorderSide(color: scheme.outlineVariant)),
       ),
@@ -1156,14 +1075,6 @@ class _CapabilityRow extends StatelessWidget {
                   protocol,
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
                     color: scheme.onSurfaceVariant,
-                  ),
-                ),
-                Text(
-                  [description, ?detail].join(' · '),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: scheme.onSurface.withValues(alpha: 0.38),
                   ),
                 ),
               ],

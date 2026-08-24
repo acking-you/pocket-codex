@@ -284,6 +284,10 @@ void main() {
           find.byKey(const Key('device-capability-meta-pcx:alpha:app:default')),
           findsOneWidget,
         );
+        expect(find.byKey(const Key('connect-other-device')), findsNothing);
+        expect(find.text('打开 PocketCodex 对话与实时审批'), findsNothing);
+        expect(find.text('OpenAI 兼容的 /v1/responses 端点'), findsNothing);
+        expect(find.text('浏览该主机上的会话与附件'), findsNothing);
         expect(
           find.byKey(const Key('device-capability-pcx:beta:app:work')),
           findsNothing,
@@ -357,7 +361,7 @@ void main() {
   });
 
   testWidgets(
-    'wide macOS settings has five sections and direct theme choices',
+    'wide macOS settings uses direct sections without explanatory copy',
     (tester) async {
       debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
       _useSize(tester, const Size(1300, 768));
@@ -374,13 +378,18 @@ void main() {
         await tester.pumpWidget(_host(const SettingsScreen(), api));
         await tester.pumpAndSettle();
 
-        for (var i = 0; i < 5; i++) {
-          expect(find.byKey(Key('settings-nav-$i')), findsOneWidget);
-        }
+        expect(find.byKey(const Key('settings-nav-0')), findsNothing);
+        expect(find.text('通用'), findsOneWidget);
+        expect(find.text('Codex'), findsOneWidget);
+        expect(find.text('账户与连接'), findsOneWidget);
+        expect(find.text('服务与订阅'), findsOneWidget);
+        expect(find.text('高级'), findsOneWidget);
+        expect(find.text('外观、语言与常用偏好。'), findsNothing);
+        expect(find.text('Provider、认证方式与 Codex 行为。'), findsNothing);
+        expect(find.text('配置导出与诊断工具。'), findsNothing);
         expect(find.byKey(const Key('theme-system')), findsOneWidget);
         expect(find.byKey(const Key('theme-light')), findsOneWidget);
         expect(find.byKey(const Key('theme-dark')), findsOneWidget);
-        expect(find.text('当前使用账户 Broker · 自建 Relay 备用未配置'), findsOneWidget);
         expect(find.text('在线'), findsNothing);
         final exportButton = tester.widget<OutlinedButton>(
           find.descendant(
@@ -419,38 +428,7 @@ void main() {
         expect(container.read(uiPrefsProvider).valueOrNull?.themeMode, 'dark');
         expect(find.byType(SimpleDialog), findsNothing);
 
-        final selectedColor = Theme.of(
-          tester.element(find.byType(SettingsScreen)),
-        ).colorScheme.primaryContainer;
-        for (final index in [2, 3]) {
-          await tester.tap(find.byKey(Key('settings-nav-$index')));
-          await tester.pumpAndSettle();
-          final selectedNav = tester.widget<Material>(
-            find
-                .descendant(
-                  of: find.byKey(Key('settings-nav-$index')),
-                  matching: find.byType(Material),
-                )
-                .first,
-          );
-          expect(selectedNav.color, selectedColor);
-        }
-
-        await tester.tap(find.byKey(const Key('settings-nav-4')));
-        await tester.pumpAndSettle();
-        expect(
-          tester.getTopLeft(find.byKey(const Key('export-btn'))).dy,
-          inInclusiveRange(56, 767),
-        );
-        final selectedNav = tester.widget<Material>(
-          find
-              .descendant(
-                of: find.byKey(const Key('settings-nav-4')),
-                matching: find.byType(Material),
-              )
-              .first,
-        );
-        expect(selectedNav.color, selectedColor);
+        expect(find.byKey(const Key('export-btn')), findsOneWidget);
       } finally {
         debugDefaultTargetPlatformOverride = null;
       }

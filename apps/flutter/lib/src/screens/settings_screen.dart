@@ -21,25 +21,6 @@ class SettingsScreen extends ConsumerStatefulWidget {
 
 class _SettingsState extends ConsumerState<SettingsScreen> {
   String? _msg;
-  int _selectedSection = 0;
-  bool _scrollingToSection = false;
-  final _sectionKeys = List<GlobalKey>.generate(5, (_) => GlobalKey());
-  final _settingsScrollController = ScrollController();
-  final _settingsScrollViewportKey = GlobalKey();
-
-  @override
-  void initState() {
-    super.initState();
-    _settingsScrollController.addListener(_syncSelectedSection);
-  }
-
-  @override
-  void dispose() {
-    _settingsScrollController
-      ..removeListener(_syncSelectedSection)
-      ..dispose();
-    super.dispose();
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -87,7 +68,6 @@ class _SettingsState extends ConsumerState<SettingsScreen> {
         key: const Key('codex-setup-btn'),
         leading: const Icon(Icons.tune),
         title: Text(l10n.codexSetup),
-        subtitle: Text(l10n.codexSetupSettingsSubtitle),
         trailing: const Icon(Icons.chevron_right),
         onTap: () => context.push('/setup/codex'),
       ),
@@ -151,11 +131,9 @@ class _SettingsState extends ConsumerState<SettingsScreen> {
       ListTile(
         key: const Key('export-btn'),
         title: Text(l10n.exportShareString),
-        subtitle: Text(
-          _canExport(config)
-              ? l10n.settingsExportDescription
-              : l10n.settingsExportUnavailable,
-        ),
+        subtitle: _canExport(config)
+            ? null
+            : Text(l10n.settingsExportUnavailable),
         trailing: const Icon(Icons.copy),
         onTap: _canExport(config) ? () => _export(api) : null,
       ),
@@ -176,293 +154,190 @@ class _SettingsState extends ConsumerState<SettingsScreen> {
     String? themeMode,
   ) {
     final scheme = Theme.of(context).colorScheme;
-    final sections = [
-      (
-        icon: Icons.settings_outlined,
-        title: l10n.settingsGeneral,
-        subtitle: l10n.settingsGeneralDescription,
-      ),
-      (
-        icon: Icons.auto_awesome_outlined,
-        title: 'Codex',
-        subtitle: l10n.settingsCodexDescription,
-      ),
-      (
-        icon: Icons.person_outline,
-        title: l10n.settingsAccountConnection,
-        subtitle: l10n.settingsAccountConnectionDescription,
-      ),
-      (
-        icon: Icons.hub_outlined,
-        title: l10n.settingsServicesSubscriptions,
-        subtitle: l10n.settingsServicesSubscriptionsDescription,
-      ),
-      (
-        icon: Icons.tune_outlined,
-        title: l10n.settingsAdvanced,
-        subtitle: l10n.settingsAdvancedDescription,
-      ),
-    ];
     return Align(
       alignment: Alignment.topCenter,
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 1080),
+        constraints: const BoxConstraints(maxWidth: 880),
         child: Padding(
           padding: const EdgeInsets.fromLTRB(24, 18, 24, 18),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
+          child: ListView(
             children: [
-              SizedBox(
-                width: 218,
-                child: Card(
-                  child: ListView(
-                    padding: const EdgeInsets.all(8),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _SettingsGroupCard(
+                    title: l10n.settingsGeneral,
                     children: [
-                      for (var i = 0; i < sections.length; i++)
-                        _SettingsNavItem(
-                          key: Key('settings-nav-$i'),
-                          icon: sections[i].icon,
-                          title: sections[i].title,
-                          subtitle: sections[i].subtitle,
-                          selected: i == _selectedSection,
-                          onTap: () => _scrollToSection(i),
-                        ),
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(width: 18),
-              Expanded(
-                child: SingleChildScrollView(
-                  key: _settingsScrollViewportKey,
-                  controller: _settingsScrollController,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      KeyedSubtree(
-                        key: _sectionKeys[0],
-                        child: _SettingsGroupCard(
-                          title: l10n.settingsGeneral,
-                          subtitle: l10n.settingsGeneralDescription,
-                          children: [
-                            Padding(
-                              key: const Key('appearance-btn'),
-                              padding: const EdgeInsets.fromLTRB(
-                                13,
-                                12,
-                                13,
-                                10,
-                              ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    l10n.appearance,
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 2),
-                                  Text(
-                                    l10n.settingsAppearanceDescription,
-                                    style: Theme.of(context).textTheme.bodySmall
-                                        ?.copyWith(
-                                          color: scheme.onSurfaceVariant,
-                                        ),
-                                  ),
-                                  const SizedBox(height: 10),
-                                  Row(
-                                    children: [
-                                      Expanded(
-                                        child: _ThemeChoice(
-                                          key: const Key('theme-system'),
-                                          icon: Icons.brightness_auto_outlined,
-                                          label: l10n.appearanceSystem,
-                                          selected: themeMode == null,
-                                          onTap: () => ref
-                                              .read(uiPrefsProvider.notifier)
-                                              .setThemeMode(null),
-                                        ),
-                                      ),
-                                      const SizedBox(width: 8),
-                                      Expanded(
-                                        child: _ThemeChoice(
-                                          key: const Key('theme-light'),
-                                          icon: Icons.light_mode_outlined,
-                                          label: l10n.appearanceLight,
-                                          selected: themeMode == 'light',
-                                          onTap: () => ref
-                                              .read(uiPrefsProvider.notifier)
-                                              .setThemeMode('light'),
-                                        ),
-                                      ),
-                                      const SizedBox(width: 8),
-                                      Expanded(
-                                        child: _ThemeChoice(
-                                          key: const Key('theme-dark'),
-                                          icon: Icons.dark_mode_outlined,
-                                          label: l10n.appearanceDark,
-                                          selected: themeMode == 'dark',
-                                          onTap: () => ref
-                                              .read(uiPrefsProvider.notifier)
-                                              .setThemeMode('dark'),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ],
-                              ),
-                            ),
-                            _SettingsRow(
-                              key: const Key('language-btn'),
-                              icon: Icons.language,
-                              title: l10n.language,
-                              subtitle: l10n.settingsLanguageDescription,
-                              value: _languageLabel(l10n, locale),
-                              onTap: () => _pickLanguage(api),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      KeyedSubtree(
-                        key: _sectionKeys[1],
-                        child: _SettingsGroupCard(
-                          title: 'Codex',
-                          subtitle: l10n.settingsCodexDescription,
-                          children: [
-                            _SettingsRow(
-                              key: const Key('codex-setup-btn'),
-                              icon: Icons.auto_awesome_outlined,
-                              title: l10n.codexSetup,
-                              subtitle: l10n.codexSetupSettingsSubtitle,
-                              onTap: () => context.push('/setup/codex'),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      KeyedSubtree(
-                        key: _sectionKeys[2],
+                      Padding(
+                        key: const Key('appearance-btn'),
+                        padding: const EdgeInsets.fromLTRB(13, 12, 13, 10),
                         child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            _SettingsGroupCard(
-                              title: l10n.settingsAccountConnection,
-                              subtitle:
-                                  l10n.settingsAccountConnectionDescription,
+                            Text(
+                              l10n.appearance,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            const SizedBox(height: 10),
+                            Row(
                               children: [
-                                if (config?.mode == 'account')
-                                  _SettingsRow(
-                                    icon: Icons.account_circle_outlined,
-                                    title: '@${config?.accountLogin ?? ''}',
-                                    subtitle: l10n.servicesAccountMode,
+                                Expanded(
+                                  child: _ThemeChoice(
+                                    key: const Key('theme-system'),
+                                    icon: Icons.brightness_auto_outlined,
+                                    label: l10n.appearanceSystem,
+                                    selected: themeMode == null,
+                                    onTap: () => ref
+                                        .read(uiPrefsProvider.notifier)
+                                        .setThemeMode(null),
                                   ),
-                                _SettingsRow(
-                                  icon: Icons.dns_outlined,
-                                  title: config?.mode == 'account'
-                                      ? l10n.settingsSelfHostedRelay
-                                      : l10n.relayRow,
-                                  subtitle: _relayLabel(l10n, config),
-                                  actionLabel: l10n.settingsConfigure,
-                                  onTap: () => _editRelay(api),
                                 ),
-                                _SettingsRow(
-                                  icon: Icons.key_outlined,
-                                  title: config?.mode == 'account'
-                                      ? l10n.settingsSelfHostedKey
-                                      : l10n.keyRow,
-                                  subtitle: _keyLabel(l10n, config),
-                                  actionLabel: config?.hasKey == true
-                                      ? l10n.settingsEdit
-                                      : l10n.save,
-                                  onTap: () => _editKey(api),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: _ThemeChoice(
+                                    key: const Key('theme-light'),
+                                    icon: Icons.light_mode_outlined,
+                                    label: l10n.appearanceLight,
+                                    selected: themeMode == 'light',
+                                    onTap: () => ref
+                                        .read(uiPrefsProvider.notifier)
+                                        .setThemeMode('light'),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: _ThemeChoice(
+                                    key: const Key('theme-dark'),
+                                    icon: Icons.dark_mode_outlined,
+                                    label: l10n.appearanceDark,
+                                    selected: themeMode == 'dark',
+                                    onTap: () => ref
+                                        .read(uiPrefsProvider.notifier)
+                                        .setThemeMode('dark'),
+                                  ),
                                 ),
                               ],
                             ),
-                            if (config?.mode == 'account') ...[
-                              const SizedBox(height: 10),
-                              _DangerRow(
-                                onPressed: () => _signOut(api),
-                                title: l10n.accountSignOut,
-                                subtitle: l10n.settingsRemoveCredentials,
-                              ),
-                            ],
                           ],
                         ),
                       ),
-                      const SizedBox(height: 10),
-                      KeyedSubtree(
-                        key: _sectionKeys[3],
-                        child: _SettingsGroupCard(
-                          title: l10n.settingsServicesSubscriptions,
-                          subtitle:
-                              l10n.settingsServicesSubscriptionsDescription,
-                          children: [
-                            if (subs.isEmpty)
-                              _SettingsRow(
-                                icon: Icons.link_off_outlined,
-                                title: l10n.activeSubscriptions,
-                                subtitle: l10n.none,
-                              )
-                            else
-                              for (final sub in subs)
-                                _SettingsRow(
-                                  icon: Icons.link_outlined,
-                                  title: sub.key,
-                                  subtitle: sub.localAddr,
-                                  status: StatusChip(
-                                    color: sub.alive
-                                        ? Colors.green.shade600
-                                        : scheme.error,
-                                    label: sub.alive
-                                        ? l10n.subscribedAlive
-                                        : l10n.subscribedDead,
-                                    filled: true,
-                                  ),
-                                ),
-                          ],
-                        ),
+                      _SettingsRow(
+                        key: const Key('language-btn'),
+                        icon: Icons.language,
+                        title: l10n.language,
+                        value: _languageLabel(l10n, locale),
+                        onTap: () => _pickLanguage(api),
                       ),
-                      const SizedBox(height: 10),
-                      KeyedSubtree(
-                        key: _sectionKeys[4],
-                        child: _SettingsGroupCard(
-                          title: l10n.settingsAdvanced,
-                          subtitle: l10n.settingsAdvancedDescription,
-                          children: [
-                            _SettingsRow(
-                              key: const Key('export-btn'),
-                              icon: Icons.ios_share_outlined,
-                              title: l10n.exportShareString,
-                              subtitle: _canExport(config)
-                                  ? l10n.settingsExportDescription
-                                  : l10n.settingsExportUnavailable,
-                              actionLabel: l10n.copy,
-                              onTap: _canExport(config)
-                                  ? () => _export(api)
-                                  : null,
-                            ),
-                            _SettingsRow(
-                              icon: Icons.article_outlined,
-                              title: l10n.settingsDiagnostics,
-                              subtitle: l10n.logsTitle,
-                              onTap: () => context.pushReplacement('/logs'),
-                            ),
-                          ],
-                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  _SettingsGroupCard(
+                    title: 'Codex',
+                    children: [
+                      _SettingsRow(
+                        key: const Key('codex-setup-btn'),
+                        icon: Icons.auto_awesome_outlined,
+                        title: l10n.codexSetup,
+                        onTap: () => context.push('/setup/codex'),
                       ),
-                      if (_msg != null)
-                        Padding(
-                          padding: const EdgeInsets.all(16),
-                          child: Text(
-                            _msg!,
-                            key: const Key('settings-msg'),
-                            style: TextStyle(color: scheme.primary),
-                          ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  _SettingsGroupCard(
+                    title: l10n.settingsAccountConnection,
+                    children: [
+                      if (config?.mode == 'account')
+                        _SettingsRow(
+                          icon: Icons.account_circle_outlined,
+                          title: '@${config?.accountLogin ?? ''}',
+                        ),
+                      _SettingsRow(
+                        icon: Icons.dns_outlined,
+                        title: config?.mode == 'account'
+                            ? l10n.settingsSelfHostedRelay
+                            : l10n.relayRow,
+                        subtitle: _relayLabel(l10n, config),
+                        actionLabel: l10n.settingsConfigure,
+                        onTap: () => _editRelay(api),
+                      ),
+                      _SettingsRow(
+                        icon: Icons.key_outlined,
+                        title: config?.mode == 'account'
+                            ? l10n.settingsSelfHostedKey
+                            : l10n.keyRow,
+                        subtitle: _keyLabel(l10n, config),
+                        actionLabel: config?.hasKey == true
+                            ? l10n.settingsEdit
+                            : l10n.save,
+                        onTap: () => _editKey(api),
+                      ),
+                      if (config?.mode == 'account')
+                        _DangerRow(
+                          onPressed: () => _signOut(api),
+                          title: l10n.accountSignOut,
                         ),
                     ],
                   ),
-                ),
+                  const SizedBox(height: 10),
+                  _SettingsGroupCard(
+                    title: l10n.settingsServicesSubscriptions,
+                    children: [
+                      if (subs.isEmpty)
+                        _SettingsRow(
+                          icon: Icons.link_off_outlined,
+                          title: l10n.none,
+                        )
+                      else
+                        for (final sub in subs)
+                          _SettingsRow(
+                            icon: Icons.link_outlined,
+                            title: sub.key,
+                            subtitle: sub.localAddr,
+                            status: StatusChip(
+                              color: sub.alive
+                                  ? Colors.green.shade600
+                                  : scheme.error,
+                              label: sub.alive
+                                  ? l10n.subscribedAlive
+                                  : l10n.subscribedDead,
+                              filled: true,
+                            ),
+                          ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  _SettingsGroupCard(
+                    title: l10n.settingsAdvanced,
+                    children: [
+                      _SettingsRow(
+                        key: const Key('export-btn'),
+                        icon: Icons.ios_share_outlined,
+                        title: l10n.exportShareString,
+                        subtitle: _canExport(config)
+                            ? null
+                            : l10n.settingsExportUnavailable,
+                        actionLabel: l10n.copy,
+                        onTap: _canExport(config) ? () => _export(api) : null,
+                      ),
+                      _SettingsRow(
+                        icon: Icons.article_outlined,
+                        title: l10n.settingsDiagnostics,
+                        onTap: () => context.pushReplacement('/logs'),
+                      ),
+                    ],
+                  ),
+                  if (_msg != null)
+                    Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Text(
+                        _msg!,
+                        key: const Key('settings-msg'),
+                        style: TextStyle(color: scheme.primary),
+                      ),
+                    ),
+                ],
               ),
             ],
           ),
@@ -471,64 +346,13 @@ class _SettingsState extends ConsumerState<SettingsScreen> {
     );
   }
 
-  Future<void> _scrollToSection(int index) async {
-    setState(() => _selectedSection = index);
-    final target = _sectionKeys[index].currentContext;
-    if (target == null) return;
-    _scrollingToSection = true;
-    await Scrollable.ensureVisible(
-      target,
-      duration: const Duration(milliseconds: 250),
-      curve: Curves.easeOut,
-      alignment: 0.02,
-    );
-    _scrollingToSection = false;
-  }
-
-  void _syncSelectedSection() {
-    if (!mounted ||
-        _scrollingToSection ||
-        !_settingsScrollController.hasClients) {
-      return;
-    }
-    final viewport = _settingsScrollViewportKey.currentContext
-        ?.findRenderObject();
-    if (viewport is! RenderBox) return;
-    if (_settingsScrollController.position.maxScrollExtent <= 1) return;
-
-    var next = 0;
-    if (_settingsScrollController.position.extentAfter <= 1) {
-      next = _sectionKeys.length - 1;
-    } else {
-      final viewportTop = viewport.localToGlobal(Offset.zero).dy;
-      for (var i = 0; i < _sectionKeys.length; i++) {
-        final section = _sectionKeys[i].currentContext?.findRenderObject();
-        if (section is RenderBox &&
-            section.localToGlobal(Offset.zero).dy <= viewportTop + 48) {
-          next = i;
-        }
-      }
-    }
-    if (next != _selectedSection) setState(() => _selectedSection = next);
-  }
-
   String _relayLabel(AppLocalizations l10n, ConfigInfo? config) {
     final value = config?.relay?.trim() ?? '';
-    if (config?.mode == 'account') {
-      return value.isEmpty
-          ? l10n.settingsUsingAccountBroker
-          : l10n.settingsUsingAccountBrokerWithRelay(value);
-    }
     if (value.isNotEmpty) return value;
     return l10n.notConfigured;
   }
 
   String _keyLabel(AppLocalizations l10n, ConfigInfo? config) {
-    if (config?.mode == 'account') {
-      return config?.hasKey == true
-          ? l10n.settingsSelfHostedKeySet
-          : l10n.settingsSelfHostedKeyNotSet;
-    }
     return config?.hasKey == true ? l10n.keySet : l10n.keyNotSet;
   }
 
@@ -739,93 +563,10 @@ class _SettingsState extends ConsumerState<SettingsScreen> {
   }
 }
 
-class _SettingsNavItem extends StatelessWidget {
-  const _SettingsNavItem({
-    super.key,
-    required this.icon,
-    required this.title,
-    required this.subtitle,
-    required this.selected,
-    required this.onTap,
-  });
-
-  final IconData icon;
-  final String title;
-  final String subtitle;
-  final bool selected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 4),
-      child: Material(
-        color: selected ? scheme.primaryContainer : Colors.transparent,
-        borderRadius: BorderRadius.circular(9),
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(9),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(minHeight: 56),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-              child: Row(
-                children: [
-                  Icon(
-                    icon,
-                    size: 18,
-                    color: selected
-                        ? scheme.onPrimaryContainer
-                        : scheme.onSurfaceVariant,
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          title,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontWeight: FontWeight.w600,
-                            color: selected
-                                ? scheme.onPrimaryContainer
-                                : scheme.onSurface,
-                          ),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          subtitle,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.bodySmall
-                              ?.copyWith(color: scheme.onSurfaceVariant),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 class _SettingsGroupCard extends StatelessWidget {
-  const _SettingsGroupCard({
-    required this.title,
-    required this.subtitle,
-    required this.children,
-  });
+  const _SettingsGroupCard({required this.title, required this.children});
 
   final String title;
-  final String subtitle;
   final List<Widget> children;
 
   @override
@@ -837,22 +578,10 @@ class _SettingsGroupCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(14, 11, 14, 10),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: const TextStyle(fontWeight: FontWeight.w600),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  subtitle,
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: scheme.onSurfaceVariant,
-                  ),
-                ),
-              ],
+            padding: const EdgeInsets.fromLTRB(14, 12, 14, 11),
+            child: Text(
+              title,
+              style: const TextStyle(fontWeight: FontWeight.w600),
             ),
           ),
           for (var i = 0; i < children.length; i++) ...[
@@ -870,7 +599,7 @@ class _SettingsRow extends StatelessWidget {
     super.key,
     required this.icon,
     required this.title,
-    required this.subtitle,
+    this.subtitle,
     this.value,
     this.status,
     this.actionLabel,
@@ -879,7 +608,7 @@ class _SettingsRow extends StatelessWidget {
 
   final IconData icon;
   final String title;
-  final String subtitle;
+  final String? subtitle;
   final String? value;
   final Widget? status;
   final String? actionLabel;
@@ -912,15 +641,17 @@ class _SettingsRow extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(fontWeight: FontWeight.w600),
                 ),
-                const SizedBox(height: 1),
-                Text(
-                  subtitle,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: scheme.onSurfaceVariant,
+                if (subtitle != null) ...[
+                  const SizedBox(height: 1),
+                  Text(
+                    subtitle!,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
                   ),
-                ),
+                ],
               ],
             ),
           ),
@@ -1010,59 +741,28 @@ class _ThemeChoice extends StatelessWidget {
 }
 
 class _DangerRow extends StatelessWidget {
-  const _DangerRow({
-    required this.onPressed,
-    required this.title,
-    required this.subtitle,
-  });
+  const _DangerRow({required this.onPressed, required this.title});
 
   final VoidCallback onPressed;
   final String title;
-  final String subtitle;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Container(
+    return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 9),
-      decoration: BoxDecoration(
-        color: scheme.errorContainer.withValues(alpha: 0.35),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: scheme.error.withValues(alpha: 0.3)),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: TextStyle(
-                    color: scheme.error,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  subtitle,
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: scheme.onSurfaceVariant,
-                  ),
-                ),
-              ],
-            ),
+      child: Align(
+        alignment: Alignment.centerRight,
+        child: OutlinedButton.icon(
+          key: const Key('sign-out-btn'),
+          onPressed: onPressed,
+          style: OutlinedButton.styleFrom(
+            foregroundColor: scheme.error,
+            side: BorderSide(color: scheme.error),
           ),
-          OutlinedButton(
-            key: const Key('sign-out-btn'),
-            onPressed: onPressed,
-            style: OutlinedButton.styleFrom(
-              foregroundColor: scheme.error,
-              side: BorderSide(color: scheme.error),
-            ),
-            child: Text(title),
-          ),
-        ],
+          icon: const Icon(Icons.logout, size: 17),
+          label: Text(title),
+        ),
       ),
     );
   }
