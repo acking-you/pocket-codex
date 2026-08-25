@@ -959,7 +959,7 @@ void main() {
     ProviderScope.containerOf(
       t.element(find.byType(AccountOnboardingScreen)),
     ).read(uiPrefsProvider.notifier).setLastService('seed');
-    await t.tap(find.text('改用设备码登录')); // accountUseDeviceCode (zh): device flow
+    await t.tap(find.text('设备码登录')); // accountUseDeviceCode (zh): device flow
     // The polling spinner is a perpetual animation, so advance via bounded pumps
     // (pumpAndSettle would never settle while it spins).
     await t.pump(); // _startDevice: accountLoginStart resolves
@@ -992,7 +992,7 @@ void main() {
       ),
     );
     await t.pumpAndSettle(); // initial onboarding (no spinner yet)
-    await t.tap(find.text('改用设备码登录')); // device-code fallback
+    await t.tap(find.text('设备码登录')); // device-code fallback
     await t.pump(); // start resolves
     await t.pump(); // code + spinner show
     expect(find.text('ABCD-1234'), findsOneWidget);
@@ -1080,7 +1080,7 @@ void main() {
     ProviderScope.containerOf(
       t.element(find.byType(AccountOnboardingScreen)),
     ).read(uiPrefsProvider.notifier).markGuideSeen();
-    await t.tap(find.text('改用设备码登录'));
+    await t.tap(find.text('设备码登录'));
     await t.pump();
     await t.pump();
     await t.pump(const Duration(seconds: 6)); // fire the 5s poll interval
@@ -1128,10 +1128,7 @@ void main() {
       find.textContaining('设备码'),
       findsWidgets,
     ); // guidance + button mention it
-    expect(
-      find.text('改用设备码登录'),
-      findsOneWidget,
-    ); // device-code fallback present
+    expect(find.text('设备码登录'), findsOneWidget); // device-code fallback present
     expect(
       find.text('使用 GitHub 登录'),
       findsOneWidget,
@@ -1172,7 +1169,7 @@ void main() {
     expect(find.text('HOME-ROUTE'), findsNothing);
     // Leads with the remedy, and the device-code button is still reachable.
     expect(find.textContaining('设备码'), findsWidgets);
-    expect(find.text('改用设备码登录'), findsOneWidget);
+    expect(find.text('设备码登录'), findsOneWidget);
     // The cause is kept, so a real bug stays diagnosable from a screenshot.
     expect(find.textContaining('listener timed out'), findsOneWidget);
   });
@@ -1243,7 +1240,7 @@ void main() {
     await container.read(configProvider.future);
     expect(container.read(configProvider).valueOrNull?.mode, 'unconfigured');
 
-    await t.tap(find.text('改用设备码登录'));
+    await t.tap(find.text('设备码登录'));
     await t.pump();
     await t.pump();
     await t.pump(const Duration(seconds: 6));
@@ -1369,7 +1366,7 @@ void main() {
     debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
     try {
       await mount();
-      expect(primaryLabel(), '改用设备码登录'); // accountUseDeviceCode
+      expect(primaryLabel(), '设备码登录'); // accountUseDeviceCode
       expect(find.byType(TextButton), findsWidgets); // browser still offered
     } finally {
       debugDefaultTargetPlatformOverride = null;

@@ -2960,6 +2960,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
+    final scheme = Theme.of(context).colorScheme;
     final width = MediaQuery.of(context).size.width;
     final needsCodexSetup = _codexNeedsSetup(watch: true);
 
@@ -2968,6 +2969,14 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     if (width < 600) {
       return Scaffold(
         drawer: Drawer(
+          // The scheme's container colours are translucent washes. A drawer
+          // floats above a scrim, so resolve the wash onto its opaque ground
+          // instead of letting the chat show through the sessions pane.
+          backgroundColor: Color.alphaBlend(
+            scheme.surfaceContainer,
+            scheme.surface,
+          ),
+          surfaceTintColor: Colors.transparent,
           child: SafeArea(child: _sessionsPane(l10n, inDrawer: true)),
         ),
         // Widen the edge-swipe-to-open zone (default ~20px). The narrow
