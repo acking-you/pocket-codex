@@ -12,6 +12,7 @@ import 'package:pocket_codex/src/screens/app_session_screen.dart'
 import 'package:pocket_codex/src/time_ago.dart';
 import 'package:pocket_codex/src/widgets/loading.dart';
 import 'package:pocket_codex/src/widgets/status_dots.dart';
+import 'package:pocket_codex/src/widgets/takeover_dialog.dart';
 import 'package:pocket_codex/src/widgets/utility_page.dart';
 
 /// Where a sessions view reads from: this machine's `CODEX_HOME` directly
@@ -638,71 +639,4 @@ Future<void> resumeLocalSession(
       'cwd=${Uri.encodeComponent(cwd.trim())}',
   ];
   context.push('/app/$key/session?${q.join('&')}');
-}
-
-/// Confirm dialog for a force takeover: lists the holder processes that will be
-/// terminated and warns about data loss.
-class TakeoverDialog extends StatelessWidget {
-  /// Creates the confirm dialog.
-  const TakeoverDialog({
-    super.key,
-    required this.holders,
-    required this.hasTarget,
-  });
-
-  final List<Holder> holders;
-  final bool hasTarget;
-
-  @override
-  Widget build(BuildContext context) {
-    final l10n = AppLocalizations.of(context);
-    return AlertDialog(
-      key: const Key('takeover-dialog'),
-      title: Text(l10n.takeoverTitle),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(l10n.takeoverBody(holders.length)),
-          if (holders.isNotEmpty) ...[
-            const SizedBox(height: 12),
-            Text(
-              l10n.takeoverWillTerminate,
-              style: Theme.of(context).textTheme.labelMedium,
-            ),
-            const SizedBox(height: 4),
-            ...holders.map(
-              (h) => Padding(
-                padding: const EdgeInsets.symmetric(vertical: 2),
-                child: Text(
-                  l10n.holderRow(h.name, h.pid),
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-              ),
-            ),
-          ],
-          if (!hasTarget) ...[
-            const SizedBox(height: 12),
-            Text(
-              l10n.takeoverNoTarget,
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: Theme.of(context).colorScheme.error,
-              ),
-            ),
-          ],
-        ],
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(false),
-          child: Text(l10n.cancel),
-        ),
-        FilledButton(
-          key: const Key('takeover-confirm'),
-          onPressed: hasTarget ? () => Navigator.of(context).pop(true) : null,
-          child: Text(l10n.takeoverConfirm),
-        ),
-      ],
-    );
-  }
 }

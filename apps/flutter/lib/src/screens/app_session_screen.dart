@@ -44,6 +44,7 @@ import 'package:pocket_codex/src/widgets/message_images.dart';
 import 'package:pocket_codex/src/widgets/project_menu.dart';
 import 'package:pocket_codex/src/widgets/realtime_handoff_card.dart';
 import 'package:pocket_codex/src/widgets/status_dots.dart';
+import 'package:pocket_codex/src/widgets/takeover_dialog.dart';
 import 'package:pocket_codex/src/widgets/theme_toggle.dart';
 
 /// Local port for the app-server ws tunnel (shared with the service screen).
@@ -423,6 +424,14 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   // True while a thread's history is being (re)loaded, so the chat shows a
   // smooth skeleton instead of flashing empty when switching sessions.
   bool _loading = false;
+  // A thread held by another app-server stays inside this chat surface. Its
+  // rollout is polled through the host meta service until it becomes resumable.
+  bool _externalWriterMode = false;
+  SessionLiveness? _externalWriterLiveness;
+  Timer? _externalWriterPoll;
+  int _externalWriterEpoch = 0;
+  int? _externalWriterRefreshingEpoch;
+  bool _takingOver = false;
   bool _sending = false;
   bool _atBottom = true; // is the list scrolled to the latest message?
   String? _error;
@@ -912,9 +921,13 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     if (tid != null) {
       ref.read(uiPrefsProvider.notifier).setLastThread(widget.serviceKey, tid);
     }
+    _cancelExternalWriterPolling();
     setState(() {
       _threadId = tid;
       _cwd = cwd;
+      _externalWriterMode = false;
+      _externalWriterLiveness = null;
+      _takingOver = false;
       // An open rename belongs to the thread being left, so drop it rather
       // than let it commit the old title onto the new conversation.
       _editingTitle = false;
@@ -1001,6 +1014,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   @override
   void dispose() {
     _healthTimer?.cancel();
+    _externalWriterPoll?.cancel();
     for (final t in _openLoadTimers.values) {
       t.cancel();
     }
@@ -1118,6 +1132,38 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     _autoReconnect();
   }
 
+  void _replaceTranscriptItems(List<ThreadItem> items) {
+    _items.clear();
+    _itemIndex.clear();
+    for (final item in items) {
+      // Defensively collapse a back-to-back duplicate user message. A genuine
+      // re-ask has the model's reply in between, so it remains distinct.
+      if (item.itemType == 'userMessage' &&
+          _items.isNotEmpty &&
+          _items.last.type == 'userMessage' &&
+          _items.last.text.trim() == item.text.trim() &&
+          listEquals(_items.last.imageUrls, item.images)) {
+        continue;
+      }
+      if (item.itemType == 'userMessage' && isContextFragment(item.text)) {
+        continue;
+      }
+      _itemIndex[item.id] = _items.length;
+      _items.add(
+        _Item(
+          id: item.id,
+          type: item.itemType,
+          title: item.title,
+          text: item.text,
+          images: resolveImageUrls(item.images),
+          imageUrls: item.images,
+          turnId: item.turnId,
+          turnCompletedAt: item.turnCompletedAt,
+        ),
+      );
+    }
+  }
+
   /// Open an existing thread: resume it into the session (so reads and turns
   /// resolve — otherwise the server returns "thread not found"), then load
   /// its history.
@@ -1125,7 +1171,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     // Guard: a stale event (e.g. thread/compacted from a prior thread) can
     // arrive after switching to a new, unsaved conversation — don't `_threadId!`
     // through a null here.
-    if (_threadId == null) return;
+    if (_threadId == null || _externalWriterMode) return;
     setState(() {
       _loading = true;
       _error = null;
@@ -1162,46 +1208,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       if (!mounted || _threadId != startTid) return;
       setState(() {
         _loading = false;
-        _items.clear();
-        _itemIndex.clear();
-        for (final i in history.items) {
-          // Defensively collapse a back-to-back duplicate user message (same
-          // text, nothing between) — the artifact of a dropped-but-committed
-          // send recorded twice. A genuine re-ask has the model's reply in
-          // between, so it is preserved. (The retry-safety guard in _send is the
-          // primary fix; this protects any other double-commit source.) Accepted
-          // edge: an identical re-ask after a turn that produced zero items would
-          // also collapse — vanishingly rare and only cosmetic (same text).
-          if (i.itemType == 'userMessage' &&
-              _items.isNotEmpty &&
-              _items.last.type == 'userMessage' &&
-              _items.last.text.trim() == i.text.trim() &&
-              listEquals(_items.last.imageUrls, i.images)) {
-            continue;
-          }
-          // codex injects contextual fragments (plugin lists, AGENTS.md,
-          // environment) as user-role messages — machinery, not typed text, so
-          // they are dropped. The rollout reader does this for transcripts we
-          // parse ourselves; history from the app-server arrives raw. A voice
-          // handoff is kept verbatim: it is the person talking, and the view
-          // renders it as its own kind of turn.
-          if (i.itemType == 'userMessage' && isContextFragment(i.text)) {
-            continue;
-          }
-          _itemIndex[i.id] = _items.length;
-          _items.add(
-            _Item(
-              id: i.id,
-              type: i.itemType,
-              title: i.title,
-              text: i.text,
-              images: resolveImageUrls(i.images),
-              imageUrls: i.images,
-              turnId: i.turnId,
-              turnCompletedAt: i.turnCompletedAt,
-            ),
-          );
-        }
+        _replaceTranscriptItems(history.items);
         // Restore the "thinking" state if a turn was still running when we
         // left: live events (delivered after resume) will finish rendering it.
         _streaming = history.running;
@@ -1317,7 +1324,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     } catch (e) {
       if (!mounted || _threadId != startTid) return;
       if (_isActiveWriterError(e)) {
-        _openReadOnlyViewer(startTid);
+        _enterExternalWriterMode(startTid);
         return;
       }
       setState(() {
@@ -1331,21 +1338,162 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   bool _isActiveWriterError(Object error) =>
       error.toString().toLowerCase().contains('active writer');
 
-  void _openReadOnlyViewer(String threadId) {
-    final matches = _threads.where((thread) => thread.id == threadId);
-    final thread = matches.isEmpty ? null : matches.first;
-    final preview = thread?.title ?? thread?.preview;
-    final cwd = (_cwd ?? thread?.cwd)?.trim();
-    final query = <String, String>{
-      'tid': threadId,
-      if (cwd != null && cwd.isNotEmpty) 'cwd': cwd,
-      if (preview != null && preview.trim().isNotEmpty)
-        'preview': preview.trim(),
-      'svc': widget.serviceKey,
-    };
-    context.pushReplacement(
-      Uri(path: '/sessions/view', queryParameters: query).toString(),
+  void _cancelExternalWriterPolling() {
+    _externalWriterPoll?.cancel();
+    _externalWriterPoll = null;
+    _externalWriterEpoch++;
+    _externalWriterRefreshingEpoch = null;
+  }
+
+  void _enterExternalWriterMode(String threadId) {
+    _cancelExternalWriterPolling();
+    final epoch = _externalWriterEpoch;
+    _elapsedTicker?.cancel();
+    _elapsedTicker = null;
+    setState(() {
+      _externalWriterMode = true;
+      _externalWriterLiveness = null;
+      _takingOver = false;
+      _loading = true;
+      _streaming = false;
+      _error = null;
+      _retry = null;
+      _approvals.clear();
+    });
+    unawaited(_refreshExternalWriter(threadId, epoch, initial: true));
+    _externalWriterPoll = Timer.periodic(
+      const Duration(seconds: 3),
+      (_) => unawaited(_refreshExternalWriter(threadId, epoch)),
     );
+  }
+
+  Future<void> _refreshExternalWriter(
+    String threadId,
+    int epoch, {
+    bool initial = false,
+  }) async {
+    if (!mounted ||
+        !_externalWriterMode ||
+        _threadId != threadId ||
+        epoch != _externalWriterEpoch ||
+        _externalWriterRefreshingEpoch == epoch) {
+      return;
+    }
+    _externalWriterRefreshingEpoch = epoch;
+    try {
+      final api = ref.read(bridgeApiProvider);
+      final liveness = await api.metaSessionLiveness(
+        widget.serviceKey,
+        threadId,
+      );
+      final wasRunning = _externalWriterLiveness?.safety == 'ownedRunning';
+      final shouldRead =
+          initial ||
+          _items.isEmpty ||
+          liveness.safety == 'ownedRunning' ||
+          wasRunning;
+      final transcript = shouldRead
+          ? await api.metaSessionTranscript(widget.serviceKey, threadId)
+          : null;
+      if (!mounted ||
+          !_externalWriterMode ||
+          _threadId != threadId ||
+          epoch != _externalWriterEpoch) {
+        return;
+      }
+      final followTail = initial || _atBottom;
+      setState(() {
+        _externalWriterLiveness = liveness;
+        if (transcript != null) _replaceTranscriptItems(transcript);
+        _loading = false;
+        _error = null;
+        _retry = null;
+      });
+      if (followTail) _scrollToEnd(force: true);
+    } catch (error) {
+      if (!mounted ||
+          !_externalWriterMode ||
+          _threadId != threadId ||
+          epoch != _externalWriterEpoch) {
+        return;
+      }
+      setState(() {
+        _loading = false;
+        _error = friendlyError(error);
+        _retry = () =>
+            unawaited(_refreshExternalWriter(threadId, epoch, initial: true));
+      });
+    } finally {
+      if (_externalWriterRefreshingEpoch == epoch) {
+        _externalWriterRefreshingEpoch = null;
+      }
+    }
+  }
+
+  Future<void> _takeOverExternalWriter() async {
+    final threadId = _threadId;
+    final liveness = _externalWriterLiveness;
+    if (threadId == null ||
+        liveness == null ||
+        !liveness.allowsResume ||
+        _takingOver) {
+      return;
+    }
+    if (liveness.requiresTakeover) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (_) =>
+            TakeoverDialog(holders: liveness.holders, hasTarget: true),
+      );
+      if (confirmed != true || !mounted || _threadId != threadId) return;
+    }
+
+    final l10n = AppLocalizations.of(context);
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() {
+      _takingOver = true;
+      _error = null;
+      _retry = null;
+    });
+    try {
+      ForceResumeReport? report;
+      if (liveness.requiresTakeover) {
+        report = await ref
+            .read(bridgeApiProvider)
+            .metaForceResume(widget.serviceKey, threadId);
+        if (!report.resumed) {
+          if (!mounted || _threadId != threadId) return;
+          setState(() {
+            _takingOver = false;
+            _error = l10n.takeoverResumeFailed(report!.resumeError ?? '');
+          });
+          return;
+        }
+      }
+      if (!mounted || _threadId != threadId) return;
+      if (report != null) {
+        final parts = <String>[
+          l10n.takeoverResumed,
+          if (report.killed.isNotEmpty)
+            l10n.takeoverKilled(report.killed.length),
+          if (report.stillHeld) l10n.takeoverStillHeld,
+        ];
+        messenger.showSnackBar(SnackBar(content: Text(parts.join(' · '))));
+      }
+      _cancelExternalWriterPolling();
+      setState(() {
+        _externalWriterMode = false;
+        _externalWriterLiveness = null;
+        _takingOver = false;
+      });
+      await _resumeAndLoad();
+    } catch (error) {
+      if (!mounted || _threadId != threadId) return;
+      setState(() {
+        _takingOver = false;
+        _error = friendlyError(error);
+      });
+    }
   }
 
   void _onEvent(AppEvent e) {
@@ -3420,6 +3568,17 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     AppLocalizations l10n,
   ) {
     final scheme = Theme.of(context).colorScheme;
+    if (_externalWriterMode) {
+      final resumable = _externalWriterLiveness?.allowsResume ?? false;
+      return (
+        color: cautionColor(scheme),
+        label: resumable
+            ? l10n.sessionInUseElsewhere
+            : l10n.sessionRunningElsewhere,
+        icon: resumable ? Icons.lock_open_outlined : Icons.lock_clock_outlined,
+        nominal: false,
+      );
+    }
     if (_reconnecting) {
       return (
         color: cautionColor(scheme),
@@ -3682,6 +3841,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     return Column(
       children: [
         _statusBar(l10n),
+        if (_externalWriterMode) _externalWriterBanner(l10n),
         Expanded(
           child: AnimatedSwitcher(
             duration: const Duration(milliseconds: 250),
@@ -3830,7 +3990,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         // approval.
         // Keyed by request id so State follows the right prompt if more than one
         // server request is pending and one is answered/removed out of order.
-        for (final a in _approvals)
+        for (final a in _externalWriterMode ? const <AppEvent>[] : _approvals)
           if (a.kind == 'item/tool/requestUserInput')
             _UserInputCard(
               key: ValueKey(a.requestId),
@@ -3845,10 +4005,109 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
             ),
         // After a plan-mode turn, offer to implement the plan (persists across
         // restart since it's derived from the trailing plan item).
-        if (_planReady) _implementBar(l10n),
+        if (!_externalWriterMode && _planReady) _implementBar(l10n),
         if (_error != null) _errorBanner(l10n),
-        _composer(l10n),
+        if (_externalWriterMode)
+          _externalWriterAction(l10n)
+        else
+          _composer(l10n),
       ],
+    );
+  }
+
+  Widget _externalWriterBanner(AppLocalizations l10n) {
+    final scheme = Theme.of(context).colorScheme;
+    final canResume = _externalWriterLiveness?.allowsResume ?? false;
+    final text = canResume
+        ? l10n.sessionInUseElsewhere
+        : '${l10n.sessionRunningElsewhere} · ${l10n.sessionReadOnly}';
+    final color = cautionColor(scheme);
+    return Container(
+      key: const Key('chat-external-writer-banner'),
+      width: double.infinity,
+      color: color.withValues(alpha: 0.10),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: Row(
+        children: [
+          Icon(
+            canResume ? Icons.lock_open_outlined : Icons.lock_clock_outlined,
+            size: 16,
+            color: color,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(text, style: TextStyle(color: color, fontSize: 13)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _externalWriterAction(AppLocalizations l10n) {
+    final scheme = Theme.of(context).colorScheme;
+    final liveness = _externalWriterLiveness;
+    final canResume = liveness?.allowsResume ?? false;
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 6, 16, 14),
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 820),
+            child: SizedBox(
+              width: double.infinity,
+              height: 46,
+              child: canResume
+                  ? FilledButton.icon(
+                      key: const Key('chat-takeover-action'),
+                      onPressed: _takingOver ? null : _takeOverExternalWriter,
+                      icon: _takingOver
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.bolt, size: 18),
+                      label: Text(
+                        liveness!.requiresTakeover
+                            ? l10n.forceTakeover
+                            : l10n.resumeSession,
+                      ),
+                    )
+                  : DecoratedBox(
+                      key: const Key('chat-read-only-action'),
+                      decoration: BoxDecoration(
+                        color: scheme.surfaceContainer,
+                        borderRadius: BorderRadius.circular(kPanelRadius),
+                        border: Border.all(color: scheme.outlineVariant),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            Icons.lock_outline,
+                            size: 16,
+                            color: scheme.onSurfaceVariant,
+                          ),
+                          const SizedBox(width: 8),
+                          Flexible(
+                            child: Text(
+                              l10n.readOnlyViewing,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: scheme.onSurfaceVariant,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 

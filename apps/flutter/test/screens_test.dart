@@ -26,7 +26,6 @@ import 'package:pocket_codex/src/image_attachments.dart';
 import 'package:pocket_codex/src/widgets/message_images.dart';
 import 'package:pocket_codex/src/screens/app_session_screen.dart';
 import 'package:pocket_codex/src/screens/app_service_screen.dart';
-import 'package:pocket_codex/src/screens/local_session_view_screen.dart';
 import 'package:pocket_codex/src/screens/services_screen.dart';
 import 'package:pocket_codex/src/screens/settings_screen.dart';
 import 'package:pocket_codex/src/web_authenticator.dart';
@@ -6021,7 +6020,9 @@ void main() {
     expect(find.textContaining('old', findRichText: true), findsOneWidget);
   });
 
-  testWidgets('Active writer opens the live read-only viewer', (t) async {
+  testWidgets('Active writer stays in chat read-only, then can be taken over', (
+    t,
+  ) async {
     const key = 'pcx:lb7666:app:default';
     final api =
         FakeBridgeApi(
@@ -6050,37 +6051,49 @@ void main() {
     );
 
     await t.pumpWidget(
-      _routerHost(
+      _host(
+        const AppSessionScreen(
+          serviceKey: key,
+          threadId: 't-active',
+          cwd: r'E:\project',
+        ),
         api,
-        initial: '/session',
-        routes: [
-          GoRoute(
-            path: '/session',
-            builder: (_, _) => const AppSessionScreen(
-              serviceKey: key,
-              threadId: 't-active',
-              cwd: r'E:\project',
-            ),
-          ),
-          GoRoute(
-            path: '/sessions/view',
-            builder: (_, state) => LocalSessionViewScreen(
-              threadId: state.uri.queryParameters['tid']!,
-              cwd: state.uri.queryParameters['cwd'],
-              preview: state.uri.queryParameters['preview'],
-              serviceKey: state.uri.queryParameters['svc'],
-            ),
-          ),
-        ],
       ),
     );
     await t.pumpAndSettle();
 
+    // This is still AppSessionScreen: its chat status, transcript and sessions
+    // chrome remain mounted, while only the composer becomes read-only.
+    expect(find.byType(AppSessionScreen), findsOneWidget);
+    expect(
+      find.byKey(const Key('chat-external-writer-banner')),
+      findsOneWidget,
+    );
     expect(find.text('work from the other client'), findsOneWidget);
     expect(find.text('只读 — 其他客户端正在使用此会话'), findsOneWidget);
-    expect(find.byKey(const Key('view-resume')), findsNothing);
+    expect(find.byKey(const Key('composer-input')), findsNothing);
+    expect(find.byKey(const Key('chat-read-only-action')), findsOneWidget);
+    expect(find.text('会话'), findsOneWidget);
 
-    // The viewer polls liveness. Once the other turn finishes but still owns
+    api.transcripts['t-active'] = const [
+      ThreadItem(
+        id: 'remote-progress',
+        itemType: 'agentMessage',
+        title: '',
+        text: 'work from the other client',
+      ),
+      ThreadItem(
+        id: 'remote-progress-2',
+        itemType: 'agentMessage',
+        title: '',
+        text: 'new progress from polling',
+      ),
+    ];
+    await t.pump(const Duration(seconds: 3));
+    await t.pump();
+    expect(find.text('new progress from polling'), findsOneWidget);
+
+    // The chat polls liveness. Once the other turn finishes but still owns
     // the rollout, the read-only state turns into an explicit takeover action.
     api.liveness['t-active'] = const SessionLiveness(
       threadId: 't-active',
@@ -6093,8 +6106,23 @@ void main() {
     );
     await t.pump(const Duration(seconds: 3));
     await t.pump();
-    expect(find.byKey(const Key('view-resume')), findsOneWidget);
+    expect(find.byType(AppSessionScreen), findsOneWidget);
+    expect(find.byKey(const Key('chat-takeover-action')), findsOneWidget);
     expect(find.text('强制接管'), findsOneWidget);
+
+    // Confirming takeover resumes in place; it must not navigate away from the
+    // chat route or leave the user stranded in a separate viewer.
+    api.appThreadResumeError = null;
+    await t.tap(find.byKey(const Key('chat-takeover-action')));
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('takeover-dialog')), findsOneWidget);
+    await t.tap(find.byKey(const Key('takeover-confirm')));
+    await t.pumpAndSettle();
+    expect(api.lastMetaResumedKey, key);
+    expect(api.lastMetaResumedThread, 't-active');
+    expect(find.byType(AppSessionScreen), findsOneWidget);
+    expect(find.byKey(const Key('chat-external-writer-banner')), findsNothing);
+    expect(find.byKey(const Key('composer-input')), findsOneWidget);
 
     await t.pumpWidget(const SizedBox());
   });
