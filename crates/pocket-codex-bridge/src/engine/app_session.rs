@@ -2085,18 +2085,12 @@ fn summarize_item(item: &Value) -> (String, String, String) {
                 [one] => one.clone(),
                 _ => format!("{} files", changes.len()),
             };
-            // Each change carries its own unified `diff`; concatenate them into a
-            // multi-file diff the UI can render (colored hunks + ±counts) and
-            // expand for review. Fall back to the path list when no diff is
-            // present (e.g. a not-yet-applied change).
+            // App-server update diffs contain hunks but no file markers, while
+            // add/delete diffs contain raw file contents. Normalize each shape
+            // before handing it to the UI's unified-diff parser.
             let diffs: Vec<String> = changes
                 .iter()
-                .filter_map(|c| {
-                    c.get("diff")
-                        .and_then(Value::as_str)
-                        .filter(|d| !d.trim().is_empty())
-                        .map(str::to_string)
-                })
+                .filter_map(normalize_file_change_diff)
                 .collect();
             let detail = if diffs.is_empty() { paths.join("\n") } else { diffs.join("\n") };
             (title, detail)
@@ -2132,6 +2126,54 @@ fn summarize_item(item: &Value) -> (String, String, String) {
         ),
     };
     (item_type, title, text)
+}
+
+fn normalize_file_change_diff(change: &Value) -> Option<String> {
+    let raw = change
+        .get("diff")
+        .and_then(Value::as_str)
+        .filter(|diff| !diff.trim().is_empty())?;
+    if raw.lines().any(|line| line.starts_with("--- "))
+        && raw.lines().any(|line| line.starts_with("+++ "))
+    {
+        return Some(raw.to_string());
+    }
+
+    let path = change.get("path").and_then(Value::as_str)?;
+    let kind = change.get("kind");
+    let kind_type = kind
+        .and_then(|value| value.get("type").and_then(Value::as_str))
+        .or_else(|| kind.and_then(Value::as_str))
+        .unwrap_or("update");
+    let body = raw.trim_end_matches(['\r', '\n']);
+    match kind_type {
+        "add" => Some(format_content_diff(path, body, true)),
+        "delete" => Some(format_content_diff(path, body, false)),
+        _ => {
+            let new_path = kind
+                .and_then(|value| value.get("movePath"))
+                .and_then(Value::as_str)
+                .unwrap_or(path);
+            Some(format!("--- a/{path}\n+++ b/{new_path}\n{body}"))
+        },
+    }
+}
+
+fn format_content_diff(path: &str, content: &str, added: bool) -> String {
+    let lines: Vec<&str> = content.lines().collect();
+    let count = lines.len();
+    let (old_path, new_path, hunk, marker) = if added {
+        ("/dev/null".to_string(), format!("b/{path}"), format!("@@ -0,0 +1,{count} @@"), '+')
+    } else {
+        (format!("a/{path}"), "/dev/null".to_string(), format!("@@ -1,{count} +0,0 @@"), '-')
+    };
+    let mut diff = format!("--- {old_path}\n+++ {new_path}\n{hunk}");
+    for line in lines {
+        diff.push('\n');
+        diff.push(marker);
+        diff.push_str(line);
+    }
+    diff
 }
 
 /// Image URLs attached to a `userMessage` item's `content` array. A v2
@@ -2403,12 +2445,14 @@ mod tests {
         assert!(detail.contains("\"x\""));
 
         // A file change with a single path titles itself with that path and
-        // exposes each change's unified `diff` as the detail (for the +/- view).
+        // adds the file markers app-server omits so the UI can parse the hunks.
         let edit = json!({"type":"fileChange","id":"e1","changes":[
-            {"path":"lib/x.dart","diff":"@@ -1 +1 @@\n-old\n+new\n","status":"completed"}]});
+            {"path":"lib/x.dart","kind":{"type":"update","movePath":null},
+             "diff":"@@ -1 +1 @@\n-old\n+new\n","status":"completed"}]});
         let (ty, title, detail) = summarize_item(&edit);
         assert_eq!(ty, "fileChange");
         assert_eq!(title, "lib/x.dart");
+        assert!(detail.starts_with("--- a/lib/x.dart\n+++ b/lib/x.dart\n@@"));
         assert!(detail.contains("+new"));
 
         // Multiple changes: title summarises the count; diffs are concatenated.
@@ -2417,6 +2461,23 @@ mod tests {
         let (_, title, detail) = summarize_item(&edits);
         assert_eq!(title, "2 files");
         assert!(detail.contains("+a") && detail.contains("+b"));
+
+        // Added/deleted files carry raw contents rather than hunks; synthesize
+        // real additions/removals so the same UI renders counts and line colors.
+        let contents = json!({"type":"fileChange","id":"e4","changes":[
+            {"path":"new.txt","kind":{"type":"add"},"diff":"one\ntwo\n"},
+            {"path":"old.txt","kind":{"type":"delete"},"diff":"gone\n"} ]});
+        let (_, _, detail) = summarize_item(&contents);
+        assert!(detail.contains("--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1,2 @@\n+one\n+two"));
+        assert!(detail.contains("--- a/old.txt\n+++ /dev/null\n@@ -1,1 +0,0 @@\n-gone"));
+
+        // Already-normalized callers remain byte-for-byte intact.
+        let normalized = json!({"type":"fileChange","id":"e5","changes":[{
+            "path":"ready.rs","kind":{"type":"update"},
+            "diff":"--- a/ready.rs\n+++ b/ready.rs\n@@ -1 +1 @@\n-old\n+new\n"
+        }]});
+        let (_, _, detail) = summarize_item(&normalized);
+        assert_eq!(detail, "--- a/ready.rs\n+++ b/ready.rs\n@@ -1 +1 @@\n-old\n+new\n");
 
         // No diff present (not-yet-applied): fall back to the path list.
         let pending = json!({"type":"fileChange","id":"e3","changes":[{"path":"c.rs"}]});

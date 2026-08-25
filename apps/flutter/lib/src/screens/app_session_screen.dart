@@ -1315,14 +1315,37 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       // events that would normally flush it were missed during the drop).
       _maybeFlushQueue();
     } catch (e) {
-      if (mounted && _threadId == startTid) {
-        setState(() {
-          _loading = false;
-          _error = friendlyError(e);
-          _retry = _resumeAndLoad;
-        });
+      if (!mounted || _threadId != startTid) return;
+      if (_isActiveWriterError(e)) {
+        _openReadOnlyViewer(startTid);
+        return;
       }
+      setState(() {
+        _loading = false;
+        _error = friendlyError(e);
+        _retry = _resumeAndLoad;
+      });
     }
+  }
+
+  bool _isActiveWriterError(Object error) =>
+      error.toString().toLowerCase().contains('active writer');
+
+  void _openReadOnlyViewer(String threadId) {
+    final matches = _threads.where((thread) => thread.id == threadId);
+    final thread = matches.isEmpty ? null : matches.first;
+    final preview = thread?.title ?? thread?.preview;
+    final cwd = (_cwd ?? thread?.cwd)?.trim();
+    final query = <String, String>{
+      'tid': threadId,
+      if (cwd != null && cwd.isNotEmpty) 'cwd': cwd,
+      if (preview != null && preview.trim().isNotEmpty)
+        'preview': preview.trim(),
+      'svc': widget.serviceKey,
+    };
+    context.pushReplacement(
+      Uri(path: '/sessions/view', queryParameters: query).toString(),
+    );
   }
 
   void _onEvent(AppEvent e) {

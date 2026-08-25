@@ -653,9 +653,14 @@ class FakeBridgeApi implements BridgeApi {
   /// Records the last resumed thread id for assertions.
   String? lastResumed;
 
+  /// Optional failure thrown by [appThreadResume].
+  Object? appThreadResumeError;
+
   @override
-  Future<void> appThreadResume(String serviceKey, String threadId) async =>
-      lastResumed = threadId;
+  Future<void> appThreadResume(String serviceKey, String threadId) async {
+    if (appThreadResumeError != null) throw appThreadResumeError!;
+    lastResumed = threadId;
+  }
 
   /// Seedable history for resume tests.
   ThreadHistory readResult = const ThreadHistory(items: [], running: false);

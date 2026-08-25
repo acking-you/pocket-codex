@@ -26,6 +26,7 @@ import 'package:pocket_codex/src/image_attachments.dart';
 import 'package:pocket_codex/src/widgets/message_images.dart';
 import 'package:pocket_codex/src/screens/app_session_screen.dart';
 import 'package:pocket_codex/src/screens/app_service_screen.dart';
+import 'package:pocket_codex/src/screens/local_session_view_screen.dart';
 import 'package:pocket_codex/src/screens/services_screen.dart';
 import 'package:pocket_codex/src/screens/settings_screen.dart';
 import 'package:pocket_codex/src/web_authenticator.dart';
@@ -6018,6 +6019,84 @@ void main() {
     await t.pumpAndSettle();
     expect(find.textContaining('new', findRichText: true), findsOneWidget);
     expect(find.textContaining('old', findRichText: true), findsOneWidget);
+  });
+
+  testWidgets('Active writer opens the live read-only viewer', (t) async {
+    const key = 'pcx:lb7666:app:default';
+    final api =
+        FakeBridgeApi(
+            config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+          )
+          ..appThreadResumeError = StateError(
+            'thread t-active already has an active writer',
+          );
+    await api.appConnect(key, 28080);
+    api.transcripts['t-active'] = const [
+      ThreadItem(
+        id: 'remote-progress',
+        itemType: 'agentMessage',
+        title: '',
+        text: 'work from the other client',
+      ),
+    ];
+    api.liveness['t-active'] = const SessionLiveness(
+      threadId: 't-active',
+      turnState: 'incomplete',
+      heldOpen: true,
+      safety: 'ownedRunning',
+      allowsResume: false,
+      requiresTakeover: false,
+      holders: [],
+    );
+
+    await t.pumpWidget(
+      _routerHost(
+        api,
+        initial: '/session',
+        routes: [
+          GoRoute(
+            path: '/session',
+            builder: (_, _) => const AppSessionScreen(
+              serviceKey: key,
+              threadId: 't-active',
+              cwd: r'E:\project',
+            ),
+          ),
+          GoRoute(
+            path: '/sessions/view',
+            builder: (_, state) => LocalSessionViewScreen(
+              threadId: state.uri.queryParameters['tid']!,
+              cwd: state.uri.queryParameters['cwd'],
+              preview: state.uri.queryParameters['preview'],
+              serviceKey: state.uri.queryParameters['svc'],
+            ),
+          ),
+        ],
+      ),
+    );
+    await t.pumpAndSettle();
+
+    expect(find.text('work from the other client'), findsOneWidget);
+    expect(find.text('只读 — 其他客户端正在使用此会话'), findsOneWidget);
+    expect(find.byKey(const Key('view-resume')), findsNothing);
+
+    // The viewer polls liveness. Once the other turn finishes but still owns
+    // the rollout, the read-only state turns into an explicit takeover action.
+    api.liveness['t-active'] = const SessionLiveness(
+      threadId: 't-active',
+      turnState: 'completed',
+      heldOpen: true,
+      safety: 'ownedIdle',
+      allowsResume: true,
+      requiresTakeover: true,
+      holders: [],
+    );
+    await t.pump(const Duration(seconds: 3));
+    await t.pump();
+    expect(find.byKey(const Key('view-resume')), findsOneWidget);
+    expect(find.text('强制接管'), findsOneWidget);
+
+    await t.pumpWidget(const SizedBox());
   });
 
   testWidgets('A compaction item shows a system notice in the transcript', (
