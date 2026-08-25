@@ -715,6 +715,19 @@ class SessionLiveness {
   final List<Holder> holders;
 }
 
+/// One full read-only transcript + ownership snapshot from the host's live
+/// session follow stream.
+class SessionFollowUpdate {
+  /// Creates a live session snapshot.
+  const SessionFollowUpdate({required this.liveness, required this.items});
+
+  /// Current ownership and resume-safety state.
+  final SessionLiveness liveness;
+
+  /// Full materialised transcript at this rollout revision.
+  final List<ThreadItem> items;
+}
+
 /// Outcome of a force-resume: which holders were killed / survived, and whether
 /// the subsequent resume took.
 class ForceResumeReport {
@@ -1303,6 +1316,13 @@ abstract interface class BridgeApi {
 
   /// Remote analogue of [appSessionLiveness].
   Future<SessionLiveness> metaSessionLiveness(
+    String serviceKey,
+    String threadId,
+  );
+
+  /// Live read-only transcript + ownership updates for a session held by
+  /// another app-server. The stream's first event is a complete snapshot.
+  Stream<SessionFollowUpdate> metaSessionEvents(
     String serviceKey,
     String threadId,
   );

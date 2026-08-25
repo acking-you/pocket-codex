@@ -291,6 +291,16 @@ pub fn read_transcript(path: &Path) -> Result<Vec<TranscriptItem>> {
             }
             continue;
         }
+        if line_type == Some("event_msg")
+            && payload.get("type").and_then(Value::as_str) == Some("item_completed")
+        {
+            if let Some(item) = payload.get("item") {
+                if let Some(item) = completed_activity_item(item, id) {
+                    out.push(item);
+                }
+            }
+            continue;
+        }
         if line_type != Some("response_item") {
             continue;
         }
@@ -515,6 +525,124 @@ fn command_title(payload: &Value) -> String {
         }
     }
     name.to_string()
+}
+
+/// Newer codex rollouts persist the UI-ready result of tool activity as an
+/// `event_msg.item_completed` record. The legacy `response_item` parser above
+/// already covers messages/reasoning and function-call commands; this adds the
+/// modern command and file-edit shapes that otherwise vanished from read-only
+/// history entirely.
+fn completed_activity_item(item: &Value, fallback_id: String) -> Option<TranscriptItem> {
+    let id = item
+        .get("id")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .unwrap_or(fallback_id);
+    match item.get("type").and_then(Value::as_str) {
+        Some("CommandExecution") => {
+            let title = item
+                .get("parsed_cmd")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|command| command.get("cmd").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let title = if title.is_empty() { completed_command_title(item) } else { title };
+            let text = ["formatted_output", "aggregated_output", "stdout"]
+                .into_iter()
+                .find_map(|field| {
+                    item.get(field)
+                        .and_then(Value::as_str)
+                        .filter(|text| !text.is_empty())
+                })
+                .unwrap_or_else(|| item.get("stderr").and_then(Value::as_str).unwrap_or(""));
+            Some(TranscriptItem {
+                id,
+                item_type: "commandExecution".to_string(),
+                title,
+                text: strip_ansi(text),
+                images: Vec::new(),
+            })
+        },
+        Some("FileChange") => completed_file_change_item(item, id),
+        _ => None,
+    }
+}
+
+fn completed_command_title(item: &Value) -> String {
+    match item.get("command") {
+        Some(Value::String(command)) => command.clone(),
+        Some(Value::Array(parts)) => {
+            let parts = parts.iter().filter_map(Value::as_str).collect::<Vec<_>>();
+            match parts.as_slice() {
+                [_, flag, command] if matches!(*flag, "-Command" | "-c" | "/C") => {
+                    (*command).to_string()
+                },
+                _ => parts.join(" "),
+            }
+        },
+        _ => "command".to_string(),
+    }
+}
+
+fn completed_file_change_item(item: &Value, id: String) -> Option<TranscriptItem> {
+    let changes = item.get("changes")?.as_object()?;
+    if changes.is_empty() {
+        return None;
+    }
+    let mut diffs = Vec::new();
+    for (path, change) in changes {
+        if let Some(diff) = completed_file_diff(path, change) {
+            diffs.push(diff);
+        }
+    }
+    let title = if changes.len() == 1 {
+        changes.keys().next().cloned().unwrap_or_default()
+    } else {
+        format!("{} files", changes.len())
+    };
+    let text = if diffs.is_empty() {
+        changes.keys().cloned().collect::<Vec<_>>().join("\n")
+    } else {
+        diffs.join("\n")
+    };
+    Some(TranscriptItem {
+        id,
+        item_type: "fileChange".to_string(),
+        title,
+        text,
+        images: Vec::new(),
+    })
+}
+
+fn completed_file_diff(path: &str, change: &Value) -> Option<String> {
+    let raw = change
+        .get("unified_diff")
+        .or_else(|| change.get("diff"))
+        .and_then(Value::as_str)
+        .filter(|diff| !diff.trim().is_empty())?;
+    if raw.lines().any(|line| line.starts_with("--- "))
+        && raw.lines().any(|line| line.starts_with("+++ "))
+    {
+        return Some(raw.to_string());
+    }
+    let kind = change
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or("update");
+    let moved = change
+        .get("move_path")
+        .or_else(|| change.get("movePath"))
+        .and_then(Value::as_str)
+        .unwrap_or(path);
+    let body = raw.trim_end_matches(['\r', '\n']);
+    let (old_path, new_path) = match kind {
+        "add" => ("/dev/null".to_string(), format!("b/{moved}")),
+        "delete" => (format!("a/{path}"), "/dev/null".to_string()),
+        _ => (format!("a/{path}"), format!("b/{moved}")),
+    };
+    Some(format!("--- {old_path}\n+++ {new_path}\n{body}"))
 }
 
 /// Join a `reasoning` payload's `summary[].text`. codex stores the model's
@@ -1128,6 +1256,31 @@ mod tests {
         assert_eq!(items[1].text, "[32mhi[0m");
         assert_eq!(items[2].item_type, "agentMessage");
         assert_eq!(items[2].text, "done");
+    }
+
+    #[test]
+    fn read_transcript_keeps_modern_command_and_file_change_history() {
+        let lines = [
+            r#"{"type":"response_item","payload":{"type":"custom_tool_call","name":"exec","call_id":"c1","input":"opaque"}}"#,
+            r#"{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"CommandExecution","id":"exec-1","command":["pwsh","-Command","cargo test"],"parsed_cmd":[{"type":"unknown","cmd":"cargo test"}],"status":"completed","formatted_output":"all tests passed\n"}}}"#,
+            r#"{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"FileChange","id":"edit-1","changes":{"src/lib.rs":{"type":"update","unified_diff":"@@ -1 +1 @@\n-old\n+new\n","move_path":null}},"status":"completed"}}}"#,
+        ];
+        let path = std::env::temp_dir().join(format!(
+            "pcx-transcript-{}-{}.jsonl",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::write(&path, lines.join("\n")).expect("write transcript fixture");
+        let items = read_transcript(&path).expect("read transcript");
+        std::fs::remove_file(&path).ok();
+
+        assert_eq!(items.len(), 2, "{items:?}");
+        assert_eq!(items[0].item_type, "commandExecution");
+        assert_eq!(items[0].title, "cargo test");
+        assert_eq!(items[0].text, "all tests passed\n");
+        assert_eq!(items[1].item_type, "fileChange");
+        assert_eq!(items[1].title, "src/lib.rs");
+        assert_eq!(items[1].text, "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1 +1 @@\n-old\n+new");
     }
 
     /// Manual harness: parse a REAL rollout and dump what the viewer would

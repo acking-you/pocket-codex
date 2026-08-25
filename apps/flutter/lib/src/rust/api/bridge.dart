@@ -6,7 +6,7 @@
 import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `apply_key`, `current_relay`, `holder_dto`, `meta_holder_dto`, `project_config_dto`, `thread_config_dto`, `thread_config_from_dto`, `to_log_dto`
+// These functions are ignored because they are not marked as `pub`: `apply_key`, `current_relay`, `holder_dto`, `meta_follow_update_dto`, `meta_holder_dto`, `meta_liveness_dto`, `meta_thread_item_dto`, `project_config_dto`, `thread_config_dto`, `thread_config_from_dto`, `to_log_dto`
 
 /// Initialise the engine with the platform app-support dir (from Dart's
 /// path_provider). Must be called once after `RustLib.init()`.
@@ -516,6 +516,17 @@ Future<SessionLivenessDto> metaSessionLiveness({
   required String serviceKey,
   required String threadId,
 }) => RustLib.instance.api.crateApiBridgeMetaSessionLiveness(
+  serviceKey: serviceKey,
+  threadId: threadId,
+);
+
+/// Subscribe to live read-only transcript + ownership snapshots for a session
+/// held by another app-server. One long-lived meta response replaces client
+/// polling; dropping the Dart stream stops forwarding.
+Stream<SessionFollowUpdateDto> metaSessionEvents({
+  required String serviceKey,
+  required String threadId,
+}) => RustLib.instance.api.crateApiBridgeMetaSessionEvents(
   serviceKey: serviceKey,
   threadId: threadId,
 );
@@ -1684,6 +1695,29 @@ class ServiceIdDto {
           kind == other.kind &&
           name == other.name &&
           key == other.key;
+}
+
+/// One full read-only transcript + ownership snapshot from the host's live
+/// session follow stream, mirrored for Dart.
+class SessionFollowUpdateDto {
+  /// Current ownership and resume-safety state.
+  final SessionLivenessDto liveness;
+
+  /// Full materialised transcript at this rollout revision.
+  final List<ThreadItemDto> items;
+
+  const SessionFollowUpdateDto({required this.liveness, required this.items});
+
+  @override
+  int get hashCode => liveness.hashCode ^ items.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SessionFollowUpdateDto &&
+          runtimeType == other.runtimeType &&
+          liveness == other.liveness &&
+          items == other.items;
 }
 
 /// One session's liveness detail, including the would-be takeover targets,

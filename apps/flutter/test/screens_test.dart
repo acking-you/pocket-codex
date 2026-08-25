@@ -6030,7 +6030,13 @@ void main() {
           )
           ..appThreadResumeError = StateError(
             'thread t-active already has an active writer',
-          );
+          )
+          ..gitDiffText = '''--- a/lib/live.dart
++++ b/lib/live.dart
+@@ -1 +1 @@
+-old
++new
+''';
     await api.appConnect(key, 28080);
     api.transcripts['t-active'] = const [
       ThreadItem(
@@ -6073,9 +6079,27 @@ void main() {
     expect(find.text('只读 — 其他客户端正在使用此会话'), findsOneWidget);
     expect(find.byKey(const Key('composer-input')), findsNothing);
     expect(find.byKey(const Key('chat-read-only-action')), findsOneWidget);
+    expect(find.byKey(const Key('chat-external-diff-action')), findsOneWidget);
     expect(find.text('会话'), findsOneWidget);
+    expect(api.metaSessionEventSubscriptions, 1);
 
-    api.transcripts['t-active'] = const [
+    // The working-tree diff remains directly reviewable without taking over.
+    await t.tap(find.byKey(const Key('chat-external-diff-action')));
+    await t.pumpAndSettle();
+    expect(find.textContaining('live.dart'), findsWidgets);
+    Navigator.of(t.element(find.textContaining('live.dart').first)).pop();
+    await t.pumpAndSettle();
+
+    const running = SessionLiveness(
+      threadId: 't-active',
+      turnState: 'incomplete',
+      heldOpen: true,
+      safety: 'ownedRunning',
+      allowsResume: false,
+      requiresTakeover: false,
+      holders: [],
+    );
+    const liveItems = [
       ThreadItem(
         id: 'remote-progress',
         itemType: 'agentMessage',
@@ -6086,26 +6110,52 @@ void main() {
         id: 'remote-progress-2',
         itemType: 'agentMessage',
         title: '',
-        text: 'new progress from polling',
+        text: 'new progress from subscription',
+      ),
+      ThreadItem(
+        id: 'remote-command',
+        itemType: 'commandExecution',
+        title: 'cargo test',
+        text: 'all tests passed',
+      ),
+      ThreadItem(
+        id: 'remote-edit',
+        itemType: 'fileChange',
+        title: 'lib/live.dart',
+        text: '''--- a/lib/live.dart
++++ b/lib/live.dart
+@@ -1 +1 @@
+-old
++new
+''',
       ),
     ];
-    await t.pump(const Duration(seconds: 3));
-    await t.pump();
-    expect(find.text('new progress from polling'), findsOneWidget);
-
-    // The chat polls liveness. Once the other turn finishes but still owns
-    // the rollout, the read-only state turns into an explicit takeover action.
-    api.liveness['t-active'] = const SessionLiveness(
-      threadId: 't-active',
-      turnState: 'completed',
-      heldOpen: true,
-      safety: 'ownedIdle',
-      allowsResume: true,
-      requiresTakeover: true,
-      holders: [],
+    api.pushMetaSessionUpdate(
+      't-active',
+      const SessionFollowUpdate(liveness: running, items: liveItems),
     );
-    await t.pump(const Duration(seconds: 3));
-    await t.pump();
+    await t.pumpAndSettle();
+    expect(find.text('new progress from subscription'), findsOneWidget);
+    expect(find.text('cargo test'), findsOneWidget);
+    expect(find.textContaining('live.dart'), findsWidgets);
+
+    // A stream update flips the action immediately when the other turn ends.
+    api.pushMetaSessionUpdate(
+      't-active',
+      const SessionFollowUpdate(
+        liveness: SessionLiveness(
+          threadId: 't-active',
+          turnState: 'completed',
+          heldOpen: true,
+          safety: 'ownedIdle',
+          allowsResume: true,
+          requiresTakeover: true,
+          holders: [],
+        ),
+        items: liveItems,
+      ),
+    );
+    await t.pumpAndSettle();
     expect(find.byType(AppSessionScreen), findsOneWidget);
     expect(find.byKey(const Key('chat-takeover-action')), findsOneWidget);
     expect(find.text('强制接管'), findsOneWidget);

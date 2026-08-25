@@ -40,6 +40,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  RustStreamSink<SessionFollowUpdateDto>
+  dco_decode_StreamSink_session_follow_update_dto_Sse(dynamic raw);
+
+  @protected
   String dco_decode_String(dynamic raw);
 
   @protected
@@ -194,6 +198,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ServiceIdDto dco_decode_service_id_dto(dynamic raw);
 
   @protected
+  SessionFollowUpdateDto dco_decode_session_follow_update_dto(dynamic raw);
+
+  @protected
   SessionLivenessDto dco_decode_session_liveness_dto(dynamic raw);
 
   @protected
@@ -247,6 +254,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   RustStreamSink<RetryProgressDto> sse_decode_StreamSink_retry_progress_dto_Sse(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  RustStreamSink<SessionFollowUpdateDto>
+  sse_decode_StreamSink_session_follow_update_dto_Sse(
     SseDeserializer deserializer,
   );
 
@@ -441,6 +454,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ServiceIdDto sse_decode_service_id_dto(SseDeserializer deserializer);
 
   @protected
+  SessionFollowUpdateDto sse_decode_session_follow_update_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   SessionLivenessDto sse_decode_session_liveness_dto(
     SseDeserializer deserializer,
   );
@@ -507,6 +525,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_StreamSink_retry_progress_dto_Sse(
     RustStreamSink<RetryProgressDto> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_StreamSink_session_follow_update_dto_Sse(
+    RustStreamSink<SessionFollowUpdateDto> self,
     SseSerializer serializer,
   );
 
@@ -749,6 +773,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_service_id_dto(ServiceIdDto self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_session_follow_update_dto(
+    SessionFollowUpdateDto self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_session_liveness_dto(

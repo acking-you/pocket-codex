@@ -8,6 +8,8 @@
 //! Every function here is **blocking** (it scans the filesystem and process
 //! table); HTTP handlers run them on a blocking task.
 
+use std::path::PathBuf;
+
 use anyhow::{anyhow, Result};
 use pocket_codex_codex::{
     liveness::{held_open_paths, Holder as CdxHolder},
@@ -64,7 +66,7 @@ pub struct LocalSession {
 
 /// A single session's liveness detail, including the processes a force takeover
 /// would target.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionLiveness {
     /// Thread / conversation id.
     pub thread_id: String,
@@ -85,7 +87,7 @@ pub struct SessionLiveness {
 
 /// A read-only transcript row, matching `thread/read`'s `{id, type, title,
 /// text}` shape so the viewer can reuse the live-conversation rendering.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TranscriptItem {
     /// Stable row id (the source line index).
     pub id: String,
@@ -100,6 +102,15 @@ pub struct TranscriptItem {
     /// response from an older host (no field) still deserializes.
     #[serde(default)]
     pub images: Vec<String>,
+}
+
+/// One point-in-time read-only view emitted by the session follow stream.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionFollowUpdate {
+    /// Current ownership and resume-safety state.
+    pub liveness: SessionLiveness,
+    /// Full materialised transcript at this revision of the rollout.
+    pub items: Vec<TranscriptItem>,
 }
 
 impl From<rollout::TranscriptItem> for TranscriptItem {
@@ -148,9 +159,7 @@ pub fn list() -> Result<Vec<LocalSession>> {
 /// Inspect one session's liveness in detail, excluding `protected` pids (the
 /// server we resume into + this process) from the listed takeover targets.
 pub fn liveness(thread_id: &str, protected: &[u32]) -> Result<SessionLiveness> {
-    let path = rollout::rollout_path_for_thread(thread_id)
-        .map_err(|e| anyhow!("locating rollout: {e}"))?
-        .ok_or_else(|| anyhow!("no rollout found for thread {thread_id}"))?;
+    let path = rollout_path(thread_id)?;
     let live = takeover::inspect(&path).map_err(|e| anyhow!("inspecting rollout: {e}"))?;
     let holders = live
         .holders
@@ -173,9 +182,21 @@ pub fn liveness(thread_id: &str, protected: &[u32]) -> Result<SessionLiveness> {
 /// the on-disk rollout, so it works for a session another client owns and never
 /// touches the app-server.
 pub fn transcript(thread_id: &str) -> Result<Vec<TranscriptItem>> {
-    let path = rollout::rollout_path_for_thread(thread_id)
-        .map_err(|e| anyhow!("locating rollout: {e}"))?
-        .ok_or_else(|| anyhow!("no rollout found for thread {thread_id}"))?;
+    let path = rollout_path(thread_id)?;
     let items = rollout::read_transcript(&path).map_err(|e| anyhow!("reading transcript: {e}"))?;
     Ok(items.into_iter().map(TranscriptItem::from).collect())
+}
+
+pub(crate) fn rollout_path(thread_id: &str) -> Result<PathBuf> {
+    rollout::rollout_path_for_thread(thread_id)
+        .map_err(|e| anyhow!("locating rollout: {e}"))?
+        .ok_or_else(|| anyhow!("no rollout found for thread {thread_id}"))
+}
+
+/// Read the liveness and transcript used to seed a session follow stream.
+pub fn follow_update(thread_id: &str, protected: &[u32]) -> Result<SessionFollowUpdate> {
+    Ok(SessionFollowUpdate {
+        liveness: liveness(thread_id, protected)?,
+        items: transcript(thread_id)?,
+    })
 }

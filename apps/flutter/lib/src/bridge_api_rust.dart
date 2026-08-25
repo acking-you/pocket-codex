@@ -687,6 +687,45 @@ class RustBridgeApi implements BridgeApi {
   }
 
   @override
+  Stream<SessionFollowUpdate> metaSessionEvents(
+    String serviceKey,
+    String threadId,
+  ) => frb
+      .metaSessionEvents(serviceKey: serviceKey, threadId: threadId)
+      .map(
+        (update) => SessionFollowUpdate(
+          liveness: SessionLiveness(
+            threadId: update.liveness.threadId,
+            turnState: update.liveness.turnState,
+            heldOpen: update.liveness.heldOpen,
+            safety: update.liveness.safety,
+            allowsResume: update.liveness.allowsResume,
+            requiresTakeover: update.liveness.requiresTakeover,
+            holders: update.liveness.holders
+                .map(
+                  (holder) =>
+                      Holder(pid: holder.pid.toInt(), name: holder.name),
+                )
+                .toList(),
+          ),
+          items: update.items
+              .map(
+                (item) => ThreadItem(
+                  id: item.id,
+                  itemType: item.itemType,
+                  title: item.title,
+                  text: item.text,
+                  images: item.images,
+                  turnId: item.turnId,
+                  turnCompletedAt: item.turnCompletedAt?.toInt(),
+                  turnDurationMs: item.turnDurationMs?.toInt(),
+                ),
+              )
+              .toList(),
+        ),
+      );
+
+  @override
   Future<List<ThreadItem>> metaSessionTranscript(
     String serviceKey,
     String threadId,

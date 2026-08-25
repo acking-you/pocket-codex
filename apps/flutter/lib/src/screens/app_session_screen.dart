@@ -425,12 +425,12 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   // smooth skeleton instead of flashing empty when switching sessions.
   bool _loading = false;
   // A thread held by another app-server stays inside this chat surface. Its
-  // rollout is polled through the host meta service until it becomes resumable.
+  // rollout follows one host-meta stream until it becomes resumable.
   bool _externalWriterMode = false;
   SessionLiveness? _externalWriterLiveness;
-  Timer? _externalWriterPoll;
+  StreamSubscription<SessionFollowUpdate>? _externalWriterSub;
+  Timer? _externalWriterReconnect;
   int _externalWriterEpoch = 0;
-  int? _externalWriterRefreshingEpoch;
   bool _takingOver = false;
   bool _sending = false;
   bool _atBottom = true; // is the list scrolled to the latest message?
@@ -921,7 +921,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     if (tid != null) {
       ref.read(uiPrefsProvider.notifier).setLastThread(widget.serviceKey, tid);
     }
-    _cancelExternalWriterPolling();
+    _cancelExternalWriterSubscription();
     setState(() {
       _threadId = tid;
       _cwd = cwd;
@@ -1014,7 +1014,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   @override
   void dispose() {
     _healthTimer?.cancel();
-    _externalWriterPoll?.cancel();
+    _externalWriterReconnect?.cancel();
+    final externalWriterSub = _externalWriterSub;
+    if (externalWriterSub != null) unawaited(externalWriterSub.cancel());
     for (final t in _openLoadTimers.values) {
       t.cancel();
     }
@@ -1338,15 +1340,17 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   bool _isActiveWriterError(Object error) =>
       error.toString().toLowerCase().contains('active writer');
 
-  void _cancelExternalWriterPolling() {
-    _externalWriterPoll?.cancel();
-    _externalWriterPoll = null;
+  void _cancelExternalWriterSubscription() {
+    _externalWriterReconnect?.cancel();
+    _externalWriterReconnect = null;
+    final sub = _externalWriterSub;
+    _externalWriterSub = null;
+    if (sub != null) unawaited(sub.cancel());
     _externalWriterEpoch++;
-    _externalWriterRefreshingEpoch = null;
   }
 
   void _enterExternalWriterMode(String threadId) {
-    _cancelExternalWriterPolling();
+    _cancelExternalWriterSubscription();
     final epoch = _externalWriterEpoch;
     _elapsedTicker?.cancel();
     _elapsedTicker = null;
@@ -1360,74 +1364,96 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       _retry = null;
       _approvals.clear();
     });
-    unawaited(_refreshExternalWriter(threadId, epoch, initial: true));
-    _externalWriterPoll = Timer.periodic(
-      const Duration(seconds: 3),
-      (_) => unawaited(_refreshExternalWriter(threadId, epoch)),
-    );
+    _loadGit();
+    _subscribeExternalWriter(threadId, epoch);
   }
 
-  Future<void> _refreshExternalWriter(
+  void _subscribeExternalWriter(String threadId, int epoch) {
+    if (!mounted ||
+        !_externalWriterMode ||
+        _threadId != threadId ||
+        epoch != _externalWriterEpoch) {
+      return;
+    }
+    _externalWriterReconnect?.cancel();
+    _externalWriterReconnect = null;
+    final oldSub = _externalWriterSub;
+    if (oldSub != null) unawaited(oldSub.cancel());
+    _externalWriterSub = ref
+        .read(bridgeApiProvider)
+        .metaSessionEvents(widget.serviceKey, threadId)
+        .listen(
+          (update) => _applyExternalWriterUpdate(threadId, epoch, update),
+          onError: (Object error, StackTrace stack) =>
+              _externalWriterStreamLost(threadId, epoch, error),
+          onDone: () => _externalWriterStreamLost(threadId, epoch, null),
+          cancelOnError: true,
+        );
+  }
+
+  void _applyExternalWriterUpdate(
     String threadId,
-    int epoch, {
-    bool initial = false,
-  }) async {
+    int epoch,
+    SessionFollowUpdate update,
+  ) {
+    if (!mounted ||
+        !_externalWriterMode ||
+        _threadId != threadId ||
+        epoch != _externalWriterEpoch) {
+      return;
+    }
+    final followTail = _loading || _atBottom;
+    final refreshDiff =
+        _items
+            .where((item) => item.type == 'fileChange')
+            .map((item) => '${item.id}\u0000${item.text}')
+            .join('\u0001') !=
+        update.items
+            .where((item) => item.itemType == 'fileChange')
+            .map((item) => '${item.id}\u0000${item.text}')
+            .join('\u0001');
+    setState(() {
+      _externalWriterLiveness = update.liveness;
+      _replaceTranscriptItems(update.items);
+      _loading = false;
+      _error = null;
+      _retry = null;
+    });
+    if (refreshDiff) _loadGit();
+    if (followTail) _scrollToEnd(force: true);
+  }
+
+  void _externalWriterStreamLost(String threadId, int epoch, Object? error) {
     if (!mounted ||
         !_externalWriterMode ||
         _threadId != threadId ||
         epoch != _externalWriterEpoch ||
-        _externalWriterRefreshingEpoch == epoch) {
+        _externalWriterReconnect != null) {
       return;
     }
-    _externalWriterRefreshingEpoch = epoch;
-    try {
-      final api = ref.read(bridgeApiProvider);
-      final liveness = await api.metaSessionLiveness(
-        widget.serviceKey,
-        threadId,
-      );
-      final wasRunning = _externalWriterLiveness?.safety == 'ownedRunning';
-      final shouldRead =
-          initial ||
-          _items.isEmpty ||
-          liveness.safety == 'ownedRunning' ||
-          wasRunning;
-      final transcript = shouldRead
-          ? await api.metaSessionTranscript(widget.serviceKey, threadId)
-          : null;
-      if (!mounted ||
-          !_externalWriterMode ||
-          _threadId != threadId ||
-          epoch != _externalWriterEpoch) {
-        return;
-      }
-      final followTail = initial || _atBottom;
-      setState(() {
-        _externalWriterLiveness = liveness;
-        if (transcript != null) _replaceTranscriptItems(transcript);
-        _loading = false;
-        _error = null;
-        _retry = null;
-      });
-      if (followTail) _scrollToEnd(force: true);
-    } catch (error) {
-      if (!mounted ||
-          !_externalWriterMode ||
-          _threadId != threadId ||
-          epoch != _externalWriterEpoch) {
-        return;
-      }
-      setState(() {
-        _loading = false;
-        _error = friendlyError(error);
-        _retry = () =>
-            unawaited(_refreshExternalWriter(threadId, epoch, initial: true));
-      });
-    } finally {
-      if (_externalWriterRefreshingEpoch == epoch) {
-        _externalWriterRefreshingEpoch = null;
-      }
-    }
+    _externalWriterSub = null;
+    setState(() {
+      _loading = false;
+      _error = error == null
+          ? AppLocalizations.of(context).connectionLost
+          : friendlyError(error);
+      _retry = () => _retryExternalWriter(threadId, epoch);
+    });
+    _externalWriterReconnect = Timer(const Duration(seconds: 1), () {
+      _externalWriterReconnect = null;
+      _subscribeExternalWriter(threadId, epoch);
+    });
+  }
+
+  void _retryExternalWriter(String threadId, int epoch) {
+    _externalWriterReconnect?.cancel();
+    _externalWriterReconnect = null;
+    setState(() {
+      _error = null;
+      _retry = null;
+      if (_items.isEmpty) _loading = true;
+    });
+    _subscribeExternalWriter(threadId, epoch);
   }
 
   Future<void> _takeOverExternalWriter() async {
@@ -1480,7 +1506,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         ];
         messenger.showSnackBar(SnackBar(content: Text(parts.join(' · '))));
       }
-      _cancelExternalWriterPolling();
+      _cancelExternalWriterSubscription();
       setState(() {
         _externalWriterMode = false;
         _externalWriterLiveness = null;
@@ -4047,6 +4073,58 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     final scheme = Theme.of(context).colorScheme;
     final liveness = _externalWriterLiveness;
     final canResume = liveness?.allowsResume ?? false;
+    final hasCwd = _cwd?.trim().isNotEmpty ?? false;
+    final stateControl = SizedBox(
+      width: double.infinity,
+      height: 46,
+      child: canResume
+          ? FilledButton.icon(
+              key: const Key('chat-takeover-action'),
+              onPressed: _takingOver ? null : _takeOverExternalWriter,
+              icon: _takingOver
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.bolt, size: 18),
+              label: Text(
+                liveness!.requiresTakeover
+                    ? l10n.forceTakeover
+                    : l10n.resumeSession,
+              ),
+            )
+          : DecoratedBox(
+              key: const Key('chat-read-only-action'),
+              decoration: BoxDecoration(
+                color: scheme.surfaceContainer,
+                borderRadius: BorderRadius.circular(kPanelRadius),
+                border: Border.all(color: scheme.outlineVariant),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    Icons.lock_outline,
+                    size: 16,
+                    color: scheme.onSurfaceVariant,
+                  ),
+                  const SizedBox(width: 8),
+                  Flexible(
+                    child: Text(
+                      l10n.readOnlyViewing,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: scheme.onSurfaceVariant,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+    );
     return SafeArea(
       top: false,
       child: Padding(
@@ -4054,56 +4132,32 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         child: Center(
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 820),
-            child: SizedBox(
-              width: double.infinity,
-              height: 46,
-              child: canResume
-                  ? FilledButton.icon(
-                      key: const Key('chat-takeover-action'),
-                      onPressed: _takingOver ? null : _takeOverExternalWriter,
-                      icon: _takingOver
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                stateControl,
+                if (hasCwd) ...[
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 42,
+                    child: OutlinedButton.icon(
+                      key: const Key('chat-external-diff-action'),
+                      onPressed: _diffLoading ? _cancelDiff : _showDiff,
+                      icon: _diffLoading
                           ? const SizedBox(
                               width: 16,
                               height: 16,
                               child: CircularProgressIndicator(strokeWidth: 2),
                             )
-                          : const Icon(Icons.bolt, size: 18),
+                          : const Icon(Icons.difference_outlined, size: 18),
                       label: Text(
-                        liveness!.requiresTakeover
-                            ? l10n.forceTakeover
-                            : l10n.resumeSession,
-                      ),
-                    )
-                  : DecoratedBox(
-                      key: const Key('chat-read-only-action'),
-                      decoration: BoxDecoration(
-                        color: scheme.surfaceContainer,
-                        borderRadius: BorderRadius.circular(kPanelRadius),
-                        border: Border.all(color: scheme.outlineVariant),
-                      ),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(
-                            Icons.lock_outline,
-                            size: 16,
-                            color: scheme.onSurfaceVariant,
-                          ),
-                          const SizedBox(width: 8),
-                          Flexible(
-                            child: Text(
-                              l10n.readOnlyViewing,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                color: scheme.onSurfaceVariant,
-                                fontSize: 13,
-                              ),
-                            ),
-                          ),
-                        ],
+                        _diffLoading ? l10n.cancelDiffLoad : l10n.viewDiff,
                       ),
                     ),
+                  ),
+                ],
+              ],
             ),
           ),
         ),
