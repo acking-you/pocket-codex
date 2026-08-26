@@ -6126,7 +6126,11 @@ void main() {
         api,
       ),
     );
-    await t.pumpAndSettle();
+    // External-writer mode deliberately keeps several animations alive. Use
+    // bounded pumps rather than pumpAndSettle, which can never settle them.
+    for (var i = 0; i < 6; i++) {
+      await t.pump(const Duration(milliseconds: 100));
+    }
 
     // This is still AppSessionScreen: its chat status, transcript and sessions
     // chrome remain mounted, while only the composer becomes read-only.
@@ -6140,15 +6144,34 @@ void main() {
     expect(find.byKey(const Key('composer-input')), findsNothing);
     expect(find.byKey(const Key('chat-read-only-action')), findsOneWidget);
     expect(find.byKey(const Key('chat-external-diff-action')), findsOneWidget);
+    expect(
+      find.byKey(const Key('chat-external-output-indicator')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const Key('chat-external-writer-pulse')), findsOneWidget);
+    expect(find.byKey(const Key('chat-status-running-pulse')), findsOneWidget);
+    final selectedConversation = find.byKey(const Key('conv-tile-t-active'));
+    expect(
+      find.descendant(
+        of: selectedConversation,
+        matching: find.byType(PulsingDot),
+      ),
+      findsOneWidget,
+    );
+    expect(find.text('进行中'), findsOneWidget);
     expect(find.text('会话'), findsOneWidget);
     expect(api.metaSessionEventSubscriptions, 1);
 
     // The working-tree diff remains directly reviewable without taking over.
     await t.tap(find.byKey(const Key('chat-external-diff-action')));
-    await t.pumpAndSettle();
+    for (var i = 0; i < 4; i++) {
+      await t.pump(const Duration(milliseconds: 100));
+    }
     expect(find.textContaining('live.dart'), findsWidgets);
     Navigator.of(t.element(find.textContaining('live.dart').first)).pop();
-    await t.pumpAndSettle();
+    for (var i = 0; i < 4; i++) {
+      await t.pump(const Duration(milliseconds: 100));
+    }
 
     const running = SessionLiveness(
       threadId: 't-active',
@@ -6194,7 +6217,8 @@ void main() {
       't-active',
       const SessionFollowUpdate(liveness: running, items: liveItems),
     );
-    await t.pumpAndSettle();
+    await t.pump();
+    await t.pump(const Duration(milliseconds: 100));
     expect(find.text('new progress from subscription'), findsOneWidget);
     expect(find.text('cargo test'), findsOneWidget);
     expect(find.textContaining('live.dart'), findsWidgets);
@@ -6217,6 +6241,18 @@ void main() {
     );
     await t.pumpAndSettle();
     expect(find.byType(AppSessionScreen), findsOneWidget);
+    expect(
+      find.byKey(const Key('chat-external-output-indicator')),
+      findsNothing,
+    );
+    expect(find.byKey(const Key('chat-external-writer-pulse')), findsNothing);
+    expect(
+      find.descendant(
+        of: selectedConversation,
+        matching: find.byType(PulsingDot),
+      ),
+      findsNothing,
+    );
     expect(find.byKey(const Key('chat-takeover-action')), findsOneWidget);
     expect(find.text('强制接管'), findsOneWidget);
 

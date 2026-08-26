@@ -500,11 +500,18 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     return false;
   }
 
-  /// Show the "typing" indicator while a turn runs and the model hasn't begun
-  /// streaming its text reply yet (tool steps may still be appearing above).
+  /// Whether the host-meta snapshot says another process still has a live turn.
+  bool get _externalWriterRunning =>
+      _externalWriterMode && _externalWriterLiveness?.turnState == 'incomplete';
+
+  /// Show the "typing" indicator while a local turn is waiting for its reply,
+  /// or throughout an external writer's turn. The latter stays visible even as
+  /// transcript snapshots arrive so read-only viewers can tell the feed is
+  /// still live rather than looking at a static history dump.
   bool get _showTyping =>
-      _streaming &&
-      (_items.isEmpty || !_items.last.isAgent || _items.last.text.isEmpty);
+      _externalWriterRunning ||
+      (_streaming &&
+          (_items.isEmpty || !_items.last.isAgent || _items.last.text.isEmpty));
 
   /// The timeline collapsed for display: runs of ≥2 consecutive same-type
   /// non-message activity items become a single [_Group] (shown as one
@@ -1346,6 +1353,11 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     final sub = _externalWriterSub;
     _externalWriterSub = null;
     if (sub != null) unawaited(sub.cancel());
+    if (_externalWriterMode) {
+      _elapsedTicker?.cancel();
+      _elapsedTicker = null;
+      _turnStartedAt = null;
+    }
     _externalWriterEpoch++;
   }
 
@@ -1354,12 +1366,14 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     final epoch = _externalWriterEpoch;
     _elapsedTicker?.cancel();
     _elapsedTicker = null;
+    _turnStartedAt = null;
     setState(() {
       _externalWriterMode = true;
       _externalWriterLiveness = null;
       _takingOver = false;
       _loading = true;
       _streaming = false;
+      _elapsedSecs = 0;
       _error = null;
       _retry = null;
       _approvals.clear();
@@ -1403,6 +1417,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       return;
     }
     final followTail = _loading || _atBottom;
+    final wasRunning = _externalWriterRunning;
+    final willRun = update.liveness.turnState == 'incomplete';
     final refreshDiff =
         _items
             .where((item) => item.type == 'fileChange')
@@ -1415,10 +1431,18 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     setState(() {
       _externalWriterLiveness = update.liveness;
       _replaceTranscriptItems(update.items);
+      if (willRun && !wasRunning) _elapsedSecs = 0;
       _loading = false;
       _error = null;
       _retry = null;
     });
+    if (willRun && !wasRunning) {
+      _startElapsedTicker();
+    } else if (!willRun && wasRunning) {
+      _elapsedTicker?.cancel();
+      _elapsedTicker = null;
+      _turnStartedAt = null;
+    }
     if (refreshDiff) _loadGit();
     if (followTail) _scrollToEnd(force: true);
   }
@@ -3684,6 +3708,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     final st = _sessionState(l10n);
     final d = _diff;
     final activeModel = _activeModelStatus();
+    final running = _streaming || _externalWriterRunning;
     return Container(
       width: double.infinity,
       // At rest the bar is part of the page — a faint ink wash under a hairline,
@@ -3698,7 +3723,14 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
       child: Row(
         children: [
-          Icon(st.icon, size: 13, color: st.color),
+          if (_externalWriterRunning)
+            PulsingDot(
+              key: const Key('chat-status-running-pulse'),
+              color: st.color,
+              size: 8,
+            )
+          else
+            Icon(st.icon, size: 13, color: st.color),
           const SizedBox(width: 6),
           Text(
             st.label,
@@ -3763,9 +3795,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
             ),
             const SizedBox(width: 10),
           ],
-          // Live elapsed clock for the running turn — ticks each second next to
-          // the working state, frozen + dropped into the transcript on turn end.
-          if (_streaming) ...[
+          // Live elapsed clock for the running turn. A local turn freezes this
+          // into its transcript footnote; an external turn counts from when
+          // this read-only observer attached and disappears when it finishes.
+          if (running) ...[
             Icon(Icons.schedule, size: 12, color: st.color),
             const SizedBox(width: 4),
             Text(
@@ -3943,6 +3976,11 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                                       itemBuilder: (c, i) {
                                         if (i >= rows.length) {
                                           return _TypingIndicator(
+                                            key: _externalWriterRunning
+                                                ? const Key(
+                                                    'chat-external-output-indicator',
+                                                  )
+                                                : null,
                                             elapsed: _fmtElapsed(_elapsedSecs),
                                           );
                                         }
@@ -4055,11 +4093,14 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       child: Row(
         children: [
-          Icon(
-            canResume ? Icons.lock_open_outlined : Icons.lock_clock_outlined,
-            size: 16,
-            color: color,
-          ),
+          if (_externalWriterRunning)
+            PulsingDot(
+              key: const Key('chat-external-writer-pulse'),
+              color: color,
+              size: 9,
+            )
+          else
+            Icon(Icons.lock_open_outlined, size: 16, color: color),
           const SizedBox(width: 8),
           Expanded(
             child: Text(text, style: TextStyle(color: color, fontSize: 13)),
@@ -4451,9 +4492,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     final scheme = Theme.of(context).colorScheme;
     // Live set of running threads for this service, so other sessions show a
     // pulsing badge here too (not just the open one's status bar).
-    final running =
-        ref.watch(runningThreadsProvider(widget.serviceKey)).valueOrNull ??
-        const <String>{};
+    final running = <String>{
+      ...?ref.watch(runningThreadsProvider(widget.serviceKey)).valueOrNull,
+      if (_externalWriterRunning && _threadId != null) _threadId!,
+    };
     // Close the drawer (mobile) if this pane is inside an open one.
     void closeDrawerIfOpen(BuildContext ctx) {
       if (Scaffold.maybeOf(ctx)?.isDrawerOpen ?? false) Navigator.pop(ctx);
@@ -10106,7 +10148,7 @@ class _ActivityCardState extends State<_ActivityCard> {
 
 /// A three-dot "typing" indicator shown while the model is starting a reply.
 class _TypingIndicator extends StatefulWidget {
-  const _TypingIndicator({required this.elapsed});
+  const _TypingIndicator({super.key, required this.elapsed});
 
   /// Live elapsed-time label (the same value as the status-bar timer);
   /// empty leaves just the pulsing dots.
