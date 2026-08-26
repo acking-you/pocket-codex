@@ -724,6 +724,30 @@ class AppLocalizationsZh extends AppLocalizations {
   String get toolCalled => '调用工具';
 
   @override
+  String get toolCollaborated => '协作智能体';
+
+  @override
+  String get toolSubAgent => '子智能体动态';
+
+  @override
+  String get toolViewedImage => '查看图片';
+
+  @override
+  String get toolGeneratedImage => '生成图片';
+
+  @override
+  String get toolWaited => '等待';
+
+  @override
+  String get toolHook => '钩子提示';
+
+  @override
+  String get toolEnteredReview => '进入审查';
+
+  @override
+  String get toolExitedReview => '退出审查';
+
+  @override
   String get toolThinking => '思考';
 
   @override

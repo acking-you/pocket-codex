@@ -1841,7 +1841,13 @@ fn map_event(inbound: Inbound) -> AppEvent {
         };
     }
     let item = params.get("item");
-    let summary = item.map(summarize_item);
+    // Most lifecycle notifications carry a full item snapshot. Output/progress
+    // notifications do not, but they still name the item in their method and
+    // carry useful live text. Normalize both shapes so the Flutter transcript
+    // can update command output, reasoning, patches, and MCP progress in place.
+    let summary = item
+        .map(summarize_item)
+        .or_else(|| summarize_item_notification(&inbound.method, &params));
     let (item_type, title) = match &summary {
         Some((t, ti, _)) => (Some(t.clone()), Some(ti.clone())),
         None => (None, None),
@@ -1863,13 +1869,6 @@ fn map_event(inbound: Inbound) -> AppEvent {
                     .map(str::to_string)
             })
     };
-    // Delta events have no `item`; infer the item type from the method name.
-    let item_type = item_type.or_else(|| {
-        inbound
-            .method
-            .contains("agentMessage")
-            .then(|| "agentMessage".to_string())
-    });
     AppEvent {
         kind: inbound.method.clone(),
         thread_id: params
@@ -1888,6 +1887,47 @@ fn map_event(inbound: Inbound) -> AppEvent {
         request_id: inbound.request_id,
         raw: params.to_string(),
     }
+}
+
+/// Summarize an item-scoped notification that does not include `params.item`.
+///
+/// App-server v2 emits the complete item only at lifecycle edges. Keeping the
+/// intermediate shapes here aligned with [`summarize_item`] lets clients show
+/// more than a spinner while a command, reasoning block, patch, or MCP call is
+/// actively producing output.
+fn summarize_item_notification(method: &str, params: &Value) -> Option<(String, String, String)> {
+    let item_type = if method.contains("agentMessage") {
+        "agentMessage"
+    } else if method.contains("reasoning") {
+        "reasoning"
+    } else if method.contains("commandExecution") {
+        "commandExecution"
+    } else if method.contains("fileChange") {
+        "fileChange"
+    } else if method.contains("mcpToolCall") {
+        "mcpToolCall"
+    } else if method.contains("plan") {
+        "plan"
+    } else {
+        return None;
+    };
+
+    if method == "item/fileChange/patchUpdated" {
+        let snapshot = json!({
+            "type": "fileChange",
+            "changes": params.get("changes").cloned().unwrap_or_else(|| json!([])),
+        });
+        return Some(summarize_item(&snapshot));
+    }
+
+    let text = params
+        .get("delta")
+        .or_else(|| params.get("message"))
+        .or_else(|| params.get("text"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    Some((item_type.to_string(), String::new(), text))
 }
 
 /// Pull a human error string out of `{error:{message}}` / `{error}` /
@@ -2070,7 +2110,25 @@ fn summarize_item(item: &Value) -> (String, String, String) {
             }
             (s("command"), detail.trim().to_string())
         },
-        "webSearch" => (s("query"), String::new()),
+        "hookPrompt" => {
+            let fragments = item
+                .get("fragments")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            let title = fragments
+                .iter()
+                .filter_map(|fragment| fragment.get("hookRunId").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let text = fragments
+                .iter()
+                .filter_map(|fragment| fragment.get("text").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join("\n");
+            (title, text)
+        },
+        "webSearch" => (s("query"), selected_json(item, &["action", "results"])),
         "fileChange" => {
             let changes = item
                 .get("changes")
@@ -2097,27 +2155,48 @@ fn summarize_item(item: &Value) -> (String, String, String) {
         },
         "mcpToolCall" => {
             let title = format!("{}.{}", s("server"), s("tool"));
-            let mut detail = item
-                .get("arguments")
-                .map(|a| a.to_string())
-                .unwrap_or_default();
-            if let Some(r) = item.get("result").filter(|r| !r.is_null()) {
-                detail = format!("{detail}\n\n{r}");
-            }
-            if let Some(e) = item.get("error").filter(|e| !e.is_null()) {
-                detail = format!("{detail}\n\nerror: {e}");
-            }
-            (title, detail)
+            (title, selected_json(item, &["arguments", "appContext", "result", "error"]))
         },
-        "dynamicToolCall" => (
+        "dynamicToolCall" => {
+            let namespace = s("namespace");
+            let tool = s("tool");
+            let title = if namespace.is_empty() { tool } else { format!("{namespace}.{tool}") };
+            (title, selected_json(item, &["arguments", "contentItems", "success"]))
+        },
+        "collabAgentToolCall" => (
             s("tool"),
-            item.get("arguments")
-                .map(|a| a.to_string())
-                .unwrap_or_default(),
+            selected_json(item, &[
+                "status",
+                "prompt",
+                "model",
+                "reasoningEffort",
+                "receiverThreadIds",
+                "agentsStates",
+            ]),
         ),
+        "subAgentActivity" => (s("kind"), selected_json(item, &["agentPath", "agentThreadId"])),
+        "imageView" => (s("path"), String::new()),
+        "sleep" => {
+            let duration = item.get("durationMs").and_then(Value::as_u64).unwrap_or(0);
+            (format!("{duration} ms"), String::new())
+        },
+        "imageGeneration" => {
+            let title = ["revisedPrompt", "savedPath", "status"]
+                .into_iter()
+                .find_map(|field| item.get(field).and_then(Value::as_str))
+                .unwrap_or("")
+                .to_string();
+            (
+                title,
+                // `result` can be a very large base64 image. The saved path,
+                // status, and failure are the useful transcript details.
+                selected_json(item, &["status", "savedPath", "failure"]),
+            )
+        },
+        "enteredReviewMode" | "exitedReviewMode" => (s("review"), String::new()),
         // Unknown / other item types: best-effort text grab.
         _ => (
-            String::new(),
+            item_type.clone(),
             item.get("text")
                 .and_then(Value::as_str)
                 .map(str::to_string)
@@ -2126,6 +2205,23 @@ fn summarize_item(item: &Value) -> (String, String, String) {
         ),
     };
     (item_type, title, text)
+}
+
+/// Pretty-print a small, ordered subset of an item's structured fields.
+/// Null/absent fields are omitted so an expandable activity row stays useful
+/// without dumping the entire protocol object (which may include image bytes).
+fn selected_json(item: &Value, fields: &[&str]) -> String {
+    let mut selected = serde_json::Map::new();
+    for field in fields {
+        if let Some(value) = item.get(field).filter(|value| !value.is_null()) {
+            selected.insert((*field).to_string(), value.clone());
+        }
+    }
+    if selected.is_empty() {
+        return String::new();
+    }
+    serde_json::to_string_pretty(&Value::Object(selected))
+        .unwrap_or_else(|_| Value::Object(serde_json::Map::new()).to_string())
 }
 
 fn normalize_file_change_diff(change: &Value) -> Option<String> {
@@ -2493,6 +2589,103 @@ mod tests {
         assert_eq!(ev.item_type.as_deref(), Some("webSearch"));
         assert_eq!(ev.title.as_deref(), Some("rust tokio"));
         assert_eq!(ev.item_id.as_deref(), Some("w1"));
+    }
+
+    #[test]
+    fn summarizes_extended_activity_items() {
+        let collab = json!({
+            "type": "collabAgentToolCall",
+            "id": "a1",
+            "tool": "spawnAgent",
+            "status": "completed",
+            "prompt": "inspect auth",
+            "receiverThreadIds": ["child-1"],
+        });
+        let (ty, title, detail) = summarize_item(&collab);
+        assert_eq!(ty, "collabAgentToolCall");
+        assert_eq!(title, "spawnAgent");
+        assert!(detail.contains("child-1"));
+
+        let dynamic = json!({
+            "type": "dynamicToolCall",
+            "id": "d1",
+            "namespace": "calendar",
+            "tool": "create",
+            "arguments": {"day": "Friday"},
+            "contentItems": [{"type": "inputText", "text": "created"}],
+            "success": true,
+        });
+        let (_, title, detail) = summarize_item(&dynamic);
+        assert_eq!(title, "calendar.create");
+        assert!(detail.contains("contentItems"));
+
+        let image = json!({
+            "type": "imageGeneration",
+            "id": "i1",
+            "status": "completed",
+            "revisedPrompt": "A blue square",
+            "result": "VERY-LARGE-BASE64",
+            "savedPath": "/tmp/blue.png",
+        });
+        let (_, title, detail) = summarize_item(&image);
+        assert_eq!(title, "A blue square");
+        assert!(detail.contains("blue.png"));
+        assert!(!detail.contains("VERY-LARGE-BASE64"));
+
+        let hook = json!({
+            "type": "hookPrompt",
+            "id": "h1",
+            "fragments": [{"hookRunId": "run-1", "text": "Check generated files"}],
+        });
+        let (_, title, detail) = summarize_item(&hook);
+        assert_eq!(title, "run-1");
+        assert_eq!(detail, "Check generated files");
+    }
+
+    #[test]
+    fn maps_item_progress_notifications_without_full_snapshots() {
+        let notification = |method: &str, params: Value| {
+            map_event(Inbound {
+                method: method.to_string(),
+                params: Some(params),
+                request_id: None,
+            })
+        };
+
+        let command = notification(
+            "item/commandExecution/outputDelta",
+            json!({"threadId":"t1","itemId":"c1","delta":"building..."}),
+        );
+        assert_eq!(command.item_type.as_deref(), Some("commandExecution"));
+        assert_eq!(command.text.as_deref(), Some("building..."));
+
+        let reasoning = notification(
+            "item/reasoning/summaryTextDelta",
+            json!({"threadId":"t1","itemId":"r1","delta":"Inspecting"}),
+        );
+        assert_eq!(reasoning.item_type.as_deref(), Some("reasoning"));
+        assert_eq!(reasoning.text.as_deref(), Some("Inspecting"));
+
+        let mcp = notification(
+            "item/mcpToolCall/progress",
+            json!({"threadId":"t1","itemId":"m1","message":"Fetched 20 records"}),
+        );
+        assert_eq!(mcp.item_type.as_deref(), Some("mcpToolCall"));
+        assert_eq!(mcp.text.as_deref(), Some("Fetched 20 records"));
+
+        let patch = notification(
+            "item/fileChange/patchUpdated",
+            json!({"threadId":"t1","itemId":"f1","changes":[{
+                "path":"src/lib.rs","kind":{"type":"update"},
+                "diff":"@@ -1 +1 @@\n-old\n+new\n"
+            }]}),
+        );
+        assert_eq!(patch.item_type.as_deref(), Some("fileChange"));
+        assert_eq!(patch.title.as_deref(), Some("src/lib.rs"));
+        assert!(patch
+            .text
+            .as_deref()
+            .is_some_and(|text| text.contains("+new")));
     }
 
     #[test]

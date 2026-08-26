@@ -4103,6 +4103,129 @@ void main() {
     expect(find.textContaining('total 0', findRichText: true), findsOneWidget);
   });
 
+  testWidgets('Extended thread-item types keep distinct activity visuals', (
+    t,
+  ) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    await t.pumpWidget(
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          threadId: 't1',
+        ),
+        api,
+      ),
+    );
+    await t.pumpAndSettle();
+
+    const items = [
+      ('collabAgentToolCall', 'spawnAgent'),
+      ('subAgentActivity', 'started'),
+      ('imageView', r'C:\tmp\screen.png'),
+      ('imageGeneration', 'A blue square'),
+      ('sleep', '1250 ms'),
+      ('hookPrompt', 'run-1'),
+      ('enteredReviewMode', 'Review the patch'),
+      ('exitedReviewMode', 'Review complete'),
+    ];
+    for (var i = 0; i < items.length; i++) {
+      final (type, title) = items[i];
+      api.pushEvent(
+        'pcx:lb7666:app:default',
+        AppEvent(
+          kind: 'item/completed',
+          threadId: 't1',
+          itemId: 'extended-$i',
+          itemType: type,
+          title: title,
+          text: '',
+          raw: '{}',
+        ),
+      );
+    }
+    await t.pumpAndSettle();
+
+    for (final label in [
+      '协作智能体',
+      '子智能体动态',
+      '查看图片',
+      '生成图片',
+      '等待',
+      '钩子提示',
+      '进入审查',
+      '退出审查',
+    ]) {
+      expect(find.text(label), findsOneWidget);
+    }
+    expect(find.byIcon(Icons.groups_outlined), findsOneWidget);
+    expect(find.byIcon(Icons.image_search_outlined), findsOneWidget);
+  });
+
+  testWidgets('Camel-case outputDelta keeps a command visibly running', (
+    t,
+  ) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    await t.pumpWidget(
+      _host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          threadId: 't1',
+        ),
+        api,
+      ),
+    );
+    await t.pumpAndSettle();
+
+    api.pushEvent(
+      'pcx:lb7666:app:default',
+      const AppEvent(
+        kind: 'item/started',
+        threadId: 't1',
+        itemId: 'c1',
+        itemType: 'commandExecution',
+        title: 'cargo test',
+        text: '',
+        raw: '{}',
+      ),
+    );
+    api.pushEvent(
+      'pcx:lb7666:app:default',
+      const AppEvent(
+        kind: 'item/commandExecution/outputDelta',
+        threadId: 't1',
+        itemId: 'c1',
+        itemType: 'commandExecution',
+        title: '',
+        text: 'building...',
+        raw: '{}',
+      ),
+    );
+    await t.pump(const Duration(milliseconds: 100));
+    expect(find.text('cargo test'), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+
+    api.pushEvent(
+      'pcx:lb7666:app:default',
+      const AppEvent(
+        kind: 'item/completed',
+        threadId: 't1',
+        itemId: 'c1',
+        itemType: 'commandExecution',
+        title: 'cargo test',
+        text: 'ok',
+        raw: '{}',
+      ),
+    );
+    await t.pumpAndSettle();
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+  });
+
   testWidgets('a finished turn drops a 用时 duration footnote', (t) async {
     final api = FakeBridgeApi(
       config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),

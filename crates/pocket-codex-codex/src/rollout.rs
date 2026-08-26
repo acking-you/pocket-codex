@@ -223,8 +223,9 @@ pub fn read_session_info(path: &Path) -> Result<SessionInfo> {
 pub struct TranscriptItem {
     /// Stable row id (the source line index).
     pub id: String,
-    /// Item kind: `userMessage` / `agentMessage` / `reasoning` /
-    /// `commandExecution` / `contextCompaction` / `plan`.
+    /// Item kind aligned with app-server v2 (`userMessage`, `agentMessage`,
+    /// `reasoning`, `commandExecution`, `mcpToolCall`, `fileChange`,
+    /// `contextCompaction`, `plan`, and the other activity item variants).
     pub item_type: String,
     /// One-line title (the command for tool calls; empty for messages).
     pub title: String,
@@ -246,15 +247,18 @@ pub struct TranscriptItem {
 /// * `update_plan` tool calls → one evolving `plan` checklist per turn
 /// * `reasoning` with a non-empty `summary` → a reasoning item
 ///
-/// plus the `turn_context` records written at each turn boundary, which become
+/// Modern `event_msg.item_completed` records contribute the richer app-server
+/// activity variants (MCP/dynamic tools, agent collaboration, search, image
+/// work, waits, hooks, and review-mode transitions). The `turn_context`
+/// records written at each turn boundary become
 /// synthetic `turnContext` items so the viewer can show WHICH model (and
 /// effort / permissions) actually handled each turn — the read-only analogue
 /// of the live conversation's per-turn model stamp.
 ///
-/// Encrypted reasoning (no readable `summary`), lifecycle and token events
-/// are skipped. Unreadable lines are skipped rather than failing the whole
-/// read, so a partially-written rollout (one a live writer is appending to)
-/// still renders what is parseable.
+/// Encrypted reasoning (no readable `summary`), redundant lifecycle edges and
+/// token events are skipped. Unreadable lines are skipped rather than failing
+/// the whole read, so a partially-written rollout (one a live writer is
+/// appending to) still renders what is parseable.
 pub fn read_transcript(path: &Path) -> Result<Vec<TranscriptItem>> {
     use std::io::BufRead;
     let file = std::fs::File::open(path)?;
@@ -770,8 +774,219 @@ fn completed_activity_item(item: &Value, fallback_id: String) -> Option<Transcri
             })
         },
         Some("FileChange") => completed_file_change_item(item, id),
+        Some("McpToolCall") => Some(TranscriptItem {
+            id,
+            item_type: "mcpToolCall".to_string(),
+            title: qualified_tool_title(item),
+            text: rollout_selected_json(item, &[
+                &["arguments"],
+                &["app_context", "appContext"],
+                &["result"],
+                &["error"],
+            ]),
+            images: Vec::new(),
+        }),
+        Some("DynamicToolCall") => Some(TranscriptItem {
+            id,
+            item_type: "dynamicToolCall".to_string(),
+            title: qualified_tool_title(item),
+            text: rollout_selected_json(item, &[
+                &["arguments"],
+                &["content_items", "contentItems"],
+                &["success"],
+                &["error"],
+            ]),
+            images: Vec::new(),
+        }),
+        Some("CollabAgentToolCall") => Some(TranscriptItem {
+            id,
+            item_type: "collabAgentToolCall".to_string(),
+            title: event_string(item, &["tool"]),
+            text: rollout_selected_json(item, &[
+                &["status"],
+                &["prompt"],
+                &["model"],
+                &["reasoning_effort", "reasoningEffort"],
+                &["receiver_thread_ids", "receiverThreadIds"],
+                &["agents_states", "agentsStates"],
+            ]),
+            images: Vec::new(),
+        }),
+        Some("SubAgentActivity") => Some(TranscriptItem {
+            id,
+            item_type: "subAgentActivity".to_string(),
+            title: event_string(item, &["kind"]),
+            text: rollout_selected_json(item, &[&["agent_path", "agentPath"], &[
+                "agent_thread_id",
+                "agentThreadId",
+            ]]),
+            images: Vec::new(),
+        }),
+        Some("WebSearch") => Some(TranscriptItem {
+            id,
+            item_type: "webSearch".to_string(),
+            title: event_string(item, &["query"]),
+            text: rollout_selected_json(item, &[&["action"], &["results"]]),
+            images: Vec::new(),
+        }),
+        Some("ImageView") => Some(TranscriptItem {
+            id,
+            item_type: "imageView".to_string(),
+            title: event_string(item, &["path"]),
+            text: String::new(),
+            images: Vec::new(),
+        }),
+        Some("ImageGeneration") => Some(completed_image_generation_item(item, id)),
+        Some("EnteredReviewMode") | Some("ExitedReviewMode") => Some(TranscriptItem {
+            id,
+            item_type: if item.get("type").and_then(Value::as_str) == Some("EnteredReviewMode") {
+                "enteredReviewMode"
+            } else {
+                "exitedReviewMode"
+            }
+            .to_string(),
+            title: event_string(item, &["review"]),
+            text: String::new(),
+            images: Vec::new(),
+        }),
+        Some("HookPrompt") => Some(TranscriptItem {
+            id,
+            item_type: "hookPrompt".to_string(),
+            title: item
+                .get("fragments")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|fragment| {
+                    event_value(fragment, &["hook_run_id", "hookRunId"]).and_then(Value::as_str)
+                })
+                .collect::<Vec<_>>()
+                .join(", "),
+            text: item
+                .get("fragments")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|fragment| fragment.get("text").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            images: Vec::new(),
+        }),
+        Some("Plan") => Some(TranscriptItem {
+            id,
+            item_type: "plan".to_string(),
+            title: String::new(),
+            text: event_string(item, &["text"]),
+            images: Vec::new(),
+        }),
+        Some("Extension") => completed_extension_item(item, id),
         _ => None,
     }
+}
+
+fn completed_extension_item(item: &Value, id: String) -> Option<TranscriptItem> {
+    let kind = event_string(item, &["kind"]);
+    let item_type = if kind == "clock.sleep" {
+        "sleep"
+    } else if kind.contains("web_search") || kind.contains("web-search") {
+        "webSearch"
+    } else if kind.contains("image_generation") || kind.contains("image-generation") {
+        "imageGeneration"
+    } else {
+        "dynamicToolCall"
+    };
+    let title = match item_type {
+        "sleep" => format!(
+            "{} ms",
+            event_value(item, &["duration_ms", "durationMs"])
+                .and_then(Value::as_u64)
+                .unwrap_or(0)
+        ),
+        "webSearch" => event_string(item, &["query"]),
+        "imageGeneration" => ["revised_prompt", "revisedPrompt", "saved_path", "savedPath"]
+            .into_iter()
+            .find_map(|field| item.get(field).and_then(Value::as_str))
+            .unwrap_or(&kind)
+            .to_string(),
+        _ => kind,
+    };
+    Some(TranscriptItem {
+        id,
+        item_type: item_type.to_string(),
+        title,
+        text: rollout_selected_json(item, &[
+            &["status"],
+            &["arguments"],
+            &["action"],
+            &["results"],
+            &["content_items", "contentItems"],
+            &["success"],
+            &["saved_path", "savedPath"],
+            &["failure"],
+        ]),
+        images: Vec::new(),
+    })
+}
+
+fn completed_image_generation_item(item: &Value, id: String) -> TranscriptItem {
+    let title = ["revised_prompt", "revisedPrompt", "saved_path", "savedPath", "status"]
+        .into_iter()
+        .find_map(|field| item.get(field).and_then(Value::as_str))
+        .unwrap_or("")
+        .to_string();
+    TranscriptItem {
+        id,
+        item_type: "imageGeneration".to_string(),
+        title,
+        // Deliberately omit `result`: it may contain the entire base64 image.
+        text: rollout_selected_json(item, &[&["status"], &["saved_path", "savedPath"], &[
+            "failure",
+        ]]),
+        images: Vec::new(),
+    }
+}
+
+fn qualified_tool_title(item: &Value) -> String {
+    let namespace = event_string(item, &["server", "namespace"]);
+    let tool = event_string(item, &["tool"]);
+    if namespace.is_empty() {
+        tool
+    } else {
+        format!("{namespace}.{tool}")
+    }
+}
+
+fn event_value<'a>(item: &'a Value, aliases: &[&str]) -> Option<&'a Value> {
+    aliases.iter().find_map(|field| item.get(*field))
+}
+
+fn event_string(item: &Value, aliases: &[&str]) -> String {
+    event_value(item, aliases)
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string()
+}
+
+/// Pretty-print selected fields while preserving their first known wire name.
+/// Extension/core rollouts use snake_case while app-server snapshots use
+/// camelCase, so each entry is an alias set for one logical field.
+fn rollout_selected_json(item: &Value, fields: &[&[&str]]) -> String {
+    let mut selected = serde_json::Map::new();
+    for aliases in fields {
+        let Some((field, value)) = aliases
+            .iter()
+            .find_map(|field| item.get(*field).map(|value| (*field, value)))
+        else {
+            continue;
+        };
+        if !value.is_null() {
+            selected.insert(field.to_string(), value.clone());
+        }
+    }
+    if selected.is_empty() {
+        return String::new();
+    }
+    serde_json::to_string_pretty(&Value::Object(selected)).unwrap_or_else(|_| "{}".to_string())
 }
 
 fn completed_command_title(item: &Value) -> String {
@@ -1517,6 +1732,37 @@ mod tests {
         assert_eq!(items.len(), 1, "{items:?}");
         assert_eq!(items[0].item_type, "contextCompaction");
         assert!(items[0].title.is_empty());
+    }
+
+    #[test]
+    fn read_transcript_aligns_richer_completed_activity_items() {
+        let lines = [
+            r#"{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"McpToolCall","id":"m1","server":"calendar","tool":"list_events","arguments":{"day":"Friday"},"status":"completed","result":{"content":[{"type":"text","text":"2 events"}]}}}}"#,
+            r#"{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"CollabAgentToolCall","id":"a1","tool":"spawnAgent","status":"completed","prompt":"inspect auth","receiver_thread_ids":["child-1"]}}}"#,
+            r#"{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"Extension","kind":"clock.sleep","id":"s1","durationMs":1250}}}"#,
+            r#"{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"ImageGeneration","id":"i1","status":"completed","revised_prompt":"A blue square","result":"VERY-LARGE-BASE64","saved_path":"C:\\tmp\\blue.png"}}}"#,
+        ];
+        let path = std::env::temp_dir().join(format!(
+            "pcx-transcript-{}-{}.jsonl",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::write(&path, lines.join("\n")).expect("write activity fixture");
+
+        let items = read_transcript(&path).expect("read activity fixture");
+        std::fs::remove_file(&path).ok();
+        assert_eq!(items.len(), 4, "{items:?}");
+        assert_eq!(items[0].item_type, "mcpToolCall");
+        assert_eq!(items[0].title, "calendar.list_events");
+        assert!(items[0].text.contains("2 events"));
+        assert_eq!(items[1].item_type, "collabAgentToolCall");
+        assert!(items[1].text.contains("child-1"));
+        assert_eq!(items[2].item_type, "sleep");
+        assert_eq!(items[2].title, "1250 ms");
+        assert_eq!(items[3].item_type, "imageGeneration");
+        assert_eq!(items[3].title, "A blue square");
+        assert!(items[3].text.contains("blue.png"));
+        assert!(!items[3].text.contains("VERY-LARGE-BASE64"));
     }
 
     #[test]

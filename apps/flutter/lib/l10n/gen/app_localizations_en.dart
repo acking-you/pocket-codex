@@ -737,6 +737,30 @@ class AppLocalizationsEn extends AppLocalizations {
   String get toolCalled => 'Used a tool';
 
   @override
+  String get toolCollaborated => 'Coordinated agents';
+
+  @override
+  String get toolSubAgent => 'Subagent activity';
+
+  @override
+  String get toolViewedImage => 'Viewed image';
+
+  @override
+  String get toolGeneratedImage => 'Generated image';
+
+  @override
+  String get toolWaited => 'Waited';
+
+  @override
+  String get toolHook => 'Hook prompt';
+
+  @override
+  String get toolEnteredReview => 'Entered review';
+
+  @override
+  String get toolExitedReview => 'Exited review';
+
+  @override
   String get toolThinking => 'Thinking';
 
   @override

@@ -1412,6 +1412,54 @@ abstract class AppLocalizations {
   /// **'Used a tool'**
   String get toolCalled;
 
+  /// No description provided for @toolCollaborated.
+  ///
+  /// In en, this message translates to:
+  /// **'Coordinated agents'**
+  String get toolCollaborated;
+
+  /// No description provided for @toolSubAgent.
+  ///
+  /// In en, this message translates to:
+  /// **'Subagent activity'**
+  String get toolSubAgent;
+
+  /// No description provided for @toolViewedImage.
+  ///
+  /// In en, this message translates to:
+  /// **'Viewed image'**
+  String get toolViewedImage;
+
+  /// No description provided for @toolGeneratedImage.
+  ///
+  /// In en, this message translates to:
+  /// **'Generated image'**
+  String get toolGeneratedImage;
+
+  /// No description provided for @toolWaited.
+  ///
+  /// In en, this message translates to:
+  /// **'Waited'**
+  String get toolWaited;
+
+  /// No description provided for @toolHook.
+  ///
+  /// In en, this message translates to:
+  /// **'Hook prompt'**
+  String get toolHook;
+
+  /// No description provided for @toolEnteredReview.
+  ///
+  /// In en, this message translates to:
+  /// **'Entered review'**
+  String get toolEnteredReview;
+
+  /// No description provided for @toolExitedReview.
+  ///
+  /// In en, this message translates to:
+  /// **'Exited review'**
+  String get toolExitedReview;
+
   /// No description provided for @toolThinking.
   ///
   /// In en, this message translates to:

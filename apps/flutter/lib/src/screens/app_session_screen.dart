@@ -1799,8 +1799,17 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     // The user's own message is shown optimistically on send; ignore the
     // server echo so it isn't duplicated.
     if (type == 'userMessage') return;
-    final isDelta = e.kind.contains('delta');
-    final running = e.kind.contains('started');
+    final kind = e.kind.toLowerCase();
+    // v2 mixes `.../delta` and `.../outputDelta` casing. Progress and patch
+    // snapshots are also mid-flight updates even though their names do not say
+    // "started". Treat all of them as active so richer tool rows keep their
+    // spinner until the eventual item/completed snapshot arrives.
+    final isDelta = kind.contains('delta');
+    final running =
+        kind.contains('started') ||
+        isDelta ||
+        kind.endsWith('/progress') ||
+        kind.endsWith('/patchupdated');
     setState(() {
       // Any agent-side item (reasoning, a tool call, or reply text) means the
       // turn has begun producing output: past this point Esc interrupts rather
@@ -10047,6 +10056,51 @@ class _Group {
   final List<_Item> items;
 }
 
+/// Visual identity for every app-server v2 activity item PocketCodex exposes.
+/// Keeping this in one place prevents grouped and individual rows from drifting
+/// as upstream adds richer thread-item variants.
+({IconData icon, String label}) _activityMeta(
+  String type,
+  AppLocalizations l10n,
+) {
+  return switch (type) {
+    'webSearch' => (icon: Icons.travel_explore, label: l10n.toolSearched),
+    'commandExecution' => (icon: Icons.terminal, label: l10n.toolRan),
+    'fileChange' => (icon: Icons.edit_document, label: l10n.toolEdited),
+    'mcpToolCall' ||
+    'dynamicToolCall' => (icon: Icons.extension, label: l10n.toolCalled),
+    'collabAgentToolCall' => (
+      icon: Icons.groups_outlined,
+      label: l10n.toolCollaborated,
+    ),
+    'subAgentActivity' => (
+      icon: Icons.account_tree_outlined,
+      label: l10n.toolSubAgent,
+    ),
+    'imageView' => (
+      icon: Icons.image_search_outlined,
+      label: l10n.toolViewedImage,
+    ),
+    'imageGeneration' => (
+      icon: Icons.auto_awesome_outlined,
+      label: l10n.toolGeneratedImage,
+    ),
+    'sleep' => (icon: Icons.hourglass_empty, label: l10n.toolWaited),
+    'hookPrompt' => (icon: Icons.webhook_outlined, label: l10n.toolHook),
+    'enteredReviewMode' => (
+      icon: Icons.fact_check_outlined,
+      label: l10n.toolEnteredReview,
+    ),
+    'exitedReviewMode' => (
+      icon: Icons.fact_check_outlined,
+      label: l10n.toolExitedReview,
+    ),
+    'reasoning' => (icon: Icons.lightbulb_outline, label: l10n.toolThinking),
+    'plan' => (icon: Icons.checklist, label: l10n.toolPlan),
+    _ => (icon: Icons.bolt, label: l10n.toolActivity),
+  };
+}
+
 /// One glyph in a message's hover action row.
 ///
 /// A washed square on hover rather than a bare icon: the reference app's row of
@@ -10136,32 +10190,12 @@ class _GroupedActivityCard extends StatefulWidget {
 class _GroupedActivityCardState extends State<_GroupedActivityCard> {
   bool _expanded = false;
 
-  ({IconData icon, String label}) _meta(AppLocalizations l10n) {
-    switch (widget.group.type) {
-      case 'webSearch':
-        return (icon: Icons.travel_explore, label: l10n.toolSearched);
-      case 'commandExecution':
-        return (icon: Icons.terminal, label: l10n.toolRan);
-      case 'fileChange':
-        return (icon: Icons.edit_document, label: l10n.toolEdited);
-      case 'mcpToolCall':
-      case 'dynamicToolCall':
-        return (icon: Icons.extension, label: l10n.toolCalled);
-      case 'reasoning':
-        return (icon: Icons.lightbulb_outline, label: l10n.toolThinking);
-      case 'plan':
-        return (icon: Icons.checklist, label: l10n.toolPlan);
-      default:
-        return (icon: Icons.bolt, label: l10n.toolActivity);
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
     final scheme = Theme.of(context).colorScheme;
     final muted = scheme.onSurfaceVariant;
-    final meta = _meta(l10n);
+    final meta = _activityMeta(widget.group.type, l10n);
     final n = widget.group.items.length;
     final anyStreaming = widget.group.items.any((i) => i.streaming);
     return Column(
@@ -10243,32 +10277,12 @@ class _ActivityCard extends StatefulWidget {
 class _ActivityCardState extends State<_ActivityCard> {
   bool _expanded = false;
 
-  ({IconData icon, String label}) _meta(AppLocalizations l10n) {
-    switch (widget.item.type) {
-      case 'webSearch':
-        return (icon: Icons.travel_explore, label: l10n.toolSearched);
-      case 'commandExecution':
-        return (icon: Icons.terminal, label: l10n.toolRan);
-      case 'fileChange':
-        return (icon: Icons.edit_document, label: l10n.toolEdited);
-      case 'mcpToolCall':
-      case 'dynamicToolCall':
-        return (icon: Icons.extension, label: l10n.toolCalled);
-      case 'reasoning':
-        return (icon: Icons.lightbulb_outline, label: l10n.toolThinking);
-      case 'plan':
-        return (icon: Icons.checklist, label: l10n.toolPlan);
-      default:
-        return (icon: Icons.bolt, label: l10n.toolActivity);
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
     final scheme = Theme.of(context).colorScheme;
     final item = widget.item;
-    final meta = _meta(l10n);
+    final meta = _activityMeta(item.type, l10n);
     final muted = scheme.onSurfaceVariant;
     final title = item.title.trim();
     final detail = item.text.trim();
