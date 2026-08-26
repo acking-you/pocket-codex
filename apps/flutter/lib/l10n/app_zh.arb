@@ -175,6 +175,7 @@
   "statePlanMode": "计划模式",
   "stateDisconnected": "已断开",
   "stateReconnecting": "重连中…",
+  "compactingContext": "正在自动压缩上下文",
   "compacted": "对话已压缩",
   "turnStopped": "已停止",
   "turnElapsed": "用时 {duration}",

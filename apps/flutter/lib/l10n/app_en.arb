@@ -205,6 +205,7 @@
   "statePlanMode": "Plan mode",
   "stateDisconnected": "Disconnected",
   "stateReconnecting": "Reconnecting…",
+  "compactingContext": "Compacting context…",
   "compacted": "Conversation compacted",
   "turnStopped": "Stopped",
   "turnElapsed": "Took {duration}",

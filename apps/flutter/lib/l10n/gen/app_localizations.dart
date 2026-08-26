@@ -1076,6 +1076,12 @@ abstract class AppLocalizations {
   /// **'Reconnecting…'**
   String get stateReconnecting;
 
+  /// No description provided for @compactingContext.
+  ///
+  /// In en, this message translates to:
+  /// **'Compacting context…'**
+  String get compactingContext;
+
   /// No description provided for @compacted.
   ///
   /// In en, this message translates to:

@@ -92,7 +92,7 @@ pub struct TranscriptItem {
     /// Stable row id (the source line index).
     pub id: String,
     /// Item kind: `userMessage` / `agentMessage` / `reasoning` /
-    /// `commandExecution`.
+    /// `commandExecution` / `contextCompaction`.
     pub item_type: String,
     /// One-line title (the command for tool calls; empty for messages).
     pub title: String,

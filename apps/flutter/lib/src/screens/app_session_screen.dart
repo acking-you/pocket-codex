@@ -1166,6 +1166,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           text: item.text,
           images: resolveImageUrls(item.images),
           imageUrls: item.images,
+          streaming:
+              item.itemType == 'contextCompaction' &&
+              item.title == 'inProgress',
           turnId: item.turnId,
           turnCompletedAt: item.turnCompletedAt,
         ),
@@ -3900,7 +3903,6 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     return Column(
       children: [
         _statusBar(l10n),
-        if (_externalWriterMode) _externalWriterBanner(l10n),
         Expanded(
           child: AnimatedSwitcher(
             duration: const Duration(milliseconds: 250),
@@ -4076,37 +4078,6 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         else
           _composer(l10n),
       ],
-    );
-  }
-
-  Widget _externalWriterBanner(AppLocalizations l10n) {
-    final scheme = Theme.of(context).colorScheme;
-    final canResume = _externalWriterLiveness?.allowsResume ?? false;
-    final text = canResume
-        ? l10n.sessionInUseElsewhere
-        : '${l10n.sessionRunningElsewhere} · ${l10n.sessionReadOnly}';
-    final color = cautionColor(scheme);
-    return Container(
-      key: const Key('chat-external-writer-banner'),
-      width: double.infinity,
-      color: color.withValues(alpha: 0.10),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      child: Row(
-        children: [
-          if (_externalWriterRunning)
-            PulsingDot(
-              key: const Key('chat-external-writer-pulse'),
-              color: color,
-              size: 9,
-            )
-          else
-            Icon(Icons.lock_open_outlined, size: 16, color: color),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(text, style: TextStyle(color: color, fontSize: 13)),
-          ),
-        ],
-      ),
     );
   }
 
@@ -9113,7 +9084,10 @@ class _MessageViewState extends State<_MessageView> {
         'fileChange' => _FileChangeCard(item: item),
         'contextCompaction' => _SystemNotice(
           icon: Icons.compress,
-          text: AppLocalizations.of(context).compacted,
+          text: item.streaming
+              ? AppLocalizations.of(context).compactingContext
+              : AppLocalizations.of(context).compacted,
+          active: item.streaming,
         ),
         'interrupted' => _SystemNotice(
           icon: Icons.stop_circle_outlined,
@@ -9328,9 +9302,14 @@ class _MessageViewState extends State<_MessageView> {
 /// A centered, subtle system notice (e.g. "conversation compacted") so
 /// lifecycle state changes are visible inline in the transcript.
 class _SystemNotice extends StatelessWidget {
-  const _SystemNotice({required this.icon, required this.text});
+  const _SystemNotice({
+    required this.icon,
+    required this.text,
+    this.active = false,
+  });
   final IconData icon;
   final String text;
+  final bool active;
 
   @override
   Widget build(BuildContext context) {
@@ -9346,7 +9325,14 @@ class _SystemNotice extends StatelessWidget {
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(icon, size: 13, color: muted),
+                if (active)
+                  PulsingDot(
+                    key: const Key('chat-compaction-progress'),
+                    color: muted,
+                    size: 8,
+                  )
+                else
+                  Icon(icon, size: 13, color: muted),
                 const SizedBox(width: 5),
                 Text(text, style: TextStyle(fontSize: 11.5, color: muted)),
               ],

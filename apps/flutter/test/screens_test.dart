@@ -6105,6 +6105,12 @@ void main() {
         title: '',
         text: 'work from the other client',
       ),
+      ThreadItem(
+        id: 'remote-compaction',
+        itemType: 'contextCompaction',
+        title: 'inProgress',
+        text: '',
+      ),
     ];
     api.liveness['t-active'] = const SessionLiveness(
       threadId: 't-active',
@@ -6135,11 +6141,10 @@ void main() {
     // This is still AppSessionScreen: its chat status, transcript and sessions
     // chrome remain mounted, while only the composer becomes read-only.
     expect(find.byType(AppSessionScreen), findsOneWidget);
-    expect(
-      find.byKey(const Key('chat-external-writer-banner')),
-      findsOneWidget,
-    );
+    expect(find.text('其他进程运行中'), findsOneWidget);
     expect(find.text('work from the other client'), findsOneWidget);
+    expect(find.text('正在自动压缩上下文'), findsOneWidget);
+    expect(find.byKey(const Key('chat-compaction-progress')), findsOneWidget);
     expect(find.text('只读 — 其他客户端正在使用此会话'), findsOneWidget);
     expect(find.byKey(const Key('composer-input')), findsNothing);
     expect(find.byKey(const Key('chat-read-only-action')), findsOneWidget);
@@ -6148,7 +6153,6 @@ void main() {
       find.byKey(const Key('chat-external-output-indicator')),
       findsOneWidget,
     );
-    expect(find.byKey(const Key('chat-external-writer-pulse')), findsOneWidget);
     expect(find.byKey(const Key('chat-status-running-pulse')), findsOneWidget);
     final selectedConversation = find.byKey(const Key('conv-tile-t-active'));
     expect(
@@ -6245,7 +6249,6 @@ void main() {
       find.byKey(const Key('chat-external-output-indicator')),
       findsNothing,
     );
-    expect(find.byKey(const Key('chat-external-writer-pulse')), findsNothing);
     expect(
       find.descendant(
         of: selectedConversation,
@@ -6255,6 +6258,7 @@ void main() {
     );
     expect(find.byKey(const Key('chat-takeover-action')), findsOneWidget);
     expect(find.text('强制接管'), findsOneWidget);
+    expect(find.text('被其他进程占用'), findsOneWidget);
 
     // Confirming takeover resumes in place; it must not navigate away from the
     // chat route or leave the user stranded in a separate viewer.
@@ -6267,13 +6271,12 @@ void main() {
     expect(api.lastMetaResumedKey, key);
     expect(api.lastMetaResumedThread, 't-active');
     expect(find.byType(AppSessionScreen), findsOneWidget);
-    expect(find.byKey(const Key('chat-external-writer-banner')), findsNothing);
     expect(find.byKey(const Key('composer-input')), findsOneWidget);
 
     await t.pumpWidget(const SizedBox());
   });
 
-  testWidgets('A compaction item shows a system notice in the transcript', (
+  testWidgets('A compaction item shows its live lifecycle in the transcript', (
     t,
   ) async {
     final api = FakeBridgeApi(
@@ -6294,6 +6297,23 @@ void main() {
     api.pushEvent(
       'pcx:lb7666:app:default',
       const AppEvent(
+        kind: 'item/started',
+        threadId: 't1',
+        itemId: 'cc1',
+        itemType: 'contextCompaction',
+        title: '',
+        text: '',
+        raw: '{}',
+      ),
+    );
+    await t.pump();
+    await t.pump(const Duration(milliseconds: 100));
+    expect(find.text('正在自动压缩上下文'), findsOneWidget);
+    expect(find.byKey(const Key('chat-compaction-progress')), findsOneWidget);
+
+    api.pushEvent(
+      'pcx:lb7666:app:default',
+      const AppEvent(
         kind: 'item/completed',
         threadId: 't1',
         itemId: 'cc1',
@@ -6305,6 +6325,7 @@ void main() {
     );
     await t.pumpAndSettle();
     expect(find.text('对话已压缩'), findsOneWidget); // compacted (zh)
+    expect(find.byKey(const Key('chat-compaction-progress')), findsNothing);
   });
 
   testWidgets('Services list shows availability + subscription status', (

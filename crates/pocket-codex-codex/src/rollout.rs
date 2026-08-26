@@ -223,7 +223,7 @@ pub struct TranscriptItem {
     /// Stable row id (the source line index).
     pub id: String,
     /// Item kind: `userMessage` / `agentMessage` / `reasoning` /
-    /// `commandExecution`.
+    /// `commandExecution` / `contextCompaction`.
     pub item_type: String,
     /// One-line title (the command for tool calls; empty for messages).
     pub title: String,
@@ -260,6 +260,10 @@ pub fn read_transcript(path: &Path) -> Result<Vec<TranscriptItem>> {
     let mut out: Vec<TranscriptItem> = Vec::new();
     // Index of the `commandExecution` item awaiting its output, by call_id.
     let mut pending: HashMap<String, usize> = HashMap::new();
+    // Some rollout producers persist both lifecycle edges. Keep a single row
+    // and mark it complete in place; current codex versions persist only the
+    // completed edge, which is handled by the fallback below.
+    let mut compactions: HashMap<String, usize> = HashMap::new();
     for (idx, line) in reader.lines().enumerate() {
         let line = line?;
         if line.trim().is_empty() {
@@ -291,12 +295,52 @@ pub fn read_transcript(path: &Path) -> Result<Vec<TranscriptItem>> {
             }
             continue;
         }
-        if line_type == Some("event_msg")
-            && payload.get("type").and_then(Value::as_str) == Some("item_completed")
-        {
+        if line_type == Some("event_msg") {
+            let event_type = payload.get("type").and_then(Value::as_str);
             if let Some(item) = payload.get("item") {
-                if let Some(item) = completed_activity_item(item, id) {
-                    out.push(item);
+                if item.get("type").and_then(Value::as_str) == Some("ContextCompaction") {
+                    let item_id = item
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                        .unwrap_or_else(|| id.clone());
+                    match event_type {
+                        Some("item_started") => {
+                            if !compactions.contains_key(&item_id) {
+                                compactions.insert(item_id.clone(), out.len());
+                                out.push(TranscriptItem {
+                                    id: item_id,
+                                    item_type: "contextCompaction".to_string(),
+                                    title: "inProgress".to_string(),
+                                    text: String::new(),
+                                    images: Vec::new(),
+                                });
+                            }
+                        },
+                        Some("item_completed") => {
+                            if let Some(index) = compactions.get(&item_id).copied() {
+                                out[index].title.clear();
+                            } else {
+                                compactions.insert(item_id.clone(), out.len());
+                                out.push(TranscriptItem {
+                                    id: item_id,
+                                    item_type: "contextCompaction".to_string(),
+                                    title: String::new(),
+                                    text: String::new(),
+                                    images: Vec::new(),
+                                });
+                            }
+                        },
+                        _ => {},
+                    }
+                    continue;
+                }
+            }
+            if event_type == Some("item_completed") {
+                if let Some(item) = payload.get("item") {
+                    if let Some(item) = completed_activity_item(item, id) {
+                        out.push(item);
+                    }
                 }
             }
             continue;
@@ -1281,6 +1325,38 @@ mod tests {
         assert_eq!(items[1].item_type, "fileChange");
         assert_eq!(items[1].title, "src/lib.rs");
         assert_eq!(items[1].text, "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1 +1 @@\n-old\n+new");
+    }
+
+    #[test]
+    fn read_transcript_tracks_context_compaction_lifecycle() {
+        let started = r#"{"type":"event_msg","payload":{"type":"item_started","item":{"type":"ContextCompaction","id":"compact-1"}}}"#;
+        let completed = r#"{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"ContextCompaction","id":"compact-1"}}}"#;
+        let path = std::env::temp_dir().join(format!(
+            "pcx-transcript-{}-{}.jsonl",
+            std::process::id(),
+            line!()
+        ));
+
+        std::fs::write(&path, started).expect("write active compaction fixture");
+        let items = read_transcript(&path).expect("read active compaction");
+        assert_eq!(items.len(), 1, "{items:?}");
+        assert_eq!(items[0].item_type, "contextCompaction");
+        assert_eq!(items[0].title, "inProgress");
+
+        std::fs::write(&path, format!("{started}\n{completed}")).expect("complete compaction");
+        let items = read_transcript(&path).expect("read completed compaction");
+        std::fs::remove_file(&path).ok();
+        assert_eq!(items.len(), 1, "{items:?}");
+        assert_eq!(items[0].item_type, "contextCompaction");
+        assert!(items[0].title.is_empty());
+
+        // Current codex rollouts persist only the completed lifecycle edge.
+        std::fs::write(&path, completed).expect("write completed-only compaction fixture");
+        let items = read_transcript(&path).expect("read completed-only compaction");
+        std::fs::remove_file(&path).ok();
+        assert_eq!(items.len(), 1, "{items:?}");
+        assert_eq!(items[0].item_type, "contextCompaction");
+        assert!(items[0].title.is_empty());
     }
 
     /// Manual harness: parse a REAL rollout and dump what the viewer would

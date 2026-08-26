@@ -540,6 +540,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get stateReconnecting => 'Reconnecting…';
 
   @override
+  String get compactingContext => 'Compacting context…';
+
+  @override
   String get compacted => 'Conversation compacted';
 
   @override

@@ -532,6 +532,9 @@ class AppLocalizationsZh extends AppLocalizations {
   String get stateReconnecting => '重连中…';
 
   @override
+  String get compactingContext => '正在自动压缩上下文';
+
+  @override
   String get compacted => '对话已压缩';
 
   @override
