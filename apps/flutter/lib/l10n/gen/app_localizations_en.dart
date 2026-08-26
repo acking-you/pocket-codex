@@ -708,6 +708,11 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
+  String turnProgressStep(int current, int total) {
+    return 'Step $current of $total';
+  }
+
+  @override
   String get start => 'Start';
 
   @override

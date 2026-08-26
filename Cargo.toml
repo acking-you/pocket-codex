@@ -64,6 +64,7 @@ base64 = "0.22"
 # Serde / config
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+json5 = "0.4"
 toml = "0.8"
 # Format-preserving TOML editor: merges generated keys into a possibly
 # hand-written codex `config.toml` without clobbering the user's comments /

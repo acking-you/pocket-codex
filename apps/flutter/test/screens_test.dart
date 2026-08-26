@@ -5848,6 +5848,65 @@ void main() {
     );
   });
 
+  testWidgets('Running plan tracker fits phone width and can collapse', (
+    t,
+  ) async {
+    const key = 'pcx:lb7666:app:default';
+    final api =
+        FakeBridgeApi(
+            config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+          )
+          ..appThreadResumeError = StateError(
+            'thread t-mobile already has an active writer',
+          );
+    await api.appConnect(key, 28080);
+    api.transcripts['t-mobile'] = const [
+      ThreadItem(id: 'u1', itemType: 'userMessage', title: '', text: 'ship it'),
+      ThreadItem(
+        id: 'p1',
+        itemType: 'plan',
+        title: '',
+        text: '- [x] inspect\n- [~] implement\n- [ ] verify',
+      ),
+    ];
+    api.liveness['t-mobile'] = const SessionLiveness(
+      threadId: 't-mobile',
+      turnState: 'incomplete',
+      heldOpen: true,
+      safety: 'ownedRunning',
+      allowsResume: false,
+      requiresTakeover: false,
+      holders: [],
+    );
+    t.view.devicePixelRatio = 1;
+    t.view.physicalSize = const Size(360, 700);
+    addTearDown(t.view.reset);
+
+    await t.pumpWidget(
+      _host(const AppSessionScreen(serviceKey: key, threadId: 't-mobile'), api),
+    );
+    for (var i = 0; i < 6; i++) {
+      await t.pump(const Duration(milliseconds: 100));
+    }
+    expect(t.takeException(), isNull);
+    expect(find.text('第 2 / 3 步'), findsOneWidget);
+    expect(find.byKey(const Key('turn-progress-panel')), findsOneWidget);
+    expect(
+      find.ancestor(
+        of: find.byKey(const Key('turn-progress-summary')),
+        matching: find.byKey(const Key('chat-conversation-layer')),
+      ),
+      findsOneWidget,
+      reason: 'the live tracker floats over the conversation layer',
+    );
+
+    await t.tap(find.byKey(const Key('turn-progress-summary')));
+    await t.pump(const Duration(milliseconds: 250));
+    expect(find.byKey(const Key('turn-progress-panel')), findsNothing);
+
+    await t.pumpWidget(const SizedBox());
+  });
+
   testWidgets('New conversation applies the chosen permission mode', (t) async {
     final api = FakeBridgeApi(
       config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
@@ -6111,6 +6170,12 @@ void main() {
         title: 'inProgress',
         text: '',
       ),
+      ThreadItem(
+        id: 'remote-plan',
+        itemType: 'plan',
+        title: '',
+        text: '- [x] inspect\n- [~] implement\n- [ ] test',
+      ),
     ];
     api.liveness['t-active'] = const SessionLiveness(
       threadId: 't-active',
@@ -6145,6 +6210,12 @@ void main() {
     expect(find.text('work from the other client'), findsOneWidget);
     expect(find.text('正在自动压缩上下文'), findsOneWidget);
     expect(find.byKey(const Key('chat-compaction-progress')), findsOneWidget);
+    expect(find.byKey(const Key('turn-progress-panel')), findsOneWidget);
+    expect(find.byKey(const Key('turn-progress-summary')), findsOneWidget);
+    expect(find.text('第 2 / 3 步'), findsOneWidget);
+    expect(find.text('inspect'), findsWidgets);
+    expect(find.text('implement'), findsWidgets);
+    expect(find.text('test'), findsWidgets);
     expect(find.text('只读 — 其他客户端正在使用此会话'), findsOneWidget);
     expect(find.byKey(const Key('composer-input')), findsNothing);
     expect(find.byKey(const Key('chat-read-only-action')), findsOneWidget);
@@ -6216,6 +6287,12 @@ void main() {
 +new
 ''',
       ),
+      ThreadItem(
+        id: 'remote-plan',
+        itemType: 'plan',
+        title: '',
+        text: '- [x] inspect\n- [x] implement\n- [~] test',
+      ),
     ];
     api.pushMetaSessionUpdate(
       't-active',
@@ -6226,6 +6303,10 @@ void main() {
     expect(find.text('new progress from subscription'), findsOneWidget);
     expect(find.text('cargo test'), findsOneWidget);
     expect(find.textContaining('live.dart'), findsWidgets);
+    expect(find.text('第 3 / 3 步'), findsOneWidget);
+    expect(find.byKey(const Key('turn-progress-panel')), findsOneWidget);
+    expect(find.byKey(const Key('turn-progress-diff')), findsOneWidget);
+    expect(find.text('1 个文件有变更'), findsWidgets);
 
     // A stream update flips the action immediately when the other turn ends.
     api.pushMetaSessionUpdate(
@@ -6259,6 +6340,7 @@ void main() {
     expect(find.byKey(const Key('chat-takeover-action')), findsOneWidget);
     expect(find.text('强制接管'), findsOneWidget);
     expect(find.text('被其他进程占用'), findsOneWidget);
+    expect(find.byKey(const Key('turn-progress-summary')), findsNothing);
 
     // Confirming takeover resumes in place; it must not navigate away from the
     // chat route or leave the user stranded in a separate viewer.

@@ -513,6 +513,28 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       (_streaming &&
           (_items.isEmpty || !_items.last.isAgent || _items.last.text.isEmpty));
 
+  /// The newest plan snapshot for the turn that is currently running. A plan
+  /// from an older turn must not reappear while a newer user request is still
+  /// waiting for its own plan, so only consider plan items after the latest
+  /// user message.
+  _Item? get _runningPlan {
+    if (!_streaming && !_externalWriterRunning) return null;
+    var latestUser = -1;
+    for (var i = _items.length - 1; i >= 0; i--) {
+      if (_items[i].isUser) {
+        latestUser = i;
+        break;
+      }
+    }
+    for (var i = _items.length - 1; i > latestUser; i--) {
+      final item = _items[i];
+      if (item.type == 'plan' && _parsePlan(item.text).steps.isNotEmpty) {
+        return item;
+      }
+    }
+    return null;
+  }
+
   /// The timeline collapsed for display: runs of ≥2 consecutive same-type
   /// non-message activity items become a single [_Group] (shown as one
   /// expandable row); everything else stays a [_Item]. Computed at build time
@@ -3900,154 +3922,177 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// The center column: conversation (kept centered with a max width) +
   /// approvals + implement bar + error + composer.
   Widget _chatPane(AppLocalizations l10n) {
+    final runningPlan = _runningPlan;
     return Column(
       children: [
         _statusBar(l10n),
         Expanded(
-          child: AnimatedSwitcher(
-            duration: const Duration(milliseconds: 250),
-            child: _loading
-                ? const ChatLoadingSkeleton(key: ValueKey('chat-loading'))
-                : KeyedSubtree(
-                    key: const ValueKey('chat-content'),
-                    child: _items.isEmpty && !_showTyping
-                        // A brand-new conversation (no thread yet) gets a richer
-                        // guidance view with tappable starter prompts; an empty
-                        // resumed thread keeps the plain hint.
-                        ? (_threadId == null
-                              ? _newSessionGuidance(l10n)
-                              : Center(
-                                  child: Text(
-                                    l10n.emptyConversation,
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .bodyMedium
-                                        ?.copyWith(
-                                          color: Theme.of(
-                                            context,
-                                          ).colorScheme.outline,
+          child: Stack(
+            key: const Key('chat-conversation-layer'),
+            children: [
+              Positioned.fill(
+                child: AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 250),
+                  child: _loading
+                      ? const ChatLoadingSkeleton(key: ValueKey('chat-loading'))
+                      : KeyedSubtree(
+                          key: const ValueKey('chat-content'),
+                          child: _items.isEmpty && !_showTyping
+                              // A brand-new conversation (no thread yet) gets a richer
+                              // guidance view with tappable starter prompts; an empty
+                              // resumed thread keeps the plain hint.
+                              ? (_threadId == null
+                                    ? _newSessionGuidance(l10n)
+                                    : Center(
+                                        child: Text(
+                                          l10n.emptyConversation,
+                                          style: Theme.of(context)
+                                              .textTheme
+                                              .bodyMedium
+                                              ?.copyWith(
+                                                color: Theme.of(
+                                                  context,
+                                                ).colorScheme.outline,
+                                              ),
                                         ),
-                                  ),
-                                ))
-                        // One SelectionArea over the whole conversation so text can be
-                        // drag-selected and copied (desktop drag, mobile long-press) —
-                        // per-message actions appear on hover instead of always-on. The
-                        // list is centered with a max width so it reads well even when
-                        // both side panes are collapsed on a wide screen.
-                        : Stack(
-                            children: [
-                              // Full-width scroll area so the scrollbar sits at
-                              // the window's right edge instead of floating at
-                              // the centred column's edge; the conversation
-                              // column itself stays centred via horizontal
-                              // padding computed from the available width.
-                              SelectionArea(
-                                child: LayoutBuilder(
-                                  builder: (context, constraints) {
-                                    final side =
-                                        (constraints.maxWidth - 820) / 2;
-                                    final pad = side < 16 ? 16.0 : side;
-                                    // Materialize the collapsed timeline ONCE per
-                                    // build: `_rows` is a getter that re-scans
-                                    // `_items` on every access, so reading it for
-                                    // itemCount and again per itemBuilder was
-                                    // O(n²) per frame. Hoisting it here keeps each
-                                    // build O(n).
-                                    final rows = _rows;
-                                    // SuperListView (super_sliver_list) replaces
-                                    // ListView.builder to stabilize the scrollbar:
-                                    // it derives scroll extent from per-item
-                                    // estimates reconciled against real heights as
-                                    // rows pass through the cache area, instead of
-                                    // the single running-average estimate that
-                                    // makes a plain ListView's thumb jump with the
-                                    // wide row-height variance here. Same lazy
-                                    // virtualization, same ScrollController — only
-                                    // visible rows build, so streaming stays cheap.
-                                    return SuperListView.builder(
-                                      controller: _scroll,
-                                      listController: _listCtl,
-                                      padding: EdgeInsets.fromLTRB(
-                                        pad,
-                                        12,
-                                        pad,
-                                        12,
+                                      ))
+                              // One SelectionArea over the whole conversation so text can be
+                              // drag-selected and copied (desktop drag, mobile long-press) —
+                              // per-message actions appear on hover instead of always-on. The
+                              // list is centered with a max width so it reads well even when
+                              // both side panes are collapsed on a wide screen.
+                              : Stack(
+                                  children: [
+                                    // Full-width scroll area so the scrollbar sits at
+                                    // the window's right edge instead of floating at
+                                    // the centred column's edge; the conversation
+                                    // column itself stays centred via horizontal
+                                    // padding computed from the available width.
+                                    SelectionArea(
+                                      child: LayoutBuilder(
+                                        builder: (context, constraints) {
+                                          final side =
+                                              (constraints.maxWidth - 820) / 2;
+                                          final pad = side < 16 ? 16.0 : side;
+                                          // Materialize the collapsed timeline ONCE per
+                                          // build: `_rows` is a getter that re-scans
+                                          // `_items` on every access, so reading it for
+                                          // itemCount and again per itemBuilder was
+                                          // O(n²) per frame. Hoisting it here keeps each
+                                          // build O(n).
+                                          final rows = _rows;
+                                          // SuperListView (super_sliver_list) replaces
+                                          // ListView.builder to stabilize the scrollbar:
+                                          // it derives scroll extent from per-item
+                                          // estimates reconciled against real heights as
+                                          // rows pass through the cache area, instead of
+                                          // the single running-average estimate that
+                                          // makes a plain ListView's thumb jump with the
+                                          // wide row-height variance here. Same lazy
+                                          // virtualization, same ScrollController — only
+                                          // visible rows build, so streaming stays cheap.
+                                          return SuperListView.builder(
+                                            controller: _scroll,
+                                            listController: _listCtl,
+                                            padding: EdgeInsets.fromLTRB(
+                                              pad,
+                                              12,
+                                              pad,
+                                              12,
+                                            ),
+                                            itemCount:
+                                                rows.length +
+                                                (_showTyping ? 1 : 0),
+                                            itemBuilder: (c, i) {
+                                              if (i >= rows.length) {
+                                                return _TypingIndicator(
+                                                  key: _externalWriterRunning
+                                                      ? const Key(
+                                                          'chat-external-output-indicator',
+                                                        )
+                                                      : null,
+                                                  elapsed: _fmtElapsed(
+                                                    _elapsedSecs,
+                                                  ),
+                                                );
+                                              }
+                                              final row = rows[i];
+                                              // Stable keys let the sliver's
+                                              // extent-reconciliation track each row
+                                              // across rebuilds (streaming upserts,
+                                              // collapse-into-group transitions) instead
+                                              // of recycling element/state by position —
+                                              // which otherwise churns measured heights.
+                                              // A group keys off its first item's stable
+                                              // id plus length so expand/collapse and
+                                              // run-growth produce a fresh measurement.
+                                              if (row is _Group) {
+                                                return _GroupedActivityCard(
+                                                  key: ValueKey(
+                                                    'g:${row.items.first.id}:'
+                                                    '${row.items.length}',
+                                                  ),
+                                                  group: row,
+                                                );
+                                              }
+                                              // A merged reply renders through the
+                                              // same view as a single one, so the two
+                                              // can't drift apart: it is presented as
+                                              // one item whose text is the whole turn.
+                                              if (row is _AgentTurn) {
+                                                return _MessageView(
+                                                  key: ValueKey(
+                                                    't:${row.items.first.id}:'
+                                                    '${row.items.length}',
+                                                  ),
+                                                  item: _Item(
+                                                    id: row.items.first.id,
+                                                    type: 'agentMessage',
+                                                    text: row.text,
+                                                    streaming: row.streaming,
+                                                    turnId:
+                                                        row.items.first.turnId,
+                                                    turnCompletedAt:
+                                                        row.completedAt,
+                                                  ),
+                                                  hostImageLoader:
+                                                      _loadHostImage,
+                                                );
+                                              }
+                                              return _MessageView(
+                                                key: ValueKey(
+                                                  (row as _Item).id,
+                                                ),
+                                                item: row,
+                                                hostImageLoader: _loadHostImage,
+                                              );
+                                            },
+                                          );
+                                        },
                                       ),
-                                      itemCount:
-                                          rows.length + (_showTyping ? 1 : 0),
-                                      itemBuilder: (c, i) {
-                                        if (i >= rows.length) {
-                                          return _TypingIndicator(
-                                            key: _externalWriterRunning
-                                                ? const Key(
-                                                    'chat-external-output-indicator',
-                                                  )
-                                                : null,
-                                            elapsed: _fmtElapsed(_elapsedSecs),
-                                          );
-                                        }
-                                        final row = rows[i];
-                                        // Stable keys let the sliver's
-                                        // extent-reconciliation track each row
-                                        // across rebuilds (streaming upserts,
-                                        // collapse-into-group transitions) instead
-                                        // of recycling element/state by position —
-                                        // which otherwise churns measured heights.
-                                        // A group keys off its first item's stable
-                                        // id plus length so expand/collapse and
-                                        // run-growth produce a fresh measurement.
-                                        if (row is _Group) {
-                                          return _GroupedActivityCard(
-                                            key: ValueKey(
-                                              'g:${row.items.first.id}:'
-                                              '${row.items.length}',
-                                            ),
-                                            group: row,
-                                          );
-                                        }
-                                        // A merged reply renders through the
-                                        // same view as a single one, so the two
-                                        // can't drift apart: it is presented as
-                                        // one item whose text is the whole turn.
-                                        if (row is _AgentTurn) {
-                                          return _MessageView(
-                                            key: ValueKey(
-                                              't:${row.items.first.id}:'
-                                              '${row.items.length}',
-                                            ),
-                                            item: _Item(
-                                              id: row.items.first.id,
-                                              type: 'agentMessage',
-                                              text: row.text,
-                                              streaming: row.streaming,
-                                              turnId: row.items.first.turnId,
-                                              turnCompletedAt: row.completedAt,
-                                            ),
-                                            hostImageLoader: _loadHostImage,
-                                          );
-                                        }
-                                        return _MessageView(
-                                          key: ValueKey((row as _Item).id),
-                                          item: row,
-                                          hostImageLoader: _loadHostImage,
-                                        );
-                                      },
-                                    );
-                                  },
+                                    ),
+                                    // Compact navigation cluster (bottom-right): jump
+                                    // between conversation turns, and to the latest
+                                    // message — so long transcripts are easy to move
+                                    // through on mobile and desktop alike.
+                                    Positioned(
+                                      right: 12,
+                                      bottom: 12,
+                                      child: _navCluster(),
+                                    ),
+                                  ],
                                 ),
-                              ),
-                              // Compact navigation cluster (bottom-right): jump
-                              // between conversation turns, and to the latest
-                              // message — so long transcripts are easy to move
-                              // through on mobile and desktop alike.
-                              Positioned(
-                                right: 12,
-                                bottom: 12,
-                                child: _navCluster(),
-                              ),
-                            ],
-                          ),
-                  ),
+                        ),
+                ),
+              ),
+              if (runningPlan != null)
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 8,
+                  child: _turnProgress(runningPlan, l10n),
+                ),
+            ],
           ),
         ),
         // Inline server requests: a `request_user_input` elicitation renders as
@@ -4078,6 +4123,37 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         else
           _composer(l10n),
       ],
+    );
+  }
+
+  /// Float the current checklist above the composer while work is in progress.
+  /// The timeline still owns the durable plan card; this compact tracker is
+  /// only the live, glanceable view and disappears with the turn.
+  Widget _turnProgress(_Item plan, AppLocalizations l10n) {
+    final parsed = _parsePlan(plan.text);
+    final diff = _diff;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final compact = constraints.maxWidth < 500;
+        final avoidNavigation = constraints.maxWidth < 620;
+        return Padding(
+          padding: EdgeInsets.fromLTRB(12, 4, avoidNavigation ? 64 : 12, 2),
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 460),
+              child: _TurnProgressTracker(
+                key: ValueKey('turn-progress-${plan.id}'),
+                steps: parsed.steps,
+                changedFiles: diff?.files.length ?? 0,
+                added: diff?.added ?? 0,
+                removed: diff?.removed ?? 0,
+                compact: compact,
+                onViewDiff: diff != null && !diff.isEmpty ? _showDiff : null,
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -9609,6 +9685,231 @@ class _CopyablePath extends StatelessWidget {
 /// One parsed plan step.
 typedef _PlanStep = ({String status, String text});
 
+/// The explanatory lead-in and checklist encoded in one plan item.
+typedef _ParsedPlan = ({String explanation, List<_PlanStep> steps});
+
+final _planStepPattern = RegExp(r'^\s*-\s*\[(.)\]\s?(.*)$');
+
+_ParsedPlan _parsePlan(String text) {
+  final explanation = <String>[];
+  final steps = <_PlanStep>[];
+  for (final line in text.split('\n')) {
+    final match = _planStepPattern.firstMatch(line);
+    if (match != null) {
+      final mark = match.group(1)!;
+      final status = mark == 'x'
+          ? 'completed'
+          : mark == '~'
+          ? 'in_progress'
+          : 'pending';
+      steps.add((status: status, text: match.group(2)!.trim()));
+    } else if (line.trim().isNotEmpty) {
+      explanation.add(line);
+    }
+  }
+  return (explanation: explanation.join('\n'), steps: steps);
+}
+
+/// Compact live checklist pinned above the composer while a turn is active.
+class _TurnProgressTracker extends StatefulWidget {
+  const _TurnProgressTracker({
+    super.key,
+    required this.steps,
+    required this.changedFiles,
+    required this.added,
+    required this.removed,
+    required this.compact,
+    this.onViewDiff,
+  });
+
+  final List<_PlanStep> steps;
+  final int changedFiles;
+  final int added;
+  final int removed;
+  final bool compact;
+  final VoidCallback? onViewDiff;
+
+  @override
+  State<_TurnProgressTracker> createState() => _TurnProgressTrackerState();
+}
+
+class _TurnProgressTrackerState extends State<_TurnProgressTracker> {
+  bool _expanded = true;
+
+  int get _currentStep {
+    final active = widget.steps.indexWhere((s) => s.status == 'in_progress');
+    if (active >= 0) return active + 1;
+    final done = widget.steps.where((s) => s.status == 'completed').length;
+    return (done + 1).clamp(1, widget.steps.length);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    final scheme = Theme.of(context).colorScheme;
+    final muted = scheme.onSurfaceVariant;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        AnimatedSize(
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOutCubic,
+          child: !_expanded
+              ? const SizedBox.shrink()
+              : Container(
+                  key: const Key('turn-progress-panel'),
+                  constraints: const BoxConstraints(maxHeight: 210),
+                  decoration: BoxDecoration(
+                    color: scheme.surfaceBright,
+                    borderRadius: BorderRadius.circular(kPanelRadius),
+                    border: Border.all(color: scheme.outlineVariant),
+                    boxShadow: panelShadow(scheme),
+                  ),
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.fromLTRB(12, 9, 12, 9),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [for (final step in widget.steps) _step(step)],
+                    ),
+                  ),
+                ),
+        ),
+        const SizedBox(height: 4),
+        Material(
+          key: const Key('turn-progress-summary'),
+          color: scheme.surfaceBright,
+          shape: StadiumBorder(side: BorderSide(color: scheme.outlineVariant)),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              InkWell(
+                mouseCursor: clickable,
+                customBorder: const StadiumBorder(),
+                onTap: () => setState(() => _expanded = !_expanded),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(10, 6, 8, 6),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      SizedBox(
+                        width: 13,
+                        height: 13,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 1.8,
+                          color: scheme.primary,
+                        ),
+                      ),
+                      const SizedBox(width: 7),
+                      Text(
+                        l10n.turnProgressStep(
+                          _currentStep,
+                          widget.steps.length,
+                        ),
+                        style: TextStyle(fontSize: 12, color: muted),
+                      ),
+                      if (widget.changedFiles > 0) ...[
+                        Text('  ·  ', style: TextStyle(color: muted)),
+                        if (!widget.compact) ...[
+                          Text(
+                            l10n.envFilesChanged(widget.changedFiles),
+                            style: TextStyle(fontSize: 12, color: muted),
+                          ),
+                          const SizedBox(width: 5),
+                        ],
+                        Text(
+                          '+${widget.added}',
+                          style: TextStyle(
+                            fontSize: 11.5,
+                            color: additionColor(scheme),
+                            fontFeatures: const [FontFeature.tabularFigures()],
+                          ),
+                        ),
+                        const SizedBox(width: 3),
+                        Text(
+                          '−${widget.removed}',
+                          style: TextStyle(
+                            fontSize: 11.5,
+                            color: scheme.error,
+                            fontFeatures: const [FontFeature.tabularFigures()],
+                          ),
+                        ),
+                      ],
+                      const SizedBox(width: 3),
+                      Icon(
+                        _expanded ? Icons.expand_less : Icons.expand_more,
+                        size: 16,
+                        color: muted,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              if (widget.onViewDiff != null) ...[
+                SizedBox(
+                  height: 22,
+                  child: VerticalDivider(
+                    width: 1,
+                    thickness: 1,
+                    color: scheme.outlineVariant,
+                  ),
+                ),
+                IconButton(
+                  key: const Key('turn-progress-diff'),
+                  tooltip: l10n.viewDiff,
+                  visualDensity: VisualDensity.compact,
+                  constraints: const BoxConstraints.tightFor(
+                    width: 34,
+                    height: 30,
+                  ),
+                  onPressed: widget.onViewDiff,
+                  icon: const Icon(Icons.difference_outlined, size: 16),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _step(_PlanStep step) {
+    final scheme = Theme.of(context).colorScheme;
+    final muted = scheme.onSurfaceVariant;
+    final icon = switch (step.status) {
+      'completed' => Icon(Icons.check_circle_outline, size: 15, color: muted),
+      'in_progress' => SizedBox(
+        width: 15,
+        height: 15,
+        child: CircularProgressIndicator(
+          strokeWidth: 1.8,
+          color: scheme.primary,
+        ),
+      ),
+      _ => Icon(Icons.circle_outlined, size: 15, color: muted),
+    };
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(padding: const EdgeInsets.only(top: 1), child: icon),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              step.text,
+              style: TextStyle(
+                fontSize: 12.5,
+                height: 1.3,
+                color: step.status == 'completed' ? muted : scheme.onSurface,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 /// A status-iconed checklist for a `plan` item (codex `update_plan`). The
 /// summarizer encodes the plan as an optional explanation plus `- [x|~| ] step`
 /// lines; this renders each step with a completed / in-progress / pending icon.
@@ -9623,33 +9924,11 @@ class _PlanCard extends StatefulWidget {
 class _PlanCardState extends State<_PlanCard> {
   bool _expanded = true;
 
-  static final _stepRe = RegExp(r'^\s*-\s*\[(.)\]\s?(.*)$');
-
-  (String explanation, List<_PlanStep> steps) _parse() {
-    final explanation = <String>[];
-    final steps = <_PlanStep>[];
-    for (final line in widget.item.text.split('\n')) {
-      final m = _stepRe.firstMatch(line);
-      if (m != null) {
-        final mark = m.group(1)!;
-        final status = mark == 'x'
-            ? 'completed'
-            : mark == '~'
-            ? 'in_progress'
-            : 'pending';
-        steps.add((status: status, text: m.group(2)!.trim()));
-      } else if (line.trim().isNotEmpty) {
-        explanation.add(line);
-      }
-    }
-    return (explanation.join('\n'), steps);
-  }
-
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
     final scheme = Theme.of(context).colorScheme;
-    final (explanation, steps) = _parse();
+    final (:explanation, :steps) = _parsePlan(widget.item.text);
     final done = steps.where((s) => s.status == 'completed').length;
     final muted = scheme.onSurfaceVariant;
 

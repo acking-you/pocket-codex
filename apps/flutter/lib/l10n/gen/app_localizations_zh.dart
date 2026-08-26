@@ -695,6 +695,11 @@ class AppLocalizationsZh extends AppLocalizations {
   }
 
   @override
+  String turnProgressStep(int current, int total) {
+    return '第 $current / $total 步';
+  }
+
+  @override
   String get start => '开始';
 
   @override

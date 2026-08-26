@@ -1358,6 +1358,12 @@ abstract class AppLocalizations {
   /// **'{count} files changed'**
   String envFilesChanged(int count);
 
+  /// No description provided for @turnProgressStep.
+  ///
+  /// In en, this message translates to:
+  /// **'Step {current} of {total}'**
+  String turnProgressStep(int current, int total);
+
   /// No description provided for @start.
   ///
   /// In en, this message translates to:

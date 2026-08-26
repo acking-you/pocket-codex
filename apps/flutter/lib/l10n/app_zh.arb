@@ -240,6 +240,7 @@
   "reviewNoFiles": "没有变更的文件。",
   "reviewPickFile": "选择一个文件查看其变更。",
   "envFilesChanged": "{count} 个文件有变更",
+  "turnProgressStep": "第 {current} / {total} 步",
   "start": "开始",
   "create": "创建",
   "copy": "复制",

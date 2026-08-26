@@ -282,6 +282,13 @@
   "@envFilesChanged": {
     "placeholders": { "count": { "type": "int" } }
   },
+  "turnProgressStep": "Step {current} of {total}",
+  "@turnProgressStep": {
+    "placeholders": {
+      "current": { "type": "int" },
+      "total": { "type": "int" }
+    }
+  },
   "start": "Start",
   "create": "Create",
   "copy": "Copy",

@@ -24,6 +24,7 @@
 //! `task_started`, `task_complete`, or `turn_aborted`.
 
 use std::{
+    collections::{HashMap, HashSet},
     io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
     time::UNIX_EPOCH,
@@ -223,7 +224,7 @@ pub struct TranscriptItem {
     /// Stable row id (the source line index).
     pub id: String,
     /// Item kind: `userMessage` / `agentMessage` / `reasoning` /
-    /// `commandExecution` / `contextCompaction`.
+    /// `commandExecution` / `contextCompaction` / `plan`.
     pub item_type: String,
     /// One-line title (the command for tool calls; empty for messages).
     pub title: String,
@@ -242,6 +243,7 @@ pub struct TranscriptItem {
 /// * `message` (role `user` / `assistant`) → user / agent message
 /// * `function_call` + its matching `function_call_output` (by `call_id`) → one
 ///   `commandExecution` item (title = command, text = output, ANSI stripped)
+/// * `update_plan` tool calls → one evolving `plan` checklist per turn
 /// * `reasoning` with a non-empty `summary` → a reasoning item
 ///
 /// plus the `turn_context` records written at each turn boundary, which become
@@ -254,16 +256,22 @@ pub struct TranscriptItem {
 /// read, so a partially-written rollout (one a live writer is appending to)
 /// still renders what is parseable.
 pub fn read_transcript(path: &Path) -> Result<Vec<TranscriptItem>> {
-    use std::{collections::HashMap, io::BufRead};
+    use std::io::BufRead;
     let file = std::fs::File::open(path)?;
     let reader = std::io::BufReader::new(file);
     let mut out: Vec<TranscriptItem> = Vec::new();
     // Index of the `commandExecution` item awaiting its output, by call_id.
     let mut pending: HashMap<String, usize> = HashMap::new();
+    // Direct `update_plan` calls still produce a function-call output. Once
+    // rendered as a plan, suppress that otherwise-empty command row.
+    let mut plan_outputs: HashSet<String> = HashSet::new();
     // Some rollout producers persist both lifecycle edges. Keep a single row
     // and mark it complete in place; current codex versions persist only the
     // completed edge, which is handled by the fallback below.
     let mut compactions: HashMap<String, usize> = HashMap::new();
+    // The agent can update the same plan several times during one turn. Keep
+    // the latest snapshot in one row, matching the live app-server behavior.
+    let mut plans: HashMap<String, usize> = HashMap::new();
     for (idx, line) in reader.lines().enumerate() {
         let line = line?;
         if line.trim().is_empty() {
@@ -380,6 +388,13 @@ pub fn read_transcript(path: &Path) -> Result<Vec<TranscriptItem>> {
                 });
             },
             Some("function_call") => {
+                if let Some((plan_id, text)) = plan_tool_snapshot(payload, &id) {
+                    if let Some(call_id) = payload.get("call_id").and_then(Value::as_str) {
+                        plan_outputs.insert(call_id.to_string());
+                    }
+                    upsert_plan(&mut out, &mut plans, plan_id, text);
+                    continue;
+                }
                 let title = command_title(payload);
                 out.push(TranscriptItem {
                     id,
@@ -392,7 +407,19 @@ pub fn read_transcript(path: &Path) -> Result<Vec<TranscriptItem>> {
                     pending.insert(call_id.to_string(), out.len() - 1);
                 }
             },
+            Some("custom_tool_call") => {
+                if let Some((plan_id, text)) = plan_tool_snapshot(payload, &id) {
+                    upsert_plan(&mut out, &mut plans, plan_id, text);
+                }
+            },
             Some("function_call_output") => {
+                if payload
+                    .get("call_id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|call_id| plan_outputs.remove(call_id))
+                {
+                    continue;
+                }
                 let output =
                     strip_ansi(payload.get("output").and_then(Value::as_str).unwrap_or(""));
                 match payload
@@ -427,6 +454,139 @@ pub fn read_transcript(path: &Path) -> Result<Vec<TranscriptItem>> {
         }
     }
     Ok(out)
+}
+
+/// Extract an `update_plan` snapshot from either a direct tool call or the
+/// JavaScript wrapper used by Codex's composed tool runner. The wrapper's
+/// argument is JSON5-compatible JavaScript object syntax; parsing it with a
+/// real parser keeps quoted punctuation and escaped text intact.
+fn plan_tool_snapshot(payload: &Value, fallback_id: &str) -> Option<(String, String)> {
+    let name = payload.get("name").and_then(Value::as_str)?;
+    let plan = if name == "update_plan" {
+        let value = payload.get("arguments").or_else(|| payload.get("input"))?;
+        parse_json5_value(value)?
+    } else if name == "exec" {
+        let source = payload.get("input").and_then(Value::as_str)?;
+        let argument = js_call_argument(source, "tools.update_plan")?;
+        json5::from_str::<Value>(argument).ok()?
+    } else {
+        return None;
+    };
+    let text = encode_rollout_plan(&plan)?;
+    let turn_id = payload
+        .get("internal_chat_message_metadata_passthrough")
+        .and_then(|metadata| metadata.get("turn_id"))
+        .and_then(Value::as_str)
+        .or_else(|| payload.get("turn_id").and_then(Value::as_str))
+        .filter(|id| !id.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            payload
+                .get("call_id")
+                .and_then(Value::as_str)
+                .filter(|id| !id.is_empty())
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| fallback_id.to_string());
+    Some((format!("plan-{turn_id}"), text))
+}
+
+fn parse_json5_value(value: &Value) -> Option<Value> {
+    match value {
+        Value::Object(_) => Some(value.clone()),
+        Value::String(raw) => serde_json::from_str(raw)
+            .ok()
+            .or_else(|| json5::from_str(raw).ok()),
+        _ => None,
+    }
+}
+
+/// Return the first call argument for `callee(...)`, respecting quoted strings
+/// and nested parentheses. The returned slice excludes the outer parentheses.
+fn js_call_argument<'a>(source: &'a str, callee: &str) -> Option<&'a str> {
+    let callee_start = source.find(callee)?;
+    let open_rel = source[callee_start + callee.len()..].find('(')?;
+    let open = callee_start + callee.len() + open_rel;
+    let mut depth = 0_u32;
+    let mut quote = None;
+    let mut escaped = false;
+    for (offset, ch) in source[open..].char_indices() {
+        if let Some(delimiter) = quote {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == delimiter {
+                quote = None;
+            }
+            continue;
+        }
+        if matches!(ch, '\'' | '"' | '`') {
+            quote = Some(ch);
+            continue;
+        }
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return source.get(open + 1..open + offset);
+                }
+            },
+            _ => {},
+        }
+    }
+    None
+}
+
+fn encode_rollout_plan(plan: &Value) -> Option<String> {
+    let steps = plan.get("plan")?.as_array()?;
+    if steps.is_empty() {
+        return None;
+    }
+    let mut lines = Vec::with_capacity(steps.len() + 1);
+    if let Some(explanation) = plan
+        .get("explanation")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+    {
+        lines.push(explanation.to_string());
+    }
+    let explanation_lines = lines.len();
+    lines.extend(steps.iter().filter_map(|step| {
+        let text = step.get("step").and_then(Value::as_str)?.trim();
+        if text.is_empty() {
+            return None;
+        }
+        let mark = match step.get("status").and_then(Value::as_str) {
+            Some("completed") => "x",
+            Some("in_progress") | Some("inProgress") => "~",
+            _ => " ",
+        };
+        Some(format!("- [{mark}] {text}"))
+    }));
+    (lines.len() > explanation_lines).then(|| lines.join("\n"))
+}
+
+fn upsert_plan(
+    out: &mut Vec<TranscriptItem>,
+    plans: &mut HashMap<String, usize>,
+    plan_id: String,
+    text: String,
+) {
+    if let Some(index) = plans.get(&plan_id).copied() {
+        out[index].text = text;
+        return;
+    }
+    plans.insert(plan_id.clone(), out.len());
+    out.push(TranscriptItem {
+        id: plan_id,
+        item_type: "plan".to_string(),
+        title: String::new(),
+        text,
+        images: Vec::new(),
+    });
 }
 
 /// Map a `turn_context` record to a synthetic `turnContext` item: `title` =
@@ -1357,6 +1517,61 @@ mod tests {
         assert_eq!(items.len(), 1, "{items:?}");
         assert_eq!(items[0].item_type, "contextCompaction");
         assert!(items[0].title.is_empty());
+    }
+
+    #[test]
+    fn read_transcript_tracks_latest_composed_tool_plan() {
+        let plan = |status: &str| {
+            serde_json::json!({
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call",
+                    "name": "exec",
+                    "call_id": format!("call-{status}"),
+                    "input": format!(
+                        "const r=await tools.update_plan({{explanation:\"Ship it\",plan:[{{step:\"Inspect foo()\",status:\"completed\"}},{{step:\"Run tests\",status:\"{status}\"}}]}});text(r);"
+                    ),
+                    "internal_chat_message_metadata_passthrough": {
+                        "turn_id": "turn-7"
+                    }
+                }
+            })
+            .to_string()
+        };
+        let path = std::env::temp_dir().join(format!(
+            "pcx-transcript-{}-{}.jsonl",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::write(&path, [plan("in_progress"), plan("completed")].join("\n"))
+            .expect("write plan snapshots");
+
+        let items = read_transcript(&path).expect("read plan snapshots");
+        std::fs::remove_file(&path).ok();
+        assert_eq!(items.len(), 1, "plan updates should upsert: {items:?}");
+        assert_eq!(items[0].id, "plan-turn-7");
+        assert_eq!(items[0].item_type, "plan");
+        assert_eq!(items[0].text, "Ship it\n- [x] Inspect foo()\n- [x] Run tests");
+    }
+
+    #[test]
+    fn read_transcript_hides_direct_plan_tool_output() {
+        let lines = [
+            r#"{"type":"response_item","payload":{"type":"function_call","name":"update_plan","call_id":"plan-call","arguments":"{plan:[{step:'Inspect',status:'in_progress'}]}"}}"#,
+            r#"{"type":"response_item","payload":{"type":"function_call_output","call_id":"plan-call","output":"Plan updated"}}"#,
+        ];
+        let path = std::env::temp_dir().join(format!(
+            "pcx-transcript-{}-{}.jsonl",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::write(&path, lines.join("\n")).expect("write direct plan snapshot");
+
+        let items = read_transcript(&path).expect("read direct plan snapshot");
+        std::fs::remove_file(&path).ok();
+        assert_eq!(items.len(), 1, "tool output must not become a command: {items:?}");
+        assert_eq!(items[0].item_type, "plan");
+        assert_eq!(items[0].text, "- [~] Inspect");
     }
 
     /// Manual harness: parse a REAL rollout and dump what the viewer would
