@@ -182,6 +182,24 @@ abstract class AppLocalizations {
   /// **'Use a device code instead'**
   String get accountUseDeviceCode;
 
+  /// No description provided for @accountSessionExpiredTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Your session expired'**
+  String get accountSessionExpiredTitle;
+
+  /// No description provided for @accountSessionExpiredMessage.
+  ///
+  /// In en, this message translates to:
+  /// **'Your saved sign-in can no longer be renewed. Sign in again to reconnect to your services.'**
+  String get accountSessionExpiredMessage;
+
+  /// No description provided for @accountSignInAgain.
+  ///
+  /// In en, this message translates to:
+  /// **'Sign in again'**
+  String get accountSignInAgain;
+
   /// No description provided for @accountWebFailed.
   ///
   /// In en, this message translates to:

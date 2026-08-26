@@ -20,7 +20,10 @@ import 'package:url_launcher/url_launcher.dart';
 /// stays one tap away. The self-host relay setup remains behind "Advanced".
 class AccountOnboardingScreen extends ConsumerStatefulWidget {
   /// Default constructor.
-  const AccountOnboardingScreen({super.key});
+  const AccountOnboardingScreen({super.key, this.sessionExpired = false});
+
+  /// Whether this sign-in was opened because a saved session cannot renew.
+  final bool sessionExpired;
 
   @override
   ConsumerState<AccountOnboardingScreen> createState() =>
@@ -295,6 +298,50 @@ class _AccountOnboardingState extends ConsumerState<AccountOnboardingScreen> {
               children: [
                 const Center(child: BrandLogo(size: 72)),
                 const SizedBox(height: 24),
+                if (widget.sessionExpired) ...[
+                  DecoratedBox(
+                    key: const Key('account-session-expired'),
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.errorContainer,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Icon(
+                            Icons.lock_clock_outlined,
+                            size: 20,
+                            color: theme.colorScheme.onErrorContainer,
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  l10n.accountSessionExpiredTitle,
+                                  style: theme.textTheme.titleSmall?.copyWith(
+                                    color: theme.colorScheme.onErrorContainer,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  l10n.accountSessionExpiredMessage,
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    color: theme.colorScheme.onErrorContainer,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                ],
                 if (_error != null) ...[
                   Text(
                     _error!,

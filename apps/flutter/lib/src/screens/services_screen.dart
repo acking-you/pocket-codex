@@ -192,13 +192,21 @@ class _ServicesScreenState extends ConsumerState<ServicesScreen>
         child: servicesAsync.when(
           loading: () =>
               const ListLoadingSkeleton(key: ValueKey('svc-loading')),
-          error: (e, _) => KeyedSubtree(
-            key: const ValueKey('svc-error'),
-            child: _ErrorState(
-              detail: friendlyError(e),
-              onRetry: () => ref.invalidate(servicesProvider),
-            ),
-          ),
+          error: (e, _) {
+            final detail = friendlyError(e);
+            final sessionExpired = isAccountSessionExpired(detail);
+            return KeyedSubtree(
+              key: const ValueKey('svc-error'),
+              child: _ErrorState(
+                detail: detail,
+                sessionExpired: sessionExpired,
+                onRetry: () => ref.invalidate(servicesProvider),
+                onSignIn: sessionExpired
+                    ? () => context.go('/onboarding?reason=session-expired')
+                    : null,
+              ),
+            );
+          },
           data: (services) {
             if (deviceFirst) {
               return KeyedSubtree(
@@ -2597,11 +2605,18 @@ class _AddLocalHostCard extends StatelessWidget {
 }
 
 class _ErrorState extends StatelessWidget {
-  const _ErrorState({required this.detail, required this.onRetry});
+  const _ErrorState({
+    required this.detail,
+    required this.sessionExpired,
+    required this.onRetry,
+    this.onSignIn,
+  });
 
-  /// Raw engine error string, shown as secondary diagnostic detail.
+  /// Raw engine error string, shown only for retryable failures.
   final String detail;
+  final bool sessionExpired;
   final VoidCallback onRetry;
+  final VoidCallback? onSignIn;
 
   @override
   Widget build(BuildContext context) {
@@ -2611,7 +2626,9 @@ class _ErrorState extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           Text(
-            l10n.discoverFailed,
+            sessionExpired
+                ? l10n.accountSessionExpiredTitle
+                : l10n.discoverFailed,
             key: const Key('services-error'),
             textAlign: TextAlign.center,
           ),
@@ -2619,13 +2636,21 @@ class _ErrorState extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 24),
             child: Text(
-              detail,
+              sessionExpired ? l10n.accountSessionExpiredMessage : detail,
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.bodySmall,
             ),
           ),
           const SizedBox(height: 12),
-          FilledButton(onPressed: onRetry, child: Text(l10n.retry)),
+          if (sessionExpired)
+            FilledButton.icon(
+              key: const Key('services-sign-in-again'),
+              onPressed: onSignIn,
+              icon: const Icon(Icons.login),
+              label: Text(l10n.accountSignInAgain),
+            )
+          else
+            FilledButton(onPressed: onRetry, child: Text(l10n.retry)),
         ],
       ),
     );

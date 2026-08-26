@@ -52,6 +52,15 @@ class AppLocalizationsZh extends AppLocalizations {
   String get accountUseDeviceCode => '设备码登录';
 
   @override
+  String get accountSessionExpiredTitle => '登录已过期';
+
+  @override
+  String get accountSessionExpiredMessage => '当前登录状态已失效，无法继续自动续期。请重新登录以恢复服务连接。';
+
+  @override
+  String get accountSignInAgain => '重新登录';
+
+  @override
   String get accountWebFailed => '登录未完成,请重试。';
 
   @override

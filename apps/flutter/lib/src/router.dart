@@ -46,7 +46,9 @@ GoRouter buildRouter({
     // Account login is the default onboarding; self-host is the advanced path.
     GoRoute(
       path: '/onboarding',
-      builder: (c, s) => const AccountOnboardingScreen(),
+      builder: (c, s) => AccountOnboardingScreen(
+        sessionExpired: s.uri.queryParameters['reason'] == 'session-expired',
+      ),
     ),
     GoRoute(
       path: '/onboarding/self-host',

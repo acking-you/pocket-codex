@@ -282,6 +282,66 @@ void main() {
     expect(find.text('重试'), findsOneWidget);
   });
 
+  testWidgets('Services explains an expired session and offers sign-in', (
+    t,
+  ) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(
+        relay: '',
+        hasKey: false,
+        mode: 'account',
+        accountLogin: 'octocat',
+      ),
+    )..discoverError = StateError('session expired; sign in again');
+    await t.pumpWidget(
+      _routerHost(
+        api,
+        initial: '/manage',
+        routes: [
+          GoRoute(path: '/manage', builder: (_, _) => const ServicesScreen()),
+          GoRoute(
+            path: '/onboarding',
+            builder: (_, state) => Scaffold(
+              body: Text('login:${state.uri.queryParameters['reason']}'),
+            ),
+          ),
+        ],
+      ),
+    );
+    await t.pumpAndSettle();
+
+    expect(find.text('登录已过期'), findsOneWidget);
+    expect(find.textContaining('请重新登录以恢复服务连接'), findsOneWidget);
+    expect(find.text('无法连接到 relay'), findsNothing);
+    expect(find.text('重试'), findsNothing);
+
+    await t.tap(find.byKey(const Key('services-sign-in-again')));
+    await t.pumpAndSettle();
+    expect(find.text('login:session-expired'), findsOneWidget);
+  });
+
+  testWidgets('Onboarding explains why an expired account must sign in', (
+    t,
+  ) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(
+        relay: '',
+        hasKey: false,
+        mode: 'account',
+        accountLogin: 'octocat',
+      ),
+    );
+    await t.pumpWidget(
+      _host(const AccountOnboardingScreen(sessionExpired: true), api),
+    );
+    await t.pumpAndSettle();
+
+    expect(find.byKey(const Key('account-session-expired')), findsOneWidget);
+    expect(find.text('登录已过期'), findsOneWidget);
+    expect(find.textContaining('请重新登录以恢复服务连接'), findsOneWidget);
+    expect(find.text('设备码登录'), findsOneWidget);
+  });
+
   testWidgets('Settings shows masked key and relay', (t) async {
     final api = FakeBridgeApi(
       config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),

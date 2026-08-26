@@ -52,6 +52,16 @@ class AppLocalizationsEn extends AppLocalizations {
   String get accountUseDeviceCode => 'Use a device code instead';
 
   @override
+  String get accountSessionExpiredTitle => 'Your session expired';
+
+  @override
+  String get accountSessionExpiredMessage =>
+      'Your saved sign-in can no longer be renewed. Sign in again to reconnect to your services.';
+
+  @override
+  String get accountSignInAgain => 'Sign in again';
+
+  @override
   String get accountWebFailed => 'Sign-in didn\'t complete. Please try again.';
 
   @override

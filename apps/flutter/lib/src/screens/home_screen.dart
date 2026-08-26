@@ -175,7 +175,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
           // first authenticated operation that can tell us; return directly to
           // the existing sign-in flow instead of trapping the user on a retry
           // hero whose retries can never succeed.
-          context.go('/onboarding');
+          context.go('/onboarding?reason=session-expired');
           return;
         }
         setState(() {

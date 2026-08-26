@@ -382,7 +382,10 @@ void main() {
     await _pumpHome(t, api, extraRoutes: [_stub('/onboarding', 'login')]);
     await t.pumpAndSettle();
 
-    expect(find.textContaining('stub:login'), findsOneWidget);
+    expect(
+      find.textContaining('stub:login reason=session-expired'),
+      findsOneWidget,
+    );
     expect(find.byKey(const Key('home-hero-title')), findsNothing);
   });
 
@@ -394,7 +397,10 @@ void main() {
     await _pumpHome(t, api, extraRoutes: [_stub('/onboarding', 'login')]);
     await t.pumpAndSettle();
 
-    expect(find.textContaining('stub:login'), findsOneWidget);
+    expect(
+      find.textContaining('stub:login reason=session-expired'),
+      findsOneWidget,
+    );
     expect(find.byKey(const Key('home-retry-btn')), findsNothing);
   });
 }
