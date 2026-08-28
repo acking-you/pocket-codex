@@ -8,10 +8,11 @@ import 'package:pocket_codex/src/desktop_theme.dart';
 import 'package:pocket_codex/src/error_format.dart';
 import 'package:pocket_codex/src/fonts.dart';
 import 'package:pocket_codex/src/providers.dart';
-import 'package:pocket_codex/src/theme.dart';
 import 'package:pocket_codex/src/screens/app_session_screen.dart'
     show appLocalPort;
+import 'package:pocket_codex/src/theme.dart';
 import 'package:pocket_codex/src/time_ago.dart';
+import 'package:pocket_codex/src/widgets/app_toast.dart';
 import 'package:pocket_codex/src/widgets/error_retry.dart';
 import 'package:pocket_codex/src/widgets/loading.dart';
 import 'package:pocket_codex/src/widgets/search_field.dart';
@@ -571,7 +572,7 @@ Future<void> resumeLocalSession(
   SessionSource source = const SessionSource.local(),
 }) async {
   final l10n = AppLocalizations.of(context);
-  final messenger = ScaffoldMessenger.of(context);
+  final messenger = ToastMessenger.of(context);
   // Resolve the app-server to resume into. For a remote host that IS the host
   // behind the source key: it evicts + resumes into its own colocated
   // app-server, so the target is simply that key. For the local source, ensure
@@ -590,7 +591,7 @@ Future<void> resumeLocalSession(
         await bridge.appConnect(target, appLocalPort);
       } catch (e) {
         if (context.mounted) {
-          messenger.showSnackBar(SnackBar(content: Text(friendlyError(e))));
+          messenger.error(friendlyError(e));
         }
         return;
       }
@@ -610,7 +611,7 @@ Future<void> resumeLocalSession(
     if (confirmed != true) return;
   }
   if (target == null) {
-    messenger.showSnackBar(SnackBar(content: Text(l10n.takeoverNoTarget)));
+    messenger.error(l10n.takeoverNoTarget);
     return;
   }
 
@@ -623,15 +624,11 @@ Future<void> resumeLocalSession(
         ? await bridge.metaForceResume(target, threadId)
         : await bridge.appForceResume(target, threadId);
   } catch (e) {
-    messenger.showSnackBar(SnackBar(content: Text(friendlyError(e))));
+    messenger.error(friendlyError(e));
     return;
   }
   if (!report.resumed) {
-    messenger.showSnackBar(
-      SnackBar(
-        content: Text(l10n.takeoverResumeFailed(report.resumeError ?? '')),
-      ),
-    );
+    messenger.error(l10n.takeoverResumeFailed(report.resumeError ?? ''));
     return;
   }
   final parts = <String>[
@@ -639,7 +636,7 @@ Future<void> resumeLocalSession(
     if (report.killed.isNotEmpty) l10n.takeoverKilled(report.killed.length),
     if (report.stillHeld) l10n.takeoverStillHeld,
   ];
-  messenger.showSnackBar(SnackBar(content: Text(parts.join(' · '))));
+  messenger.notice(parts.join(' · '));
 
   // Open the resumed conversation (only reached on success).
   if (!context.mounted) return;

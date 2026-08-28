@@ -7,6 +7,7 @@ import 'package:pocket_codex/src/bridge_api.dart';
 import 'package:pocket_codex/src/desktop_theme.dart';
 import 'package:pocket_codex/src/error_format.dart';
 import 'package:pocket_codex/src/providers.dart';
+import 'package:pocket_codex/src/widgets/app_toast.dart';
 import 'package:pocket_codex/src/widgets/utility_page.dart';
 
 /// Form fields on this page stand alone on the sheet rather than inside a
@@ -412,16 +413,11 @@ class _CodexSetupScreenState extends ConsumerState<CodexSetupScreen> {
                               tooltip: l10n.accountCopyCode,
                               icon: const Icon(Icons.copy, size: 20),
                               onPressed: () async {
-                                final messenger = ScaffoldMessenger.of(context);
+                                final messenger = ToastMessenger.of(context);
                                 await Clipboard.setData(
                                   ClipboardData(text: _deviceCode!),
                                 );
-                                messenger.showSnackBar(
-                                  SnackBar(
-                                    content: Text(l10n.copied),
-                                    duration: const Duration(seconds: 1),
-                                  ),
-                                );
+                                messenger.ok(l10n.copied);
                               },
                             ),
                           ],

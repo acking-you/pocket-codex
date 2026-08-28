@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
+import 'package:pocket_codex/src/desktop_theme.dart';
 import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/theme.dart';
 import 'package:pocket_codex/src/ui_prefs.dart';
@@ -301,7 +302,7 @@ class _WelcomeGuideScreenState extends ConsumerState<WelcomeGuideScreen> {
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: scheme.surfaceContainerLow,
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(kPanelRadius),
         border: Border.all(
           color: done ? successColor(scheme) : scheme.outlineVariant,
           width: done ? 1.4 : 1,

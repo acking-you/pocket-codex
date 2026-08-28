@@ -8,6 +8,7 @@ import 'package:pocket_codex/src/desktop_theme.dart';
 import 'package:pocket_codex/src/fonts.dart';
 import 'package:pocket_codex/src/log_manager.dart';
 import 'package:pocket_codex/src/theme.dart';
+import 'package:pocket_codex/src/widgets/app_toast.dart';
 import 'package:pocket_codex/src/widgets/search_field.dart';
 import 'package:pocket_codex/src/widgets/status_dots.dart';
 import 'package:pocket_codex/src/widgets/utility_page.dart';
@@ -97,9 +98,7 @@ class _LogViewScreenState extends State<LogViewScreen> {
     await Clipboard.setData(ClipboardData(text: text));
     if (!mounted) return;
     final l10n = AppLocalizations.of(context);
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(l10n.logsCopied(_filtered.length))));
+    showToastOk(context, l10n.logsCopied(_filtered.length));
   }
 
   static String _fmtTime(int ms) {

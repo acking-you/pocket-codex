@@ -1,17 +1,20 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:pocket_codex/src/widgets/window_title_bar.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
+import 'package:pocket_codex/src/desktop_theme.dart';
 import 'package:pocket_codex/src/error_format.dart';
+import 'package:pocket_codex/src/fonts.dart';
 import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/ui_prefs.dart';
 import 'package:pocket_codex/src/web_authenticator.dart';
+import 'package:pocket_codex/src/widgets/app_toast.dart';
 import 'package:pocket_codex/src/widgets/brand_logo.dart';
+import 'package:pocket_codex/src/widgets/window_title_bar.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 /// Default first-run experience: sign in to a hosted account. The convenient
@@ -256,20 +259,16 @@ class _AccountOnboardingState extends ConsumerState<AccountOnboardingScreen> {
     if (mounted) context.go(seen ? '/' : '/welcome');
   }
 
-  /// Confirm a successful sign-in with a toast. Shown via the root
-  /// ScaffoldMessenger so it survives the immediate `context.go('/')`.
+  /// Confirm a successful sign-in. Raised on the app-level ScaffoldMessenger, so
+  /// it survives the immediate `context.go('/')`.
   void _showSignedIn(String? login) {
     if (!mounted) return;
     final l10n = AppLocalizations.of(context);
-    final message = (login != null && login.isNotEmpty)
-        ? l10n.accountSignedInAs(login)
-        : l10n.accountSignedIn;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        behavior: SnackBarBehavior.floating,
-        duration: const Duration(seconds: 3),
-      ),
+    showToastOk(
+      context,
+      (login != null && login.isNotEmpty)
+          ? l10n.accountSignedInAs(login)
+          : l10n.accountSignedIn,
     );
   }
 
@@ -303,7 +302,7 @@ class _AccountOnboardingState extends ConsumerState<AccountOnboardingScreen> {
                     key: const Key('account-session-expired'),
                     decoration: BoxDecoration(
                       color: theme.colorScheme.errorContainer,
-                      borderRadius: BorderRadius.circular(8),
+                      borderRadius: BorderRadius.circular(kControlRadius),
                     ),
                     child: Padding(
                       padding: const EdgeInsets.all(12),
@@ -393,41 +392,45 @@ class _AccountOnboardingState extends ConsumerState<AccountOnboardingScreen> {
                     ),
                   ],
                 ] else ...[
-                  Text(l10n.accountEnterCode, textAlign: TextAlign.center),
-                  const SizedBox(height: 12),
-                  SelectableText(
-                    device.userCode,
-                    textAlign: TextAlign.center,
-                    style: theme.textTheme.headlineMedium?.copyWith(
-                      letterSpacing: 4,
+                  // Three ordered steps, because the code alone doesn't say what
+                  // to do with it: take the code, enter it at GitHub, come back.
+                  _Step(
+                    number: 1,
+                    caption: l10n.accountEnterCode,
+                    child: _DeviceCodeCard(code: device.userCode),
+                  ),
+                  const SizedBox(height: 14),
+                  _Step(
+                    number: 2,
+                    child: FilledButton.icon(
+                      key: const Key('account-open-github'),
+                      onPressed: () =>
+                          _openVerification(device.verificationUri),
+                      icon: const Icon(Icons.open_in_new, size: 18),
+                      label: Text(l10n.accountOpenGitHub),
                     ),
                   ),
-                  const SizedBox(height: 4),
-                  TextButton.icon(
-                    onPressed: () =>
-                        Clipboard.setData(ClipboardData(text: device.userCode)),
-                    icon: const Icon(Icons.copy, size: 16),
-                    label: Text(l10n.accountCopyCode),
-                  ),
-                  const SizedBox(height: 12),
-                  FilledButton.icon(
-                    onPressed: () => _openVerification(device.verificationUri),
-                    icon: const Icon(Icons.open_in_new),
-                    label: Text(l10n.accountOpenGitHub),
-                  ),
-                  const SizedBox(height: 20),
-                  const Center(
-                    child: SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
+                  const SizedBox(height: 14),
+                  _Step(
+                    number: 3,
+                    child: Row(
+                      children: [
+                        const SizedBox(
+                          width: 15,
+                          height: 15,
+                          child: CircularProgressIndicator(strokeWidth: 1.8),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            l10n.accountWaiting,
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    l10n.accountWaiting,
-                    textAlign: TextAlign.center,
-                    style: theme.textTheme.bodySmall,
                   ),
                 ],
                 const SizedBox(height: 24),
@@ -455,6 +458,140 @@ class _AccountOnboardingState extends ConsumerState<AccountOnboardingScreen> {
                     child: Text(l10n.accountAdvancedSelfHost),
                   ),
                 ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// One numbered step of the device-code flow.
+///
+/// The number is what makes the three read as an order rather than three
+/// unrelated controls; [caption] explains a step whose content can't speak for
+/// itself (the bare code), and is omitted where the control already says it.
+class _Step extends StatelessWidget {
+  const _Step({required this.number, required this.child, this.caption});
+
+  final int number;
+  final Widget child;
+  final String? caption;
+
+  /// A 20px disc, the same tinted-glyph treatment the capability rows use, with
+  /// its content indented to clear it.
+  static const double _discSize = 20;
+  static const double _discGap = 10;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          width: _discSize,
+          height: _discSize,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: scheme.primaryContainer,
+            shape: BoxShape.circle,
+          ),
+          child: Text(
+            '$number',
+            style: TextStyle(
+              fontSize: 11.5,
+              fontWeight: FontWeight.w600,
+              color: scheme.onPrimaryContainer,
+            ),
+          ),
+        ),
+        const SizedBox(width: _discGap),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (caption != null) ...[
+                Padding(
+                  padding: const EdgeInsets.only(top: 1, bottom: 7),
+                  child: Text(
+                    caption!,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+              ],
+              child,
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// The device code, as one tap target that copies it.
+///
+/// Copying is the whole point of showing the code, so the card itself is the
+/// button rather than hanging a separate control underneath — and it confirms,
+/// because a silent clipboard write leaves the user unsure whether to retype the
+/// code by hand. Monospace with the digits spaced out, since the next thing that
+/// happens is a human transcribing it into another window.
+class _DeviceCodeCard extends StatelessWidget {
+  const _DeviceCodeCard({required this.code});
+
+  final String code;
+
+  static const double _codeSize = 25;
+  static const double _codeTracking = 4;
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    final scheme = Theme.of(context).colorScheme;
+    return Tooltip(
+      message: l10n.accountCopyCode,
+      child: Material(
+        color: scheme.surfaceContainerLowest,
+        borderRadius: BorderRadius.circular(kPanelRadius),
+        child: InkWell(
+          key: const Key('account-code-copy'),
+          mouseCursor: clickable,
+          borderRadius: BorderRadius.circular(kPanelRadius),
+          onTap: () {
+            Clipboard.setData(ClipboardData(text: code));
+            showToastOk(context, l10n.copied);
+          },
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(14, 12, 12, 12),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(kPanelRadius),
+              border: Border.all(color: scheme.outline),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    code,
+                    style: TextStyle(
+                      fontFamily: monoFontFamily,
+                      fontFamilyFallback: monoCjkFallback,
+                      fontSize: _codeSize,
+                      letterSpacing: _codeTracking,
+                      fontWeight: FontWeight.w600,
+                      color: scheme.onSurface,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Icon(
+                  Icons.copy_outlined,
+                  size: 18,
+                  color: scheme.onSurfaceVariant,
+                ),
               ],
             ),
           ),

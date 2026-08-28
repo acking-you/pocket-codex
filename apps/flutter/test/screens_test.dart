@@ -886,6 +886,51 @@ void main() {
     expect(find.text('WELCOME-ROUTE'), findsOneWidget);
   });
 
+  testWidgets('onboarding: the device code copies itself and confirms', (
+    t,
+  ) async {
+    final copied = <String>[];
+    t.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        if (call.method == 'Clipboard.setData') {
+          copied.add((call.arguments as Map)['text'] as String);
+        }
+        return null;
+      },
+    );
+    addTearDown(
+      () => t.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      ),
+    );
+    // 'expired' lets the poll reach a terminal state, so no spinner or timer is
+    // left pending at teardown (same reason as the expired-code test below).
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: '', hasKey: false),
+    )..accountPollStatus = 'expired';
+    await t.pumpWidget(_host(const AccountOnboardingScreen(), api));
+    await t.pumpAndSettle();
+    await t.tap(find.text('设备码登录')); // accountUseDeviceCode (zh)
+    await t.pump(); // accountLoginStart resolves
+    await t.pump(); // the code renders
+
+    // The code is the tap target: copying is the only reason it is on screen,
+    // so it doesn't hide behind a separate button.
+    await t.tap(find.byKey(const Key('account-code-copy')));
+    await t.pump();
+    await t.pump(const Duration(milliseconds: 400));
+
+    expect(copied.single, 'ABCD-1234');
+    // And it says so — a silent clipboard write leaves the user unsure whether
+    // to retype the code by hand.
+    expect(find.text('已复制'), findsOneWidget); // copied (zh)
+
+    await t.pump(const Duration(seconds: 6)); // poll fires → expired → stops
+    await t.pumpAndSettle();
+  });
+
   testWidgets('onboarding: an expired code clears and shows the expired '
       'message without navigating', (t) async {
     final api = FakeBridgeApi(

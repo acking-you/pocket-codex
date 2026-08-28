@@ -10,6 +10,7 @@ import 'package:pocket_codex/src/fonts.dart';
 import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/theme.dart';
 import 'package:pocket_codex/src/ui_prefs.dart';
+import 'package:pocket_codex/src/widgets/app_toast.dart';
 import 'package:pocket_codex/src/widgets/github_avatar.dart';
 import 'package:pocket_codex/src/widgets/status_dots.dart';
 import 'package:pocket_codex/src/widgets/utility_page.dart';
@@ -389,10 +390,10 @@ class _SettingsState extends ConsumerState<SettingsScreen> {
   void _showMessage(String message) {
     if (!mounted) return;
     setState(() => _msg = message);
+    // The inline `_msg` line carries it on compact layouts; wide also toasts,
+    // since a message under a long settings list is easy to miss.
     if (isDesktop && MediaQuery.sizeOf(context).width >= 840) {
-      final messenger = ScaffoldMessenger.of(context);
-      messenger.hideCurrentSnackBar();
-      messenger.showSnackBar(SnackBar(content: Text(message)));
+      showToast(context, message);
     }
   }
 

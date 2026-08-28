@@ -3,19 +3,20 @@ import 'dart:async';
 import 'package:flutter/foundation.dart'
     show defaultTargetPlatform, kIsWeb, TargetPlatform, visibleForTesting;
 import 'package:flutter/material.dart';
-import 'package:pocket_codex/src/widgets/window_title_bar.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:pocket_codex/src/dismissed_services.dart';
 import 'package:pocket_codex/src/error_format.dart';
 import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/screens/app_session_screen.dart';
 import 'package:pocket_codex/src/ui_prefs.dart';
+import 'package:pocket_codex/src/widgets/app_toast.dart';
 import 'package:pocket_codex/src/widgets/brand_logo.dart';
 import 'package:pocket_codex/src/widgets/local_host_dialog.dart';
 import 'package:pocket_codex/src/widgets/utility_page.dart';
+import 'package:pocket_codex/src/widgets/window_title_bar.dart';
 
 /// Chat-first home: resolves the right app service (explicit default → last
 /// used → locally hosted → first reachable), connects, picks the latest
@@ -400,7 +401,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   Future<void> _switchService(String key) async {
     if (key == _serviceKey || _switching) return;
     final l10n = AppLocalizations.of(context);
-    final messenger = ScaffoldMessenger.of(context);
+    final messenger = ToastMessenger.of(context);
     // Supersede any background resolve; this switch owns the outcome now.
     final gen = ++_generation;
     setState(() => _switching = true);
@@ -426,9 +427,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       }
       if (!mounted || gen != _generation) return;
       if (!ok) {
-        messenger.showSnackBar(
-          SnackBar(content: Text(l10n.switchServiceFailed)),
-        );
+        messenger.error(l10n.switchServiceFailed);
         return;
       }
       final pick = await _pickThread(key, await _prefs());

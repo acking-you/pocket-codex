@@ -7,6 +7,7 @@ import 'package:pocket_codex/src/desktop_theme.dart';
 import 'package:pocket_codex/src/error_format.dart';
 import 'package:pocket_codex/src/fonts.dart';
 import 'package:pocket_codex/src/providers.dart';
+import 'package:pocket_codex/src/widgets/app_toast.dart';
 import 'package:pocket_codex/src/widgets/links.dart';
 import 'package:pocket_codex/src/widgets/utility_page.dart';
 
@@ -64,6 +65,11 @@ class _ApiServiceState extends ConsumerState<ApiServiceScreen> {
     await ref.read(bridgeApiProvider).apiUnsubscribe(widget.serviceKey);
     ref.invalidate(subscriptionsProvider);
     setState(() => _sub = null);
+  }
+
+  void _copy(String text) {
+    Clipboard.setData(ClipboardData(text: text));
+    showToastOk(context, AppLocalizations.of(context).copied);
   }
 
   @override
@@ -145,10 +151,10 @@ class _ApiServiceState extends ConsumerState<ApiServiceScreen> {
                 ),
               ),
               IconButton(
+                tooltip: l10n.copy,
                 icon: const Icon(Icons.copy, size: 16),
                 visualDensity: VisualDensity.compact,
-                onPressed: () =>
-                    Clipboard.setData(ClipboardData(text: widget.serviceKey)),
+                onPressed: () => _copy(widget.serviceKey),
               ),
             ],
           ),
@@ -208,9 +214,7 @@ class _ApiServiceState extends ConsumerState<ApiServiceScreen> {
                   IconButton(
                     tooltip: l10n.copy,
                     icon: const Icon(Icons.copy, size: 17),
-                    onPressed: () => Clipboard.setData(
-                      ClipboardData(text: 'http://${_sub!.localAddr}/v1'),
-                    ),
+                    onPressed: () => _copy('http://${_sub!.localAddr}/v1'),
                   ),
                 ],
               ),
@@ -299,9 +303,12 @@ class _ProviderSnippet extends StatelessWidget {
               children: [
                 const Text('~/.codex/config.toml'),
                 IconButton(
-                  icon: const Icon(Icons.copy),
-                  onPressed: () =>
-                      Clipboard.setData(ClipboardData(text: snippet)),
+                  tooltip: AppLocalizations.of(context).copy,
+                  icon: const Icon(Icons.copy, size: 17),
+                  onPressed: () {
+                    Clipboard.setData(ClipboardData(text: snippet));
+                    showToastOk(context, AppLocalizations.of(context).copied);
+                  },
                 ),
               ],
             ),

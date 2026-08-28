@@ -9,18 +9,18 @@ import 'package:pocket_codex/src/attachment_refs.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
 import 'package:pocket_codex/src/desktop_theme.dart';
 import 'package:pocket_codex/src/error_format.dart';
-import 'package:pocket_codex/src/widgets/utility_page.dart';
-import 'package:pocket_codex/src/ide_context.dart';
 import 'package:pocket_codex/src/fonts.dart';
+import 'package:pocket_codex/src/ide_context.dart';
 import 'package:pocket_codex/src/providers.dart';
-import 'package:pocket_codex/src/theme.dart';
 import 'package:pocket_codex/src/realtime_delegation.dart';
 import 'package:pocket_codex/src/screens/local_sessions_screen.dart'
     show SessionSource, resumeLocalSession;
+import 'package:pocket_codex/src/theme.dart';
 import 'package:pocket_codex/src/widgets/loading.dart';
 import 'package:pocket_codex/src/widgets/markdown_view.dart';
 import 'package:pocket_codex/src/widgets/message_images.dart';
 import 'package:pocket_codex/src/widgets/realtime_handoff_card.dart';
+import 'package:pocket_codex/src/widgets/utility_page.dart';
 import 'package:super_sliver_list/super_sliver_list.dart';
 
 /// Read-only viewer for a local codex session's transcript, parsed straight from

@@ -2,16 +2,17 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:pocket_codex/src/desktop_theme.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
+import 'package:pocket_codex/src/desktop_theme.dart';
 import 'package:pocket_codex/src/dismissed_services.dart';
 import 'package:pocket_codex/src/error_format.dart';
 import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/theme.dart';
 import 'package:pocket_codex/src/ui_prefs.dart';
+import 'package:pocket_codex/src/widgets/app_toast.dart';
 import 'package:pocket_codex/src/widgets/github_avatar.dart';
 import 'package:pocket_codex/src/widgets/loading.dart';
 import 'package:pocket_codex/src/widgets/local_host_dialog.dart';
@@ -1224,9 +1225,7 @@ Future<void> _batchRemove(
   // Refresh discovery so the list reflects the removals.
   ref.invalidate(servicesProvider);
   if (context.mounted && removed > 0) {
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(l10n.batchRemovedSnack(removed))));
+    showToastOk(context, l10n.batchRemovedSnack(removed));
   }
 }
 
@@ -1346,11 +1345,7 @@ Future<void> _confirmDeregister(
     ref.invalidate(servicesProvider);
   } catch (e) {
     if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('${l10n.deregisterFailed}: ${friendlyError(e)}'),
-        ),
-      );
+      showToastError(context, '${l10n.deregisterFailed}: ${friendlyError(e)}');
     }
   }
 }
@@ -1408,7 +1403,7 @@ class _LocalHostCard extends ConsumerWidget {
   ) async {
     final key = _keyFor(kind);
     final l10n = AppLocalizations.of(context);
-    final messenger = ScaffoldMessenger.of(context);
+    final messenger = ToastMessenger.of(context);
     try {
       await ref
           .read(bridgeApiProvider)
@@ -1417,11 +1412,7 @@ class _LocalHostCard extends ConsumerWidget {
       // Surfaces a duplicate-name refusal (another live instance took the
       // name while this tunnel was down) as guidance instead of silence.
       final raw = friendlyError(e);
-      messenger.showSnackBar(
-        SnackBar(
-          content: Text(isHostNameConflict(raw) ? l10n.hostNameConflict : raw),
-        ),
-      );
+      messenger.error(isHostNameConflict(raw) ? l10n.hostNameConflict : raw);
       return;
     }
     // Make sure it isn't still optimistically hidden, then re-discover.

@@ -7,8 +7,9 @@ import 'package:file_selector/file_selector.dart' show openFiles;
 import 'package:flutter/foundation.dart'
     show listEquals, defaultTargetPlatform, TargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
-import 'package:pocket_codex/src/desktop_theme.dart';
-import 'package:pocket_codex/src/widgets/window_title_bar.dart';
+import 'package:pocket_codex/l10n/gen/app_localizations.dart';
+import 'package:pocket_codex/src/app_modes.dart';
+import 'package:pocket_codex/src/attachment_refs.dart';
 import 'package:flutter/services.dart';
 import 'package:pasteboard/pasteboard.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -17,22 +18,21 @@ import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart' show DateFormat;
 import 'package:super_sliver_list/super_sliver_list.dart';
 import 'package:window_manager/window_manager.dart' show DragToMoveArea;
-import 'package:pocket_codex/l10n/gen/app_localizations.dart';
-import 'package:pocket_codex/src/app_modes.dart';
-import 'package:pocket_codex/src/attachment_refs.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
 import 'package:pocket_codex/src/code_highlight.dart';
 import 'package:pocket_codex/src/context_status.dart';
+import 'package:pocket_codex/src/desktop_theme.dart';
 import 'package:pocket_codex/src/error_format.dart';
 import 'package:pocket_codex/src/fonts.dart';
 import 'package:pocket_codex/src/git_diff.dart';
 import 'package:pocket_codex/src/ide_context.dart';
 import 'package:pocket_codex/src/image_attachments.dart';
 import 'package:pocket_codex/src/providers.dart';
-import 'package:pocket_codex/src/theme.dart';
 import 'package:pocket_codex/src/realtime_delegation.dart';
+import 'package:pocket_codex/src/theme.dart';
 import 'package:pocket_codex/src/ui_prefs.dart';
 import 'package:pocket_codex/src/widgets/adaptive_sheet.dart';
+import 'package:pocket_codex/src/widgets/app_toast.dart';
 import 'package:pocket_codex/src/widgets/brand_logo.dart';
 import 'package:pocket_codex/src/widgets/diff_review.dart';
 import 'package:pocket_codex/src/widgets/file_browser_panel.dart';
@@ -46,6 +46,7 @@ import 'package:pocket_codex/src/widgets/realtime_handoff_card.dart';
 import 'package:pocket_codex/src/widgets/status_dots.dart';
 import 'package:pocket_codex/src/widgets/takeover_dialog.dart';
 import 'package:pocket_codex/src/widgets/theme_toggle.dart';
+import 'package:pocket_codex/src/widgets/window_title_bar.dart';
 
 /// Local port for the app-server ws tunnel (shared with the service screen).
 /// `0` is a sentinel: the bridge assigns a free OS port *per service* so several
@@ -1524,7 +1525,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     }
 
     final l10n = AppLocalizations.of(context);
-    final messenger = ScaffoldMessenger.of(context);
+    final messenger = ToastMessenger.of(context);
     setState(() {
       _takingOver = true;
       _error = null;
@@ -1553,7 +1554,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
             l10n.takeoverKilled(report.killed.length),
           if (report.stillHeld) l10n.takeoverStillHeld,
         ];
-        messenger.showSnackBar(SnackBar(content: Text(parts.join(' · '))));
+        messenger.notice(parts.join(' · '));
       }
       _cancelExternalWriterSubscription();
       setState(() {
@@ -2931,9 +2932,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         }
       }
       final l10n = AppLocalizations.of(context);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('${l10n.renameFailed}: ${friendlyError(e)}')),
-      );
+      showToastError(context, '${l10n.renameFailed}: ${friendlyError(e)}');
     }
   }
 
@@ -5997,15 +5996,13 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// isolate before it becomes sendable, showing a spinner chip meanwhile.
   Future<void> _pickImages() async {
     final l10n = AppLocalizations.of(context);
-    final messenger = ScaffoldMessenger.of(context);
+    final messenger = ToastMessenger.of(context);
     // Only IMAGE chips consume image slots — _attachments also holds document
     // chips, which have their own kMaxFilesPerMessage budget.
     final remaining =
         kMaxImagesPerMessage - _attachments.where((a) => !a.isFile).length;
     if (remaining <= 0) {
-      messenger.showSnackBar(
-        SnackBar(content: Text(l10n.imageTooMany(kMaxImagesPerMessage))),
-      );
+      messenger.error(l10n.imageTooMany(kMaxImagesPerMessage));
       return;
     }
     List<XFile> picked;
@@ -6020,7 +6017,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       }
     } catch (_) {
       if (mounted) {
-        messenger.showSnackBar(SnackBar(content: Text(l10n.imagePickFailed)));
+        messenger.error(l10n.imagePickFailed);
       }
       return;
     }
@@ -6028,9 +6025,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     if (picked.length > remaining) {
       // Some platforms ignore the picker's limit; enforce ours.
       picked = picked.sublist(0, remaining);
-      messenger.showSnackBar(
-        SnackBar(content: Text(l10n.imageTooMany(kMaxImagesPerMessage))),
-      );
+      messenger.error(l10n.imageTooMany(kMaxImagesPerMessage));
     }
     setState(() {
       for (final file in picked) {
@@ -6065,9 +6060,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   void _failImageAttachment(_Attachment att) {
     if (!mounted || !_attachments.contains(att)) return;
     setState(() => _attachments.remove(att));
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(AppLocalizations.of(context).imagePickFailed)),
-    );
+    showToastError(context, AppLocalizations.of(context).imagePickFailed);
   }
 
   /// Extensions the image pipeline can decode; a file picked with one of
@@ -6086,13 +6079,11 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// reference in the turn text; image files route to the image pipeline.
   Future<void> _pickFiles() async {
     final l10n = AppLocalizations.of(context);
-    final messenger = ScaffoldMessenger.of(context);
+    final messenger = ToastMessenger.of(context);
     final remaining =
         kMaxFilesPerMessage - _attachments.where((a) => a.isFile).length;
     if (remaining <= 0) {
-      messenger.showSnackBar(
-        SnackBar(content: Text(l10n.fileTooMany(kMaxFilesPerMessage))),
-      );
+      messenger.error(l10n.fileTooMany(kMaxFilesPerMessage));
       return;
     }
     List<XFile> picked;
@@ -6100,7 +6091,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       picked = await openFiles();
     } catch (_) {
       if (mounted) {
-        messenger.showSnackBar(SnackBar(content: Text(l10n.filePickFailed)));
+        messenger.error(l10n.filePickFailed);
       }
       return;
     }
@@ -6116,7 +6107,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   void _addFiles(List<XFile> picked) {
     if (picked.isEmpty || !mounted) return;
     final l10n = AppLocalizations.of(context);
-    final messenger = ScaffoldMessenger.of(context);
+    final messenger = ToastMessenger.of(context);
     final remaining =
         kMaxFilesPerMessage - _attachments.where((a) => a.isFile).length;
     var files = 0;
@@ -6148,14 +6139,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       }
     });
     if (filesDropped > 0) {
-      messenger.showSnackBar(
-        SnackBar(content: Text(l10n.fileTooMany(kMaxFilesPerMessage))),
-      );
+      messenger.error(l10n.fileTooMany(kMaxFilesPerMessage));
     }
     if (imagesDropped > 0) {
-      messenger.showSnackBar(
-        SnackBar(content: Text(l10n.imageTooMany(kMaxImagesPerMessage))),
-      );
+      messenger.error(l10n.imageTooMany(kMaxImagesPerMessage));
     }
   }
 
@@ -6239,12 +6226,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         if (!mounted) return;
         if (_attachments.where((a) => !a.isFile).length >=
             kMaxImagesPerMessage) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                AppLocalizations.of(context).imageTooMany(kMaxImagesPerMessage),
-              ),
-            ),
+          showToastError(
+            context,
+            AppLocalizations.of(context).imageTooMany(kMaxImagesPerMessage),
           );
           return;
         }
@@ -6296,14 +6280,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
 
   Future<void> _uploadAttachment(_Attachment att, XFile file) async {
     final l10n = AppLocalizations.of(context);
-    final messenger = ScaffoldMessenger.of(context);
+    final messenger = ToastMessenger.of(context);
     void rejectTooLarge() {
       setState(() => _attachments.remove(att));
-      messenger.showSnackBar(
-        SnackBar(
-          content: Text(l10n.fileTooLarge(kMaxFileBytes ~/ (1024 * 1024))),
-        ),
-      );
+      messenger.error(l10n.fileTooLarge(kMaxFileBytes ~/ (1024 * 1024)));
     }
 
     try {
@@ -6331,11 +6311,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     } catch (e) {
       if (!mounted || !_attachments.contains(att)) return;
       setState(() => _attachments.remove(att));
-      messenger.showSnackBar(
-        SnackBar(
-          content: Text('${l10n.fileUploadFailed}: ${friendlyError(e)}'),
-        ),
-      );
+      messenger.error('${l10n.fileUploadFailed}: ${friendlyError(e)}');
     }
   }
 
@@ -9148,13 +9124,7 @@ class _MessageViewState extends State<_MessageView> {
     Clipboard.setData(
       ClipboardData(text: _readProposedPlan(widget.item.text).text),
     );
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(l10n.copied),
-        duration: const Duration(seconds: 1),
-        behavior: SnackBarBehavior.floating,
-      ),
-    );
+    showToastOk(context, l10n.copied);
   }
 
   @override
@@ -9677,13 +9647,19 @@ class _CopyablePath extends StatelessWidget {
             ),
           ),
         ),
-        InkResponse(
-          mouseCursor: clickable,
-          radius: 16,
-          onTap: () => Clipboard.setData(ClipboardData(text: path)),
-          child: Padding(
-            padding: const EdgeInsets.all(2),
-            child: Icon(Icons.copy_outlined, size: 14, color: muted),
+        Tooltip(
+          message: AppLocalizations.of(context).copy,
+          child: InkResponse(
+            mouseCursor: clickable,
+            radius: 16,
+            onTap: () {
+              Clipboard.setData(ClipboardData(text: path));
+              showToastOk(context, AppLocalizations.of(context).copied);
+            },
+            child: Padding(
+              padding: const EdgeInsets.all(2),
+              child: Icon(Icons.copy_outlined, size: 14, color: muted),
+            ),
           ),
         ),
       ],

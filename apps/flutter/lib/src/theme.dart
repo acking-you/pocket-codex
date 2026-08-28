@@ -236,9 +236,11 @@ ThemeData _base(ColorScheme scheme) {
       indicatorColor: scheme.secondaryContainer,
       elevation: 0,
     ),
+    // A fallback for any snack bar raised outside `app_toast.dart`, which draws
+    // its own surface and ignores this.
     snackBarTheme: SnackBarThemeData(
       behavior: SnackBarBehavior.floating,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      shape: RoundedRectangleBorder(borderRadius: radius),
     ),
   );
 }
