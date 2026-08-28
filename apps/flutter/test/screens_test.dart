@@ -152,9 +152,6 @@ GoRoute _stub(String path, String label) => GoRoute(
   builder: (_, _) => Scaffold(body: Text(label)),
 );
 
-/// Tap a home-screen section tab by its label and settle. The desktop
-/// NavigationRail and the mobile NavigationBar share the destination label text,
-/// so one helper drives both layouts.
 /// Open the selected device's capabilities, which is where every kind — chat,
 /// API, session sharing — is now listed together.
 ///
@@ -508,6 +505,12 @@ void main() {
 
   testWidgets('local-host: a second host coexists with the first', (t) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    // Tall enough that both host cards and the add button build: the detail is
+    // a lazy ListView, so anything below the fold is absent rather than merely
+    // scrolled away, and `ensureVisible` has nothing to scroll to.
+    t.view.physicalSize = const Size(1200, 1600);
+    t.view.devicePixelRatio = 1;
+    addTearDown(t.view.reset);
     try {
       final api = accountFake();
       await t.pumpWidget(_host(const ServicesScreen(), api));
@@ -520,10 +523,7 @@ void main() {
       await t.tap(find.byKey(const Key('start-hosting-btn')));
       await t.pumpAndSettle();
 
-      // Second host "work" (codex found → fields are port, name, proxy). The
-      // first host's card pushed the add button below the fold at this size.
-      await t.ensureVisible(find.byKey(const Key('add-local-host-card')));
-      await t.pumpAndSettle();
+      // Second host "work" (codex found → fields are port, name, proxy).
       await t.tap(find.byKey(const Key('add-local-host-card')));
       await t.pumpAndSettle();
       await t.enterText(find.byType(TextField).at(0), '18081');
@@ -563,11 +563,14 @@ void main() {
       await t.pumpWidget(_host(const ServicesScreen(), api));
       await t.pumpAndSettle();
       await _openDevice(t);
-      // Before hosting, the device is just a discovered remote one.
+      // Before hosting, the device is just a discovered remote one — and the
+      // hosting card belongs to THIS machine, so it isn't shown under a peer.
       expect(find.text('本机'), findsNothing);
+      expect(find.byKey(const Key('add-local-host-card')), findsNothing);
 
-      // Host "default" locally → its key matches the discovered service.
-      await t.tap(find.byKey(const Key('add-local-host-card')));
+      // Host "default" locally → its key matches the discovered service. The
+      // title bar's button is the route in when no local device is selected.
+      await t.tap(find.byKey(const Key('host-this-device-btn')));
       await t.pumpAndSettle();
       await t.tap(find.byKey(const Key('start-hosting-btn')));
       await t.pumpAndSettle();
@@ -604,11 +607,12 @@ void main() {
       expect(api.serveHosts.single.apiRegistered, isTrue);
       expect(api.serveHosts.single.appRegistered, isTrue);
 
-      // Deregister just the API tunnel from the host card (confirm the dialog).
-      // The tunnel rows sit below the capability list at this size.
-      await t.ensureVisible(find.byKey(const Key('tunnel-deregister-API')));
+      // Deregister just the API tunnel. Its capability row owns both actions now
+      // — the separate tunnel list described the same three things twice.
+      const apiMenu = Key('capability-menu-pcx:local:api:default');
+      await t.tap(find.byKey(apiMenu));
       await t.pumpAndSettle();
-      await t.tap(find.byKey(const Key('tunnel-deregister-API')));
+      await t.tap(find.text('注销')); // deregister (zh)
       await t.pumpAndSettle();
       await t.tap(find.byKey(const Key('deregister-confirm-btn')));
       await t.pumpAndSettle();
@@ -616,12 +620,106 @@ void main() {
       expect(api.serveHosts.single.apiRegistered, isFalse);
       expect(api.serveHosts.single.appRegistered, isTrue);
 
-      // The row now offers re-register; tapping it re-publishes the tunnel.
-      final reReg = find.byKey(const Key('tunnel-reregister-API'));
-      expect(reReg, findsOneWidget);
-      await t.tap(reReg);
+      // The row stays — listed as offline — so re-registering is still reachable.
+      // Hiding it would strand the tunnel with no route back.
+      expect(find.text('已下架'), findsOneWidget); // tunnelOffline (zh)
+      await t.tap(find.byKey(apiMenu));
+      await t.pumpAndSettle();
+      await t.tap(find.text('重新注册')); // reregister (zh)
       await t.pumpAndSettle();
       expect(api.serveHosts.single.apiRegistered, isTrue);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
+  testWidgets('local-host: the session tunnel can be taken down and put back', (
+    t,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    try {
+      final api = accountFake();
+      await t.pumpWidget(_host(const ServicesScreen(), api));
+      await t.pumpAndSettle();
+      await _openDevice(t);
+      await t.tap(find.byKey(const Key('add-local-host-card')));
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(const Key('start-hosting-btn')));
+      await t.pumpAndSettle();
+      expect(api.serveHosts.single.metaRegistered, isTrue);
+
+      // Session sharing rides its own tunnel, so it unpublishes like the other
+      // two — the row it replaced offered exactly this.
+      const metaMenu = Key('capability-menu-meta-pcx:local:app:default');
+      await t.tap(find.byKey(metaMenu));
+      await t.pumpAndSettle();
+      await t.tap(find.text('注销')); // deregister (zh)
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(const Key('deregister-confirm-btn')));
+      await t.pumpAndSettle();
+      expect(api.serveHosts.single.metaRegistered, isFalse);
+      // The app tunnel it shares a row-key with is untouched.
+      expect(api.serveHosts.single.appRegistered, isTrue);
+
+      await t.tap(find.byKey(metaMenu));
+      await t.pumpAndSettle();
+      await t.tap(find.text('重新注册')); // reregister (zh)
+      await t.pumpAndSettle();
+      expect(api.serveHosts.single.metaRegistered, isTrue);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
+  testWidgets('local-host: each tunnel is described once, address and all', (
+    t,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    try {
+      final api = accountFake();
+      await t.pumpWidget(_host(const ServicesScreen(), api));
+      await t.pumpAndSettle();
+      await _openDevice(t);
+      await t.tap(find.byKey(const Key('add-local-host-card')));
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(const Key('start-hosting-btn')));
+      await t.pumpAndSettle();
+
+      // The capability row IS the tunnel row now: each protocol is named once,
+      // on the same line as the listen address that only the tunnel row used to
+      // carry. A second mention would mean the duplicate list is back.
+      expect(find.textContaining('App-server'), findsOneWidget);
+      expect(
+        find.textContaining(RegExp(r'App-server\s+·\s+127\.0\.0\.1:18080')),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining(RegExp(r'^API\s+·\s+127\.0\.0\.1:')),
+        findsOneWidget,
+      );
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
+  testWidgets('the identity row is the way into settings', (t) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    try {
+      await t.pumpWidget(
+        _routerHost(
+          accountFake(),
+          initial: '/manage',
+          routes: [
+            GoRoute(path: '/manage', builder: (_, _) => const ServicesScreen()),
+            _stub('/settings', 'settings-page'),
+          ],
+        ),
+      );
+      await t.pumpAndSettle();
+
+      await t.tap(find.byKey(const Key('identity-open-settings')));
+      await t.pumpAndSettle();
+      expect(find.text('settings-page'), findsOneWidget);
     } finally {
       debugDefaultTargetPlatformOverride = null;
     }
@@ -667,7 +765,9 @@ void main() {
     );
 
     // Open the card overflow menu → 注销 → cancel: nothing happens.
-    await t.tap(find.byKey(const Key('capability-menu')).first);
+    await t.tap(
+      find.byKey(const Key('capability-menu-pcx:lb7666:api:default')),
+    );
     await t.pumpAndSettle();
     await t.tap(find.text('注销'));
     await t.pumpAndSettle();
@@ -681,14 +781,16 @@ void main() {
     );
 
     // Re-open → confirm: the service is deregistered + leaves the list.
-    await t.tap(find.byKey(const Key('capability-menu')).first);
+    await t.tap(
+      find.byKey(const Key('capability-menu-pcx:lb7666:api:default')),
+    );
     await t.pumpAndSettle();
     await t.tap(find.text('注销'));
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('deregister-confirm-btn')));
     await t.pumpAndSettle();
     expect(api.lastDeregistered, 'pcx:lb7666:api:default');
-    expect(find.text('API · default'), findsNothing);
+    expect(find.text('API'), findsNothing);
   });
 
   testWidgets('注销 on an unreachable remote entry dismisses it, staying '
@@ -723,7 +825,9 @@ void main() {
     );
 
     // Overflow → 注销 → the honest "remove unreachable" dialog → confirm.
-    await t.tap(find.byKey(const Key('capability-menu')).first);
+    await t.tap(
+      find.byKey(const Key('capability-menu-pcx:otherdev:api:orphan')),
+    );
     await t.pumpAndSettle();
     await t.tap(find.text('注销'));
     await t.pumpAndSettle();
@@ -763,7 +867,9 @@ void main() {
     await _openDevice(t);
 
     // Dismiss the unreachable orphan.
-    await t.tap(find.byKey(const Key('capability-menu')).first);
+    await t.tap(
+      find.byKey(const Key('capability-menu-pcx:otherdev:api:orphan')),
+    );
     await t.pumpAndSettle();
     await t.tap(find.text('注销'));
     await t.pumpAndSettle();
@@ -6612,12 +6718,12 @@ void main() {
     await t.pumpWidget(_host(const ServicesScreen(), api));
     await t.pumpAndSettle();
     await _openDevice(t);
-    expect(find.text('App-server · default'), findsOneWidget);
+    expect(find.text('App-server'), findsOneWidget);
 
     // Tapping refresh re-discovers (skeleton flashes, then data) without error.
     await t.tap(find.byKey(const Key('refresh-btn')));
     await t.pumpAndSettle();
-    expect(find.text('App-server · default'), findsOneWidget);
+    expect(find.text('App-server'), findsOneWidget);
   });
 
   testWidgets('Picker reconnect button forces a fresh connection', (t) async {
@@ -6721,7 +6827,7 @@ void main() {
     // Data arrived → skeleton gone, the capability is listed.
     expect(find.byType(ListLoadingSkeleton), findsNothing);
     await _openDevice(t);
-    expect(find.text('App-server · default'), findsOneWidget);
+    expect(find.text('App-server'), findsOneWidget);
   });
 
   testWidgets('Chat loading skeleton renders a shimmer', (t) async {

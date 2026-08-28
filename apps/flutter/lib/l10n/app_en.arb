@@ -494,7 +494,6 @@
   },
   "tunnelAppLabel": "App-server",
   "tunnelApiLabel": "API",
-  "tunnelMetaLabel": "Sessions (meta)",
   "tunnelOffline": "Offline",
   "logsTitle": "Runtime logs",
   "logsLive": "Live capture",

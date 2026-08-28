@@ -413,7 +413,6 @@
   },
   "tunnelAppLabel": "App-server",
   "tunnelApiLabel": "API",
-  "tunnelMetaLabel": "会话（meta）",
   "tunnelOffline": "已下架",
   "logsTitle": "运行日志",
   "logsLive": "实时采集",

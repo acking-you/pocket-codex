@@ -360,14 +360,13 @@ void main() {
           findsNothing,
         );
 
+        // Setting a default is a one-off, so it lives in the row's overflow
+        // rather than competing with 打开 for the row's width.
         await tester.tap(
-          find.descendant(
-            of: find.byKey(
-              const Key('device-capability-pcx:alpha:app:default'),
-            ),
-            matching: find.text('设为默认'),
-          ),
+          find.byKey(const Key('capability-menu-pcx:alpha:app:default')),
         );
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('设为默认'));
         await tester.pumpAndSettle();
         final container = ProviderScope.containerOf(
           tester.element(find.byType(ServicesScreen)),

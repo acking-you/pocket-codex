@@ -7,6 +7,7 @@ import 'package:pocket_codex/src/bridge_api.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:pocket_codex/src/desktop_theme.dart';
+import 'package:pocket_codex/src/fonts.dart';
 import 'package:pocket_codex/src/dismissed_services.dart';
 import 'package:pocket_codex/src/error_format.dart';
 import 'package:pocket_codex/src/providers.dart';
@@ -245,34 +246,31 @@ class _DeviceFirstServices extends ConsumerWidget {
         if (!pending.contains(service.key) && !dismissed.contains(service.key))
           service,
     ];
-    // A freshly-started host can precede the next relay discovery refresh.
-    // Synthesize only its actually-published app/API entries so the device and
-    // its capabilities appear immediately without inventing remote services.
+    // A freshly-started host can precede the next relay discovery refresh, so
+    // synthesize its entries rather than waiting for discovery.
+    //
+    // Deregistered tunnels are listed too, as offline rows: the capability list
+    // is now the only place a tunnel can be published again, so hiding a
+    // deregistered one would strand it with no route back. `pending` is still
+    // honoured — it now means only "this whole host is being stopped".
+    final offlineTunnels = <String>{};
     for (final host in localHosts) {
-      if (host.appRegistered &&
-          !pending.contains(host.appServiceKey) &&
-          !visible.any((service) => service.key == host.appServiceKey)) {
+      void synthesize(String kind, String key, {required bool registered}) {
+        if (pending.contains(key)) return;
+        if (!registered) offlineTunnels.add(key);
+        if (visible.any((service) => service.key == key)) return;
         visible.add(
           ServiceEntry(
             device: host.device,
-            kind: 'app',
+            kind: kind,
             name: host.name,
-            key: host.appServiceKey,
+            key: key,
           ),
         );
       }
-      if (host.apiRegistered &&
-          !pending.contains(host.apiServiceKey) &&
-          !visible.any((service) => service.key == host.apiServiceKey)) {
-        visible.add(
-          ServiceEntry(
-            device: host.device,
-            kind: 'api',
-            name: host.name,
-            key: host.apiServiceKey,
-          ),
-        );
-      }
+
+      synthesize('app', host.appServiceKey, registered: host.appRegistered);
+      synthesize('api', host.apiServiceKey, registered: host.apiRegistered);
     }
 
     // A dismissed orphan should reappear if its backend later recovers. This
@@ -478,15 +476,74 @@ class _DeviceFirstServices extends ConsumerWidget {
     // twice per row would double the watch registrations.
     final appStates = {for (final s in apps) s.key: appStatus(s)};
     final apiStates = {for (final s in apis) s.key: apiStatus(s)};
+    // The instance name only earns its place when it isn't the default one: the
+    // device already names itself above, and a lone "default" repeated down the
+    // column says nothing.
+    String protocolOf(String wire, ServiceEntry service) =>
+        service.name == 'default' ? wire : '$wire · ${service.name}';
+    // A host we run publishes its meta tunnel on the same host record as its
+    // app-server, so the session capability's address comes from there.
+    final localMetaAddr = <String, String>{
+      for (final host in localHosts)
+        if (host.metaRegistered) host.appServiceKey: host.metaListenAddr,
+    };
+    // Which host each of our own tunnels belongs to, so a row can offer to
+    // publish it again. Only tunnels we host can be re-registered. The meta
+    // tunnel is keyed by its host's app-server, because that is the row session
+    // sharing is rendered against.
+    final hostOf = <String, ({String name, String kind})>{
+      for (final host in localHosts) ...{
+        host.appServiceKey: (name: host.name, kind: 'app'),
+        host.apiServiceKey: (name: host.name, kind: 'api'),
+      },
+    };
+    final metaHostOf = <String, ({String name, String kind})>{
+      for (final host in localHosts)
+        host.appServiceKey: (name: host.name, kind: 'meta'),
+    };
+    final offlineMeta = <String>{
+      for (final host in localHosts)
+        if (!host.metaRegistered) host.appServiceKey,
+    };
+    VoidCallback? reregisterOf(
+      Map<String, ({String name, String kind})> owners,
+      Set<String> offline,
+      String key,
+    ) {
+      final owner = owners[key];
+      if (owner == null || !offline.contains(key)) return null;
+      return () => _reregisterTunnel(
+        context,
+        ref,
+        hostName: owner.name,
+        kind: owner.kind,
+      );
+    }
+
+    VoidCallback? reregisterFor(String key) =>
+        reregisterOf(hostOf, offlineTunnels, key);
+
+    // A tunnel we took off the relay reads as offline, not unreachable: nothing
+    // is broken, it simply is not published.
+    Widget? offlineChip(String key) => offlineTunnels.contains(key)
+        ? StatusChip(
+            color: scheme.outline,
+            label: l10n.tunnelOffline,
+            filled: true,
+          )
+        : null;
     final capabilityRows = <Widget>[
       for (final service in apps)
         _CapabilityRow(
           key: Key('device-capability-${service.key}'),
           icon: Icons.chat_bubble_outline,
           title: l10n.servicesChatCapability,
-          protocol: 'App-server · ${service.name}',
-          status: appStates[service.key]!.chip,
+          protocol: protocolOf('App-server', service),
+          localAddr: localAppAddr[service.key],
+          menuKey: Key('capability-menu-${service.key}'),
+          status: offlineChip(service.key) ?? appStates[service.key]!.chip,
           reason: appStates[service.key]!.reason,
+          onReregister: reregisterFor(service.key),
           isDefault: service.key == preferredKey,
           onSetDefault: () => ref
               .read(uiPrefsProvider.notifier)
@@ -509,9 +566,12 @@ class _DeviceFirstServices extends ConsumerWidget {
           key: Key('device-capability-${service.key}'),
           icon: Icons.bolt_outlined,
           title: l10n.servicesApiCapability,
-          protocol: 'API · ${service.name}',
-          status: apiStates[service.key]!.chip,
+          protocol: protocolOf('API', service),
+          localAddr: localApiAddr[service.key],
+          menuKey: Key('capability-menu-${service.key}'),
+          status: offlineChip(service.key) ?? apiStates[service.key]!.chip,
           reason: apiStates[service.key]!.reason,
+          onReregister: reregisterFor(service.key),
           actionLabel: l10n.servicesManage,
           onAction: () =>
               context.push('/api/${Uri.encodeComponent(service.key)}'),
@@ -531,7 +591,35 @@ class _DeviceFirstServices extends ConsumerWidget {
             key: Key('device-capability-meta-${service.key}'),
             icon: Icons.forum_outlined,
             title: l10n.servicesSessionsCapability,
-            protocol: 'Meta · ${service.name}',
+            protocol: protocolOf('Meta', service),
+            localAddr: localMetaAddr[service.key],
+            menuKey: Key('capability-menu-meta-${service.key}'),
+            // The meta tunnel is unpublishable like the other two, so this row
+            // carries the same controls the tunnel list used to.
+            status: offlineMeta.contains(service.key)
+                ? StatusChip(
+                    color: scheme.outline,
+                    label: l10n.tunnelOffline,
+                    filled: true,
+                  )
+                : null,
+            onReregister: reregisterOf(metaHostOf, offlineMeta, service.key),
+            onDeregister: metaHostOf.containsKey(service.key)
+                ? () => _confirmDeregister(
+                    context,
+                    ref,
+                    ServiceEntry(
+                      device: service.device,
+                      kind: 'meta',
+                      name: metaHostOf[service.key]!.name,
+                      key: service.key,
+                    ),
+                    localTunnel: (
+                      name: metaHostOf[service.key]!.name,
+                      kind: 'meta',
+                    ),
+                  )
+                : null,
             actionLabel: l10n.servicesBrowse,
             // Pushed, like the chat and API rows beside it, so the breadcrumb
             // back to this device's capabilities actually has somewhere to go.
@@ -598,22 +686,21 @@ class _DeviceFirstServices extends ConsumerWidget {
           ],
         ),
       ),
-      if (_hostingSupported && account) ...[
+      // Hosting is about THIS machine, so it belongs under this machine's
+      // device — showing it while a remote peer is selected implied the hosts
+      // listed were that peer's. The no-devices case still needs it, since that
+      // is the only route to starting a first host.
+      if (_hostingSupported &&
+          account &&
+          (devices.isEmpty || localDevices.contains(activeDevice))) ...[
         const SizedBox(height: 12),
         Card(
           clipBehavior: Clip.antiAlias,
           child: Column(
             children: [
-              _CardHeading(
-                title: l10n.localHostingSection,
-                trailing: localHosts.isEmpty
-                    ? null
-                    : StatusChip(
-                        color: online,
-                        label: l10n.localHostRunning,
-                        filled: true,
-                      ),
-              ),
+              // No status here: each host card carries its own, and the same
+              // pill in both places said one thing twice.
+              _CardHeading(title: l10n.localHostingSection),
               Padding(
                 padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
                 child: Column(
@@ -795,32 +882,45 @@ class _DeviceColumn extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         mainAxisSize: filled ? MainAxisSize.max : MainAxisSize.min,
         children: [
-          Padding(
-            padding: const EdgeInsets.all(12),
-            child: Row(
-              children: [
-                GitHubAvatar(
-                  accountId: accountId,
-                  fallbackIcon: accountLogin == null
-                      ? Icons.dns_outlined
-                      : Icons.person_outline,
-                  size: 36,
+          // The identity opens settings, where the account, the relay, the key
+          // and signing out already live — a second account page would only
+          // duplicate that group. Self-host mode has no account, but the relay
+          // and key are configured there too, so it leads to the same place.
+          Tooltip(
+            message: l10n.settingsTitle,
+            child: InkWell(
+              key: const Key('identity-open-settings'),
+              mouseCursor: clickable,
+              onTap: () => context.push('/settings'),
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Row(
+                  children: [
+                    GitHubAvatar(
+                      accountId: accountId,
+                      fallbackIcon: accountLogin == null
+                          ? Icons.dns_outlined
+                          : Icons.person_outline,
+                      size: 36,
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        accountLogin == null ? relay : '@$accountLogin',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                    StatusChip(
+                      color: online,
+                      label: l10n.statusOnline,
+                      filled: true,
+                    ),
+                    Icon(Icons.chevron_right, size: 18, color: scheme.outline),
+                  ],
                 ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    accountLogin == null ? relay : '@$accountLogin',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontWeight: FontWeight.w600),
-                  ),
-                ),
-                StatusChip(
-                  color: online,
-                  label: l10n.statusOnline,
-                  filled: true,
-                ),
-              ],
+              ),
             ),
           ),
           Divider(height: 1, color: scheme.outlineVariant),
@@ -1032,9 +1132,12 @@ class _CapabilityRow extends StatelessWidget {
     required this.onAction,
     this.status,
     this.reason,
+    this.localAddr,
+    this.menuKey,
     this.isDefault = false,
     this.onSetDefault,
     this.onDeregister,
+    this.onReregister,
   });
 
   final IconData icon;
@@ -1048,9 +1151,23 @@ class _CapabilityRow extends StatelessWidget {
   /// the user guessing whether the relay or the backend is at fault, so the
   /// status pill is followed by the explanation.
   final String? reason;
+
+  /// Where this capability listens on this machine, for a device we host. Shown
+  /// because it is what a user copies into another tool's config.
+  final String? localAddr;
+
+  /// Identifies THIS row's overflow. The title bar's page menu carries the same
+  /// glyph, so a test reaching for "the overflow" has to say which row's.
+  final Key? menuKey;
+
   final bool isDefault;
   final VoidCallback? onSetDefault;
   final VoidCallback? onDeregister;
+
+  /// Publish a tunnel that was taken off the relay. Without this a deregistered
+  /// capability would have no way back, which is why the tunnel list it replaces
+  /// offered both.
+  final VoidCallback? onReregister;
 
   @override
   Widget build(BuildContext context) {
@@ -1083,11 +1200,32 @@ class _CapabilityRow extends StatelessWidget {
                   title,
                   style: const TextStyle(fontWeight: FontWeight.w600),
                 ),
-                Text(
-                  protocol,
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: scheme.onSurfaceVariant,
+                // One rich line rather than a Row, so a long address ellipsises
+                // with the protocol instead of overflowing the row.
+                Text.rich(
+                  TextSpan(
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
+                    children: [
+                      TextSpan(text: protocol),
+                      if (localAddr != null) ...[
+                        TextSpan(
+                          text: '  ·  ',
+                          style: TextStyle(color: onSurfaceMuted(scheme)),
+                        ),
+                        TextSpan(
+                          text: localAddr,
+                          style: const TextStyle(
+                            fontFamily: monoFontFamily,
+                            fontFamilyFallback: monoCjkFallback,
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
                 if (reason != null) ...[
                   const SizedBox(height: 3),
@@ -1102,38 +1240,58 @@ class _CapabilityRow extends StatelessWidget {
               ],
             ),
           ),
-          if (status != null) ...[status!, const SizedBox(width: 8)],
-          if (isDefault)
-            _CountPill(label: l10n.servicesDefault, accent: true)
-          else if (onSetDefault != null)
-            OutlinedButton(
-              onPressed: onSetDefault,
-              child: Text(l10n.servicesSetDefault),
-            ),
-          const SizedBox(width: 6),
+          // Two trailing columns — status, then one action — so the rows line up
+          // instead of each ending at a different place. Everything occasional
+          // (set default, deregister, re-register) lives in the overflow.
+          if (isDefault) ...[
+            _CountPill(label: l10n.servicesDefault, accent: true),
+            const SizedBox(width: 8),
+          ],
+          if (status != null) ...[status!, const SizedBox(width: 6)],
           TextButton(onPressed: onAction, child: Text(actionLabel)),
-          if (onDeregister != null)
-            PopupMenuButton<String>(
-              // Keyed because the page menu in the title bar carries the same
-              // glyph; a test reaching for "the overflow" needs to say which.
-              key: const Key('capability-menu'),
+          if (_overflow.isNotEmpty)
+            PopupMenuButton<VoidCallback>(
+              key: menuKey,
               tooltip: l10n.moreActions,
               icon: const Icon(Icons.more_horiz),
-              onSelected: (_) => onDeregister!(),
+              onSelected: (action) => action(),
               itemBuilder: (_) => [
-                PopupMenuItem<String>(
-                  value: 'deregister',
-                  child: Text(
-                    l10n.deregister,
-                    style: TextStyle(color: scheme.error),
+                for (final item in _overflow)
+                  PopupMenuItem<VoidCallback>(
+                    value: item.action,
+                    child: Text(
+                      item.label(l10n),
+                      style: item.danger
+                          ? TextStyle(color: scheme.error)
+                          : null,
+                    ),
                   ),
-                ),
               ],
             ),
         ],
       ),
     );
   }
+
+  /// The occasional actions, in the order they belong: make this the default,
+  /// bring a dropped tunnel back, take one off the relay.
+  List<_RowAction> get _overflow => [
+    if (!isDefault && onSetDefault != null)
+      _RowAction((l) => l.servicesSetDefault, onSetDefault!),
+    if (onReregister != null) _RowAction((l) => l.reregister, onReregister!),
+    if (onDeregister != null)
+      _RowAction((l) => l.deregister, onDeregister!, danger: true),
+  ];
+}
+
+/// One entry of a capability row's overflow menu. The label is resolved late so
+/// the list can be built where no `l10n` is in hand.
+class _RowAction {
+  const _RowAction(this.label, this.action, {this.danger = false});
+
+  final String Function(AppLocalizations) label;
+  final VoidCallback action;
+  final bool danger;
 }
 
 class _CountPill extends StatelessWidget {
@@ -1229,6 +1387,32 @@ Future<void> _batchRemove(
   }
 }
 
+/// Publish one of a hosted server's tunnels back onto the relay after it was
+/// taken off. Reached from the capability row's overflow, which is the only
+/// route back for a tunnel the user deregistered.
+Future<void> _reregisterTunnel(
+  BuildContext context,
+  WidgetRef ref, {
+  required String hostName,
+  required String kind,
+}) async {
+  final l10n = AppLocalizations.of(context);
+  final messenger = ToastMessenger.of(context);
+  try {
+    await ref
+        .read(bridgeApiProvider)
+        .appServeReregister(name: hostName, kind: kind);
+  } catch (e) {
+    // Surfaces a duplicate-name refusal (another live instance took the name
+    // while this tunnel was down) as guidance instead of silence.
+    final raw = friendlyError(e);
+    messenger.error(isHostNameConflict(raw) ? l10n.hostNameConflict : raw);
+    return;
+  }
+  ref.invalidate(localServeListProvider);
+  ref.invalidate(servicesProvider);
+}
+
 /// Local hosting spawns a local `codex` binary + child processes — desktop only.
 bool get _hostingSupported =>
     !kIsWeb &&
@@ -1292,14 +1476,12 @@ Future<void> _confirmDeregister(
   try {
     if (localTunnel != null) {
       // Reversible: stop this tunnel's register task (codex/proxy keep running);
-      // serve_deregister also best-effort force-drops the relay key. Our own
-      // tunnel reliably leaves discovery, so optimistically hide it at once.
+      // serve_deregister also best-effort force-drops the relay key. The row
+      // must NOT be hidden — it is the only place the tunnel can be published
+      // again. Refreshing the host list flips it to 已下架 on its own.
       await ref
           .read(bridgeApiProvider)
           .appServeDeregister(name: localTunnel.name, kind: localTunnel.kind);
-      ref
-          .read(pendingRemovalProvider.notifier)
-          .update((set) => {...set, s.key});
       ref.invalidate(localServeListProvider);
     } else if (isOrphan) {
       // Orphaned/hollow: nothing live holds the relay key, so the backend can't
@@ -1372,56 +1554,14 @@ class _IconBadge extends StatelessWidget {
   );
 }
 
-/// One locally-hosted host: a codex app-server + an in-app API proxy, each
-/// published through its own tunnel. The card shows codex's liveness and both
-/// tunnels' publish state, with a per-tunnel 注销 / 重新注册 toggle. Tapping the
-/// header opens [LocalHostDialog] for the full 停止托管 + details.
+/// One locally-hosted host: a codex app-server + an in-app API proxy. The card
+/// carries codex's liveness; each tunnel's publish state and its 注销 / 重新注册
+/// live on the capability row it belongs to. Tapping this opens
+/// [LocalHostDialog] for 停止托管 + details.
 class _LocalHostCard extends ConsumerWidget {
   const _LocalHostCard({super.key, required this.host});
 
   final AppServeStatus host;
-
-  /// Synthesize the discovery entry for one of this host's tunnels, so the
-  /// shared [_confirmDeregister] flow (confirm + optimistic hide) can run.
-  String _keyFor(String kind) => switch (kind) {
-    'api' => host.apiServiceKey,
-    'meta' => host.metaServiceKey,
-    _ => host.appServiceKey,
-  };
-
-  ServiceEntry _entry(String kind) => ServiceEntry(
-    device: host.device,
-    kind: kind,
-    name: host.name,
-    key: _keyFor(kind),
-  );
-
-  Future<void> _reregister(
-    BuildContext context,
-    WidgetRef ref,
-    String kind,
-  ) async {
-    final key = _keyFor(kind);
-    final l10n = AppLocalizations.of(context);
-    final messenger = ToastMessenger.of(context);
-    try {
-      await ref
-          .read(bridgeApiProvider)
-          .appServeReregister(name: host.name, kind: kind);
-    } catch (e) {
-      // Surfaces a duplicate-name refusal (another live instance took the
-      // name while this tunnel was down) as guidance instead of silence.
-      final raw = friendlyError(e);
-      messenger.error(isHostNameConflict(raw) ? l10n.hostNameConflict : raw);
-      return;
-    }
-    // Make sure it isn't still optimistically hidden, then re-discover.
-    ref
-        .read(pendingRemovalProvider.notifier)
-        .update((s) => s.difference({key}));
-    ref.invalidate(localServeListProvider);
-    ref.invalidate(servicesProvider);
-  }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -1527,119 +1667,10 @@ class _LocalHostCard extends ConsumerWidget {
                     ],
                   ),
                 ),
-                Divider(height: 1, color: scheme.outlineVariant),
-                _TunnelRow(
-                  label: l10n.tunnelAppLabel,
-                  addr: host.appListenAddr,
-                  registered: host.appRegistered,
-                  onDeregister: () => _confirmDeregister(
-                    context,
-                    ref,
-                    _entry('app'),
-                    localTunnel: (name: host.name, kind: 'app'),
-                  ),
-                  onReregister: () => _reregister(context, ref, 'app'),
-                ),
-                Divider(height: 1, color: scheme.outlineVariant),
-                _TunnelRow(
-                  label: l10n.tunnelApiLabel,
-                  addr: host.apiListenAddr,
-                  registered: host.apiRegistered,
-                  onDeregister: () => _confirmDeregister(
-                    context,
-                    ref,
-                    _entry('api'),
-                    localTunnel: (name: host.name, kind: 'api'),
-                  ),
-                  onReregister: () => _reregister(context, ref, 'api'),
-                ),
-                Divider(height: 1, color: scheme.outlineVariant),
-                _TunnelRow(
-                  label: l10n.tunnelMetaLabel,
-                  addr: host.metaListenAddr,
-                  registered: host.metaRegistered,
-                  onDeregister: () => _confirmDeregister(
-                    context,
-                    ref,
-                    _entry('meta'),
-                    localTunnel: (name: host.name, kind: 'meta'),
-                  ),
-                  onReregister: () => _reregister(context, ref, 'meta'),
-                ),
               ],
             ),
           ),
         ),
-      ),
-    );
-  }
-}
-
-/// One tunnel row inside a [_LocalHostCard]: kind label, listen address, a
-/// published/offline pill, and a 注销 (when published) / 重新注册 (when offline)
-/// toggle.
-class _TunnelRow extends StatelessWidget {
-  const _TunnelRow({
-    required this.label,
-    required this.addr,
-    required this.registered,
-    required this.onDeregister,
-    required this.onReregister,
-  });
-
-  final String label;
-  final String addr;
-  final bool registered;
-  final VoidCallback onDeregister;
-  final VoidCallback onReregister;
-
-  @override
-  Widget build(BuildContext context) {
-    final l10n = AppLocalizations.of(context);
-    final scheme = Theme.of(context).colorScheme;
-    final online = successColor(scheme);
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 6, 6, 6),
-      child: Row(
-        children: [
-          Icon(
-            registered ? Icons.cloud_done_outlined : Icons.cloud_off_outlined,
-            size: 18,
-            color: registered ? online : scheme.outline,
-          ),
-          const SizedBox(width: 8),
-          SizedBox(
-            width: 78,
-            child: Text(
-              label,
-              style: Theme.of(context).textTheme.labelMedium,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-          Expanded(
-            child: Text(
-              registered ? addr : l10n.tunnelOffline,
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: registered ? scheme.onSurfaceVariant : scheme.outline,
-              ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-          if (registered)
-            TextButton(
-              key: Key('tunnel-deregister-$label'),
-              onPressed: onDeregister,
-              style: TextButton.styleFrom(foregroundColor: scheme.error),
-              child: Text(l10n.deregister),
-            )
-          else
-            TextButton(
-              key: Key('tunnel-reregister-$label'),
-              onPressed: onReregister,
-              child: Text(l10n.reregister),
-            ),
-        ],
       ),
     );
   }
