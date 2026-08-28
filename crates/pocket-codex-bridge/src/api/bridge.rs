@@ -25,6 +25,9 @@ pub struct ConfigView {
     pub mode: String,
     /// Signed-in GitHub login (account mode), if any.
     pub account_login: Option<String>,
+    /// Signed-in GitHub numeric account id, if any. The UI builds the avatar
+    /// URL from it; there is no avatar field to fetch.
+    pub account_id: Option<String>,
     /// Whether an account session token is stored (value withheld).
     pub has_account_token: bool,
 }
@@ -102,6 +105,7 @@ pub fn get_config() -> Result<ConfigView> {
         locale: cfg.locale().map(str::to_string),
         mode,
         account_login: cfg.account_login().map(str::to_string),
+        account_id: cfg.account_id().map(str::to_string),
         has_account_token: cfg.account_token().is_some(),
     })
 }

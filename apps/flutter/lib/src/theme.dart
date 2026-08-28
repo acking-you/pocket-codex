@@ -103,6 +103,21 @@ Color cautionColor(ColorScheme scheme) => scheme.brightness == Brightness.light
     ? const Color(0xFF96540A)
     : const Color(0xFFD9A054);
 
+/// Healthy — a service online, a subscription alive, a host running. The design
+/// names no success role, so this follows [additionColor] and takes the syntax
+/// palette's `string` green, at the same value: both mean "good" and the hue is
+/// already tuned to the warm neutrals. Kept a separate function rather than
+/// calling [additionColor] at the status sites, because a diff's additions and a
+/// service's health are different meanings — retuning one must not move the
+/// other.
+Color successColor(ColorScheme scheme) => additionColor(scheme);
+
+/// Informational — a log line that is neither a problem nor a result. The syntax
+/// palette's `number` blue; the only status level that isn't already named.
+Color infoColor(ColorScheme scheme) => scheme.brightness == Brightness.light
+    ? const Color(0xFF1F63BC)
+    : const Color(0xFF74A9EC);
+
 /// A thin, rounded scrollbar shared by both themes — closer to a modern web
 /// chat than the default chunky Material scrollbar. Combined with full-width
 /// scroll areas it sits flush at the window edge.

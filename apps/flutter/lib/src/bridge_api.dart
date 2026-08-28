@@ -177,6 +177,7 @@ class ConfigInfo {
     this.locale,
     this.mode = 'unconfigured',
     this.accountLogin,
+    this.accountId,
     this.hasAccountToken = false,
   });
 
@@ -195,6 +196,10 @@ class ConfigInfo {
 
   /// Signed-in GitHub login (account mode), if any.
   final String? accountLogin;
+
+  /// Signed-in GitHub numeric account id, if any. The avatar URL is derived from
+  /// it (see `GitHubAvatar`); no avatar field is fetched from the backend.
+  final String? accountId;
 
   /// Whether an account session token is stored.
   final bool hasAccountToken;

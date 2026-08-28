@@ -302,54 +302,6 @@ abstract class AppLocalizations {
   /// **'App-server services'**
   String get appServerServices;
 
-  /// No description provided for @navApi.
-  ///
-  /// In en, this message translates to:
-  /// **'API'**
-  String get navApi;
-
-  /// No description provided for @navAppServer.
-  ///
-  /// In en, this message translates to:
-  /// **'App-server'**
-  String get navAppServer;
-
-  /// No description provided for @navSessions.
-  ///
-  /// In en, this message translates to:
-  /// **'Sessions'**
-  String get navSessions;
-
-  /// No description provided for @navHosting.
-  ///
-  /// In en, this message translates to:
-  /// **'Hosting'**
-  String get navHosting;
-
-  /// No description provided for @sessionsHostLabel.
-  ///
-  /// In en, this message translates to:
-  /// **'Host'**
-  String get sessionsHostLabel;
-
-  /// No description provided for @sessionsNoHost.
-  ///
-  /// In en, this message translates to:
-  /// **'Connect an app-server first, then its sessions show here.'**
-  String get sessionsNoHost;
-
-  /// No description provided for @appServerSubtitle.
-  ///
-  /// In en, this message translates to:
-  /// **'{device} · remote control'**
-  String appServerSubtitle(String device);
-
-  /// No description provided for @appServiceTitle.
-  ///
-  /// In en, this message translates to:
-  /// **'App-server'**
-  String get appServiceTitle;
-
   /// No description provided for @connecting.
   ///
   /// In en, this message translates to:
@@ -1478,23 +1430,11 @@ abstract class AppLocalizations {
   /// **'Activity'**
   String get toolActivity;
 
-  /// No description provided for @selectApiService.
-  ///
-  /// In en, this message translates to:
-  /// **'Select an API service'**
-  String get selectApiService;
-
   /// No description provided for @relayNotConfigured.
   ///
   /// In en, this message translates to:
   /// **'(no relay configured)'**
   String get relayNotConfigured;
-
-  /// No description provided for @noServicesFound.
-  ///
-  /// In en, this message translates to:
-  /// **'No services found on this relay'**
-  String get noServicesFound;
 
   /// No description provided for @retry.
   ///
@@ -1507,12 +1447,6 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Couldn\'t reach the relay'**
   String get discoverFailed;
-
-  /// No description provided for @apiServiceTitle.
-  ///
-  /// In en, this message translates to:
-  /// **'API service'**
-  String get apiServiceTitle;
 
   /// No description provided for @localPortLabel.
   ///
@@ -2276,12 +2210,6 @@ abstract class AppLocalizations {
   /// **'Change path'**
   String get customizeCodexPath;
 
-  /// No description provided for @appServerSubtitleLocal.
-  ///
-  /// In en, this message translates to:
-  /// **'{device} · hosted here'**
-  String appServerSubtitleLocal(String device);
-
   /// No description provided for @deregister.
   ///
   /// In en, this message translates to:
@@ -2348,30 +2276,6 @@ abstract class AppLocalizations {
   /// **'Clean up unreachable'**
   String get batchRemoveEnter;
 
-  /// No description provided for @batchRemoveHint.
-  ///
-  /// In en, this message translates to:
-  /// **'Tap the unreachable services you want to remove.'**
-  String get batchRemoveHint;
-
-  /// No description provided for @batchSelectAll.
-  ///
-  /// In en, this message translates to:
-  /// **'Select all'**
-  String get batchSelectAll;
-
-  /// No description provided for @batchClear.
-  ///
-  /// In en, this message translates to:
-  /// **'Clear'**
-  String get batchClear;
-
-  /// No description provided for @batchRemoveSelected.
-  ///
-  /// In en, this message translates to:
-  /// **'Remove ({count})'**
-  String batchRemoveSelected(int count);
-
   /// No description provided for @batchRemoveTitle.
   ///
   /// In en, this message translates to:
@@ -2426,23 +2330,11 @@ abstract class AppLocalizations {
   /// **'Live capture'**
   String get logsLive;
 
-  /// No description provided for @logsLevel.
-  ///
-  /// In en, this message translates to:
-  /// **'Level'**
-  String get logsLevel;
-
   /// No description provided for @logsLevelAll.
   ///
   /// In en, this message translates to:
   /// **'All'**
   String get logsLevelAll;
-
-  /// No description provided for @logsKeyword.
-  ///
-  /// In en, this message translates to:
-  /// **'Keyword'**
-  String get logsKeyword;
 
   /// No description provided for @logsKeywordHint.
   ///

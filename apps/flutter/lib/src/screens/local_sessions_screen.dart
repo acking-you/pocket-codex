@@ -4,13 +4,17 @@ import 'package:go_router/go_router.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/attachment_refs.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
+import 'package:pocket_codex/src/desktop_theme.dart';
 import 'package:pocket_codex/src/error_format.dart';
 import 'package:pocket_codex/src/fonts.dart';
 import 'package:pocket_codex/src/providers.dart';
+import 'package:pocket_codex/src/theme.dart';
 import 'package:pocket_codex/src/screens/app_session_screen.dart'
     show appLocalPort;
 import 'package:pocket_codex/src/time_ago.dart';
+import 'package:pocket_codex/src/widgets/error_retry.dart';
 import 'package:pocket_codex/src/widgets/loading.dart';
+import 'package:pocket_codex/src/widgets/search_field.dart';
 import 'package:pocket_codex/src/widgets/status_dots.dart';
 import 'package:pocket_codex/src/widgets/takeover_dialog.dart';
 import 'package:pocket_codex/src/widgets/utility_page.dart';
@@ -56,17 +60,15 @@ class SessionSource {
 /// safe to resume, and lets the user force-take-over a finished session that
 /// another process still holds open.
 ///
-/// With the default [SessionSource.local] it reads this machine directly (the
-/// standalone `/sessions` screen). With a [SessionSource.remote] it reads a
-/// (possibly remote) host over its meta tunnel — the Sessions tab embeds it that
-/// way, one instance per picked host.
+/// With the default [SessionSource.local] it reads this machine directly. With a
+/// [SessionSource.remote] — reached from a device's session-sharing capability —
+/// it reads a (possibly remote) host over that host's meta tunnel.
 class LocalSessionsScreen extends ConsumerStatefulWidget {
   /// Default constructor.
   const LocalSessionsScreen({
     super.key,
     this.clock,
     this.source = const SessionSource.local(),
-    this.embedded = false,
   });
 
   /// Clock used to bucket sessions by activity time (今天 / 更早) and to render
@@ -78,10 +80,6 @@ class LocalSessionsScreen extends ConsumerStatefulWidget {
 
   /// Where to read sessions from (local machine vs a host's meta tunnel).
   final SessionSource source;
-
-  /// When true, render only the body (no Scaffold/AppBar) so a parent screen
-  /// (the Sessions tab) can host it under its own chrome.
-  final bool embedded;
 
   @override
   ConsumerState<LocalSessionsScreen> createState() => _LocalSessionsState();
@@ -155,12 +153,18 @@ class _LocalSessionsState extends ConsumerState<LocalSessionsScreen> {
       duration: const Duration(milliseconds: 250),
       child: _buildBody(l10n),
     );
-    // Embedded in the Sessions tab: the parent provides the chrome, so render
-    // the body only (refresh is pull-to-refresh + the host picker's button).
-    if (widget.embedded) return body;
+    // Reading another device's sessions is reached from that device, so name it:
+    // otherwise a remote list is indistinguishable from this machine's own.
+    final device = widget.source.serviceKey?.split(':');
+    final remoteDevice = (device != null && device.length >= 3)
+        ? device[device.length - 3]
+        : null;
     return UtilityPage(
       route: '/sessions',
-      title: l10n.localSessionsTitle,
+      title: remoteDevice ?? l10n.localSessionsTitle,
+      parent: remoteDevice == null
+          ? null
+          : UtilityParent(title: l10n.localSessionsTitle, route: '/sessions'),
       actions: [
         IconButton(
           key: const Key('local-sessions-refresh'),
@@ -178,19 +182,11 @@ class _LocalSessionsState extends ConsumerState<LocalSessionsScreen> {
       return const ListLoadingSkeleton(key: ValueKey('local-loading'));
     }
     if (_error != null) {
-      return Center(
+      return ErrorRetry(
         key: const ValueKey('local-error'),
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(_error!, textAlign: TextAlign.center),
-              const SizedBox(height: 12),
-              FilledButton(onPressed: _load, child: Text(l10n.retry)),
-            ],
-          ),
-        ),
+        errorKey: const Key('local-error-message'),
+        message: _error!,
+        onRetry: _load,
       );
     }
     if (_sessions.isEmpty) {
@@ -350,31 +346,11 @@ class _LocalSessionsState extends ConsumerState<LocalSessionsScreen> {
     );
   }
 
-  Widget _searchField(AppLocalizations l10n) {
-    final scheme = Theme.of(context).colorScheme;
-    return TextField(
-      key: const Key('local-search'),
-      onChanged: (v) => setState(() => _query = v),
-      style: const TextStyle(fontSize: 13),
-      decoration: InputDecoration(
-        isDense: true,
-        prefixIcon: const Icon(Icons.search, size: 18),
-        prefixIconConstraints: const BoxConstraints(
-          minWidth: 34,
-          minHeight: 34,
-        ),
-        hintText: l10n.searchLocalSessions,
-        hintStyle: TextStyle(fontSize: 13, color: scheme.onSurfaceVariant),
-        filled: true,
-        fillColor: scheme.surfaceContainerHighest,
-        contentPadding: const EdgeInsets.symmetric(vertical: 9),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(10),
-          borderSide: BorderSide.none,
-        ),
-      ),
-    );
-  }
+  Widget _searchField(AppLocalizations l10n) => SearchField(
+    key: const Key('local-search'),
+    hintText: l10n.searchLocalSessions,
+    onChanged: (v) => setState(() => _query = v),
+  );
 
   Widget _sectionLabel(String text) => Padding(
     padding: const EdgeInsets.fromLTRB(16, 12, 16, 2),
@@ -428,64 +404,99 @@ class _SessionRow extends StatelessWidget {
       if (session.source != null && session.source!.isNotEmpty) session.source!,
       if (time.isNotEmpty) time,
     ];
-    return ListTile(
-      key: Key('local-${session.threadId}'),
-      // Tapping any row opens the read-only transcript viewer (works even for
-      // a session another client owns — it reads the on-disk rollout).
-      onTap: () {
-        final q = <String>[
-          'tid=${Uri.encodeComponent(session.threadId)}',
-          if (session.cwd != null && session.cwd!.trim().isNotEmpty)
-            'cwd=${Uri.encodeComponent(session.cwd!.trim())}',
-          if (preview.isNotEmpty) 'preview=${Uri.encodeComponent(preview)}',
-          if (serviceKey != null) 'svc=${Uri.encodeComponent(serviceKey!)}',
-        ];
-        context.push('/sessions/view?${q.join('&')}');
-      },
-      leading: Icon(
-        session.heldOpen ? Icons.lock_outline : Icons.chat_bubble_outline,
-        size: 20,
-        color: session.heldOpen ? scheme.error : scheme.primary,
-      ),
-      title: Text(
-        preview.isEmpty ? session.threadId : preview,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-      ),
-      subtitle: subtitleParts.isEmpty
-          ? null
-          : Text(
-              subtitleParts.join('  ·  '),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
+    // Matches the conversation list's row: an ink row on the control radius
+    // rather than a ListTile, whose fixed leading/trailing metrics sit taller
+    // than the rest of the app's lists.
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 1),
+      child: Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(kControlRadius),
+        child: InkWell(
+          key: Key('local-${session.threadId}'),
+          mouseCursor: clickable,
+          borderRadius: BorderRadius.circular(kControlRadius),
+          // Tapping any row opens the read-only transcript viewer (works even
+          // for a session another client owns — it reads the on-disk rollout).
+          onTap: () {
+            final q = <String>[
+              'tid=${Uri.encodeComponent(session.threadId)}',
+              if (session.cwd != null && session.cwd!.trim().isNotEmpty)
+                'cwd=${Uri.encodeComponent(session.cwd!.trim())}',
+              if (preview.isNotEmpty) 'preview=${Uri.encodeComponent(preview)}',
+              if (serviceKey != null) 'svc=${Uri.encodeComponent(serviceKey!)}',
+            ];
+            context.push('/sessions/view?${q.join('&')}');
+          },
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+            child: Row(
+              children: [
+                Icon(
+                  session.heldOpen
+                      ? Icons.lock_outline
+                      : Icons.chat_bubble_outline,
+                  size: 18,
+                  color: session.heldOpen ? scheme.error : scheme.primary,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        preview.isEmpty ? session.threadId : preview,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                      if (subtitleParts.isNotEmpty) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                          subtitleParts.join(' · '),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(color: scheme.onSurfaceVariant),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                _safetyChip(context, l10n),
+                if (session.allowsResume) ...[
+                  const SizedBox(width: 6),
+                  TextButton(
+                    key: Key('resume-${session.threadId}'),
+                    onPressed: () => onResume(session),
+                    child: Text(
+                      session.requiresTakeover
+                          ? l10n.forceTakeover
+                          : l10n.resumeSession,
+                    ),
+                  ),
+                ],
+              ],
             ),
-      trailing: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          _safetyChip(context, l10n),
-          const SizedBox(width: 8),
-          if (session.allowsResume)
-            TextButton(
-              key: Key('resume-${session.threadId}'),
-              onPressed: () => onResume(session),
-              child: Text(
-                session.requiresTakeover
-                    ? l10n.forceTakeover
-                    : l10n.resumeSession,
-              ),
-            ),
-        ],
+          ),
+        ),
       ),
     );
   }
 
   Widget _safetyChip(BuildContext context, AppLocalizations l10n) {
     final scheme = Theme.of(context).colorScheme;
+    // Both "in use elsewhere" states are degraded-but-not-failed, so they share
+    // the caution amber; only a session actively running elsewhere is an error.
     final (Color color, String label) = switch (session.safety) {
-      'resumable' => (Colors.green.shade600, l10n.sessionResumable),
-      'resumableUnfinished' => (Colors.amber.shade800, l10n.sessionUnfinished),
+      'resumable' => (successColor(scheme), l10n.sessionResumable),
+      'resumableUnfinished' => (cautionColor(scheme), l10n.sessionUnfinished),
       'ownedRunning' => (scheme.error, l10n.sessionRunningElsewhere),
-      'ownedIdle' => (Colors.orange.shade700, l10n.sessionInUseElsewhere),
+      'ownedIdle' => (cautionColor(scheme), l10n.sessionInUseElsewhere),
       _ => (scheme.outline, session.safety),
     };
     return StatusChip(

@@ -1230,6 +1230,10 @@ class ConfigView {
   /// Signed-in GitHub login (account mode), if any.
   final String? accountLogin;
 
+  /// Signed-in GitHub numeric account id, if any. The UI builds the avatar URL
+  /// from it; there is no avatar field to fetch.
+  final String? accountId;
+
   /// Whether an account session token is stored (value withheld).
   final bool hasAccountToken;
 
@@ -1239,6 +1243,7 @@ class ConfigView {
     this.locale,
     required this.mode,
     this.accountLogin,
+    this.accountId,
     required this.hasAccountToken,
   });
 
@@ -1249,6 +1254,7 @@ class ConfigView {
       locale.hashCode ^
       mode.hashCode ^
       accountLogin.hashCode ^
+      accountId.hashCode ^
       hasAccountToken.hashCode;
 
   @override
@@ -1261,6 +1267,7 @@ class ConfigView {
           locale == other.locale &&
           mode == other.mode &&
           accountLogin == other.accountLogin &&
+          accountId == other.accountId &&
           hasAccountToken == other.hasAccountToken;
 }
 

@@ -17,6 +17,7 @@ class RustBridgeApi implements BridgeApi {
       locale: c.locale,
       mode: c.mode,
       accountLogin: c.accountLogin,
+      accountId: c.accountId,
       hasAccountToken: c.hasAccountToken,
     );
   }

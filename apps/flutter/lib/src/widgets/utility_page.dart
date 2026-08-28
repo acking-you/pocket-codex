@@ -22,6 +22,7 @@ class UtilityPage extends StatelessWidget {
     required this.route,
     required this.title,
     required this.body,
+    this.parent,
     this.actions = const [],
     this.bottomNavigationBar,
     this.floatingActionButton,
@@ -32,6 +33,11 @@ class UtilityPage extends StatelessWidget {
 
   /// Localized page title.
   final String title;
+
+  /// The list this page drilled down from, for a detail page. Renders as a third
+  /// breadcrumb (`Conversation / Services / <name>`) whose middle segment is the
+  /// way back up; omit it on a top-level page.
+  final UtilityParent? parent;
 
   /// Page content below the shared title bar.
   final Widget body;
@@ -48,13 +54,33 @@ class UtilityPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scaffold = Scaffold(
-      appBar: UtilityPageTitleBar(route: route, title: title, actions: actions),
+      appBar: UtilityPageTitleBar(
+        route: route,
+        title: title,
+        parent: parent,
+        actions: actions,
+      ),
       body: body,
       bottomNavigationBar: bottomNavigationBar,
       floatingActionButton: floatingActionButton,
     );
     return AppPageShortcuts(currentRoute: route, child: scaffold);
   }
+}
+
+/// The list a detail page sits under, named so the breadcrumb can lead back to
+/// it. [route] is the top-level route the page menu should treat as current, so a
+/// detail page highlights the section it belongs to.
+@immutable
+class UtilityParent {
+  /// Creates a parent breadcrumb segment.
+  const UtilityParent({required this.title, required this.route});
+
+  /// Localized title of the list this page came from.
+  final String title;
+
+  /// Route that list lives at.
+  final String route;
 }
 
 /// Installs app-level page shortcuts while leaving [child] unchanged.
@@ -94,6 +120,7 @@ class UtilityPageTitleBar extends ConsumerWidget
     super.key,
     required this.route,
     required this.title,
+    this.parent,
     this.actions = const [],
   });
 
@@ -102,6 +129,9 @@ class UtilityPageTitleBar extends ConsumerWidget
 
   /// Localized current-page title.
   final String title;
+
+  /// The list this page drilled down from, if any.
+  final UtilityParent? parent;
 
   /// Actions that belong only to the current page.
   final List<Widget> actions;
@@ -143,6 +173,17 @@ class UtilityPageTitleBar extends ConsumerWidget
                   ),
                 ),
                 const SizedBox(width: 7),
+                // Compact drops the parent's label but keeps its tap target, so
+                // a detail page still has a way up when the bar can't spell the
+                // chain out.
+                if (parent != null) ...[
+                  _BreadcrumbLink(
+                    label: parent!.title,
+                    onTap: () => _openParent(context, parent!),
+                    compact: true,
+                  ),
+                  _breadcrumbSeparator(scheme),
+                ],
                 Flexible(
                   child: Text(
                     title,
@@ -174,16 +215,14 @@ class UtilityPageTitleBar extends ConsumerWidget
                     visualDensity: VisualDensity.compact,
                   ),
                 ),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 7),
-                  child: Text(
-                    '/',
-                    style: TextStyle(
-                      color: scheme.onSurface.withValues(alpha: 0.28),
-                      fontWeight: FontWeight.w400,
-                    ),
+                _breadcrumbSeparator(scheme),
+                if (parent != null) ...[
+                  _BreadcrumbLink(
+                    label: parent!.title,
+                    onTap: () => _openParent(context, parent!),
                   ),
-                ),
+                  _breadcrumbSeparator(scheme),
+                ],
                 Flexible(
                   child: Text(
                     title,
@@ -213,7 +252,9 @@ class UtilityPageTitleBar extends ConsumerWidget
             }
             _openUtilityRoute(context, route, value);
           },
-          itemBuilder: (context) => _menuItems(context, route),
+          // A detail page marks its parent section as current, so the menu shows
+          // where you are rather than nothing at all.
+          itemBuilder: (context) => _menuItems(context, parent?.route ?? route),
         ),
       ],
       bottom: PreferredSize(
@@ -225,6 +266,77 @@ class UtilityPageTitleBar extends ConsumerWidget
 }
 
 const _themeValue = '__theme__';
+
+/// Climb from a detail page to the list it came from.
+///
+/// Pops when that list is the route directly beneath — the usual case, since the
+/// detail was pushed from it — which keeps the list's scroll position and
+/// selection. Only when the detail was reached some other way (a deep link, or a
+/// sibling swap that left no list underneath) does it navigate instead. Note this
+/// can't go through `_openUtilityRoute`: a detail page reports its parent's
+/// section as its own `route` so the page menu highlights correctly, so that
+/// helper would see target == current and do nothing.
+void _openParent(BuildContext context, UtilityParent parent) {
+  final router = GoRouter.of(context);
+  if (router.canPop()) {
+    router.pop();
+    return;
+  }
+  context.go(parent.route);
+}
+
+/// The `/` between breadcrumb segments — ink at 28%, well under the labels it
+/// divides so the chain reads as one line rather than three words.
+Widget _breadcrumbSeparator(ColorScheme scheme) => Padding(
+  padding: const EdgeInsets.symmetric(horizontal: 7),
+  child: Text(
+    '/',
+    style: TextStyle(
+      color: scheme.onSurface.withValues(alpha: 0.28),
+      fontWeight: FontWeight.w400,
+    ),
+  ),
+);
+
+/// A middle breadcrumb segment: the current page's parent, tappable to go up.
+/// Quieter than the chat origin button (no border, no fill) because the origin
+/// leaves the section entirely while this only climbs one level inside it.
+class _BreadcrumbLink extends StatelessWidget {
+  const _BreadcrumbLink({
+    required this.label,
+    required this.onTap,
+    this.compact = false,
+  });
+
+  final String label;
+  final VoidCallback onTap;
+
+  /// Narrow bars show the icon-sized hit area without the label.
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return TextButton(
+      key: const Key('utility-parent-origin'),
+      onPressed: onTap,
+      style: TextButton.styleFrom(
+        foregroundColor: scheme.onSurfaceVariant,
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 7),
+        minimumSize: Size.zero,
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        visualDensity: VisualDensity.compact,
+      ),
+      child: compact
+          ? const Icon(Icons.chevron_left, size: 17)
+          : Text(
+              label,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w400),
+            ),
+    );
+  }
+}
 
 List<PopupMenuEntry<String>> _menuItems(BuildContext context, String route) {
   final l10n = AppLocalizations.of(context);

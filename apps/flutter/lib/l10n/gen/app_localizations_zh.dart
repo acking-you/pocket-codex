@@ -114,32 +114,6 @@ class AppLocalizationsZh extends AppLocalizations {
   String get appServerServices => 'App-server 服务';
 
   @override
-  String get navApi => 'API';
-
-  @override
-  String get navAppServer => 'App-server';
-
-  @override
-  String get navSessions => '会话';
-
-  @override
-  String get navHosting => '托管';
-
-  @override
-  String get sessionsHostLabel => '主机';
-
-  @override
-  String get sessionsNoHost => '请先连接一个 app-server，其会话会显示在这里。';
-
-  @override
-  String appServerSubtitle(String device) {
-    return '$device · 远程控制';
-  }
-
-  @override
-  String get appServiceTitle => 'App-server';
-
-  @override
   String get connecting => '连接中…';
 
   @override
@@ -757,22 +731,13 @@ class AppLocalizationsZh extends AppLocalizations {
   String get toolActivity => '活动';
 
   @override
-  String get selectApiService => '选择一个 API 服务';
-
-  @override
   String get relayNotConfigured => '(未配置 relay)';
-
-  @override
-  String get noServicesFound => '该 relay 上没有发现服务';
 
   @override
   String get retry => '重试';
 
   @override
   String get discoverFailed => '无法连接到 relay';
-
-  @override
-  String get apiServiceTitle => 'API 服务';
 
   @override
   String get localPortLabel => '本地端口';
@@ -1178,11 +1143,6 @@ class AppLocalizationsZh extends AppLocalizations {
   String get customizeCodexPath => '自定义路径';
 
   @override
-  String appServerSubtitleLocal(String device) {
-    return '$device · 本地托管';
-  }
-
-  @override
   String get deregister => '注销';
 
   @override
@@ -1223,20 +1183,6 @@ class AppLocalizationsZh extends AppLocalizations {
   String get batchRemoveEnter => '清理不可达';
 
   @override
-  String get batchRemoveHint => '点选要移除的不可达服务。';
-
-  @override
-  String get batchSelectAll => '全选';
-
-  @override
-  String get batchClear => '清空';
-
-  @override
-  String batchRemoveSelected(int count) {
-    return '移除（$count）';
-  }
-
-  @override
   String get batchRemoveTitle => '移除这些不可达服务？';
 
   @override
@@ -1268,13 +1214,7 @@ class AppLocalizationsZh extends AppLocalizations {
   String get logsLive => '实时采集';
 
   @override
-  String get logsLevel => '级别';
-
-  @override
   String get logsLevelAll => '全部';
-
-  @override
-  String get logsKeyword => '关键词';
 
   @override
   String get logsKeywordHint => 'error、host、tunnel…';

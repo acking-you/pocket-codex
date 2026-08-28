@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:pocket_codex/src/widgets/window_title_bar.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
@@ -10,7 +9,9 @@ import 'package:pocket_codex/src/screens/app_session_screen.dart'
     show appLocalPort;
 import 'package:pocket_codex/src/time_ago.dart';
 import 'package:pocket_codex/src/widgets/loading.dart';
+import 'package:pocket_codex/src/widgets/search_field.dart';
 import 'package:pocket_codex/src/widgets/status_dots.dart';
+import 'package:pocket_codex/src/widgets/utility_page.dart';
 
 /// App-server service detail: connect over the relay, then list threads grouped
 /// by project and open or start a remote-control conversation.
@@ -166,30 +167,32 @@ class _AppServiceState extends ConsumerState<AppServiceScreen> {
     final running =
         ref.watch(runningThreadsProvider(widget.serviceKey)).valueOrNull ??
         const <String>{};
-    return Scaffold(
-      appBar: WindowTitleBar(
-        title: Text(l10n.appServiceTitle),
-        actions: [
-          if (running.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 14),
-              child: Center(
-                child: StatusChip(
-                  color: Theme.of(context).colorScheme.primary,
-                  label: l10n.runningSessions(running.length),
-                  pulsing: true,
-                ),
+    // `pcx:<device>:app:<name>` — the trailing name is what the user recognises.
+    final name = widget.serviceKey.split(':').last;
+    return UtilityPage(
+      route: '/manage',
+      title: name,
+      parent: UtilityParent(title: l10n.manageServices, route: '/manage'),
+      actions: [
+        if (running.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14),
+            child: Center(
+              child: StatusChip(
+                color: Theme.of(context).colorScheme.primary,
+                label: l10n.runningSessions(running.length),
+                pulsing: true,
               ),
             ),
-          IconButton(
-            key: const Key('reconnect-btn'),
-            icon: const Icon(Icons.refresh),
-            tooltip: l10n.refreshStatus,
-            // Force a clean reconnect + reload (recovers a slow/stale tunnel).
-            onPressed: _connecting ? null : _reconnect,
           ),
-        ],
-      ),
+        IconButton(
+          key: const Key('reconnect-btn'),
+          icon: const Icon(Icons.refresh),
+          tooltip: l10n.refreshStatus,
+          // Force a clean reconnect + reload (recovers a slow/stale tunnel).
+          onPressed: _connecting ? null : _reconnect,
+        ),
+      ],
       body: AnimatedSwitcher(
         duration: const Duration(milliseconds: 250),
         child: _buildBody(l10n, running),
@@ -451,30 +454,12 @@ class _AppServiceState extends ConsumerState<AppServiceScreen> {
   );
 
   Widget _searchBox(AppLocalizations l10n) {
-    final scheme = Theme.of(context).colorScheme;
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
-      child: TextField(
+      child: SearchField(
         key: const Key('app-thread-search'),
+        hintText: l10n.searchConversations,
         onChanged: (v) => setState(() => _query = v),
-        style: const TextStyle(fontSize: 13),
-        decoration: InputDecoration(
-          isDense: true,
-          prefixIcon: const Icon(Icons.search, size: 18),
-          prefixIconConstraints: const BoxConstraints(
-            minWidth: 34,
-            minHeight: 34,
-          ),
-          hintText: l10n.searchConversations,
-          hintStyle: TextStyle(fontSize: 13, color: scheme.onSurfaceVariant),
-          filled: true,
-          fillColor: scheme.surfaceContainerHighest,
-          contentPadding: const EdgeInsets.symmetric(vertical: 9),
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(10),
-            borderSide: BorderSide.none,
-          ),
-        ),
       ),
     );
   }

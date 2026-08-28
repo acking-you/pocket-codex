@@ -117,33 +117,6 @@ class AppLocalizationsEn extends AppLocalizations {
   String get appServerServices => 'App-server services';
 
   @override
-  String get navApi => 'API';
-
-  @override
-  String get navAppServer => 'App-server';
-
-  @override
-  String get navSessions => 'Sessions';
-
-  @override
-  String get navHosting => 'Hosting';
-
-  @override
-  String get sessionsHostLabel => 'Host';
-
-  @override
-  String get sessionsNoHost =>
-      'Connect an app-server first, then its sessions show here.';
-
-  @override
-  String appServerSubtitle(String device) {
-    return '$device · remote control';
-  }
-
-  @override
-  String get appServiceTitle => 'App-server';
-
-  @override
   String get connecting => 'Connecting…';
 
   @override
@@ -770,22 +743,13 @@ class AppLocalizationsEn extends AppLocalizations {
   String get toolActivity => 'Activity';
 
   @override
-  String get selectApiService => 'Select an API service';
-
-  @override
   String get relayNotConfigured => '(no relay configured)';
-
-  @override
-  String get noServicesFound => 'No services found on this relay';
 
   @override
   String get retry => 'Retry';
 
   @override
   String get discoverFailed => 'Couldn\'t reach the relay';
-
-  @override
-  String get apiServiceTitle => 'API service';
 
   @override
   String get localPortLabel => 'Local port';
@@ -1204,11 +1168,6 @@ class AppLocalizationsEn extends AppLocalizations {
   String get customizeCodexPath => 'Change path';
 
   @override
-  String appServerSubtitleLocal(String device) {
-    return '$device · hosted here';
-  }
-
-  @override
   String get deregister => 'Deregister';
 
   @override
@@ -1249,21 +1208,6 @@ class AppLocalizationsEn extends AppLocalizations {
   String get batchRemoveEnter => 'Clean up unreachable';
 
   @override
-  String get batchRemoveHint =>
-      'Tap the unreachable services you want to remove.';
-
-  @override
-  String get batchSelectAll => 'Select all';
-
-  @override
-  String get batchClear => 'Clear';
-
-  @override
-  String batchRemoveSelected(int count) {
-    return 'Remove ($count)';
-  }
-
-  @override
   String get batchRemoveTitle => 'Remove these unreachable services?';
 
   @override
@@ -1295,13 +1239,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get logsLive => 'Live capture';
 
   @override
-  String get logsLevel => 'Level';
-
-  @override
   String get logsLevelAll => 'All';
-
-  @override
-  String get logsKeyword => 'Keyword';
 
   @override
   String get logsKeywordHint => 'error, host, tunnel…';

@@ -1,29 +1,23 @@
 import 'package:flutter/material.dart';
-import 'package:pocket_codex/src/widgets/window_title_bar.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
+import 'package:pocket_codex/src/desktop_theme.dart';
 import 'package:pocket_codex/src/error_format.dart';
 import 'package:pocket_codex/src/fonts.dart';
 import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/widgets/links.dart';
+import 'package:pocket_codex/src/widgets/utility_page.dart';
 
 /// API-service detail: subscribe and expose a local OpenAI-compatible port.
 class ApiServiceScreen extends ConsumerStatefulWidget {
-  /// [serviceKey] is the full `pcx:<device>:api:<name>` key. [embedded] omits
-  /// the Scaffold so it can nest in the wide-layout right pane.
-  const ApiServiceScreen({
-    super.key,
-    required this.serviceKey,
-    this.embedded = false,
-  });
+  /// [serviceKey] is the full `pcx:<device>:api:<name>` key.
+  const ApiServiceScreen({super.key, required this.serviceKey});
 
   /// Full relay key of the API service.
   final String serviceKey;
 
-  /// Whether to render without a Scaffold (nested in a wide-layout pane).
-  final bool embedded;
   @override
   ConsumerState<ApiServiceScreen> createState() => _ApiServiceState();
 }
@@ -92,13 +86,13 @@ class _ApiServiceState extends ConsumerState<ApiServiceScreen> {
               width: 40,
               height: 40,
               decoration: BoxDecoration(
-                color: scheme.secondaryContainer,
-                borderRadius: BorderRadius.circular(10),
+                color: scheme.primaryContainer,
+                borderRadius: BorderRadius.circular(kPanelRadius),
               ),
               child: Icon(
-                Icons.api,
+                Icons.bolt_outlined,
                 size: 20,
-                color: scheme.onSecondaryContainer,
+                color: scheme.onPrimaryContainer,
               ),
             ),
             const SizedBox(width: 12),
@@ -135,7 +129,7 @@ class _ApiServiceState extends ConsumerState<ApiServiceScreen> {
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
           decoration: BoxDecoration(
             color: scheme.surfaceContainerLow,
-            borderRadius: BorderRadius.circular(8),
+            borderRadius: BorderRadius.circular(kControlRadius),
           ),
           child: Row(
             children: [
@@ -166,7 +160,12 @@ class _ApiServiceState extends ConsumerState<ApiServiceScreen> {
             keyboardType: TextInputType.number,
             decoration: InputDecoration(
               labelText: l10n.localPortLabel,
-              border: const OutlineInputBorder(),
+              filled: true,
+              fillColor: scheme.surfaceContainerHighest,
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(kControlRadius),
+                borderSide: BorderSide.none,
+              ),
             ),
           ),
           const SizedBox(height: 16),
@@ -181,32 +180,69 @@ class _ApiServiceState extends ConsumerState<ApiServiceScreen> {
           ),
         ] else ...[
           Card(
-            child: ListTile(
-              title: KeyedSubtree(
-                key: const Key('base-url'),
-                child: linkifyText(
-                  context,
-                  'http://${_sub!.localAddr}/v1',
-                  selectable: true,
-                ),
-              ),
-              subtitle: const Text('base_url'),
-              trailing: IconButton(
-                icon: const Icon(Icons.copy),
-                onPressed: () => Clipboard.setData(
-                  ClipboardData(text: 'http://${_sub!.localAddr}/v1'),
-                ),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(14, 11, 8, 11),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'base_url',
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(color: scheme.onSurfaceVariant),
+                        ),
+                        const SizedBox(height: 2),
+                        KeyedSubtree(
+                          key: const Key('base-url'),
+                          child: linkifyText(
+                            context,
+                            'http://${_sub!.localAddr}/v1',
+                            selectable: true,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: l10n.copy,
+                    icon: const Icon(Icons.copy, size: 17),
+                    onPressed: () => Clipboard.setData(
+                      ClipboardData(text: 'http://${_sub!.localAddr}/v1'),
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
           const SizedBox(height: 8),
           _ProviderSnippet(localAddr: _sub!.localAddr),
           const SizedBox(height: 8),
-          Card(
-            color: Theme.of(context).colorScheme.errorContainer,
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: Text(l10n.noAuthWarning),
+          // The proxy listens with no auth; say so where the base_url is copied
+          // from, not in a footnote.
+          Container(
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+            decoration: BoxDecoration(
+              color: scheme.errorContainer,
+              borderRadius: BorderRadius.circular(kPanelRadius),
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(
+                  Icons.warning_amber_rounded,
+                  size: 17,
+                  color: scheme.onErrorContainer,
+                ),
+                const SizedBox(width: 9),
+                Expanded(
+                  child: Text(
+                    l10n.noAuthWarning,
+                    style: TextStyle(color: scheme.onErrorContainer),
+                  ),
+                ),
+              ],
             ),
           ),
           const SizedBox(height: 12),
@@ -230,9 +266,10 @@ class _ApiServiceState extends ConsumerState<ApiServiceScreen> {
           ),
       ],
     );
-    if (widget.embedded) return body;
-    return Scaffold(
-      appBar: WindowTitleBar(title: Text(l10n.apiServiceTitle)),
+    return UtilityPage(
+      route: '/manage',
+      title: name,
+      parent: UtilityParent(title: l10n.manageServices, route: '/manage'),
       body: body,
     );
   }

@@ -4,10 +4,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
+import 'package:pocket_codex/src/desktop_theme.dart';
 import 'package:pocket_codex/src/error_format.dart';
 import 'package:pocket_codex/src/fonts.dart';
 import 'package:pocket_codex/src/providers.dart';
+import 'package:pocket_codex/src/theme.dart';
 import 'package:pocket_codex/src/ui_prefs.dart';
+import 'package:pocket_codex/src/widgets/github_avatar.dart';
 import 'package:pocket_codex/src/widgets/status_dots.dart';
 import 'package:pocket_codex/src/widgets/utility_page.dart';
 
@@ -78,7 +81,11 @@ class _SettingsState extends ConsumerState<SettingsScreen> {
           child: Text(l10n.accountSection),
         ),
         ListTile(
-          leading: const Icon(Icons.account_circle),
+          leading: GitHubAvatar(
+            accountId: config?.accountId,
+            fallbackIcon: Icons.person_outline,
+            size: 32,
+          ),
           title: Text('@${config?.accountLogin ?? ''}'),
         ),
         ListTile(
@@ -251,6 +258,11 @@ class _SettingsState extends ConsumerState<SettingsScreen> {
                       if (config?.mode == 'account')
                         _SettingsRow(
                           icon: Icons.account_circle_outlined,
+                          leading: GitHubAvatar(
+                            accountId: config?.accountId,
+                            fallbackIcon: Icons.person_outline,
+                            size: 32,
+                          ),
                           title: '@${config?.accountLogin ?? ''}',
                         ),
                       _SettingsRow(
@@ -297,7 +309,7 @@ class _SettingsState extends ConsumerState<SettingsScreen> {
                             subtitle: sub.localAddr,
                             status: StatusChip(
                               color: sub.alive
-                                  ? Colors.green.shade600
+                                  ? successColor(scheme)
                                   : scheme.error,
                               label: sub.alive
                                   ? l10n.subscribedAlive
@@ -599,6 +611,7 @@ class _SettingsRow extends StatelessWidget {
     super.key,
     required this.icon,
     required this.title,
+    this.leading,
     this.subtitle,
     this.value,
     this.status,
@@ -608,6 +621,9 @@ class _SettingsRow extends StatelessWidget {
 
   final IconData icon;
   final String title;
+
+  /// Replaces the [icon] tile, for a row whose subject has a picture of its own.
+  final Widget? leading;
   final String? subtitle;
   final String? value;
   final Widget? status;
@@ -621,15 +637,16 @@ class _SettingsRow extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(13, 8, 8, 8),
       child: Row(
         children: [
-          Container(
-            width: 32,
-            height: 32,
-            decoration: BoxDecoration(
-              color: scheme.surfaceContainer,
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Icon(icon, size: 17, color: scheme.onSurfaceVariant),
-          ),
+          leading ??
+              Container(
+                width: 32,
+                height: 32,
+                decoration: BoxDecoration(
+                  color: scheme.surfaceContainer,
+                  borderRadius: BorderRadius.circular(kControlRadius),
+                ),
+                child: Icon(icon, size: 17, color: scheme.onSurfaceVariant),
+              ),
           const SizedBox(width: 11),
           Expanded(
             child: Column(
@@ -672,7 +689,7 @@ class _SettingsRow extends StatelessWidget {
       ),
     );
     if (onTap == null || actionLabel != null) return content;
-    return InkWell(onTap: onTap, child: content);
+    return InkWell(mouseCursor: clickable, onTap: onTap, child: content);
   }
 }
 
@@ -696,12 +713,13 @@ class _ThemeChoice extends StatelessWidget {
     return Material(
       color: selected ? scheme.primaryContainer : Colors.transparent,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(9),
+        borderRadius: BorderRadius.circular(kControlRadius),
         side: BorderSide(color: selected ? scheme.primary : scheme.outline),
       ),
       child: InkWell(
+        mouseCursor: clickable,
         onTap: onTap,
-        borderRadius: BorderRadius.circular(9),
+        borderRadius: BorderRadius.circular(kControlRadius),
         child: SizedBox(
           height: 48,
           child: Stack(

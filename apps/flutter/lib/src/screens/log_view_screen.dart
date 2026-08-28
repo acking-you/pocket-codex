@@ -4,8 +4,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
+import 'package:pocket_codex/src/desktop_theme.dart';
 import 'package:pocket_codex/src/fonts.dart';
 import 'package:pocket_codex/src/log_manager.dart';
+import 'package:pocket_codex/src/theme.dart';
+import 'package:pocket_codex/src/widgets/search_field.dart';
 import 'package:pocket_codex/src/widgets/status_dots.dart';
 import 'package:pocket_codex/src/widgets/utility_page.dart';
 
@@ -106,22 +109,18 @@ class _LogViewScreenState extends State<LogViewScreen> {
         '${dt.millisecond.toString().padLeft(3, '0')}';
   }
 
-  Color _levelColor(String level, bool dark) {
-    switch (LogManager.normalizeLevel(level)) {
-      case 'ERROR':
-        return dark ? Colors.red.shade300 : Colors.red.shade700;
-      case 'WARN':
-        return dark ? Colors.orange.shade300 : Colors.orange.shade800;
-      case 'INFO':
-        return dark ? Colors.blue.shade300 : Colors.blue.shade700;
-      case 'DEBUG':
-        return dark ? Colors.green.shade300 : Colors.green.shade700;
-      case 'TRACE':
-        return dark ? Colors.grey.shade400 : Colors.grey.shade600;
-      default:
-        return dark ? Colors.white70 : Colors.black87;
-    }
-  }
+  /// Level colours come from the app's own palette rather than Material's stock
+  /// hues: error and caution are already named, and info/debug borrow the syntax
+  /// palette's blue and green, which are tuned to sit with the warm neutrals.
+  Color _levelColor(String level, ColorScheme scheme) =>
+      switch (LogManager.normalizeLevel(level)) {
+        'ERROR' => scheme.error,
+        'WARN' => cautionColor(scheme),
+        'INFO' => infoColor(scheme),
+        'DEBUG' => successColor(scheme),
+        'TRACE' => onSurfaceMuted(scheme),
+        _ => scheme.onSurfaceVariant,
+      };
 
   @override
   Widget build(BuildContext context) {
@@ -156,7 +155,7 @@ class _LogViewScreenState extends State<LogViewScreen> {
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 6),
             child: StatusChip(
-              color: Colors.green.shade600,
+              color: successColor(scheme),
               label: l10n.logsLive,
               filled: true,
             ),
@@ -183,86 +182,128 @@ class _LogViewScreenState extends State<LogViewScreen> {
               ),
             )
           : content,
+      // A quiet raised pill rather than a Material FAB: the conversation's own
+      // jump-to-latest reads this way, and a tinted circle would be the loudest
+      // thing on a page of monospace text.
       floatingActionButton: _followTail
           ? null
-          : FloatingActionButton.small(
-              tooltip: l10n.logsScrollBottom,
-              onPressed: () {
-                setState(() => _followTail = true);
-                _scrollToBottom();
-              },
-              child: const Icon(Icons.arrow_downward),
+          : DecoratedBox(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(kPanelRadius),
+                boxShadow: panelShadow(scheme),
+              ),
+              child: Material(
+                elevation: 0,
+                color: scheme.surfaceBright,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(kPanelRadius),
+                  side: BorderSide(color: scheme.outline),
+                ),
+                child: InkWell(
+                  mouseCursor: clickable,
+                  borderRadius: BorderRadius.circular(kPanelRadius),
+                  onTap: () {
+                    setState(() => _followTail = true);
+                    _scrollToBottom();
+                  },
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 9,
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.arrow_downward, size: 16),
+                        const SizedBox(width: 7),
+                        Text(
+                          l10n.logsScrollBottom,
+                          style: const TextStyle(
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
             ),
     );
   }
 
-  Widget _toolbar(AppLocalizations l10n) => Padding(
-    padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
-    child: Row(
-      children: [
-        SizedBox(
-          width: 150,
-          child: DropdownButtonFormField<String?>(
-            initialValue: _levelFilter,
-            isExpanded: true,
-            decoration: InputDecoration(
-              labelText: l10n.logsLevel,
-              border: const OutlineInputBorder(),
-              isDense: true,
-            ),
-            items: [
-              DropdownMenuItem<String?>(
-                value: null,
-                child: Text(l10n.logsLevelAll),
+  Widget _toolbar(AppLocalizations l10n) {
+    final scheme = Theme.of(context).colorScheme;
+    // Level reads as a set of choices rather than a form field, so it's a chip
+    // row like the sessions filters — one tap instead of open-scroll-pick.
+    Widget levelChip(String? value, String label) => Padding(
+      padding: const EdgeInsets.only(right: 6),
+      child: ChoiceChip(
+        key: Key('log-level-${value ?? 'all'}'),
+        label: Text(label),
+        selected: _levelFilter == value,
+        showCheckmark: false,
+        side: BorderSide(color: scheme.outlineVariant),
+        onSelected: (_) {
+          _levelFilter = value;
+          _applyFilters();
+        },
+      ),
+    );
+    final chips = [
+      levelChip(null, l10n.logsLevelAll),
+      for (final lvl in LogManager.levels)
+        levelChip(lvl, LogManager.thresholdLabel(lvl)),
+    ];
+    // Six thresholds plus the keyword box exceed a phone's width, so the
+    // thresholds drop to their own scrolling row instead of being squeezed.
+    final stacked = MediaQuery.sizeOf(context).width < 720;
+    final search = SearchField(
+      controller: _keywordCtrl,
+      hintText: l10n.logsKeywordHint,
+      onChanged: _onKeywordChanged,
+      // Track the live controller text, not the debounced `_keyword`, so
+      // the clear button appears/disappears immediately as you type.
+      suffix: ValueListenableBuilder<TextEditingValue>(
+        valueListenable: _keywordCtrl,
+        builder: (_, value, _) => value.text.isEmpty
+            ? const SizedBox.shrink()
+            : IconButton(
+                icon: const Icon(Icons.clear, size: 17),
+                tooltip: l10n.cancel,
+                onPressed: () {
+                  _keywordCtrl.clear();
+                  _keyword = '';
+                  _applyFilters();
+                },
               ),
-              ...LogManager.levels.map(
-                (lvl) => DropdownMenuItem<String?>(
-                  value: lvl,
-                  child: Text(LogManager.thresholdLabel(lvl)),
+      ),
+    );
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
+      child: stacked
+          ? Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                search,
+                const SizedBox(height: 8),
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(children: chips),
                 ),
-              ),
-            ],
-            onChanged: (value) {
-              _levelFilter = value;
-              _applyFilters();
-            },
-          ),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: TextField(
-            controller: _keywordCtrl,
-            onChanged: _onKeywordChanged,
-            decoration: InputDecoration(
-              labelText: l10n.logsKeyword,
-              hintText: l10n.logsKeywordHint,
-              prefixIcon: const Icon(Icons.search),
-              isDense: true,
-              // Track the live controller text, not the debounced `_keyword`, so
-              // the clear button appears/disappears immediately as you type.
-              suffixIcon: ValueListenableBuilder<TextEditingValue>(
-                valueListenable: _keywordCtrl,
-                builder: (_, value, _) => value.text.isEmpty
-                    ? const SizedBox.shrink()
-                    : IconButton(
-                        icon: const Icon(Icons.clear),
-                        onPressed: () {
-                          _keywordCtrl.clear();
-                          _keyword = '';
-                          _applyFilters();
-                        },
-                      ),
-              ),
-              border: const OutlineInputBorder(),
+              ],
+            )
+          : Row(
+              children: [
+                Expanded(child: search),
+                const SizedBox(width: 10),
+                ...chips,
+              ],
             ),
-          ),
-        ),
-      ],
-    ),
-  );
+    );
+  }
 
   Widget _list(ColorScheme scheme) {
-    final dark = Theme.of(context).brightness == Brightness.dark;
     if (_filtered.isEmpty) {
       return Center(
         child: Text(
@@ -305,8 +346,8 @@ class _LogViewScreenState extends State<LogViewScreen> {
                     TextSpan(
                       text: '${log.level.padRight(5)} ',
                       style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        color: _levelColor(log.level, dark),
+                        fontWeight: FontWeight.w600,
+                        color: _levelColor(log.level, scheme),
                       ),
                     ),
                     TextSpan(

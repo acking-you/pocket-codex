@@ -155,11 +155,53 @@ GoRoute _stub(String path, String label) => GoRoute(
 /// Tap a home-screen section tab by its label and settle. The desktop
 /// NavigationRail and the mobile NavigationBar share the destination label text,
 /// so one helper drives both layouts.
-Future<void> _selectSection(WidgetTester t, String label) async {
-  // The nav destination's label sits early in the tree (the rail/bar precedes
-  // the section content), so the first match is the tappable destination even
-  // when a section's content happens to repeat the word.
-  await t.tap(find.text(label).first);
+/// Open the selected device's capabilities, which is where every kind — chat,
+/// API, session sharing — is now listed together.
+///
+/// Services used to be split into protocol tabs, and each of these tests began
+/// by tapping the one it cared about. The page is organised by device now, so
+/// there is no tab to pick and the rows are already on screen; narrow layouts do
+/// gate them behind picking a device, which is what this still does.
+Future<void> _openDevice(WidgetTester t, [String? device]) async {
+  // Wide auto-selects a device, so the capabilities are already up and there is
+  // nothing to tap. Narrow shows the list first; tap whichever device is asked
+  // for, or the only one when the caller doesn't care.
+  final tile = device != null
+      ? find.byKey(Key('device-$device'))
+      : find.byWidgetPredicate((w) {
+          final key = w.key;
+          if (key is! ValueKey<String>) return false;
+          final name = key.value;
+          // `device-<name>` only — not `device-capability-*`/`device-back`.
+          return name.startsWith('device-') &&
+              !name.startsWith('device-capability-') &&
+              name != 'device-back' &&
+              name != 'device-clean-unreachable';
+        });
+  if (tile.evaluate().isEmpty) {
+    // Nothing to tap is only legitimate when the capabilities are already up
+    // (wide auto-selects) or when there are no devices at all. If the page
+    // rendered neither, say so here rather than letting the caller's assertions
+    // pass or fail for a reason that has nothing to do with what they test.
+    final onDetail = find
+        .byWidgetPredicate(
+          (w) =>
+              w.key is ValueKey<String> &&
+              (w.key! as ValueKey<String>).value.startsWith(
+                'device-capability-',
+              ),
+        )
+        .evaluate()
+        .isNotEmpty;
+    final empty = find.text('此设备暂时没有可用能力').evaluate().isNotEmpty;
+    expect(
+      onDetail || empty,
+      isTrue,
+      reason: 'no device tile to open and no capabilities on screen either',
+    );
+    return;
+  }
+  await t.tap(tile.first);
   await t.pumpAndSettle();
 }
 
@@ -201,7 +243,9 @@ void main() {
   // another that reuses a thread id.
   setUp(AppSessionScreen.debugResetThreadMemory);
 
-  testWidgets('Services shows api/app cards by tab + the relay', (t) async {
+  testWidgets('a device lists every kind it exposes, plus the relay', (
+    t,
+  ) async {
     final api = FakeBridgeApi(
       config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
       services: const [
@@ -221,55 +265,17 @@ void main() {
     );
     await t.pumpWidget(_host(const ServicesScreen(), api));
     await t.pumpAndSettle();
-    // Default tab = API: its card + the relay banner.
-    expect(find.byKey(const Key('svc-pcx:lb7666:api:default')), findsOneWidget);
     expect(find.text('lb7666.top:7666'), findsOneWidget);
-    // The App-server tab shows the app-server card.
-    await _selectSection(t, 'App-server');
-    expect(find.byKey(const Key('svc-pcx:lb7666:app:default')), findsOneWidget);
-  });
-
-  testWidgets('Sessions tab: picks a host and lists its remote sessions', (
-    t,
-  ) async {
-    // Account mode shows the Sessions tab; one app-server host is connectable.
-    final api =
-        FakeBridgeApi(
-            config: const ConfigInfo(
-              relay: '',
-              hasKey: false,
-              mode: 'account',
-              accountLogin: 'acking-you',
-            ),
-            services: const [
-              ServiceEntry(
-                device: 'lb7666',
-                kind: 'app',
-                name: 'default',
-                key: 'pcx:lb7666:app:default',
-              ),
-            ],
-          )
-          ..localSessions = const [
-            LocalSession(
-              threadId: 't-remote',
-              preview: 'hello from the host',
-              updatedAt: 0,
-              turnState: 'completed',
-              heldOpen: false,
-              safety: 'resumable',
-              allowsResume: true,
-              requiresTakeover: false,
-            ),
-          ];
-    await t.pumpWidget(_host(const ServicesScreen(), api));
-    await t.pumpAndSettle();
-    await _selectSection(t, '会话'); // Sessions tab (zh)
-    // Host picker at the top + the picked host's session over its meta tunnel.
-    expect(find.byKey(const Key('sessions-host-picker')), findsOneWidget);
-    expect(find.text('hello from the host'), findsOneWidget);
-    // The resume action targets the meta service (the host resumes itself).
-    expect(find.byKey(const Key('resume-t-remote')), findsOneWidget);
+    await _openDevice(t);
+    // Both kinds sit under the one device — no tab to switch between them.
+    expect(
+      find.byKey(const Key('device-capability-pcx:lb7666:api:default')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const Key('device-capability-pcx:lb7666:app:default')),
+      findsOneWidget,
+    );
   });
 
   testWidgets('Services shows error state with retry', (t) async {
@@ -353,71 +359,6 @@ void main() {
     expect(find.byKey(const Key('export-btn')), findsOneWidget);
   });
 
-  testWidgets('Services switches to master-detail at >=600 width', (t) async {
-    final api = FakeBridgeApi(
-      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
-      services: const [
-        ServiceEntry(
-          device: 'lb7666',
-          kind: 'api',
-          name: 'default',
-          key: 'pcx:lb7666:api:default',
-        ),
-      ],
-    );
-    t.view.devicePixelRatio = 1.0;
-    addTearDown(t.view.reset);
-
-    // Narrow (<600): single column, no inline detail pane.
-    t.view.physicalSize = const Size(400, 900);
-    await t.pumpWidget(_host(const ServicesScreen(), api));
-    await t.pumpAndSettle();
-    expect(find.byKey(const Key('subscribe-btn')), findsNothing);
-
-    // Wide (>=600): list + embedded ApiServiceScreen detail (subscribe button).
-    t.view.physicalSize = const Size(1000, 900);
-    await t.pumpWidget(_host(const ServicesScreen(), api));
-    await t.pumpAndSettle();
-    expect(find.byKey(const Key('subscribe-btn')), findsOneWidget);
-  });
-
-  testWidgets('Wide layout switches the detail pane when another API is tapped', (
-    t,
-  ) async {
-    final api = FakeBridgeApi(
-      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
-      services: const [
-        ServiceEntry(
-          device: 'lb7666',
-          kind: 'api',
-          name: 'first',
-          key: 'pcx:lb7666:api:first',
-        ),
-        ServiceEntry(
-          device: 'lb7666',
-          kind: 'api',
-          name: 'second',
-          key: 'pcx:lb7666:api:second',
-        ),
-      ],
-    );
-    t.view.devicePixelRatio = 1.0;
-    t.view.physicalSize = const Size(1000, 900);
-    addTearDown(t.view.reset);
-
-    await t.pumpWidget(_host(const ServicesScreen(), api));
-    await t.pumpAndSettle();
-    // Default selection = first API; its full key shows only in the detail pane.
-    expect(find.text('pcx:lb7666:api:first'), findsOneWidget);
-    expect(find.text('pcx:lb7666:api:second'), findsNothing);
-
-    // Tap the second service's list tile → detail pane switches to it.
-    await t.tap(find.byKey(const Key('svc-pcx:lb7666:api:second')));
-    await t.pumpAndSettle();
-    expect(find.text('pcx:lb7666:api:second'), findsOneWidget);
-    expect(find.text('pcx:lb7666:api:first'), findsNothing);
-  });
-
   testWidgets('a registered-but-dead app-server reads "unreachable", not '
       '"online"', (t) async {
     final api = FakeBridgeApi(
@@ -437,13 +378,12 @@ void main() {
 
     await t.pumpWidget(_host(const ServicesScreen(), api));
     await t.pumpAndSettle();
-    await _selectSection(t, 'App-server'); // probe runs when the card builds
+    await _openDevice(t);
 
     // The probe says the backend is dead → honest "不可达" on the app-server.
     expect(find.text('不可达'), findsOneWidget); // statusUnreachable (zh)
-    // "在线" appears once — for the RELAY only. The old bug would have shown it
-    // a second time on the app-server (a false green "online").
-    expect(find.text('在线'), findsOneWidget);
+    // The old bug showed a false green "online" here, off a cached flag.
+    expect(find.text('在线'), findsNothing);
     // …and it spells out *why*: relay registration up, remote backend down.
     expect(find.textContaining('远端 app-server 没有响应'), findsOneWidget);
   });
@@ -493,7 +433,7 @@ void main() {
       final api = accountFake();
       await t.pumpWidget(_host(const ServicesScreen(), api));
       await t.pumpAndSettle();
-      await _selectSection(t, '托管'); // Local hosting tab
+      await _openDevice(t);
 
       // No hosts yet → only the "host another" entry (desktop + account mode).
       expect(find.byKey(const Key('add-local-host-card')), findsOneWidget);
@@ -527,7 +467,7 @@ void main() {
       final api = accountFake();
       await t.pumpWidget(_host(const ServicesScreen(), api));
       await t.pumpAndSettle();
-      await _selectSection(t, '托管'); // Local hosting tab
+      await _openDevice(t);
       await t.tap(find.byKey(const Key('add-local-host-card')));
       await t.pumpAndSettle();
       // The proxy field shows by default (proxy is mandatory); toggle it off.
@@ -552,7 +492,7 @@ void main() {
       final api = accountFake(); // codexLocate returns a path → "found"
       await t.pumpWidget(_host(const ServicesScreen(), api));
       await t.pumpAndSettle();
-      await _selectSection(t, '托管'); // Local hosting tab
+      await _openDevice(t);
       await t.tap(find.byKey(const Key('add-local-host-card')));
       await t.pumpAndSettle();
       // Found → no path field, but a "change path" override is offered.
@@ -572,7 +512,7 @@ void main() {
       final api = accountFake();
       await t.pumpWidget(_host(const ServicesScreen(), api));
       await t.pumpAndSettle();
-      await _selectSection(t, '托管'); // Local hosting tab
+      await _openDevice(t);
 
       // First host "default".
       await t.tap(find.byKey(const Key('add-local-host-card')));
@@ -580,7 +520,10 @@ void main() {
       await t.tap(find.byKey(const Key('start-hosting-btn')));
       await t.pumpAndSettle();
 
-      // Second host "work" (codex found → fields are port, name, proxy).
+      // Second host "work" (codex found → fields are port, name, proxy). The
+      // first host's card pushed the add button below the fold at this size.
+      await t.ensureVisible(find.byKey(const Key('add-local-host-card')));
+      await t.pumpAndSettle();
       await t.tap(find.byKey(const Key('add-local-host-card')));
       await t.pumpAndSettle();
       await t.enterText(find.byType(TextField).at(0), '18081');
@@ -619,21 +562,26 @@ void main() {
       );
       await t.pumpWidget(_host(const ServicesScreen(), api));
       await t.pumpAndSettle();
-      // Before hosting it's a plain remote app-server (on the App-server tab).
-      await _selectSection(t, 'App-server');
-      expect(find.text('local · 远程控制'), findsOneWidget);
+      await _openDevice(t);
+      // Before hosting, the device is just a discovered remote one.
+      expect(find.text('本机'), findsNothing);
 
-      // Host "default" locally (Hosting tab) → its key matches the service.
-      await _selectSection(t, '托管');
+      // Host "default" locally → its key matches the discovered service.
       await t.tap(find.byKey(const Key('add-local-host-card')));
       await t.pumpAndSettle();
       await t.tap(find.byKey(const Key('start-hosting-btn')));
       await t.pumpAndSettle();
 
-      // The same App-server card now reads as locally hosted.
-      await _selectSection(t, 'App-server');
-      expect(find.text('local · 本地托管'), findsOneWidget);
-      expect(find.text('local · 远程控制'), findsNothing);
+      // The device now reads as this machine rather than a remote peer, and the
+      // host it published is listed under it by name — the state change, not
+      // just the presence of the word somewhere on the page.
+      expect(find.text('本机'), findsWidgets);
+      expect(find.byKey(const Key('local-host-default')), findsOneWidget);
+      // Its app-server capability is the same discovered service as before.
+      expect(
+        find.byKey(const Key('device-capability-pcx:local:app:default')),
+        findsOneWidget,
+      );
     } finally {
       debugDefaultTargetPlatformOverride = null;
     }
@@ -647,7 +595,7 @@ void main() {
       final api = accountFake();
       await t.pumpWidget(_host(const ServicesScreen(), api));
       await t.pumpAndSettle();
-      await _selectSection(t, '托管'); // Local hosting tab
+      await _openDevice(t);
       // Host one server → it publishes both an app and an api tunnel.
       await t.tap(find.byKey(const Key('add-local-host-card')));
       await t.pumpAndSettle();
@@ -657,6 +605,9 @@ void main() {
       expect(api.serveHosts.single.appRegistered, isTrue);
 
       // Deregister just the API tunnel from the host card (confirm the dialog).
+      // The tunnel rows sit below the capability list at this size.
+      await t.ensureVisible(find.byKey(const Key('tunnel-deregister-API')));
+      await t.pumpAndSettle();
       await t.tap(find.byKey(const Key('tunnel-deregister-API')));
       await t.pumpAndSettle();
       await t.tap(find.byKey(const Key('deregister-confirm-btn')));
@@ -707,12 +658,16 @@ void main() {
     );
     await t.pumpWidget(_host(const ServicesScreen(), api));
     await t.pumpAndSettle();
+    await _openDevice(t);
     // The list card (the wide layout ALSO shows the name in the detail pane,
     // so presence is asserted on the card key, absence on the text).
-    expect(find.byKey(const Key('svc-pcx:lb7666:api:default')), findsOneWidget);
+    expect(
+      find.byKey(const Key('device-capability-pcx:lb7666:api:default')),
+      findsOneWidget,
+    );
 
     // Open the card overflow menu → 注销 → cancel: nothing happens.
-    await t.tap(find.byIcon(Icons.more_vert).first);
+    await t.tap(find.byKey(const Key('capability-menu')).first);
     await t.pumpAndSettle();
     await t.tap(find.text('注销'));
     await t.pumpAndSettle();
@@ -720,17 +675,20 @@ void main() {
     await t.tap(find.text('取消'));
     await t.pumpAndSettle();
     expect(api.lastDeregistered, isNull);
-    expect(find.byKey(const Key('svc-pcx:lb7666:api:default')), findsOneWidget);
+    expect(
+      find.byKey(const Key('device-capability-pcx:lb7666:api:default')),
+      findsOneWidget,
+    );
 
     // Re-open → confirm: the service is deregistered + leaves the list.
-    await t.tap(find.byIcon(Icons.more_vert).first);
+    await t.tap(find.byKey(const Key('capability-menu')).first);
     await t.pumpAndSettle();
     await t.tap(find.text('注销'));
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('deregister-confirm-btn')));
     await t.pumpAndSettle();
     expect(api.lastDeregistered, 'pcx:lb7666:api:default');
-    expect(find.text('default'), findsNothing);
+    expect(find.text('API · default'), findsNothing);
   });
 
   testWidgets('注销 on an unreachable remote entry dismisses it, staying '
@@ -758,13 +716,14 @@ void main() {
           ..keepOnDeregister = true;
     await t.pumpWidget(_host(const ServicesScreen(), api));
     await t.pumpAndSettle();
+    await _openDevice(t);
     expect(
-      find.byKey(const Key('svc-pcx:otherdev:api:orphan')),
+      find.byKey(const Key('device-capability-pcx:otherdev:api:orphan')),
       findsOneWidget,
     );
 
     // Overflow → 注销 → the honest "remove unreachable" dialog → confirm.
-    await t.tap(find.byIcon(Icons.more_vert).first);
+    await t.tap(find.byKey(const Key('capability-menu')).first);
     await t.pumpAndSettle();
     await t.tap(find.text('注销'));
     await t.pumpAndSettle();
@@ -801,9 +760,10 @@ void main() {
           ..keepOnDeregister = true;
     await t.pumpWidget(_host(const ServicesScreen(), api));
     await t.pumpAndSettle();
+    await _openDevice(t);
 
     // Dismiss the unreachable orphan.
-    await t.tap(find.byIcon(Icons.more_vert).first);
+    await t.tap(find.byKey(const Key('capability-menu')).first);
     await t.pumpAndSettle();
     await t.tap(find.text('注销'));
     await t.pumpAndSettle();
@@ -818,117 +778,9 @@ void main() {
     await t.tap(find.byKey(const Key('refresh-btn')));
     await t.pumpAndSettle();
     expect(
-      find.byKey(const Key('svc-pcx:otherdev:api:orphan')),
+      find.byKey(const Key('device-capability-pcx:otherdev:api:orphan')),
       findsOneWidget,
     );
-  });
-
-  testWidgets('batch cleanup: select several unreachable entries and remove '
-      'them in one action; reachable entries stay untouched', (t) async {
-    final api =
-        FakeBridgeApi(
-            config: const ConfigInfo(
-              relay: '',
-              hasKey: false,
-              mode: 'account',
-              accountLogin: 'acking-you',
-            ),
-            services: const [
-              ServiceEntry(
-                device: 'devA',
-                kind: 'api',
-                name: 'dead1',
-                key: 'pcx:devA:api:dead1',
-              ),
-              ServiceEntry(
-                device: 'devB',
-                kind: 'api',
-                name: 'dead2',
-                key: 'pcx:devB:api:dead2',
-              ),
-              ServiceEntry(
-                device: 'devC',
-                kind: 'api',
-                name: 'alive',
-                key: 'pcx:devC:api:alive',
-              ),
-            ],
-          )
-          ..reachable['pcx:devA:api:dead1'] = false
-          ..reachable['pcx:devB:api:dead2'] = false
-          ..reachable['pcx:devC:api:alive'] = true
-          ..keepOnDeregister = true; // relay keeps listing orphans
-    t.view.devicePixelRatio = 1.0;
-    t.view.physicalSize = const Size(400, 900); // narrow: single-pane list
-    addTearDown(t.view.reset);
-    await t.pumpWidget(_host(const ServicesScreen(), api));
-    await t.pumpAndSettle(); // let the probes resolve
-
-    // All three list; the cleanup affordance appears because ≥1 is unreachable.
-    expect(find.text('dead1'), findsOneWidget);
-    expect(find.text('dead2'), findsOneWidget);
-    expect(find.text('alive'), findsOneWidget);
-    expect(find.byKey(const Key('batch-enter-btn')), findsOneWidget);
-
-    // Enter select mode → only the two unreachable cards get a checkbox; the
-    // reachable one is not selectable.
-    await t.tap(find.byKey(const Key('batch-enter-btn')));
-    await t.pumpAndSettle();
-    expect(find.byType(Checkbox), findsNWidgets(2));
-
-    // "Select all" ticks both removable entries; the batch button counts them.
-    await t.tap(find.byKey(const Key('batch-select-all-btn')));
-    await t.pumpAndSettle();
-    expect(find.text('移除（2）'), findsOneWidget);
-
-    // Remove → confirm the batch dialog.
-    await t.tap(find.byKey(const Key('batch-remove-btn')));
-    await t.pumpAndSettle();
-    expect(find.text('移除这些不可达服务？'), findsOneWidget);
-    await t.tap(find.byKey(const Key('batch-remove-confirm-btn')));
-    await t.pumpAndSettle();
-
-    // Both unreachable entries are gone (durably dismissed) and each got a
-    // best-effort backend drop; the reachable one is untouched, and select mode
-    // exited (no more batch bar).
-    expect(find.text('dead1'), findsNothing);
-    expect(find.text('dead2'), findsNothing);
-    expect(find.text('alive'), findsOneWidget);
-    expect(
-      api.deregistered,
-      containsAll(<String>['pcx:devA:api:dead1', 'pcx:devB:api:dead2']),
-    );
-    expect(api.deregistered, isNot(contains('pcx:devC:api:alive')));
-    expect(find.byKey(const Key('batch-remove-btn')), findsNothing);
-  });
-
-  testWidgets('batch cleanup: the affordance is absent when every entry is '
-      'reachable', (t) async {
-    final api = FakeBridgeApi(
-      config: const ConfigInfo(
-        relay: '',
-        hasKey: false,
-        mode: 'account',
-        accountLogin: 'acking-you',
-      ),
-      services: const [
-        ServiceEntry(
-          device: 'devC',
-          kind: 'api',
-          name: 'alive',
-          key: 'pcx:devC:api:alive',
-        ),
-      ],
-    )..reachable['pcx:devC:api:alive'] = true;
-    t.view.devicePixelRatio = 1.0;
-    t.view.physicalSize = const Size(400, 900);
-    addTearDown(t.view.reset);
-    await t.pumpWidget(_host(const ServicesScreen(), api));
-    await t.pumpAndSettle();
-
-    expect(find.text('alive'), findsOneWidget);
-    // Nothing to clean up → no "clean up unreachable" button.
-    expect(find.byKey(const Key('batch-enter-btn')), findsNothing);
   });
 
   testWidgets('a registered-but-dead API proxy reads "unreachable", not '
@@ -950,6 +802,7 @@ void main() {
 
     await t.pumpWidget(_host(const ServicesScreen(), api));
     await t.pumpAndSettle(); // let the API probe resolve
+    await _openDevice(t);
 
     // The probe says the proxy is dead → honest "不可达" on the API service…
     expect(find.text('不可达'), findsOneWidget);
@@ -979,7 +832,7 @@ void main() {
 
     await t.pumpWidget(_host(const ServicesScreen(), api));
     await t.pumpAndSettle();
-    await _selectSection(t, 'App-server'); // probe runs when the card builds
+    await _openDevice(t);
     expect(find.text('不可达'), findsOneWidget); // honest dead status
 
     // The remote app-server comes back up out from under us...
@@ -989,7 +842,7 @@ void main() {
     await t.pumpAndSettle(); // let the fresh probe resolve
 
     expect(find.text('不可达'), findsNothing); // recovered on its own
-    expect(find.text('在线'), findsNWidgets(2)); // relay + app-server both online
+    expect(find.text('在线'), findsOneWidget); // the app-server reads online
   });
 
   testWidgets('onboarding: sign in shows the code, then authorized opens the '
@@ -1338,15 +1191,13 @@ void main() {
     addTearDown(t.view.reset);
     await t.pumpWidget(_host(const ServicesScreen(), api));
     await t.pumpAndSettle();
+    await _openDevice(t);
 
     final container = ProviderScope.containerOf(
       t.element(find.byType(ServicesScreen)),
     );
-    // The screen opens on the API section; the app-server rows are the ones a
-    // conversation runs on.
-    container.read(servicesSectionProvider.notifier).state =
-        ServicesSection.appServer;
-    await t.pumpAndSettle();
+    // Every kind is listed under the device at once, so the app-server
+    // capability a conversation runs on is on screen already.
     // Baseline: the stale flag alone reads as connected.
     expect(find.text('已连接'), findsOneWidget); // statusConnected
 
@@ -6063,15 +5914,16 @@ void main() {
     );
     await t.pumpWidget(_host(const ServicesScreen(), api));
     await t.pumpAndSettle();
-    await _selectSection(t, 'App-server');
-    // Service rows are tappable cards now; the row is enabled iff its InkWell
+    await _openDevice(t);
     // carries an onTap (a disabled row would have a null callback). The card's
     // own InkWell is the first descendant (the deregister overflow menu adds its
     // own InkWell deeper in the tree).
     final ink = t
         .widgetList<InkWell>(
           find.descendant(
-            of: find.byKey(const Key('svc-pcx:lb7666:app:default')),
+            of: find.byKey(
+              const Key('device-capability-pcx:lb7666:app:default'),
+            ),
             matching: find.byType(InkWell),
           ),
         )
@@ -6568,6 +6420,7 @@ void main() {
 
     await t.pumpWidget(_host(const ServicesScreen(), api));
     await t.pumpAndSettle();
+    await _openDevice(t);
 
     expect(find.text('已订阅'), findsOneWidget); // subscribedAlive (zh)
     expect(find.text('在线'), findsWidgets); // relay + unsubscribed api + app
@@ -6713,13 +6566,13 @@ void main() {
 
     await t.pumpWidget(_host(const ServicesScreen(), api));
     await t.pumpAndSettle();
-    await _selectSection(t, 'App-server');
-    expect(find.text('default'), findsOneWidget);
+    await _openDevice(t);
+    expect(find.text('App-server · default'), findsOneWidget);
 
     // Tapping refresh re-discovers (skeleton flashes, then data) without error.
     await t.tap(find.byKey(const Key('refresh-btn')));
     await t.pumpAndSettle();
-    expect(find.text('default'), findsOneWidget);
+    expect(find.text('App-server · default'), findsOneWidget);
   });
 
   testWidgets('Picker reconnect button forces a fresh connection', (t) async {
@@ -6820,10 +6673,10 @@ void main() {
     // First frame: discovery future hasn't resolved → skeleton.
     expect(find.byType(ListLoadingSkeleton), findsOneWidget);
     await t.pumpAndSettle();
-    // Data arrived → skeleton gone, the service is listed (App-server tab).
+    // Data arrived → skeleton gone, the capability is listed.
     expect(find.byType(ListLoadingSkeleton), findsNothing);
-    await _selectSection(t, 'App-server');
-    expect(find.text('default'), findsOneWidget);
+    await _openDevice(t);
+    expect(find.text('App-server · default'), findsOneWidget);
   });
 
   testWidgets('Chat loading skeleton renders a shimmer', (t) async {

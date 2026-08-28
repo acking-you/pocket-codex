@@ -1,12 +1,20 @@
 import 'package:flutter/material.dart';
-import 'package:pocket_codex/src/widgets/window_title_bar.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
+import 'package:pocket_codex/src/desktop_theme.dart';
 import 'package:pocket_codex/src/error_format.dart';
 import 'package:pocket_codex/src/providers.dart';
+import 'package:pocket_codex/src/widgets/utility_page.dart';
+
+/// Form fields on this page stand alone on the sheet rather than inside a
+/// bordered toolbar, so they keep an outline — see `SearchField` for the filled,
+/// borderless counterpart used in filters.
+final _fieldBorder = OutlineInputBorder(
+  borderRadius: BorderRadius.circular(kControlRadius),
+);
 
 /// 自带 codex 首次配置向导。
 ///
@@ -255,8 +263,10 @@ class _CodexSetupScreenState extends ConsumerState<CodexSetupScreen> {
     final theme = Theme.of(context);
     final status = _status;
     final nonDegraded = status?.promptVariant == 'non_degraded';
-    return Scaffold(
-      appBar: WindowTitleBar(title: Text(l10n.codexSetup)),
+    return UtilityPage(
+      route: '/settings',
+      title: l10n.codexSetup,
+      parent: UtilityParent(title: l10n.settingsTitle, route: '/settings'),
       body: SafeArea(
         child: Center(
           child: ConstrainedBox(
@@ -282,10 +292,10 @@ class _CodexSetupScreenState extends ConsumerState<CodexSetupScreen> {
                   key: const Key('codex-base-url'),
                   controller: _baseUrl,
                   keyboardType: TextInputType.url,
-                  decoration: const InputDecoration(
+                  decoration: InputDecoration(
                     labelText: 'Base URL',
                     hintText: 'https://example.com/v1',
-                    border: OutlineInputBorder(),
+                    border: _fieldBorder,
                   ),
                 ),
                 const SizedBox(height: 10),
@@ -293,9 +303,9 @@ class _CodexSetupScreenState extends ConsumerState<CodexSetupScreen> {
                   key: const Key('codex-api-key'),
                   controller: _apiKey,
                   obscureText: true,
-                  decoration: const InputDecoration(
+                  decoration: InputDecoration(
                     labelText: 'API Key',
-                    border: OutlineInputBorder(),
+                    border: _fieldBorder,
                   ),
                 ),
                 const SizedBox(height: 10),
@@ -304,7 +314,7 @@ class _CodexSetupScreenState extends ConsumerState<CodexSetupScreen> {
                   decoration: InputDecoration(
                     labelText: l10n.codexSetupModelLabel,
                     hintText: 'gpt-5.5',
-                    border: const OutlineInputBorder(),
+                    border: _fieldBorder,
                   ),
                 ),
                 const SizedBox(height: 12),
@@ -375,7 +385,7 @@ class _CodexSetupScreenState extends ConsumerState<CodexSetupScreen> {
                     padding: const EdgeInsets.all(14),
                     decoration: BoxDecoration(
                       color: theme.colorScheme.surfaceContainerHighest,
-                      borderRadius: BorderRadius.circular(10),
+                      borderRadius: BorderRadius.circular(kPanelRadius),
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,

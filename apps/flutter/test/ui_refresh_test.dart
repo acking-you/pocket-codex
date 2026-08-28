@@ -113,6 +113,73 @@ void main() {
       }
     });
 
+    testWidgets('a detail page names its list and climbs back to it', (
+      tester,
+    ) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+      _useSize(tester, const Size(1300, 768));
+      final router = GoRouter(
+        initialLocation: '/manage',
+        routes: [
+          GoRoute(
+            path: '/',
+            builder: (_, _) => const Scaffold(body: Text('chat-home')),
+          ),
+          GoRoute(
+            path: '/manage',
+            builder: (_, _) => UtilityPage(
+              route: '/manage',
+              title: '服务管理',
+              body: Builder(
+                builder: (context) => Center(
+                  child: TextButton(
+                    onPressed: () => context.push('/manage/detail'),
+                    child: const Text('open-detail'),
+                  ),
+                ),
+              ),
+            ),
+            routes: [
+              GoRoute(
+                path: 'detail',
+                builder: (_, _) => const UtilityPage(
+                  // A detail page reports its parent's section as its route so
+                  // the page menu highlights correctly; the breadcrumb must
+                  // still work despite that collision.
+                  route: '/manage',
+                  title: 'my-device',
+                  parent: UtilityParent(title: '服务管理', route: '/manage'),
+                  body: Center(child: Text('detail-body')),
+                ),
+              ),
+            ],
+          ),
+        ],
+      );
+      addTearDown(router.dispose);
+
+      try {
+        await tester.pumpWidget(_routerHost(FakeBridgeApi(), router));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('open-detail'));
+        await tester.pumpAndSettle();
+
+        // Three segments: the conversation origin, the list, then this page.
+        expect(find.text('detail-body'), findsOneWidget);
+        expect(find.byKey(const Key('utility-chat-origin')), findsOneWidget);
+        expect(find.byKey(const Key('utility-parent-origin')), findsOneWidget);
+        expect(find.text('my-device'), findsOneWidget);
+
+        // Tapping the list segment actually returns to it.
+        await tester.tap(find.byKey(const Key('utility-parent-origin')));
+        await tester.pumpAndSettle();
+        expect(find.text('open-detail'), findsOneWidget);
+        expect(find.text('detail-body'), findsNothing);
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+      }
+    });
+
     testWidgets('compact Android keeps the implied back interaction', (
       tester,
     ) async {
@@ -338,7 +405,7 @@ void main() {
       }
     });
 
-    testWidgets('compact Android retains the protocol-tab layout', (
+    testWidgets('compact keeps devices first, one level at a time', (
       tester,
     ) async {
       debugDefaultTargetPlatformOverride = TargetPlatform.android;
@@ -348,12 +415,28 @@ void main() {
         await tester.pumpWidget(_host(const ServicesScreen(), accountApi()));
         await tester.pumpAndSettle();
 
-        expect(find.byKey(const Key('services-nav-bar')), findsOneWidget);
-        expect(find.byKey(const Key('device-alpha')), findsNothing);
+        // Narrow opens on the device list. Nothing is auto-selected, because a
+        // screen this size can only show one level at a time.
+        expect(find.byKey(const Key('device-alpha')), findsOneWidget);
         expect(
-          find.byKey(const Key('svc-pcx:alpha:api:default')),
+          find.byKey(const Key('device-capability-pcx:alpha:api:default')),
+          findsNothing,
+        );
+
+        await tester.tap(find.byKey(const Key('device-alpha')));
+        await tester.pumpAndSettle();
+
+        // Picking a device replaces the list with its capabilities…
+        expect(
+          find.byKey(const Key('device-capability-pcx:alpha:api:default')),
           findsOneWidget,
         );
+        expect(find.byKey(const Key('device-alpha')), findsNothing);
+
+        // …and the back row returns to it.
+        await tester.tap(find.byKey(const Key('device-back')));
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('device-alpha')), findsOneWidget);
       } finally {
         debugDefaultTargetPlatformOverride = null;
       }

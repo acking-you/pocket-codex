@@ -3344,15 +3344,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ConfigView dco_decode_config_view(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 6)
-      throw Exception('unexpected arr length: expect 6 but see ${arr.length}');
+    if (arr.length != 7)
+      throw Exception('unexpected arr length: expect 7 but see ${arr.length}');
     return ConfigView(
       relay: dco_decode_opt_String(arr[0]),
       hasKey: dco_decode_bool(arr[1]),
       locale: dco_decode_opt_String(arr[2]),
       mode: dco_decode_String(arr[3]),
       accountLogin: dco_decode_opt_String(arr[4]),
-      hasAccountToken: dco_decode_bool(arr[5]),
+      accountId: dco_decode_opt_String(arr[5]),
+      hasAccountToken: dco_decode_bool(arr[6]),
     );
   }
 
@@ -4103,6 +4104,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_locale = sse_decode_opt_String(deserializer);
     var var_mode = sse_decode_String(deserializer);
     var var_accountLogin = sse_decode_opt_String(deserializer);
+    var var_accountId = sse_decode_opt_String(deserializer);
     var var_hasAccountToken = sse_decode_bool(deserializer);
     return ConfigView(
       relay: var_relay,
@@ -4110,6 +4112,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       locale: var_locale,
       mode: var_mode,
       accountLogin: var_accountLogin,
+      accountId: var_accountId,
       hasAccountToken: var_hasAccountToken,
     );
   }
@@ -5012,6 +5015,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_opt_String(self.locale, serializer);
     sse_encode_String(self.mode, serializer);
     sse_encode_opt_String(self.accountLogin, serializer);
+    sse_encode_opt_String(self.accountId, serializer);
     sse_encode_bool(self.hasAccountToken, serializer);
   }
 

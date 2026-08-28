@@ -8,6 +8,7 @@ import 'package:go_router/go_router.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
 import 'package:pocket_codex/src/providers.dart';
+import 'package:pocket_codex/src/theme.dart';
 import 'package:pocket_codex/src/ui_prefs.dart';
 import 'package:pocket_codex/src/widgets/brand_logo.dart';
 import 'package:pocket_codex/src/widgets/links.dart';
@@ -161,7 +162,7 @@ class _WelcomeGuideScreenState extends ConsumerState<WelcomeGuideScreen> {
             : Row(
                 children: [
                   StatusChip(
-                    color: Colors.green.shade600,
+                    color: successColor(scheme),
                     label: l10n.welcomeHostRunning,
                     filled: true,
                   ),
@@ -276,7 +277,7 @@ class _WelcomeGuideScreenState extends ConsumerState<WelcomeGuideScreen> {
                 ],
               )
             : StatusChip(
-                color: Colors.green.shade600,
+                color: successColor(scheme),
                 label: l10n.welcomeHostFound(
                   '${found.first.device} · ${found.first.name}',
                 ),
@@ -302,7 +303,7 @@ class _WelcomeGuideScreenState extends ConsumerState<WelcomeGuideScreen> {
         color: scheme.surfaceContainerLow,
         borderRadius: BorderRadius.circular(14),
         border: Border.all(
-          color: done ? Colors.green.shade600 : scheme.outlineVariant,
+          color: done ? successColor(scheme) : scheme.outlineVariant,
           width: done ? 1.4 : 1,
         ),
       ),
@@ -313,7 +314,7 @@ class _WelcomeGuideScreenState extends ConsumerState<WelcomeGuideScreen> {
             children: [
               CircleAvatar(
                 radius: 13,
-                backgroundColor: done ? Colors.green.shade600 : scheme.primary,
+                backgroundColor: done ? successColor(scheme) : scheme.primary,
                 child: done
                     ? const Icon(Icons.check, size: 16, color: Colors.white)
                     : Text(
