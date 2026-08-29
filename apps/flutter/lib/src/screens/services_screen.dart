@@ -2,22 +2,26 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:pocket_codex/src/desktop_theme.dart';
-import 'package:pocket_codex/src/widgets/window_title_bar.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
+import 'package:pocket_codex/src/desktop_theme.dart';
+import 'package:pocket_codex/src/fonts.dart';
 import 'package:pocket_codex/src/dismissed_services.dart';
 import 'package:pocket_codex/src/error_format.dart';
 import 'package:pocket_codex/src/providers.dart';
-import 'package:pocket_codex/src/screens/api_service_screen.dart';
-import 'package:pocket_codex/src/screens/local_sessions_screen.dart';
 import 'package:pocket_codex/src/theme.dart';
+import 'package:pocket_codex/src/ui_prefs.dart';
+import 'package:pocket_codex/src/widgets/api_service_panel.dart';
+import 'package:pocket_codex/src/widgets/app_toast.dart';
+import 'package:pocket_codex/src/widgets/github_avatar.dart';
+import 'package:pocket_codex/src/widgets/group_card.dart';
+import 'package:pocket_codex/src/widgets/icon_badge.dart';
 import 'package:pocket_codex/src/widgets/loading.dart';
 import 'package:pocket_codex/src/widgets/local_host_dialog.dart';
 import 'package:pocket_codex/src/widgets/status_dots.dart';
-import 'package:pocket_codex/src/widgets/theme_toggle.dart';
+import 'package:pocket_codex/src/widgets/utility_page.dart';
 
 /// Management hub (`/manage`): lists discovered services on the configured
 /// relay, plus the Sessions browser and desktop local hosting. The chat-first
@@ -41,6 +45,7 @@ class _ServicesScreenState extends ConsumerState<ServicesScreen>
   static const _reprobeInterval = Duration(seconds: 15);
 
   Timer? _reprobeTimer;
+  String? _selectedDevice;
 
   @override
   void initState() {
@@ -92,224 +97,1207 @@ class _ServicesScreenState extends ConsumerState<ServicesScreen>
     }
   }
 
+  /// Whether the title bar must carry "host this device".
+  ///
+  /// The 本地托管 card is the real home for hosting, but it only renders under
+  /// THIS machine's device (or when no device exists at all, which is the empty
+  /// state the detail pane shows anyway). So the button is needed in exactly one
+  /// case: peers are listed and we host nothing, leaving no local device tile to
+  /// select and no card to reach.
+  bool get _hostingNeedsTitleBar {
+    final hosts = ref.watch(localServeListProvider).valueOrNull;
+    if (hosts == null || hosts.isNotEmpty) return false;
+    final services = ref.watch(servicesProvider).valueOrNull;
+    return services != null && services.isNotEmpty;
+  }
+
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
     final servicesAsync = ref.watch(servicesProvider);
     final config = ref.watch(configProvider).valueOrNull;
-    final selectedKey = ref.watch(selectedApiKeyProvider);
-    final wide = MediaQuery.of(context).size.width >= 600;
     final account = config?.mode == 'account';
-    final online = Colors.green.shade600;
 
-    // Sections shown as responsive tabs. Local hosting only where it's supported
-    // (desktop) + in account mode, so the tab set differs by platform — we drive
-    // the nav off this stable list and a section ENUM (not a raw index) so a
-    // hidden section never mis-selects.
-    final sections = <ServicesSection>[
-      ServicesSection.api,
-      ServicesSection.appServer,
-      // Remote-viewable host sessions are an account-mode feature (the meta
-      // tunnel rides the account broker; a host hosted by this app is reached
-      // over loopback).
-      if (account) ServicesSection.sessions,
-      if (_hostingSupported && account) ServicesSection.hosting,
-    ];
-    var section = ref.watch(servicesSectionProvider);
-    if (!sections.contains(section)) section = ServicesSection.api;
-    final selectedIndex = sections.indexOf(section);
-    void selectIndex(int i) =>
-        ref.read(servicesSectionProvider.notifier).state = sections[i];
-    IconData iconFor(ServicesSection s) => switch (s) {
-      ServicesSection.api => Icons.api,
-      ServicesSection.appServer => Icons.smart_toy_outlined,
-      ServicesSection.sessions => Icons.forum_outlined,
-      ServicesSection.hosting => Icons.dns_outlined,
-    };
-    String labelFor(ServicesSection s) => switch (s) {
-      ServicesSection.api => l10n.navApi,
-      ServicesSection.appServer => l10n.navAppServer,
-      ServicesSection.sessions => l10n.navSessions,
-      ServicesSection.hosting => l10n.navHosting,
-    };
-
-    return Scaffold(
-      // A pushed hub page: back + the PAGE title. The brand logo + app name
-      // belong to the root (chat home) title bar only — a page that can pop
-      // must read as a place inside the app, not as the app itself.
-      appBar: WindowTitleBar(
-        title: Text(l10n.manageServices),
-        actions: [
-          IconButton(
-            key: const Key('refresh-btn'),
-            icon: const Icon(Icons.refresh),
-            tooltip: l10n.refreshStatus,
-            // Re-discover services, re-read subscription health, and re-probe
-            // every app-server's backend reachability, then rebuild so each
-            // status re-evaluates.
-            onPressed: () {
-              ref.invalidate(servicesProvider);
-              ref.invalidate(subscriptionsProvider);
-              ref.invalidate(appReachableProvider);
-              ref.invalidate(apiReachableProvider);
-              ref.invalidate(appReachableLocalProvider);
-              ref.invalidate(apiReachableLocalProvider);
-              ref.invalidate(localServeListProvider);
-            },
-          ),
-          IconButton(
-            key: const Key('local-sessions-btn'),
-            icon: const Icon(Icons.history),
-            tooltip: l10n.localSessions,
-            onPressed: () => context.push('/sessions'),
-          ),
-          IconButton(
-            key: const Key('logs-btn'),
-            icon: const Icon(Icons.article_outlined),
-            tooltip: l10n.logsTitle,
-            onPressed: () => context.push('/logs'),
-          ),
-          // Appearance sits with the window's own controls here too, so it is
-          // in the same place on every full-window surface.
-          const ThemeToggle(),
-          IconButton(
-            key: const Key('settings-btn'),
-            icon: const Icon(Icons.settings),
-            onPressed: () => context.push('/settings'),
-          ),
-        ],
-      ),
-      // Mobile: bottom tab bar. Desktop uses a side rail in the body (below).
-      bottomNavigationBar: wide
-          ? null
-          : NavigationBar(
-              key: const Key('services-nav-bar'),
-              selectedIndex: selectedIndex,
-              onDestinationSelected: selectIndex,
-              destinations: [
-                for (final s in sections)
-                  NavigationDestination(
-                    icon: Icon(iconFor(s)),
-                    label: labelFor(s),
-                  ),
-              ],
+    return UtilityPage(
+      route: '/manage',
+      title: l10n.manageServices,
+      actions: [
+        IconButton(
+          key: const Key('refresh-btn'),
+          icon: const Icon(Icons.refresh),
+          tooltip: l10n.refreshStatus,
+          // Re-discover services, re-read subscription health, and re-probe
+          // every app-server's backend reachability, then rebuild so each
+          // status re-evaluates.
+          onPressed: () {
+            ref.invalidate(servicesProvider);
+            ref.invalidate(subscriptionsProvider);
+            ref.invalidate(appReachableProvider);
+            ref.invalidate(apiReachableProvider);
+            ref.invalidate(appReachableLocalProvider);
+            ref.invalidate(apiReachableLocalProvider);
+            ref.invalidate(localServeListProvider);
+          },
+        ),
+        // Only when this machine has no device tile to click — i.e. it hosts
+        // nothing yet while remote peers exist. That is the one arrangement
+        // where the 本地托管 card is unreachable (it renders under this
+        // machine, or when no device exists at all), so the title bar has to
+        // carry the action. Once we host, selecting our own device reaches the
+        // same card, and keeping the button would offer one action twice.
+        if (_hostingSupported && account && _hostingNeedsTitleBar)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: FilledButton.icon(
+              key: const Key('host-this-device-btn'),
+              onPressed: () => showDialog<void>(
+                context: context,
+                builder: (_) => const LocalHostDialog(),
+              ),
+              icon: const Icon(Icons.add, size: 18),
+              label: Text(l10n.servicesHostThisDevice),
             ),
+          ),
+      ],
       body: AnimatedSwitcher(
         duration: const Duration(milliseconds: 250),
         child: servicesAsync.when(
           loading: () =>
               const ListLoadingSkeleton(key: ValueKey('svc-loading')),
-          error: (e, _) => KeyedSubtree(
-            key: const ValueKey('svc-error'),
-            child: _ErrorState(
-              detail: friendlyError(e),
-              onRetry: () => ref.invalidate(servicesProvider),
-            ),
-          ),
-          data: (services) {
-            // The detail pane must honour the same optimistic/durable hiding
-            // as the list: a just-removed or dismissed service should not
-            // linger as the pane's auto-selected subject.
-            final pending = ref.watch(pendingRemovalProvider);
-            final dismissed =
-                ref.watch(dismissedServicesProvider).valueOrNull ??
-                const <String>{};
-            final apiServices = services
-                .where(
-                  (s) =>
-                      s.kind == 'api' &&
-                      !pending.contains(s.key) &&
-                      !dismissed.contains(s.key),
-                )
-                .toList();
-            final selected =
-                apiServices.where((s) => s.key == selectedKey).firstOrNull ??
-                apiServices.firstOrNull;
-            final list = _ServiceList(
-              section: section,
-              sectionLabel: labelFor(section),
+          error: (e, _) {
+            final detail = friendlyError(e);
+            final sessionExpired = isAccountSessionExpired(detail);
+            return KeyedSubtree(
+              key: const ValueKey('svc-error'),
+              child: _ErrorState(
+                detail: detail,
+                sessionExpired: sessionExpired,
+                onRetry: () => ref.invalidate(servicesProvider),
+                onSignIn: sessionExpired
+                    ? () => context.go('/onboarding?reason=session-expired')
+                    : null,
+              ),
+            );
+          },
+          data: (services) => KeyedSubtree(
+            key: const ValueKey('svc-data'),
+            child: _DeviceFirstServices(
+              services: services,
               relay: config?.relay,
               accountLogin: account ? config?.accountLogin : null,
-              // Wide puts the identity block in the side nav; narrow keeps it
-              // at the top of the list.
-              showIdentity: !wide,
-              services: services,
-              // Only the inline API detail pane (desktop, API tab) has a
-              // "current" service worth highlighting; narrow taps push a route.
-              highlightKey: (wide && section == ServicesSection.api)
-                  ? selected?.key
-                  : null,
-              onTapApi: (key) {
-                if (wide) {
-                  ref.read(selectedApiKeyProvider.notifier).state = key;
-                } else {
-                  context.push('/api/$key');
+              accountId: account ? config?.accountId : null,
+              selectedDevice: _selectedDevice,
+              onSelectDevice: (device) {
+                if (_selectedDevice != device) {
+                  setState(() => _selectedDevice = device);
                 }
               },
-              // App-server sessions are a full-screen chat; always push a route.
-              onTapApp: (key) =>
-                  context.push('/app/${Uri.encodeComponent(key)}'),
-            );
-            // The Sessions tab is its own widget (host picker + that host's
-            // remote sessions); the desktop API tab keeps the master-detail
-            // (list + inline detail); every other tab is just the section list.
-            final Widget content = section == ServicesSection.sessions
-                ? _SessionsTab(services: services)
-                : wide && section == ServicesSection.api
-                ? Row(
+              onClearDevice: () {
+                if (_selectedDevice != null) {
+                  setState(() => _selectedDevice = null);
+                }
+              },
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The service inventory, organized around devices rather than protocol tabs.
+/// App/API remain the real discovered services; session sharing is presented
+/// as a capability derived from an account-mode app host, because meta is
+/// intentionally not returned by service discovery.
+///
+/// Wide lays the device column beside the selected device's detail. Narrow can't
+/// hold both, so it becomes two levels: the device list, then that device's
+/// capabilities with the title bar's `Services / <device>` origin leading back.
+class _DeviceFirstServices extends ConsumerWidget {
+  const _DeviceFirstServices({
+    required this.services,
+    required this.relay,
+    required this.accountLogin,
+    required this.accountId,
+    required this.selectedDevice,
+    required this.onSelectDevice,
+    required this.onClearDevice,
+  });
+
+  final List<ServiceEntry> services;
+  final String? relay;
+  final String? accountLogin;
+  final String? accountId;
+
+  /// The device whose detail is shown. On narrow this doubles as the level:
+  /// null is the device list, set is that device's capabilities.
+  final String? selectedDevice;
+  final ValueChanged<String> onSelectDevice;
+
+  /// Return to the device list (narrow only).
+  final VoidCallback onClearDevice;
+
+  /// Below this the device column and the detail can't sit side by side. Matches
+  /// the conversation's own document-layout breakpoint so the whole app changes
+  /// idiom at one width rather than each screen picking its own.
+  static const double _splitWidth = 720;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final l10n = AppLocalizations.of(context);
+    final scheme = Theme.of(context).colorScheme;
+    final account = accountLogin != null;
+    final pending = ref.watch(pendingRemovalProvider);
+    final dismissed =
+        ref.watch(dismissedServicesProvider).valueOrNull ?? const <String>{};
+    final localHosts =
+        ref.watch(localServeListProvider).valueOrNull ??
+        const <AppServeStatus>[];
+    ref.listen(servicesProvider, (_, next) {
+      final data = next.valueOrNull;
+      if (data == null) return;
+      final present = {for (final service in data) service.key};
+      final current = ref.read(pendingRemovalProvider);
+      final stillHidden = current.intersection(present);
+      if (stillHidden.length != current.length) {
+        ref.read(pendingRemovalProvider.notifier).state = stillHidden;
+      }
+    });
+
+    final visible = <ServiceEntry>[
+      for (final service in services)
+        if (!pending.contains(service.key) && !dismissed.contains(service.key))
+          service,
+    ];
+    // A freshly-started host can precede the next relay discovery refresh, so
+    // synthesize its entries rather than waiting for discovery.
+    //
+    // Deregistered tunnels are listed too, as offline rows: the capability list
+    // is now the only place a tunnel can be published again, so hiding a
+    // deregistered one would strand it with no route back. `pending` is still
+    // honoured — it now means only "this whole host is being stopped".
+    final offlineTunnels = <String>{};
+    for (final host in localHosts) {
+      void synthesize(String kind, String key, {required bool registered}) {
+        if (pending.contains(key)) return;
+        if (!registered) offlineTunnels.add(key);
+        if (visible.any((service) => service.key == key)) return;
+        visible.add(
+          ServiceEntry(
+            device: host.device,
+            kind: kind,
+            name: host.name,
+            key: key,
+          ),
+        );
+      }
+
+      synthesize('app', host.appServiceKey, registered: host.appRegistered);
+      synthesize('api', host.apiServiceKey, registered: host.apiRegistered);
+    }
+
+    // A dismissed orphan should reappear if its backend later recovers. This
+    // mirrors the compact layout's recovery contract.
+    if (dismissed.isNotEmpty) {
+      final recovered = <String>[
+        for (final service in services)
+          if (dismissed.contains(service.key) &&
+              (service.kind == 'app'
+                          ? ref.watch(appReachableProvider(service.key))
+                          : ref.watch(apiReachableProvider(service.key)))
+                      .valueOrNull ==
+                  true)
+            service.key,
+      ];
+      if (recovered.isNotEmpty) {
+        final notifier = ref.read(dismissedServicesProvider.notifier);
+        Future.microtask(() => notifier.restore(recovered));
+      }
+    }
+
+    final devices = <String>{
+      for (final service in visible) service.device,
+      for (final host in localHosts) host.device,
+    }.toList()..sort();
+    final localDevices = {for (final host in localHosts) host.device};
+    final preferredKey = ref.watch(
+      uiPrefsProvider.select(
+        (prefs) => prefs.valueOrNull?.preferredAppServiceKey,
+      ),
+    );
+    final preferredDevice = visible
+        .where((service) => service.key == preferredKey)
+        .firstOrNull
+        ?.device;
+    devices.sort((a, b) {
+      int rank(String device) {
+        if (device == preferredDevice) return 0;
+        if (localDevices.contains(device)) return 1;
+        return 2;
+      }
+
+      final byRank = rank(a).compareTo(rank(b));
+      return byRank == 0 ? a.compareTo(b) : byRank;
+    });
+    final split = MediaQuery.sizeOf(context).width >= _splitWidth;
+    // Wide always has a device in the detail pane — an empty pane beside a
+    // populated column reads as broken. Narrow shows the list first and only
+    // resolves a device once one is picked, so nothing is chosen on the user's
+    // behalf on a screen that can only show one level at a time.
+    final activeDevice = devices.contains(selectedDevice)
+        ? selectedDevice
+        : !split
+        ? null
+        : preferredDevice != null && devices.contains(preferredDevice)
+        ? preferredDevice
+        : devices.firstOrNull;
+    final deviceEntries =
+        visible.where((service) => service.device == activeDevice).toList()
+          ..sort((a, b) {
+            final byName = a.name.compareTo(b.name);
+            return byName == 0 ? a.kind.compareTo(b.kind) : byName;
+          });
+    final apps = deviceEntries
+        .where((service) => service.kind == 'app')
+        .toList();
+    final apis = deviceEntries
+        .where((service) => service.kind == 'api')
+        .toList();
+    final capabilityCount =
+        apps.length + apis.length + (account ? apps.length : 0);
+
+    final localAppAddr = <String, String>{
+      for (final host in localHosts) host.appServiceKey: host.appListenAddr,
+    };
+    final localApiAddr = <String, String>{
+      for (final host in localHosts) host.apiServiceKey: host.apiListenAddr,
+    };
+    final localTunnels = <String, ({String name, String kind})>{
+      for (final host in localHosts) ...{
+        host.appServiceKey: (name: host.name, kind: 'app'),
+        host.apiServiceKey: (name: host.name, kind: 'api'),
+      },
+    };
+    final subscriptions = {
+      for (final sub
+          in ref.watch(subscriptionsProvider).valueOrNull ?? const <SubInfo>[])
+        sub.key: sub,
+    };
+    final bridge = ref.watch(bridgeApiProvider);
+    final observedDown = ref.watch(observedDisconnectedProvider);
+    final online = successColor(scheme);
+
+    // A capability's status pill, plus the reason when it is unreachable: the
+    // relay registration can outlive the backend it forwards to, and "offline"
+    // alone leaves the user unable to tell which half is at fault.
+    ({Widget chip, String? reason}) status({
+      required bool unreachable,
+      required String label,
+      required Color color,
+      required String reasonText,
+    }) => (
+      chip: StatusChip(color: color, label: label, filled: true),
+      reason: unreachable ? reasonText : null,
+    );
+
+    ({Widget chip, String? reason}) appStatus(ServiceEntry service) {
+      if (!observedDown.contains(service.key) &&
+          bridge.appIsConnected(service.key)) {
+        return status(
+          unreachable: false,
+          label: l10n.statusConnected,
+          color: online,
+          reasonText: l10n.unreachableReason,
+        );
+      }
+      if (observedDown.contains(service.key)) {
+        return status(
+          unreachable: true,
+          label: l10n.statusUnreachable,
+          color: scheme.error,
+          reasonText: l10n.unreachableReason,
+        );
+      }
+      final localAddr = localAppAddr[service.key];
+      final reach = localAddr == null
+          ? ref.watch(appReachableProvider(service.key))
+          : ref.watch(appReachableLocalProvider(localAddr));
+      return reach.when(
+        data: (ok) => status(
+          unreachable: !ok,
+          label: ok ? l10n.statusOnline : l10n.statusUnreachable,
+          color: ok ? online : scheme.error,
+          reasonText: l10n.unreachableReason,
+        ),
+        loading: () => status(
+          unreachable: false,
+          label: l10n.statusChecking,
+          color: scheme.outline,
+          reasonText: l10n.unreachableReason,
+        ),
+        error: (_, _) => status(
+          unreachable: true,
+          label: l10n.statusUnreachable,
+          color: scheme.error,
+          reasonText: l10n.unreachableReason,
+        ),
+      );
+    }
+
+    ({Widget chip, String? reason}) apiStatus(ServiceEntry service) {
+      final sub = subscriptions[service.key];
+      if (sub != null) {
+        return status(
+          unreachable: !sub.alive,
+          label: sub.alive ? l10n.subscribedAlive : l10n.subscribedDead,
+          color: sub.alive ? online : scheme.error,
+          reasonText: l10n.apiUnreachableReason,
+        );
+      }
+      final localAddr = localApiAddr[service.key];
+      final reach = localAddr == null
+          ? ref.watch(apiReachableProvider(service.key))
+          : ref.watch(apiReachableLocalProvider(localAddr));
+      return reach.when(
+        data: (ok) => status(
+          unreachable: !ok,
+          label: ok ? l10n.statusOnline : l10n.statusUnreachable,
+          color: ok ? online : scheme.error,
+          reasonText: l10n.apiUnreachableReason,
+        ),
+        loading: () => status(
+          unreachable: false,
+          label: l10n.statusChecking,
+          color: scheme.outline,
+          reasonText: l10n.apiUnreachableReason,
+        ),
+        error: (_, _) => status(
+          unreachable: true,
+          label: l10n.statusUnreachable,
+          color: scheme.error,
+          reasonText: l10n.apiUnreachableReason,
+        ),
+      );
+    }
+
+    bool unreachable(ServiceEntry service) {
+      final local = localTunnels.containsKey(service.key);
+      if (local) return false;
+      if (service.kind == 'app' && observedDown.contains(service.key)) {
+        return true;
+      }
+      final probe = service.kind == 'app'
+          ? ref.watch(appReachableProvider(service.key))
+          : ref.watch(apiReachableProvider(service.key));
+      return probe.hasError || probe.valueOrNull == false;
+    }
+
+    final unreachableEntries = deviceEntries
+        .where(unreachable)
+        .toList(growable: false);
+    // Resolve each status once — the builders watch providers, so calling one
+    // twice per row would double the watch registrations.
+    final appStates = {for (final s in apps) s.key: appStatus(s)};
+    final apiStates = {for (final s in apis) s.key: apiStatus(s)};
+    // The instance name only earns its place when it isn't the default one: the
+    // device already names itself above, and a lone "default" repeated down the
+    // column says nothing.
+    String protocolOf(String wire, ServiceEntry service) =>
+        service.name == 'default' ? wire : '$wire · ${service.name}';
+    // A host we run publishes its meta tunnel on the same host record as its
+    // app-server, so the session capability's address comes from there.
+    final localMetaAddr = <String, String>{
+      for (final host in localHosts)
+        if (host.metaRegistered) host.appServiceKey: host.metaListenAddr,
+    };
+    // The meta tunnel is keyed by its host's app-server, because that is the row
+    // session sharing is rendered against — so it needs its own map rather than
+    // reusing `localTunnels` (which is app/api and is what re-registration for
+    // those two reads).
+    final metaHostOf = <String, ({String name, String kind})>{
+      for (final host in localHosts)
+        host.appServiceKey: (name: host.name, kind: 'meta'),
+    };
+    final offlineMeta = <String>{
+      for (final host in localHosts)
+        if (!host.metaRegistered) host.appServiceKey,
+    };
+    VoidCallback? reregisterOf(
+      Map<String, ({String name, String kind})> owners,
+      Set<String> offline,
+      String key,
+    ) {
+      final owner = owners[key];
+      if (owner == null || !offline.contains(key)) return null;
+      return () => _reregisterTunnel(
+        context,
+        ref,
+        hostName: owner.name,
+        kind: owner.kind,
+      );
+    }
+
+    // `localTunnels` already maps every tunnel we host to its owner — which is
+    // exactly "whose tunnel is this, and of what kind", the question
+    // re-registration asks. It used to be built a second time under another
+    // name a hundred lines further down.
+    VoidCallback? reregisterFor(String key) =>
+        reregisterOf(localTunnels, offlineTunnels, key);
+
+    // A tunnel we took off the relay reads as offline, not unreachable: nothing
+    // is broken, it simply is not published.
+    Widget? offlineChip(String key) => offlineTunnels.contains(key)
+        ? StatusChip(
+            color: scheme.outline,
+            label: l10n.tunnelOffline,
+            filled: true,
+          )
+        : null;
+    final capabilityRows = <Widget>[
+      for (final service in apps)
+        _CapabilityRow(
+          key: Key('device-capability-${service.key}'),
+          icon: Icons.chat_bubble_outline,
+          title: l10n.servicesChatCapability,
+          protocol: protocolOf('App-server', service),
+          localAddr: localAppAddr[service.key],
+          menuKey: Key('capability-menu-${service.key}'),
+          status: offlineChip(service.key) ?? appStates[service.key]!.chip,
+          reason: appStates[service.key]!.reason,
+          onReregister: reregisterFor(service.key),
+          isDefault: service.key == preferredKey,
+          onSetDefault: () => ref
+              .read(uiPrefsProvider.notifier)
+              .setPreferredAppService(service.key),
+          actionLabel: l10n.servicesOpen,
+          // Straight back to the chat, pointed at this service. The project /
+          // conversation picker this used to push lives in the chat's own
+          // sidebar, so drilling into a third page only put the same tree
+          // behind an extra tap.
+          onAction: () => _openInChat(context, ref, service.key),
+          onDeregister: () => _confirmDeregister(
+            context,
+            ref,
+            service,
+            localTunnel: localTunnels[service.key],
+            unreachable: unreachableEntries.any(
+              (entry) => entry.key == service.key,
+            ),
+          ),
+        ),
+      for (final service in apis)
+        _CapabilityRow(
+          key: Key('device-capability-${service.key}'),
+          icon: Icons.bolt_outlined,
+          title: l10n.servicesApiCapability,
+          protocol: protocolOf('API', service),
+          localAddr: localApiAddr[service.key],
+          menuKey: Key('capability-menu-${service.key}'),
+          status: offlineChip(service.key) ?? apiStates[service.key]!.chip,
+          reason: apiStates[service.key]!.reason,
+          onReregister: reregisterFor(service.key),
+          actionLabel: l10n.servicesManage,
+          // A panel, not a page: subscribing is one port and one button, and
+          // the row it acts on stays in view behind it.
+          onAction: () => showApiServicePanel(context, service.key),
+          onDeregister: () => _confirmDeregister(
+            context,
+            ref,
+            service,
+            localTunnel: localTunnels[service.key],
+            unreachable: unreachableEntries.any(
+              (entry) => entry.key == service.key,
+            ),
+          ),
+        ),
+      if (account)
+        for (final service in apps)
+          _CapabilityRow(
+            key: Key('device-capability-meta-${service.key}'),
+            icon: Icons.forum_outlined,
+            title: l10n.servicesSessionsCapability,
+            protocol: protocolOf('Meta', service),
+            localAddr: localMetaAddr[service.key],
+            menuKey: Key('capability-menu-meta-${service.key}'),
+            // The meta tunnel is unpublishable like the other two, so this row
+            // carries the same controls the tunnel list used to.
+            status: offlineMeta.contains(service.key)
+                ? StatusChip(
+                    color: scheme.outline,
+                    label: l10n.tunnelOffline,
+                    filled: true,
+                  )
+                : null,
+            onReregister: reregisterOf(metaHostOf, offlineMeta, service.key),
+            onDeregister: metaHostOf.containsKey(service.key)
+                ? () => _confirmDeregister(
+                    context,
+                    ref,
+                    ServiceEntry(
+                      device: service.device,
+                      kind: 'meta',
+                      name: metaHostOf[service.key]!.name,
+                      key: service.key,
+                    ),
+                    localTunnel: (
+                      name: metaHostOf[service.key]!.name,
+                      kind: 'meta',
+                    ),
+                  )
+                : null,
+            actionLabel: l10n.servicesBrowse,
+            // Replaces this page rather than stacking on it: the session
+            // browser is a top-level destination in its own right (it has a
+            // page-menu entry and a shortcut), so it reads as `Chat /
+            // <device>` instead of a third level under Services.
+            onAction: () => context.pushReplacement(
+              Uri(
+                path: '/sessions',
+                queryParameters: {'svc': service.key},
+              ).toString(),
+            ),
+          ),
+    ];
+
+    int countFor(String device) {
+      final entries = visible
+          .where((service) => service.device == device)
+          .toList();
+      final appCount = entries.where((service) => service.kind == 'app').length;
+      return entries.length + (account ? appCount : 0);
+    }
+
+    final deviceColumn = _DeviceColumn(
+      relay: relay ?? l10n.relayNotConfigured,
+      accountLogin: accountLogin,
+      accountId: accountId,
+      devices: devices,
+      activeDevice: activeDevice,
+      localDevices: localDevices,
+      capabilityCount: countFor,
+      onSelect: onSelectDevice,
+      // Beside a detail pane the column owns the full height and scrolls its
+      // own list; stacked it is the page's only content and scrolls with it.
+      filled: split,
+    );
+
+    final detail = <Widget>[
+      _DeviceDetailHeader(
+        device: activeDevice,
+        local: activeDevice != null && localDevices.contains(activeDevice),
+        isDefault: activeDevice != null && activeDevice == preferredDevice,
+        onClean: unreachableEntries.isEmpty
+            ? null
+            : () => _batchRemove(context, ref, unreachableEntries),
+      ),
+      GroupCard(
+        title: l10n.servicesCapabilities,
+        trailing: _CountPill(
+          label: l10n.servicesDeviceCapabilityCount(capabilityCount),
+        ),
+        children: [
+          if (capabilityRows.isEmpty)
+            Padding(
+              padding: const EdgeInsets.all(32),
+              child: Text(
+                l10n.servicesNoCapabilities,
+                style: TextStyle(color: scheme.onSurfaceVariant),
+              ),
+            )
+          else
+            // One child, not one per row: the rows draw their own separators, so
+            // letting the card divide them too would double every hairline.
+            Column(children: capabilityRows),
+        ],
+      ),
+      // Hosting is about THIS machine, so it belongs under this machine's
+      // device — showing it while a remote peer is selected implied the hosts
+      // listed were that peer's. The no-devices case still needs it, since that
+      // is the only route to starting a first host.
+      if (_hostingSupported &&
+          account &&
+          (devices.isEmpty || localDevices.contains(activeDevice))) ...[
+        const SizedBox(height: 12),
+        // No status on the header: each host card carries its own, and the same
+        // pill in both places said one thing twice.
+        GroupCard(
+          title: l10n.localHostingSection,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+              child: Column(
+                children: [
+                  for (final host in localHosts)
+                    _LocalHostCard(
+                      key: Key('local-host-${host.name}'),
+                      host: host,
+                    ),
+                  const _AddLocalHostCard(),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ],
+    ];
+
+    // Narrow: one level at a time. The device list stands alone until a device
+    // is picked; the detail then replaces it, with a back affordance in the
+    // header rather than a second column squeezed alongside.
+    if (!split) {
+      return _NarrowServices(
+        // With no devices at all there is no list worth showing — and the empty
+        // state and the "host this machine" card both live in the detail, so
+        // going straight there is the only way to reach them.
+        showDetail: activeDevice != null || devices.isEmpty,
+        canGoBack: devices.isNotEmpty,
+        onBack: onClearDevice,
+        deviceColumn: deviceColumn,
+        detail: detail,
+      );
+    }
+
+    return Align(
+      alignment: Alignment.topCenter,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 1160),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 18, 24, 24),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              SizedBox(width: 260, child: deviceColumn),
+              const SizedBox(width: 14),
+              Expanded(child: ListView(children: detail)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The compact two-level form of [_DeviceFirstServices]: the device list, or one
+/// device's capabilities with a back row above them.
+class _NarrowServices extends StatelessWidget {
+  const _NarrowServices({
+    required this.showDetail,
+    required this.canGoBack,
+    required this.onBack,
+    required this.deviceColumn,
+    required this.detail,
+  });
+
+  final bool showDetail;
+
+  /// Whether there is a device list to return to. False when the detail is the
+  /// only level (no devices discovered), so no back affordance is offered.
+  final bool canGoBack;
+
+  final VoidCallback onBack;
+  final Widget deviceColumn;
+  final List<Widget> detail;
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    // A level change is a navigation, so it moves rather than cross-fades:
+    // forward slides in from the trailing edge, back from the leading one.
+    final switcher = AnimatedSwitcher(
+      duration: const Duration(milliseconds: 220),
+      switchInCurve: Curves.easeOutCubic,
+      switchOutCurve: Curves.easeOutCubic,
+      transitionBuilder: (child, animation) => SlideTransition(
+        position: Tween<Offset>(
+          begin: Offset(showDetail ? 0.06 : -0.06, 0),
+          end: Offset.zero,
+        ).animate(animation),
+        child: FadeTransition(opacity: animation, child: child),
+      ),
+      child: showDetail
+          ? ListView(
+              key: const ValueKey('svc-narrow-detail'),
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
+              children: [
+                if (canGoBack) ...[
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton.icon(
+                      key: const Key('device-back'),
+                      onPressed: onBack,
+                      icon: const Icon(Icons.chevron_left, size: 18),
+                      label: Text(l10n.servicesDevices),
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                ],
+                ...detail,
+              ],
+            )
+          : Padding(
+              key: const ValueKey('svc-narrow-devices'),
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
+              child: deviceColumn,
+            ),
+    );
+    // Drilling into a device is a level, not a route, so the platform's back
+    // gesture has to be told: without this it would leave Services entirely
+    // from the detail, skipping the device list the user came through.
+    return PopScope(
+      canPop: !showDetail || !canGoBack,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) onBack();
+      },
+      child: switcher,
+    );
+  }
+}
+
+class _DeviceColumn extends StatelessWidget {
+  const _DeviceColumn({
+    required this.relay,
+    required this.accountLogin,
+    required this.accountId,
+    required this.devices,
+    required this.activeDevice,
+    required this.localDevices,
+    required this.capabilityCount,
+    required this.onSelect,
+    required this.filled,
+  });
+
+  final String relay;
+  final String? accountLogin;
+  final String? accountId;
+  final List<String> devices;
+  final String? activeDevice;
+  final Set<String> localDevices;
+  final int Function(String device) capabilityCount;
+  final ValueChanged<String> onSelect;
+
+  /// Whether to take the height it is given and scroll the device list inside.
+  /// False sizes to the list instead, for a column that is the whole page.
+  final bool filled;
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    final scheme = Theme.of(context).colorScheme;
+    final online = successColor(scheme);
+    final tiles = <Widget>[
+      for (final device in devices)
+        _DeviceTile(
+          key: Key('device-$device'),
+          device: device,
+          subtitle: [
+            if (localDevices.contains(device)) l10n.servicesLocalDevice,
+            l10n.servicesDeviceCapabilityCount(capabilityCount(device)),
+          ].join(' · '),
+          selected: device == activeDevice,
+          onTap: () => onSelect(device),
+        ),
+    ];
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: filled ? MainAxisSize.max : MainAxisSize.min,
+        children: [
+          // The identity opens settings, where the account, the relay, the key
+          // and signing out already live — a second account page would only
+          // duplicate that group. Self-host mode has no account, but the relay
+          // and key are configured there too, so it leads to the same place.
+          Tooltip(
+            message: l10n.settingsTitle,
+            child: InkWell(
+              key: const Key('identity-open-settings'),
+              mouseCursor: clickable,
+              onTap: () => context.push('/settings'),
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Row(
+                  children: [
+                    GitHubAvatar(
+                      accountId: accountId,
+                      fallbackIcon: accountLogin == null
+                          ? Icons.dns_outlined
+                          : Icons.person_outline,
+                      size: 36,
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        accountLogin == null ? relay : '@$accountLogin',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                    StatusChip(
+                      color: online,
+                      label: l10n.statusOnline,
+                      filled: true,
+                    ),
+                    Icon(Icons.chevron_right, size: 18, color: scheme.outline),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          Divider(height: 1, color: scheme.outlineVariant),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 13, 14, 7),
+            child: Text(
+              l10n.servicesDevices.toUpperCase(),
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                color: scheme.onSurfaceVariant,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          if (filled)
+            Expanded(
+              child: ListView(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                children: tiles,
+              ),
+            )
+          else
+            Padding(
+              padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+              child: Column(children: tiles),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DeviceTile extends StatelessWidget {
+  const _DeviceTile({
+    super.key,
+    required this.device,
+    required this.subtitle,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String device;
+  final String subtitle;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Material(
+        color: selected ? scheme.primaryContainer : Colors.transparent,
+        borderRadius: BorderRadius.circular(kControlRadius),
+        child: InkWell(
+          mouseCursor: clickable,
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(kControlRadius),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 9),
+            child: Row(
+              children: [
+                Container(
+                  width: 32,
+                  height: 32,
+                  decoration: BoxDecoration(
+                    color: surfacePanel(scheme),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: scheme.outlineVariant),
+                  ),
+                  child: Icon(
+                    Icons.dns_outlined,
+                    size: 17,
+                    color: selected
+                        ? scheme.onPrimaryContainer
+                        : scheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      SizedBox(width: 360, child: list),
-                      const VerticalDivider(width: 1),
-                      Expanded(
-                        child: selected == null
-                            ? Center(child: Text(l10n.selectApiService))
-                            : Align(
-                                alignment: Alignment.topCenter,
-                                child: ConstrainedBox(
-                                  constraints: const BoxConstraints(
-                                    maxWidth: 520,
-                                  ),
-                                  child: ApiServiceScreen(
-                                    key: ValueKey(selected.key),
-                                    serviceKey: selected.key,
-                                    embedded: true,
-                                  ),
-                                ),
-                              ),
+                      Text(
+                        device,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                          color: selected
+                              ? scheme.onPrimaryContainer
+                              : scheme.onSurface,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        subtitle,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: scheme.onSurfaceVariant,
+                        ),
                       ),
                     ],
-                  )
-                : list;
-            final scrollable = RefreshIndicator(
-              onRefresh: () async => ref.invalidate(servicesProvider),
-              child: content,
-            );
-            // Desktop: a drawer-style side nav (identity block on top,
-            // icon+label tiles below) — labels beside icons read better than
-            // a cramped icon rail, and the identity lives where a desktop
-            // sidebar puts it instead of as a hero banner in the list.
-            final body = wide
-                ? Row(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _DeviceDetailHeader extends StatelessWidget {
+  const _DeviceDetailHeader({
+    required this.device,
+    required this.local,
+    required this.isDefault,
+    required this.onClean,
+  });
+
+  final String? device;
+  final bool local;
+  final bool isDefault;
+  final VoidCallback? onClean;
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Row(
+        children: [
+          Container(
+            width: 42,
+            height: 42,
+            decoration: BoxDecoration(
+              color: scheme.primaryContainer,
+              borderRadius: BorderRadius.circular(11),
+            ),
+            child: Icon(Icons.dns_outlined, color: scheme.onPrimaryContainer),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              device ?? l10n.servicesDevices,
+              style: Theme.of(
+                context,
+              ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w600),
+            ),
+          ),
+          if (local) _CountPill(label: l10n.servicesLocalDevice),
+          if (local && isDefault) const SizedBox(width: 8),
+          if (isDefault) _CountPill(label: l10n.servicesDefault, accent: true),
+          if (onClean != null) ...[
+            const SizedBox(width: 8),
+            TextButton.icon(
+              key: const Key('device-clean-unreachable'),
+              onPressed: onClean,
+              icon: const Icon(Icons.cleaning_services_outlined, size: 17),
+              label: Text(l10n.batchRemoveEnter),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _CapabilityRow extends StatelessWidget {
+  const _CapabilityRow({
+    super.key,
+    required this.icon,
+    required this.title,
+    required this.protocol,
+    required this.actionLabel,
+    required this.onAction,
+    this.status,
+    this.reason,
+    this.localAddr,
+    this.menuKey,
+    this.isDefault = false,
+    this.onSetDefault,
+    this.onDeregister,
+    this.onReregister,
+  });
+
+  final IconData icon;
+  final String title;
+  final String protocol;
+  final String actionLabel;
+  final VoidCallback onAction;
+  final Widget? status;
+
+  /// Why this capability is unavailable, when it is. A bare "unreachable" leaves
+  /// the user guessing whether the relay or the backend is at fault, so the
+  /// status pill is followed by the explanation.
+  final String? reason;
+
+  /// Where this capability listens on this machine, for a device we host. Shown
+  /// because it is what a user copies into another tool's config.
+  final String? localAddr;
+
+  /// Identifies THIS row's overflow. The title bar's page menu carries the same
+  /// glyph, so a test reaching for "the overflow" has to say which row's.
+  final Key? menuKey;
+
+  final bool isDefault;
+  final VoidCallback? onSetDefault;
+  final VoidCallback? onDeregister;
+
+  /// Publish a tunnel that was taken off the relay. Without this a deregistered
+  /// capability would have no way back, which is why the tunnel list it replaces
+  /// offered both.
+  final VoidCallback? onReregister;
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      constraints: const BoxConstraints(minHeight: 64),
+      padding: const EdgeInsets.fromLTRB(12, 8, 7, 8),
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: scheme.outlineVariant)),
+      ),
+      child: Row(
+        children: [
+          IconBadge(icon: icon, size: 36, accent: true),
+          const SizedBox(width: 11),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
+                // One rich line rather than a Row, so a long address ellipsises
+                // with the protocol instead of overflowing the row.
+                Text.rich(
+                  TextSpan(
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
                     children: [
-                      _SideNav(
-                        relay: config?.relay ?? l10n.relayNotConfigured,
-                        accountLogin: account ? config?.accountLogin : null,
-                        online: online,
-                        selectedIndex: selectedIndex,
-                        onSelect: selectIndex,
-                        items: [
-                          for (final s in sections)
-                            (icon: iconFor(s), label: labelFor(s)),
-                        ],
-                      ),
-                      const VerticalDivider(width: 1),
-                      Expanded(child: scrollable),
+                      TextSpan(text: protocol),
+                      if (localAddr != null) ...[
+                        TextSpan(
+                          text: '  ·  ',
+                          style: TextStyle(color: onSurfaceMuted(scheme)),
+                        ),
+                        TextSpan(
+                          text: localAddr,
+                          style: const TextStyle(
+                            fontFamily: monoFontFamily,
+                            fontFamilyFallback: monoCjkFallback,
+                          ),
+                        ),
+                      ],
                     ],
-                  )
-                : scrollable;
-            return KeyedSubtree(key: const ValueKey('svc-data'), child: body);
-          },
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                if (reason != null) ...[
+                  const SizedBox(height: 3),
+                  Text(
+                    reason!,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: scheme.error,
+                      height: 1.35,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          // Two trailing columns — status, then one action — so the rows line up
+          // instead of each ending at a different place. Everything occasional
+          // (set default, deregister, re-register) lives in the overflow.
+          if (isDefault) ...[
+            _CountPill(label: l10n.servicesDefault, accent: true),
+            const SizedBox(width: 8),
+          ],
+          if (status != null) ...[status!, const SizedBox(width: 6)],
+          TextButton(onPressed: onAction, child: Text(actionLabel)),
+          if (_overflow.isNotEmpty)
+            PopupMenuButton<VoidCallback>(
+              key: menuKey,
+              tooltip: l10n.moreActions,
+              icon: const Icon(Icons.more_horiz),
+              onSelected: (action) => action(),
+              itemBuilder: (_) => [
+                for (final item in _overflow)
+                  PopupMenuItem<VoidCallback>(
+                    value: item.action,
+                    child: Text(
+                      item.label(l10n),
+                      style: item.danger
+                          ? TextStyle(color: scheme.error)
+                          : null,
+                    ),
+                  ),
+              ],
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// The occasional actions, in the order they belong: make this the default,
+  /// bring a dropped tunnel back, take one off the relay.
+  List<_RowAction> get _overflow => [
+    if (!isDefault && onSetDefault != null)
+      _RowAction((l) => l.servicesSetDefault, onSetDefault!),
+    if (onReregister != null) _RowAction((l) => l.reregister, onReregister!),
+    if (onDeregister != null)
+      _RowAction((l) => l.deregister, onDeregister!, danger: true),
+  ];
+}
+
+/// One entry of a capability row's overflow menu. The label is resolved late so
+/// the list can be built where no `l10n` is in hand.
+class _RowAction {
+  const _RowAction(this.label, this.action, {this.danger = false});
+
+  final String Function(AppLocalizations) label;
+  final VoidCallback action;
+  final bool danger;
+}
+
+class _CountPill extends StatelessWidget {
+  const _CountPill({required this.label, this.accent = false});
+
+  final String label;
+  final bool accent;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+      decoration: BoxDecoration(
+        color: accent ? scheme.primaryContainer : scheme.surfaceContainer,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: scheme.outlineVariant),
+      ),
+      child: Text(
+        label,
+        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+          color: accent ? scheme.onPrimaryContainer : scheme.onSurfaceVariant,
+          fontWeight: accent ? FontWeight.w600 : FontWeight.w400,
         ),
       ),
     );
@@ -320,602 +1308,10 @@ class _ServicesScreenState extends ConsumerState<ServicesScreen>
 /// sessions over its meta tunnel (loopback when this app hosts it, broker when
 /// remote). Read-only transcripts + force-resume per session, via an embedded
 /// [LocalSessionsScreen] in remote mode.
-class _SessionsTab extends ConsumerWidget {
-  const _SessionsTab({required this.services});
-
-  final List<ServiceEntry> services;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final l10n = AppLocalizations.of(context);
-    final hosts = services.where((s) => s.kind == 'app').toList();
-    if (hosts.isEmpty) {
-      return Center(
-        key: const ValueKey('sessions-no-host'),
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Text(l10n.sessionsNoHost, textAlign: TextAlign.center),
-        ),
-      );
-    }
-    final selected = ref.watch(sessionsHostKeyProvider);
-    final activeKey = hosts.any((h) => h.key == selected)
-        ? selected!
-        : hosts.first.key;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-          child: Row(
-            children: [
-              const Icon(Icons.dns_outlined, size: 18),
-              const SizedBox(width: 10),
-              Text(l10n.sessionsHostLabel),
-              const SizedBox(width: 12),
-              Expanded(
-                child: DropdownButton<String>(
-                  key: const Key('sessions-host-picker'),
-                  isExpanded: true,
-                  value: activeKey,
-                  items: [
-                    for (final h in hosts)
-                      DropdownMenuItem(
-                        value: h.key,
-                        child: Text(
-                          '${h.device} · ${h.name}',
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                  ],
-                  onChanged: (k) {
-                    if (k != null) {
-                      ref.read(sessionsHostKeyProvider.notifier).state = k;
-                    }
-                  },
-                ),
-              ),
-            ],
-          ),
-        ),
-        const Divider(height: 1),
-        Expanded(
-          child: LocalSessionsScreen(
-            key: ValueKey('remote-sessions-$activeKey'),
-            source: SessionSource.remote(activeKey),
-            embedded: true,
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _ServiceList extends ConsumerWidget {
-  const _ServiceList({
-    required this.section,
-    required this.sectionLabel,
-    required this.showIdentity,
-    required this.relay,
-    required this.accountLogin,
-    required this.services,
-    required this.onTapApi,
-    required this.onTapApp,
-    this.highlightKey,
-  });
-
-  /// Which section's cards this list renders (the selected responsive tab). The
-  /// relay/account banner shows on every section.
-  final ServicesSection section;
-
-  /// The localised section name, rendered as the list's heading.
-  final String sectionLabel;
-
-  /// Whether to render the identity card at the top of the list (narrow
-  /// layouts; wide layouts show it in the side nav instead).
-  final bool showIdentity;
-  final String? relay;
-
-  /// The signed-in GitHub login in account mode (null in self-host mode), shown
-  /// in the header card instead of a relay address.
-  final String? accountLogin;
-  final List<ServiceEntry> services;
-  final void Function(String key) onTapApi;
-  final void Function(String key) onTapApp;
-
-  /// The service key to render selected (a 2px accent border) — the inline
-  /// detail pane's current service in the wide layout; null otherwise.
-  final String? highlightKey;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final l10n = AppLocalizations.of(context);
-    final scheme = Theme.of(context).colorScheme;
-    final online = Colors.green.shade600;
-    // Optimistically hide a just-removed service so it vanishes at once. When
-    // fresh discovery data lands, stop hiding keys that are now ABSENT (confirmed
-    // gone) — keys still present stay hidden, so a deregister that the relay
-    // hasn't finished processing doesn't flicker back as 不可达.
-    final pending = ref.watch(pendingRemovalProvider);
-    // Durably-dismissed unreachable/orphaned entries (persisted across
-    // restarts). Empty while the store loads — a dismissed entry may flash for
-    // a frame on cold start, then hides once loaded.
-    final dismissed =
-        ref.watch(dismissedServicesProvider).valueOrNull ?? const <String>{};
-    ref.listen(servicesProvider, (_, next) {
-      final data = next.valueOrNull;
-      if (data == null) return;
-      final present = {for (final s in data) s.key};
-      final current = ref.read(pendingRemovalProvider);
-      final stillHidden = current.intersection(present);
-      if (stillHidden.length != current.length) {
-        ref.read(pendingRemovalProvider.notifier).state = stillHidden;
-      }
-    });
-    // Un-hide a dismissed entry once it is REACHABLE again — the service
-    // recovered in place (a hollow orphan whose backend came back, still
-    // relay-registered the whole time) or a fresh reachable host re-registered
-    // the same key. Reachability, not discovery-absence, is the signal: an
-    // orphan never leaves the relay listing, so absence would strand a
-    // recovered service forever. The probes refresh on the screen's periodic
-    // re-probe, so recovery is picked up within a tick.
-    if (dismissed.isNotEmpty) {
-      final recovered = <String>[
-        for (final s in services)
-          if (dismissed.contains(s.key) &&
-              (s.kind == 'app'
-                          ? ref.watch(appReachableProvider(s.key))
-                          : ref.watch(apiReachableProvider(s.key)))
-                      .valueOrNull ==
-                  true)
-            s.key,
-      ];
-      if (recovered.isNotEmpty) {
-        final notifier = ref.read(dismissedServicesProvider.notifier);
-        // Defer: never mutate a provider during build.
-        Future.microtask(() => notifier.restore(recovered));
-      }
-    }
-    final api = services
-        .where(
-          (s) =>
-              s.kind == 'api' &&
-              !pending.contains(s.key) &&
-              !dismissed.contains(s.key),
-        )
-        .toList();
-    final app = services
-        .where(
-          (s) =>
-              s.kind == 'app' &&
-              !pending.contains(s.key) &&
-              !dismissed.contains(s.key),
-        )
-        .toList();
-    // Tunnels this machine hosts itself (its own `serve`): each host publishes
-    // an app + an api tunnel. Used to relabel their discovery cards as 本地托管
-    // and to route a card 注销 to a reversible serve-deregister (vs the backend
-    // force-drop for someone else's service).
-    final localHosts =
-        ref.watch(localServeListProvider).valueOrNull ??
-        const <AppServeStatus>[];
-    final localTunnels = <String, ({String name, String kind})>{
-      for (final h in localHosts) ...{
-        h.appServiceKey: (name: h.name, kind: 'app'),
-        h.apiServiceKey: (name: h.name, kind: 'api'),
-      },
-    };
-    // Loopback listen address of each tunnel THIS machine hosts, keyed by
-    // service key. For our own tunnels we health-check the local proxy directly
-    // (no relay round-trip), so the dot flips green the instant the backend is
-    // up instead of lagging a transient relay subscribe — and reads honestly if
-    // it later wedges. Empty for anyone else's service (probe via the relay).
-    final localAppAddr = <String, String>{
-      for (final h in localHosts) h.appServiceKey: h.appListenAddr,
-    };
-    final localApiAddr = <String, String>{
-      for (final h in localHosts) h.apiServiceKey: h.apiListenAddr,
-    };
-    // Live subscription health, keyed by service key (alive/dead). A discovered
-    // service is by definition currently registered on the relay → "online".
-    final subs = {
-      for (final s in ref.watch(subscriptionsProvider).valueOrNull ?? const [])
-        s.key: s,
-    };
-    final bridge = ref.watch(bridgeApiProvider);
-
-    // Batch cleanup: only the API / app-server lists carry removable inactive
-    // entries. An entry is removable iff it is NOT one of our local tunnels AND
-    // its backend is confirmed unreachable (a subscribed-dead tunnel, or a
-    // probe that returned false / errored — never while a probe is still
-    // loading, and never a connected/alive one). This mirrors exactly what the
-    // single-entry 注销 dismisses, so a batch never removes anything a per-entry
-    // 注销 wouldn't.
-    bool removable(ServiceEntry s) {
-      if (localTunnels.containsKey(s.key)) return false;
-      if (s.kind == 'api') {
-        final sub = subs[s.key];
-        if (sub != null) return !sub.alive;
-        final r = ref.watch(apiReachableProvider(s.key));
-        return r.hasError || r.valueOrNull == false;
-      }
-      // Same caveat as the status row: a conversation that saw the link drop
-      // knows more than the session's cached health flag.
-      if (ref.watch(observedDisconnectedProvider).contains(s.key)) return true;
-      if (bridge.appIsConnected(s.key)) return false;
-      final r = ref.watch(appReachableProvider(s.key));
-      return r.hasError || r.valueOrNull == false;
-    }
-
-    final isSelectableSection =
-        section == ServicesSection.api || section == ServicesSection.appServer;
-    final sectionEntries = section == ServicesSection.api ? api : app;
-    final removableKeys = isSelectableSection
-        ? {
-            for (final s in sectionEntries)
-              if (removable(s)) s.key,
-          }
-        : const <String>{};
-    final selection = isSelectableSection
-        ? ref.watch(serviceSelectionProvider(section))
-        : const ServiceSelection();
-    // Keep the selection honest against live probes: exit select mode when
-    // nothing is removable any more, and drop ticks for entries that recovered
-    // (went reachable) since being selected. Deferred — never mutate a provider
-    // during build.
-    if (isSelectableSection && selection.active) {
-      final notifier = ref.read(serviceSelectionProvider(section).notifier);
-      if (removableKeys.isEmpty) {
-        Future.microtask(() => notifier.state = const ServiceSelection());
-      } else {
-        final stale = selection.keys.difference(removableKeys);
-        if (stale.isNotEmpty) {
-          Future.microtask(() => notifier.update((s) => s.without(stale)));
-        }
-      }
-    }
-
-    // Per-API status. Subscribed → the live tunnel's alive/dropped flag.
-    // Otherwise PROBE the proxy (like the app-server) so a registered-but-dead
-    // api-proxy reads "unreachable" instead of a false green "online", with the
-    // reason spelled out.
-    (StatusChip, String?) apiStatus(ServiceEntry s) {
-      final sub = subs[s.key];
-      if (sub != null) {
-        return sub.alive
-            ? (
-                StatusChip(
-                  color: online,
-                  label: l10n.subscribedAlive,
-                  filled: true,
-                ),
-                null,
-              )
-            : (
-                StatusChip(
-                  color: scheme.error,
-                  label: l10n.subscribedDead,
-                  filled: true,
-                ),
-                null,
-              );
-      }
-      // Our own api tunnel: probe the loopback proxy directly (fast, no relay
-      // hop) so it reads online the instant it is up. Anyone else's: relay probe.
-      final localAddr = localApiAddr[s.key];
-      final probe = localAddr != null
-          ? ref.watch(apiReachableLocalProvider(localAddr))
-          : ref.watch(apiReachableProvider(s.key));
-      return probe.when(
-        data: (ok) => ok
-            ? (
-                StatusChip(
-                  color: online,
-                  label: l10n.statusOnline,
-                  filled: true,
-                ),
-                null,
-              )
-            : (
-                StatusChip(
-                  color: scheme.error,
-                  label: l10n.statusUnreachable,
-                  filled: true,
-                ),
-                l10n.apiUnreachableReason,
-              ),
-        loading: () => (
-          StatusChip(
-            color: scheme.outline,
-            label: l10n.statusChecking,
-            filled: true,
-          ),
-          null,
-        ),
-        error: (_, _) => (
-          StatusChip(
-            color: scheme.error,
-            label: l10n.statusUnreachable,
-            filled: true,
-          ),
-          l10n.apiUnreachableReason,
-        ),
-      );
-    }
-
-    Widget apiCard(ServiceEntry s) {
-      final (status, reason) = apiStatus(s);
-      return _ServiceCard(
-        key: Key('svc-${s.key}'),
-        icon: Icons.api,
-        iconBg: scheme.secondaryContainer,
-        iconFg: scheme.onSecondaryContainer,
-        title: s.name,
-        subtitle: s.device,
-        selected: s.key == highlightKey,
-        reason: reason,
-        status: status,
-        selecting: selection.active,
-        selectable: removableKeys.contains(s.key),
-        checked: selection.contains(s.key),
-        onToggle: () => ref
-            .read(serviceSelectionProvider(section).notifier)
-            .update((v) => v.toggled(s.key)),
-        onTap: () => onTapApi(s.key),
-        onDeregister: () => _confirmDeregister(
-          context,
-          ref,
-          s,
-          localTunnel: localTunnels[s.key],
-          unreachable: reason != null,
-        ),
-      );
-    }
-
-    Widget appCard(ServiceEntry s) {
-      // An app-server we host locally also shows here (to drive it); label it
-      // "本地托管" with the host icon instead of "远程控制", so it reads as the
-      // same instance the 本地托管 section manages, not a separate one.
-      final isLocal = localTunnels.containsKey(s.key);
-      // `appIsConnected` reports a CACHED health flag on the session object, not
-      // the state of the wire — so a link that has actually dropped can still
-      // read connected. An open conversation knows better (it holds the live
-      // event stream), so its observation overrides the flag; otherwise this row
-      // stayed green while the transcript on top of it said "reconnecting".
-      final observedDown = ref
-          .watch(observedDisconnectedProvider)
-          .contains(s.key);
-      final connected = !observedDown && bridge.appIsConnected(s.key);
-      // "Registered on the relay" is NOT "reachable": a pb-register worker can
-      // outlive the codex app-server it forwards to, leaving a hollow
-      // registration. Probe the real backend so a dead one reads "unreachable"
-      // instead of a false green "online". For our OWN host, probe its loopback
-      // address directly (fast, no relay hop) so it reads honestly and promptly.
-      final localAddr = localAppAddr[s.key];
-      final reach = localAddr != null
-          ? ref.watch(appReachableLocalProvider(localAddr))
-          : ref.watch(appReachableProvider(s.key));
-      // `reason` is non-null only when unreachable: the backend probe failed even
-      // though the relay still lists the registration, so spell out that the dead
-      // link is the remote app-server, not the relay.
-      final (Color statusColor, String statusLabel, String? reason) = connected
-          ? (online, l10n.statusConnected, null)
-          : observedDown
-          ? (scheme.error, l10n.statusUnreachable, l10n.unreachableReason)
-          : reach.when(
-              data: (ok) => ok
-                  ? (online, l10n.statusOnline, null)
-                  : (
-                      scheme.error,
-                      l10n.statusUnreachable,
-                      l10n.unreachableReason,
-                    ),
-              loading: () => (scheme.outline, l10n.statusChecking, null),
-              error: (_, _) => (
-                scheme.error,
-                l10n.statusUnreachable,
-                l10n.unreachableReason,
-              ),
-            );
-      return _ServiceCard(
-        key: Key('svc-${s.key}'),
-        icon: isLocal ? Icons.dns : Icons.computer,
-        iconBg: scheme.tertiaryContainer,
-        iconFg: scheme.onTertiaryContainer,
-        title: s.name,
-        subtitle: isLocal
-            ? l10n.appServerSubtitleLocal(s.device)
-            : l10n.appServerSubtitle(s.device),
-        reason: reason,
-        chevron: true,
-        status: StatusChip(
-          color: statusColor,
-          label: statusLabel,
-          filled: true,
-        ),
-        selecting: selection.active,
-        selectable: removableKeys.contains(s.key),
-        checked: selection.contains(s.key),
-        onToggle: () => ref
-            .read(serviceSelectionProvider(section).notifier)
-            .update((v) => v.toggled(s.key)),
-        onTap: () => onTapApp(s.key),
-        onDeregister: () => _confirmDeregister(
-          context,
-          ref,
-          s,
-          localTunnel: localTunnels[s.key],
-          unreachable: reason != null,
-        ),
-      );
-    }
-
-    Widget emptyHint(String text) => Padding(
-      padding: const EdgeInsets.all(32),
-      child: Center(child: Text(text)),
-    );
-
-    // Render only the selected section (the responsive tab); the banner shows on
-    // every one.
-    final sectionChildren = switch (section) {
-      ServicesSection.api =>
-        api.isEmpty
-            ? [emptyHint(l10n.noServicesFound)]
-            : api.map(apiCard).toList(),
-      ServicesSection.appServer =>
-        app.isEmpty
-            ? [emptyHint(l10n.noServicesFound)]
-            : app.map(appCard).toList(),
-      // Desktop + account mode: host this machine's codex app-server(s) from the
-      // app (the in-app equivalent of `pocket-codex serve`); several can run at
-      // once. The "+ host another" card doubles as the empty state.
-      ServicesSection.hosting => [
-        ...localHosts.map(
-          (h) => _LocalHostCard(key: Key('local-host-${h.name}'), host: h),
-        ),
-        const _AddLocalHostCard(),
-      ],
-      // The Sessions tab is rendered by [_SessionsTab], not this list, so it is
-      // never passed here; the arm exists only to keep the switch exhaustive.
-      ServicesSection.sessions => const <Widget>[],
-    };
-
-    final selNotifier = ref.read(serviceSelectionProvider(section).notifier);
-    // The "clean up unreachable" affordance appears ONLY when there's something
-    // to clean (≥1 removable inactive entry) and we're not already selecting —
-    // no clutter otherwise.
-    final showEnterButton =
-        isSelectableSection && !selection.active && removableKeys.isNotEmpty;
-    final listView = ListView(
-      padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
-      children: [
-        if (showIdentity)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 12),
-            child: _IdentityCard(
-              relay: relay ?? l10n.relayNotConfigured,
-              accountLogin: accountLogin,
-              online: online,
-            ),
-          ),
-        // Section heading with the (conditional) cleanup affordance inline,
-        // so the header stays a single calm row instead of stacked banners.
-        Padding(
-          padding: const EdgeInsets.fromLTRB(4, 8, 0, 10),
-          child: Row(
-            children: [
-              Expanded(
-                child: Text(
-                  sectionLabel,
-                  style: Theme.of(
-                    context,
-                  ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w600),
-                ),
-              ),
-              if (showEnterButton)
-                TextButton.icon(
-                  key: const Key('batch-enter-btn'),
-                  icon: const Icon(Icons.cleaning_services_outlined, size: 18),
-                  label: Text(l10n.batchRemoveEnter),
-                  onPressed: () =>
-                      selNotifier.state = const ServiceSelection(active: true),
-                ),
-            ],
-          ),
-        ),
-        if (isSelectableSection && selection.active)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(4, 4, 4, 8),
-            child: Text(
-              l10n.batchRemoveHint,
-              style: Theme.of(
-                context,
-              ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
-            ),
-          ),
-        ...sectionChildren,
-      ],
-    );
-    // Readable line length on wide windows: the list column caps out and
-    // centres instead of stretching cards across the whole screen.
-    final constrained = Align(
-      alignment: Alignment.topCenter,
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 780),
-        child: listView,
-      ),
-    );
-    if (!isSelectableSection || !selection.active) return constrained;
-    // Selecting: pin a bottom action bar (cancel · select-all · remove(N)) so
-    // the batch action stays reachable while the list scrolls.
-    final selected = sectionEntries
-        .where((s) => selection.contains(s.key))
-        .toList();
-    final allSelected =
-        removableKeys.isNotEmpty &&
-        selection.keys.length == removableKeys.length;
-    return Column(
-      children: [
-        Expanded(child: constrained),
-        Material(
-          elevation: 0,
-          color: scheme.surfaceBright,
-          child: SafeArea(
-            top: false,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-              child: Row(
-                children: [
-                  TextButton(
-                    key: const Key('batch-cancel-btn'),
-                    onPressed: () =>
-                        selNotifier.state = const ServiceSelection(),
-                    child: Text(l10n.cancel),
-                  ),
-                  const SizedBox(width: 4),
-                  TextButton(
-                    key: const Key('batch-select-all-btn'),
-                    onPressed: () => selNotifier.state = allSelected
-                        ? const ServiceSelection(active: true)
-                        : const ServiceSelection().withAll(removableKeys),
-                    child: Text(
-                      allSelected ? l10n.batchClear : l10n.batchSelectAll,
-                    ),
-                  ),
-                  const Spacer(),
-                  FilledButton.icon(
-                    key: const Key('batch-remove-btn'),
-                    style: FilledButton.styleFrom(
-                      backgroundColor: scheme.error,
-                      foregroundColor: scheme.onError,
-                    ),
-                    onPressed: selected.isEmpty
-                        ? null
-                        : () => _batchRemove(context, ref, selected, section),
-                    icon: const Icon(Icons.delete_sweep_outlined, size: 18),
-                    label: Text(l10n.batchRemoveSelected(selected.length)),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-/// Remove several unreachable/orphaned remote entries at once — the batch
-/// analogue of the orphan path in [_confirmDeregister]. Each still-unreachable
-/// key is durably dismissed (client-side, survives restart) plus a best-effort
-/// backend drop; any that recovered (went reachable) since selection are left
-/// untouched. One confirm covers the whole set. Reachable / local entries can
-/// never reach here (they're not selectable).
 Future<void> _batchRemove(
   BuildContext context,
   WidgetRef ref,
   List<ServiceEntry> entries,
-  ServicesSection section,
 ) async {
   final l10n = AppLocalizations.of(context);
   final scheme = Theme.of(context).colorScheme;
@@ -967,15 +1363,51 @@ Future<void> _batchRemove(
       // Best-effort — the entry is already hidden from the list.
     }
   }
-  // Leave select mode and refresh discovery so the list reflects the removals.
-  ref.read(serviceSelectionProvider(section).notifier).state =
-      const ServiceSelection();
+  // Refresh discovery so the list reflects the removals.
   ref.invalidate(servicesProvider);
   if (context.mounted && removed > 0) {
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(l10n.batchRemovedSnack(removed))));
+    showToastOk(context, l10n.batchRemovedSnack(removed));
   }
+}
+
+/// Point the chat at [serviceKey] and return to it.
+///
+/// Replaces the `/app/:key` project picker this used to push. That page listed
+/// the service's projects and conversations — exactly what the chat's sidebar
+/// already shows, one level deeper and without the conversation beside it. The
+/// request is handed over through [requestedServiceProvider] because the switch
+/// happens on the other side of the route change.
+void _openInChat(BuildContext context, WidgetRef ref, String serviceKey) {
+  ref.read(requestedServiceProvider.notifier).state = serviceKey;
+  // `go`, not `pop`: this page may have been opened directly (deep link, page
+  // menu) with no chat underneath to return to.
+  context.go('/');
+}
+
+/// Publish one of a hosted server's tunnels back onto the relay after it was
+/// taken off. Reached from the capability row's overflow, which is the only
+/// route back for a tunnel the user deregistered.
+Future<void> _reregisterTunnel(
+  BuildContext context,
+  WidgetRef ref, {
+  required String hostName,
+  required String kind,
+}) async {
+  final l10n = AppLocalizations.of(context);
+  final messenger = ToastMessenger.of(context);
+  try {
+    await ref
+        .read(bridgeApiProvider)
+        .appServeReregister(name: hostName, kind: kind);
+  } catch (e) {
+    // Surfaces a duplicate-name refusal (another live instance took the name
+    // while this tunnel was down) as guidance instead of silence.
+    final raw = friendlyError(e);
+    messenger.error(isHostNameConflict(raw) ? l10n.hostNameConflict : raw);
+    return;
+  }
+  ref.invalidate(localServeListProvider);
+  ref.invalidate(servicesProvider);
 }
 
 /// Local hosting spawns a local `codex` binary + child processes — desktop only.
@@ -1041,14 +1473,12 @@ Future<void> _confirmDeregister(
   try {
     if (localTunnel != null) {
       // Reversible: stop this tunnel's register task (codex/proxy keep running);
-      // serve_deregister also best-effort force-drops the relay key. Our own
-      // tunnel reliably leaves discovery, so optimistically hide it at once.
+      // serve_deregister also best-effort force-drops the relay key. The row
+      // must NOT be hidden — it is the only place the tunnel can be published
+      // again. Refreshing the host list flips it to 已下架 on its own.
       await ref
           .read(bridgeApiProvider)
           .appServeDeregister(name: localTunnel.name, kind: localTunnel.kind);
-      ref
-          .read(pendingRemovalProvider.notifier)
-          .update((set) => {...set, s.key});
       ref.invalidate(localServeListProvider);
     } else if (isOrphan) {
       // Orphaned/hollow: nothing live holds the relay key, so the backend can't
@@ -1094,443 +1524,25 @@ Future<void> _confirmDeregister(
     ref.invalidate(servicesProvider);
   } catch (e) {
     if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('${l10n.deregisterFailed}: ${friendlyError(e)}'),
-        ),
-      );
+      showToastError(context, '${l10n.deregisterFailed}: ${friendlyError(e)}');
     }
   }
 }
 
-/// The connection identity: in account mode the signed-in GitHub login; in
-/// self-host mode the configured relay. Status is implicitly online — this
-/// only renders once discovery (which needs a valid session/relay) succeeded.
-/// A quiet outlined panel, not a hero: status colour is the only accent.
-class _IdentityCard extends StatelessWidget {
-  const _IdentityCard({
-    required this.relay,
-    required this.accountLogin,
-    required this.online,
-  });
-  final String relay;
-
-  /// Non-null in account mode: the signed-in GitHub login (shown instead of a
-  /// relay address, so an account user never sees "(no relay configured)").
-  final String? accountLogin;
-  final Color online;
-
-  @override
-  Widget build(BuildContext context) {
-    final l10n = AppLocalizations.of(context);
-    final scheme = Theme.of(context).colorScheme;
-    final account = accountLogin != null;
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: surfacePanel(scheme),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: scheme.outlineVariant),
-      ),
-      child: Row(
-        children: [
-          CircleAvatar(
-            radius: 18,
-            backgroundColor: scheme.secondaryContainer,
-            child: Icon(
-              account ? Icons.person_outline : Icons.dns_outlined,
-              size: 20,
-              color: scheme.onSecondaryContainer,
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  account ? '@$accountLogin' : relay,
-                  style: Theme.of(
-                    context,
-                  ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                const SizedBox(height: 1),
-                Text(
-                  account ? l10n.accountSection : l10n.relayRow,
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: scheme.onSurfaceVariant,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 8),
-          StatusChip(color: online, label: l10n.statusOnline, filled: true),
-        ],
-      ),
-    );
-  }
-}
-
-/// The desktop side navigation: the identity card on top, then one
-/// drawer-style destination tile per section (icon + label, stadium
-/// indicator) — the Material 3 drawer idiom sized for an embedded pane.
-class _SideNav extends StatelessWidget {
-  const _SideNav({
-    required this.relay,
-    required this.accountLogin,
-    required this.online,
-    required this.items,
-    required this.selectedIndex,
-    required this.onSelect,
-  });
-
-  final String relay;
-  final String? accountLogin;
-  final Color online;
-  final List<({IconData icon, String label})> items;
-  final int selectedIndex;
-  final ValueChanged<int> onSelect;
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      width: 248,
-      child: ListView(
-        padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
-        children: [
-          _IdentityCard(
-            relay: relay,
-            accountLogin: accountLogin,
-            online: online,
-          ),
-          const SizedBox(height: 12),
-          for (var i = 0; i < items.length; i++)
-            _NavTile(
-              icon: items[i].icon,
-              label: items[i].label,
-              selected: i == selectedIndex,
-              onTap: () => onSelect(i),
-            ),
-        ],
-      ),
-    );
-  }
-}
-
-/// One side-nav destination: a stadium-shaped tile with the M3 drawer
-/// treatment (secondary-container indicator when selected, quiet otherwise).
-class _NavTile extends StatelessWidget {
-  const _NavTile({
-    required this.icon,
-    required this.label,
-    required this.selected,
-    required this.onTap,
-  });
-
-  final IconData icon;
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final fg = selected ? scheme.onSecondaryContainer : scheme.onSurfaceVariant;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 4),
-      child: Material(
-        color: selected ? scheme.secondaryContainer : Colors.transparent,
-        borderRadius: BorderRadius.circular(20),
-        child: InkWell(
-          mouseCursor: clickable,
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(20),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
-            child: Row(
-              children: [
-                Icon(icon, size: 20, color: fg),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    label,
-                    style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                      color: fg,
-                      fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// A discovered service, rendered as a tappable card: tinted icon badge, name +
-/// device, an optional unreachable reason, and a filled status pill.
-class _ServiceCard extends StatelessWidget {
-  const _ServiceCard({
-    super.key,
-    required this.icon,
-    required this.iconBg,
-    required this.iconFg,
-    required this.title,
-    required this.subtitle,
-    required this.status,
-    required this.onTap,
-    this.reason,
-    this.chevron = false,
-    this.selected = false,
-    this.onDeregister,
-    this.selecting = false,
-    this.selectable = false,
-    this.checked = false,
-    this.onToggle,
-  });
-
-  final IconData icon;
-  final Color iconBg;
-  final Color iconFg;
-  final String title;
-  final String subtitle;
-
-  /// Non-null only for an unreachable app-server: the "why" line under the
-  /// subtitle (relay registration up, remote backend down).
-  final String? reason;
-  final StatusChip status;
-  final VoidCallback onTap;
-  final bool chevron;
-  final bool selected;
-
-  /// When set, an overflow menu offers a 注销 (deregister) action.
-  final VoidCallback? onDeregister;
-
-  /// Batch multi-select mode is active: [selectable] cards show a checkbox and
-  /// tap-to-toggle instead of navigating; non-selectable cards (reachable /
-  /// local) dim out and ignore taps; the overflow menu is hidden throughout.
-  final bool selecting;
-  final bool selectable;
-  final bool checked;
-  final VoidCallback? onToggle;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    // In select mode only removable cards are interactive (they toggle); others
-    // are shown dimmed and inert so it's obvious which entries a batch touches.
-    final dimmed = selecting && !selectable;
-    final effectiveTap = selecting ? (selectable ? onToggle : null) : onTap;
-    final highlight = selected || (selecting && selectable && checked);
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Opacity(
-        opacity: dimmed ? 0.4 : 1,
-        child: Material(
-          // A tonal panel on the window background; the accent border appears
-          // only for the selected/checked card.
-          color: surfacePanel(scheme),
-          borderRadius: BorderRadius.circular(12),
-          child: InkWell(
-            mouseCursor: clickable,
-            onTap: effectiveTap,
-            borderRadius: BorderRadius.circular(12),
-            child: Container(
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                  color: highlight ? scheme.primary : scheme.outlineVariant,
-                  width: highlight ? 1.5 : 1,
-                ),
-              ),
-              padding: const EdgeInsets.all(12),
-              child: Row(
-                children: [
-                  if (selecting && selectable) ...[
-                    Checkbox(
-                      value: checked,
-                      onChanged: (_) => onToggle?.call(),
-                    ),
-                    const SizedBox(width: 4),
-                  ],
-                  _IconBadge(icon: icon, bg: iconBg, fg: iconFg),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          title,
-                          style: Theme.of(context).textTheme.titleSmall
-                              ?.copyWith(fontWeight: FontWeight.w600),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          subtitle,
-                          style: Theme.of(context).textTheme.bodySmall
-                              ?.copyWith(color: scheme.onSurfaceVariant),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        if (reason != null) ...[
-                          const SizedBox(height: 3),
-                          // One quiet line, full text on hover/long-press —
-                          // a red paragraph inside a list card shouts.
-                          Tooltip(
-                            message: reason!,
-                            child: Row(
-                              children: [
-                                Icon(
-                                  Icons.error_outline,
-                                  size: 14,
-                                  color: scheme.error,
-                                ),
-                                const SizedBox(width: 4),
-                                Expanded(
-                                  child: Text(
-                                    reason!,
-                                    style: Theme.of(context).textTheme.bodySmall
-                                        ?.copyWith(color: scheme.error),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  status,
-                  if (chevron) ...[
-                    const SizedBox(width: 2),
-                    Icon(Icons.chevron_right, color: scheme.outline),
-                  ],
-                  // The per-entry 注销 menu is hidden while multi-selecting —
-                  // the bottom batch bar owns removal then.
-                  if (onDeregister != null && !selecting)
-                    PopupMenuButton<String>(
-                      icon: Icon(Icons.more_vert, color: scheme.outline),
-                      padding: EdgeInsets.zero,
-                      onSelected: (_) => onDeregister!(),
-                      itemBuilder: (context) => [
-                        PopupMenuItem(
-                          value: 'deregister',
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(
-                                Icons.link_off,
-                                size: 18,
-                                color: scheme.error,
-                              ),
-                              const SizedBox(width: 8),
-                              Text(AppLocalizations.of(context).deregister),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// A rounded, theme-tinted icon tile — the visual anchor on relay/service rows.
-class _IconBadge extends StatelessWidget {
-  const _IconBadge({required this.icon, required this.bg, required this.fg});
-  final IconData icon;
-  final Color bg;
-  final Color fg;
-
-  @override
-  Widget build(BuildContext context) => Container(
-    width: 40,
-    height: 40,
-    decoration: BoxDecoration(
-      color: bg,
-      borderRadius: BorderRadius.circular(10),
-    ),
-    child: Icon(icon, size: 20, color: fg),
-  );
-}
-
-/// One locally-hosted host: a codex app-server + an in-app API proxy, each
-/// published through its own tunnel. The card shows codex's liveness and both
-/// tunnels' publish state, with a per-tunnel 注销 / 重新注册 toggle. Tapping the
-/// header opens [LocalHostDialog] for the full 停止托管 + details.
+/// One locally-hosted host: a codex app-server + an in-app API proxy. The card
+/// carries codex's liveness; each tunnel's publish state and its 注销 / 重新注册
+/// live on the capability row it belongs to. Tapping this opens
+/// [LocalHostDialog] for 停止托管 + details.
 class _LocalHostCard extends ConsumerWidget {
   const _LocalHostCard({super.key, required this.host});
 
   final AppServeStatus host;
 
-  /// Synthesize the discovery entry for one of this host's tunnels, so the
-  /// shared [_confirmDeregister] flow (confirm + optimistic hide) can run.
-  String _keyFor(String kind) => switch (kind) {
-    'api' => host.apiServiceKey,
-    'meta' => host.metaServiceKey,
-    _ => host.appServiceKey,
-  };
-
-  ServiceEntry _entry(String kind) => ServiceEntry(
-    device: host.device,
-    kind: kind,
-    name: host.name,
-    key: _keyFor(kind),
-  );
-
-  Future<void> _reregister(
-    BuildContext context,
-    WidgetRef ref,
-    String kind,
-  ) async {
-    final key = _keyFor(kind);
-    final l10n = AppLocalizations.of(context);
-    final messenger = ScaffoldMessenger.of(context);
-    try {
-      await ref
-          .read(bridgeApiProvider)
-          .appServeReregister(name: host.name, kind: kind);
-    } catch (e) {
-      // Surfaces a duplicate-name refusal (another live instance took the
-      // name while this tunnel was down) as guidance instead of silence.
-      final raw = friendlyError(e);
-      messenger.showSnackBar(
-        SnackBar(
-          content: Text(isHostNameConflict(raw) ? l10n.hostNameConflict : raw),
-        ),
-      );
-      return;
-    }
-    // Make sure it isn't still optimistically hidden, then re-discover.
-    ref
-        .read(pendingRemovalProvider.notifier)
-        .update((s) => s.difference({key}));
-    ref.invalidate(localServeListProvider);
-    ref.invalidate(servicesProvider);
-  }
-
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final l10n = AppLocalizations.of(context);
     final scheme = Theme.of(context).colorScheme;
-    final online = Colors.green.shade600;
+    final online = successColor(scheme);
     // Honest host health. `host.alive` is only port-open (the listener bound),
     // which stays true even when the embedded codex has wedged / gone half-open
     // (still accept()ing but never answering RPC) — a false "hosting". So once
@@ -1596,10 +1608,11 @@ class _LocalHostCard extends ConsumerWidget {
                   padding: const EdgeInsets.all(12),
                   child: Row(
                     children: [
-                      _IconBadge(
+                      IconBadge(
                         icon: Icons.dns,
-                        bg: scheme.tertiaryContainer,
-                        fg: scheme.onTertiaryContainer,
+                        size: 40,
+                        background: scheme.tertiaryContainer,
+                        foreground: scheme.onTertiaryContainer,
                       ),
                       const SizedBox(width: 12),
                       Expanded(
@@ -1630,119 +1643,10 @@ class _LocalHostCard extends ConsumerWidget {
                     ],
                   ),
                 ),
-                Divider(height: 1, color: scheme.outlineVariant),
-                _TunnelRow(
-                  label: l10n.tunnelAppLabel,
-                  addr: host.appListenAddr,
-                  registered: host.appRegistered,
-                  onDeregister: () => _confirmDeregister(
-                    context,
-                    ref,
-                    _entry('app'),
-                    localTunnel: (name: host.name, kind: 'app'),
-                  ),
-                  onReregister: () => _reregister(context, ref, 'app'),
-                ),
-                Divider(height: 1, color: scheme.outlineVariant),
-                _TunnelRow(
-                  label: l10n.tunnelApiLabel,
-                  addr: host.apiListenAddr,
-                  registered: host.apiRegistered,
-                  onDeregister: () => _confirmDeregister(
-                    context,
-                    ref,
-                    _entry('api'),
-                    localTunnel: (name: host.name, kind: 'api'),
-                  ),
-                  onReregister: () => _reregister(context, ref, 'api'),
-                ),
-                Divider(height: 1, color: scheme.outlineVariant),
-                _TunnelRow(
-                  label: l10n.tunnelMetaLabel,
-                  addr: host.metaListenAddr,
-                  registered: host.metaRegistered,
-                  onDeregister: () => _confirmDeregister(
-                    context,
-                    ref,
-                    _entry('meta'),
-                    localTunnel: (name: host.name, kind: 'meta'),
-                  ),
-                  onReregister: () => _reregister(context, ref, 'meta'),
-                ),
               ],
             ),
           ),
         ),
-      ),
-    );
-  }
-}
-
-/// One tunnel row inside a [_LocalHostCard]: kind label, listen address, a
-/// published/offline pill, and a 注销 (when published) / 重新注册 (when offline)
-/// toggle.
-class _TunnelRow extends StatelessWidget {
-  const _TunnelRow({
-    required this.label,
-    required this.addr,
-    required this.registered,
-    required this.onDeregister,
-    required this.onReregister,
-  });
-
-  final String label;
-  final String addr;
-  final bool registered;
-  final VoidCallback onDeregister;
-  final VoidCallback onReregister;
-
-  @override
-  Widget build(BuildContext context) {
-    final l10n = AppLocalizations.of(context);
-    final scheme = Theme.of(context).colorScheme;
-    final online = Colors.green.shade600;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 6, 6, 6),
-      child: Row(
-        children: [
-          Icon(
-            registered ? Icons.cloud_done_outlined : Icons.cloud_off_outlined,
-            size: 18,
-            color: registered ? online : scheme.outline,
-          ),
-          const SizedBox(width: 8),
-          SizedBox(
-            width: 78,
-            child: Text(
-              label,
-              style: Theme.of(context).textTheme.labelMedium,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-          Expanded(
-            child: Text(
-              registered ? addr : l10n.tunnelOffline,
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: registered ? scheme.onSurfaceVariant : scheme.outline,
-              ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-          if (registered)
-            TextButton(
-              key: Key('tunnel-deregister-$label'),
-              onPressed: onDeregister,
-              style: TextButton.styleFrom(foregroundColor: scheme.error),
-              child: Text(l10n.deregister),
-            )
-          else
-            TextButton(
-              key: Key('tunnel-reregister-$label'),
-              onPressed: onReregister,
-              child: Text(l10n.reregister),
-            ),
-        ],
       ),
     );
   }
@@ -1775,11 +1679,18 @@ class _AddLocalHostCard extends StatelessWidget {
 }
 
 class _ErrorState extends StatelessWidget {
-  const _ErrorState({required this.detail, required this.onRetry});
+  const _ErrorState({
+    required this.detail,
+    required this.sessionExpired,
+    required this.onRetry,
+    this.onSignIn,
+  });
 
-  /// Raw engine error string, shown as secondary diagnostic detail.
+  /// Raw engine error string, shown only for retryable failures.
   final String detail;
+  final bool sessionExpired;
   final VoidCallback onRetry;
+  final VoidCallback? onSignIn;
 
   @override
   Widget build(BuildContext context) {
@@ -1789,7 +1700,9 @@ class _ErrorState extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           Text(
-            l10n.discoverFailed,
+            sessionExpired
+                ? l10n.accountSessionExpiredTitle
+                : l10n.discoverFailed,
             key: const Key('services-error'),
             textAlign: TextAlign.center,
           ),
@@ -1797,13 +1710,21 @@ class _ErrorState extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 24),
             child: Text(
-              detail,
+              sessionExpired ? l10n.accountSessionExpiredMessage : detail,
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.bodySmall,
             ),
           ),
           const SizedBox(height: 12),
-          FilledButton(onPressed: onRetry, child: Text(l10n.retry)),
+          if (sessionExpired)
+            FilledButton.icon(
+              key: const Key('services-sign-in-again'),
+              onPressed: onSignIn,
+              icon: const Icon(Icons.login),
+              label: Text(l10n.accountSignInAgain),
+            )
+          else
+            FilledButton(onPressed: onRetry, child: Text(l10n.retry)),
         ],
       ),
     );

@@ -67,7 +67,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.12.0';
 
   @override
-  int get rustContentHash => 272822241;
+  int get rustContentHash => -1359732961;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -340,6 +340,11 @@ abstract class RustLibApi extends BaseApi {
   });
 
   Stream<RetryProgressDto> crateApiBridgeMetaRetryEvents();
+
+  Stream<SessionFollowUpdateDto> crateApiBridgeMetaSessionEvents({
+    required String serviceKey,
+    required String threadId,
+  });
 
   Future<SessionLivenessDto> crateApiBridgeMetaSessionLiveness({
     required String serviceKey,
@@ -2663,6 +2668,49 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       const TaskConstMeta(debugName: "meta_retry_events", argNames: ["sink"]);
 
   @override
+  Stream<SessionFollowUpdateDto> crateApiBridgeMetaSessionEvents({
+    required String serviceKey,
+    required String threadId,
+  }) {
+    final sink = RustStreamSink<SessionFollowUpdateDto>();
+    unawaited(
+      handler.executeNormal(
+        NormalTask(
+          callFfi: (port_) {
+            final serializer = SseSerializer(generalizedFrbRustBinding);
+            sse_encode_String(serviceKey, serializer);
+            sse_encode_String(threadId, serializer);
+            sse_encode_StreamSink_session_follow_update_dto_Sse(
+              sink,
+              serializer,
+            );
+            pdeCallFfi(
+              generalizedFrbRustBinding,
+              serializer,
+              funcId: 71,
+              port: port_,
+            );
+          },
+          codec: SseCodec(
+            decodeSuccessData: sse_decode_unit,
+            decodeErrorData: sse_decode_AnyhowException,
+          ),
+          constMeta: kCrateApiBridgeMetaSessionEventsConstMeta,
+          argValues: [serviceKey, threadId, sink],
+          apiImpl: this,
+        ),
+      ),
+    );
+    return sink.stream;
+  }
+
+  TaskConstMeta get kCrateApiBridgeMetaSessionEventsConstMeta =>
+      const TaskConstMeta(
+        debugName: "meta_session_events",
+        argNames: ["serviceKey", "threadId", "sink"],
+      );
+
+  @override
   Future<SessionLivenessDto> crateApiBridgeMetaSessionLiveness({
     required String serviceKey,
     required String threadId,
@@ -2676,7 +2724,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 71,
+            funcId: 72,
             port: port_,
           );
         },
@@ -2711,7 +2759,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 72,
+            funcId: 73,
             port: port_,
           );
         },
@@ -2744,7 +2792,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 73,
+            funcId: 74,
             port: port_,
           );
         },
@@ -2778,7 +2826,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 74,
+            funcId: 75,
             port: port_,
           );
         },
@@ -2813,7 +2861,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 75,
+            funcId: 76,
             port: port_,
           );
         },
@@ -2850,7 +2898,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 76,
+            funcId: 77,
             port: port_,
           );
         },
@@ -2887,7 +2935,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 77,
+            funcId: 78,
             port: port_,
           );
         },
@@ -2926,7 +2974,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 78,
+            funcId: 79,
             port: port_,
           );
         },
@@ -2957,7 +3005,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 79,
+            funcId: 80,
             port: port_,
           );
         },
@@ -2985,7 +3033,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 80,
+            funcId: 81,
             port: port_,
           );
         },
@@ -3013,7 +3061,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 81,
+            funcId: 82,
             port: port_,
           );
         },
@@ -3040,7 +3088,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 82,
+            funcId: 83,
             port: port_,
           );
         },
@@ -3084,6 +3132,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   RustStreamSink<RetryProgressDto> dco_decode_StreamSink_retry_progress_dto_Sse(
     dynamic raw,
   ) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    throw UnimplementedError();
+  }
+
+  @protected
+  RustStreamSink<SessionFollowUpdateDto>
+  dco_decode_StreamSink_session_follow_update_dto_Sse(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     throw UnimplementedError();
   }
@@ -3289,15 +3344,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ConfigView dco_decode_config_view(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 6)
-      throw Exception('unexpected arr length: expect 6 but see ${arr.length}');
+    if (arr.length != 7)
+      throw Exception('unexpected arr length: expect 7 but see ${arr.length}');
     return ConfigView(
       relay: dco_decode_opt_String(arr[0]),
       hasKey: dco_decode_bool(arr[1]),
       locale: dco_decode_opt_String(arr[2]),
       mode: dco_decode_String(arr[3]),
       accountLogin: dco_decode_opt_String(arr[4]),
-      hasAccountToken: dco_decode_bool(arr[5]),
+      accountId: dco_decode_opt_String(arr[5]),
+      hasAccountToken: dco_decode_bool(arr[6]),
     );
   }
 
@@ -3589,6 +3645,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  SessionFollowUpdateDto dco_decode_session_follow_update_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 2)
+      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    return SessionFollowUpdateDto(
+      liveness: dco_decode_session_liveness_dto(arr[0]),
+      items: dco_decode_list_thread_item_dto(arr[1]),
+    );
+  }
+
+  @protected
   SessionLivenessDto dco_decode_session_liveness_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
@@ -3774,6 +3842,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   RustStreamSink<RetryProgressDto> sse_decode_StreamSink_retry_progress_dto_Sse(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    throw UnimplementedError('Unreachable ()');
+  }
+
+  @protected
+  RustStreamSink<SessionFollowUpdateDto>
+  sse_decode_StreamSink_session_follow_update_dto_Sse(
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
@@ -4027,6 +4104,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_locale = sse_decode_opt_String(deserializer);
     var var_mode = sse_decode_String(deserializer);
     var var_accountLogin = sse_decode_opt_String(deserializer);
+    var var_accountId = sse_decode_opt_String(deserializer);
     var var_hasAccountToken = sse_decode_bool(deserializer);
     return ConfigView(
       relay: var_relay,
@@ -4034,6 +4112,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       locale: var_locale,
       mode: var_mode,
       accountLogin: var_accountLogin,
+      accountId: var_accountId,
       hasAccountToken: var_hasAccountToken,
     );
   }
@@ -4460,6 +4539,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  SessionFollowUpdateDto sse_decode_session_follow_update_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_liveness = sse_decode_session_liveness_dto(deserializer);
+    var var_items = sse_decode_list_thread_item_dto(deserializer);
+    return SessionFollowUpdateDto(liveness: var_liveness, items: var_items);
+  }
+
+  @protected
   SessionLivenessDto sse_decode_session_liveness_dto(
     SseDeserializer deserializer,
   ) {
@@ -4719,6 +4808,23 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_StreamSink_session_follow_update_dto_Sse(
+    RustStreamSink<SessionFollowUpdateDto> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(
+      self.setupAndSerialize(
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_session_follow_update_dto,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+      ),
+      serializer,
+    );
+  }
+
+  @protected
   void sse_encode_String(String self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_list_prim_u_8_strict(utf8.encoder.convert(self), serializer);
@@ -4909,6 +5015,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_opt_String(self.locale, serializer);
     sse_encode_String(self.mode, serializer);
     sse_encode_opt_String(self.accountLogin, serializer);
+    sse_encode_opt_String(self.accountId, serializer);
     sse_encode_bool(self.hasAccountToken, serializer);
   }
 
@@ -5265,6 +5372,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_String(self.kind, serializer);
     sse_encode_String(self.name, serializer);
     sse_encode_String(self.key, serializer);
+  }
+
+  @protected
+  void sse_encode_session_follow_update_dto(
+    SessionFollowUpdateDto self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_session_liveness_dto(self.liveness, serializer);
+    sse_encode_list_thread_item_dto(self.items, serializer);
   }
 
   @protected

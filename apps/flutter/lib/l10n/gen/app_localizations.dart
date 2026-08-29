@@ -182,6 +182,24 @@ abstract class AppLocalizations {
   /// **'Use a device code instead'**
   String get accountUseDeviceCode;
 
+  /// No description provided for @accountSessionExpiredTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Your session expired'**
+  String get accountSessionExpiredTitle;
+
+  /// No description provided for @accountSessionExpiredMessage.
+  ///
+  /// In en, this message translates to:
+  /// **'Your saved sign-in can no longer be renewed. Sign in again to reconnect to your services.'**
+  String get accountSessionExpiredMessage;
+
+  /// No description provided for @accountSignInAgain.
+  ///
+  /// In en, this message translates to:
+  /// **'Sign in again'**
+  String get accountSignInAgain;
+
   /// No description provided for @accountWebFailed.
   ///
   /// In en, this message translates to:
@@ -283,54 +301,6 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'App-server services'**
   String get appServerServices;
-
-  /// No description provided for @navApi.
-  ///
-  /// In en, this message translates to:
-  /// **'API'**
-  String get navApi;
-
-  /// No description provided for @navAppServer.
-  ///
-  /// In en, this message translates to:
-  /// **'App-server'**
-  String get navAppServer;
-
-  /// No description provided for @navSessions.
-  ///
-  /// In en, this message translates to:
-  /// **'Sessions'**
-  String get navSessions;
-
-  /// No description provided for @navHosting.
-  ///
-  /// In en, this message translates to:
-  /// **'Hosting'**
-  String get navHosting;
-
-  /// No description provided for @sessionsHostLabel.
-  ///
-  /// In en, this message translates to:
-  /// **'Host'**
-  String get sessionsHostLabel;
-
-  /// No description provided for @sessionsNoHost.
-  ///
-  /// In en, this message translates to:
-  /// **'Connect an app-server first, then its sessions show here.'**
-  String get sessionsNoHost;
-
-  /// No description provided for @appServerSubtitle.
-  ///
-  /// In en, this message translates to:
-  /// **'{device} · remote control'**
-  String appServerSubtitle(String device);
-
-  /// No description provided for @appServiceTitle.
-  ///
-  /// In en, this message translates to:
-  /// **'App-server'**
-  String get appServiceTitle;
 
   /// No description provided for @connecting.
   ///
@@ -1016,11 +986,11 @@ abstract class AppLocalizations {
   /// **'More'**
   String get moreActions;
 
-  /// No description provided for @backToProjects.
+  /// No description provided for @backToSessions.
   ///
   /// In en, this message translates to:
-  /// **'Back to projects'**
-  String get backToProjects;
+  /// **'Back to sessions'**
+  String get backToSessions;
 
   /// No description provided for @stateReady.
   ///
@@ -1057,6 +1027,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Reconnecting…'**
   String get stateReconnecting;
+
+  /// No description provided for @compactingContext.
+  ///
+  /// In en, this message translates to:
+  /// **'Compacting context…'**
+  String get compactingContext;
 
   /// No description provided for @compacted.
   ///
@@ -1334,6 +1310,12 @@ abstract class AppLocalizations {
   /// **'{count} files changed'**
   String envFilesChanged(int count);
 
+  /// No description provided for @turnProgressStep.
+  ///
+  /// In en, this message translates to:
+  /// **'Step {current} of {total}'**
+  String turnProgressStep(int current, int total);
+
   /// No description provided for @start.
   ///
   /// In en, this message translates to:
@@ -1382,6 +1364,54 @@ abstract class AppLocalizations {
   /// **'Used a tool'**
   String get toolCalled;
 
+  /// No description provided for @toolCollaborated.
+  ///
+  /// In en, this message translates to:
+  /// **'Coordinated agents'**
+  String get toolCollaborated;
+
+  /// No description provided for @toolSubAgent.
+  ///
+  /// In en, this message translates to:
+  /// **'Subagent activity'**
+  String get toolSubAgent;
+
+  /// No description provided for @toolViewedImage.
+  ///
+  /// In en, this message translates to:
+  /// **'Viewed image'**
+  String get toolViewedImage;
+
+  /// No description provided for @toolGeneratedImage.
+  ///
+  /// In en, this message translates to:
+  /// **'Generated image'**
+  String get toolGeneratedImage;
+
+  /// No description provided for @toolWaited.
+  ///
+  /// In en, this message translates to:
+  /// **'Waited'**
+  String get toolWaited;
+
+  /// No description provided for @toolHook.
+  ///
+  /// In en, this message translates to:
+  /// **'Hook prompt'**
+  String get toolHook;
+
+  /// No description provided for @toolEnteredReview.
+  ///
+  /// In en, this message translates to:
+  /// **'Entered review'**
+  String get toolEnteredReview;
+
+  /// No description provided for @toolExitedReview.
+  ///
+  /// In en, this message translates to:
+  /// **'Exited review'**
+  String get toolExitedReview;
+
   /// No description provided for @toolThinking.
   ///
   /// In en, this message translates to:
@@ -1400,23 +1430,11 @@ abstract class AppLocalizations {
   /// **'Activity'**
   String get toolActivity;
 
-  /// No description provided for @selectApiService.
-  ///
-  /// In en, this message translates to:
-  /// **'Select an API service'**
-  String get selectApiService;
-
   /// No description provided for @relayNotConfigured.
   ///
   /// In en, this message translates to:
   /// **'(no relay configured)'**
   String get relayNotConfigured;
-
-  /// No description provided for @noServicesFound.
-  ///
-  /// In en, this message translates to:
-  /// **'No services found on this relay'**
-  String get noServicesFound;
 
   /// No description provided for @retry.
   ///
@@ -1429,12 +1447,6 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Couldn\'t reach the relay'**
   String get discoverFailed;
-
-  /// No description provided for @apiServiceTitle.
-  ///
-  /// In en, this message translates to:
-  /// **'API service'**
-  String get apiServiceTitle;
 
   /// No description provided for @localPortLabel.
   ///
@@ -1477,6 +1489,90 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Settings'**
   String get settingsTitle;
+
+  /// No description provided for @utilityChat.
+  ///
+  /// In en, this message translates to:
+  /// **'Conversation'**
+  String get utilityChat;
+
+  /// No description provided for @utilityPages.
+  ///
+  /// In en, this message translates to:
+  /// **'Pages'**
+  String get utilityPages;
+
+  /// No description provided for @utilitySwitchPage.
+  ///
+  /// In en, this message translates to:
+  /// **'Switch page'**
+  String get utilitySwitchPage;
+
+  /// No description provided for @settingsGeneral.
+  ///
+  /// In en, this message translates to:
+  /// **'General'**
+  String get settingsGeneral;
+
+  /// No description provided for @settingsAccountConnection.
+  ///
+  /// In en, this message translates to:
+  /// **'Account & connection'**
+  String get settingsAccountConnection;
+
+  /// No description provided for @settingsServicesSubscriptions.
+  ///
+  /// In en, this message translates to:
+  /// **'Services & subscriptions'**
+  String get settingsServicesSubscriptions;
+
+  /// No description provided for @settingsAdvanced.
+  ///
+  /// In en, this message translates to:
+  /// **'Advanced'**
+  String get settingsAdvanced;
+
+  /// No description provided for @settingsSelfHostedRelay.
+  ///
+  /// In en, this message translates to:
+  /// **'Self-hosted relay fallback'**
+  String get settingsSelfHostedRelay;
+
+  /// No description provided for @settingsSelfHostedKey.
+  ///
+  /// In en, this message translates to:
+  /// **'Self-hosted relay key'**
+  String get settingsSelfHostedKey;
+
+  /// No description provided for @settingsExportUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Configure a self-hosted relay and 32-byte key first.'**
+  String get settingsExportUnavailable;
+
+  /// No description provided for @settingsOperationFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Operation failed: {error}'**
+  String settingsOperationFailed(String error);
+
+  /// No description provided for @settingsDiagnostics.
+  ///
+  /// In en, this message translates to:
+  /// **'Diagnostics'**
+  String get settingsDiagnostics;
+
+  /// No description provided for @settingsConfigure.
+  ///
+  /// In en, this message translates to:
+  /// **'Configure'**
+  String get settingsConfigure;
+
+  /// No description provided for @settingsEdit.
+  ///
+  /// In en, this message translates to:
+  /// **'Edit'**
+  String get settingsEdit;
 
   /// No description provided for @trayShow.
   ///
@@ -1783,12 +1879,6 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Local sessions'**
   String get localSessionsTitle;
-
-  /// No description provided for @localSessionsHint.
-  ///
-  /// In en, this message translates to:
-  /// **'Sessions under this CODEX_HOME, including ones the desktop app or CLI created. Resume a finished one here.'**
-  String get localSessionsHint;
 
   /// No description provided for @noLocalSessions.
   ///
@@ -2120,12 +2210,6 @@ abstract class AppLocalizations {
   /// **'Change path'**
   String get customizeCodexPath;
 
-  /// No description provided for @appServerSubtitleLocal.
-  ///
-  /// In en, this message translates to:
-  /// **'{device} · hosted here'**
-  String appServerSubtitleLocal(String device);
-
   /// No description provided for @deregister.
   ///
   /// In en, this message translates to:
@@ -2192,30 +2276,6 @@ abstract class AppLocalizations {
   /// **'Clean up unreachable'**
   String get batchRemoveEnter;
 
-  /// No description provided for @batchRemoveHint.
-  ///
-  /// In en, this message translates to:
-  /// **'Tap the unreachable services you want to remove.'**
-  String get batchRemoveHint;
-
-  /// No description provided for @batchSelectAll.
-  ///
-  /// In en, this message translates to:
-  /// **'Select all'**
-  String get batchSelectAll;
-
-  /// No description provided for @batchClear.
-  ///
-  /// In en, this message translates to:
-  /// **'Clear'**
-  String get batchClear;
-
-  /// No description provided for @batchRemoveSelected.
-  ///
-  /// In en, this message translates to:
-  /// **'Remove ({count})'**
-  String batchRemoveSelected(int count);
-
   /// No description provided for @batchRemoveTitle.
   ///
   /// In en, this message translates to:
@@ -2246,12 +2306,6 @@ abstract class AppLocalizations {
   /// **'API'**
   String get tunnelApiLabel;
 
-  /// No description provided for @tunnelMetaLabel.
-  ///
-  /// In en, this message translates to:
-  /// **'Sessions (meta)'**
-  String get tunnelMetaLabel;
-
   /// No description provided for @tunnelOffline.
   ///
   /// In en, this message translates to:
@@ -2264,23 +2318,17 @@ abstract class AppLocalizations {
   /// **'Runtime logs'**
   String get logsTitle;
 
-  /// No description provided for @logsLevel.
+  /// No description provided for @logsLive.
   ///
   /// In en, this message translates to:
-  /// **'Level'**
-  String get logsLevel;
+  /// **'Live capture'**
+  String get logsLive;
 
   /// No description provided for @logsLevelAll.
   ///
   /// In en, this message translates to:
   /// **'All'**
   String get logsLevelAll;
-
-  /// No description provided for @logsKeyword.
-  ///
-  /// In en, this message translates to:
-  /// **'Keyword'**
-  String get logsKeyword;
 
   /// No description provided for @logsKeywordHint.
   ///
@@ -2329,6 +2377,90 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Manage services'**
   String get manageServices;
+
+  /// No description provided for @servicesHostThisDevice.
+  ///
+  /// In en, this message translates to:
+  /// **'Host this device'**
+  String get servicesHostThisDevice;
+
+  /// No description provided for @servicesDevices.
+  ///
+  /// In en, this message translates to:
+  /// **'Devices'**
+  String get servicesDevices;
+
+  /// No description provided for @servicesDeviceCapabilityCount.
+  ///
+  /// In en, this message translates to:
+  /// **'{count} capabilities'**
+  String servicesDeviceCapabilityCount(int count);
+
+  /// No description provided for @servicesLocalDevice.
+  ///
+  /// In en, this message translates to:
+  /// **'This device'**
+  String get servicesLocalDevice;
+
+  /// No description provided for @servicesCapabilities.
+  ///
+  /// In en, this message translates to:
+  /// **'Available capabilities'**
+  String get servicesCapabilities;
+
+  /// No description provided for @servicesChatCapability.
+  ///
+  /// In en, this message translates to:
+  /// **'Conversation service'**
+  String get servicesChatCapability;
+
+  /// No description provided for @servicesApiCapability.
+  ///
+  /// In en, this message translates to:
+  /// **'Responses API'**
+  String get servicesApiCapability;
+
+  /// No description provided for @servicesSessionsCapability.
+  ///
+  /// In en, this message translates to:
+  /// **'Session sharing'**
+  String get servicesSessionsCapability;
+
+  /// No description provided for @servicesDefault.
+  ///
+  /// In en, this message translates to:
+  /// **'Default'**
+  String get servicesDefault;
+
+  /// No description provided for @servicesSetDefault.
+  ///
+  /// In en, this message translates to:
+  /// **'Set as default'**
+  String get servicesSetDefault;
+
+  /// No description provided for @servicesOpen.
+  ///
+  /// In en, this message translates to:
+  /// **'Open'**
+  String get servicesOpen;
+
+  /// No description provided for @servicesManage.
+  ///
+  /// In en, this message translates to:
+  /// **'Manage'**
+  String get servicesManage;
+
+  /// No description provided for @servicesBrowse.
+  ///
+  /// In en, this message translates to:
+  /// **'Browse'**
+  String get servicesBrowse;
+
+  /// No description provided for @servicesNoCapabilities.
+  ///
+  /// In en, this message translates to:
+  /// **'No capabilities are currently available on this device'**
+  String get servicesNoCapabilities;
 
   /// No description provided for @hostSessions.
   ///
@@ -2642,12 +2774,6 @@ abstract class AppLocalizations {
   /// **'Model access isn\'t set up yet — configure Codex before chatting.'**
   String get codexChatNeedsSetup;
 
-  /// No description provided for @codexSetupSettingsSubtitle.
-  ///
-  /// In en, this message translates to:
-  /// **'Provider / official login / non-degraded prompt'**
-  String get codexSetupSettingsSubtitle;
-
   /// No description provided for @codexSetupStepTitle.
   ///
   /// In en, this message translates to:
@@ -2663,13 +2789,13 @@ abstract class AppLocalizations {
   /// No description provided for @codexSetupProviderSection.
   ///
   /// In en, this message translates to:
-  /// **'Option 1 · Custom Provider'**
+  /// **'Custom provider'**
   String get codexSetupProviderSection;
 
   /// No description provided for @codexSetupProviderDesc.
   ///
   /// In en, this message translates to:
-  /// **'Enter the provider\'s Base URL and API Key; it is written into codex\'s config automatically, with no official login needed.'**
+  /// **'Point codex at a third-party or self-hosted model service with its Base URL and API key.'**
   String get codexSetupProviderDesc;
 
   /// No description provided for @codexSetupModelLabel.
@@ -2687,13 +2813,13 @@ abstract class AppLocalizations {
   /// No description provided for @codexSetupLoginSection.
   ///
   /// In en, this message translates to:
-  /// **'Option 2 · Official ChatGPT login'**
+  /// **'ChatGPT login'**
   String get codexSetupLoginSection;
 
   /// No description provided for @codexSetupLoginDesc.
   ///
   /// In en, this message translates to:
-  /// **'Complete OpenAI\'s official login in a browser; codex generates the credential itself (no manual config). On a restricted network, set a proxy when you start local hosting.'**
+  /// **'Run the model on your ChatGPT subscription; codex generates the credential itself.'**
   String get codexSetupLoginDesc;
 
   /// No description provided for @codexSetupLoginButton.
@@ -2708,17 +2834,65 @@ abstract class AppLocalizations {
   /// **'Waiting for the browser login…'**
   String get codexSetupLoginWaiting;
 
+  /// No description provided for @codexSetupMethodsTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Model access'**
+  String get codexSetupMethodsTitle;
+
+  /// No description provided for @codexSetupMethodsHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Pick either one — codex uses whichever you configured last.'**
+  String get codexSetupMethodsHint;
+
+  /// No description provided for @codexSetupInUse.
+  ///
+  /// In en, this message translates to:
+  /// **'In use'**
+  String get codexSetupInUse;
+
+  /// No description provided for @codexSetupSwitchTo.
+  ///
+  /// In en, this message translates to:
+  /// **'Switch to this'**
+  String get codexSetupSwitchTo;
+
+  /// No description provided for @codexSetupProxyNote.
+  ///
+  /// In en, this message translates to:
+  /// **'On a restricted network this needs a proxy: set one when you start local hosting.'**
+  String get codexSetupProxyNote;
+
+  /// No description provided for @codexSetupAdvanced.
+  ///
+  /// In en, this message translates to:
+  /// **'Advanced'**
+  String get codexSetupAdvanced;
+
   /// No description provided for @codexSetupNonDegradedTitle.
   ///
   /// In en, this message translates to:
-  /// **'Use the non-degraded system prompt'**
+  /// **'Non-degraded system prompt'**
   String get codexSetupNonDegradedTitle;
 
   /// No description provided for @codexSetupNonDegradedDesc.
   ///
   /// In en, this message translates to:
-  /// **'Removes the commentary / progress-report instructions that interrupt the reasoning chain (openai/codex#30364) so the model spends its budget on reasoning. Applies to new conversations.'**
+  /// **'Removes the commentary / progress-report instructions that interrupt the reasoning chain, so the model spends its budget on reasoning.'**
   String get codexSetupNonDegradedDesc;
+
+  /// No description provided for @codexSetupNonDegradedScope.
+  ///
+  /// In en, this message translates to:
+  /// **'Applies to new conversations'**
+  String get codexSetupNonDegradedScope;
+
+  /// No description provided for @codexSetupNonDegradedIssue.
+  ///
+  /// In en, this message translates to:
+  /// **'openai/codex#30364'**
+  String get codexSetupNonDegradedIssue;
 
   /// No description provided for @codexSetupNeedFields.
   ///
@@ -2789,8 +2963,26 @@ abstract class AppLocalizations {
   /// No description provided for @codexSetupStatusNeedSetup.
   ///
   /// In en, this message translates to:
-  /// **'Not configured yet — pick a method below.'**
+  /// **'Not configured yet'**
   String get codexSetupStatusNeedSetup;
+
+  /// No description provided for @codexSetupStatusNeedSetupHint.
+  ///
+  /// In en, this message translates to:
+  /// **'codex cannot make a model call yet. Configure either method below.'**
+  String get codexSetupStatusNeedSetupHint;
+
+  /// No description provided for @codexSetupStatusReadyHint.
+  ///
+  /// In en, this message translates to:
+  /// **'codex can make model calls.'**
+  String get codexSetupStatusReadyHint;
+
+  /// No description provided for @codexSetupCodexHomeLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Config directory'**
+  String get codexSetupCodexHomeLabel;
 
   /// No description provided for @codexSetupCredentialExists.
   ///

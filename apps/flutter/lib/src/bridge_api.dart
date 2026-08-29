@@ -177,6 +177,7 @@ class ConfigInfo {
     this.locale,
     this.mode = 'unconfigured',
     this.accountLogin,
+    this.accountId,
     this.hasAccountToken = false,
   });
 
@@ -195,6 +196,10 @@ class ConfigInfo {
 
   /// Signed-in GitHub login (account mode), if any.
   final String? accountLogin;
+
+  /// Signed-in GitHub numeric account id, if any. The avatar URL is derived from
+  /// it (see `GitHubAvatar`); no avatar field is fetched from the backend.
+  final String? accountId;
 
   /// Whether an account session token is stored.
   final bool hasAccountToken;
@@ -713,6 +718,19 @@ class SessionLiveness {
 
   /// Processes a force takeover would attempt to terminate.
   final List<Holder> holders;
+}
+
+/// One full read-only transcript + ownership snapshot from the host's live
+/// session follow stream.
+class SessionFollowUpdate {
+  /// Creates a live session snapshot.
+  const SessionFollowUpdate({required this.liveness, required this.items});
+
+  /// Current ownership and resume-safety state.
+  final SessionLiveness liveness;
+
+  /// Full materialised transcript at this rollout revision.
+  final List<ThreadItem> items;
 }
 
 /// Outcome of a force-resume: which holders were killed / survived, and whether
@@ -1303,6 +1321,13 @@ abstract interface class BridgeApi {
 
   /// Remote analogue of [appSessionLiveness].
   Future<SessionLiveness> metaSessionLiveness(
+    String serviceKey,
+    String threadId,
+  );
+
+  /// Live read-only transcript + ownership updates for a session held by
+  /// another app-server. The stream's first event is a complete snapshot.
+  Stream<SessionFollowUpdate> metaSessionEvents(
     String serviceKey,
     String threadId,
   );

@@ -24,6 +24,7 @@
 //! `task_started`, `task_complete`, or `turn_aborted`.
 
 use std::{
+    collections::{HashMap, HashSet},
     io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
     time::UNIX_EPOCH,
@@ -222,8 +223,9 @@ pub fn read_session_info(path: &Path) -> Result<SessionInfo> {
 pub struct TranscriptItem {
     /// Stable row id (the source line index).
     pub id: String,
-    /// Item kind: `userMessage` / `agentMessage` / `reasoning` /
-    /// `commandExecution`.
+    /// Item kind aligned with app-server v2 (`userMessage`, `agentMessage`,
+    /// `reasoning`, `commandExecution`, `mcpToolCall`, `fileChange`,
+    /// `contextCompaction`, `plan`, and the other activity item variants).
     pub item_type: String,
     /// One-line title (the command for tool calls; empty for messages).
     pub title: String,
@@ -242,24 +244,38 @@ pub struct TranscriptItem {
 /// * `message` (role `user` / `assistant`) → user / agent message
 /// * `function_call` + its matching `function_call_output` (by `call_id`) → one
 ///   `commandExecution` item (title = command, text = output, ANSI stripped)
+/// * `update_plan` tool calls → one evolving `plan` checklist per turn
 /// * `reasoning` with a non-empty `summary` → a reasoning item
 ///
-/// plus the `turn_context` records written at each turn boundary, which become
+/// Modern `event_msg.item_completed` records contribute the richer app-server
+/// activity variants (MCP/dynamic tools, agent collaboration, search, image
+/// work, waits, hooks, and review-mode transitions). The `turn_context`
+/// records written at each turn boundary become
 /// synthetic `turnContext` items so the viewer can show WHICH model (and
 /// effort / permissions) actually handled each turn — the read-only analogue
 /// of the live conversation's per-turn model stamp.
 ///
-/// Encrypted reasoning (no readable `summary`), lifecycle and token events
-/// are skipped. Unreadable lines are skipped rather than failing the whole
-/// read, so a partially-written rollout (one a live writer is appending to)
-/// still renders what is parseable.
+/// Encrypted reasoning (no readable `summary`), redundant lifecycle edges and
+/// token events are skipped. Unreadable lines are skipped rather than failing
+/// the whole read, so a partially-written rollout (one a live writer is
+/// appending to) still renders what is parseable.
 pub fn read_transcript(path: &Path) -> Result<Vec<TranscriptItem>> {
-    use std::{collections::HashMap, io::BufRead};
+    use std::io::BufRead;
     let file = std::fs::File::open(path)?;
     let reader = std::io::BufReader::new(file);
     let mut out: Vec<TranscriptItem> = Vec::new();
     // Index of the `commandExecution` item awaiting its output, by call_id.
     let mut pending: HashMap<String, usize> = HashMap::new();
+    // Direct `update_plan` calls still produce a function-call output. Once
+    // rendered as a plan, suppress that otherwise-empty command row.
+    let mut plan_outputs: HashSet<String> = HashSet::new();
+    // Some rollout producers persist both lifecycle edges. Keep a single row
+    // and mark it complete in place; current codex versions persist only the
+    // completed edge, which is handled by the fallback below.
+    let mut compactions: HashMap<String, usize> = HashMap::new();
+    // The agent can update the same plan several times during one turn. Keep
+    // the latest snapshot in one row, matching the live app-server behavior.
+    let mut plans: HashMap<String, usize> = HashMap::new();
     for (idx, line) in reader.lines().enumerate() {
         let line = line?;
         if line.trim().is_empty() {
@@ -288,6 +304,56 @@ pub fn read_transcript(path: &Path) -> Result<Vec<TranscriptItem>> {
                     out.pop();
                 }
                 out.push(item);
+            }
+            continue;
+        }
+        if line_type == Some("event_msg") {
+            let event_type = payload.get("type").and_then(Value::as_str);
+            if let Some(item) = payload.get("item") {
+                if item.get("type").and_then(Value::as_str) == Some("ContextCompaction") {
+                    let item_id = item
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                        .unwrap_or_else(|| id.clone());
+                    match event_type {
+                        Some("item_started") => {
+                            if !compactions.contains_key(&item_id) {
+                                compactions.insert(item_id.clone(), out.len());
+                                out.push(TranscriptItem {
+                                    id: item_id,
+                                    item_type: "contextCompaction".to_string(),
+                                    title: "inProgress".to_string(),
+                                    text: String::new(),
+                                    images: Vec::new(),
+                                });
+                            }
+                        },
+                        Some("item_completed") => {
+                            if let Some(index) = compactions.get(&item_id).copied() {
+                                out[index].title.clear();
+                            } else {
+                                compactions.insert(item_id.clone(), out.len());
+                                out.push(TranscriptItem {
+                                    id: item_id,
+                                    item_type: "contextCompaction".to_string(),
+                                    title: String::new(),
+                                    text: String::new(),
+                                    images: Vec::new(),
+                                });
+                            }
+                        },
+                        _ => {},
+                    }
+                    continue;
+                }
+            }
+            if event_type == Some("item_completed") {
+                if let Some(item) = payload.get("item") {
+                    if let Some(item) = completed_activity_item(item, id) {
+                        out.push(item);
+                    }
+                }
             }
             continue;
         }
@@ -326,6 +392,13 @@ pub fn read_transcript(path: &Path) -> Result<Vec<TranscriptItem>> {
                 });
             },
             Some("function_call") => {
+                if let Some((plan_id, text)) = plan_tool_snapshot(payload, &id) {
+                    if let Some(call_id) = payload.get("call_id").and_then(Value::as_str) {
+                        plan_outputs.insert(call_id.to_string());
+                    }
+                    upsert_plan(&mut out, &mut plans, plan_id, text);
+                    continue;
+                }
                 let title = command_title(payload);
                 out.push(TranscriptItem {
                     id,
@@ -338,7 +411,19 @@ pub fn read_transcript(path: &Path) -> Result<Vec<TranscriptItem>> {
                     pending.insert(call_id.to_string(), out.len() - 1);
                 }
             },
+            Some("custom_tool_call") => {
+                if let Some((plan_id, text)) = plan_tool_snapshot(payload, &id) {
+                    upsert_plan(&mut out, &mut plans, plan_id, text);
+                }
+            },
             Some("function_call_output") => {
+                if payload
+                    .get("call_id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|call_id| plan_outputs.remove(call_id))
+                {
+                    continue;
+                }
                 let output =
                     strip_ansi(payload.get("output").and_then(Value::as_str).unwrap_or(""));
                 match payload
@@ -373,6 +458,139 @@ pub fn read_transcript(path: &Path) -> Result<Vec<TranscriptItem>> {
         }
     }
     Ok(out)
+}
+
+/// Extract an `update_plan` snapshot from either a direct tool call or the
+/// JavaScript wrapper used by Codex's composed tool runner. The wrapper's
+/// argument is JSON5-compatible JavaScript object syntax; parsing it with a
+/// real parser keeps quoted punctuation and escaped text intact.
+fn plan_tool_snapshot(payload: &Value, fallback_id: &str) -> Option<(String, String)> {
+    let name = payload.get("name").and_then(Value::as_str)?;
+    let plan = if name == "update_plan" {
+        let value = payload.get("arguments").or_else(|| payload.get("input"))?;
+        parse_json5_value(value)?
+    } else if name == "exec" {
+        let source = payload.get("input").and_then(Value::as_str)?;
+        let argument = js_call_argument(source, "tools.update_plan")?;
+        json5::from_str::<Value>(argument).ok()?
+    } else {
+        return None;
+    };
+    let text = encode_rollout_plan(&plan)?;
+    let turn_id = payload
+        .get("internal_chat_message_metadata_passthrough")
+        .and_then(|metadata| metadata.get("turn_id"))
+        .and_then(Value::as_str)
+        .or_else(|| payload.get("turn_id").and_then(Value::as_str))
+        .filter(|id| !id.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            payload
+                .get("call_id")
+                .and_then(Value::as_str)
+                .filter(|id| !id.is_empty())
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| fallback_id.to_string());
+    Some((format!("plan-{turn_id}"), text))
+}
+
+fn parse_json5_value(value: &Value) -> Option<Value> {
+    match value {
+        Value::Object(_) => Some(value.clone()),
+        Value::String(raw) => serde_json::from_str(raw)
+            .ok()
+            .or_else(|| json5::from_str(raw).ok()),
+        _ => None,
+    }
+}
+
+/// Return the first call argument for `callee(...)`, respecting quoted strings
+/// and nested parentheses. The returned slice excludes the outer parentheses.
+fn js_call_argument<'a>(source: &'a str, callee: &str) -> Option<&'a str> {
+    let callee_start = source.find(callee)?;
+    let open_rel = source[callee_start + callee.len()..].find('(')?;
+    let open = callee_start + callee.len() + open_rel;
+    let mut depth = 0_u32;
+    let mut quote = None;
+    let mut escaped = false;
+    for (offset, ch) in source[open..].char_indices() {
+        if let Some(delimiter) = quote {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == delimiter {
+                quote = None;
+            }
+            continue;
+        }
+        if matches!(ch, '\'' | '"' | '`') {
+            quote = Some(ch);
+            continue;
+        }
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return source.get(open + 1..open + offset);
+                }
+            },
+            _ => {},
+        }
+    }
+    None
+}
+
+fn encode_rollout_plan(plan: &Value) -> Option<String> {
+    let steps = plan.get("plan")?.as_array()?;
+    if steps.is_empty() {
+        return None;
+    }
+    let mut lines = Vec::with_capacity(steps.len() + 1);
+    if let Some(explanation) = plan
+        .get("explanation")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+    {
+        lines.push(explanation.to_string());
+    }
+    let explanation_lines = lines.len();
+    lines.extend(steps.iter().filter_map(|step| {
+        let text = step.get("step").and_then(Value::as_str)?.trim();
+        if text.is_empty() {
+            return None;
+        }
+        let mark = match step.get("status").and_then(Value::as_str) {
+            Some("completed") => "x",
+            Some("in_progress") | Some("inProgress") => "~",
+            _ => " ",
+        };
+        Some(format!("- [{mark}] {text}"))
+    }));
+    (lines.len() > explanation_lines).then(|| lines.join("\n"))
+}
+
+fn upsert_plan(
+    out: &mut Vec<TranscriptItem>,
+    plans: &mut HashMap<String, usize>,
+    plan_id: String,
+    text: String,
+) {
+    if let Some(index) = plans.get(&plan_id).copied() {
+        out[index].text = text;
+        return;
+    }
+    plans.insert(plan_id.clone(), out.len());
+    out.push(TranscriptItem {
+        id: plan_id,
+        item_type: "plan".to_string(),
+        title: String::new(),
+        text,
+        images: Vec::new(),
+    });
 }
 
 /// Map a `turn_context` record to a synthetic `turnContext` item: `title` =
@@ -515,6 +733,335 @@ fn command_title(payload: &Value) -> String {
         }
     }
     name.to_string()
+}
+
+/// Newer codex rollouts persist the UI-ready result of tool activity as an
+/// `event_msg.item_completed` record. The legacy `response_item` parser above
+/// already covers messages/reasoning and function-call commands; this adds the
+/// modern command and file-edit shapes that otherwise vanished from read-only
+/// history entirely.
+fn completed_activity_item(item: &Value, fallback_id: String) -> Option<TranscriptItem> {
+    let id = item
+        .get("id")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .unwrap_or(fallback_id);
+    match item.get("type").and_then(Value::as_str) {
+        Some("CommandExecution") => {
+            let title = item
+                .get("parsed_cmd")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|command| command.get("cmd").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let title = if title.is_empty() { completed_command_title(item) } else { title };
+            let text = ["formatted_output", "aggregated_output", "stdout"]
+                .into_iter()
+                .find_map(|field| {
+                    item.get(field)
+                        .and_then(Value::as_str)
+                        .filter(|text| !text.is_empty())
+                })
+                .unwrap_or_else(|| item.get("stderr").and_then(Value::as_str).unwrap_or(""));
+            Some(TranscriptItem {
+                id,
+                item_type: "commandExecution".to_string(),
+                title,
+                text: strip_ansi(text),
+                images: Vec::new(),
+            })
+        },
+        Some("FileChange") => completed_file_change_item(item, id),
+        Some("McpToolCall") => Some(TranscriptItem {
+            id,
+            item_type: "mcpToolCall".to_string(),
+            title: qualified_tool_title(item),
+            text: rollout_selected_json(item, &[
+                &["arguments"],
+                &["app_context", "appContext"],
+                &["result"],
+                &["error"],
+            ]),
+            images: Vec::new(),
+        }),
+        Some("DynamicToolCall") => Some(TranscriptItem {
+            id,
+            item_type: "dynamicToolCall".to_string(),
+            title: qualified_tool_title(item),
+            text: rollout_selected_json(item, &[
+                &["arguments"],
+                &["content_items", "contentItems"],
+                &["success"],
+                &["error"],
+            ]),
+            images: Vec::new(),
+        }),
+        Some("CollabAgentToolCall") => Some(TranscriptItem {
+            id,
+            item_type: "collabAgentToolCall".to_string(),
+            title: event_string(item, &["tool"]),
+            text: rollout_selected_json(item, &[
+                &["status"],
+                &["prompt"],
+                &["model"],
+                &["reasoning_effort", "reasoningEffort"],
+                &["receiver_thread_ids", "receiverThreadIds"],
+                &["agents_states", "agentsStates"],
+            ]),
+            images: Vec::new(),
+        }),
+        Some("SubAgentActivity") => Some(TranscriptItem {
+            id,
+            item_type: "subAgentActivity".to_string(),
+            title: event_string(item, &["kind"]),
+            text: rollout_selected_json(item, &[&["agent_path", "agentPath"], &[
+                "agent_thread_id",
+                "agentThreadId",
+            ]]),
+            images: Vec::new(),
+        }),
+        Some("WebSearch") => Some(TranscriptItem {
+            id,
+            item_type: "webSearch".to_string(),
+            title: event_string(item, &["query"]),
+            text: rollout_selected_json(item, &[&["action"], &["results"]]),
+            images: Vec::new(),
+        }),
+        Some("ImageView") => Some(TranscriptItem {
+            id,
+            item_type: "imageView".to_string(),
+            title: event_string(item, &["path"]),
+            text: String::new(),
+            images: Vec::new(),
+        }),
+        Some("ImageGeneration") => Some(completed_image_generation_item(item, id)),
+        Some("EnteredReviewMode") | Some("ExitedReviewMode") => Some(TranscriptItem {
+            id,
+            item_type: if item.get("type").and_then(Value::as_str) == Some("EnteredReviewMode") {
+                "enteredReviewMode"
+            } else {
+                "exitedReviewMode"
+            }
+            .to_string(),
+            title: event_string(item, &["review"]),
+            text: String::new(),
+            images: Vec::new(),
+        }),
+        Some("HookPrompt") => Some(TranscriptItem {
+            id,
+            item_type: "hookPrompt".to_string(),
+            title: item
+                .get("fragments")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|fragment| {
+                    event_value(fragment, &["hook_run_id", "hookRunId"]).and_then(Value::as_str)
+                })
+                .collect::<Vec<_>>()
+                .join(", "),
+            text: item
+                .get("fragments")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|fragment| fragment.get("text").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            images: Vec::new(),
+        }),
+        Some("Plan") => Some(TranscriptItem {
+            id,
+            item_type: "plan".to_string(),
+            title: String::new(),
+            text: event_string(item, &["text"]),
+            images: Vec::new(),
+        }),
+        Some("Extension") => completed_extension_item(item, id),
+        _ => None,
+    }
+}
+
+fn completed_extension_item(item: &Value, id: String) -> Option<TranscriptItem> {
+    let kind = event_string(item, &["kind"]);
+    let item_type = if kind == "clock.sleep" {
+        "sleep"
+    } else if kind.contains("web_search") || kind.contains("web-search") {
+        "webSearch"
+    } else if kind.contains("image_generation") || kind.contains("image-generation") {
+        "imageGeneration"
+    } else {
+        "dynamicToolCall"
+    };
+    let title = match item_type {
+        "sleep" => format!(
+            "{} ms",
+            event_value(item, &["duration_ms", "durationMs"])
+                .and_then(Value::as_u64)
+                .unwrap_or(0)
+        ),
+        "webSearch" => event_string(item, &["query"]),
+        "imageGeneration" => ["revised_prompt", "revisedPrompt", "saved_path", "savedPath"]
+            .into_iter()
+            .find_map(|field| item.get(field).and_then(Value::as_str))
+            .unwrap_or(&kind)
+            .to_string(),
+        _ => kind,
+    };
+    Some(TranscriptItem {
+        id,
+        item_type: item_type.to_string(),
+        title,
+        text: rollout_selected_json(item, &[
+            &["status"],
+            &["arguments"],
+            &["action"],
+            &["results"],
+            &["content_items", "contentItems"],
+            &["success"],
+            &["saved_path", "savedPath"],
+            &["failure"],
+        ]),
+        images: Vec::new(),
+    })
+}
+
+fn completed_image_generation_item(item: &Value, id: String) -> TranscriptItem {
+    let title = ["revised_prompt", "revisedPrompt", "saved_path", "savedPath", "status"]
+        .into_iter()
+        .find_map(|field| item.get(field).and_then(Value::as_str))
+        .unwrap_or("")
+        .to_string();
+    TranscriptItem {
+        id,
+        item_type: "imageGeneration".to_string(),
+        title,
+        // Deliberately omit `result`: it may contain the entire base64 image.
+        text: rollout_selected_json(item, &[&["status"], &["saved_path", "savedPath"], &[
+            "failure",
+        ]]),
+        images: Vec::new(),
+    }
+}
+
+fn qualified_tool_title(item: &Value) -> String {
+    let namespace = event_string(item, &["server", "namespace"]);
+    let tool = event_string(item, &["tool"]);
+    if namespace.is_empty() {
+        tool
+    } else {
+        format!("{namespace}.{tool}")
+    }
+}
+
+fn event_value<'a>(item: &'a Value, aliases: &[&str]) -> Option<&'a Value> {
+    aliases.iter().find_map(|field| item.get(*field))
+}
+
+fn event_string(item: &Value, aliases: &[&str]) -> String {
+    event_value(item, aliases)
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string()
+}
+
+/// Pretty-print selected fields while preserving their first known wire name.
+/// Extension/core rollouts use snake_case while app-server snapshots use
+/// camelCase, so each entry is an alias set for one logical field.
+fn rollout_selected_json(item: &Value, fields: &[&[&str]]) -> String {
+    let mut selected = serde_json::Map::new();
+    for aliases in fields {
+        let Some((field, value)) = aliases
+            .iter()
+            .find_map(|field| item.get(*field).map(|value| (*field, value)))
+        else {
+            continue;
+        };
+        if !value.is_null() {
+            selected.insert(field.to_string(), value.clone());
+        }
+    }
+    if selected.is_empty() {
+        return String::new();
+    }
+    serde_json::to_string_pretty(&Value::Object(selected)).unwrap_or_else(|_| "{}".to_string())
+}
+
+fn completed_command_title(item: &Value) -> String {
+    match item.get("command") {
+        Some(Value::String(command)) => command.clone(),
+        Some(Value::Array(parts)) => {
+            let parts = parts.iter().filter_map(Value::as_str).collect::<Vec<_>>();
+            match parts.as_slice() {
+                [_, flag, command] if matches!(*flag, "-Command" | "-c" | "/C") => {
+                    (*command).to_string()
+                },
+                _ => parts.join(" "),
+            }
+        },
+        _ => "command".to_string(),
+    }
+}
+
+fn completed_file_change_item(item: &Value, id: String) -> Option<TranscriptItem> {
+    let changes = item.get("changes")?.as_object()?;
+    if changes.is_empty() {
+        return None;
+    }
+    let mut diffs = Vec::new();
+    for (path, change) in changes {
+        if let Some(diff) = completed_file_diff(path, change) {
+            diffs.push(diff);
+        }
+    }
+    let title = if changes.len() == 1 {
+        changes.keys().next().cloned().unwrap_or_default()
+    } else {
+        format!("{} files", changes.len())
+    };
+    let text = if diffs.is_empty() {
+        changes.keys().cloned().collect::<Vec<_>>().join("\n")
+    } else {
+        diffs.join("\n")
+    };
+    Some(TranscriptItem {
+        id,
+        item_type: "fileChange".to_string(),
+        title,
+        text,
+        images: Vec::new(),
+    })
+}
+
+fn completed_file_diff(path: &str, change: &Value) -> Option<String> {
+    let raw = change
+        .get("unified_diff")
+        .or_else(|| change.get("diff"))
+        .and_then(Value::as_str)
+        .filter(|diff| !diff.trim().is_empty())?;
+    if raw.lines().any(|line| line.starts_with("--- "))
+        && raw.lines().any(|line| line.starts_with("+++ "))
+    {
+        return Some(raw.to_string());
+    }
+    let kind = change
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or("update");
+    let moved = change
+        .get("move_path")
+        .or_else(|| change.get("movePath"))
+        .and_then(Value::as_str)
+        .unwrap_or(path);
+    let body = raw.trim_end_matches(['\r', '\n']);
+    let (old_path, new_path) = match kind {
+        "add" => ("/dev/null".to_string(), format!("b/{moved}")),
+        "delete" => (format!("a/{path}"), "/dev/null".to_string()),
+        _ => (format!("a/{path}"), format!("b/{moved}")),
+    };
+    Some(format!("--- {old_path}\n+++ {new_path}\n{body}"))
 }
 
 /// Join a `reasoning` payload's `summary[].text`. codex stores the model's
@@ -1128,6 +1675,149 @@ mod tests {
         assert_eq!(items[1].text, "[32mhi[0m");
         assert_eq!(items[2].item_type, "agentMessage");
         assert_eq!(items[2].text, "done");
+    }
+
+    #[test]
+    fn read_transcript_keeps_modern_command_and_file_change_history() {
+        let lines = [
+            r#"{"type":"response_item","payload":{"type":"custom_tool_call","name":"exec","call_id":"c1","input":"opaque"}}"#,
+            r#"{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"CommandExecution","id":"exec-1","command":["pwsh","-Command","cargo test"],"parsed_cmd":[{"type":"unknown","cmd":"cargo test"}],"status":"completed","formatted_output":"all tests passed\n"}}}"#,
+            r#"{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"FileChange","id":"edit-1","changes":{"src/lib.rs":{"type":"update","unified_diff":"@@ -1 +1 @@\n-old\n+new\n","move_path":null}},"status":"completed"}}}"#,
+        ];
+        let path = std::env::temp_dir().join(format!(
+            "pcx-transcript-{}-{}.jsonl",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::write(&path, lines.join("\n")).expect("write transcript fixture");
+        let items = read_transcript(&path).expect("read transcript");
+        std::fs::remove_file(&path).ok();
+
+        assert_eq!(items.len(), 2, "{items:?}");
+        assert_eq!(items[0].item_type, "commandExecution");
+        assert_eq!(items[0].title, "cargo test");
+        assert_eq!(items[0].text, "all tests passed\n");
+        assert_eq!(items[1].item_type, "fileChange");
+        assert_eq!(items[1].title, "src/lib.rs");
+        assert_eq!(items[1].text, "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1 +1 @@\n-old\n+new");
+    }
+
+    #[test]
+    fn read_transcript_tracks_context_compaction_lifecycle() {
+        let started = r#"{"type":"event_msg","payload":{"type":"item_started","item":{"type":"ContextCompaction","id":"compact-1"}}}"#;
+        let completed = r#"{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"ContextCompaction","id":"compact-1"}}}"#;
+        let path = std::env::temp_dir().join(format!(
+            "pcx-transcript-{}-{}.jsonl",
+            std::process::id(),
+            line!()
+        ));
+
+        std::fs::write(&path, started).expect("write active compaction fixture");
+        let items = read_transcript(&path).expect("read active compaction");
+        assert_eq!(items.len(), 1, "{items:?}");
+        assert_eq!(items[0].item_type, "contextCompaction");
+        assert_eq!(items[0].title, "inProgress");
+
+        std::fs::write(&path, format!("{started}\n{completed}")).expect("complete compaction");
+        let items = read_transcript(&path).expect("read completed compaction");
+        std::fs::remove_file(&path).ok();
+        assert_eq!(items.len(), 1, "{items:?}");
+        assert_eq!(items[0].item_type, "contextCompaction");
+        assert!(items[0].title.is_empty());
+
+        // Current codex rollouts persist only the completed lifecycle edge.
+        std::fs::write(&path, completed).expect("write completed-only compaction fixture");
+        let items = read_transcript(&path).expect("read completed-only compaction");
+        std::fs::remove_file(&path).ok();
+        assert_eq!(items.len(), 1, "{items:?}");
+        assert_eq!(items[0].item_type, "contextCompaction");
+        assert!(items[0].title.is_empty());
+    }
+
+    #[test]
+    fn read_transcript_aligns_richer_completed_activity_items() {
+        let lines = [
+            r#"{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"McpToolCall","id":"m1","server":"calendar","tool":"list_events","arguments":{"day":"Friday"},"status":"completed","result":{"content":[{"type":"text","text":"2 events"}]}}}}"#,
+            r#"{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"CollabAgentToolCall","id":"a1","tool":"spawnAgent","status":"completed","prompt":"inspect auth","receiver_thread_ids":["child-1"]}}}"#,
+            r#"{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"Extension","kind":"clock.sleep","id":"s1","durationMs":1250}}}"#,
+            r#"{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"ImageGeneration","id":"i1","status":"completed","revised_prompt":"A blue square","result":"VERY-LARGE-BASE64","saved_path":"C:\\tmp\\blue.png"}}}"#,
+        ];
+        let path = std::env::temp_dir().join(format!(
+            "pcx-transcript-{}-{}.jsonl",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::write(&path, lines.join("\n")).expect("write activity fixture");
+
+        let items = read_transcript(&path).expect("read activity fixture");
+        std::fs::remove_file(&path).ok();
+        assert_eq!(items.len(), 4, "{items:?}");
+        assert_eq!(items[0].item_type, "mcpToolCall");
+        assert_eq!(items[0].title, "calendar.list_events");
+        assert!(items[0].text.contains("2 events"));
+        assert_eq!(items[1].item_type, "collabAgentToolCall");
+        assert!(items[1].text.contains("child-1"));
+        assert_eq!(items[2].item_type, "sleep");
+        assert_eq!(items[2].title, "1250 ms");
+        assert_eq!(items[3].item_type, "imageGeneration");
+        assert_eq!(items[3].title, "A blue square");
+        assert!(items[3].text.contains("blue.png"));
+        assert!(!items[3].text.contains("VERY-LARGE-BASE64"));
+    }
+
+    #[test]
+    fn read_transcript_tracks_latest_composed_tool_plan() {
+        let plan = |status: &str| {
+            serde_json::json!({
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call",
+                    "name": "exec",
+                    "call_id": format!("call-{status}"),
+                    "input": format!(
+                        "const r=await tools.update_plan({{explanation:\"Ship it\",plan:[{{step:\"Inspect foo()\",status:\"completed\"}},{{step:\"Run tests\",status:\"{status}\"}}]}});text(r);"
+                    ),
+                    "internal_chat_message_metadata_passthrough": {
+                        "turn_id": "turn-7"
+                    }
+                }
+            })
+            .to_string()
+        };
+        let path = std::env::temp_dir().join(format!(
+            "pcx-transcript-{}-{}.jsonl",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::write(&path, [plan("in_progress"), plan("completed")].join("\n"))
+            .expect("write plan snapshots");
+
+        let items = read_transcript(&path).expect("read plan snapshots");
+        std::fs::remove_file(&path).ok();
+        assert_eq!(items.len(), 1, "plan updates should upsert: {items:?}");
+        assert_eq!(items[0].id, "plan-turn-7");
+        assert_eq!(items[0].item_type, "plan");
+        assert_eq!(items[0].text, "Ship it\n- [x] Inspect foo()\n- [x] Run tests");
+    }
+
+    #[test]
+    fn read_transcript_hides_direct_plan_tool_output() {
+        let lines = [
+            r#"{"type":"response_item","payload":{"type":"function_call","name":"update_plan","call_id":"plan-call","arguments":"{plan:[{step:'Inspect',status:'in_progress'}]}"}}"#,
+            r#"{"type":"response_item","payload":{"type":"function_call_output","call_id":"plan-call","output":"Plan updated"}}"#,
+        ];
+        let path = std::env::temp_dir().join(format!(
+            "pcx-transcript-{}-{}.jsonl",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::write(&path, lines.join("\n")).expect("write direct plan snapshot");
+
+        let items = read_transcript(&path).expect("read direct plan snapshot");
+        std::fs::remove_file(&path).ok();
+        assert_eq!(items.len(), 1, "tool output must not become a command: {items:?}");
+        assert_eq!(items[0].item_type, "plan");
+        assert_eq!(items[0].text, "- [~] Inspect");
     }
 
     /// Manual harness: parse a REAL rollout and dump what the viewer would

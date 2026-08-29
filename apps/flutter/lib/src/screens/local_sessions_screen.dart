@@ -1,17 +1,25 @@
 import 'package:flutter/material.dart';
-import 'package:pocket_codex/src/widgets/window_title_bar.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/attachment_refs.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
+import 'package:pocket_codex/src/desktop_theme.dart';
 import 'package:pocket_codex/src/error_format.dart';
+import 'package:pocket_codex/src/fonts.dart';
 import 'package:pocket_codex/src/providers.dart';
+import 'package:pocket_codex/src/service_key.dart';
 import 'package:pocket_codex/src/screens/app_session_screen.dart'
     show appLocalPort;
+import 'package:pocket_codex/src/theme.dart';
 import 'package:pocket_codex/src/time_ago.dart';
+import 'package:pocket_codex/src/widgets/app_toast.dart';
+import 'package:pocket_codex/src/widgets/error_retry.dart';
 import 'package:pocket_codex/src/widgets/loading.dart';
+import 'package:pocket_codex/src/widgets/search_field.dart';
 import 'package:pocket_codex/src/widgets/status_dots.dart';
+import 'package:pocket_codex/src/widgets/takeover_dialog.dart';
+import 'package:pocket_codex/src/widgets/utility_page.dart';
 
 /// Where a sessions view reads from: this machine's `CODEX_HOME` directly
 /// ([SessionSource.local]), or a (possibly remote) host's CODEX_HOME over its
@@ -54,17 +62,15 @@ class SessionSource {
 /// safe to resume, and lets the user force-take-over a finished session that
 /// another process still holds open.
 ///
-/// With the default [SessionSource.local] it reads this machine directly (the
-/// standalone `/sessions` screen). With a [SessionSource.remote] it reads a
-/// (possibly remote) host over its meta tunnel — the Sessions tab embeds it that
-/// way, one instance per picked host.
+/// With the default [SessionSource.local] it reads this machine directly. With a
+/// [SessionSource.remote] — reached from a device's session-sharing capability —
+/// it reads a (possibly remote) host over that host's meta tunnel.
 class LocalSessionsScreen extends ConsumerStatefulWidget {
   /// Default constructor.
   const LocalSessionsScreen({
     super.key,
     this.clock,
     this.source = const SessionSource.local(),
-    this.embedded = false,
   });
 
   /// Clock used to bucket sessions by activity time (今天 / 更早) and to render
@@ -77,10 +83,6 @@ class LocalSessionsScreen extends ConsumerStatefulWidget {
   /// Where to read sessions from (local machine vs a host's meta tunnel).
   final SessionSource source;
 
-  /// When true, render only the body (no Scaffold/AppBar) so a parent screen
-  /// (the Sessions tab) can host it under its own chrome.
-  final bool embedded;
-
   @override
   ConsumerState<LocalSessionsScreen> createState() => _LocalSessionsState();
 }
@@ -90,6 +92,7 @@ class _LocalSessionsState extends ConsumerState<LocalSessionsScreen> {
   String? _error;
   List<LocalSession> _sessions = const [];
   String _query = '';
+  _SessionViewFilter _filter = _SessionViewFilter.all;
 
   @override
   void initState() {
@@ -152,21 +155,26 @@ class _LocalSessionsState extends ConsumerState<LocalSessionsScreen> {
       duration: const Duration(milliseconds: 250),
       child: _buildBody(l10n),
     );
-    // Embedded in the Sessions tab: the parent provides the chrome, so render
-    // the body only (refresh is pull-to-refresh + the host picker's button).
-    if (widget.embedded) return body;
-    return Scaffold(
-      appBar: WindowTitleBar(
-        title: Text(l10n.localSessionsTitle),
-        actions: [
-          IconButton(
-            key: const Key('local-sessions-refresh'),
-            icon: const Icon(Icons.refresh),
-            tooltip: l10n.refreshStatus,
-            onPressed: _loading ? null : _load,
-          ),
-        ],
-      ),
+    // Reading another device's sessions is reached from that device, so name it:
+    // otherwise a remote list is indistinguishable from this machine's own.
+    final key = widget.source.serviceKey;
+    final device = key == null ? '' : serviceKeyDevice(key);
+    final remoteDevice = device.isEmpty ? null : device;
+    return UtilityPage(
+      route: '/sessions',
+      title: remoteDevice ?? l10n.localSessionsTitle,
+      // No parent segment even for a remote device's list. The middle
+      // "本地会话" crumb pointed at THIS machine's sessions, which is a sibling
+      // of the remote list rather than a level above it — the chat origin is
+      // the real way out, and the page menu switches between them.
+      actions: [
+        IconButton(
+          key: const Key('local-sessions-refresh'),
+          icon: const Icon(Icons.refresh),
+          tooltip: l10n.refreshStatus,
+          onPressed: _loading ? null : _load,
+        ),
+      ],
       body: body,
     );
   }
@@ -176,19 +184,11 @@ class _LocalSessionsState extends ConsumerState<LocalSessionsScreen> {
       return const ListLoadingSkeleton(key: ValueKey('local-loading'));
     }
     if (_error != null) {
-      return Center(
+      return ErrorRetry(
         key: const ValueKey('local-error'),
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(_error!, textAlign: TextAlign.center),
-              const SizedBox(height: 12),
-              FilledButton(onPressed: _load, child: Text(l10n.retry)),
-            ],
-          ),
-        ),
+        errorKey: const Key('local-error-message'),
+        message: _error!,
+        onRetry: _load,
       );
     }
     if (_sessions.isEmpty) {
@@ -208,6 +208,7 @@ class _LocalSessionsState extends ConsumerState<LocalSessionsScreen> {
 
   Widget _buildList(AppLocalizations l10n) {
     final scheme = Theme.of(context).colorScheme;
+    final desktop = isDesktop && MediaQuery.sizeOf(context).width >= 840;
     final now = (widget.clock ?? DateTime.now)();
     final q = _query.trim().toLowerCase();
     bool matches(LocalSession s) {
@@ -215,7 +216,20 @@ class _LocalSessionsState extends ConsumerState<LocalSessionsScreen> {
       return has(s.preview) || has(s.cwd) || has(s.source);
     }
 
-    final filtered = q.isEmpty ? _sessions : _sessions.where(matches).toList();
+    bool matchesFilter(LocalSession session) => switch (_filter) {
+      _SessionViewFilter.all => true,
+      _SessionViewFilter.active => session.safety == 'ownedRunning',
+      _SessionViewFilter.resumable =>
+        session.allowsResume && !session.requiresTakeover,
+      _SessionViewFilter.takeover => session.requiresTakeover,
+    };
+
+    final filtered = _sessions
+        .where(
+          (session) =>
+              (q.isEmpty || matches(session)) && matchesFilter(session),
+        )
+        .toList();
 
     // Group by activity time, mirroring the conversation list: actively-running
     // first, then today, then earlier. The source list is already sorted
@@ -233,15 +247,7 @@ class _LocalSessionsState extends ConsumerState<LocalSessionsScreen> {
       }
     }
 
-    final rows = <Widget>[
-      Padding(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-        child: Text(
-          l10n.localSessionsHint,
-          style: Theme.of(context).textTheme.bodySmall,
-        ),
-      ),
-    ];
+    final rows = <Widget>[];
     void section(String label, List<LocalSession> items) {
       if (items.isEmpty) return;
       rows.add(_sectionLabel(label));
@@ -264,8 +270,12 @@ class _LocalSessionsState extends ConsumerState<LocalSessionsScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // Quick filter — shown once there are enough sessions to scan.
-        if (_sessions.length > 6) _searchBox(l10n),
+        if (desktop)
+          _desktopToolbar(l10n)
+        // Quick filter on compact layouts is shown only when it pays for its
+        // vertical space. Desktop always keeps search + state filters visible.
+        else if (_sessions.length > 6)
+          _searchBox(l10n),
         Expanded(
           child: filtered.isEmpty
               ? Center(
@@ -273,6 +283,21 @@ class _LocalSessionsState extends ConsumerState<LocalSessionsScreen> {
                   child: Text(
                     l10n.noMatchingThreads,
                     style: TextStyle(color: scheme.outline),
+                  ),
+                )
+              : desktop
+              ? Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
+                  child: Card(
+                    clipBehavior: Clip.antiAlias,
+                    child: RefreshIndicator(
+                      key: const ValueKey('local-list'),
+                      onRefresh: _load,
+                      child: ListView(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        children: rows,
+                      ),
+                    ),
                   ),
                 )
               : RefreshIndicator(
@@ -288,34 +313,46 @@ class _LocalSessionsState extends ConsumerState<LocalSessionsScreen> {
     );
   }
 
-  Widget _searchBox(AppLocalizations l10n) {
+  Widget _desktopToolbar(AppLocalizations l10n) {
     final scheme = Theme.of(context).colorScheme;
+    Widget filter(_SessionViewFilter value, String label) => ChoiceChip(
+      key: Key('session-filter-${value.name}'),
+      label: Text(label),
+      selected: _filter == value,
+      onSelected: (_) => setState(() => _filter = value),
+      showCheckmark: false,
+      side: BorderSide(color: scheme.outlineVariant),
+    );
     return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
-      child: TextField(
-        key: const Key('local-search'),
-        onChanged: (v) => setState(() => _query = v),
-        style: const TextStyle(fontSize: 13),
-        decoration: InputDecoration(
-          isDense: true,
-          prefixIcon: const Icon(Icons.search, size: 18),
-          prefixIconConstraints: const BoxConstraints(
-            minWidth: 34,
-            minHeight: 34,
-          ),
-          hintText: l10n.searchLocalSessions,
-          hintStyle: TextStyle(fontSize: 13, color: scheme.onSurfaceVariant),
-          filled: true,
-          fillColor: scheme.surfaceContainerHighest,
-          contentPadding: const EdgeInsets.symmetric(vertical: 9),
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(10),
-            borderSide: BorderSide.none,
-          ),
-        ),
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
+      child: Row(
+        children: [
+          Expanded(child: _searchField(l10n)),
+          const SizedBox(width: 10),
+          filter(_SessionViewFilter.all, l10n.logsLevelAll),
+          const SizedBox(width: 6),
+          filter(_SessionViewFilter.active, l10n.groupActive),
+          const SizedBox(width: 6),
+          filter(_SessionViewFilter.resumable, l10n.sessionResumable),
+          const SizedBox(width: 6),
+          filter(_SessionViewFilter.takeover, l10n.forceTakeover),
+        ],
       ),
     );
   }
+
+  Widget _searchBox(AppLocalizations l10n) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+      child: _searchField(l10n),
+    );
+  }
+
+  Widget _searchField(AppLocalizations l10n) => SearchField(
+    key: const Key('local-search'),
+    hintText: l10n.searchLocalSessions,
+    onChanged: (v) => setState(() => _query = v),
+  );
 
   Widget _sectionLabel(String text) => Padding(
     padding: const EdgeInsets.fromLTRB(16, 12, 16, 2),
@@ -328,6 +365,8 @@ class _LocalSessionsState extends ConsumerState<LocalSessionsScreen> {
     ),
   );
 }
+
+enum _SessionViewFilter { all, active, resumable, takeover }
 
 /// One session row: preview + cwd/source/time, a resume-safety chip, and a
 /// resume / force-takeover action when allowed.
@@ -367,64 +406,99 @@ class _SessionRow extends StatelessWidget {
       if (session.source != null && session.source!.isNotEmpty) session.source!,
       if (time.isNotEmpty) time,
     ];
-    return ListTile(
-      key: Key('local-${session.threadId}'),
-      // Tapping any row opens the read-only transcript viewer (works even for
-      // a session another client owns — it reads the on-disk rollout).
-      onTap: () {
-        final q = <String>[
-          'tid=${Uri.encodeComponent(session.threadId)}',
-          if (session.cwd != null && session.cwd!.trim().isNotEmpty)
-            'cwd=${Uri.encodeComponent(session.cwd!.trim())}',
-          if (preview.isNotEmpty) 'preview=${Uri.encodeComponent(preview)}',
-          if (serviceKey != null) 'svc=${Uri.encodeComponent(serviceKey!)}',
-        ];
-        context.push('/sessions/view?${q.join('&')}');
-      },
-      leading: Icon(
-        session.heldOpen ? Icons.lock_outline : Icons.chat_bubble_outline,
-        size: 20,
-        color: session.heldOpen ? scheme.error : scheme.primary,
-      ),
-      title: Text(
-        preview.isEmpty ? session.threadId : preview,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-      ),
-      subtitle: subtitleParts.isEmpty
-          ? null
-          : Text(
-              subtitleParts.join('  ·  '),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
+    // Matches the conversation list's row: an ink row on the control radius
+    // rather than a ListTile, whose fixed leading/trailing metrics sit taller
+    // than the rest of the app's lists.
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 1),
+      child: Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(kControlRadius),
+        child: InkWell(
+          key: Key('local-${session.threadId}'),
+          mouseCursor: clickable,
+          borderRadius: BorderRadius.circular(kControlRadius),
+          // Tapping any row opens the read-only transcript viewer (works even
+          // for a session another client owns — it reads the on-disk rollout).
+          onTap: () {
+            final q = <String>[
+              'tid=${Uri.encodeComponent(session.threadId)}',
+              if (session.cwd != null && session.cwd!.trim().isNotEmpty)
+                'cwd=${Uri.encodeComponent(session.cwd!.trim())}',
+              if (preview.isNotEmpty) 'preview=${Uri.encodeComponent(preview)}',
+              if (serviceKey != null) 'svc=${Uri.encodeComponent(serviceKey!)}',
+            ];
+            context.push('/sessions/view?${q.join('&')}');
+          },
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+            child: Row(
+              children: [
+                Icon(
+                  session.heldOpen
+                      ? Icons.lock_outline
+                      : Icons.chat_bubble_outline,
+                  size: 18,
+                  color: session.heldOpen ? scheme.error : scheme.primary,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        preview.isEmpty ? session.threadId : preview,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                      if (subtitleParts.isNotEmpty) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                          subtitleParts.join(' · '),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(color: scheme.onSurfaceVariant),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                _safetyChip(context, l10n),
+                if (session.allowsResume) ...[
+                  const SizedBox(width: 6),
+                  TextButton(
+                    key: Key('resume-${session.threadId}'),
+                    onPressed: () => onResume(session),
+                    child: Text(
+                      session.requiresTakeover
+                          ? l10n.forceTakeover
+                          : l10n.resumeSession,
+                    ),
+                  ),
+                ],
+              ],
             ),
-      trailing: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          _safetyChip(context, l10n),
-          const SizedBox(width: 8),
-          if (session.allowsResume)
-            TextButton(
-              key: Key('resume-${session.threadId}'),
-              onPressed: () => onResume(session),
-              child: Text(
-                session.requiresTakeover
-                    ? l10n.forceTakeover
-                    : l10n.resumeSession,
-              ),
-            ),
-        ],
+          ),
+        ),
       ),
     );
   }
 
   Widget _safetyChip(BuildContext context, AppLocalizations l10n) {
     final scheme = Theme.of(context).colorScheme;
+    // Both "in use elsewhere" states are degraded-but-not-failed, so they share
+    // the caution amber; only a session actively running elsewhere is an error.
     final (Color color, String label) = switch (session.safety) {
-      'resumable' => (Colors.green.shade600, l10n.sessionResumable),
-      'resumableUnfinished' => (Colors.amber.shade800, l10n.sessionUnfinished),
+      'resumable' => (successColor(scheme), l10n.sessionResumable),
+      'resumableUnfinished' => (cautionColor(scheme), l10n.sessionUnfinished),
       'ownedRunning' => (scheme.error, l10n.sessionRunningElsewhere),
-      'ownedIdle' => (Colors.orange.shade700, l10n.sessionInUseElsewhere),
+      'ownedIdle' => (cautionColor(scheme), l10n.sessionInUseElsewhere),
       _ => (scheme.outline, session.safety),
     };
     return StatusChip(
@@ -499,7 +573,7 @@ Future<void> resumeLocalSession(
   SessionSource source = const SessionSource.local(),
 }) async {
   final l10n = AppLocalizations.of(context);
-  final messenger = ScaffoldMessenger.of(context);
+  final messenger = ToastMessenger.of(context);
   // Resolve the app-server to resume into. For a remote host that IS the host
   // behind the source key: it evicts + resumes into its own colocated
   // app-server, so the target is simply that key. For the local source, ensure
@@ -518,7 +592,7 @@ Future<void> resumeLocalSession(
         await bridge.appConnect(target, appLocalPort);
       } catch (e) {
         if (context.mounted) {
-          messenger.showSnackBar(SnackBar(content: Text(friendlyError(e))));
+          messenger.error(friendlyError(e));
         }
         return;
       }
@@ -538,7 +612,7 @@ Future<void> resumeLocalSession(
     if (confirmed != true) return;
   }
   if (target == null) {
-    messenger.showSnackBar(SnackBar(content: Text(l10n.takeoverNoTarget)));
+    messenger.error(l10n.takeoverNoTarget);
     return;
   }
 
@@ -551,15 +625,11 @@ Future<void> resumeLocalSession(
         ? await bridge.metaForceResume(target, threadId)
         : await bridge.appForceResume(target, threadId);
   } catch (e) {
-    messenger.showSnackBar(SnackBar(content: Text(friendlyError(e))));
+    messenger.error(friendlyError(e));
     return;
   }
   if (!report.resumed) {
-    messenger.showSnackBar(
-      SnackBar(
-        content: Text(l10n.takeoverResumeFailed(report.resumeError ?? '')),
-      ),
-    );
+    messenger.error(l10n.takeoverResumeFailed(report.resumeError ?? ''));
     return;
   }
   final parts = <String>[
@@ -567,7 +637,7 @@ Future<void> resumeLocalSession(
     if (report.killed.isNotEmpty) l10n.takeoverKilled(report.killed.length),
     if (report.stillHeld) l10n.takeoverStillHeld,
   ];
-  messenger.showSnackBar(SnackBar(content: Text(parts.join(' · '))));
+  messenger.notice(parts.join(' · '));
 
   // Open the resumed conversation (only reached on success).
   if (!context.mounted) return;
@@ -578,71 +648,4 @@ Future<void> resumeLocalSession(
       'cwd=${Uri.encodeComponent(cwd.trim())}',
   ];
   context.push('/app/$key/session?${q.join('&')}');
-}
-
-/// Confirm dialog for a force takeover: lists the holder processes that will be
-/// terminated and warns about data loss.
-class TakeoverDialog extends StatelessWidget {
-  /// Creates the confirm dialog.
-  const TakeoverDialog({
-    super.key,
-    required this.holders,
-    required this.hasTarget,
-  });
-
-  final List<Holder> holders;
-  final bool hasTarget;
-
-  @override
-  Widget build(BuildContext context) {
-    final l10n = AppLocalizations.of(context);
-    return AlertDialog(
-      key: const Key('takeover-dialog'),
-      title: Text(l10n.takeoverTitle),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(l10n.takeoverBody(holders.length)),
-          if (holders.isNotEmpty) ...[
-            const SizedBox(height: 12),
-            Text(
-              l10n.takeoverWillTerminate,
-              style: Theme.of(context).textTheme.labelMedium,
-            ),
-            const SizedBox(height: 4),
-            ...holders.map(
-              (h) => Padding(
-                padding: const EdgeInsets.symmetric(vertical: 2),
-                child: Text(
-                  l10n.holderRow(h.name, h.pid),
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-              ),
-            ),
-          ],
-          if (!hasTarget) ...[
-            const SizedBox(height: 12),
-            Text(
-              l10n.takeoverNoTarget,
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: Theme.of(context).colorScheme.error,
-              ),
-            ),
-          ],
-        ],
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(false),
-          child: Text(l10n.cancel),
-        ),
-        FilledButton(
-          key: const Key('takeover-confirm'),
-          onPressed: hasTarget ? () => Navigator.of(context).pop(true) : null,
-          child: Text(l10n.takeoverConfirm),
-        ),
-      ],
-    );
-  }
 }

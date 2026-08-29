@@ -1705,6 +1705,9 @@ mod tests {
     #[test]
     fn truncating_a_live_host_log_frees_it_in_place() {
         let dir = std::env::temp_dir().join(format!("pcx-logcap-{}", std::process::id()));
+        // This test can run before every other runtime-using test. Initialize
+        // explicitly instead of depending on the test runner's random order.
+        runtime::init(std::env::temp_dir()).expect("init runtime");
         std::fs::create_dir_all(&dir).expect("tmp dir");
         let log = dir.join("codex-default.log");
         std::fs::write(&log, vec![b'x'; 1024]).expect("write");

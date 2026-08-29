@@ -2,23 +2,25 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
-import 'package:pocket_codex/src/widgets/window_title_bar.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/app_modes.dart';
 import 'package:pocket_codex/src/attachment_refs.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
+import 'package:pocket_codex/src/desktop_theme.dart';
 import 'package:pocket_codex/src/error_format.dart';
-import 'package:pocket_codex/src/ide_context.dart';
 import 'package:pocket_codex/src/fonts.dart';
+import 'package:pocket_codex/src/ide_context.dart';
 import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/realtime_delegation.dart';
 import 'package:pocket_codex/src/screens/local_sessions_screen.dart'
     show SessionSource, resumeLocalSession;
+import 'package:pocket_codex/src/theme.dart';
 import 'package:pocket_codex/src/widgets/loading.dart';
 import 'package:pocket_codex/src/widgets/markdown_view.dart';
 import 'package:pocket_codex/src/widgets/message_images.dart';
 import 'package:pocket_codex/src/widgets/realtime_handoff_card.dart';
+import 'package:pocket_codex/src/widgets/utility_page.dart';
 import 'package:super_sliver_list/super_sliver_list.dart';
 
 /// Read-only viewer for a local codex session's transcript, parsed straight from
@@ -206,18 +208,18 @@ class _LocalSessionViewState extends ConsumerState<LocalSessionViewScreen> {
             l10n.fileOnlyMessage,
           ).trim();
     final title = cleaned.isEmpty ? widget.threadId : cleaned;
-    return Scaffold(
-      appBar: WindowTitleBar(
-        title: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
-        actions: [
-          IconButton(
-            key: const Key('local-view-refresh'),
-            icon: const Icon(Icons.refresh),
-            tooltip: l10n.refreshStatus,
-            onPressed: _loading ? null : () => _load(initial: true),
-          ),
-        ],
-      ),
+    return UtilityPage(
+      route: '/sessions',
+      title: title,
+      parent: UtilityParent(title: l10n.localSessionsTitle, route: '/sessions'),
+      actions: [
+        IconButton(
+          key: const Key('local-view-refresh'),
+          icon: const Icon(Icons.refresh),
+          tooltip: l10n.refreshStatus,
+          onPressed: _loading ? null : () => _load(initial: true),
+        ),
+      ],
       body: Column(
         children: [
           _banner(l10n),
@@ -234,7 +236,7 @@ class _LocalSessionViewState extends ConsumerState<LocalSessionViewScreen> {
     if (live == null || !live.heldOpen) return const SizedBox.shrink();
     final scheme = Theme.of(context).colorScheme;
     final running = live.safety == 'ownedRunning';
-    final color = running ? scheme.error : Colors.orange.shade800;
+    final color = running ? scheme.error : cautionColor(scheme);
     final text = running
         ? '${l10n.sessionRunningElsewhere} · ${l10n.sessionReadOnly}'
         : l10n.sessionInUseElsewhere;
@@ -415,7 +417,7 @@ class _TranscriptRow extends StatelessWidget {
               constraints: BoxConstraints(maxWidth: c.maxWidth * 0.82),
               decoration: BoxDecoration(
                 color: scheme.primaryContainer,
-                borderRadius: BorderRadius.circular(14),
+                borderRadius: BorderRadius.circular(kPanelRadius),
               ),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
@@ -554,7 +556,7 @@ class _CommandBlock extends StatelessWidget {
       margin: const EdgeInsets.symmetric(vertical: 6),
       decoration: BoxDecoration(
         color: scheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(kPanelRadius),
         border: Border.all(color: scheme.outlineVariant, width: 0.5),
       ),
       child: Column(

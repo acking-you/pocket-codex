@@ -3,10 +3,11 @@ import 'dart:io';
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:pocket_codex/src/desktop_theme.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/attachment_refs.dart';
+import 'package:pocket_codex/src/desktop_theme.dart';
 import 'package:pocket_codex/src/image_attachments.dart';
+import 'package:pocket_codex/src/widgets/app_toast.dart';
 import 'package:pocket_codex/src/widgets/window_title_bar.dart';
 
 /// One message attachment resolved from its wire URL: either renderable
@@ -79,16 +80,14 @@ Future<void> saveImageBytes(
   required String suggestedName,
 }) async {
   final l10n = AppLocalizations.of(context);
-  final messenger = ScaffoldMessenger.of(context);
+  final messenger = ToastMessenger.of(context);
   final location = await getSaveLocation(suggestedName: suggestedName);
   if (location == null) return;
   try {
     await File(location.path).writeAsBytes(bytes);
-    messenger.showSnackBar(
-      SnackBar(content: Text(l10n.imageSaved(location.path))),
-    );
+    messenger.ok(l10n.imageSaved(location.path));
   } catch (e) {
-    messenger.showSnackBar(SnackBar(content: Text(l10n.imageSaveFailed('$e'))));
+    messenger.error(l10n.imageSaveFailed('$e'));
   }
 }
 

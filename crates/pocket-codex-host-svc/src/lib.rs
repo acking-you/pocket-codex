@@ -19,18 +19,22 @@ pub mod resume;
 pub mod sessions;
 pub mod store;
 
-use std::{net::SocketAddr, path::PathBuf, sync::Arc};
+use std::{convert::Infallible, net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 
 use anyhow::{anyhow, Context, Result};
 use axum::{
     extract::{DefaultBodyLimit, Path, Query, State},
     http::StatusCode,
-    response::{IntoResponse, Response},
+    response::{
+        sse::{Event, KeepAlive, Sse},
+        IntoResponse, Response,
+    },
     routing::{get, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
-use tokio::net::TcpListener;
+use tokio::{net::TcpListener, sync::mpsc};
+use tokio_stream::wrappers::ReceiverStream;
 
 use crate::store::{ConfigStore, HostConfig, HostStore, ThreadConfig};
 
@@ -90,6 +94,7 @@ pub async fn serve(
         .route("/sessions", get(list_sessions))
         .route("/sessions/{id}/liveness", get(session_liveness))
         .route("/sessions/{id}/transcript", get(session_transcript))
+        .route("/sessions/{id}/follow", get(session_follow))
         .route("/sessions/{id}/resume", post(session_resume))
         .route("/threads/{id}/config", get(get_config).put(put_config))
         // Project-folder browser: the configured roots + default, and a
@@ -202,6 +207,125 @@ async fn session_transcript(Path(id): Path<String>) -> Result<Json<TranscriptRes
     Ok(Json(TranscriptResponse {
         items,
     }))
+}
+
+/// Follow a rollout over one long-lived response. The filesystem is sampled
+/// close to its append cadence on the host, but only changed snapshots cross
+/// the relay; liveness is checked separately so a completed writer is noticed
+/// even when releasing the file does not append another record.
+async fn session_follow(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let protected = resume::protected_pids(state.app_ws_addr);
+    let initial_id = id.clone();
+    let initial_protected = protected.clone();
+    let initial = tokio::task::spawn_blocking(move || {
+        sessions::follow_update(&initial_id, &initial_protected)
+    })
+    .await
+    .context("session-follow seed task panicked")??;
+    let rollout_path = sessions::rollout_path(&id)?;
+    let initial_metadata = tokio::fs::metadata(&rollout_path).await?;
+    let mut revision = (initial_metadata.len(), initial_metadata.modified().ok());
+
+    let (tx, rx) = mpsc::channel(4);
+    tokio::spawn(async move {
+        let mut previous = initial;
+        let mut last_sent = match serde_json::to_string(&previous) {
+            Ok(encoded) => encoded,
+            Err(error) => {
+                tracing::warn!(%error, "encoding session follow update failed");
+                return;
+            },
+        };
+        if send_follow_data(&tx, last_sent.clone()).await.is_err() {
+            return;
+        }
+
+        let mut interval = tokio::time::interval(Duration::from_millis(300));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        // The first interval tick is immediate; the seed above already covers
+        // it, so consume that tick before entering the change loop.
+        interval.tick().await;
+        let mut tick = 0_u8;
+        loop {
+            interval.tick().await;
+            tick = tick.wrapping_add(1);
+            let metadata = match tokio::fs::metadata(&rollout_path).await {
+                Ok(metadata) => metadata,
+                Err(error) => {
+                    tracing::debug!(%error, thread_id = %id, "session follow rollout disappeared");
+                    break;
+                },
+            };
+            let next_revision = (metadata.len(), metadata.modified().ok());
+            let transcript_changed = next_revision != revision;
+            let check_liveness = tick % 3 == 0;
+            if !transcript_changed && !check_liveness {
+                continue;
+            }
+            let next_id = id.clone();
+            let next_protected = protected.clone();
+            let next = match tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+                let items = transcript_changed
+                    .then(|| sessions::transcript(&next_id))
+                    .transpose()?;
+                let liveness = check_liveness
+                    .then(|| sessions::liveness(&next_id, &next_protected))
+                    .transpose()?;
+                Ok((items, liveness))
+            })
+            .await
+            {
+                Ok(Ok(update)) => update,
+                Ok(Err(error)) => {
+                    tracing::debug!(%error, thread_id = %id, "session follow stopped");
+                    break;
+                },
+                Err(error) => {
+                    tracing::warn!(%error, thread_id = %id, "session follow task panicked");
+                    break;
+                },
+            };
+            revision = next_revision;
+            if let Some(items) = next.0 {
+                previous.items = items;
+            }
+            if let Some(liveness) = next.1 {
+                previous.liveness = liveness;
+            }
+            let encoded = match serde_json::to_string(&previous) {
+                Ok(encoded) => encoded,
+                Err(error) => {
+                    tracing::warn!(%error, "encoding session follow update failed");
+                    break;
+                },
+            };
+            if encoded == last_sent {
+                continue;
+            }
+            last_sent.clone_from(&encoded);
+            if send_follow_data(&tx, encoded).await.is_err() {
+                break;
+            }
+        }
+    });
+
+    Ok(Sse::new(ReceiverStream::new(rx)).keep_alive(
+        KeepAlive::new()
+            .interval(Duration::from_secs(10))
+            .text("session-follow"),
+    ))
+}
+
+async fn send_follow_data(
+    tx: &mpsc::Sender<Result<Event, Infallible>>,
+    data: String,
+) -> Result<(), ()> {
+    tx.send(Ok(Event::default().event("snapshot").data(data)))
+        .await
+        .map_err(|_| ())
 }
 
 async fn session_resume(

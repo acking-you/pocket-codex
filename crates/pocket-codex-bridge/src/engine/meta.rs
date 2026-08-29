@@ -18,7 +18,7 @@ use pocket_codex_core::service::{ServiceId, ServiceKind};
 use pocket_codex_host_svc::{
     fs::{DirEntry, FileEntry},
     resume::ForceResumeOutcome,
-    sessions::{LocalSession, SessionLiveness, TranscriptItem},
+    sessions::{LocalSession, SessionFollowUpdate, SessionLiveness, TranscriptItem},
     store::{HostConfig, ThreadConfig},
 };
 use reqwest::{Client, Method, Url};
@@ -84,6 +84,19 @@ fn client() -> &'static Client {
     CLIENT.get_or_init(|| {
         Client::builder()
             .timeout(META_TIMEOUT)
+            .no_proxy()
+            .build()
+            .unwrap_or_else(|_| Client::new())
+    })
+}
+
+/// A client without an overall response timeout for the long-lived session
+/// follow endpoint. Connection establishment is still bounded at the call
+/// site; only the healthy response body is allowed to remain open.
+fn stream_client() -> &'static Client {
+    static CLIENT: OnceCell<Client> = OnceCell::new();
+    CLIENT.get_or_init(|| {
+        Client::builder()
             .no_proxy()
             .build()
             .unwrap_or_else(|_| Client::new())
@@ -287,6 +300,68 @@ pub fn transcript(service_key: &str, thread_id: &str) -> Result<Vec<TranscriptIt
     let url = endpoint(service_key, &["sessions", thread_id, "transcript"])?;
     let resp: TranscriptResponse = runtime::runtime().block_on(get_json(url))?;
     Ok(resp.items)
+}
+
+/// Follow a remote session until the response closes or `on_update` declines
+/// another snapshot. The host emits Server-Sent Events only when either the
+/// rollout or its ownership changes, so one relay connection replaces client
+/// polling while retaining the full-snapshot recovery semantics.
+pub async fn follow_session<F>(service_key: &str, thread_id: &str, mut on_update: F) -> Result<()>
+where
+    F: FnMut(SessionFollowUpdate) -> bool,
+{
+    let url = endpoint(service_key, &["sessions", thread_id, "follow"])?;
+    let response = tokio::time::timeout(META_TIMEOUT, stream_client().get(url.clone()).send())
+        .await
+        .with_context(|| format!("meta session follow connection to {url} timed out"))?
+        .context("opening meta session follow")?;
+    let mut response = ensure_ok(response).await?;
+    let mut pending = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .context("reading meta session follow")?
+    {
+        pending.extend_from_slice(&chunk);
+        while let Some(event) = take_sse_event(&mut pending) {
+            let Some(update) = decode_follow_event(&event)? else {
+                continue;
+            };
+            if !on_update(update) {
+                return Ok(());
+            }
+        }
+    }
+    Err(anyhow!("meta session follow ended unexpectedly"))
+}
+
+fn take_sse_event(pending: &mut Vec<u8>) -> Option<Vec<u8>> {
+    let lf = pending.windows(2).position(|window| window == b"\n\n");
+    let crlf = pending.windows(4).position(|window| window == b"\r\n\r\n");
+    let (at, delimiter_len) = match (lf, crlf) {
+        (Some(lf), Some(crlf)) if lf <= crlf => (lf, 2),
+        (Some(_), Some(crlf)) => (crlf, 4),
+        (Some(lf), None) => (lf, 2),
+        (None, Some(crlf)) => (crlf, 4),
+        (None, None) => return None,
+    };
+    let event = pending[..at].to_vec();
+    pending.drain(..at + delimiter_len);
+    Some(event)
+}
+
+fn decode_follow_event(event: &[u8]) -> Result<Option<SessionFollowUpdate>> {
+    let text = std::str::from_utf8(event).context("decoding meta session follow event")?;
+    let data = text
+        .lines()
+        .filter_map(|line| line.strip_prefix("data:"))
+        .map(|line| line.trim_start().trim_end_matches('\r'))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if data.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(serde_json::from_str(&data).context("decoding meta session follow snapshot")?))
 }
 
 /// A stored attachment upload, echoed by the host. (The response also carries
@@ -511,6 +586,24 @@ mod tests {
         assert_eq!(meta_key_of("pcx:dev:meta:y").unwrap(), "pcx:dev:meta:y");
         // A non-pocket-codex key is rejected rather than silently mis-derived.
         assert!(meta_key_of("not-a-key").is_err());
+    }
+
+    #[test]
+    fn session_follow_parser_handles_chunked_events_and_keepalives() {
+        let mut pending = b": session-follow\n\ndata: {\"liveness\":{\"thread_id\":\"t1\",\"turn_state\":\"incomplete\",\"held_open\":true,\"safety\":\"ownedRunning\",\"allows_resume\":false,\"requires_takeover\":false,\"holders\":[]},\"items\":[{\"id\":\"i1\",\"item_type\":\"agentMessage\",\"title\":\"\",\"text\":\"hel".to_vec();
+
+        let keepalive = take_sse_event(&mut pending).expect("keepalive frame");
+        assert!(decode_follow_event(&keepalive).expect("decode").is_none());
+        assert!(take_sse_event(&mut pending).is_none());
+
+        pending.extend_from_slice(b"lo\",\"images\":[]}]}\n\n");
+        let event = take_sse_event(&mut pending).expect("completed data frame");
+        let update = decode_follow_event(&event)
+            .expect("valid snapshot")
+            .expect("data event");
+        assert_eq!(update.liveness.thread_id, "t1");
+        assert_eq!(update.items[0].text, "hello");
+        assert!(pending.is_empty());
     }
 
     /// A connection dropped mid-request is exactly what a supervised service

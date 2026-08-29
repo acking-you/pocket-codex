@@ -653,9 +653,14 @@ class FakeBridgeApi implements BridgeApi {
   /// Records the last resumed thread id for assertions.
   String? lastResumed;
 
+  /// Optional failure thrown by [appThreadResume].
+  Object? appThreadResumeError;
+
   @override
-  Future<void> appThreadResume(String serviceKey, String threadId) async =>
-      lastResumed = threadId;
+  Future<void> appThreadResume(String serviceKey, String threadId) async {
+    if (appThreadResumeError != null) throw appThreadResumeError!;
+    lastResumed = threadId;
+  }
 
   /// Seedable history for resume tests.
   ThreadHistory readResult = const ThreadHistory(items: [], running: false);
@@ -849,6 +854,13 @@ class FakeBridgeApi implements BridgeApi {
   /// Records the last `(serviceKey, threadId)` passed to [metaForceResume].
   String? lastMetaResumedKey, lastMetaResumedThread;
 
+  /// Number of live session streams opened, for asserting that active-writer
+  /// chat uses the subscription instead of periodic transcript requests.
+  int metaSessionEventSubscriptions = 0;
+
+  final Map<String, StreamController<SessionFollowUpdate>> _metaSessionEvents =
+      {};
+
   @override
   Future<List<LocalSession>> metaSessions(String serviceKey) async =>
       remoteSessions[serviceKey] ?? localSessions;
@@ -858,6 +870,36 @@ class FakeBridgeApi implements BridgeApi {
     String serviceKey,
     String threadId,
   ) async => appSessionLiveness(threadId);
+
+  @override
+  Stream<SessionFollowUpdate> metaSessionEvents(
+    String serviceKey,
+    String threadId,
+  ) {
+    metaSessionEventSubscriptions++;
+    final existing = _metaSessionEvents[threadId];
+    if (existing != null) return existing.stream;
+    late final StreamController<SessionFollowUpdate> controller;
+    controller = StreamController<SessionFollowUpdate>.broadcast(
+      onListen: () => unawaited(() async {
+        controller.add(
+          SessionFollowUpdate(
+            liveness: await appSessionLiveness(threadId),
+            items: transcripts[threadId] ?? const [],
+          ),
+        );
+      }()),
+    );
+    _metaSessionEvents[threadId] = controller;
+    return controller.stream;
+  }
+
+  /// Emits one remote-writer snapshot to subscribers of [threadId].
+  void pushMetaSessionUpdate(String threadId, SessionFollowUpdate update) {
+    _metaSessionEvents
+        .putIfAbsent(threadId, StreamController<SessionFollowUpdate>.broadcast)
+        .add(update);
+  }
 
   @override
   Future<List<ThreadItem>> metaSessionTranscript(

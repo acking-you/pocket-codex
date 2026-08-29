@@ -82,6 +82,23 @@ bool isRelayAuthRejection(String message) {
       (lower.contains('403') && lower.contains('forbidden'));
 }
 
+/// True when the hosted-account refresh token can no longer renew the session.
+///
+/// The bridge deliberately returns an actionable, stable message for this
+/// terminal state. Keep this narrower than a generic `401`/`unauthorized`
+/// match: a transient backend or relay failure should stay on the retry screen,
+/// while an expired account must return to sign-in immediately.
+bool isAccountSessionExpired(String message) {
+  final lower = message.toLowerCase();
+  final refreshRejected =
+      lower.contains('session expired') && lower.contains('sign in again');
+  final servicesRejected =
+      lower.contains('/v1/services') &&
+      lower.contains('401') &&
+      lower.contains('unauthorized');
+  return refreshRejected || servicesRejected;
+}
+
 /// True when the probe never got an answer at all — the far end is genuinely
 /// silent (not listening, wedged, or gone). Distinct from
 /// [isRelayAuthRejection], where it answered and said no.

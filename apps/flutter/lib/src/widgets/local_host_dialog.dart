@@ -7,6 +7,7 @@ import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
 import 'package:pocket_codex/src/error_format.dart';
 import 'package:pocket_codex/src/providers.dart';
+import 'package:pocket_codex/src/theme.dart';
 import 'package:pocket_codex/src/ui_prefs.dart';
 import 'package:pocket_codex/src/widgets/project_folders_editor.dart';
 
@@ -320,7 +321,7 @@ class _LocalHostDialogState extends ConsumerState<LocalHostDialog> {
         children.add(
           Row(
             children: [
-              Icon(Icons.check_circle, size: 18, color: Colors.green.shade600),
+              Icon(Icons.check_circle, size: 18, color: successColor(scheme)),
               const SizedBox(width: 6),
               Expanded(
                 child: Text(
@@ -423,7 +424,7 @@ class _LocalHostDialogState extends ConsumerState<LocalHostDialog> {
         children.add(
           Text(
             l10n.noProxyWarning,
-            style: TextStyle(color: Colors.orange.shade800),
+            style: TextStyle(color: cautionColor(scheme)),
           ),
         );
       }

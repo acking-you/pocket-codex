@@ -1,6 +1,5 @@
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:go_router/go_router.dart';
-import 'package:pocket_codex/src/screens/api_service_screen.dart';
-import 'package:pocket_codex/src/screens/app_service_screen.dart';
 import 'package:pocket_codex/src/screens/app_session_screen.dart';
 import 'package:pocket_codex/src/screens/codex_setup_screen.dart';
 import 'package:pocket_codex/src/screens/home_screen.dart';
@@ -19,22 +18,45 @@ import 'package:pocket_codex/src/screens/welcome_guide_screen.dart';
 /// before then).
 GoRouter? _appRouter;
 
+/// Test-only: point [openSettingsFromTray] at [router] (null to clear).
+///
+/// The tray reaches navigation through a module-level router because it fires
+/// from outside the widget tree and has no BuildContext. That is exactly what
+/// makes its decision — push over the chat, replace over a peer — otherwise
+/// unreachable from a widget test.
+@visibleForTesting
+void debugSetAppRouterForTesting([GoRouter? router]) => _appRouter = router;
+
 /// Open the settings screen from outside the widget tree (the desktop tray).
 /// Safe to call before the router exists (no-op) and needs no BuildContext.
 ///
-/// Uses `push`, not `go`: settings is a top-level route, so `go` would REPLACE
-/// the stack, leaving the screen with nothing to pop — its AppBar shows no back
-/// button and the user is stranded there. `push` mirrors the in-app settings
-/// button (`context.push('/settings')`), so the back button works.
+/// Uses `push`, not `go`, so compact layouts retain their conventional back
+/// path. Wide desktop settings has its explicit Conversation origin button,
+/// while mobile still relies on the pushed route's implied back button.
+///
+/// Pushing only ever happens over the conversation. Over ANOTHER utility page it
+/// replaces instead, matching how the page menu swaps siblings: pushing there
+/// left the tray route stacked on a peer, and the menu's next swap would replace
+/// only the top one — so Logs → tray Settings → Logs kept two `LogViewScreen`
+/// states alive, each with its own log-stream subscription.
 void openSettingsFromTray() {
   final router = _appRouter;
   if (router == null) return;
-  // The tray item can be clicked repeatedly; don't stack duplicate Settings
-  // pages when it's already the current route.
-  if (router.routerDelegate.currentConfiguration.uri.path == '/settings') {
-    return;
+  // The TOP of the stack, not `currentConfiguration.uri.path` — that reports the
+  // base location and stays `/` after a push, so the guard below never fired and
+  // repeated tray clicks did stack Settings.
+  final matches = router.routerDelegate.currentConfiguration.matches;
+  final top = matches.isEmpty ? '/' : matches.last.matchedLocation;
+  if (top == '/settings') return;
+  if (top == '/') {
+    router.push('/settings');
+  } else {
+    // Over another utility page, take its slot rather than stacking on a peer:
+    // the page menu's next sibling swap would replace only the top route, so
+    // Logs → tray Settings → Logs left two `LogViewScreen`s alive, each holding
+    // its own log-stream subscription.
+    router.pushReplacement('/settings');
   }
-  router.push('/settings');
 }
 
 /// Build the app router. [initialLocation] is `/onboarding` on first run
@@ -47,7 +69,9 @@ GoRouter buildRouter({
     // Account login is the default onboarding; self-host is the advanced path.
     GoRoute(
       path: '/onboarding',
-      builder: (c, s) => const AccountOnboardingScreen(),
+      builder: (c, s) => AccountOnboardingScreen(
+        sessionExpired: s.uri.queryParameters['reason'] == 'session-expired',
+      ),
     ),
     GoRoute(
       path: '/onboarding/self-host',
@@ -85,14 +109,10 @@ GoRouter buildRouter({
         serviceKey: s.uri.queryParameters['svc'],
       ),
     ),
-    GoRoute(
-      path: '/api/:key',
-      builder: (c, s) => ApiServiceScreen(serviceKey: s.pathParameters['key']!),
-    ),
-    GoRoute(
-      path: '/app/:key',
-      builder: (c, s) => AppServiceScreen(serviceKey: s.pathParameters['key']!),
-    ),
+    // A conversation on a specific service. Reached from the session browser's
+    // resume; the chat-first home renders the same screen at `/` instead of
+    // pushing here, and there is no longer a `/app/:key` project picker above
+    // it — the home sidebar already lists every project and conversation.
     GoRoute(
       path: '/app/:key/session',
       builder: (c, s) => AppSessionScreen(

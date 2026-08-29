@@ -25,6 +25,9 @@ pub struct ConfigView {
     pub mode: String,
     /// Signed-in GitHub login (account mode), if any.
     pub account_login: Option<String>,
+    /// Signed-in GitHub numeric account id, if any. The UI builds the avatar
+    /// URL from it; there is no avatar field to fetch.
+    pub account_id: Option<String>,
     /// Whether an account session token is stored (value withheld).
     pub has_account_token: bool,
 }
@@ -102,6 +105,7 @@ pub fn get_config() -> Result<ConfigView> {
         locale: cfg.locale().map(str::to_string),
         mode,
         account_login: cfg.account_login().map(str::to_string),
+        account_id: cfg.account_id().map(str::to_string),
         has_account_token: cfg.account_token().is_some(),
     })
 }
@@ -1153,6 +1157,15 @@ pub struct SessionLivenessDto {
     pub holders: Vec<HolderDto>,
 }
 
+/// One full read-only transcript + ownership snapshot from the host's live
+/// session follow stream, mirrored for Dart.
+pub struct SessionFollowUpdateDto {
+    /// Current ownership and resume-safety state.
+    pub liveness: SessionLivenessDto,
+    /// Full materialised transcript at this rollout revision.
+    pub items: Vec<ThreadItemDto>,
+}
+
 /// Outcome of a force-resume, mirrored for Dart.
 pub struct ForceResumeReportDto {
     /// Holders that were successfully terminated.
@@ -1282,6 +1295,44 @@ fn meta_holder_dto(h: pocket_codex_host_svc::sessions::Holder) -> HolderDto {
     }
 }
 
+fn meta_liveness_dto(
+    value: pocket_codex_host_svc::sessions::SessionLiveness,
+) -> SessionLivenessDto {
+    SessionLivenessDto {
+        thread_id: value.thread_id,
+        turn_state: value.turn_state,
+        held_open: value.held_open,
+        safety: value.safety,
+        allows_resume: value.allows_resume,
+        requires_takeover: value.requires_takeover,
+        holders: value.holders.into_iter().map(meta_holder_dto).collect(),
+    }
+}
+
+fn meta_thread_item_dto(value: pocket_codex_host_svc::sessions::TranscriptItem) -> ThreadItemDto {
+    ThreadItemDto {
+        id: value.id,
+        item_type: value.item_type,
+        title: value.title,
+        text: value.text,
+        images: value.images,
+        // A rollout file on disk has no turn envelope, so these read as
+        // "unknown" rather than being reconstructed from the item order.
+        turn_id: String::new(),
+        turn_completed_at: None,
+        turn_duration_ms: None,
+    }
+}
+
+fn meta_follow_update_dto(
+    value: pocket_codex_host_svc::sessions::SessionFollowUpdate,
+) -> SessionFollowUpdateDto {
+    SessionFollowUpdateDto {
+        liveness: meta_liveness_dto(value.liveness),
+        items: value.items.into_iter().map(meta_thread_item_dto).collect(),
+    }
+}
+
 /// Per-thread session config persisted on the host (mirrored for Dart). Every
 /// field is optional: `None`/null means "no stored preference", so the UI falls
 /// back to its own default.
@@ -1339,15 +1390,27 @@ pub fn meta_sessions(service_key: String) -> Result<Vec<LocalSessionDto>> {
 /// Remote analogue of [`app_session_liveness`].
 pub fn meta_session_liveness(service_key: String, thread_id: String) -> Result<SessionLivenessDto> {
     let v = meta::session_liveness(&service_key, &thread_id)?;
-    Ok(SessionLivenessDto {
-        thread_id: v.thread_id,
-        turn_state: v.turn_state,
-        held_open: v.held_open,
-        safety: v.safety,
-        allows_resume: v.allows_resume,
-        requires_takeover: v.requires_takeover,
-        holders: v.holders.into_iter().map(meta_holder_dto).collect(),
-    })
+    Ok(meta_liveness_dto(v))
+}
+
+/// Subscribe to live read-only transcript + ownership snapshots for a session
+/// held by another app-server. One long-lived meta response replaces client
+/// polling; dropping the Dart stream stops forwarding.
+pub fn meta_session_events(
+    service_key: String,
+    thread_id: String,
+    sink: StreamSink<SessionFollowUpdateDto>,
+) -> Result<()> {
+    runtime::runtime().spawn(async move {
+        let result = meta::follow_session(&service_key, &thread_id, |update| {
+            sink.add(meta_follow_update_dto(update)).is_ok()
+        })
+        .await;
+        if let Err(error) = result {
+            let _ = sink.add_error(error.to_string());
+        }
+    });
+    Ok(())
 }
 
 /// Remote analogue of [`app_local_session_transcript`].
@@ -1357,18 +1420,7 @@ pub fn meta_session_transcript(
 ) -> Result<Vec<ThreadItemDto>> {
     Ok(meta::transcript(&service_key, &thread_id)?
         .into_iter()
-        .map(|i| ThreadItemDto {
-            id: i.id,
-            item_type: i.item_type,
-            title: i.title,
-            text: i.text,
-            images: i.images,
-            // A rollout file on disk has no turn envelope, so these read as
-            // "unknown" rather than being reconstructed from the item order.
-            turn_id: String::new(),
-            turn_completed_at: None,
-            turn_duration_ms: None,
-        })
+        .map(meta_thread_item_dto)
         .collect())
 }
 

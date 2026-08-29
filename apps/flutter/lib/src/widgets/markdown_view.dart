@@ -8,6 +8,7 @@ import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/code_highlight.dart';
 import 'package:pocket_codex/src/fonts.dart';
 import 'package:pocket_codex/src/markdown_cjk.dart';
+import 'package:pocket_codex/src/widgets/app_toast.dart';
 import 'package:pocket_codex/src/widgets/links.dart';
 
 /// One Markdown renderer for every agent-authored surface (replies, plan
@@ -252,13 +253,7 @@ class _CopyButton extends StatelessWidget {
       color: Theme.of(context).colorScheme.onSurfaceVariant,
       onPressed: () {
         Clipboard.setData(ClipboardData(text: text));
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(l10n.copied),
-            duration: const Duration(seconds: 1),
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
+        showToastOk(context, l10n.copied);
       },
     );
   }

@@ -82,6 +82,20 @@ final subscriptionsProvider = FutureProvider<List<SubInfo>>((ref) async {
 /// that had no reason to expire.
 final observedDisconnectedProvider = StateProvider<Set<String>>((_) => {});
 
+/// An app service the user asked the chat to switch to, from outside the chat.
+///
+/// The capability list's "open" used to push a project picker at `/app/:key`,
+/// which listed the projects and conversations the chat's own sidebar already
+/// shows. It now returns to the chat pointed at that service instead, and this
+/// is how the request crosses the route boundary: the list sets the key and
+/// navigates to `/`, the home consumes it and switches.
+///
+/// One-shot: the home clears it once acted on, so a later visit to `/` doesn't
+/// re-switch to a service the user has since moved away from. This is NOT the
+/// durable default (`UiPrefs.preferredAppServiceKey`) — opening a service once
+/// must not overwrite the user's standing choice.
+final requestedServiceProvider = StateProvider<String?>((_) => null);
+
 /// Whether an app-server service's backend is actually REACHABLE — it answers a
 /// handshake — rather than merely registered on the relay. A `pb-register`
 /// worker stays registered (so the relay lists the key) even when the codex
@@ -268,86 +282,6 @@ final runningThreadsProvider = StreamProvider.family<Set<String>, String>((
     await gate.future;
   }
 });
-
-/// Service key selected in the wide-layout master-detail pane (null = none,
-/// falls back to the first API service). Unused on narrow layouts, which push
-/// a detail route instead.
-final selectedApiKeyProvider = StateProvider<String?>((ref) => null);
-
-/// Selected home-screen section, as a stable key (not an index, so adding/hiding
-/// a section — e.g. Local hosting only on desktop — never mis-selects). Rendered
-/// as a bottom `NavigationBar` on mobile and a side `NavigationRail` on desktop.
-enum ServicesSection {
-  /// Responses-API proxy services.
-  api,
-
-  /// App-server (remote codex control) services.
-  appServer,
-
-  /// Remote-viewable host sessions (pick a connected app-server, then browse its
-  /// host's CODEX_HOME sessions over the meta tunnel).
-  sessions,
-
-  /// This machine's locally-hosted codex servers (desktop + account only).
-  hosting,
-}
-
-/// The app-server service key selected in the Sessions tab's host picker (null =
-/// fall back to the first connected app-server). Its host's sessions are listed
-/// over that service's meta tunnel.
-final sessionsHostKeyProvider = StateProvider<String?>((ref) => null);
-
-/// The currently-selected home-screen section tab.
-final servicesSectionProvider = StateProvider<ServicesSection>(
-  (ref) => ServicesSection.api,
-);
-
-/// Multi-select state for batch-removing inactive service entries. `active`
-/// gates the checkbox UI; `keys` are the currently-ticked service keys. Only
-/// unreachable, non-local entries are ever selectable — reachable or locally
-/// hosted services must never be dismissed (a dismissal is keyed on being
-/// unreachable, and hiding a live one would strand it), mirroring the
-/// single-entry 注销 rule.
-@immutable
-class ServiceSelection {
-  /// Creates a selection state (inactive + empty by default).
-  const ServiceSelection({this.active = false, this.keys = const {}});
-
-  /// Whether multi-select mode is on (checkboxes shown, taps toggle).
-  final bool active;
-
-  /// The ticked service keys.
-  final Set<String> keys;
-
-  /// Whether [key] is currently ticked.
-  bool contains(String key) => keys.contains(key);
-
-  /// Number of ticked keys.
-  int get count => keys.length;
-
-  /// Selection with [key] toggled (and mode forced on).
-  ServiceSelection toggled(String key) {
-    final next = {...keys};
-    if (!next.remove(key)) next.add(key);
-    return ServiceSelection(active: true, keys: next);
-  }
-
-  /// Selection with exactly [all] ticked (and mode on) — the "select all".
-  ServiceSelection withAll(Iterable<String> all) =>
-      ServiceSelection(active: true, keys: {...all});
-
-  /// Selection with [removed] keys dropped, keeping mode + the rest.
-  ServiceSelection without(Iterable<String> removed) =>
-      ServiceSelection(active: active, keys: {...keys}..removeAll(removed));
-}
-
-/// Per-section multi-select state, so entering select mode in one tab (API vs
-/// app-server) never shows checkboxes in another. Not autoDispose (tiny state,
-/// preserved across a glance at another tab), matching [pendingRemovalProvider].
-final serviceSelectionProvider =
-    StateProvider.family<ServiceSelection, ServicesSection>(
-      (ref, section) => const ServiceSelection(),
-    );
 
 /// Active UI locale (`null` = follow system). Seeded at boot from the
 /// persisted config via a ProviderScope override, then changed by the

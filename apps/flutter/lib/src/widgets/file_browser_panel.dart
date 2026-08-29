@@ -2,13 +2,14 @@ import 'dart:io';
 
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
-import 'package:pocket_codex/src/widgets/error_retry.dart';
-import 'package:pocket_codex/src/widgets/adaptive_sheet.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
 import 'package:pocket_codex/src/error_format.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:pocket_codex/src/providers.dart';
+import 'package:pocket_codex/src/widgets/adaptive_sheet.dart';
+import 'package:pocket_codex/src/widgets/app_toast.dart';
+import 'package:pocket_codex/src/widgets/error_retry.dart';
 
 /// Show the host file-transfer panel over [serviceKey]'s meta tunnel: browse
 /// the host's configured project roots, download a host file to local disk, or
@@ -140,7 +141,7 @@ class _FileBrowserState extends ConsumerState<_FileBrowser> {
 
   Future<void> _download(HostFileEntry file) async {
     final l10n = AppLocalizations.of(context);
-    final messenger = ScaffoldMessenger.of(context);
+    final messenger = ToastMessenger.of(context);
     setState(() => _busy = true);
     try {
       final bytes = await ref
@@ -149,13 +150,9 @@ class _FileBrowserState extends ConsumerState<_FileBrowser> {
       final location = await getSaveLocation(suggestedName: file.name);
       if (location == null) return;
       await File(location.path).writeAsBytes(bytes);
-      messenger.showSnackBar(
-        SnackBar(content: Text(l10n.fileDownloaded(location.path))),
-      );
+      messenger.ok(l10n.fileDownloaded(location.path));
     } catch (e) {
-      messenger.showSnackBar(
-        SnackBar(content: Text(l10n.fileDownloadFailed(friendlyError(e)))),
-      );
+      messenger.error(l10n.fileDownloadFailed(friendlyError(e)));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -165,7 +162,7 @@ class _FileBrowserState extends ConsumerState<_FileBrowser> {
     final dir = _current;
     if (dir == null) return;
     final l10n = AppLocalizations.of(context);
-    final messenger = ScaffoldMessenger.of(context);
+    final messenger = ToastMessenger.of(context);
     final picked = await openFile();
     if (picked == null) return;
     setState(() => _busy = true);
@@ -174,14 +171,10 @@ class _FileBrowserState extends ConsumerState<_FileBrowser> {
       await ref
           .read(bridgeApiProvider)
           .metaWriteFile(widget.serviceKey, dir, picked.name, bytes);
-      messenger.showSnackBar(
-        SnackBar(content: Text(l10n.fileUploaded(picked.name))),
-      );
+      messenger.ok(l10n.fileUploaded(picked.name));
       await _loadDir(dir);
     } catch (e) {
-      messenger.showSnackBar(
-        SnackBar(content: Text(l10n.hostFileUploadFailed(friendlyError(e)))),
-      );
+      messenger.error(l10n.hostFileUploadFailed(friendlyError(e)));
     } finally {
       if (mounted) setState(() => _busy = false);
     }

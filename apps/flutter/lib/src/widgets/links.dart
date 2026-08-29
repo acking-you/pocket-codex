@@ -3,6 +3,7 @@ import 'package:flutter_linkify/flutter_linkify.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
+import 'package:pocket_codex/src/widgets/app_toast.dart';
 
 /// Open [url] in the system browser. Only `http`/`https` are followed — any
 /// other scheme (a stray `file:` / `javascript:` / `mailto:` in model or tool
@@ -13,7 +14,7 @@ Future<void> openUrl(BuildContext context, String? url) async {
   final uri = Uri.tryParse(url.trim());
   if (uri == null || (uri.scheme != 'http' && uri.scheme != 'https')) return;
   // Capture context-derived values before the await (context may unmount).
-  final messenger = ScaffoldMessenger.maybeOf(context);
+  final messenger = ToastMessenger.of(context);
   final failMessage = AppLocalizations.of(context).linkOpenFailed;
   var ok = false;
   try {
@@ -22,7 +23,7 @@ Future<void> openUrl(BuildContext context, String? url) async {
     ok = false;
   }
   if (!ok) {
-    messenger?.showSnackBar(SnackBar(content: Text(failMessage)));
+    messenger.error(failMessage);
   }
 }
 

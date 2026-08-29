@@ -97,6 +97,27 @@ void main() {
       expect(isRelayAuthRejection('connection refused'), isFalse);
     });
 
+    test('an expired account session is classified narrowly', () {
+      expect(isAccountSessionExpired('session expired; sign in again'), isTrue);
+      expect(
+        isAccountSessionExpired(
+          'refresh failed: session expired; SIGN IN AGAIN',
+        ),
+        isTrue,
+      );
+      expect(
+        isAccountSessionExpired('/v1/services failed: 401 Unauthorized'),
+        isTrue,
+      );
+      expect(isAccountSessionExpired('connection refused'), isFalse);
+      expect(isAccountSessionExpired('401 unauthorized'), isFalse);
+      expect(
+        isAccountSessionExpired('/v1/other failed: 401 Unauthorized'),
+        isFalse,
+      );
+      expect(isAccountSessionExpired('session expired'), isFalse);
+    });
+
     test('a silent far end is classified as a timeout', () {
       expect(isProbeTimeout('probe: initialize timed out'), isTrue);
       expect(isProbeTimeout('probe: connect timed out'), isTrue);

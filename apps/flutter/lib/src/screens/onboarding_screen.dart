@@ -2,9 +2,16 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
+import 'package:pocket_codex/src/desktop_theme.dart';
 import 'package:pocket_codex/src/error_format.dart';
 import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/widgets/brand_logo.dart';
+
+/// Standalone form fields on this page keep an outline, matching the codex setup
+/// wizard; the filled, borderless variant is for filters (see `SearchField`).
+final _fieldBorder = OutlineInputBorder(
+  borderRadius: BorderRadius.circular(kControlRadius),
+);
 
 /// First-run setup: import a `pcx1:` string or type relay + key.
 class OnboardingScreen extends ConsumerStatefulWidget {
@@ -74,7 +81,7 @@ class _OnboardingState extends ConsumerState<OnboardingScreen> {
                   controller: _import,
                   decoration: InputDecoration(
                     labelText: l10n.importFieldLabel,
-                    border: const OutlineInputBorder(),
+                    border: _fieldBorder,
                   ),
                 ),
                 const SizedBox(height: 8),
@@ -90,7 +97,7 @@ class _OnboardingState extends ConsumerState<OnboardingScreen> {
                   controller: _relay,
                   decoration: InputDecoration(
                     labelText: l10n.relayFieldLabel,
-                    border: const OutlineInputBorder(),
+                    border: _fieldBorder,
                   ),
                 ),
                 const SizedBox(height: 8),
@@ -98,7 +105,7 @@ class _OnboardingState extends ConsumerState<OnboardingScreen> {
                   controller: _key,
                   decoration: InputDecoration(
                     labelText: l10n.keyFieldLabel,
-                    border: const OutlineInputBorder(),
+                    border: _fieldBorder,
                   ),
                 ),
                 const SizedBox(height: 8),

@@ -123,6 +123,9 @@ void main() {
       // Past the LogManager emit-coalesce window so the streamed line renders.
       await t.pump(const Duration(milliseconds: 150));
 
+      // The page title belongs to the shared top bar; no duplicate heading is
+      // rendered above the filters.
+      expect(find.text('运行日志'), findsOneWidget);
       expect(find.textContaining('tunnel down'), findsOneWidget);
     });
   });

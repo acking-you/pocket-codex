@@ -356,6 +356,15 @@ impl Config {
             .filter(|s| !s.is_empty())
     }
 
+    /// Signed-in GitHub account id, or `None`.
+    pub fn account_id(&self) -> Option<&str> {
+        self.account
+            .account_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+    }
+
     /// Configured backend base URL override, or `None` (use the default).
     pub fn account_backend(&self) -> Option<&str> {
         self.account

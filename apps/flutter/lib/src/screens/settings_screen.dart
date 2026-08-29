@@ -1,12 +1,21 @@
 import 'package:flutter/material.dart';
-import 'package:pocket_codex/src/widgets/window_title_bar.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
+import 'package:pocket_codex/src/desktop_theme.dart';
+import 'package:pocket_codex/src/error_format.dart';
+import 'package:pocket_codex/src/fonts.dart';
 import 'package:pocket_codex/src/providers.dart';
+import 'package:pocket_codex/src/theme.dart';
 import 'package:pocket_codex/src/ui_prefs.dart';
+import 'package:pocket_codex/src/widgets/app_toast.dart';
+import 'package:pocket_codex/src/widgets/github_avatar.dart';
+import 'package:pocket_codex/src/widgets/group_card.dart';
+import 'package:pocket_codex/src/widgets/icon_badge.dart';
+import 'package:pocket_codex/src/widgets/status_dots.dart';
+import 'package:pocket_codex/src/widgets/utility_page.dart';
 
 /// Settings: language, relay/key, subscription status, export.
 class SettingsScreen extends ConsumerStatefulWidget {
@@ -27,108 +36,378 @@ class _SettingsState extends ConsumerState<SettingsScreen> {
     final locale = ref.watch(localeProvider);
     final subs =
         ref.watch(subscriptionsProvider).valueOrNull ?? const <SubInfo>[];
-    return Scaffold(
-      appBar: WindowTitleBar(title: Text(l10n.settingsTitle)),
-      body: ListView(
-        children: [
-          ListTile(
-            key: const Key('language-btn'),
-            title: Text(l10n.language),
-            subtitle: Text(_languageLabel(l10n, locale)),
-            trailing: const Icon(Icons.language),
-            onTap: () => _pickLanguage(api),
+    final themeMode = ref.watch(uiPrefsProvider).valueOrNull?.themeMode;
+    final desktop = isDesktop && MediaQuery.sizeOf(context).width >= 840;
+    return UtilityPage(
+      route: '/settings',
+      title: l10n.settingsTitle,
+      body: desktop
+          ? _desktopBody(l10n, api, config, locale, subs, themeMode)
+          : _compactBody(l10n, api, config, locale, subs, themeMode),
+    );
+  }
+
+  Widget _compactBody(
+    AppLocalizations l10n,
+    BridgeApi api,
+    ConfigInfo? config,
+    Locale? locale,
+    List<SubInfo> subs,
+    String? themeMode,
+  ) => ListView(
+    children: [
+      ListTile(
+        key: const Key('language-btn'),
+        title: Text(l10n.language),
+        subtitle: Text(_languageLabel(l10n, locale)),
+        trailing: const Icon(Icons.language),
+        onTap: () => _pickLanguage(api),
+      ),
+      ListTile(
+        key: const Key('appearance-btn'),
+        title: Text(l10n.appearance),
+        subtitle: Text(_appearanceLabel(l10n, themeMode)),
+        trailing: const Icon(Icons.brightness_6_outlined),
+        onTap: _pickAppearance,
+      ),
+      ListTile(
+        key: const Key('codex-setup-btn'),
+        leading: const Icon(Icons.tune),
+        title: Text(l10n.codexSetup),
+        trailing: const Icon(Icons.chevron_right),
+        onTap: () => context.push('/setup/codex'),
+      ),
+      const Divider(),
+      if (config?.mode == 'account') ...[
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+          child: Text(l10n.accountSection),
+        ),
+        ListTile(
+          leading: GitHubAvatar(
+            accountId: config?.accountId,
+            fallbackIcon: Icons.person_outline,
+            size: 32,
           ),
-          ListTile(
-            key: const Key('appearance-btn'),
-            title: Text(l10n.appearance),
-            subtitle: Text(
-              _appearanceLabel(
-                l10n,
-                ref.watch(uiPrefsProvider).valueOrNull?.themeMode,
+          title: Text('@${config?.accountLogin ?? ''}'),
+        ),
+        ListTile(
+          key: const Key('sign-out-btn'),
+          title: Text(l10n.accountSignOut),
+          trailing: const Icon(Icons.logout),
+          onTap: () => _signOut(api),
+        ),
+        const Divider(),
+      ],
+      ListTile(
+        title: Text(
+          config?.mode == 'account'
+              ? l10n.settingsSelfHostedRelay
+              : l10n.relayRow,
+        ),
+        subtitle: Text(_relayLabel(l10n, config)),
+        trailing: const Icon(Icons.edit),
+        onTap: () => _editRelay(api),
+      ),
+      ListTile(
+        title: Text(
+          config?.mode == 'account' ? l10n.settingsSelfHostedKey : l10n.keyRow,
+        ),
+        subtitle: Text(_keyLabel(l10n, config)),
+        trailing: const Icon(Icons.edit),
+        onTap: () => _editKey(api),
+      ),
+      const Divider(),
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+        child: Text(l10n.activeSubscriptions),
+      ),
+      if (subs.isEmpty)
+        ListTile(dense: true, title: Text(l10n.none))
+      else
+        ...subs.map(
+          (s) => ListTile(
+            dense: true,
+            leading: Icon(
+              Icons.circle,
+              size: 12,
+              color: s.alive ? Colors.green : Colors.red,
+            ),
+            title: Text(s.key),
+            subtitle: Text(s.localAddr),
+          ),
+        ),
+      const Divider(),
+      ListTile(
+        key: const Key('export-btn'),
+        title: Text(l10n.exportShareString),
+        subtitle: _canExport(config)
+            ? null
+            : Text(l10n.settingsExportUnavailable),
+        trailing: const Icon(Icons.copy),
+        onTap: _canExport(config) ? () => _export(api) : null,
+      ),
+      // Compact needs this as much as desktop and had no route to it. The page
+      // menu that carries Logs on desktop is desktop-only, and the one other
+      // compact shortcut lives in the chat drawer — which is exactly what a user
+      // whose host is unreachable cannot open. That left the logs explaining the
+      // failure reachable only after the failure had been fixed.
+      ListTile(
+        key: const Key('diagnostics-btn'),
+        title: Text(l10n.settingsDiagnostics),
+        trailing: const Icon(Icons.article_outlined),
+        onTap: () => context.push('/logs'),
+      ),
+      if (_msg != null)
+        Padding(
+          padding: const EdgeInsets.all(16),
+          child: Text(_msg!, key: const Key('settings-msg')),
+        ),
+    ],
+  );
+
+  Widget _desktopBody(
+    AppLocalizations l10n,
+    BridgeApi api,
+    ConfigInfo? config,
+    Locale? locale,
+    List<SubInfo> subs,
+    String? themeMode,
+  ) {
+    final scheme = Theme.of(context).colorScheme;
+    return Align(
+      alignment: Alignment.topCenter,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 880),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 18, 24, 18),
+          child: ListView(
+            children: [
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  GroupCard(
+                    title: l10n.settingsGeneral,
+                    children: [
+                      Padding(
+                        key: const Key('appearance-btn'),
+                        padding: const EdgeInsets.fromLTRB(13, 12, 13, 10),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              l10n.appearance,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            const SizedBox(height: 10),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: _ThemeChoice(
+                                    key: const Key('theme-system'),
+                                    icon: Icons.brightness_auto_outlined,
+                                    label: l10n.appearanceSystem,
+                                    selected: themeMode == null,
+                                    onTap: () => ref
+                                        .read(uiPrefsProvider.notifier)
+                                        .setThemeMode(null),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: _ThemeChoice(
+                                    key: const Key('theme-light'),
+                                    icon: Icons.light_mode_outlined,
+                                    label: l10n.appearanceLight,
+                                    selected: themeMode == 'light',
+                                    onTap: () => ref
+                                        .read(uiPrefsProvider.notifier)
+                                        .setThemeMode('light'),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: _ThemeChoice(
+                                    key: const Key('theme-dark'),
+                                    icon: Icons.dark_mode_outlined,
+                                    label: l10n.appearanceDark,
+                                    selected: themeMode == 'dark',
+                                    onTap: () => ref
+                                        .read(uiPrefsProvider.notifier)
+                                        .setThemeMode('dark'),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                      _SettingsRow(
+                        key: const Key('language-btn'),
+                        icon: Icons.language,
+                        title: l10n.language,
+                        value: _languageLabel(l10n, locale),
+                        onTap: () => _pickLanguage(api),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  GroupCard(
+                    title: 'Codex',
+                    children: [
+                      _SettingsRow(
+                        key: const Key('codex-setup-btn'),
+                        icon: Icons.auto_awesome_outlined,
+                        title: l10n.codexSetup,
+                        onTap: () => context.push('/setup/codex'),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  GroupCard(
+                    title: l10n.settingsAccountConnection,
+                    children: [
+                      if (config?.mode == 'account')
+                        _SettingsRow(
+                          icon: Icons.account_circle_outlined,
+                          leading: GitHubAvatar(
+                            accountId: config?.accountId,
+                            fallbackIcon: Icons.person_outline,
+                            size: 32,
+                          ),
+                          title: '@${config?.accountLogin ?? ''}',
+                        ),
+                      _SettingsRow(
+                        icon: Icons.dns_outlined,
+                        title: config?.mode == 'account'
+                            ? l10n.settingsSelfHostedRelay
+                            : l10n.relayRow,
+                        subtitle: _relayLabel(l10n, config),
+                        actionLabel: l10n.settingsConfigure,
+                        onTap: () => _editRelay(api),
+                      ),
+                      _SettingsRow(
+                        icon: Icons.key_outlined,
+                        title: config?.mode == 'account'
+                            ? l10n.settingsSelfHostedKey
+                            : l10n.keyRow,
+                        subtitle: _keyLabel(l10n, config),
+                        actionLabel: config?.hasKey == true
+                            ? l10n.settingsEdit
+                            : l10n.save,
+                        onTap: () => _editKey(api),
+                      ),
+                      if (config?.mode == 'account')
+                        _DangerRow(
+                          onPressed: () => _signOut(api),
+                          title: l10n.accountSignOut,
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  GroupCard(
+                    title: l10n.settingsServicesSubscriptions,
+                    children: [
+                      if (subs.isEmpty)
+                        _SettingsRow(
+                          icon: Icons.link_off_outlined,
+                          title: l10n.none,
+                        )
+                      else
+                        for (final sub in subs)
+                          _SettingsRow(
+                            icon: Icons.link_outlined,
+                            title: sub.key,
+                            subtitle: sub.localAddr,
+                            status: StatusChip(
+                              color: sub.alive
+                                  ? successColor(scheme)
+                                  : scheme.error,
+                              label: sub.alive
+                                  ? l10n.subscribedAlive
+                                  : l10n.subscribedDead,
+                              filled: true,
+                            ),
+                          ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  GroupCard(
+                    title: l10n.settingsAdvanced,
+                    children: [
+                      _SettingsRow(
+                        key: const Key('export-btn'),
+                        icon: Icons.ios_share_outlined,
+                        title: l10n.exportShareString,
+                        subtitle: _canExport(config)
+                            ? null
+                            : l10n.settingsExportUnavailable,
+                        actionLabel: l10n.copy,
+                        onTap: _canExport(config) ? () => _export(api) : null,
+                      ),
+                      _SettingsRow(
+                        icon: Icons.article_outlined,
+                        title: l10n.settingsDiagnostics,
+                        onTap: () => context.pushReplacement('/logs'),
+                      ),
+                    ],
+                  ),
+                  if (_msg != null)
+                    Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Text(
+                        _msg!,
+                        key: const Key('settings-msg'),
+                        style: TextStyle(color: scheme.primary),
+                      ),
+                    ),
+                ],
               ),
-            ),
-            trailing: const Icon(Icons.brightness_6_outlined),
-            onTap: _pickAppearance,
+            ],
           ),
-          ListTile(
-            key: const Key('codex-setup-btn'),
-            leading: const Icon(Icons.tune),
-            title: Text(l10n.codexSetup),
-            subtitle: Text(l10n.codexSetupSettingsSubtitle),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => context.push('/setup/codex'),
-          ),
-          const Divider(),
-          if (config?.mode == 'account') ...[
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-              child: Text(l10n.accountSection),
-            ),
-            ListTile(
-              leading: const Icon(Icons.account_circle),
-              title: Text('@${config?.accountLogin ?? ''}'),
-            ),
-            ListTile(
-              key: const Key('sign-out-btn'),
-              title: Text(l10n.accountSignOut),
-              trailing: const Icon(Icons.logout),
-              onTap: () => _signOut(api),
-            ),
-            const Divider(),
-          ],
-          ListTile(
-            title: Text(l10n.relayRow),
-            subtitle: Text(config?.relay ?? l10n.notConfigured),
-            trailing: const Icon(Icons.edit),
-            onTap: () => _editRelay(api),
-          ),
-          ListTile(
-            title: Text(l10n.keyRow),
-            subtitle: Text(
-              config?.hasKey == true ? l10n.keySet : l10n.keyNotSet,
-            ),
-            trailing: const Icon(Icons.edit),
-            onTap: () => _editKey(api),
-          ),
-          const Divider(),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-            child: Text(l10n.activeSubscriptions),
-          ),
-          if (subs.isEmpty)
-            ListTile(dense: true, title: Text(l10n.none))
-          else
-            ...subs.map(
-              (s) => ListTile(
-                dense: true,
-                leading: Icon(
-                  Icons.circle,
-                  size: 12,
-                  color: s.alive ? Colors.green : Colors.red,
-                ),
-                title: Text(s.key),
-                subtitle: Text(s.localAddr),
-              ),
-            ),
-          const Divider(),
-          ListTile(
-            key: const Key('export-btn'),
-            title: Text(l10n.exportShareString),
-            trailing: const Icon(Icons.copy),
-            onTap: () async {
-              final s = await api.exportConfig();
-              await Clipboard.setData(ClipboardData(text: s));
-              setState(() => _msg = l10n.copiedShareString);
-            },
-          ),
-          if (_msg != null)
-            Padding(
-              padding: const EdgeInsets.all(16),
-              child: Text(_msg!, key: const Key('settings-msg')),
-            ),
-        ],
+        ),
       ),
     );
+  }
+
+  String _relayLabel(AppLocalizations l10n, ConfigInfo? config) {
+    final value = config?.relay?.trim() ?? '';
+    if (value.isNotEmpty) return value;
+    return l10n.notConfigured;
+  }
+
+  String _keyLabel(AppLocalizations l10n, ConfigInfo? config) {
+    return config?.hasKey == true ? l10n.keySet : l10n.keyNotSet;
+  }
+
+  bool _canExport(ConfigInfo? config) =>
+      (config?.relay?.trim().isNotEmpty ?? false) && config?.hasKey == true;
+
+  Future<void> _export(BridgeApi api) async {
+    try {
+      final value = await api.exportConfig();
+      await Clipboard.setData(ClipboardData(text: value));
+      if (mounted) {
+        _showMessage(AppLocalizations.of(context).copiedShareString);
+      }
+    } catch (error) {
+      if (mounted) {
+        final l10n = AppLocalizations.of(context);
+        _showMessage(l10n.settingsOperationFailed(friendlyError(error)));
+      }
+    }
+  }
+
+  void _showMessage(String message) {
+    if (!mounted) return;
+    setState(() => _msg = message);
+    // The inline `_msg` line carries it on compact layouts; wide also toasts,
+    // since a message under a long settings list is easy to miss.
+    if (isDesktop && MediaQuery.sizeOf(context).width >= 840) {
+      showToast(context, message);
+    }
   }
 
   String _languageLabel(AppLocalizations l10n, Locale? locale) {
@@ -189,10 +468,18 @@ class _SettingsState extends ConsumerState<SettingsScreen> {
       ),
     );
     if (choice == null) return;
-    ref.read(localeProvider.notifier).state = choice == 'system'
-        ? null
-        : Locale(choice);
-    await api.setLocale(choice == 'system' ? '' : choice);
+    try {
+      await api.setLocale(choice == 'system' ? '' : choice);
+      if (!mounted) return;
+      ref.read(localeProvider.notifier).state = choice == 'system'
+          ? null
+          : Locale(choice);
+      setState(() => _msg = null);
+    } catch (error) {
+      if (mounted) {
+        _showMessage(l10n.settingsOperationFailed(friendlyError(error)));
+      }
+    }
   }
 
   Widget _choiceOption(
@@ -214,9 +501,16 @@ class _SettingsState extends ConsumerState<SettingsScreen> {
   }
 
   Future<void> _signOut(BridgeApi api) async {
-    await api.accountLogout();
-    ref.invalidate(configProvider);
-    if (mounted) context.go('/onboarding');
+    final l10n = AppLocalizations.of(context);
+    try {
+      await api.accountLogout();
+      ref.invalidate(configProvider);
+      if (mounted) context.go('/onboarding');
+    } catch (error) {
+      if (mounted) {
+        _showMessage(l10n.settingsOperationFailed(friendlyError(error)));
+      }
+    }
   }
 
   Future<void> _editRelay(BridgeApi api) async {
@@ -228,12 +522,19 @@ class _SettingsState extends ConsumerState<SettingsScreen> {
     if (ok == true) {
       final relay = ctrl.text.trim();
       if (relay.isEmpty) {
-        setState(() => _msg = l10n.relayEmpty);
+        _showMessage(l10n.relayEmpty);
         return;
       }
-      await api.setRelay(relay);
-      ref.invalidate(configProvider);
-      ref.invalidate(servicesProvider);
+      try {
+        await api.setRelay(relay);
+        if (mounted) setState(() => _msg = null);
+        ref.invalidate(configProvider);
+        ref.invalidate(servicesProvider);
+      } catch (error) {
+        if (mounted) {
+          _showMessage(l10n.settingsOperationFailed(friendlyError(error)));
+        }
+      }
     }
   }
 
@@ -244,11 +545,18 @@ class _SettingsState extends ConsumerState<SettingsScreen> {
     if (ok == true) {
       final key = ctrl.text.trim();
       if (key.length != 32) {
-        setState(() => _msg = l10n.keyLengthError);
+        _showMessage(l10n.keyLengthError);
         return;
       }
-      await api.setKey(key);
-      ref.invalidate(configProvider);
+      try {
+        await api.setKey(key);
+        if (mounted) setState(() => _msg = null);
+        ref.invalidate(configProvider);
+      } catch (error) {
+        if (mounted) {
+          _showMessage(l10n.settingsOperationFailed(friendlyError(error)));
+        }
+      }
     }
   }
 
@@ -276,6 +584,177 @@ class _SettingsState extends ConsumerState<SettingsScreen> {
             child: Text(l10n.save),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _SettingsRow extends StatelessWidget {
+  const _SettingsRow({
+    super.key,
+    required this.icon,
+    required this.title,
+    this.leading,
+    this.subtitle,
+    this.value,
+    this.status,
+    this.actionLabel,
+    this.onTap,
+  });
+
+  final IconData icon;
+  final String title;
+
+  /// Replaces the [icon] tile, for a row whose subject has a picture of its own.
+  final Widget? leading;
+  final String? subtitle;
+  final String? value;
+  final Widget? status;
+  final String? actionLabel;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final content = Padding(
+      padding: const EdgeInsets.fromLTRB(13, 8, 8, 8),
+      child: Row(
+        children: [
+          leading ?? IconBadge(icon: icon),
+          const SizedBox(width: 11),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
+                if (subtitle != null) ...[
+                  const SizedBox(height: 1),
+                  Text(
+                    subtitle!,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          if (value != null)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              child: Text(
+                value!,
+                style: TextStyle(color: scheme.onSurfaceVariant),
+              ),
+            ),
+          if (status != null) ...[status!, const SizedBox(width: 8)],
+          if (actionLabel != null)
+            OutlinedButton(onPressed: onTap, child: Text(actionLabel!))
+          else if (onTap != null)
+            Icon(Icons.chevron_right, color: scheme.onSurfaceVariant),
+        ],
+      ),
+    );
+    if (onTap == null || actionLabel != null) return content;
+    return InkWell(mouseCursor: clickable, onTap: onTap, child: content);
+  }
+}
+
+class _ThemeChoice extends StatelessWidget {
+  const _ThemeChoice({
+    super.key,
+    required this.icon,
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Material(
+      color: selected ? scheme.primaryContainer : Colors.transparent,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(kControlRadius),
+        side: BorderSide(color: selected ? scheme.primary : scheme.outline),
+      ),
+      child: InkWell(
+        mouseCursor: clickable,
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(kControlRadius),
+        child: SizedBox(
+          height: 48,
+          child: Stack(
+            children: [
+              Center(
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      icon,
+                      size: 18,
+                      color: selected
+                          ? scheme.onPrimaryContainer
+                          : scheme.onSurfaceVariant,
+                    ),
+                    const SizedBox(width: 7),
+                    Text(label),
+                  ],
+                ),
+              ),
+              if (selected)
+                Positioned(
+                  top: 6,
+                  right: 6,
+                  child: Icon(
+                    Icons.check,
+                    size: 13,
+                    color: scheme.onPrimaryContainer,
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _DangerRow extends StatelessWidget {
+  const _DangerRow({required this.onPressed, required this.title});
+
+  final VoidCallback onPressed;
+  final String title;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 9),
+      child: Align(
+        alignment: Alignment.centerRight,
+        child: OutlinedButton.icon(
+          key: const Key('sign-out-btn'),
+          onPressed: onPressed,
+          style: OutlinedButton.styleFrom(
+            foregroundColor: scheme.error,
+            side: BorderSide(color: scheme.error),
+          ),
+          icon: const Icon(Icons.logout, size: 17),
+          label: Text(title),
+        ),
       ),
     );
   }

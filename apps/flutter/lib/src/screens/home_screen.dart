@@ -3,23 +3,26 @@ import 'dart:async';
 import 'package:flutter/foundation.dart'
     show defaultTargetPlatform, kIsWeb, TargetPlatform, visibleForTesting;
 import 'package:flutter/material.dart';
-import 'package:pocket_codex/src/widgets/window_title_bar.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:pocket_codex/src/dismissed_services.dart';
 import 'package:pocket_codex/src/error_format.dart';
 import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/screens/app_session_screen.dart';
 import 'package:pocket_codex/src/ui_prefs.dart';
+import 'package:pocket_codex/src/widgets/app_toast.dart';
 import 'package:pocket_codex/src/widgets/brand_logo.dart';
 import 'package:pocket_codex/src/widgets/local_host_dialog.dart';
+import 'package:pocket_codex/src/widgets/utility_page.dart';
+import 'package:pocket_codex/src/widgets/window_title_bar.dart';
 
-/// Chat-first home: resolves the right app service (last used → locally
-/// hosted → first reachable), connects, picks the latest conversation, and
-/// lands the user straight in the chat — the phone opens ready to talk, the
-/// desktop opens as a two-pane chat with every session in the sidebar.
+/// Chat-first home: resolves the right app service (explicit default → last
+/// used → locally hosted → first reachable), connects, picks the latest
+/// conversation, and lands the user straight in the chat — the phone opens
+/// ready to talk, the desktop opens as a two-pane chat with every session in
+/// the sidebar.
 ///
 /// When nothing is connectable it degrades to a branded hero with the ONE
 /// action that fixes it (desktop: start hosting; phone: pointer to the
@@ -104,7 +107,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     Future.microtask(() {
       if (!mounted) return;
       ref.invalidate(servicesProvider);
-      _resolve();
+      // The manage page's "open" hands a service over here rather than pushing
+      // a picker route, so honour it as the resolve's pin. Cleared once taken:
+      // it is one request, not a new default.
+      final requested = ref.read(requestedServiceProvider);
+      if (requested != null) {
+        ref.read(requestedServiceProvider.notifier).state = null;
+      }
+      _resolve(forceKey: requested);
     });
     _retryTimer = Timer.periodic(_retryInterval, (_) => _selfHeal());
   }
@@ -166,9 +176,19 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
         services = await ref.read(servicesProvider.future);
       } catch (e) {
         if (!mounted || gen != _generation) return;
+        final message = friendlyError(e);
+        if (isAccountSessionExpired(message)) {
+          // A stored account still makes config.mode `account`, so cold-start
+          // routing cannot know its refresh token has expired. Discovery is the
+          // first authenticated operation that can tell us; return directly to
+          // the existing sign-in flow instead of trapping the user on a retry
+          // hero whose retries can never succeed.
+          context.go('/onboarding?reason=session-expired');
+          return;
+        }
         setState(() {
           _phase = _Phase.discoverFailed;
-          _error = friendlyError(e);
+          _error = message;
         });
         return;
       }
@@ -233,7 +253,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
         return;
       }
 
-      // 3. Rank: pinned switch > last used > hosted on this machine > rest.
+      // 3. Rank: explicit default > last used > hosted here > the rest. A
+      // one-off switch still wins for this resolve through [forceKey], without
+      // silently overwriting the user's durable default choice.
       final prefs = await _prefs();
       final localKeys = <String>{};
       try {
@@ -246,9 +268,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       if (!mounted || gen != _generation) return;
       int rank(ServiceEntry s) {
         if (s.key == forceKey) return 0;
-        if (s.key == prefs.lastServiceKey) return 1;
-        if (localKeys.contains(s.key)) return 2;
-        return 3;
+        if (s.key == prefs.preferredAppServiceKey) return 1;
+        if (s.key == prefs.lastServiceKey) return 2;
+        if (localKeys.contains(s.key)) return 3;
+        return 4;
       }
 
       final ranked = [...apps]..sort((a, b) => rank(a).compareTo(rank(b)));
@@ -385,7 +408,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   Future<void> _switchService(String key) async {
     if (key == _serviceKey || _switching) return;
     final l10n = AppLocalizations.of(context);
-    final messenger = ScaffoldMessenger.of(context);
+    final messenger = ToastMessenger.of(context);
     // Supersede any background resolve; this switch owns the outcome now.
     final gen = ++_generation;
     setState(() => _switching = true);
@@ -411,9 +434,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       }
       if (!mounted || gen != _generation) return;
       if (!ok) {
-        messenger.showSnackBar(
-          SnackBar(content: Text(l10n.switchServiceFailed)),
-        );
+        messenger.error(l10n.switchServiceFailed);
         return;
       }
       final pick = await _pickThread(key, await _prefs());
@@ -454,9 +475,33 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     _resolve();
   }
 
+  /// Act on a service handed over from the manage page while this home is
+  /// already alive — the usual case, since `/manage` is pushed ABOVE `/` and
+  /// returning to it reuses this state rather than rebuilding it (so
+  /// [initState]'s read only covers a cold open / deep link).
+  void _takeRequestedService() {
+    final key = ref.read(requestedServiceProvider);
+    if (key == null) return;
+    ref.read(requestedServiceProvider.notifier).state = null;
+    // Ready means there is a live chat to move; anything else has to resolve
+    // from scratch, with the request as the pin.
+    if (_phase == _Phase.ready) {
+      _switchService(key);
+    } else {
+      _resolve(forceKey: key);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
+    // Deferred: the notifier write inside cannot happen during a build.
+    ref.listen(requestedServiceProvider, (_, next) {
+      if (next == null) return;
+      Future.microtask(() {
+        if (mounted) _takeRequestedService();
+      });
+    });
     switch (_phase) {
       case _Phase.ready:
         // The switcher list tracks live discovery (a host added/removed on the
@@ -473,20 +518,23 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                   .toList(growable: false);
         // The chat IS the home. Keyed by service so a switch rebuilds the
         // session state from scratch (connections stay alive underneath).
-        return AppSessionScreen(
-          key: ValueKey('home-$_serviceKey'),
-          serviceKey: _serviceKey!,
-          threadId: _threadId,
-          cwd: _cwd,
-          home: true,
-          services: candidates,
-          onSwitchService: _switchService,
+        return AppPageShortcuts(
+          currentRoute: '/',
+          child: AppSessionScreen(
+            key: ValueKey('home-$_serviceKey'),
+            serviceKey: _serviceKey!,
+            threadId: _threadId,
+            cwd: _cwd,
+            home: true,
+            services: candidates,
+            onSwitchService: _switchService,
+          ),
         );
       case _Phase.resolving:
-        return _splash(l10n);
+        return AppPageShortcuts(currentRoute: '/', child: _splash(l10n));
       case _Phase.noService:
       case _Phase.discoverFailed:
-        return _hero(l10n);
+        return AppPageShortcuts(currentRoute: '/', child: _hero(l10n));
     }
   }
 

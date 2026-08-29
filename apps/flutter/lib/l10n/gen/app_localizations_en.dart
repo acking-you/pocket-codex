@@ -52,6 +52,16 @@ class AppLocalizationsEn extends AppLocalizations {
   String get accountUseDeviceCode => 'Use a device code instead';
 
   @override
+  String get accountSessionExpiredTitle => 'Your session expired';
+
+  @override
+  String get accountSessionExpiredMessage =>
+      'Your saved sign-in can no longer be renewed. Sign in again to reconnect to your services.';
+
+  @override
+  String get accountSignInAgain => 'Sign in again';
+
+  @override
   String get accountWebFailed => 'Sign-in didn\'t complete. Please try again.';
 
   @override
@@ -105,33 +115,6 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get appServerServices => 'App-server services';
-
-  @override
-  String get navApi => 'API';
-
-  @override
-  String get navAppServer => 'App-server';
-
-  @override
-  String get navSessions => 'Sessions';
-
-  @override
-  String get navHosting => 'Hosting';
-
-  @override
-  String get sessionsHostLabel => 'Host';
-
-  @override
-  String get sessionsNoHost =>
-      'Connect an app-server first, then its sessions show here.';
-
-  @override
-  String appServerSubtitle(String device) {
-    return '$device · remote control';
-  }
-
-  @override
-  String get appServiceTitle => 'App-server';
 
   @override
   String get connecting => 'Connecting…';
@@ -509,7 +492,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get moreActions => 'More';
 
   @override
-  String get backToProjects => 'Back to projects';
+  String get backToSessions => 'Back to sessions';
 
   @override
   String get stateReady => 'Ready';
@@ -528,6 +511,9 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get stateReconnecting => 'Reconnecting…';
+
+  @override
+  String get compactingContext => 'Compacting context…';
 
   @override
   String get compacted => 'Conversation compacted';
@@ -695,6 +681,11 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
+  String turnProgressStep(int current, int total) {
+    return 'Step $current of $total';
+  }
+
+  @override
   String get start => 'Start';
 
   @override
@@ -719,6 +710,30 @@ class AppLocalizationsEn extends AppLocalizations {
   String get toolCalled => 'Used a tool';
 
   @override
+  String get toolCollaborated => 'Coordinated agents';
+
+  @override
+  String get toolSubAgent => 'Subagent activity';
+
+  @override
+  String get toolViewedImage => 'Viewed image';
+
+  @override
+  String get toolGeneratedImage => 'Generated image';
+
+  @override
+  String get toolWaited => 'Waited';
+
+  @override
+  String get toolHook => 'Hook prompt';
+
+  @override
+  String get toolEnteredReview => 'Entered review';
+
+  @override
+  String get toolExitedReview => 'Exited review';
+
+  @override
   String get toolThinking => 'Thinking';
 
   @override
@@ -728,22 +743,13 @@ class AppLocalizationsEn extends AppLocalizations {
   String get toolActivity => 'Activity';
 
   @override
-  String get selectApiService => 'Select an API service';
-
-  @override
   String get relayNotConfigured => '(no relay configured)';
-
-  @override
-  String get noServicesFound => 'No services found on this relay';
 
   @override
   String get retry => 'Retry';
 
   @override
   String get discoverFailed => 'Couldn\'t reach the relay';
-
-  @override
-  String get apiServiceTitle => 'API service';
 
   @override
   String get localPortLabel => 'Local port';
@@ -766,6 +772,51 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get settingsTitle => 'Settings';
+
+  @override
+  String get utilityChat => 'Conversation';
+
+  @override
+  String get utilityPages => 'Pages';
+
+  @override
+  String get utilitySwitchPage => 'Switch page';
+
+  @override
+  String get settingsGeneral => 'General';
+
+  @override
+  String get settingsAccountConnection => 'Account & connection';
+
+  @override
+  String get settingsServicesSubscriptions => 'Services & subscriptions';
+
+  @override
+  String get settingsAdvanced => 'Advanced';
+
+  @override
+  String get settingsSelfHostedRelay => 'Self-hosted relay fallback';
+
+  @override
+  String get settingsSelfHostedKey => 'Self-hosted relay key';
+
+  @override
+  String get settingsExportUnavailable =>
+      'Configure a self-hosted relay and 32-byte key first.';
+
+  @override
+  String settingsOperationFailed(String error) {
+    return 'Operation failed: $error';
+  }
+
+  @override
+  String get settingsDiagnostics => 'Diagnostics';
+
+  @override
+  String get settingsConfigure => 'Configure';
+
+  @override
+  String get settingsEdit => 'Edit';
 
   @override
   String get trayShow => 'Show window';
@@ -930,10 +981,6 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get localSessionsTitle => 'Local sessions';
-
-  @override
-  String get localSessionsHint =>
-      'Sessions under this CODEX_HOME, including ones the desktop app or CLI created. Resume a finished one here.';
 
   @override
   String get noLocalSessions => 'No local sessions';
@@ -1121,11 +1168,6 @@ class AppLocalizationsEn extends AppLocalizations {
   String get customizeCodexPath => 'Change path';
 
   @override
-  String appServerSubtitleLocal(String device) {
-    return '$device · hosted here';
-  }
-
-  @override
   String get deregister => 'Deregister';
 
   @override
@@ -1166,21 +1208,6 @@ class AppLocalizationsEn extends AppLocalizations {
   String get batchRemoveEnter => 'Clean up unreachable';
 
   @override
-  String get batchRemoveHint =>
-      'Tap the unreachable services you want to remove.';
-
-  @override
-  String get batchSelectAll => 'Select all';
-
-  @override
-  String get batchClear => 'Clear';
-
-  @override
-  String batchRemoveSelected(int count) {
-    return 'Remove ($count)';
-  }
-
-  @override
   String get batchRemoveTitle => 'Remove these unreachable services?';
 
   @override
@@ -1200,22 +1227,16 @@ class AppLocalizationsEn extends AppLocalizations {
   String get tunnelApiLabel => 'API';
 
   @override
-  String get tunnelMetaLabel => 'Sessions (meta)';
-
-  @override
   String get tunnelOffline => 'Offline';
 
   @override
   String get logsTitle => 'Runtime logs';
 
   @override
-  String get logsLevel => 'Level';
+  String get logsLive => 'Live capture';
 
   @override
   String get logsLevelAll => 'All';
-
-  @override
-  String get logsKeyword => 'Keyword';
 
   @override
   String get logsKeywordHint => 'error, host, tunnel…';
@@ -1244,6 +1265,51 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get manageServices => 'Manage services';
+
+  @override
+  String get servicesHostThisDevice => 'Host this device';
+
+  @override
+  String get servicesDevices => 'Devices';
+
+  @override
+  String servicesDeviceCapabilityCount(int count) {
+    return '$count capabilities';
+  }
+
+  @override
+  String get servicesLocalDevice => 'This device';
+
+  @override
+  String get servicesCapabilities => 'Available capabilities';
+
+  @override
+  String get servicesChatCapability => 'Conversation service';
+
+  @override
+  String get servicesApiCapability => 'Responses API';
+
+  @override
+  String get servicesSessionsCapability => 'Session sharing';
+
+  @override
+  String get servicesDefault => 'Default';
+
+  @override
+  String get servicesSetDefault => 'Set as default';
+
+  @override
+  String get servicesOpen => 'Open';
+
+  @override
+  String get servicesManage => 'Manage';
+
+  @override
+  String get servicesBrowse => 'Browse';
+
+  @override
+  String get servicesNoCapabilities =>
+      'No capabilities are currently available on this device';
 
   @override
   String get hostSessions => 'Host session history';
@@ -1425,10 +1491,6 @@ class AppLocalizationsEn extends AppLocalizations {
       'Model access isn\'t set up yet — configure Codex before chatting.';
 
   @override
-  String get codexSetupSettingsSubtitle =>
-      'Provider / official login / non-degraded prompt';
-
-  @override
   String get codexSetupStepTitle => 'Configure Codex model access';
 
   @override
@@ -1436,11 +1498,11 @@ class AppLocalizationsEn extends AppLocalizations {
       'Fill in a provider (URL + API Key) or sign in with ChatGPT, and optionally switch on the non-degraded system prompt.';
 
   @override
-  String get codexSetupProviderSection => 'Option 1 · Custom Provider';
+  String get codexSetupProviderSection => 'Custom provider';
 
   @override
   String get codexSetupProviderDesc =>
-      'Enter the provider\'s Base URL and API Key; it is written into codex\'s config automatically, with no official login needed.';
+      'Point codex at a third-party or self-hosted model service with its Base URL and API key.';
 
   @override
   String get codexSetupModelLabel => 'Model (optional, default gpt-5.5)';
@@ -1449,11 +1511,11 @@ class AppLocalizationsEn extends AppLocalizations {
   String get codexSetupSaveProvider => 'Save and use';
 
   @override
-  String get codexSetupLoginSection => 'Option 2 · Official ChatGPT login';
+  String get codexSetupLoginSection => 'ChatGPT login';
 
   @override
   String get codexSetupLoginDesc =>
-      'Complete OpenAI\'s official login in a browser; codex generates the credential itself (no manual config). On a restricted network, set a proxy when you start local hosting.';
+      'Run the model on your ChatGPT subscription; codex generates the credential itself.';
 
   @override
   String get codexSetupLoginButton => 'Sign in with ChatGPT';
@@ -1462,11 +1524,37 @@ class AppLocalizationsEn extends AppLocalizations {
   String get codexSetupLoginWaiting => 'Waiting for the browser login…';
 
   @override
-  String get codexSetupNonDegradedTitle => 'Use the non-degraded system prompt';
+  String get codexSetupMethodsTitle => 'Model access';
+
+  @override
+  String get codexSetupMethodsHint =>
+      'Pick either one — codex uses whichever you configured last.';
+
+  @override
+  String get codexSetupInUse => 'In use';
+
+  @override
+  String get codexSetupSwitchTo => 'Switch to this';
+
+  @override
+  String get codexSetupProxyNote =>
+      'On a restricted network this needs a proxy: set one when you start local hosting.';
+
+  @override
+  String get codexSetupAdvanced => 'Advanced';
+
+  @override
+  String get codexSetupNonDegradedTitle => 'Non-degraded system prompt';
 
   @override
   String get codexSetupNonDegradedDesc =>
-      'Removes the commentary / progress-report instructions that interrupt the reasoning chain (openai/codex#30364) so the model spends its budget on reasoning. Applies to new conversations.';
+      'Removes the commentary / progress-report instructions that interrupt the reasoning chain, so the model spends its budget on reasoning.';
+
+  @override
+  String get codexSetupNonDegradedScope => 'Applies to new conversations';
+
+  @override
+  String get codexSetupNonDegradedIssue => 'openai/codex#30364';
 
   @override
   String get codexSetupNeedFields =>
@@ -1511,8 +1599,17 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
-  String get codexSetupStatusNeedSetup =>
-      'Not configured yet — pick a method below.';
+  String get codexSetupStatusNeedSetup => 'Not configured yet';
+
+  @override
+  String get codexSetupStatusNeedSetupHint =>
+      'codex cannot make a model call yet. Configure either method below.';
+
+  @override
+  String get codexSetupStatusReadyHint => 'codex can make model calls.';
+
+  @override
+  String get codexSetupCodexHomeLabel => 'Config directory';
 
   @override
   String get codexSetupCredentialExists => 'credential present';
