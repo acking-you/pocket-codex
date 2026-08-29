@@ -39,7 +39,6 @@ use pocket_codex_core::{
     service::{default_device_id, ServiceId, ServiceKind, DEFAULT_SERVICE_NAME},
     state::RuntimeState,
 };
-use tokio::net::lookup_host;
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct TargetRequest {
