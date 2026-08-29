@@ -550,6 +550,34 @@ void main() {
     expect(find.byKey(const Key('export-btn')), findsOneWidget);
   });
 
+  testWidgets('compact Settings can reach the logs', (t) async {
+    // The page menu that carries Logs is desktop-only, and the other compact
+    // shortcut is in the chat drawer — unopenable for the user this matters to,
+    // whose host is unreachable. Without a row here the logs explaining the
+    // failure were only reachable after it was fixed.
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    await t.pumpWidget(
+      _routerHost(
+        api,
+        initial: '/settings',
+        routes: [
+          GoRoute(path: '/settings', builder: (_, _) => const SettingsScreen()),
+          _stub('/logs', 'logs-page'),
+        ],
+      ),
+    );
+    await t.pumpAndSettle();
+
+    // The row is below the fold in a 600 px test viewport.
+    await t.ensureVisible(find.byKey(const Key('diagnostics-btn')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('diagnostics-btn')));
+    await t.pumpAndSettle();
+    expect(find.text('logs-page'), findsOneWidget);
+  });
+
   testWidgets('a registered-but-dead app-server reads "unreachable", not '
       '"online"', (t) async {
     final api = FakeBridgeApi(

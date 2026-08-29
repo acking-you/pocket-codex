@@ -147,6 +147,17 @@ class _SettingsState extends ConsumerState<SettingsScreen> {
         trailing: const Icon(Icons.copy),
         onTap: _canExport(config) ? () => _export(api) : null,
       ),
+      // Compact needs this as much as desktop and had no route to it. The page
+      // menu that carries Logs on desktop is desktop-only, and the one other
+      // compact shortcut lives in the chat drawer — which is exactly what a user
+      // whose host is unreachable cannot open. That left the logs explaining the
+      // failure reachable only after the failure had been fixed.
+      ListTile(
+        key: const Key('diagnostics-btn'),
+        title: Text(l10n.settingsDiagnostics),
+        trailing: const Icon(Icons.article_outlined),
+        onTap: () => context.push('/logs'),
+      ),
       if (_msg != null)
         Padding(
           padding: const EdgeInsets.all(16),
