@@ -7,8 +7,11 @@ import 'package:pocket_codex/src/desktop_theme.dart';
 import 'package:pocket_codex/src/error_format.dart';
 import 'package:pocket_codex/src/fonts.dart';
 import 'package:pocket_codex/src/providers.dart';
+import 'package:pocket_codex/src/service_key.dart';
 import 'package:pocket_codex/src/widgets/adaptive_sheet.dart';
 import 'package:pocket_codex/src/widgets/app_toast.dart';
+import 'package:pocket_codex/src/widgets/code_row.dart';
+import 'package:pocket_codex/src/widgets/icon_badge.dart';
 import 'package:pocket_codex/src/widgets/links.dart';
 
 /// Subscribe to an API capability and expose it on a local OpenAI-compatible
@@ -105,11 +108,8 @@ class _ApiServicePanelState extends ConsumerState<ApiServicePanel> {
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
     final scheme = Theme.of(context).colorScheme;
-    // `pcx:<device>:api:<name>` (or the account-mode `pcxu:…` variant): the
-    // human-facing bits are the trailing name and the device before the kind.
-    final parts = widget.serviceKey.split(':');
-    final name = parts.isNotEmpty ? parts.last : widget.serviceKey;
-    final device = parts.length >= 3 ? parts[parts.length - 3] : '';
+    final name = serviceKeyName(widget.serviceKey);
+    final device = serviceKeyDevice(widget.serviceKey);
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
       child: Column(
@@ -118,18 +118,10 @@ class _ApiServicePanelState extends ConsumerState<ApiServicePanel> {
         children: [
           Row(
             children: [
-              Container(
-                width: 36,
-                height: 36,
-                decoration: BoxDecoration(
-                  color: scheme.primaryContainer,
-                  borderRadius: BorderRadius.circular(kControlRadius),
-                ),
-                child: Icon(
-                  Icons.bolt_outlined,
-                  size: 18,
-                  color: scheme.onPrimaryContainer,
-                ),
+              const IconBadge(
+                icon: Icons.bolt_outlined,
+                size: 36,
+                accent: true,
               ),
               const SizedBox(width: 11),
               Expanded(
@@ -165,7 +157,7 @@ class _ApiServicePanelState extends ConsumerState<ApiServicePanel> {
             ],
           ),
           const SizedBox(height: 12),
-          _KeyRow(serviceKey: widget.serviceKey, onCopy: _copy),
+          CodeRow(value: widget.serviceKey),
           const SizedBox(height: 16),
           if (_sub == null) ..._form(l10n, scheme) else ..._live(l10n, scheme),
           if (_error != null)
@@ -284,47 +276,6 @@ class _ApiServicePanelState extends ConsumerState<ApiServicePanel> {
       child: Text(l10n.stop),
     ),
   ];
-}
-
-/// The raw relay key as a copyable code row.
-class _KeyRow extends StatelessWidget {
-  const _KeyRow({required this.serviceKey, required this.onCopy});
-
-  final String serviceKey;
-  final ValueChanged<String> onCopy;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      decoration: BoxDecoration(
-        color: scheme.surfaceContainerLow,
-        borderRadius: BorderRadius.circular(kControlRadius),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: SelectableText(
-              serviceKey,
-              style: TextStyle(
-                fontFamily: monoFontFamily,
-                fontFamilyFallback: monoCjkFallback,
-                fontSize: 12,
-                color: scheme.onSurfaceVariant,
-              ),
-            ),
-          ),
-          IconButton(
-            tooltip: AppLocalizations.of(context).copy,
-            icon: const Icon(Icons.copy, size: 16),
-            visualDensity: VisualDensity.compact,
-            onPressed: () => onCopy(serviceKey),
-          ),
-        ],
-      ),
-    );
-  }
 }
 
 class _ProviderSnippet extends StatelessWidget {

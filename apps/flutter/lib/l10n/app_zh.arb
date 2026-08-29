@@ -437,7 +437,6 @@
   "@servicesDeviceCapabilityCount": {
     "placeholders": { "count": { "type": "int" } }
   },
-  "servicesCurrentDevice": "当前设备",
   "servicesLocalDevice": "本机",
   "servicesCapabilities": "可用能力",
   "servicesChatCapability": "对话服务",
@@ -518,7 +517,6 @@
   "codexSetupMethodsHint": "两种任选一种,codex 用你最后配置的那种。",
   "codexSetupInUse": "使用中",
   "codexSetupSwitchTo": "改用此项",
-  "codexSetupCollapse": "收起",
   "codexSetupProxyNote": "受限网络下需要代理:在启动本机托管时填写。",
   "codexSetupAdvanced": "高级",
   "codexSetupNonDegradedTitle": "非降智 system prompt",

@@ -16,6 +16,8 @@ import 'package:pocket_codex/src/ui_prefs.dart';
 import 'package:pocket_codex/src/widgets/api_service_panel.dart';
 import 'package:pocket_codex/src/widgets/app_toast.dart';
 import 'package:pocket_codex/src/widgets/github_avatar.dart';
+import 'package:pocket_codex/src/widgets/group_card.dart';
+import 'package:pocket_codex/src/widgets/icon_badge.dart';
 import 'package:pocket_codex/src/widgets/loading.dart';
 import 'package:pocket_codex/src/widgets/local_host_dialog.dart';
 import 'package:pocket_codex/src/widgets/status_dots.dart';
@@ -508,16 +510,10 @@ class _DeviceFirstServices extends ConsumerWidget {
       for (final host in localHosts)
         if (host.metaRegistered) host.appServiceKey: host.metaListenAddr,
     };
-    // Which host each of our own tunnels belongs to, so a row can offer to
-    // publish it again. Only tunnels we host can be re-registered. The meta
-    // tunnel is keyed by its host's app-server, because that is the row session
-    // sharing is rendered against.
-    final hostOf = <String, ({String name, String kind})>{
-      for (final host in localHosts) ...{
-        host.appServiceKey: (name: host.name, kind: 'app'),
-        host.apiServiceKey: (name: host.name, kind: 'api'),
-      },
-    };
+    // The meta tunnel is keyed by its host's app-server, because that is the row
+    // session sharing is rendered against — so it needs its own map rather than
+    // reusing `localTunnels` (which is app/api and is what re-registration for
+    // those two reads).
     final metaHostOf = <String, ({String name, String kind})>{
       for (final host in localHosts)
         host.appServiceKey: (name: host.name, kind: 'meta'),
@@ -541,8 +537,12 @@ class _DeviceFirstServices extends ConsumerWidget {
       );
     }
 
+    // `localTunnels` already maps every tunnel we host to its owner — which is
+    // exactly "whose tunnel is this, and of what kind", the question
+    // re-registration asks. It used to be built a second time under another
+    // name a hundred lines further down.
     VoidCallback? reregisterFor(String key) =>
-        reregisterOf(hostOf, offlineTunnels, key);
+        reregisterOf(localTunnels, offlineTunnels, key);
 
     // A tunnel we took off the relay reads as offline, not unreachable: nothing
     // is broken, it simply is not published.
@@ -690,28 +690,25 @@ class _DeviceFirstServices extends ConsumerWidget {
             ? null
             : () => _batchRemove(context, ref, unreachableEntries),
       ),
-      Card(
-        clipBehavior: Clip.antiAlias,
-        child: Column(
-          children: [
-            _CardHeading(
-              title: l10n.servicesCapabilities,
-              trailing: _CountPill(
-                label: l10n.servicesDeviceCapabilityCount(capabilityCount),
-              ),
-            ),
-            if (capabilityRows.isEmpty)
-              Padding(
-                padding: const EdgeInsets.all(32),
-                child: Text(
-                  l10n.servicesNoCapabilities,
-                  style: TextStyle(color: scheme.onSurfaceVariant),
-                ),
-              )
-            else
-              ...capabilityRows,
-          ],
+      GroupCard(
+        title: l10n.servicesCapabilities,
+        trailing: _CountPill(
+          label: l10n.servicesDeviceCapabilityCount(capabilityCount),
         ),
+        children: [
+          if (capabilityRows.isEmpty)
+            Padding(
+              padding: const EdgeInsets.all(32),
+              child: Text(
+                l10n.servicesNoCapabilities,
+                style: TextStyle(color: scheme.onSurfaceVariant),
+              ),
+            )
+          else
+            // One child, not one per row: the rows draw their own separators, so
+            // letting the card divide them too would double every hairline.
+            Column(children: capabilityRows),
+        ],
       ),
       // Hosting is about THIS machine, so it belongs under this machine's
       // device — showing it while a remote peer is selected implied the hosts
@@ -721,28 +718,25 @@ class _DeviceFirstServices extends ConsumerWidget {
           account &&
           (devices.isEmpty || localDevices.contains(activeDevice))) ...[
         const SizedBox(height: 12),
-        Card(
-          clipBehavior: Clip.antiAlias,
-          child: Column(
-            children: [
-              // No status here: each host card carries its own, and the same
-              // pill in both places said one thing twice.
-              _CardHeading(title: l10n.localHostingSection),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
-                child: Column(
-                  children: [
-                    for (final host in localHosts)
-                      _LocalHostCard(
-                        key: Key('local-host-${host.name}'),
-                        host: host,
-                      ),
-                    const _AddLocalHostCard(),
-                  ],
-                ),
+        // No status on the header: each host card carries its own, and the same
+        // pill in both places said one thing twice.
+        GroupCard(
+          title: l10n.localHostingSection,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+              child: Column(
+                children: [
+                  for (final host in localHosts)
+                    _LocalHostCard(
+                      key: Key('local-host-${host.name}'),
+                      host: host,
+                    ),
+                  const _AddLocalHostCard(),
+                ],
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ],
     ];
@@ -1119,36 +1113,6 @@ class _DeviceDetailHeader extends StatelessWidget {
   }
 }
 
-class _CardHeading extends StatelessWidget {
-  const _CardHeading({required this.title, this.trailing});
-
-  final String title;
-  final Widget? trailing;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Container(
-      constraints: const BoxConstraints(minHeight: 46),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-      decoration: BoxDecoration(
-        border: Border(bottom: BorderSide(color: scheme.outlineVariant)),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Text(
-              title,
-              style: const TextStyle(fontWeight: FontWeight.w600),
-            ),
-          ),
-          ?trailing,
-        ],
-      ),
-    );
-  }
-}
-
 class _CapabilityRow extends StatelessWidget {
   const _CapabilityRow({
     super.key,
@@ -1208,15 +1172,7 @@ class _CapabilityRow extends StatelessWidget {
       ),
       child: Row(
         children: [
-          Container(
-            width: 36,
-            height: 36,
-            decoration: BoxDecoration(
-              color: scheme.primaryContainer,
-              borderRadius: BorderRadius.circular(kControlRadius),
-            ),
-            child: Icon(icon, size: 18, color: scheme.onPrimaryContainer),
-          ),
+          IconBadge(icon: icon, size: 36, accent: true),
           const SizedBox(width: 11),
           Expanded(
             child: Column(
@@ -1573,28 +1529,6 @@ Future<void> _confirmDeregister(
   }
 }
 
-/// The connection identity: in account mode the signed-in GitHub login; in
-/// self-host mode the configured relay. Status is implicitly online — this
-/// only renders once discovery (which needs a valid session/relay) succeeded.
-/// A quiet outlined panel, not a hero: status colour is the only accent.
-class _IconBadge extends StatelessWidget {
-  const _IconBadge({required this.icon, required this.bg, required this.fg});
-  final IconData icon;
-  final Color bg;
-  final Color fg;
-
-  @override
-  Widget build(BuildContext context) => Container(
-    width: 40,
-    height: 40,
-    decoration: BoxDecoration(
-      color: bg,
-      borderRadius: BorderRadius.circular(10),
-    ),
-    child: Icon(icon, size: 20, color: fg),
-  );
-}
-
 /// One locally-hosted host: a codex app-server + an in-app API proxy. The card
 /// carries codex's liveness; each tunnel's publish state and its 注销 / 重新注册
 /// live on the capability row it belongs to. Tapping this opens
@@ -1674,10 +1608,11 @@ class _LocalHostCard extends ConsumerWidget {
                   padding: const EdgeInsets.all(12),
                   child: Row(
                     children: [
-                      _IconBadge(
+                      IconBadge(
                         icon: Icons.dns,
-                        bg: scheme.tertiaryContainer,
-                        fg: scheme.onTertiaryContainer,
+                        size: 40,
+                        background: scheme.tertiaryContainer,
+                        foreground: scheme.onTertiaryContainer,
                       ),
                       const SizedBox(width: 12),
                       Expanded(

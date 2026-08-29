@@ -2396,12 +2396,6 @@ abstract class AppLocalizations {
   /// **'{count} capabilities'**
   String servicesDeviceCapabilityCount(int count);
 
-  /// No description provided for @servicesCurrentDevice.
-  ///
-  /// In en, this message translates to:
-  /// **'Current device'**
-  String get servicesCurrentDevice;
-
   /// No description provided for @servicesLocalDevice.
   ///
   /// In en, this message translates to:
@@ -2863,12 +2857,6 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Switch to this'**
   String get codexSetupSwitchTo;
-
-  /// No description provided for @codexSetupCollapse.
-  ///
-  /// In en, this message translates to:
-  /// **'Collapse'**
-  String get codexSetupCollapse;
 
   /// No description provided for @codexSetupProxyNote.
   ///

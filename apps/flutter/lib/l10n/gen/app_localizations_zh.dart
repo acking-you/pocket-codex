@@ -1253,9 +1253,6 @@ class AppLocalizationsZh extends AppLocalizations {
   }
 
   @override
-  String get servicesCurrentDevice => '当前设备';
-
-  @override
   String get servicesLocalDevice => '本机';
 
   @override
@@ -1499,9 +1496,6 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get codexSetupSwitchTo => '改用此项';
-
-  @override
-  String get codexSetupCollapse => '收起';
 
   @override
   String get codexSetupProxyNote => '受限网络下需要代理:在启动本机托管时填写。';

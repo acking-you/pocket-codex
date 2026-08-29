@@ -6,10 +6,12 @@ import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
 import 'package:pocket_codex/src/desktop_theme.dart';
 import 'package:pocket_codex/src/error_format.dart';
-import 'package:pocket_codex/src/fonts.dart';
 import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/theme.dart';
 import 'package:pocket_codex/src/widgets/app_toast.dart';
+import 'package:pocket_codex/src/widgets/code_row.dart';
+import 'package:pocket_codex/src/widgets/group_card.dart';
+import 'package:pocket_codex/src/widgets/icon_badge.dart';
 import 'package:pocket_codex/src/widgets/links.dart';
 import 'package:pocket_codex/src/widgets/status_dots.dart';
 import 'package:pocket_codex/src/widgets/utility_page.dart';
@@ -148,6 +150,28 @@ class _CodexSetupScreenState extends ConsumerState<CodexSetupScreen> {
     }
   }
 
+  /// A live JSON-RPC session to a locally-hosted app-server, which is what both
+  /// codex-account operations run on. Null (with [_error] set) when nothing is
+  /// hosted — codex's own login and logout live in the codex process, so there
+  /// has to be one running to drive them.
+  Future<String?> _connectedLocalHost(AppLocalizations l10n) async {
+    final host = (await _api.appServeStatus())
+        .where((h) => h.appServiceKey.isNotEmpty)
+        .firstOrNull;
+    if (host == null) {
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _error = l10n.codexSetupNeedHost;
+        });
+      }
+      return null;
+    }
+    final key = host.appServiceKey;
+    if (!_api.appIsConnected(key)) await _api.appConnect(key, 0);
+    return key;
+  }
+
   /// Sign the local codex out on the running host, then refresh.
   Future<void> _logout(AppLocalizations l10n) async {
     setState(() {
@@ -156,22 +180,8 @@ class _CodexSetupScreenState extends ConsumerState<CodexSetupScreen> {
       _info = null;
     });
     try {
-      final hosts = await _api.appServeStatus();
-      final candidates = hosts
-          .where((h) => h.appServiceKey.isNotEmpty)
-          .toList();
-      final host = candidates.isEmpty ? null : candidates.first;
-      if (host == null) {
-        setState(() {
-          _busy = false;
-          _error = l10n.codexSetupNeedHost;
-        });
-        return;
-      }
-      final key = host.appServiceKey;
-      if (!_api.appIsConnected(key)) {
-        await _api.appConnect(key, 0);
-      }
+      final key = await _connectedLocalHost(l10n);
+      if (key == null) return;
       await _api.codexLogout(key);
       await _loadStatus();
       if (mounted) setState(() => _busy = false);
@@ -230,24 +240,8 @@ class _CodexSetupScreenState extends ConsumerState<CodexSetupScreen> {
       _deviceUrl = null;
     });
     try {
-      final hosts = await _api.appServeStatus();
-      final candidates = hosts
-          .where((h) => h.appServiceKey.isNotEmpty)
-          .toList();
-      final host = candidates.isEmpty ? null : candidates.first;
-      if (host == null) {
-        setState(() {
-          _busy = false;
-          _error = l10n.codexSetupNeedHost;
-        });
-        return;
-      }
-      final key = host.appServiceKey;
-      // Ensure a live JSON-RPC session to the local app-server before driving
-      // the login RPC on it.
-      if (!_api.appIsConnected(key)) {
-        await _api.appConnect(key, 0);
-      }
+      final key = await _connectedLocalHost(l10n);
+      if (key == null) return;
       final start = await _api.codexLoginChatgptStart(key);
       final isDevice = start.mode == 'device';
       // Browser flow opens authUrl; device flow (codex couldn't bind its local
@@ -348,7 +342,7 @@ class _CodexSetupScreenState extends ConsumerState<CodexSetupScreen> {
               children: [
                 if (status != null) _statusCard(l10n, theme, status),
                 const SizedBox(height: 10),
-                _GroupCard(
+                GroupCard(
                   title: l10n.codexSetupMethodsTitle,
                   hint: l10n.codexSetupMethodsHint,
                   children: [
@@ -357,7 +351,7 @@ class _CodexSetupScreenState extends ConsumerState<CodexSetupScreen> {
                   ],
                 ),
                 const SizedBox(height: 10),
-                _GroupCard(
+                GroupCard(
                   title: l10n.codexSetupAdvanced,
                   children: [_nonDegradedRow(l10n, theme, nonDegraded)],
                 ),
@@ -614,21 +608,11 @@ class _CodexSetupScreenState extends ConsumerState<CodexSetupScreen> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Padding(
-            padding: const EdgeInsets.only(top: 2),
-            child: Container(
-              width: 32,
-              height: 32,
-              decoration: BoxDecoration(
-                color: scheme.surfaceContainer,
-                borderRadius: BorderRadius.circular(kControlRadius),
-              ),
-              child: Icon(
-                Icons.psychology_outlined,
-                size: 17,
-                color: scheme.onSurfaceVariant,
-              ),
-            ),
+          const Padding(
+            // Nudged down so the badge aligns with the title's cap height rather
+            // than the block of wrapped text beneath it.
+            padding: EdgeInsets.only(top: 2),
+            child: IconBadge(icon: Icons.psychology_outlined),
           ),
           const SizedBox(width: 11),
           Expanded(
@@ -764,91 +748,16 @@ class _CodexSetupScreenState extends ConsumerState<CodexSetupScreen> {
           ),
           Divider(height: 1, color: scheme.outlineVariant),
           Padding(
-            padding: const EdgeInsets.fromLTRB(14, 9, 14, 10),
-            child: Row(
-              children: [
-                Text(
-                  l10n.codexSetupCodexHomeLabel,
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: onSurfaceMuted(scheme),
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: SelectableText(
-                    s.codexHome,
-                    style: TextStyle(
-                      fontFamily: monoFontFamily,
-                      fontFamilyFallback: monoCjkFallback,
-                      fontSize: 12,
-                      color: scheme.onSurfaceVariant,
-                    ),
-                    maxLines: 1,
-                  ),
-                ),
-                IconButton(
-                  key: const Key('codex-home-copy'),
-                  tooltip: l10n.copy,
-                  icon: const Icon(Icons.copy, size: 15),
-                  visualDensity: VisualDensity.compact,
-                  onPressed: () async {
-                    final messenger = ToastMessenger.of(context);
-                    await Clipboard.setData(ClipboardData(text: s.codexHome));
-                    messenger.ok(l10n.copied);
-                  },
-                ),
-              ],
+            padding: const EdgeInsets.fromLTRB(14, 6, 12, 7),
+            // Unfilled: the card is already the ground, so a tinted row inside
+            // it would read as a box in a box.
+            child: CodeRow(
+              value: s.codexHome,
+              label: l10n.codexSetupCodexHomeLabel,
+              filled: false,
+              copyKey: const Key('codex-home-copy'),
             ),
           ),
-        ],
-      ),
-    );
-  }
-}
-
-/// A titled card of divider-separated rows — the settings page's grouping,
-/// reused here so the two pages read as one system. [hint] adds a line under the
-/// title for a group that needs a sentence of framing.
-class _GroupCard extends StatelessWidget {
-  const _GroupCard({required this.title, required this.children, this.hint});
-
-  final String title;
-  final String? hint;
-  final List<Widget> children;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Card(
-      clipBehavior: Clip.antiAlias,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Padding(
-            padding: EdgeInsets.fromLTRB(14, 12, 14, hint == null ? 11 : 10),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: const TextStyle(fontWeight: FontWeight.w600),
-                ),
-                if (hint != null) ...[
-                  const SizedBox(height: 2),
-                  Text(
-                    hint!,
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: scheme.onSurfaceVariant,
-                    ),
-                  ),
-                ],
-              ],
-            ),
-          ),
-          for (final child in children) ...[
-            Divider(height: 1, color: scheme.outlineVariant),
-            child,
-          ],
         ],
       ),
     );
@@ -898,19 +807,9 @@ class _MethodRow extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final header = Row(
       children: [
-        Container(
-          width: 32,
-          height: 32,
-          decoration: BoxDecoration(
-            color: open ? scheme.primaryContainer : scheme.surfaceContainer,
-            borderRadius: BorderRadius.circular(kControlRadius),
-          ),
-          child: Icon(
-            icon,
-            size: 17,
-            color: open ? scheme.onPrimaryContainer : scheme.onSurfaceVariant,
-          ),
-        ),
+        // Accented while open: the method being configured is the subject of the
+        // card, the collapsed one is a label on a row.
+        IconBadge(icon: icon, accent: open),
         const SizedBox(width: 11),
         Expanded(
           child: Column(

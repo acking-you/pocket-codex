@@ -28,6 +28,7 @@ import 'package:pocket_codex/src/git_diff.dart';
 import 'package:pocket_codex/src/ide_context.dart';
 import 'package:pocket_codex/src/image_attachments.dart';
 import 'package:pocket_codex/src/providers.dart';
+import 'package:pocket_codex/src/service_key.dart';
 import 'package:pocket_codex/src/realtime_delegation.dart';
 import 'package:pocket_codex/src/theme.dart';
 import 'package:pocket_codex/src/ui_prefs.dart';
@@ -5281,14 +5282,13 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     );
   }
 
-  /// `device · name` fallback parsed from a `pcx:<device>:app:<name>` key,
-  /// for when the switcher's service list doesn't contain the active key.
-  static String _serviceLabelFromKey(String key) {
-    final parts = key.split(':');
-    return parts.length >= 4
-        ? '${parts[1]} · ${parts.sublist(3).join(':')}'
-        : key;
-  }
+  /// `device · name` fallback parsed from the key, for when the switcher's
+  /// service list doesn't contain the active one.
+  ///
+  /// This used to read the device as `parts[1]`, which is the USER in an
+  /// account-mode `pcxu:<user>:<device>:…` key — so a hosted service was
+  /// labelled with the account rather than the machine.
+  static String _serviceLabelFromKey(String key) => serviceKeyLabel(key);
 
   /// Leaf folder name of [cwd], or empty when unknown.
   static String _leafOf(String cwd) {

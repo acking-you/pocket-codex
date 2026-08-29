@@ -12,6 +12,8 @@ import 'package:pocket_codex/src/theme.dart';
 import 'package:pocket_codex/src/ui_prefs.dart';
 import 'package:pocket_codex/src/widgets/app_toast.dart';
 import 'package:pocket_codex/src/widgets/github_avatar.dart';
+import 'package:pocket_codex/src/widgets/group_card.dart';
+import 'package:pocket_codex/src/widgets/icon_badge.dart';
 import 'package:pocket_codex/src/widgets/status_dots.dart';
 import 'package:pocket_codex/src/widgets/utility_page.dart';
 
@@ -173,7 +175,7 @@ class _SettingsState extends ConsumerState<SettingsScreen> {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  _SettingsGroupCard(
+                  GroupCard(
                     title: l10n.settingsGeneral,
                     children: [
                       Padding(
@@ -241,7 +243,7 @@ class _SettingsState extends ConsumerState<SettingsScreen> {
                     ],
                   ),
                   const SizedBox(height: 10),
-                  _SettingsGroupCard(
+                  GroupCard(
                     title: 'Codex',
                     children: [
                       _SettingsRow(
@@ -253,7 +255,7 @@ class _SettingsState extends ConsumerState<SettingsScreen> {
                     ],
                   ),
                   const SizedBox(height: 10),
-                  _SettingsGroupCard(
+                  GroupCard(
                     title: l10n.settingsAccountConnection,
                     children: [
                       if (config?.mode == 'account')
@@ -294,7 +296,7 @@ class _SettingsState extends ConsumerState<SettingsScreen> {
                     ],
                   ),
                   const SizedBox(height: 10),
-                  _SettingsGroupCard(
+                  GroupCard(
                     title: l10n.settingsServicesSubscriptions,
                     children: [
                       if (subs.isEmpty)
@@ -321,7 +323,7 @@ class _SettingsState extends ConsumerState<SettingsScreen> {
                     ],
                   ),
                   const SizedBox(height: 10),
-                  _SettingsGroupCard(
+                  GroupCard(
                     title: l10n.settingsAdvanced,
                     children: [
                       _SettingsRow(
@@ -576,37 +578,6 @@ class _SettingsState extends ConsumerState<SettingsScreen> {
   }
 }
 
-class _SettingsGroupCard extends StatelessWidget {
-  const _SettingsGroupCard({required this.title, required this.children});
-
-  final String title;
-  final List<Widget> children;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Card(
-      clipBehavior: Clip.antiAlias,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(14, 12, 14, 11),
-            child: Text(
-              title,
-              style: const TextStyle(fontWeight: FontWeight.w600),
-            ),
-          ),
-          for (var i = 0; i < children.length; i++) ...[
-            Divider(height: 1, color: scheme.outlineVariant),
-            children[i],
-          ],
-        ],
-      ),
-    );
-  }
-}
-
 class _SettingsRow extends StatelessWidget {
   const _SettingsRow({
     super.key,
@@ -638,16 +609,7 @@ class _SettingsRow extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(13, 8, 8, 8),
       child: Row(
         children: [
-          leading ??
-              Container(
-                width: 32,
-                height: 32,
-                decoration: BoxDecoration(
-                  color: scheme.surfaceContainer,
-                  borderRadius: BorderRadius.circular(kControlRadius),
-                ),
-                child: Icon(icon, size: 17, color: scheme.onSurfaceVariant),
-              ),
+          leading ?? IconBadge(icon: icon),
           const SizedBox(width: 11),
           Expanded(
             child: Column(

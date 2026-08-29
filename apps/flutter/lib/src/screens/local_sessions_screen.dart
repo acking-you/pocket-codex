@@ -8,6 +8,7 @@ import 'package:pocket_codex/src/desktop_theme.dart';
 import 'package:pocket_codex/src/error_format.dart';
 import 'package:pocket_codex/src/fonts.dart';
 import 'package:pocket_codex/src/providers.dart';
+import 'package:pocket_codex/src/service_key.dart';
 import 'package:pocket_codex/src/screens/app_session_screen.dart'
     show appLocalPort;
 import 'package:pocket_codex/src/theme.dart';
@@ -156,10 +157,9 @@ class _LocalSessionsState extends ConsumerState<LocalSessionsScreen> {
     );
     // Reading another device's sessions is reached from that device, so name it:
     // otherwise a remote list is indistinguishable from this machine's own.
-    final device = widget.source.serviceKey?.split(':');
-    final remoteDevice = (device != null && device.length >= 3)
-        ? device[device.length - 3]
-        : null;
+    final key = widget.source.serviceKey;
+    final device = key == null ? '' : serviceKeyDevice(key);
+    final remoteDevice = device.isEmpty ? null : device;
     return UtilityPage(
       route: '/sessions',
       title: remoteDevice ?? l10n.localSessionsTitle,

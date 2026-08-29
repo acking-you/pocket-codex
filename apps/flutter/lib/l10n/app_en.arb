@@ -518,7 +518,6 @@
   "@servicesDeviceCapabilityCount": {
     "placeholders": { "count": { "type": "int" } }
   },
-  "servicesCurrentDevice": "Current device",
   "servicesLocalDevice": "This device",
   "servicesCapabilities": "Available capabilities",
   "servicesChatCapability": "Conversation service",
@@ -611,7 +610,6 @@
   "codexSetupMethodsHint": "Pick either one — codex uses whichever you configured last.",
   "codexSetupInUse": "In use",
   "codexSetupSwitchTo": "Switch to this",
-  "codexSetupCollapse": "Collapse",
   "codexSetupProxyNote": "On a restricted network this needs a proxy: set one when you start local hosting.",
   "codexSetupAdvanced": "Advanced",
   "codexSetupNonDegradedTitle": "Non-degraded system prompt",

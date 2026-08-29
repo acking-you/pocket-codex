@@ -1278,9 +1278,6 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
-  String get servicesCurrentDevice => 'Current device';
-
-  @override
   String get servicesLocalDevice => 'This device';
 
   @override
@@ -1538,9 +1535,6 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get codexSetupSwitchTo => 'Switch to this';
-
-  @override
-  String get codexSetupCollapse => 'Collapse';
 
   @override
   String get codexSetupProxyNote =>
