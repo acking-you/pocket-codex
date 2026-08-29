@@ -1,47 +1,43 @@
-//! Backend integration: the real HTTP router + broker (plain TCP) over a real
-//! loopback pb-mapper relay. Auth is exercised with a directly-minted JWT (the
-//! GitHub device flow needs a live OAuth app), proving everything downstream of
-//! login: `/v1/me`, broker register, `/v1/services`, broker subscribe + echo.
+//! Backend integration: the real HTTP router over plain TCP.
+//!
+//! Auth is exercised with a directly-minted JWT (the GitHub flows need a live
+//! OAuth app), proving everything downstream of login: `/healthz`, `/v1/me`,
+//! and that every `/v1/*` route refuses an unauthenticated caller.
+//!
+//! # Why there is no tunnel test here any more
+//!
+//! The backend used to carry client traffic, so an end-to-end test had to stand
+//! up a relay, register an echo service through the backend's broker, and
+//! round-trip a payload. It no longer touches that path: it authenticates a
+//! caller and hands out a relay credential, and the client takes it from there.
+//! So what remains to test in-process is the HTTP contract.
+//!
+//! The relay-facing half (`/v1/relay` minting a real credential, `/v1/services`
+//! listing) needs a live `pb-mapper server` holding a known administrator key.
+//! The relay server crate is `publish = false`, so it cannot be spun up from
+//! the registry — those cases run only when `PCX_TEST_RELAY` /
+//! `PCX_TEST_RELAY_KEY` point at one, and are skipped (loudly) otherwise. Build
+//! a relay from an `acking-you/pb-mapper` checkout
+//! (`cargo build --release --bin pb-mapper`) to run them locally.
 
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
-use pocket_codex_account_proto::http::{MeResponse, ServicesResponse};
+use pocket_codex_account_proto::http::{MeResponse, RelayCredentialResponse};
 use pocket_codex_auth::{Auth, Claims};
-use pocket_codex_backend::{router, AppState, AuthVerifier};
-use pocket_codex_broker_client::{
-    run_register, run_subscribe, BrokerError, BrokerStream, Connector, RegisterConfig,
-    SubscribeConfig, TokenProvider,
-};
-use pocket_codex_broker_server::BrokerServer;
-use pocket_codex_core::service::ServiceKind;
+use pocket_codex_backend::{router, AppState};
 use pocket_codex_store::Store;
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::{TcpListener, TcpStream},
-};
+use tokio::net::TcpListener;
 
-const TEST_KEY: &str = "0123456789abcdef0123456789abcdef";
 const JWT_SECRET: &str = "test-jwt-secret";
 
-struct TcpConnector {
-    addr: SocketAddr,
-}
-
-#[async_trait::async_trait]
-impl Connector for TcpConnector {
-    async fn connect(&self) -> Result<Box<dyn BrokerStream>, BrokerError> {
-        Ok(Box::new(TcpStream::connect(self.addr).await?))
-    }
-}
-
-struct StaticToken(String);
-
-#[async_trait::async_trait]
-impl TokenProvider for StaticToken {
-    async fn token(&self) -> Result<String, BrokerError> {
-        Ok(self.0.clone())
-    }
+/// A relay to test against, from the environment. `None` skips the cases that
+/// need one rather than failing them: a missing relay is a missing fixture, not
+/// a defect in the code under test.
+fn test_relay() -> Option<pocket_codex_pb::RelaySession> {
+    let addr = std::env::var("PCX_TEST_RELAY").ok()?;
+    let key = std::env::var("PCX_TEST_RELAY_KEY").ok()?;
+    Some(pocket_codex_pb::RelaySession::new(addr, key))
 }
 
 fn mint(user: &str, login: &str, gh_id: i64) -> String {
@@ -62,57 +58,8 @@ fn mint(user: &str, login: &str, gh_id: i64) -> String {
     .expect("mint jwt")
 }
 
-async fn free_port() -> u16 {
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("probe bind");
-    let port = listener.local_addr().expect("probe addr").port();
-    drop(listener);
-    port
-}
-
-async fn wait_for_key(relay: SocketAddr, key: &str) {
-    for _ in 0..200 {
-        if let Ok(keys) = pocket_codex_pb::keys(relay).await {
-            if keys.iter().any(|k| k == key) {
-                return;
-            }
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    panic!("relay never registered key: {key}");
-}
-
-async fn try_echo(addr: SocketAddr, payload: &[u8]) -> Option<Vec<u8>> {
-    let mut stream = TcpStream::connect(addr).await.ok()?;
-    stream.write_all(payload).await.ok()?;
-    let mut buf = vec![0u8; payload.len()];
-    match tokio::time::timeout(Duration::from_secs(2), stream.read_exact(&mut buf)).await {
-        Ok(Ok(_)) => Some(buf),
-        _ => None,
-    }
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn backend_http_and_broker_end_to_end() {
-    pocket_codex_pb::set_msg_header_key(Some(TEST_KEY)).expect("set key");
-
-    // Relay.
-    let relay_port = free_port().await;
-    let relay_addr_s = format!("127.0.0.1:{relay_port}");
-    let relay_sock: SocketAddr = relay_addr_s.parse().expect("relay sock");
-    {
-        let addr = relay_addr_s.clone();
-        tokio::spawn(async move {
-            let _ = pb_mapper::pb_server::run_server(addr).await;
-        });
-    }
-    for _ in 0..200 {
-        if TcpStream::connect(&relay_addr_s).await.is_ok() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
-
-    // Auth + HTTP router.
+/// Start the real router on a loopback port and return its base URL.
+async fn start_backend(relay: pocket_codex_pb::RelaySession) -> String {
     let store = Store::connect("sqlite::memory:").await.expect("store");
     let auth = Arc::new(
         Auth::new(store, pocket_codex_auth::Config {
@@ -126,56 +73,27 @@ async fn backend_http_and_broker_end_to_end() {
         })
         .expect("auth"),
     );
-    // Broker, shared into the HTTP AppState so DELETE /v1/services can drop keys.
-    let broker = BrokerServer::new(
-        Arc::new(AuthVerifier(auth.clone())),
-        relay_addr_s.clone(),
-        Duration::from_secs(60),
-    );
     let app = router(AppState {
-        auth: auth.clone(),
-        relay_addr: relay_sock,
-        broker: broker.clone(),
+        auth,
+        credentials: pocket_codex_backend::Credentials::new(relay.clone()),
+        relay,
     });
-    let http_listener = TcpListener::bind("127.0.0.1:0").await.expect("http bind");
-    let http_addr = http_listener.local_addr().expect("http addr");
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("http bind");
+    let addr = listener.local_addr().expect("http addr");
     tokio::spawn(async move {
-        let _ = axum::serve(http_listener, app.into_make_service()).await;
+        let _ = axum::serve(listener, app.into_make_service()).await;
     });
+    format!("http://{addr}")
+}
 
-    let broker_listener = TcpListener::bind("127.0.0.1:0").await.expect("broker bind");
-    let broker_addr = broker_listener.local_addr().expect("broker addr");
-    {
-        let broker = broker.clone();
-        tokio::spawn(async move {
-            while let Ok((stream, _)) = broker_listener.accept().await {
-                let broker = broker.clone();
-                tokio::spawn(async move { broker.handle_connection(stream).await });
-            }
-        });
-    }
-
-    // Echo app-server.
-    let echo = TcpListener::bind("127.0.0.1:0").await.expect("echo bind");
-    let echo_addr = echo.local_addr().expect("echo addr");
-    tokio::spawn(async move {
-        while let Ok((mut s, _)) = echo.accept().await {
-            tokio::spawn(async move {
-                let mut buf = [0u8; 4096];
-                while let Ok(n) = s.read(&mut buf).await {
-                    if n == 0 || s.write_all(&buf[..n]).await.is_err() {
-                        break;
-                    }
-                }
-            });
-        }
-    });
-
-    let token = mint("userA", "octocat", 42);
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn health_identity_and_auth_enforcement() {
+    // No relay needed: none of these routes talk to one. That is the point —
+    // authentication is the backend's own job and must work standalone.
+    let base = start_backend(pocket_codex_pb::RelaySession::for_test("127.0.0.1:7666")).await;
     let client = reqwest::Client::new();
-    let base = format!("http://{http_addr}");
+    let token = mint("userA", "octocat", 42);
 
-    // healthz
     let r = client
         .get(format!("{base}/healthz"))
         .send()
@@ -184,7 +102,6 @@ async fn backend_http_and_broker_end_to_end() {
     assert_eq!(r.status(), 200);
     assert_eq!(r.text().await.expect("healthz body"), "ok");
 
-    // /v1/me with + without a token
     let r = client
         .get(format!("{base}/v1/me"))
         .bearer_auth(&token)
@@ -196,73 +113,88 @@ async fn backend_http_and_broker_end_to_end() {
     assert_eq!(me.login, "octocat");
     assert_eq!(me.account_id.as_deref(), Some("42"));
 
-    let r = client
-        .get(format!("{base}/v1/me"))
-        .send()
-        .await
-        .expect("me noauth");
-    assert_eq!(r.status(), 401);
-
-    // Register an echo service under the account.
-    let connector: Arc<dyn Connector> = Arc::new(TcpConnector {
-        addr: broker_addr,
-    });
-    let tokens: Arc<dyn TokenProvider> = Arc::new(StaticToken(token.clone()));
-    tokio::spawn(run_register(
-        connector.clone(),
-        tokens.clone(),
-        RegisterConfig {
-            device: "dev".to_string(),
-            kind: ServiceKind::App,
-            name: "default".to_string(),
-            client_instance_id: "test".to_string(),
-            local_addr: echo_addr,
-            idle: Duration::from_secs(60),
-        },
-        None,
-    ));
-    wait_for_key(relay_sock, "pcxu:usera:dev:app:default").await;
-
-    // /v1/services lists it (prefix stripped to device/kind/name).
-    let r = client
-        .get(format!("{base}/v1/services"))
-        .bearer_auth(&token)
-        .send()
-        .await
-        .expect("services");
-    assert_eq!(r.status(), 200);
-    let services: ServicesResponse = r.json().await.expect("services json");
-    assert!(
-        services
-            .services
-            .iter()
-            .any(|s| s.device == "dev" && s.kind == ServiceKind::App && s.name == "default"),
-        "expected dev/app/default in {services:?}"
-    );
-
-    // Subscribe and round-trip an echo through the whole backend chain.
-    let sub_listener = TcpListener::bind("127.0.0.1:0").await.expect("sub bind");
-    let sub_addr = sub_listener.local_addr().expect("sub addr");
-    tokio::spawn(run_subscribe(
-        connector,
-        tokens,
-        SubscribeConfig {
-            device: "dev".to_string(),
-            kind: ServiceKind::App,
-            name: "default".to_string(),
-            idle: Duration::from_secs(60),
-        },
-        sub_listener,
-    ));
-
-    let payload = b"backend round-trip";
-    let mut got = None;
-    for _ in 0..50 {
-        if let Some(v) = try_echo(sub_addr, payload).await {
-            got = Some(v);
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
+    // Every per-account route must refuse an unauthenticated caller. `/v1/relay`
+    // matters most: it hands out a relay credential, so an unauthenticated 200
+    // there would let anyone into some account's namespace.
+    for path in ["/v1/me", "/v1/services", "/v1/relay"] {
+        let r = client
+            .get(format!("{base}{path}"))
+            .send()
+            .await
+            .expect("unauthenticated request");
+        assert_eq!(r.status(), 401, "{path} must require a bearer token");
     }
-    assert_eq!(got.as_deref(), Some(payload.as_slice()));
+    // And a forged token must not pass, whatever it claims.
+    let forged = encode(
+        &Header::new(Algorithm::HS256),
+        &Claims {
+            sub: "userB".to_string(),
+            ns: "pcxu:userb".to_string(),
+            login: "attacker".to_string(),
+            gh_id: 1,
+            iat: 0,
+            exp: 9_999_999_999,
+            jti: "forged".to_string(),
+        },
+        &EncodingKey::from_secret(b"not-the-backend-secret"),
+    )
+    .expect("mint a token with the wrong secret");
+    let r = client
+        .get(format!("{base}/v1/relay"))
+        .bearer_auth(&forged)
+        .send()
+        .await
+        .expect("forged request");
+    assert_eq!(r.status(), 401, "a token signed with another secret must not authenticate");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn relay_credential_is_minted_and_scoped_to_the_account() {
+    let Some(relay) = test_relay() else {
+        eprintln!(
+            "skipping: set PCX_TEST_RELAY=host:port and PCX_TEST_RELAY_KEY=<32-byte admin key> to \
+             run the relay-facing cases"
+        );
+        return;
+    };
+    let base = start_backend(relay).await;
+    let client = reqwest::Client::new();
+
+    let issued = |token: String| {
+        let client = client.clone();
+        let base = base.clone();
+        async move {
+            let r = client
+                .get(format!("{base}/v1/relay"))
+                .bearer_auth(&token)
+                .send()
+                .await
+                .expect("relay credential");
+            assert_eq!(r.status(), 200, "minting a credential failed");
+            r.json::<RelayCredentialResponse>()
+                .await
+                .expect("relay credential json")
+        }
+    };
+
+    let a = issued(mint("userA", "octocat", 42)).await;
+    assert!(
+        a.credential.starts_with("pbmt1_"),
+        "clients must get a TEMPORARY credential, never the admin key: {}",
+        a.credential
+    );
+    assert_eq!(a.namespace, "usera", "the namespace comes from the verified token");
+    assert!(a.expires_at > 0, "a client needs an expiry to schedule its refresh against");
+
+    // Asking twice returns the same credential: the backend caches and renews
+    // rather than re-minting, because a temporary credential's namespace IS its
+    // key id — a fresh one would move the account and orphan its registrations.
+    let again = issued(mint("userA", "octocat", 42)).await;
+    assert_eq!(again.credential, a.credential, "an account must keep one credential");
+    assert_eq!(again.namespace, a.namespace);
+
+    // A different account gets a different credential in a different namespace.
+    let b = issued(mint("userB", "hubot", 7)).await;
+    assert_ne!(b.credential, a.credential, "accounts must not share a credential");
+    assert_eq!(b.namespace, "userb");
 }

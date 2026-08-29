@@ -17,12 +17,13 @@
 //!
 //! A temporary credential is HKDF-derived from the relay's root key, its server
 //! instance id, and the key id. The relay can therefore verify a credential it
-//! holds no copy of, and a key id is the only per-key state. Two properties fall
-//! out of that which a shared key could not offer:
+//! holds no copy of, and a key id is the only per-key state. Two properties
+//! fall out of that which a shared key could not offer:
 //!
 //! * **Revocation is immediate, not eventual.** A live credential holds a lease
 //!   carrying a cancellation token, so [`revoke_credential`] tears down that
-//!   client's in-flight connections rather than merely failing its next attempt.
+//!   client's in-flight connections rather than merely failing its next
+//!   attempt.
 //! * **Everything can be invalidated without touching individual keys**, by
 //!   rotating the root or resetting the instance id — both inputs to the
 //!   derivation.
@@ -77,6 +78,58 @@ pub async fn issue_credential(
         key_id: issued.key_id,
         expires_at: issued.expires_at,
     })
+}
+
+/// Extend an existing credential's life, keeping its key id.
+///
+/// Preferred over issuing a replacement whenever the old credential is still
+/// alive: the key id IS the namespace, so a fresh credential would move the
+/// holder to a new namespace and orphan every service already registered under
+/// the old one. Fails once the credential is past renewal, at which point
+/// [`issue_credential`] is the only way back.
+pub async fn renew_credential(
+    session: &RelaySession,
+    key_id: u64,
+    ttl: Duration,
+) -> Result<IssuedCredential> {
+    let renewed = session
+        .admin()?
+        .renew_key(key_id, ttl)
+        .await
+        .with_context(|| format!("renewing credential {key_id} on {}", session.relay_addr))?;
+    Ok(IssuedCredential {
+        credential: renewed.credential,
+        key_id: renewed.key_id,
+        expires_at: renewed.expires_at,
+    })
+}
+
+/// Every service key the relay knows, across all namespaces.
+///
+/// Admin-scoped deliberately: a per-account credential sees only its own
+/// namespace, which is right for a client but not for a backend answering
+/// "what does this account have registered" — that caller filters by the
+/// account's own key prefix afterwards.
+pub async fn all_service_keys(session: &RelaySession) -> Result<Vec<String>> {
+    let services = session
+        .admin()?
+        .list_services_all(None)
+        .await
+        .with_context(|| format!("listing services on {}", session.relay_addr))?;
+    Ok(services.into_iter().map(|svc| svc.service_name).collect())
+}
+
+/// Drop the relay's connections for `service_name`.
+///
+/// For a registration whose owner is gone: the relay still holds the key and
+/// the client that would have released it no longer exists. A live client
+/// reconnects afterwards, so the cost is a brief interruption at worst.
+pub async fn retire_service(session: &RelaySession, service_name: &str) -> Result<u32> {
+    session
+        .admin()?
+        .retire_connections(None, service_name.to_string(), None)
+        .await
+        .with_context(|| format!("retiring `{service_name}` on {}", session.relay_addr))
 }
 
 /// Withdraw a credential, cancelling whatever it currently holds open.

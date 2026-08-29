@@ -39,8 +39,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{bail, Context, Result};
-use pocket_codex_broker_client::{run_register, Connector, RegisterConfig, TokenProvider};
+use anyhow::{Context, Result};
 use pocket_codex_codex::{
     spawn_ready, stop, ListenSpec, SpawnOptions, SpawnReadyError, READY_TIMEOUT,
 };
@@ -54,15 +53,12 @@ use pocket_codex_core::{
 use crate::{
     cli::ServeArgs,
     commands::{
-        account, api_proxy, codex,
+        api_proxy, codex,
         managed_pb::{self, EnsureOutcome, PbWorkerSpec},
         transport::{self, Transport},
         ui,
     },
 };
-
-/// Idle timeout applied to account-mode data bridges.
-const ACCOUNT_DATA_IDLE: Duration = Duration::from_secs(1800);
 
 /// How often the watchdog probes the codex app-server's health endpoint.
 const HEALTH_INTERVAL: Duration = Duration::from_secs(15);
@@ -90,7 +86,8 @@ pub async fn run(args: ServeArgs) -> Result<()> {
     let effective_proxy = api_proxy::resolve_app_server_proxy(args.proxy.as_deref())?;
 
     let config = Config::load()?;
-    let transport = transport::resolve_transport(args.relay.relay.as_deref(), None, &config)?;
+    let transport =
+        transport::resolve_transport(args.relay.relay.as_deref(), None, &config).await?;
 
     let device = args.device.clone().unwrap_or_else(default_device_id);
     let name = args.name.clone();
@@ -118,138 +115,100 @@ pub async fn run(args: ServeArgs) -> Result<()> {
         format!("codex listen URL `{}` is not relayable TCP", report.info.listen)
     })?;
 
-    match transport {
-        Transport::SelfHost {
-            session,
-        } => {
-            let key = explicit_key
-                .unwrap_or_else(|| ServiceId::new(&device, ServiceKind::App, &name).key());
-            let outcome = managed_pb::ensure(PbWorkerSpec {
-                role: PbRole::Register,
-                key: key.clone(),
-                local_addr,
-                session: session.clone(),
-                codec,
-            })
-            .await?;
-            print_serve_summary(
-                &report.info,
-                &outcome,
-                &key,
-                &session.relay_addr,
-                effective_proxy.as_deref(),
-                proxy_requested,
-                report.reused,
-            );
-            Ok(())
-        },
-        Transport::Account {
-            backend,
-        } => {
-            ui::headline(ui::Tone::Ok, "codex app-server");
-            ui::field("pid", &report.info.pid.to_string());
-            ui::field("listen", &report.info.listen);
-            ui::field("log", &report.info.log_file.display().to_string());
-            api_proxy::print_proxy_status(
-                effective_proxy.as_deref(),
-                proxy_requested,
-                report.reused,
-                api_proxy::SpawnCommand::Serve,
-            );
-            if explicit_key.is_some() {
-                ui::warn(
-                    "--key is ignored in account mode; the service is namespaced to your account",
-                );
-            }
-            serve_account(&backend, &device, &name, local_addr, spawn_opts).await
-        },
+    if explicit_key.is_some() && transport.is_account() {
+        ui::warn("--key is ignored in account mode; the service is namespaced to your account");
     }
+    let app = ServiceId::new(&device, ServiceKind::App, &name);
+    // An explicit `--key` is honoured only in self-host mode: the relay confines
+    // an account credential to its own namespace, so a key outside it is refused.
+    let key = match explicit_key.filter(|_| !transport.is_account()) {
+        Some(key) => key,
+        None => transport.key(&app),
+    };
+    let outcome = managed_pb::ensure(PbWorkerSpec {
+        role: PbRole::Register,
+        key: key.clone(),
+        local_addr: local_addr.clone(),
+        session: transport.session.clone(),
+        codec,
+    })
+    .await?;
+    print_serve_summary(
+        &report.info,
+        &outcome,
+        &key,
+        &transport,
+        effective_proxy.as_deref(),
+        proxy_requested,
+        report.reused,
+    );
+
+    // Self-host mode is done: the register worker is a detached child, so the
+    // operator gets their shell back. Account mode stays in the foreground
+    // because the host meta service below is an IN-PROCESS listener — it cannot
+    // outlive this command, so exiting here would publish a meta key with
+    // nothing behind it.
+    if !transport.is_account() {
+        return Ok(());
+    }
+    serve_account_foreground(&transport, &device, &name, local_addr, spawn_opts).await
 }
 
-/// Account-mode host side: register the local app-server through the backend
-/// broker. Runs in the foreground (holds the control tunnel) until interrupted.
-async fn serve_account(
-    backend: &str,
+/// Account-mode tail of `serve`: publish the host meta service beside the app
+/// service, supervise codex's health, and hold both until Ctrl-C.
+async fn serve_account_foreground(
+    transport: &Transport,
     device: &str,
     name: &str,
     local_addr: String,
     mut spawn_opts: SpawnOptions,
 ) -> Result<()> {
-    let (host, port) = account::broker_endpoint(backend)?;
-    let connector: Arc<dyn Connector> = Arc::new(account::BrokerTlsConnector::new(host, port)?);
-    let tokens: Arc<dyn TokenProvider> =
-        Arc::new(account::ConfigTokenProvider::new(backend.to_string()));
     let local: SocketAddr = local_addr
         .parse()
         .with_context(|| format!("codex listen addr `{local_addr}` is not a socket address"))?;
 
+    // Expose the host meta service alongside the app service so a CLI-hosted
+    // server's sessions are remote-viewable (#5) and its per-thread config
+    // persists (#2) — parity with the in-app host. Best-effort: a meta failure
+    // must not stop the app-server from serving. Its own registration rather
+    // than a share of the app's, because the relay maps one local address per key
+    // and this is a second listener.
+    let meta = match spawn_meta_service(local).await {
+        Ok(meta_local) => {
+            pocket_codex_pb::register(&transport.session, pocket_codex_pb::RegisterOptions {
+                key: transport.key(&ServiceId::new(device, ServiceKind::Meta, name)),
+                local_addr: meta_local.to_string(),
+                codec: false,
+            })
+            .await
+            .map(Some)
+        },
+        Err(e) => Err(e),
+    };
+    match &meta {
+        Ok(_) => ui::field("meta", &format!("{device}/meta/{name}")),
+        Err(e) => ui::warn(&format!("host meta service unavailable: {e:#}")),
+    }
+
     // Pin the watchdog's respawn to the *resolved* listen address so a restart
-    // always rebinds the same port the register tunnel forwards to (robust even
-    // if the operator asked for `--port 0`). The watchdog lives for the lifetime
-    // of this foreground `serve`; the process exit on Ctrl-C tears it down.
+    // always rebinds the same port the register worker forwards to (robust even
+    // if the operator asked for `--port 0`).
     spawn_opts.listen = ListenSpec::WebSocket {
         host: local.ip().to_string(),
         port: local.port(),
     };
     tokio::spawn(codex_health_watchdog(local_addr, spawn_opts));
 
-    ui::headline(ui::Tone::Ok, "account register");
-    ui::field("backend", backend);
-    ui::field("service", &format!("{device}/app/{name}"));
-
-    // Expose the host meta service alongside the app tunnel so a CLI-hosted
-    // server's sessions are remote-viewable (#5) and its per-thread config
-    // persists (#2) — parity with the in-app host. Best-effort: a meta failure
-    // must not stop the app-server from serving.
-    match spawn_meta_service(local).await {
-        Ok(meta_local) => {
-            let connector = connector.clone();
-            let tokens = tokens.clone();
-            let dev = device.to_string();
-            let nm = name.to_string();
-            tokio::spawn(async move {
-                let fatal = run_register(
-                    connector,
-                    tokens,
-                    RegisterConfig {
-                        device: dev,
-                        kind: ServiceKind::Meta,
-                        name: nm,
-                        client_instance_id: account::client_instance_id(),
-                        local_addr: meta_local,
-                        idle: ACCOUNT_DATA_IDLE,
-                    },
-                    None,
-                )
-                .await;
-                ui::warn(&format!("meta tunnel stopped: {}", fatal.reason));
-            });
-            ui::field("meta", &format!("{device}/meta/{name}"));
-        },
-        Err(e) => ui::warn(&format!("host meta service unavailable: {e:#}")),
-    }
-
     ui::headline(ui::Tone::Action, "exposing — keep this running, Ctrl-C to stop");
-
-    // Runs until a FATAL rejection (e.g. another live instance owns this
-    // name); transient drops reconnect internally. A conflict on the very
-    // first handshake IS the duplicate-name interception: the command exits
-    // with a clear error instead of fighting the incumbent for the key.
-    let fatal = run_register(
-        connector,
-        tokens,
-        RegisterConfig {
-            device: device.to_string(),
-            kind: ServiceKind::App,
-            name: name.to_string(),
-            client_instance_id: account::client_instance_id(),
-            local_addr: local,
-            idle: ACCOUNT_DATA_IDLE,
-        },
-        None,
-    )
-    .await;
-    bail!("hosting stopped: {}", fatal.reason);
+    tokio::signal::ctrl_c()
+        .await
+        .context("waiting for Ctrl-C")?;
+    // Release the meta registration deliberately rather than letting the drop
+    // abort it, so the relay frees the key now instead of at its next sweep.
+    if let Ok(Some(registration)) = meta {
+        let _ = registration.stop().await;
+    }
+    Ok(())
 }
 
 /// Bind a loopback listener for the host meta service, start it (resuming into
@@ -290,7 +249,7 @@ fn print_serve_summary(
     codex: &pocket_codex_core::state::CodexProcessInfo,
     pb: &EnsureOutcome,
     key: &str,
-    relay: &str,
+    transport: &Transport,
     effective_proxy: Option<&str>,
     proxy_requested: bool,
     reused: bool,
@@ -307,7 +266,7 @@ fn print_serve_summary(
     );
     pb.render("pb register");
     ui::headline(ui::Tone::Action, "client setup");
-    ui::code(&format!("pocket-codex connect --key {key} --relay {relay}"));
+    ui::code(&crate::commands::api::client_setup_command("connect", key, transport));
 }
 
 fn websocket_listen_addr(listen: &str) -> Option<String> {

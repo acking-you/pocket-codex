@@ -69,8 +69,8 @@ if [[ "${NEEDS_SECRETS:-0}" == "1" ]]; then
 fi
 echo "  2. TLS certs readable by the pcx user in $ETC/ (tls_cert/tls_key in $ETC/backend.toml):"
 echo "     copy certbot/Caddy PEMs into $ETC/ (0640 pcx:pcx) via a renewal hook that restarts the unit."
-echo "  3. Firewall the relay to loopback:  sudo ufw deny 7666/tcp"
-echo "     Open API + broker:               sudo ufw allow 8443/tcp && sudo ufw allow 7900/tcp"
+echo "  3. Deny the pre-v2 relay protocol (REQUIRED):  pb-mapper admin legacy-protocol set deny"
+echo "     Open API + relay:  sudo ufw allow 8443/tcp && sudo ufw allow 7666/tcp"
 echo "  4. Start:  sudo systemctl enable --now pocket-codex-backend"
 echo "     Watch:   journalctl -u pocket-codex-backend -f"
 echo "     Check:   curl -fsS https://lb7666.top:8443/healthz   # -> ok"

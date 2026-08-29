@@ -1,9 +1,13 @@
 //! JSON bodies for the backend's HTTP API (served over HTTPS).
 //!
-//! Auth is GitHub Device Flow, mediated by the backend (which holds the OAuth
-//! client secret): `start` returns a user code + verification URL, the client
-//! polls until the backend has a session, then uses the bearer token for
-//! `/v1/*` and the broker tunnel.
+//! Auth is GitHub login — Device Flow or the browser-redirect flow — mediated
+//! by the backend, which holds the OAuth client secret. `start` returns a user
+//! code and a verification URL, the client polls until the backend has a
+//! session, then uses the bearer token for every `/v1/*` call.
+//!
+//! [`RelayCredentialResponse`] is where a client stops needing the backend: it
+//! carries the relay address and a credential, and everything after it is
+//! client↔relay.
 
 use pocket_codex_core::service::{ServiceId, ServiceKind};
 use serde::{Deserialize, Serialize};
@@ -120,7 +124,7 @@ pub struct WebExchangeResponse {
 /// long-lived refresh token and the GitHub identity (for display).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionCredential {
-    /// Bearer token (JWT) for `/v1/*` and the broker `HELLO`.
+    /// Bearer token (JWT) for every `/v1/*` call.
     pub token: String,
     /// Opaque refresh token; exchange via `/auth/refresh` when the bearer
     /// expires.
@@ -190,4 +194,42 @@ impl ServiceEntry {
 pub struct ServicesResponse {
     /// The account's services discovered on the relay.
     pub services: Vec<ServiceEntry>,
+}
+
+/// Response to `GET /v1/relay` — everything a client needs to talk to the relay
+/// itself, so it can register and subscribe WITHOUT the backend on the data
+/// path.
+///
+/// The credential is a short-lived pb-mapper temporary credential, minted by
+/// the backend under its administrator key. The relay confines it to its own
+/// namespace, so one account can neither see nor address another's services
+/// even though both dial the same relay.
+///
+/// It is deliberately per-ACCOUNT rather than per-device: a temporary
+/// credential's namespace is its own key id, so two devices holding different
+/// credentials could not see each other's services — which is the whole point
+/// of the product. Devices on one account share a credential and therefore a
+/// namespace; isolation is between accounts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RelayCredentialResponse {
+    /// `host:port` of the relay to dial.
+    pub relay_addr: String,
+    /// The `pbmt1_…` credential to present.
+    pub credential: String,
+    /// Unix seconds at which the relay stops accepting it. Clients should
+    /// re-request before this; the backend renews rather than re-minting (which
+    /// keeps the credential string identical), so asking again early is cheap.
+    pub expires_at: u64,
+    /// The caller's account id, already sanitised into a key segment.
+    ///
+    /// Clients build their own relay keys from it via
+    /// [`NamespacedServiceId::new`] — the backend no longer prepends the
+    /// namespace on their behalf, because it no longer sees their traffic. It
+    /// is still the backend that DECIDES the value, from the verified
+    /// token, so a client cannot name another account's namespace and have
+    /// the relay honour it: the credential is confined to one namespace
+    /// regardless of the key string presented.
+    ///
+    /// [`NamespacedServiceId::new`]: crate::key::NamespacedServiceId::new
+    pub namespace: String,
 }

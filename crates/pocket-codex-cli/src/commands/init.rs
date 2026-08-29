@@ -8,10 +8,7 @@
 use anyhow::{anyhow, bail, Result};
 use pocket_codex_core::config::Config;
 
-use crate::{
-    cli::InitArgs,
-    commands::{service_target::discover_services, ui},
-};
+use crate::{cli::InitArgs, commands::ui};
 
 /// Strip an optional `tcp://` scheme and validate `host:port`.
 ///
@@ -91,7 +88,10 @@ pub async fn run(args: InitArgs) -> Result<()> {
         // about to be written rather than whatever the process happened to hold.
         // That distinction was invisible when the key was process-global.
         let session = pocket_codex_pb::RelaySession::new(relay.clone(), key.clone());
-        match discover_services(&session).await {
+        // Every key the relay shows this credential, not just the Pocket-Codex
+        // ones: the question here is "does this pair authenticate", and a relay
+        // hosting nothing of ours still answers it.
+        match pocket_codex_pb::keys(&session).await {
             Ok(found) => {
                 ui::field("verified", &format!("reached relay, {} service(s)", found.len()))
             },

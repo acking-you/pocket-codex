@@ -5,12 +5,15 @@
 # SQLite identity/credential store.
 database_url = "sqlite:///var/lib/pocket-codex/backend.db"
 
-# Loopback pb-mapper relay (MUST be firewalled to localhost — see README).
-relay_addr = "127.0.0.1:7666"
+# The pb-mapper relay. This is BOTH what the backend dials and what /v1/relay
+# tells clients to dial, so it must be an address that resolves for them too —
+# a public name, not 127.0.0.1. Clients reach the relay directly; the relay
+# confines each account's credential to its own namespace. That requires
+# `--legacy-protocol deny` on the relay — see README.
+relay_addr = "lb7666.top:7666"
 
-# Listeners. Both terminate TLS in-process (tls_mode below).
+# The API listener; terminates TLS in-process (tls_mode below).
 http_listen = "0.0.0.0:8443"
-broker_listen = "0.0.0.0:7900"
 
 # GitHub OAuth scope requested at login.
 github_scope = "read:user"

@@ -2,10 +2,9 @@
 
 A **host-side meta service**: a small axum HTTP server, run on the machine that
 hosts a `codex` app-server (via the app's in-app hosting or the CLI
-`pocket-codex serve`). It is published through the account broker as a **third
-tunnel** — `pcx:<device>:meta:<name>` — alongside the existing
-`app:<name>` (codex remote control) and `api:<name>` (Responses API proxy)
-tunnels that one host already exposes.
+`pocket-codex serve`). It is published on the relay as a **third service** —
+`meta:<name>` — alongside the existing `app:<name>` (codex remote control) and
+`api:<name>` (Responses API proxy) services that one host already exposes.
 
 It exists so a **remote** client (the phone app driving a desktop host) can do
 what previously only worked when the Flutter app ran *on* the host:
@@ -53,12 +52,14 @@ loopback) so there is no evict→resume race split across the relay.
 
 ## Auth / trust model
 
-Mirrors `pocket-codex-api-proxy`: the **broker** authenticates the subscriber by
-account JWT before bridging the tunnel, and the backend scopes every key to the
-JWT's user namespace (`pcxu:<user>:…`), so only the account owner can reach their
-own meta tunnel. The loopback listener is host-trusted (same posture as the
-api-proxy, which forwards the host's ChatGPT token on the same basis). A
-per-host bearer secret is a possible future hardening for the local-loopback leg.
+Mirrors `pocket-codex-api-proxy`: the **relay** confines each account's
+credential to its own namespace (`pcxu:<user>:…`), so only the account owner can
+reach their own meta service — a credential presenting another account's key is
+refused whatever string it sends. The backend authenticates the GitHub login and
+decides that namespace when it mints the credential; it is not on the data path.
+The loopback listener is host-trusted (same posture as the api-proxy, which
+forwards the host's ChatGPT token on the same basis). A per-host bearer secret is
+a possible future hardening for the local-loopback leg.
 
 ## Reuse (no bridge dependency)
 
@@ -100,7 +101,7 @@ client-side from the app key and never needs to appear in that listing.
   is not fully prevented without an OS file lock — an accepted edge for this
   convenience state. No `fsync`, so an unclean shutdown may lose the last write
   (the atomic rename still guarantees the file is never partial).
-* **Idle meta subscription.** A remote viewer keeps its `meta:` broker
+* **Idle meta subscription.** A remote viewer keeps its `meta:` relay
   subscription registered (reused across re-opens, not a growing leak) until the
   app exits; it self-heals if torn down. A `meta` disconnect-on-teardown is a
   possible future tidy-up.

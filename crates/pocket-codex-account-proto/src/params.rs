@@ -1,81 +1,28 @@
-//! Timing constants and reconnect backoff for the broker, copied from
-//! pb-mapper so both ends share one source of truth.
+//! Retry pacing for request-shaped work, on pb-mapper's backoff curve.
 //!
-//! The durations mirror `deps/pb-mapper/src/common/config.rs` (publisher
-//! heartbeat / lease / health-probe cadence) so the broker control loop behaves
-//! exactly like a pb-mapper publisher — except [`STREAM_DIAL_TIMEOUT`], which
-//! is deliberately NOT pb-mapper's 1 s value (that one budgets a loopback dial;
-//! a broker data tunnel budgets a WAN TLS handshake).
+//! This module used to hold the whole broker control loop's timing — heartbeat
+//! cadence, lease timeout, stream-dial budget, the register-loop backoff tuned
+//! after the 2026-07-07 register storm. All of that belonged to a tunnel
+//! protocol we no longer implement: the pb-mapper SDK owns reconnecting now, so
+//! the constants that paced OUR reconnect loop went with it.
+//!
+//! What is left is the bounded retry a user-facing request needs — see
+//! [`BoundedRetry`] — plus the curve it waits on.
 
 use std::time::Duration;
 
-/// How often the client sends a heartbeat ping on a register control tunnel.
-pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(2);
-
-/// How long the client tolerates no inbound control frame before probing
-/// liveness out-of-band (= 3 missed heartbeats).
-pub const HEARTBEAT_TOLERANCE: Duration = Duration::from_secs(6);
-
-/// Extra grace added to the tolerance before reconnecting on a failed probe.
-pub const SUSPECT_GRACE: Duration = Duration::from_secs(2);
-
-/// Timeout of the out-of-band liveness probe.
-pub const PROBE_TIMEOUT: Duration = Duration::from_secs(1);
-
-/// Backend read-idle timeout on a register control tunnel: this much silence
-/// and the backend retires the registration leg.
-pub const LEASE_TIMEOUT: Duration = Duration::from_secs(15);
-
-/// Per read/write timeout on control frames and on the data-tunnel handshake.
-pub const CONTROL_IO_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// Subscribe-side health-probe cadence.
-pub const HEALTH_INTERVAL: Duration = Duration::from_secs(1);
-
-/// How long the backend keeps a pending loopback accept while waiting for the
-/// client to dial back the answering `RegisterData` tunnel.
-///
-/// NOT pb-mapper's 1 s `STREAM_READY_TIMEOUT`: that budgets a loopback dial,
-/// whereas this budgets the client's WAN TLS handshake + a round trip (review
-/// finding A1). Generous so a phone on cellular still pairs in time.
-pub const STREAM_DIAL_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// Lower bound of the reconnect backoff.
+/// Lower bound of the retry backoff.
 pub const BACKOFF_MIN: Duration = Duration::from_millis(100);
 
-/// Upper bound of the reconnect backoff.
+/// Upper bound of the retry backoff.
 pub const BACKOFF_MAX: Duration = Duration::from_secs(1);
 
-/// Upper bound of the REGISTER-loop reconnect backoff, deliberately much
-/// larger than [`BACKOFF_MAX`]: a publisher that cannot hold a session (dead
-/// backend, key kept by someone else on an old backend) must degrade to a slow
-/// trickle instead of hammering at 1 Hz forever — the 2026-07-07 lb7666 outage
-/// was a register storm flooding 24 GB of logs and filling the disk. Normal
-/// operation is unaffected: the backoff only grows on consecutive failures and
-/// resets once a session proves stable ([`STABLE_SESSION_MIN`]).
-pub const REGISTER_BACKOFF_MAX: Duration = Duration::from_secs(30);
-
-/// How long a register session must survive before the reconnect backoff
-/// resets. Resetting on mere handshake success is what fueled the duplicate-key
-/// leapfrog storm: each contender's handshake "succeeded" for ~100 ms before
-/// the other evicted it, so the backoff never grew. A session only counts as
-/// healthy once it outlives the takeover churn window.
-pub const STABLE_SESSION_MIN: Duration = Duration::from_secs(5);
-
-/// How long the backend parks an id-less (legacy) register hello before
-/// rejecting it with a key conflict. Legacy clients reconnect-loop on any
-/// rejection with a ≤[`BACKOFF_MAX`] cap, so the tarpit bounds their retry
-/// rate; current clients carry an instance id and stop on the first conflict,
-/// never hitting this.
-pub const CONFLICT_TARPIT: Duration = Duration::from_secs(5);
-
-/// Reconnect backoff: pb-mapper's curve (100 ms → 1 s, base-2) plus optional
-/// ±20% jitter.
+/// Retry backoff: pb-mapper's curve (100 ms → 1 s, base-2) plus optional ±20%
+/// jitter.
 ///
-/// pb-mapper itself uses no jitter, but the broker fans many clients into one
-/// backend, so a backend restart would otherwise thunder every client at the
-/// same 100/200/400 ms steps (review finding G4); callers should prefer
-/// [`RetryBackoff::next_delay_jittered`].
+/// pb-mapper itself uses no jitter, but many clients converge on one host, so a
+/// host restart would otherwise thunder every client at the same 100/200/400 ms
+/// steps; callers should prefer [`RetryBackoff::next_delay_jittered`].
 #[derive(Debug, Clone)]
 pub struct RetryBackoff {
     failures: u32,
@@ -97,9 +44,9 @@ impl RetryBackoff {
         Self::default()
     }
 
-    /// A fresh backoff with a custom upper bound (e.g.
-    /// [`REGISTER_BACKOFF_MAX`] for the register loop). The curve still starts
-    /// at [`BACKOFF_MIN`] and doubles per failure.
+    /// A fresh backoff with a custom upper bound, for a caller whose work is
+    /// slower or cheaper than the default assumes. The curve still starts at
+    /// [`BACKOFF_MIN`] and doubles per failure.
     pub fn with_max(max: Duration) -> Self {
         Self {
             failures: 0,
@@ -135,13 +82,12 @@ impl RetryBackoff {
 
 /// How many times a *bounded* operation is attempted before giving up.
 ///
-/// Ten total attempts (one try + nine retries). Deliberately NOT applied to the
-/// supervisor / register loops: those must retry forever (a host that stops
+/// Ten total attempts (one try + nine retries). Deliberately NOT applied to
+/// publishing or supervisor loops: those must retry forever (a host that stops
 /// re-publishing is unreachable until the user notices), and their pacing is
-/// what the 2026-07-07 outage postmortem tuned — see [`REGISTER_BACKOFF_MAX`]
-/// and [`STABLE_SESSION_MIN`]. This bound is for *request-shaped* work, where
-/// there is a caller waiting on an answer and "still trying" eventually has to
-/// become "it failed".
+/// the pb-mapper SDK's. This bound is for *request-shaped* work, where there is
+/// a caller waiting on an answer and "still trying" eventually has to become
+/// "it failed".
 pub const MAX_ATTEMPTS: u32 = 10;
 
 /// Drives a bounded retry: how long to wait before the next attempt, or
@@ -236,16 +182,17 @@ mod tests {
 
     #[test]
     fn with_max_keeps_the_curve_but_raises_the_cap() {
-        let mut b = RetryBackoff::with_max(REGISTER_BACKOFF_MAX);
+        let raised = Duration::from_secs(30);
+        let mut b = RetryBackoff::with_max(raised);
         // Same doubling curve from BACKOFF_MIN...
         assert_eq!(b.next_delay().as_millis(), 100);
         assert_eq!(b.next_delay().as_millis(), 200);
-        // ...but it climbs past the default 1 s cap up to the register cap.
+        // ...but it climbs past the default 1 s cap up to the raised one.
         let mut last = 0;
         for _ in 0..12 {
             last = b.next_delay().as_millis();
         }
-        assert_eq!(last as u64, REGISTER_BACKOFF_MAX.as_millis() as u64);
+        assert_eq!(last as u64, raised.as_millis() as u64);
         b.reset();
         assert_eq!(b.next_delay().as_millis(), 100);
     }

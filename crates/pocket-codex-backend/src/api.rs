@@ -1,5 +1,7 @@
-//! The HTTP API: GitHub device-flow auth, session refresh/logout, and the
-//! per-account `/v1/me` + `/v1/services` views.
+//! The HTTP API: GitHub device-flow auth, session refresh/logout, the
+//! per-account `/v1/me` + `/v1/services` views, and `/v1/relay` — the endpoint
+//! that hands a client its own relay credential so the backend leaves the data
+//! path entirely.
 
 use std::{sync::Arc, time::Duration};
 
@@ -13,13 +15,13 @@ use axum::{
 use pocket_codex_account_proto::{
     http::{
         DevicePollRequest, DevicePollResponse, DeviceStartRequest, DeviceStartResponse,
-        LogoutRequest, MeResponse, RefreshRequest, RefreshResponse, ServiceEntry, ServicesResponse,
-        WebExchangeRequest, WebExchangeResponse, WebStartRequest, WebStartResponse,
+        LogoutRequest, MeResponse, RefreshRequest, RefreshResponse, RelayCredentialResponse,
+        ServiceEntry, ServicesResponse, WebExchangeRequest, WebExchangeResponse, WebStartRequest,
+        WebStartResponse,
     },
     key::NamespacedServiceId,
 };
 use pocket_codex_auth::{Auth, AuthError, Claims};
-use pocket_codex_broker_server::BrokerServer;
 use pocket_codex_core::service::{ServiceId, ServiceKind};
 use serde::Deserialize;
 use tower_http::{limit::RequestBodyLimitLayer, timeout::TimeoutLayer, trace::TraceLayer};
@@ -29,11 +31,12 @@ use tower_http::{limit::RequestBodyLimitLayer, timeout::TimeoutLayer, trace::Tra
 pub struct AppState {
     /// The identity/session service.
     pub auth: Arc<Auth>,
-    /// The loopback relay and the credential to query it with, for the
-    /// account's service listing.
+    /// The relay plus the ADMINISTRATOR credential, for the two things the
+    /// backend still does on an account's behalf: listing its services across
+    /// namespaces, and retiring a registration whose owner is gone.
     pub relay: pocket_codex_pb::RelaySession,
-    /// The broker, used to force-deregister a caller's relay key on demand.
-    pub broker: BrokerServer,
+    /// Vends each account its own short-lived relay credential.
+    pub credentials: crate::credentials::Credentials,
 }
 
 /// Build the HTTP API router.
@@ -49,6 +52,7 @@ pub fn router(state: AppState) -> Router {
         .route("/auth/logout", post(logout))
         .route("/v1/me", get(me))
         .route("/v1/services", get(services))
+        .route("/v1/relay", get(relay_credential))
         .route("/v1/services/{device}/{kind}/{name}", delete(deregister_service))
         // Bound every request so a slow upstream (GitHub) can't pin connections
         // on the unauthenticated /auth/* surface indefinitely.
@@ -266,7 +270,7 @@ async fn services(
 ) -> ApiResult<Json<ServicesResponse>> {
     let claims = authed(&state, &headers)?;
     let prefix = NamespacedServiceId::user_prefix(&claims.sub);
-    let keys = pocket_codex_pb::keys(&state.relay)
+    let keys = pocket_codex_pb::all_service_keys(&state.relay)
         .await
         .map_err(|e| ApiError::Internal(format!("relay status: {e}")))?;
     let services = keys
@@ -305,6 +309,43 @@ async fn deregister_service(
         .map_err(|_| ApiError::BadRequest("invalid service kind"))?;
     let relay_key =
         NamespacedServiceId::new(&claims.sub, ServiceId::new(&device, kind, &name)).key();
-    state.broker.deregister_key(&relay_key).await;
+    // Asks the RELAY to drop the registration's connections. It used to cancel a
+    // broker session that owned the tunnel; with clients registering directly the
+    // backend no longer holds anything to cancel, so the authority it does have —
+    // its administrator credential — is what retires the key.
+    //
+    // The key is derived from the verified token, so a caller can only ever name
+    // a service inside its own namespace.
+    pocket_codex_pb::retire_service(&state.relay, &relay_key)
+        .await
+        .map_err(|e| ApiError::Internal(format!("retiring {relay_key}: {e:#}")))?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Hand this account the relay address and a short-lived credential, so the
+/// client can register and subscribe against the relay directly.
+///
+/// This is the endpoint that takes the backend off the data path: everything
+/// after it is client↔relay. The credential is per-account (see
+/// [`crate::credentials`]) and scoped to the account's namespace by the relay
+/// itself, so possession of it grants nothing outside that account.
+async fn relay_credential(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<Json<RelayCredentialResponse>> {
+    let claims = authed(&state, &headers)?;
+    let (credential, expires_at) = state
+        .credentials
+        .for_account(&claims.sub)
+        .await
+        .map_err(|e| ApiError::Internal(format!("issuing a relay credential: {e:#}")))?;
+    Ok(Json(RelayCredentialResponse {
+        relay_addr: state.credentials.relay_addr().to_string(),
+        credential,
+        expires_at,
+        // From the VERIFIED token, never from the request: this is the one place
+        // an account's namespace is decided, and a client that asked for another
+        // one would still be confined by the credential it gets back.
+        namespace: NamespacedServiceId::namespace_of(&claims.sub),
+    }))
 }

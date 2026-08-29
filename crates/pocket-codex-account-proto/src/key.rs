@@ -1,10 +1,5 @@
 //! Per-user namespacing of pb-mapper relay keys.
 //!
-//! The relay does not understand identity — any holder of the global key can
-//! register or subscribe any key string. The hosted backend closes that gap by
-//! prefixing every relay key with the authenticated user's id, so account A can
-//! never reach account B's services:
-//!
 //! ```text
 //!   pcxu : <user_id> : <device> : <kind> : <name>
 //!    │       │           └────────────────────────── a pocket_codex_core::ServiceId
@@ -12,10 +7,28 @@
 //!    └──────────────────────────────────────────────  SERVICE_NS_PREFIX
 //! ```
 //!
-//! Clients never choose the `pcxu:<user_id>` prefix — the broker derives it
-//! from the verified session token and prepends it server-side. `/v1/services`
-//! lists relay keys filtered to the caller's
-//! [`NamespacedServiceId::user_prefix`].
+//! # What this prefix does and does not protect
+//!
+//! Isolation between accounts is the RELAY's, not this prefix's. Each account
+//! holds a temporary credential confined to its own relay namespace, so a
+//! client that presented `pcxu:<someone-else>:…` would be refused whatever
+//! string it typed. Clients therefore build their own keys — the backend hands
+//! them their `user_id` at `/v1/relay` and is not on the path to prepend
+//! anything.
+//!
+//! What the prefix still earns:
+//!
+//! * **A stable name across devices.** Both of an account's devices derive the
+//!   same key for the same service, which is how a phone finds a desktop.
+//! * **A per-account view of a shared relay.** The backend holds the
+//!   administrator credential and can see every namespace; filtering its
+//!   listing by [`NamespacedServiceId::user_prefix`] is what makes
+//!   `/v1/services` answer for one account.
+//! * **Coexistence with self-host `pcx:` keys** on the same relay.
+//!
+//! Sanitising every segment is what keeps those properties true: a `:` smuggled
+//! into a device or service name could otherwise make one account's key parse
+//! as another's, and the backend's filter reads these strings.
 
 use pocket_codex_core::service::{sanitize_component, ServiceId};
 use serde::{Deserialize, Serialize};
@@ -61,7 +74,17 @@ impl NamespacedServiceId {
     /// The relay-key prefix shared by all of `user_id`'s services. Used to
     /// filter a relay key listing down to one account.
     pub fn user_prefix(user_id: impl AsRef<str>) -> String {
-        format!("{SERVICE_NS_PREFIX}:{}:", sanitize_component(user_id.as_ref()))
+        format!("{SERVICE_NS_PREFIX}:{}:", Self::namespace_of(user_id))
+    }
+
+    /// `user_id` as it appears in a relay key — the sanitised segment, without
+    /// the `pcxu:` prefix or trailing colon.
+    ///
+    /// This is what the backend hands a client at `/v1/relay` so the client can
+    /// build its own keys. Kept beside [`Self::user_prefix`] so both derive the
+    /// same segment through the same sanitiser and cannot drift apart.
+    pub fn namespace_of(user_id: impl AsRef<str>) -> String {
+        sanitize_component(user_id.as_ref())
     }
 
     /// Parse a namespaced relay key. Returns `None` for any key that is not a
@@ -114,6 +137,19 @@ mod tests {
         assert_eq!(id.key(), "pcxu:user-42:macbook:app:work");
         let parsed = NamespacedServiceId::parse_key(&id.key()).expect("parse");
         assert_eq!(parsed, id);
+    }
+
+    #[test]
+    fn namespace_and_prefix_agree_with_the_key_a_client_builds() {
+        // The backend sends `namespace_of`; the client feeds it to `new`. If those
+        // two disagreed, a client's keys would fall outside the prefix the backend
+        // filters `/v1/services` by, and its services would go missing from its
+        // own listing.
+        let ns = NamespacedServiceId::namespace_of("User-42");
+        let key =
+            NamespacedServiceId::new(&ns, ServiceId::new("mac", ServiceKind::App, "work")).key();
+        assert!(key.starts_with(&NamespacedServiceId::user_prefix("User-42")));
+        assert_eq!(ns, "user-42", "the namespace is the sanitised segment only");
     }
 
     #[test]

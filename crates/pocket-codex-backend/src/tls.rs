@@ -1,5 +1,4 @@
-//! TLS termination: plain (none) or static cert files. The same layer fronts
-//! both the HTTP API and the broker.
+//! TLS termination for the HTTP API: plain (none) or static cert files.
 //!
 //! For a self-contained Let's Encrypt deploy, obtain certs out of band
 //! (certbot) and point `tls_cert`/`tls_key` at the live PEMs; the backend

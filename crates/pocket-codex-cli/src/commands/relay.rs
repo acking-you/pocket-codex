@@ -1,15 +1,15 @@
 //! Relay address + credential resolution for `pocket-codex` commands.
 //!
-//! Precedence is `flag > config > $PB_MAPPER_SERVER`. The credential is bound to
-//! the *configured* relay: [`resolve_relay`] pairs the resolved address with
+//! Precedence is `flag > config > $PB_MAPPER_SERVER`. The credential is bound
+//! to the *configured* relay: [`resolve_relay`] pairs the resolved address with
 //! `config.key` only when that address IS the configured one, so an explicit
 //! `--relay <other>` uses whatever `$MSG_HEADER_KEY` the caller exported for
 //! that relay rather than silently presenting the saved key to a stranger.
 //!
 //! That rule used to be enforced by conditionally mutating pb-mapper's
-//! process-global key. It is now a returned value, which is a better fit for the
-//! same intent: there is no window in which the process holds a credential for a
-//! relay it is not talking to.
+//! process-global key. It is now a returned value, which is a better fit for
+//! the same intent: there is no window in which the process holds a credential
+//! for a relay it is not talking to.
 
 use anyhow::{anyhow, Result};
 use pocket_codex_core::config::Config;

@@ -283,18 +283,19 @@ mod tests {
 
     #[test]
     fn pb_worker_args_include_codec_only_for_register() {
+        let session = pocket_codex_pb::RelaySession::for_test("relay.example:7666");
         let register = PbWorkerSpec {
             role: PbRole::Register,
             key: "codex".into(),
             local_addr: "127.0.0.1:18080".into(),
-            relay_addr: "relay.example:7666".into(),
+            session: session.clone(),
             codec: true,
         };
         let subscribe = PbWorkerSpec {
             role: PbRole::Subscribe,
             key: "codex".into(),
             local_addr: "127.0.0.1:28080".into(),
-            relay_addr: "relay.example:7666".into(),
+            session,
             codec: true,
         };
 

@@ -1,7 +1,7 @@
 //! Manual end-to-end verification harness (`#[ignore]`d — never runs in CI).
 //!
 //! Drives the REAL stack exactly as the Flutter app does through FRB: embedded
-//! codex host → account broker/relay tunnel → `turn/start` with an image
+//! codex host → relay tunnel → `turn/start` with an image
 //! attachment → live event stream → `thread/read` history echo. Needs a
 //! signed-in account in the app's support dir and spends one real model call.
 //!
@@ -74,7 +74,7 @@ fn image_turn_round_trips_through_a_real_host() {
 }
 
 /// The document analogue: upload a file over the META service (loopback here;
-/// the same code path a remote controller takes through the broker tunnel),
+/// the same code path a remote controller takes through the relay),
 /// reference its HOST path in the turn text, and require the agent to read the
 /// file's exact sentinel content back.
 ///

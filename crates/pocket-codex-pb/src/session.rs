@@ -28,15 +28,15 @@
 //! # Registrations are handles, not futures
 //!
 //! `register`/`subscribe` used to return a future that ran until the session
-//! died, so callers `tokio::spawn`ed it and had no way to ask whether the tunnel
-//! was actually up. The SDK spawns its own worker and hands back a handle
-//! carrying readiness and a `stop()`. We surface that handle so a caller can
-//! wait for the relay to accept the registration and tear it down deliberately
-//! — dropping it aborts the tunnel.
+//! died, so callers `tokio::spawn`ed it and had no way to ask whether the
+//! tunnel was actually up. The SDK spawns its own worker and hands back a
+//! handle carrying readiness and a `stop()`. We surface that handle so a caller
+//! can wait for the relay to accept the registration and tear it down
+//! deliberately — dropping it aborts the tunnel.
 
-use std::{net::SocketAddr, time::Duration};
+use std::time::Duration;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use pb_mapper::{
     Client, ClientConfig, ConnectRequest, Connection, RegisterRequest, Registration,
     ServiceConnection, Transport,
@@ -97,9 +97,10 @@ impl RelaySession {
     /// A session against `relay_addr` with a syntactically valid throwaway
     /// credential, for tests that never reach the relay.
     ///
-    /// Exists because the SDK validates the credential when the client is built,
-    /// so a test exercising, say, token rejection would otherwise have to carry
-    /// a 32-byte literal that has nothing to do with what it is testing.
+    /// Exists because the SDK validates the credential when the client is
+    /// built, so a test exercising, say, token rejection would otherwise
+    /// have to carry a 32-byte literal that has nothing to do with what it
+    /// is testing.
     pub fn for_test(relay_addr: impl Into<String>) -> Self {
         Self::new(relay_addr, "0".repeat(32))
     }
@@ -184,7 +185,9 @@ pub async fn register(session: &RelaySession, opts: RegisterOptions) -> Result<R
     registration
         .wait_ready_timeout(TUNNEL_READY_TIMEOUT)
         .await
-        .with_context(|| format!("waiting for `{}` to register on {}", opts.key, session.relay_addr))?;
+        .with_context(|| {
+            format!("waiting for `{}` to register on {}", opts.key, session.relay_addr)
+        })?;
     Ok(registration)
 }
 
@@ -206,7 +209,9 @@ pub async fn subscribe(session: &RelaySession, opts: SubscribeOptions) -> Result
     connection
         .wait_ready_timeout(TUNNEL_READY_TIMEOUT)
         .await
-        .with_context(|| format!("waiting for `{}` to subscribe on {}", opts.key, session.relay_addr))?;
+        .with_context(|| {
+            format!("waiting for `{}` to subscribe on {}", opts.key, session.relay_addr)
+        })?;
     Ok(connection)
 }
 
@@ -248,13 +253,25 @@ pub async fn service_connections(
         .with_context(|| format!("querying `{key}` status on {}", session.relay_addr))
 }
 
-/// Whether `addr` parses as a relay address this session could dial.
+/// Check that `addr` is a `host:port` a relay session could dial.
 ///
-/// Kept as a free function because callers validate user input (a CLI flag, a
-/// settings field) before they have a credential to build a session with.
-pub fn parse_relay_addr(addr: &str) -> Result<SocketAddr> {
-    addr.parse()
-        .with_context(|| format!("`{addr}` is not a host:port relay address"))
+/// Deliberately NOT `SocketAddr::parse`: clients dial the relay by name
+/// (`lb7666.top:7666`), so requiring a literal IP would reject every real
+/// deployment. The SDK resolves the host itself; all we owe a caller is an
+/// early "you typed that wrong" on a value that came from a CLI flag or a
+/// settings field, before it becomes a connection error much later.
+pub fn parse_relay_addr(addr: &str) -> Result<()> {
+    let (host, port) = addr
+        .rsplit_once(':')
+        .ok_or_else(|| anyhow!("`{addr}` is missing a `:port`"))?;
+    // An IPv6 literal keeps its brackets (`[::1]:7666`); `rsplit_once` already
+    // took the port off the end, so anything left is the host.
+    if host.is_empty() {
+        bail!("`{addr}` is missing a host");
+    }
+    port.parse::<u16>()
+        .map(|_| ())
+        .with_context(|| format!("`{addr}` has an invalid port"))
 }
 
 #[cfg(test)]
@@ -319,8 +336,14 @@ mod tests {
     }
 
     #[test]
-    fn parse_relay_addr_rejects_a_bare_host() {
+    fn parse_relay_addr_accepts_a_named_host_and_needs_a_port() {
+        // A NAME must be accepted: with clients dialling the relay directly,
+        // `lb7666.top:7666` is the production value, not an edge case.
+        assert!(parse_relay_addr("lb7666.top:7666").is_ok());
         assert!(parse_relay_addr("127.0.0.1:7666").is_ok());
-        assert!(parse_relay_addr("lb7666.top").is_err());
+        assert!(parse_relay_addr("[::1]:7666").is_ok());
+        assert!(parse_relay_addr("lb7666.top").is_err(), "a missing port is a typo");
+        assert!(parse_relay_addr("lb7666.top:nope").is_err());
+        assert!(parse_relay_addr(":7666").is_err());
     }
 }

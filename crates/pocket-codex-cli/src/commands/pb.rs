@@ -72,9 +72,9 @@ async fn subscribe(args: PbSubscribeArgs) -> Result<()> {
 /// Print what the relay knows about this credential's services.
 ///
 /// This used to hand off to upstream's own status printer, which wrote its
-/// formatting straight to stdout and had a `remote-id` mode. The SDK exposes the
-/// data instead of a rendering, so both kinds print through our own `ui` and
-/// look like the rest of the CLI.
+/// formatting straight to stdout and had a `remote-id` mode. The SDK exposes
+/// the data instead of a rendering, so both kinds print through our own `ui`
+/// and look like the rest of the CLI.
 async fn status(args: PbStatusArgs) -> Result<()> {
     let config = Config::load()?;
     let session = crate::commands::relay::resolve_session(args.relay.relay.as_deref(), &config)?;

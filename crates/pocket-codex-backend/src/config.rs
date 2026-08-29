@@ -2,7 +2,7 @@
 
 use serde::Deserialize;
 
-/// How the backend terminates TLS for the HTTP API and the broker.
+/// How the backend terminates TLS for the HTTP API.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TlsMode {
@@ -24,8 +24,9 @@ pub struct ServerConfig {
     /// from which the relay derives the short-lived credentials clients use. So
     /// the backend holding it is what lets clients hold nothing.
     ///
-    /// Omit (or leave blank) to read the relay's admin key off disk, which works
-    /// when the relay is on this host — see [`ServerConfig::relay_credential`].
+    /// Omit (or leave blank) to read the relay's admin key off disk, which
+    /// works when the relay is on this host — see
+    /// [`ServerConfig::relay_credential`].
     #[serde(default, alias = "relay_admin_key")]
     pub msg_header_key: Option<String>,
     /// HS256 secret used to sign session JWTs.
@@ -51,24 +52,22 @@ pub struct ServerConfig {
     /// sqlx SQLite URL (e.g. `sqlite://pocket-codex.db`).
     #[serde(default = "default_database_url")]
     pub database_url: String,
-    /// Loopback address of the pb-mapper relay.
+    /// `host:port` of the pb-mapper relay, as the BACKEND dials it.
+    ///
+    /// Also what `/v1/relay` tells clients to dial, so it must be an address
+    /// that resolves for them too — no longer a loopback-only concern now that
+    /// clients reach the relay directly.
     #[serde(default = "default_relay_addr")]
     pub relay_addr: String,
     /// Listen address for the HTTP API.
     #[serde(default = "default_http_listen")]
     pub http_listen: String,
-    /// Listen address for the broker tunnel.
-    #[serde(default = "default_broker_listen")]
-    pub broker_listen: String,
     /// Session (JWT) lifetime in seconds.
     #[serde(default = "default_jwt_ttl")]
     pub jwt_ttl_secs: i64,
     /// Refresh-token lifetime in seconds.
     #[serde(default = "default_refresh_ttl")]
     pub refresh_ttl_secs: i64,
-    /// Idle timeout for a data bridge, in seconds.
-    #[serde(default = "default_data_idle")]
-    pub data_idle_secs: u64,
     /// TLS termination mode.
     #[serde(default)]
     pub tls_mode: TlsMode,
@@ -82,10 +81,10 @@ pub struct ServerConfig {
 
 /// Where the relay keeps its administrator key when it manages one itself.
 ///
-/// Matches pb-mapper 0.5's default auth state directory. Reading it is what lets
-/// a same-host deployment configure nothing: the relay generates the key on
-/// first start and the backend adopts it, so there is no copy of the secret to
-/// keep in sync between two config files.
+/// Matches pb-mapper 0.5's default auth state directory. Reading it is what
+/// lets a same-host deployment configure nothing: the relay generates the key
+/// on first start and the backend adopts it, so there is no copy of the secret
+/// to keep in sync between two config files.
 const RELAY_ADMIN_KEY_PATH: &str = "/var/lib/pb-mapper/auth/admin.key";
 
 impl ServerConfig {
@@ -129,10 +128,11 @@ impl ServerConfig {
     }
 
     /// Fail closed on a missing, weak, or still-placeholder secret. A forgeable
-    /// `jwt_secret` collapses the entire per-account isolation (the broker
-    /// derives the relay-key namespace from the JWT's `sub`), so the backend
-    /// must refuse to boot rather than sign tokens anyone can forge — including
-    /// the case where an operator deploys the example env without editing it.
+    /// `jwt_secret` collapses the entire per-account isolation: `/v1/relay`
+    /// hands out a credential scoped to the namespace derived from the JWT's
+    /// `sub`, so anyone able to mint a token can obtain another account's
+    /// credential. The backend must refuse to boot rather than sign forgeable
+    /// tokens — including when an operator deploys the example env unedited.
     fn validate(&self) -> anyhow::Result<()> {
         use anyhow::ensure;
         ensure!(
@@ -173,11 +173,6 @@ impl ServerConfig {
         }
         Ok(())
     }
-
-    /// The data-bridge idle timeout as a [`std::time::Duration`].
-    pub fn data_idle(&self) -> std::time::Duration {
-        std::time::Duration::from_secs(self.data_idle_secs)
-    }
 }
 
 /// True for an empty/whitespace value or one that still carries the shipped
@@ -198,17 +193,11 @@ fn default_relay_addr() -> String {
 fn default_http_listen() -> String {
     "0.0.0.0:8080".to_string()
 }
-fn default_broker_listen() -> String {
-    "0.0.0.0:7900".to_string()
-}
 fn default_jwt_ttl() -> i64 {
     3600
 }
 fn default_refresh_ttl() -> i64 {
     30 * 24 * 3600
-}
-fn default_data_idle() -> u64 {
-    1800
 }
 
 #[cfg(test)]
@@ -226,10 +215,8 @@ mod tests {
             database_url: default_database_url(),
             relay_addr: default_relay_addr(),
             http_listen: default_http_listen(),
-            broker_listen: default_broker_listen(),
             jwt_ttl_secs: default_jwt_ttl(),
             refresh_ttl_secs: default_refresh_ttl(),
-            data_idle_secs: default_data_idle(),
             tls_mode: TlsMode::Plain,
             tls_cert: None,
             tls_key: None,

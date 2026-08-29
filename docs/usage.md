@@ -5,7 +5,7 @@
 The simplest way to use Pocket-Codex: **sign in with a GitHub account**. One
 machine stays logged in to Codex; every other device drives it after signing in
 to the **same** account. There is no relay address or shared key to manage — the
-backend brokers your services for you.
+backend issues your devices a credential and they find each other on the relay.
 
 > Running your own relay instead? See the *Self-host (advanced)* section of the
 > [README](../README.md). Hosting the backend yourself? See
