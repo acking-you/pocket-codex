@@ -163,9 +163,10 @@ class _LocalSessionsState extends ConsumerState<LocalSessionsScreen> {
     return UtilityPage(
       route: '/sessions',
       title: remoteDevice ?? l10n.localSessionsTitle,
-      parent: remoteDevice == null
-          ? null
-          : UtilityParent(title: l10n.localSessionsTitle, route: '/sessions'),
+      // No parent segment even for a remote device's list. The middle
+      // "本地会话" crumb pointed at THIS machine's sessions, which is a sibling
+      // of the remote list rather than a level above it — the chat origin is
+      // the real way out, and the page menu switches between them.
       actions: [
         IconButton(
           key: const Key('local-sessions-refresh'),

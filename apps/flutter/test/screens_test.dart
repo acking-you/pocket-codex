@@ -21,11 +21,11 @@ import 'package:pocket_codex/src/bridge_api.dart';
 import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/ui_prefs.dart';
 import 'package:pocket_codex/src/screens/account_onboarding_screen.dart';
-import 'package:pocket_codex/src/screens/api_service_screen.dart';
 import 'package:pocket_codex/src/image_attachments.dart';
+import 'package:pocket_codex/src/widgets/api_service_panel.dart';
 import 'package:pocket_codex/src/widgets/message_images.dart';
 import 'package:pocket_codex/src/screens/app_session_screen.dart';
-import 'package:pocket_codex/src/screens/app_service_screen.dart';
+import 'package:pocket_codex/src/screens/codex_setup_screen.dart';
 import 'package:pocket_codex/src/screens/services_screen.dart';
 import 'package:pocket_codex/src/screens/settings_screen.dart';
 import 'package:pocket_codex/src/web_authenticator.dart';
@@ -273,6 +273,200 @@ void main() {
       find.byKey(const Key('device-capability-pcx:lb7666:app:default')),
       findsOneWidget,
     );
+  });
+
+  testWidgets('Opening a chat capability returns to the chat on that service', (
+    t,
+  ) async {
+    // "Open" used to push a project picker at /app/:key — a third level whose
+    // project tree and conversation list the chat sidebar already shows. It now
+    // hands the key to the home and goes back to it.
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+      services: const [
+        ServiceEntry(
+          device: 'lb7666',
+          kind: 'app',
+          name: 'default',
+          key: 'pcx:lb7666:app:default',
+        ),
+      ],
+    );
+    late final ProviderContainer container;
+    await t.pumpWidget(
+      ProviderScope(
+        overrides: [bridgeApiProvider.overrideWithValue(api)],
+        child: Consumer(
+          builder: (c, ref, _) {
+            container = ProviderScope.containerOf(c);
+            return MaterialApp.router(
+              locale: const Locale('zh'),
+              localizationsDelegates: AppLocalizations.localizationsDelegates,
+              supportedLocales: AppLocalizations.supportedLocales,
+              routerConfig: GoRouter(
+                initialLocation: '/manage',
+                routes: [
+                  _stub('/', 'chat-home'),
+                  GoRoute(path: '/manage', builder: (_, _) => ServicesScreen()),
+                ],
+              ),
+            );
+          },
+        ),
+      ),
+    );
+    await t.pumpAndSettle();
+    await _openDevice(t);
+
+    await t.tap(find.text('打开')); // servicesOpen (zh)
+    await t.pumpAndSettle();
+
+    // Back on the chat route, with the service handed over for it to switch to.
+    expect(find.text('chat-home'), findsOneWidget);
+    expect(container.read(requestedServiceProvider), 'pcx:lb7666:app:default');
+  });
+
+  testWidgets('Managing an API capability opens a panel, not a page', (
+    t,
+  ) async {
+    // The /api/:key route was a whole page for one port field and one button.
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+      services: const [
+        ServiceEntry(
+          device: 'lb7666',
+          kind: 'api',
+          name: 'default',
+          key: 'pcx:lb7666:api:default',
+        ),
+      ],
+    );
+    await t.pumpWidget(_host(const ServicesScreen(), api));
+    await t.pumpAndSettle();
+    await _openDevice(t);
+
+    await t.tap(find.text('管理')); // servicesManage (zh)
+    await t.pumpAndSettle();
+
+    // The panel is up with its subscribe form, and the capability row it acts
+    // on is still mounted behind it — the point of a panel over a route.
+    expect(find.byKey(const Key('subscribe-btn')), findsOneWidget);
+    expect(
+      find.byKey(const Key('device-capability-pcx:lb7666:api:default')),
+      findsOneWidget,
+    );
+  });
+
+  group('Codex setup', () {
+    /// Mount the wizard with [status] seeded, wide enough for the desktop card
+    /// layout.
+    Future<FakeBridgeApi> pump(
+      WidgetTester t, {
+      required CodexSetupStatus status,
+    }) async {
+      final api = FakeBridgeApi(
+        config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+      )..codexStatus = status;
+      t.view.devicePixelRatio = 1.0;
+      t.view.physicalSize = const Size(1200, 1400);
+      addTearDown(t.view.reset);
+      await t.pumpWidget(_host(const CodexSetupScreen(), api));
+      await t.pumpAndSettle();
+      return api;
+    }
+
+    const unconfigured = CodexSetupStatus(
+      codexHome: r'C:\Users\test\.codex',
+      hasConfig: false,
+      hasAuth: false,
+      hasCustomProvider: false,
+      needsSetup: true,
+      promptVariant: 'default',
+    );
+    const signedIn = CodexSetupStatus(
+      codexHome: r'C:\Users\test\.codex',
+      hasConfig: true,
+      hasAuth: true,
+      hasCustomProvider: false,
+      authMode: 'chatgpt',
+      needsSetup: false,
+      promptVariant: 'default',
+    );
+
+    testWidgets('unconfigured leads with the provider form and says why', (
+      t,
+    ) async {
+      await pump(t, status: unconfigured);
+
+      // The state card answers "is this working" before any method is offered.
+      expect(find.text('尚未配置'), findsOneWidget); // codexSetupStatusNeedSetup
+      // Provider is the open method — it is the one that needs no running host.
+      expect(find.byKey(const Key('codex-base-url')), findsOneWidget);
+      // ChatGPT is present but collapsed: its button is not on screen, only the
+      // way to switch to it.
+      expect(find.byKey(const Key('codex-login-chatgpt')), findsNothing);
+      expect(find.text('改用此项'), findsOneWidget); // codexSetupSwitchTo
+    });
+
+    testWidgets('signed in hides the provider fields it cannot use', (t) async {
+      await pump(t, status: signedIn);
+
+      // The live method leads, marked as such...
+      expect(find.text('使用中'), findsOneWidget); // codexSetupInUse
+      expect(find.byKey(const Key('codex-login-done')), findsOneWidget);
+      expect(find.byKey(const Key('codex-logout-btn')), findsOneWidget);
+      // ...and the three provider inputs — unusable while a credential is in
+      // force — are behind the collapsed row rather than in the user's face.
+      expect(find.byKey(const Key('codex-base-url')), findsNothing);
+      expect(find.byKey(const Key('codex-api-key')), findsNothing);
+    });
+
+    testWidgets('switching to the collapsed method opens its controls', (
+      t,
+    ) async {
+      await pump(t, status: signedIn);
+      expect(find.byKey(const Key('codex-base-url')), findsNothing);
+
+      await t.tap(find.text('改用此项')); // codexSetupSwitchTo
+      await t.pumpAndSettle();
+
+      // The provider form is now open; the ChatGPT row keeps its "in use" pill
+      // (switching the disclosure must not pretend the live method changed).
+      expect(find.byKey(const Key('codex-base-url')), findsOneWidget);
+      expect(find.text('使用中'), findsOneWidget);
+    });
+
+    testWidgets('saving a provider reports success and re-reads the status', (
+      t,
+    ) async {
+      final api = await pump(t, status: unconfigured);
+
+      await t.enterText(
+        find.byKey(const Key('codex-base-url')),
+        'https://example.com/v1',
+      );
+      await t.enterText(find.byKey(const Key('codex-api-key')), 'sk-test');
+      await t.tap(find.byKey(const Key('codex-save-provider')));
+      await t.pumpAndSettle();
+
+      expect(api.lastProvider?.baseUrl, 'https://example.com/v1');
+      expect(find.byKey(const Key('codex-setup-info')), findsOneWidget);
+      // The state card followed the write instead of still reading "not
+      // configured" under a success message.
+      expect(find.text('尚未配置'), findsNothing);
+    });
+
+    testWidgets('the prompt switch lives under Advanced and persists', (
+      t,
+    ) async {
+      final api = await pump(t, status: signedIn);
+      expect(find.text('高级'), findsOneWidget); // codexSetupAdvanced
+
+      await t.tap(find.byKey(const Key('codex-nondegraded-toggle')));
+      await t.pumpAndSettle();
+
+      expect(api.codexStatus.promptVariant, 'non_degraded');
+    });
   });
 
   testWidgets('Services shows error state with retry', (t) async {
@@ -1446,7 +1640,12 @@ void main() {
       config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
     );
     await t.pumpWidget(
-      _host(const ApiServiceScreen(serviceKey: 'pcx:lb7666:api:default'), api),
+      _host(
+        const Scaffold(
+          body: ApiServicePanel(serviceKey: 'pcx:lb7666:api:default'),
+        ),
+        api,
+      ),
     );
     await t.pumpAndSettle();
 
@@ -6629,38 +6828,6 @@ void main() {
     expect(find.byType(PulsingDot), findsNothing);
   });
 
-  testWidgets('Project picker shows a running badge before a session opens', (
-    t,
-  ) async {
-    final api = FakeBridgeApi(
-      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
-    );
-    await api.appConnect('pcx:lb7666:app:default', 28080);
-    api.appThreads.add(
-      const ThreadMeta(
-        id: 't9',
-        preview: 'busy chat',
-        cwd: '/proj',
-        updatedAt: 0,
-      ),
-    );
-
-    await t.pumpWidget(
-      _host(const AppServiceScreen(serviceKey: 'pcx:lb7666:app:default'), api),
-    );
-    await t.pumpAndSettle();
-    expect(find.text('busy chat'), findsOneWidget);
-    expect(find.byType(PulsingDot), findsNothing);
-
-    api.pushEvent(
-      'pcx:lb7666:app:default',
-      const AppEvent(kind: 'turn/started', threadId: 't9', raw: '{}'),
-    );
-    await t.pump(); // deliver
-    await t.pump(); // build
-    expect(find.byType(PulsingDot), findsAtLeastNWidgets(1)); // tile badge
-  });
-
   testWidgets('Stopping a turn shows a "stopped" marker in the transcript', (
     t,
   ) async {
@@ -6724,50 +6891,6 @@ void main() {
     await t.tap(find.byKey(const Key('refresh-btn')));
     await t.pumpAndSettle();
     expect(find.text('App-server'), findsOneWidget);
-  });
-
-  testWidgets('Picker reconnect button forces a fresh connection', (t) async {
-    final api = FakeBridgeApi(
-      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
-    );
-    await api.appConnect('pcx:lb7666:app:default', 28080);
-    api.appThreads.add(
-      const ThreadMeta(id: 't1', preview: 'chat', cwd: '/p', updatedAt: 0),
-    );
-    await t.pumpWidget(
-      _host(const AppServiceScreen(serviceKey: 'pcx:lb7666:app:default'), api),
-    );
-    await t.pumpAndSettle();
-    final before = api.appConnectCount;
-
-    await t.tap(find.byKey(const Key('reconnect-btn')));
-    await t.pumpAndSettle(const Duration(seconds: 2));
-    expect(api.appConnectCount, greaterThan(before)); // reconnected
-    expect(find.text('chat'), findsOneWidget);
-    expect(find.byKey(const Key('app-connect-error')), findsNothing);
-  });
-
-  testWidgets('Picker recovers from a stale connection by reconnecting', (
-    t,
-  ) async {
-    final api = FakeBridgeApi(
-      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
-    );
-    await api.appConnect('pcx:lb7666:app:default', 28080);
-    api.appThreads.add(
-      const ThreadMeta(id: 't1', preview: 'past chat', cwd: '/p', updatedAt: 0),
-    );
-    // First thread/list fails (stale socket shown as "online"); the picker must
-    // disconnect + reconnect and retry, surfacing the threads, not the error.
-    api.failNextThreadList = true;
-
-    await t.pumpWidget(
-      _host(const AppServiceScreen(serviceKey: 'pcx:lb7666:app:default'), api),
-    );
-    await t.pumpAndSettle();
-
-    expect(find.byKey(const Key('app-connect-error')), findsNothing);
-    expect(find.text('past chat'), findsOneWidget);
   });
 
   testWidgets('Consecutive notices are not folded into a group', (t) async {

@@ -1,6 +1,4 @@
 import 'package:go_router/go_router.dart';
-import 'package:pocket_codex/src/screens/api_service_screen.dart';
-import 'package:pocket_codex/src/screens/app_service_screen.dart';
 import 'package:pocket_codex/src/screens/app_session_screen.dart';
 import 'package:pocket_codex/src/screens/codex_setup_screen.dart';
 import 'package:pocket_codex/src/screens/home_screen.dart';
@@ -86,14 +84,10 @@ GoRouter buildRouter({
         serviceKey: s.uri.queryParameters['svc'],
       ),
     ),
-    GoRoute(
-      path: '/api/:key',
-      builder: (c, s) => ApiServiceScreen(serviceKey: s.pathParameters['key']!),
-    ),
-    GoRoute(
-      path: '/app/:key',
-      builder: (c, s) => AppServiceScreen(serviceKey: s.pathParameters['key']!),
-    ),
+    // A conversation on a specific service. Reached from the session browser's
+    // resume; the chat-first home renders the same screen at `/` instead of
+    // pushing here, and there is no longer a `/app/:key` project picker above
+    // it — the home sidebar already lists every project and conversation.
     GoRoute(
       path: '/app/:key/session',
       builder: (c, s) => AppSessionScreen(

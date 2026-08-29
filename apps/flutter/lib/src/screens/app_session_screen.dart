@@ -46,6 +46,7 @@ import 'package:pocket_codex/src/widgets/realtime_handoff_card.dart';
 import 'package:pocket_codex/src/widgets/status_dots.dart';
 import 'package:pocket_codex/src/widgets/takeover_dialog.dart';
 import 'package:pocket_codex/src/widgets/theme_toggle.dart';
+import 'package:pocket_codex/src/widgets/turn_minimap.dart';
 import 'package:pocket_codex/src/widgets/window_title_bar.dart';
 
 /// Local port for the app-server ws tunnel (shared with the service screen).
@@ -235,8 +236,17 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   final _inputFocus = FocusNode();
   final _scroll = ScrollController();
   // Index-based scrolling for the transcript (super_sliver_list): powers the
-  // prev/next-turn jump buttons via `visibleRange` + `animateToItem`.
+  // turn minimap and the compact prev/next-turn jumps via `visibleRange` +
+  // `animateToItem`.
   final _listCtl = ListController();
+
+  /// The transcript's visible row range, republished on scroll.
+  ///
+  /// A notifier rather than screen state on purpose: the turn minimap highlights
+  /// whichever turns are on screen, which changes every scroll frame. Holding
+  /// that in `setState` would rebuild the whole transcript — 10k lines of widget
+  /// tree — to move a 2 px tick, so only the ticks listen.
+  final _visibleRows = ValueNotifier<(int, int)?>(null);
   // Ordered timeline + an id→index map for upserting streamed/updated items.
   final List<_Item> _items = [];
   final Map<String, int> _itemIndex = {};
@@ -1061,6 +1071,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     _scroll.removeListener(_onScroll);
     _scroll.dispose();
     _listCtl.dispose();
+    _visibleRows.dispose();
     _quotaRev.dispose();
     _titleCtrl.dispose();
     _titleFocus.dispose();
@@ -1074,6 +1085,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     final atBottom =
         _scroll.position.pixels >= _scroll.position.maxScrollExtent - 80;
     if (atBottom != _atBottom) setState(() => _atBottom = atBottom);
+    // Publish the visible rows for the turn minimap. Straight onto the notifier
+    // — no setState — so a scroll frame repaints ticks, not the transcript.
+    if (_listCtl.isAttached) _visibleRows.value = _listCtl.visibleRange;
   }
 
   /// Read a host-side image so it can render as a thumbnail instead of a
@@ -2378,13 +2392,16 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     return '${p(t.hour)}:${p(t.minute)}:${p(t.second)}';
   }
 
-  /// Return to the project / session picker (AppServiceScreen). Pops if this
-  /// screen was pushed from there; otherwise navigates to it directly.
-  void _backToProjects() {
+  /// Leave a pushed conversation for the list it came from — the session
+  /// browser, now the only route that pushes this screen. Falls back to the
+  /// chat home when there is nothing beneath (a deep link), since the
+  /// `/app/:key` project picker this used to target is gone: its project tree
+  /// is the home sidebar's.
+  void _backToSessions() {
     if (context.canPop()) {
       context.pop();
     } else {
-      context.go('/app/${widget.serviceKey}');
+      context.go('/');
     }
   }
 
@@ -2773,10 +2790,137 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       }
     }
     if (target == null) return;
+    // Same landing as the minimap: the turn's user message at the top of the
+    // viewport, so stepping and jumping never frame a turn differently.
+    _scrollToRow(target);
+  }
+
+  /// One minimap entry per turn: the user's message, and how the turn answered.
+  ///
+  /// Derived from the collapsed row list rather than `_items`, because the
+  /// minimap jumps by row index and the two differ — a run of agent prose or a
+  /// batch of tool calls is several items but one row.
+  List<TurnMinimapItem> _turnMinimapItems(List<Object> rows) {
+    final out = <TurnMinimapItem>[];
+    for (var i = 0; i < rows.length; i++) {
+      final row = rows[i];
+      if (row is! _Item || !row.isUser) continue;
+      // The raw text can be wire machinery (an attachment block, an IDE context
+      // fragment); the same cleaner the sidebar and title bar use resolves it,
+      // so all three agree on what a turn is called.
+      //
+      // The placeholder is passed EMPTY on purpose. A sidebar row must say
+      // something, so there it becomes "[file]" — but on the rail that produced
+      // a card whose headline was the word "file" above the reply, which named
+      // the attachment instead of the turn. With nothing to head the card, the
+      // reply speaks for the turn by itself.
+      final user = _collapseWhitespace(previewWithoutFileRefs(row.text, ''));
+      final reply = _finalReplyAfter(rows, i);
+      // Neither half has anything to show — an empty card that only occludes the
+      // conversation. The tick stays; it just has no preview.
+      if (user.isEmpty && reply == null) {
+        out.add(TurnMinimapItem(rowIndex: i, userText: ''));
+        continue;
+      }
+      out.add(
+        TurnMinimapItem(rowIndex: i, userText: user, assistantText: reply),
+      );
+    }
+    return out;
+  }
+
+  /// The last reply of the turn starting at [userRow] — its conclusion, not the
+  /// preamble it opened with. Null when the turn produced no prose.
+  String? _finalReplyAfter(List<Object> rows, int userRow) {
+    String? last;
+    for (var i = userRow + 1; i < rows.length; i++) {
+      final row = rows[i];
+      if (row is _Item && row.isUser) break;
+      if (row is _AgentTurn) {
+        last = row.text;
+      } else if (row is _Item && row.isAgent) {
+        last = row.text;
+      }
+    }
+    final text = _collapseWhitespace(last ?? '');
+    return text.isEmpty ? null : text;
+  }
+
+  /// Flatten a message to one line, so a preview shows its opening words rather
+  /// than the first line of a code block.
+  String _collapseWhitespace(String text) =>
+      text.replaceAll(RegExp(r'\s+'), ' ').trim();
+
+  /// Max width of the centred conversation column. The transcript computes its
+  /// own side padding from this; the turn rail lives in what's left over, so both
+  /// have to agree on the number.
+  static const double _kColumnWidth = 820;
+
+  /// The space beside the conversation column, which is where the turn rail
+  /// lives. Zero on a window narrow enough that the column fills it.
+  double _gutterWidth(double available) =>
+      math.max(0, (available - _kColumnWidth) / 2);
+
+  /// Whether the gutter rail can take turn navigation over at [available] width,
+  /// so the corner arrows can stand down rather than offer the same thing twice.
+  ///
+  /// Answered from the transcript's own laid-out width, not a MediaQuery: the
+  /// conversation sits between two collapsible panes, so the window size says
+  /// nothing useful about how much room it actually got.
+  bool _railOwnsTurnNav(double available) =>
+      isDesktop && _gutterWidth(available) > kTurnMinimapRailInset;
+
+  /// The turn rail, plus the corner cluster that defers to it — one layout pass
+  /// for both, since the same width decides whether the rail has a gutter and
+  /// therefore whether the arrows are still needed.
+  Widget _turnNavOverlay() => LayoutBuilder(
+    builder: (context, constraints) {
+      final width = constraints.maxWidth;
+      final rail = _railOwnsTurnNav(width);
+      return Stack(
+        children: [
+          if (rail)
+            Positioned.fill(
+              child: TurnMinimap(
+                items: _turnMinimapItems(_rows),
+                visibleRange: _visibleRows,
+                gutterWidth: _gutterWidth(width),
+                onSelect: (item) => _scrollToRow(item.rowIndex),
+              ),
+            ),
+          // Where the rail has taken the turn jumps, jump-to-latest is all that
+          // is left — and that is about the conversation rather than about a
+          // corner, so it centres over the column, where every other chat app
+          // puts its scroll-down pill. With the arrows still in it, the cluster
+          // is a stack of three and keeps to the right, out of the text.
+          if (rail)
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 14,
+              child: Center(child: _navCluster(showTurnNav: false)),
+            )
+          else
+            Positioned(
+              right: 12,
+              bottom: 12,
+              child: _navCluster(
+                showTurnNav: _items.where((i) => i.isUser).length >= 2,
+              ),
+            ),
+        ],
+      );
+    },
+  );
+
+  /// Scroll a turn's user message to the top of the viewport. Shared by the
+  /// minimap and the compact prev/next buttons so both land identically.
+  void _scrollToRow(int index) {
+    if (!_listCtl.isAttached || !_scroll.hasClients) return;
     _listCtl.animateToItem(
-      index: target,
+      index: index,
       scrollController: _scroll,
-      alignment: 0, // land the turn's user message at the top of the viewport
+      alignment: 0,
       duration: (est) => Duration(milliseconds: est.abs() > 2400 ? 420 : 260),
       curve: (_) => Curves.easeOutCubic,
     );
@@ -2786,11 +2930,15 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// there are ≥2 turns) and a jump-to-latest (shown when scrolled up). A
   /// single compact rounded bar rather than scattered FABs, so it stays out of
   /// the way of the messages.
-  Widget _navCluster() {
+  ///
+  /// [showTurnNav] is false where the left-gutter [TurnMinimap] is carrying turn
+  /// navigation, which does the same job better: the arrows can only step, one
+  /// turn per click, with no sense of how many turns exist or what you will land
+  /// on. They stay for the layouts the rail can't serve — touch, and windows too
+  /// narrow to hold a gutter.
+  Widget _navCluster({required bool showTurnNav}) {
     final l10n = AppLocalizations.of(context);
     final scheme = Theme.of(context).colorScheme;
-    final turns = _items.where((i) => i.isUser).length;
-    final showTurnNav = turns >= 2;
     if (!showTurnNav && _atBottom) return const SizedBox.shrink();
     Widget btn(Key key, IconData icon, String tip, VoidCallback onTap) =>
         IconButton(
@@ -3425,9 +3573,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                 ),
               if (!widget.home)
                 IconButton(
-                  tooltip: l10n.backToProjects,
+                  tooltip: l10n.backToSessions,
                   icon: const Icon(Icons.arrow_back, size: 20),
-                  onPressed: _backToProjects,
+                  onPressed: _backToSessions,
                 ),
               const SizedBox(width: 8),
               // The title is a label, not a banner: cap it well short of the
@@ -3979,8 +4127,12 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                                     SelectionArea(
                                       child: LayoutBuilder(
                                         builder: (context, constraints) {
-                                          final side =
-                                              (constraints.maxWidth - 820) / 2;
+                                          // The same gutter the turn rail sits
+                                          // in, so the two never disagree about
+                                          // where the column ends.
+                                          final side = _gutterWidth(
+                                            constraints.maxWidth,
+                                          );
                                           final pad = side < 16 ? 16.0 : side;
                                           // Materialize the collapsed timeline ONCE per
                                           // build: `_rows` is a getter that re-scans
@@ -4079,15 +4231,14 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                                         },
                                       ),
                                     ),
-                                    // Compact navigation cluster (bottom-right): jump
-                                    // between conversation turns, and to the latest
-                                    // message — so long transcripts are easy to move
-                                    // through on mobile and desktop alike.
-                                    Positioned(
-                                      right: 12,
-                                      bottom: 12,
-                                      child: _navCluster(),
-                                    ),
+                                    // Turn navigation. On a window wide enough
+                                    // to leave a gutter this is the tick rail
+                                    // beside the conversation — hover a turn to
+                                    // preview it, click to jump. Narrower, and
+                                    // on touch, it stays the bottom-right
+                                    // cluster, which also carries jump-to-latest
+                                    // in both cases.
+                                    Positioned.fill(child: _turnNavOverlay()),
                                   ],
                                 ),
                         ),
@@ -4717,13 +4868,13 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
             // destination at all.
             if (inDrawer && !widget.home) ...[
               ListTile(
-                key: const Key('drawer-back-to-projects'),
+                key: const Key('drawer-back-to-sessions'),
                 dense: true,
                 leading: const Icon(Icons.arrow_back),
-                title: Text(l10n.backToProjects),
+                title: Text(l10n.backToSessions),
                 onTap: () {
                   closeDrawerIfOpen(ctx);
-                  _backToProjects();
+                  _backToSessions();
                 },
               ),
               const Divider(height: 1),

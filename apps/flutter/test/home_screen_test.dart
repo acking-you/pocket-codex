@@ -356,7 +356,7 @@ void main() {
     final drawer = t.widget<Drawer>(find.byType(Drawer));
     expect(drawer.backgroundColor, isNotNull);
     expect(drawer.backgroundColor!.a, 1.0);
-    expect(find.byKey(const Key('drawer-back-to-projects')), findsNothing);
+    expect(find.byKey(const Key('drawer-back-to-sessions')), findsNothing);
     expect(find.byKey(const Key('sidebar-manage-btn')), findsOneWidget);
     expect(find.byKey(const Key('sidebar-settings-btn')), findsOneWidget);
   });

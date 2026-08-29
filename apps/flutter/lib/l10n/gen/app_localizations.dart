@@ -986,11 +986,11 @@ abstract class AppLocalizations {
   /// **'More'**
   String get moreActions;
 
-  /// No description provided for @backToProjects.
+  /// No description provided for @backToSessions.
   ///
   /// In en, this message translates to:
-  /// **'Back to projects'**
-  String get backToProjects;
+  /// **'Back to sessions'**
+  String get backToSessions;
 
   /// No description provided for @stateReady.
   ///
@@ -2795,13 +2795,13 @@ abstract class AppLocalizations {
   /// No description provided for @codexSetupProviderSection.
   ///
   /// In en, this message translates to:
-  /// **'Option 1 · Custom Provider'**
+  /// **'Custom provider'**
   String get codexSetupProviderSection;
 
   /// No description provided for @codexSetupProviderDesc.
   ///
   /// In en, this message translates to:
-  /// **'Enter the provider\'s Base URL and API Key; it is written into codex\'s config automatically, with no official login needed.'**
+  /// **'Point codex at a third-party or self-hosted model service with its Base URL and API key.'**
   String get codexSetupProviderDesc;
 
   /// No description provided for @codexSetupModelLabel.
@@ -2819,13 +2819,13 @@ abstract class AppLocalizations {
   /// No description provided for @codexSetupLoginSection.
   ///
   /// In en, this message translates to:
-  /// **'Option 2 · Official ChatGPT login'**
+  /// **'ChatGPT login'**
   String get codexSetupLoginSection;
 
   /// No description provided for @codexSetupLoginDesc.
   ///
   /// In en, this message translates to:
-  /// **'Complete OpenAI\'s official login in a browser; codex generates the credential itself (no manual config). On a restricted network, set a proxy when you start local hosting.'**
+  /// **'Run the model on your ChatGPT subscription; codex generates the credential itself.'**
   String get codexSetupLoginDesc;
 
   /// No description provided for @codexSetupLoginButton.
@@ -2840,17 +2840,71 @@ abstract class AppLocalizations {
   /// **'Waiting for the browser login…'**
   String get codexSetupLoginWaiting;
 
+  /// No description provided for @codexSetupMethodsTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Model access'**
+  String get codexSetupMethodsTitle;
+
+  /// No description provided for @codexSetupMethodsHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Pick either one — codex uses whichever you configured last.'**
+  String get codexSetupMethodsHint;
+
+  /// No description provided for @codexSetupInUse.
+  ///
+  /// In en, this message translates to:
+  /// **'In use'**
+  String get codexSetupInUse;
+
+  /// No description provided for @codexSetupSwitchTo.
+  ///
+  /// In en, this message translates to:
+  /// **'Switch to this'**
+  String get codexSetupSwitchTo;
+
+  /// No description provided for @codexSetupCollapse.
+  ///
+  /// In en, this message translates to:
+  /// **'Collapse'**
+  String get codexSetupCollapse;
+
+  /// No description provided for @codexSetupProxyNote.
+  ///
+  /// In en, this message translates to:
+  /// **'On a restricted network this needs a proxy: set one when you start local hosting.'**
+  String get codexSetupProxyNote;
+
+  /// No description provided for @codexSetupAdvanced.
+  ///
+  /// In en, this message translates to:
+  /// **'Advanced'**
+  String get codexSetupAdvanced;
+
   /// No description provided for @codexSetupNonDegradedTitle.
   ///
   /// In en, this message translates to:
-  /// **'Use the non-degraded system prompt'**
+  /// **'Non-degraded system prompt'**
   String get codexSetupNonDegradedTitle;
 
   /// No description provided for @codexSetupNonDegradedDesc.
   ///
   /// In en, this message translates to:
-  /// **'Removes the commentary / progress-report instructions that interrupt the reasoning chain (openai/codex#30364) so the model spends its budget on reasoning. Applies to new conversations.'**
+  /// **'Removes the commentary / progress-report instructions that interrupt the reasoning chain, so the model spends its budget on reasoning.'**
   String get codexSetupNonDegradedDesc;
+
+  /// No description provided for @codexSetupNonDegradedScope.
+  ///
+  /// In en, this message translates to:
+  /// **'Applies to new conversations'**
+  String get codexSetupNonDegradedScope;
+
+  /// No description provided for @codexSetupNonDegradedIssue.
+  ///
+  /// In en, this message translates to:
+  /// **'openai/codex#30364'**
+  String get codexSetupNonDegradedIssue;
 
   /// No description provided for @codexSetupNeedFields.
   ///
@@ -2921,8 +2975,26 @@ abstract class AppLocalizations {
   /// No description provided for @codexSetupStatusNeedSetup.
   ///
   /// In en, this message translates to:
-  /// **'Not configured yet — pick a method below.'**
+  /// **'Not configured yet'**
   String get codexSetupStatusNeedSetup;
+
+  /// No description provided for @codexSetupStatusNeedSetupHint.
+  ///
+  /// In en, this message translates to:
+  /// **'codex cannot make a model call yet. Configure either method below.'**
+  String get codexSetupStatusNeedSetupHint;
+
+  /// No description provided for @codexSetupStatusReadyHint.
+  ///
+  /// In en, this message translates to:
+  /// **'codex can make model calls.'**
+  String get codexSetupStatusReadyHint;
+
+  /// No description provided for @codexSetupCodexHomeLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Config directory'**
+  String get codexSetupCodexHomeLabel;
 
   /// No description provided for @codexSetupCredentialExists.
   ///

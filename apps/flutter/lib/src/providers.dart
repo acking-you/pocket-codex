@@ -82,6 +82,20 @@ final subscriptionsProvider = FutureProvider<List<SubInfo>>((ref) async {
 /// that had no reason to expire.
 final observedDisconnectedProvider = StateProvider<Set<String>>((_) => {});
 
+/// An app service the user asked the chat to switch to, from outside the chat.
+///
+/// The capability list's "open" used to push a project picker at `/app/:key`,
+/// which listed the projects and conversations the chat's own sidebar already
+/// shows. It now returns to the chat pointed at that service instead, and this
+/// is how the request crosses the route boundary: the list sets the key and
+/// navigates to `/`, the home consumes it and switches.
+///
+/// One-shot: the home clears it once acted on, so a later visit to `/` doesn't
+/// re-switch to a service the user has since moved away from. This is NOT the
+/// durable default (`UiPrefs.preferredAppServiceKey`) — opening a service once
+/// must not overwrite the user's standing choice.
+final requestedServiceProvider = StateProvider<String?>((_) => null);
+
 /// Whether an app-server service's backend is actually REACHABLE — it answers a
 /// handshake — rather than merely registered on the relay. A `pb-register`
 /// worker stays registered (so the relay lists the key) even when the codex

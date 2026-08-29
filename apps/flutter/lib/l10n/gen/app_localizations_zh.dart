@@ -485,7 +485,7 @@ class AppLocalizationsZh extends AppLocalizations {
   String get moreActions => '更多';
 
   @override
-  String get backToProjects => '返回项目';
+  String get backToSessions => '返回会话列表';
 
   @override
   String get stateReady => '就绪';
@@ -1465,11 +1465,10 @@ class AppLocalizationsZh extends AppLocalizations {
       '填写 provider(URL + API Key)或用 ChatGPT 官方登录,并可切换「非降智」system prompt。';
 
   @override
-  String get codexSetupProviderSection => '方式一 · 自定义 Provider';
+  String get codexSetupProviderSection => '自定义 Provider';
 
   @override
-  String get codexSetupProviderDesc =>
-      '填写服务商的 Base URL 和 API Key,自动写入 codex 配置,无需官方登录。';
+  String get codexSetupProviderDesc => '填服务商的 Base URL 和 API Key,用第三方或自建的模型服务。';
 
   @override
   String get codexSetupModelLabel => '模型(可选,默认 gpt-5.5)';
@@ -1478,11 +1477,10 @@ class AppLocalizationsZh extends AppLocalizations {
   String get codexSetupSaveProvider => '保存并使用';
 
   @override
-  String get codexSetupLoginSection => '方式二 · 官方 ChatGPT 登录';
+  String get codexSetupLoginSection => 'ChatGPT 登录';
 
   @override
-  String get codexSetupLoginDesc =>
-      '通过浏览器完成 OpenAI 官方登录,codex 自动生成凭证(无需手工配置)。若在受限网络,请在启动本机托管时设置代理。';
+  String get codexSetupLoginDesc => '用你的 ChatGPT 订阅跑模型,凭证由 codex 自己生成。';
 
   @override
   String get codexSetupLoginButton => '使用 ChatGPT 登录';
@@ -1491,11 +1489,38 @@ class AppLocalizationsZh extends AppLocalizations {
   String get codexSetupLoginWaiting => '等待浏览器完成登录…';
 
   @override
-  String get codexSetupNonDegradedTitle => '使用非降智 system prompt';
+  String get codexSetupMethodsTitle => '模型接入方式';
+
+  @override
+  String get codexSetupMethodsHint => '两种任选一种,codex 用你最后配置的那种。';
+
+  @override
+  String get codexSetupInUse => '使用中';
+
+  @override
+  String get codexSetupSwitchTo => '改用此项';
+
+  @override
+  String get codexSetupCollapse => '收起';
+
+  @override
+  String get codexSetupProxyNote => '受限网络下需要代理:在启动本机托管时填写。';
+
+  @override
+  String get codexSetupAdvanced => '高级';
+
+  @override
+  String get codexSetupNonDegradedTitle => '非降智 system prompt';
 
   @override
   String get codexSetupNonDegradedDesc =>
-      '移除会打断思维链的 commentary / 进度汇报指令(openai/codex#30364),让模型把预算用在推理上。对之后新建的会话生效。';
+      '移除会打断思维链的 commentary / 进度汇报指令,让模型把预算用在推理上。';
+
+  @override
+  String get codexSetupNonDegradedScope => '对之后新建的会话生效';
+
+  @override
+  String get codexSetupNonDegradedIssue => 'openai/codex#30364';
 
   @override
   String get codexSetupNeedFields => '请填写 Base URL 和 API Key。';
@@ -1535,7 +1560,16 @@ class AppLocalizationsZh extends AppLocalizations {
   }
 
   @override
-  String get codexSetupStatusNeedSetup => '尚未配置:请在下方选择一种方式。';
+  String get codexSetupStatusNeedSetup => '尚未配置';
+
+  @override
+  String get codexSetupStatusNeedSetupHint => 'codex 还不能发起模型调用。在下面任选一种方式配置。';
+
+  @override
+  String get codexSetupStatusReadyHint => 'codex 可以发起模型调用了。';
+
+  @override
+  String get codexSetupCodexHomeLabel => '配置目录';
 
   @override
   String get codexSetupCredentialExists => '凭证已存在';

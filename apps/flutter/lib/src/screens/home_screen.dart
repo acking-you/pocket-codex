@@ -107,7 +107,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     Future.microtask(() {
       if (!mounted) return;
       ref.invalidate(servicesProvider);
-      _resolve();
+      // The manage page's "open" hands a service over here rather than pushing
+      // a picker route, so honour it as the resolve's pin. Cleared once taken:
+      // it is one request, not a new default.
+      final requested = ref.read(requestedServiceProvider);
+      if (requested != null) {
+        ref.read(requestedServiceProvider.notifier).state = null;
+      }
+      _resolve(forceKey: requested);
     });
     _retryTimer = Timer.periodic(_retryInterval, (_) => _selfHeal());
   }
@@ -468,9 +475,33 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     _resolve();
   }
 
+  /// Act on a service handed over from the manage page while this home is
+  /// already alive — the usual case, since `/manage` is pushed ABOVE `/` and
+  /// returning to it reuses this state rather than rebuilding it (so
+  /// [initState]'s read only covers a cold open / deep link).
+  void _takeRequestedService() {
+    final key = ref.read(requestedServiceProvider);
+    if (key == null) return;
+    ref.read(requestedServiceProvider.notifier).state = null;
+    // Ready means there is a live chat to move; anything else has to resolve
+    // from scratch, with the request as the pin.
+    if (_phase == _Phase.ready) {
+      _switchService(key);
+    } else {
+      _resolve(forceKey: key);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
+    // Deferred: the notifier write inside cannot happen during a build.
+    ref.listen(requestedServiceProvider, (_, next) {
+      if (next == null) return;
+      Future.microtask(() {
+        if (mounted) _takeRequestedService();
+      });
+    });
     switch (_phase) {
       case _Phase.ready:
         // The switcher list tracks live discovery (a host added/removed on the

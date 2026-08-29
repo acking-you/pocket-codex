@@ -13,6 +13,7 @@ import 'package:pocket_codex/src/error_format.dart';
 import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/theme.dart';
 import 'package:pocket_codex/src/ui_prefs.dart';
+import 'package:pocket_codex/src/widgets/api_service_panel.dart';
 import 'package:pocket_codex/src/widgets/app_toast.dart';
 import 'package:pocket_codex/src/widgets/github_avatar.dart';
 import 'package:pocket_codex/src/widgets/loading.dart';
@@ -94,6 +95,20 @@ class _ServicesScreenState extends ConsumerState<ServicesScreen>
     }
   }
 
+  /// Whether the title bar must carry "host this device".
+  ///
+  /// The 本地托管 card is the real home for hosting, but it only renders under
+  /// THIS machine's device (or when no device exists at all, which is the empty
+  /// state the detail pane shows anyway). So the button is needed in exactly one
+  /// case: peers are listed and we host nothing, leaving no local device tile to
+  /// select and no card to reach.
+  bool get _hostingNeedsTitleBar {
+    final hosts = ref.watch(localServeListProvider).valueOrNull;
+    if (hosts == null || hosts.isNotEmpty) return false;
+    final services = ref.watch(servicesProvider).valueOrNull;
+    return services != null && services.isNotEmpty;
+  }
+
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
@@ -122,7 +137,13 @@ class _ServicesScreenState extends ConsumerState<ServicesScreen>
             ref.invalidate(localServeListProvider);
           },
         ),
-        if (_hostingSupported && account)
+        // Only when this machine has no device tile to click — i.e. it hosts
+        // nothing yet while remote peers exist. That is the one arrangement
+        // where the 本地托管 card is unreachable (it renders under this
+        // machine, or when no device exists at all), so the title bar has to
+        // carry the action. Once we host, selecting our own device reaches the
+        // same card, and keeping the button would offer one action twice.
+        if (_hostingSupported && account && _hostingNeedsTitleBar)
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 8),
             child: FilledButton.icon(
@@ -549,8 +570,11 @@ class _DeviceFirstServices extends ConsumerWidget {
               .read(uiPrefsProvider.notifier)
               .setPreferredAppService(service.key),
           actionLabel: l10n.servicesOpen,
-          onAction: () =>
-              context.push('/app/${Uri.encodeComponent(service.key)}'),
+          // Straight back to the chat, pointed at this service. The project /
+          // conversation picker this used to push lives in the chat's own
+          // sidebar, so drilling into a third page only put the same tree
+          // behind an extra tap.
+          onAction: () => _openInChat(context, ref, service.key),
           onDeregister: () => _confirmDeregister(
             context,
             ref,
@@ -573,8 +597,9 @@ class _DeviceFirstServices extends ConsumerWidget {
           reason: apiStates[service.key]!.reason,
           onReregister: reregisterFor(service.key),
           actionLabel: l10n.servicesManage,
-          onAction: () =>
-              context.push('/api/${Uri.encodeComponent(service.key)}'),
+          // A panel, not a page: subscribing is one port and one button, and
+          // the row it acts on stays in view behind it.
+          onAction: () => showApiServicePanel(context, service.key),
           onDeregister: () => _confirmDeregister(
             context,
             ref,
@@ -621,9 +646,11 @@ class _DeviceFirstServices extends ConsumerWidget {
                   )
                 : null,
             actionLabel: l10n.servicesBrowse,
-            // Pushed, like the chat and API rows beside it, so the breadcrumb
-            // back to this device's capabilities actually has somewhere to go.
-            onAction: () => context.push(
+            // Replaces this page rather than stacking on it: the session
+            // browser is a top-level destination in its own right (it has a
+            // page-menu entry and a shortcut), so it reads as `Chat /
+            // <device>` instead of a third level under Services.
+            onAction: () => context.pushReplacement(
               Uri(
                 path: '/sessions',
                 queryParameters: {'svc': service.key},
@@ -1385,6 +1412,20 @@ Future<void> _batchRemove(
   if (context.mounted && removed > 0) {
     showToastOk(context, l10n.batchRemovedSnack(removed));
   }
+}
+
+/// Point the chat at [serviceKey] and return to it.
+///
+/// Replaces the `/app/:key` project picker this used to push. That page listed
+/// the service's projects and conversations — exactly what the chat's sidebar
+/// already shows, one level deeper and without the conversation beside it. The
+/// request is handed over through [requestedServiceProvider] because the switch
+/// happens on the other side of the route change.
+void _openInChat(BuildContext context, WidgetRef ref, String serviceKey) {
+  ref.read(requestedServiceProvider.notifier).state = serviceKey;
+  // `go`, not `pop`: this page may have been opened directly (deep link, page
+  // menu) with no chat underneath to return to.
+  context.go('/');
 }
 
 /// Publish one of a hosted server's tunnels back onto the relay after it was

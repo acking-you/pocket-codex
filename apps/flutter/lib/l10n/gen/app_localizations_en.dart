@@ -492,7 +492,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get moreActions => 'More';
 
   @override
-  String get backToProjects => 'Back to projects';
+  String get backToSessions => 'Back to sessions';
 
   @override
   String get stateReady => 'Ready';
@@ -1501,11 +1501,11 @@ class AppLocalizationsEn extends AppLocalizations {
       'Fill in a provider (URL + API Key) or sign in with ChatGPT, and optionally switch on the non-degraded system prompt.';
 
   @override
-  String get codexSetupProviderSection => 'Option 1 · Custom Provider';
+  String get codexSetupProviderSection => 'Custom provider';
 
   @override
   String get codexSetupProviderDesc =>
-      'Enter the provider\'s Base URL and API Key; it is written into codex\'s config automatically, with no official login needed.';
+      'Point codex at a third-party or self-hosted model service with its Base URL and API key.';
 
   @override
   String get codexSetupModelLabel => 'Model (optional, default gpt-5.5)';
@@ -1514,11 +1514,11 @@ class AppLocalizationsEn extends AppLocalizations {
   String get codexSetupSaveProvider => 'Save and use';
 
   @override
-  String get codexSetupLoginSection => 'Option 2 · Official ChatGPT login';
+  String get codexSetupLoginSection => 'ChatGPT login';
 
   @override
   String get codexSetupLoginDesc =>
-      'Complete OpenAI\'s official login in a browser; codex generates the credential itself (no manual config). On a restricted network, set a proxy when you start local hosting.';
+      'Run the model on your ChatGPT subscription; codex generates the credential itself.';
 
   @override
   String get codexSetupLoginButton => 'Sign in with ChatGPT';
@@ -1527,11 +1527,40 @@ class AppLocalizationsEn extends AppLocalizations {
   String get codexSetupLoginWaiting => 'Waiting for the browser login…';
 
   @override
-  String get codexSetupNonDegradedTitle => 'Use the non-degraded system prompt';
+  String get codexSetupMethodsTitle => 'Model access';
+
+  @override
+  String get codexSetupMethodsHint =>
+      'Pick either one — codex uses whichever you configured last.';
+
+  @override
+  String get codexSetupInUse => 'In use';
+
+  @override
+  String get codexSetupSwitchTo => 'Switch to this';
+
+  @override
+  String get codexSetupCollapse => 'Collapse';
+
+  @override
+  String get codexSetupProxyNote =>
+      'On a restricted network this needs a proxy: set one when you start local hosting.';
+
+  @override
+  String get codexSetupAdvanced => 'Advanced';
+
+  @override
+  String get codexSetupNonDegradedTitle => 'Non-degraded system prompt';
 
   @override
   String get codexSetupNonDegradedDesc =>
-      'Removes the commentary / progress-report instructions that interrupt the reasoning chain (openai/codex#30364) so the model spends its budget on reasoning. Applies to new conversations.';
+      'Removes the commentary / progress-report instructions that interrupt the reasoning chain, so the model spends its budget on reasoning.';
+
+  @override
+  String get codexSetupNonDegradedScope => 'Applies to new conversations';
+
+  @override
+  String get codexSetupNonDegradedIssue => 'openai/codex#30364';
 
   @override
   String get codexSetupNeedFields =>
@@ -1576,8 +1605,17 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
-  String get codexSetupStatusNeedSetup =>
-      'Not configured yet — pick a method below.';
+  String get codexSetupStatusNeedSetup => 'Not configured yet';
+
+  @override
+  String get codexSetupStatusNeedSetupHint =>
+      'codex cannot make a model call yet. Configure either method below.';
+
+  @override
+  String get codexSetupStatusReadyHint => 'codex can make model calls.';
+
+  @override
+  String get codexSetupCodexHomeLabel => 'Config directory';
 
   @override
   String get codexSetupCredentialExists => 'credential present';
