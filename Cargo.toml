@@ -44,6 +44,13 @@ readme = "README.md"
 # from here via `dep = { workspace = true }` so we have a single source
 # of truth for upgrades.
 [workspace.dependencies]
+# The pb-mapper client SDK, from the registry rather than the git submodule it
+# used to be. Pinned here so every consumer moves together: a client older than
+# the deployed relay cannot decode the relay's structured error frames, which is
+# how the 0.2.14-client/0.5.0-relay skew turned an over-quota refusal into an
+# unbacked-off reconnect storm.
+pb-mapper = "0.5.0"
+
 # Internal crates
 pocket-codex-core = { path = "crates/pocket-codex-core" }
 pocket-codex-account-proto = { path = "crates/pocket-codex-account-proto" }
