@@ -47,7 +47,12 @@ use pb_mapper::{
 /// The credential is either the relay's 32-byte administrator key or a
 /// `pbmt1_`-prefixed temporary credential the relay issued. The SDK decides
 /// which from the string's shape; only the admin one may drive admin RPCs.
-#[derive(Debug, Clone)]
+///
+/// `Debug` is hand-written to redact the credential. Deriving it would put the
+/// relay's administrator key into any log line, panic message, or error chain
+/// that happened to format a value containing one — and the backend holds
+/// exactly that key.
+#[derive(Clone, PartialEq, Eq)]
 pub struct RelaySession {
     /// `host:port` of the relay (`pb-mapper server`).
     pub relay_addr: String,
@@ -55,6 +60,23 @@ pub struct RelaySession {
     pub credential: String,
     /// Whether to enable TCP keep-alive on relay connections.
     pub keep_alive: bool,
+}
+
+impl std::fmt::Debug for RelaySession {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RelaySession")
+            .field("relay_addr", &self.relay_addr)
+            // Which KIND of credential is diagnostically useful ("the backend is
+            // presenting a temporary key" is a real bug report); the bytes never
+            // are.
+            .field("credential", &if self.credential.starts_with("pbmt1_") {
+                "<temporary>"
+            } else {
+                "<admin>"
+            })
+            .field("keep_alive", &self.keep_alive)
+            .finish()
+    }
 }
 
 impl RelaySession {
@@ -70,6 +92,16 @@ impl RelaySession {
             credential: credential.into(),
             keep_alive: true,
         }
+    }
+
+    /// A session against `relay_addr` with a syntactically valid throwaway
+    /// credential, for tests that never reach the relay.
+    ///
+    /// Exists because the SDK validates the credential when the client is built,
+    /// so a test exercising, say, token rejection would otherwise have to carry
+    /// a 32-byte literal that has nothing to do with what it is testing.
+    pub fn for_test(relay_addr: impl Into<String>) -> Self {
+        Self::new(relay_addr, "0".repeat(32))
     }
 
     /// The admin RPC surface for this session.
@@ -190,6 +222,19 @@ pub async fn keys(session: &RelaySession) -> Result<Vec<String>> {
         .with_context(|| format!("listing keys on {}", session.relay_addr))
 }
 
+/// The relay's id for this connection, as the relay reports it.
+///
+/// Useful only for diagnostics — it names the connection, not the service — but
+/// it is what `pb status remote-id` answers, so it stays exposed.
+pub async fn remote_id(session: &RelaySession) -> Result<String> {
+    session
+        .client()?
+        .remote_id()
+        .await
+        .map(|id| format!("{id:?}"))
+        .with_context(|| format!("querying remote id on {}", session.relay_addr))
+}
+
 /// Query connection health for one registered service key.
 pub async fn service_connections(
     session: &RelaySession,
@@ -253,6 +298,24 @@ mod tests {
     fn an_empty_relay_address_is_rejected() {
         let session = RelaySession::new("", "a".repeat(32));
         assert!(session.client().is_err());
+    }
+
+    #[test]
+    fn debug_never_prints_the_credential() {
+        // The backend holds the relay's ADMINISTRATOR key in one of these, and a
+        // derived Debug would leak it through any log line or error chain that
+        // formatted a value containing one.
+        let admin = "S3CR3T-admin-key-padded-to-32ch!";
+        assert_eq!(admin.len(), 32);
+        let rendered = format!("{:?}", RelaySession::new("127.0.0.1:7666", admin));
+        assert!(!rendered.contains(admin), "credential leaked: {rendered}");
+        assert!(rendered.contains("<admin>"), "kind not shown: {rendered}");
+        assert!(rendered.contains("127.0.0.1:7666"), "address hidden: {rendered}");
+
+        let temp = "pbmt1_AQAAAAEAAAAAFNsL8qDUIBWtvMkHusQ9A6kEm0APq_BDwMZTCuoBCzqAsdCp";
+        let rendered = format!("{:?}", RelaySession::new("127.0.0.1:7666", temp));
+        assert!(!rendered.contains(temp), "credential leaked: {rendered}");
+        assert!(rendered.contains("<temporary>"), "kind not shown: {rendered}");
     }
 
     #[test]

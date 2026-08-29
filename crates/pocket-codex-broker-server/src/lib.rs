@@ -1,10 +1,10 @@
 //! Server side of the Pocket-Codex broker tunnel.
 //!
 //! The backend accepts authenticated client tunnels (TLS in production, plain
-//! TCP in tests) and bridges them to a **loopback** pb-mapper relay that holds
-//! the real `MSG_HEADER_KEY`. Clients never see that key and can never name
-//! another account's services: the backend derives the relay key from the
-//! verified token as `pcxu:<user_id>:<device>:<kind>:<name>`.
+//! TCP in tests) and bridges them to a **loopback** pb-mapper relay, presenting
+//! the relay's administrator credential. Clients hold no relay credential at all
+//! and can never name another account's services: the backend derives the relay
+//! key from the verified token as `pcxu:<user_id>:<device>:<kind>:<name>`.
 //!
 //! The pb-mapper work is reused unchanged via [`pocket_codex_pb`]; this crate
 //! is the seam between pb-mapper's address-based `register`/`subscribe` and the
@@ -19,8 +19,10 @@
 //!   [`pocket_codex_pb::subscribe`] on a loopback listener and dial it,
 //!   bridging the result to the client tunnel.
 //!
-//! The process-global `MSG_HEADER_KEY` must be set (via
-//! [`pocket_codex_pb::set_msg_header_key`]) before any connection is handled.
+//! The relay credential is supplied to [`BrokerServer::new`] as part of a
+//! [`pocket_codex_pb::RelaySession`]. It used to be process-global state a caller
+//! had to install before the first connection; making it a constructor argument
+//! means a broker cannot exist without one.
 
 #![forbid(unsafe_code)]
 
@@ -86,6 +88,14 @@ pub enum BrokerServerError {
     /// A timed operation exceeded its deadline.
     #[error("timed out: {0}")]
     Timeout(&'static str),
+    /// The relay refused a register or subscribe.
+    ///
+    /// Distinct from [`Self::Io`] on purpose: the relay answering "no" — an
+    /// over-quota service, a revoked credential — is a decision to surface, not
+    /// a transport fault to retry through. Conflating the two is what let a
+    /// permanent refusal drive an unbacked-off reconnect loop.
+    #[error("relay refused: {0}")]
+    Relay(String),
 }
 
 type Result<T> = std::result::Result<T, BrokerServerError>;
@@ -110,7 +120,11 @@ struct RegisterSession {
 
 struct Inner {
     verifier: Arc<dyn TokenVerifier>,
-    relay_addr: String,
+    /// How this process authenticates to the relay. Held here rather than set
+    /// process-globally (which is what the pre-0.5 client required), so the
+    /// credential is a property of this broker and never ambient state some
+    /// other component could depend on having been installed.
+    relay: pocket_codex_pb::RelaySession,
     data_idle: Duration,
     registers: Mutex<HashMap<String, Arc<RegisterSession>>>,
     /// Last time a key-conflict rejection was logged at WARN, per relay key —
@@ -128,23 +142,33 @@ pub struct BrokerServer {
 }
 
 impl BrokerServer {
-    /// Build a broker server that bridges to the pb-mapper relay at
-    /// `relay_addr` (expected loopback). `data_idle` bounds an idle data
-    /// bridge.
+    /// Build a broker server that bridges to the pb-mapper relay `relay`
+    /// addresses (expected loopback). `data_idle` bounds an idle data bridge.
+    ///
+    /// `relay` carries the credential as well as the address. The broker is the
+    /// component that holds the relay's ADMINISTRATOR key: it registers and
+    /// subscribes on behalf of clients that hold no relay credential at all,
+    /// which is what keeps per-account isolation a property of the broker rather
+    /// than of client good behaviour.
     pub fn new(
         verifier: Arc<dyn TokenVerifier>,
-        relay_addr: impl Into<String>,
+        relay: pocket_codex_pb::RelaySession,
         data_idle: Duration,
     ) -> Self {
         Self {
             inner: Arc::new(Inner {
                 verifier,
-                relay_addr: relay_addr.into(),
+                relay,
                 data_idle,
                 registers: Mutex::new(HashMap::new()),
                 conflict_log: std::sync::Mutex::new(HashMap::new()),
             }),
         }
+    }
+
+    /// This broker's relay session, for the register/subscribe legs.
+    pub(crate) fn relay_session(&self) -> pocket_codex_pb::RelaySession {
+        self.inner.relay.clone()
     }
 
     /// Force-deregister a relay key: cancel the live register session holding
@@ -301,7 +325,11 @@ mod tests {
     /// control loop) and, under first-wins, PERMANENTLY refuses the key.
     #[tokio::test]
     async fn ack_write_failure_does_not_leak_the_register_session() {
-        let broker = BrokerServer::new(Arc::new(RejectAll), "127.0.0.1:1", Duration::from_secs(1));
+        let broker = BrokerServer::new(
+            Arc::new(RejectAll),
+            pocket_codex_pb::RelaySession::for_test("127.0.0.1:1"),
+            Duration::from_secs(1),
+        );
         let key = "pcxu:u:dev:app:default".to_string();
         let hello = BrokerHello {
             token: "t".to_string(),
@@ -326,7 +354,11 @@ mod tests {
 
     #[tokio::test]
     async fn deregister_key_cancels_and_evicts_the_session() {
-        let broker = BrokerServer::new(Arc::new(RejectAll), "127.0.0.1:1", Duration::from_secs(1));
+        let broker = BrokerServer::new(
+            Arc::new(RejectAll),
+            pocket_codex_pb::RelaySession::for_test("127.0.0.1:1"),
+            Duration::from_secs(1),
+        );
         let cancel = CancellationToken::new();
         let key = "pcxu:u:dev:app:default";
         broker.inner.registers.lock().await.insert(

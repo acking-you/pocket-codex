@@ -87,24 +87,34 @@ impl BrokerServer {
         let result = match write_frame(&mut ctrl, &BrokerAck::ok(relay_key.clone())).await {
             Ok(()) => {
                 tracing::info!(relay_key = %relay_key, generation = session.generation, "register control up");
-                // pb-mapper register against the loopback relay with the REAL
-                // key; it dials `seam_addr` for each subscriber the relay routes
-                // to us.
-                let pb = tokio::spawn({
-                    let relay_addr = self.inner.relay_addr.clone();
-                    let key = relay_key.clone();
-                    let local_addr = seam_addr.to_string();
-                    let cancel = cancel.clone();
-                    async move {
-                        tokio::select! {
-                            _ = cancel.cancelled() => {}
-                            _ = register(RegisterOptions { key, local_addr, relay_addr, codec: true }) => {}
-                        }
-                    }
-                });
-                let r = self.run_register_session(ctrl, seam, &session).await;
-                pb.abort();
-                r
+                // Register against the loopback relay under the REAL key; the
+                // relay dials `seam_addr` for each subscriber it routes to us.
+                //
+                // Awaited rather than spawned-and-forgotten: this resolves once
+                // the relay has ACCEPTED the registration, so a refusal — an
+                // over-quota service, a revoked credential — is reported here
+                // instead of retried forever by a detached task. That is exactly
+                // the failure the 0.2.14 client could not see, because it could
+                // not decode the relay's error frame.
+                match register(
+                    &self.relay_session(),
+                    RegisterOptions {
+                        key: relay_key.clone(),
+                        local_addr: seam_addr.to_string(),
+                        codec: true,
+                    },
+                )
+                .await
+                {
+                    Ok(registration) => {
+                        let r = self.run_register_session(ctrl, seam, &session).await;
+                        // Stop, not drop: an awaited teardown releases the relay
+                        // slot now rather than leaving it for the lease sweep.
+                        let _ = registration.stop().await;
+                        r
+                    },
+                    Err(e) => Err(BrokerServerError::Relay(format!("{e:#}"))),
+                }
             },
             Err(e) => Err(e.into()),
         };

@@ -120,7 +120,7 @@ pub async fn run(args: ServeArgs) -> Result<()> {
 
     match transport {
         Transport::SelfHost {
-            relay,
+            session,
         } => {
             let key = explicit_key
                 .unwrap_or_else(|| ServiceId::new(&device, ServiceKind::App, &name).key());
@@ -128,7 +128,7 @@ pub async fn run(args: ServeArgs) -> Result<()> {
                 role: PbRole::Register,
                 key: key.clone(),
                 local_addr,
-                relay_addr: relay.clone(),
+                session: session.clone(),
                 codec,
             })
             .await?;
@@ -136,7 +136,7 @@ pub async fn run(args: ServeArgs) -> Result<()> {
                 &report.info,
                 &outcome,
                 &key,
-                &relay,
+                &session.relay_addr,
                 effective_proxy.as_deref(),
                 proxy_requested,
                 report.reused,

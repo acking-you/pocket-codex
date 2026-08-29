@@ -16,11 +16,17 @@ pub enum TlsMode {
 /// The backend's full configuration.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ServerConfig {
-    /// The real 32-byte pb-mapper `MSG_HEADER_KEY`. Never leaves the backend.
-    /// Omit (or leave blank) to use the relay's machine-derived key — required
-    /// when the relay runs with `--use-machine-msg-header-key` and the backend
-    /// is on the same host.
-    #[serde(default)]
+    /// The relay's 32-byte ADMINISTRATOR key. Never leaves the backend.
+    ///
+    /// Named `msg_header_key` on disk for continuity with existing deployments
+    /// (and with the relay's own env var), but its role narrowed with pb-mapper
+    /// 0.5: it is no longer a secret every participant shares, it is the root
+    /// from which the relay derives the short-lived credentials clients use. So
+    /// the backend holding it is what lets clients hold nothing.
+    ///
+    /// Omit (or leave blank) to read the relay's admin key off disk, which works
+    /// when the relay is on this host — see [`ServerConfig::relay_credential`].
+    #[serde(default, alias = "relay_admin_key")]
     pub msg_header_key: Option<String>,
     /// HS256 secret used to sign session JWTs.
     pub jwt_secret: String,
@@ -74,7 +80,36 @@ pub struct ServerConfig {
     pub tls_key: Option<String>,
 }
 
+/// Where the relay keeps its administrator key when it manages one itself.
+///
+/// Matches pb-mapper 0.5's default auth state directory. Reading it is what lets
+/// a same-host deployment configure nothing: the relay generates the key on
+/// first start and the backend adopts it, so there is no copy of the secret to
+/// keep in sync between two config files.
+const RELAY_ADMIN_KEY_PATH: &str = "/var/lib/pb-mapper/auth/admin.key";
+
 impl ServerConfig {
+    /// The credential to present to the relay: the configured key, else the
+    /// relay's own admin key from disk.
+    ///
+    /// Returns `None` when neither is available, which is a fatal
+    /// misconfiguration rather than a reason to fall back — pb-mapper 0.5 fails
+    /// closed on a missing credential, and a backend that started anyway would
+    /// only discover it on the first tunnel.
+    pub fn relay_credential(&self) -> Option<String> {
+        if let Some(key) = self
+            .msg_header_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            return Some(key.to_string());
+        }
+        let from_disk = std::fs::read_to_string(RELAY_ADMIN_KEY_PATH).ok()?;
+        let from_disk = from_disk.trim();
+        (!from_disk.is_empty()).then(|| from_disk.to_string())
+    }
+
     /// Load config from the TOML file at `$POCKET_CODEX_BACKEND_CONFIG`
     /// (default `backend.toml`, optional) layered under `PCX_`-prefixed env
     /// vars.

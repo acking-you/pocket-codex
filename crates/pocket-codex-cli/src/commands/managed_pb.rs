@@ -44,7 +44,7 @@ use pocket_codex_core::{
     state::{PbRole, PbSessionInfo, RuntimeState},
 };
 
-use crate::commands::ui;
+use crate::commands::{relay::CREDENTIAL_ENV, ui};
 
 /// A pb-mapper worker process Pocket-Codex should supervise.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,8 +55,14 @@ pub(crate) struct PbWorkerSpec {
     pub key: String,
     /// Local `host:port` used by this worker.
     pub local_addr: String,
-    /// Relay `host:port`.
-    pub relay_addr: String,
+    /// The relay and the credential the worker should present to it.
+    ///
+    /// The credential reaches the spawned child through its environment, which
+    /// is why the session is carried rather than resolved again in the child:
+    /// resolving twice could pick different answers if the config changed in
+    /// between, and the child would then authenticate as something the parent
+    /// never checked.
+    pub session: pocket_codex_pb::RelaySession,
     /// Whether register mode should request pb-mapper encryption.
     pub codec: bool,
 }
@@ -169,19 +175,13 @@ async fn ensure_relay_key_free(spec: &PbWorkerSpec) -> Result<()> {
     if spec.role != PbRole::Register {
         return Ok(());
     }
-    let Ok(mut addrs) = tokio::net::lookup_host(&spec.relay_addr).await else {
-        return Ok(());
-    };
-    let Some(relay) = addrs.next() else {
-        return Ok(());
-    };
-    match pocket_codex_pb::service_connections(relay, &spec.key).await {
+    match pocket_codex_pb::service_connections(&spec.session, &spec.key).await {
         Ok(conns) if conns.iter().any(|c| c.healthy) => bail!(
             "`{}` is already registered and online on relay {} — another machine or process owns \
              this name; stop that publisher or serve under a different name (a just-stopped \
              publisher frees the key within seconds)",
             spec.key,
-            spec.relay_addr,
+            spec.session.relay_addr,
         ),
         _ => Ok(()),
     }
@@ -200,6 +200,12 @@ fn spawn_worker(spec: &PbWorkerSpec, exe: PathBuf) -> Result<PbSessionInfo> {
 
     let child = Command::new(exe)
         .args(pb_worker_args(spec))
+        // The credential travels in the environment rather than argv, where it
+        // would be visible to any process listing on the machine. The child
+        // resolves it back through the same `MSG_HEADER_KEY` precedence the
+        // parent used, so an explicit `--relay` keeps behaving the same way in
+        // both.
+        .env(CREDENTIAL_ENV, &spec.session.credential)
         .stdin(Stdio::null())
         .stdout(Stdio::from(log_handle))
         .stderr(Stdio::from(log_handle_dup))
@@ -212,7 +218,7 @@ fn spawn_worker(spec: &PbWorkerSpec, exe: PathBuf) -> Result<PbSessionInfo> {
         role: spec.role,
         key: spec.key.clone(),
         local_addr: spec.local_addr.clone(),
-        relay_addr: spec.relay_addr.clone(),
+        relay_addr: spec.session.relay_addr.clone(),
         pid,
         log_file,
         codec: spec.codec,
@@ -234,7 +240,7 @@ pub(crate) fn pb_worker_args(spec: &PbWorkerSpec) -> Vec<String> {
         "--local-addr".to_string(),
         spec.local_addr.clone(),
         "--relay".to_string(),
-        spec.relay_addr.clone(),
+        spec.session.relay_addr.clone(),
     ];
     if spec.role == PbRole::Register && spec.codec {
         args.push("--codec".to_string());

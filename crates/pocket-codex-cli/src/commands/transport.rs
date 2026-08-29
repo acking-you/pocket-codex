@@ -12,10 +12,15 @@ use crate::commands::{account, relay};
 
 /// The transport a command should use to reach Pocket-Codex services.
 pub(crate) enum Transport {
-    /// Self-hosted pb-mapper relay (`host:port`).
+    /// Self-hosted pb-mapper relay.
     SelfHost {
-        /// Resolved relay `host:port`.
-        relay: String,
+        /// The relay address AND the credential to present to it.
+        ///
+        /// One value rather than an address plus an ambient key: in self-host
+        /// mode the saved credential belongs to the CONFIGURED relay, so pairing
+        /// them here is what stops an explicit `--relay <other>` from presenting
+        /// a credential that was never meant for it.
+        session: pocket_codex_pb::RelaySession,
     },
     /// Hosted account: the backend base URL. The session token is loaded (and
     /// refreshed) from config by the token provider, not carried here.
@@ -33,7 +38,7 @@ pub(crate) fn resolve_transport(
 ) -> Result<Transport> {
     if relay_flag.map(str::trim).is_some_and(|s| !s.is_empty()) {
         return Ok(Transport::SelfHost {
-            relay: relay::resolve_relay(relay_flag, config)?,
+            session: relay::resolve_session(relay_flag, config)?,
         });
     }
     match config.account_mode() {
@@ -48,7 +53,7 @@ pub(crate) fn resolve_transport(
             })
         },
         Mode::SelfHost | Mode::Unconfigured => Ok(Transport::SelfHost {
-            relay: relay::resolve_relay(relay_flag, config)?,
+            session: relay::resolve_session(relay_flag, config)?,
         }),
     }
 }

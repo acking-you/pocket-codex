@@ -12,33 +12,36 @@ use crate::{cli::WorkerCmd, commands::api_proxy};
 pub async fn run(cmd: WorkerCmd) -> Result<()> {
     match cmd {
         WorkerCmd::PbRegister(args) => {
-            // The parent always passes `--relay`, so config is only consulted
-            // for parity with other commands; load it best-effort so a broken
-            // config.toml can't fail a worker that never needs it.
+            // The parent always passes `--relay` and exports the credential, so
+            // config is only consulted for parity with other commands; load it
+            // best-effort so a broken config.toml can't fail a worker that never
+            // needs it.
             let config = Config::load().unwrap_or_default();
-            let relay =
-                crate::commands::relay::resolve_relay(args.relay.relay.as_deref(), &config)?;
-            pb_register(RegisterOptions {
+            let session =
+                crate::commands::relay::resolve_session(args.relay.relay.as_deref(), &config)?;
+            let registration = pb_register(&session, RegisterOptions {
                 key: args.key,
                 local_addr: args.local_addr,
-                relay_addr: relay,
                 codec: args.codec,
             })
-            .await;
+            .await?;
+            // A worker's whole job is to hold the tunnel open, so it parks here
+            // until it is signalled. Returning would drop the handle and take
+            // the registration down with it.
+            tokio::signal::ctrl_c().await?;
+            registration.stop().await?;
         },
         WorkerCmd::PbSubscribe(args) => {
-            // The parent always passes `--relay`, so config is only consulted
-            // for parity with other commands; load it best-effort so a broken
-            // config.toml can't fail a worker that never needs it.
             let config = Config::load().unwrap_or_default();
-            let relay =
-                crate::commands::relay::resolve_relay(args.relay.relay.as_deref(), &config)?;
-            pb_subscribe(SubscribeOptions {
+            let session =
+                crate::commands::relay::resolve_session(args.relay.relay.as_deref(), &config)?;
+            let connection = pb_subscribe(&session, SubscribeOptions {
                 key: args.key,
                 local_addr: args.local_addr,
-                relay_addr: relay,
             })
-            .await;
+            .await?;
+            tokio::signal::ctrl_c().await?;
+            connection.stop().await?;
         },
         WorkerCmd::ApiProxy(args) => api_proxy::run(args.listen, args.proxy).await?,
     }

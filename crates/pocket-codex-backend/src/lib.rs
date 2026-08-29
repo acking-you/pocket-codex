@@ -19,7 +19,7 @@ mod api;
 mod serve;
 mod tls;
 
-use std::{net::SocketAddr, sync::Arc};
+use std::sync::Arc;
 
 pub use api::{router, AppState};
 pub use config::{ServerConfig, TlsMode};
@@ -42,15 +42,6 @@ impl TokenVerifier for AuthVerifier {
 /// error or a serving task aborts.
 pub async fn run(cfg: ServerConfig) -> anyhow::Result<()> {
     let _ = rustls::crypto::ring::default_provider().install_default();
-    // An explicit key, or `None` to adopt the relay's machine-derived key
-    // (matching `pb-mapper-server --use-machine-msg-header-key` on the same host).
-    let configured_key = cfg
-        .msg_header_key
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
-    pocket_codex_pb::set_msg_header_key(configured_key)
-        .map_err(|e| anyhow::anyhow!("invalid msg_header_key: {e}"))?;
 
     let store = Store::connect(&cfg.database_url).await?;
 
@@ -85,13 +76,24 @@ pub async fn run(cfg: ServerConfig) -> anyhow::Result<()> {
         web_callback_url,
     })?);
     tracing::info!(web_login = auth.web_enabled(), "auth flows configured");
-    let relay_addr: SocketAddr = cfg
-        .relay_addr
-        .parse()
-        .map_err(|e| anyhow::anyhow!("relay_addr `{}`: {e}", cfg.relay_addr))?;
+    // Validated at boot even though the SDK takes the address as a string: a
+    // typo'd relay_addr should fail the process here, not surface later as a
+    // per-tunnel connect error on a backend that looked healthy.
+    pocket_codex_pb::parse_relay_addr(&cfg.relay_addr)?;
+
+    // The relay credential this process authenticates with. The backend is the
+    // ONE component that holds it: clients present a session JWT to the broker
+    // and never a relay credential, so per-account isolation is enforced here
+    // rather than trusted to clients. It used to be installed process-globally
+    // via `set_msg_header_key`; it is now a value threaded to the broker.
+    let relay = pocket_codex_pb::RelaySession::new(
+        cfg.relay_addr.clone(),
+        cfg.relay_credential()
+            .ok_or_else(|| anyhow::anyhow!("relay_credential is required"))?,
+    );
 
     let verifier = Arc::new(AuthVerifier(auth.clone()));
-    let broker = BrokerServer::new(verifier, cfg.relay_addr.clone(), cfg.data_idle());
+    let broker = BrokerServer::new(verifier, relay.clone(), cfg.data_idle());
     let tls = tls::build_tls(&cfg)?;
 
     let http_listener = TcpListener::bind(&cfg.http_listen)
@@ -103,7 +105,7 @@ pub async fn run(cfg: ServerConfig) -> anyhow::Result<()> {
 
     let app = api::router(AppState {
         auth,
-        relay_addr,
+        relay,
         broker: broker.clone(),
     });
     tracing::info!(

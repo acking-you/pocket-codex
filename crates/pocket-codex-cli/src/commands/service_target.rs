@@ -159,19 +159,14 @@ fn resolved_name(requested_name: Option<&str>, fallback_name: Option<&str>) -> S
         .to_string()
 }
 
-pub(crate) async fn discover_services(relay: &str) -> Result<Vec<ServiceId>> {
-    let relay_addr = resolve_one(relay).await?;
-    let keys = pocket_codex_pb::keys(relay_addr).await?;
+pub(crate) async fn discover_services(
+    session: &pocket_codex_pb::RelaySession,
+) -> Result<Vec<ServiceId>> {
+    let keys = pocket_codex_pb::keys(session).await?;
     Ok(keys
         .into_iter()
         .filter_map(|key| ServiceId::parse_key(&key))
         .collect())
-}
-
-async fn resolve_one(addr: &str) -> Result<std::net::SocketAddr> {
-    let mut iter = lookup_host(addr).await?;
-    iter.next()
-        .ok_or_else(|| anyhow::anyhow!("relay address `{addr}` resolved to no entries"))
 }
 
 #[cfg(test)]

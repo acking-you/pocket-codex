@@ -38,6 +38,6 @@ pub mod session;
 
 pub use admin::{issue_credential, revoke_credential, IssuedCredential};
 pub use session::{
-    keys, parse_relay_addr, register, service_connections, subscribe, RegisterOptions,
+    keys, parse_relay_addr, register, remote_id, service_connections, subscribe, RegisterOptions,
     RelaySession, SubscribeOptions, TUNNEL_READY_TIMEOUT,
 };

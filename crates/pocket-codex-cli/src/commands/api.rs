@@ -88,13 +88,13 @@ async fn serve(args: ApiServeArgs) -> Result<()> {
 
     match transport {
         Transport::SelfHost {
-            relay,
+            session,
         } => {
             let pb_outcome = managed_pb::ensure(PbWorkerSpec {
                 role: PbRole::Register,
                 key: key.clone(),
                 local_addr,
-                relay_addr: relay.clone(),
+                session: session.clone(),
                 codec: args.codec,
             })
             .await?;
@@ -102,7 +102,7 @@ async fn serve(args: ApiServeArgs) -> Result<()> {
                 &api_outcome,
                 &pb_outcome,
                 &key,
-                &relay,
+                &session.relay_addr,
                 effective_proxy.as_deref(),
             );
             Ok(())
@@ -156,15 +156,19 @@ async fn connect(args: ApiConnectArgs) -> Result<()> {
     let config = Config::load()?;
     match transport::resolve_transport(args.relay.relay.as_deref(), None, &config)? {
         Transport::SelfHost {
-            relay,
-        } => connect_self_host(args, &config, relay).await,
+            session,
+        } => connect_self_host(args, &config, session).await,
         Transport::Account {
             backend,
         } => connect_account(args, backend).await,
     }
 }
 
-async fn connect_self_host(args: ApiConnectArgs, config: &Config, relay: String) -> Result<()> {
+async fn connect_self_host(
+    args: ApiConnectArgs,
+    config: &Config,
+    session: pocket_codex_pb::RelaySession,
+) -> Result<()> {
     let request = TargetRequest {
         key: args.key,
         device: args.device,
@@ -175,7 +179,7 @@ async fn connect_self_host(args: ApiConnectArgs, config: &Config, relay: String)
     let has_local_default = config.default_service(ServiceKind::Api).is_some()
         || state.selected_service(ServiceKind::Api).is_some();
     let discovered = if needs_discovery && !has_local_default {
-        discover_services(&relay).await?
+        discover_services(&session).await?
     } else {
         Vec::new()
     };
@@ -184,7 +188,7 @@ async fn connect_self_host(args: ApiConnectArgs, config: &Config, relay: String)
         role: PbRole::Subscribe,
         key: target.key,
         local_addr: args.local_addr,
-        relay_addr: relay,
+        session: session.clone(),
         codec: false,
     })
     .await?;

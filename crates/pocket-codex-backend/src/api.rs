@@ -1,7 +1,7 @@
 //! The HTTP API: GitHub device-flow auth, session refresh/logout, and the
 //! per-account `/v1/me` + `/v1/services` views.
 
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use axum::{
     extract::{Path, Query, State},
@@ -29,8 +29,9 @@ use tower_http::{limit::RequestBodyLimitLayer, timeout::TimeoutLayer, trace::Tra
 pub struct AppState {
     /// The identity/session service.
     pub auth: Arc<Auth>,
-    /// Loopback relay address, queried for the account's service listing.
-    pub relay_addr: SocketAddr,
+    /// The loopback relay and the credential to query it with, for the
+    /// account's service listing.
+    pub relay: pocket_codex_pb::RelaySession,
     /// The broker, used to force-deregister a caller's relay key on demand.
     pub broker: BrokerServer,
 }
@@ -265,7 +266,7 @@ async fn services(
 ) -> ApiResult<Json<ServicesResponse>> {
     let claims = authed(&state, &headers)?;
     let prefix = NamespacedServiceId::user_prefix(&claims.sub);
-    let keys = pocket_codex_pb::keys(state.relay_addr)
+    let keys = pocket_codex_pb::keys(&state.relay)
         .await
         .map_err(|e| ApiError::Internal(format!("relay status: {e}")))?;
     let services = keys

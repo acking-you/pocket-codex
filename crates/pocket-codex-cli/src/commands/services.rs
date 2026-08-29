@@ -27,16 +27,19 @@ async fn list(args: ServicesListArgs) -> Result<()> {
     let mut config = Config::load()?;
     match transport::resolve_transport(args.relay.relay.as_deref(), None, &config)? {
         Transport::SelfHost {
-            relay,
-        } => list_self_host(&relay, kind).await,
+            session,
+        } => list_self_host(&session, kind).await,
         Transport::Account {
             backend,
         } => list_account(&mut config, &backend, kind).await,
     }
 }
 
-async fn list_self_host(relay: &str, kind: Option<ServiceKind>) -> Result<()> {
-    let mut services = discover_services(relay).await?;
+async fn list_self_host(
+    session: &pocket_codex_pb::RelaySession,
+    kind: Option<ServiceKind>,
+) -> Result<()> {
+    let mut services = discover_services(session).await?;
     services.retain(|id| kind.is_none_or(|kind| id.kind == kind));
     services.sort_by_key(|id| id.key());
 
