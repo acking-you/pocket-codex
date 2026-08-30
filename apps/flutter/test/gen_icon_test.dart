@@ -353,12 +353,17 @@ void main() {
   }, skip: skip);
 
   test('derive tray assets (png + template + multi-size ico)', () async {
-    final dark = await loadMaster('icon/logo_dark.png');
+    // Every tray asset is the bare GLYPH, so no composed tile is needed here.
     Directory('assets/tray').createSync(recursive: true);
 
-    // Linux loads the icon as a PNG; a 256 source scales down cleanly to the
-    // ~18-22 px the tray actually shows.
-    await writePng('assets/tray/tray.png', await compose(dark, size: 256));
+    // Linux loads the icon as a PNG at whatever size its tray uses (~18-22 px).
+    // The glyph for the same reason as Windows below: a tile that small is mostly
+    // surround. Left in the brand's own colours, since Linux trays vary in
+    // background and neither black nor white is safe.
+    await writePng(
+      'assets/tray/tray.png',
+      glyphPng(glyphFromMaster('icon/logo_dark.png'), 256),
+    );
 
     // macOS wants a TEMPLATE image (black + alpha; the menu bar tints it to
     // match light/dark mode and highlight state). tray_manager loads the
@@ -373,13 +378,25 @@ void main() {
 
     // Windows: tray_manager hands the path to LoadImage(IMAGE_ICON,
     // LR_LOADFROMFILE), which needs a true .ico — a .png silently fails to
-    // load. Render each frame size directly (crisper than downscaling one big
-    // raster) and pack them into a PNG-framed ICO (Vista+). LoadImage asks for
-    // SM_CXSMICON (16-24 px), so the small frames carry the on-screen look.
+    // load. Render each frame size directly and pack them into a PNG-framed ICO
+    // (Vista+). LoadImage asks for SM_CXSMICON (16-24 px), so the small frames
+    // carry the on-screen look.
+    //
+    // The GLYPH, not the tile. The tray shows this at ~16 px, and a rounded tile
+    // spends almost all of that on its own surround and corners — the mark inside
+    // lands on a handful of pixels and reads as mush. macOS already uses the bare
+    // glyph for its template icon, for exactly this reason; Windows was still
+    // composing the full tile and looked blurry next to it.
+    //
+    // White, because the Windows taskbar is dark by default. Unlike the macOS
+    // template there is no tinting, so the colour is fixed here.
+    final glyph = glyphFromMaster(
+      'icon/logo_dark.png',
+      recolor: img.ColorRgb8(255, 255, 255),
+    );
     final frames = <img.Image>[];
-    for (final s in [16, 24, 32, 48, 256]) {
-      final png = await compose(dark, size: s.toDouble());
-      frames.add(img.decodePng(png)!);
+    for (final s in [16, 20, 24, 32, 48, 64, 256]) {
+      frames.add(img.decodePng(glyphPng(glyph, s))!);
     }
     final ico = img.IcoEncoder().encodeImages(frames);
     await File('assets/tray/tray.ico').writeAsBytes(ico);
