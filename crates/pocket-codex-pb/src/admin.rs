@@ -104,32 +104,100 @@ pub async fn renew_credential(
     })
 }
 
-/// Every service key the relay knows, across all namespaces.
+/// A credential the relay still holds, without its secret.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CredentialRecord {
+    /// The relay's handle for it — and the namespace it is confined to.
+    pub key_id: u64,
+    /// The label it was issued with, if any.
+    pub label: Option<String>,
+    /// Unix seconds at which the relay stops accepting it.
+    pub expires_at: u64,
+}
+
+/// Every credential the relay currently accepts.
+///
+/// Filtered to live keys: the table retains expired and revoked ones until a
+/// sweep, and adopting one of those would hand a caller a namespace nothing can
+/// authenticate into.
+pub async fn live_credentials(session: &RelaySession) -> Result<Vec<CredentialRecord>> {
+    let keys = session
+        .admin()?
+        .list_keys_all()
+        .await
+        .with_context(|| format!("listing credentials on {}", session.relay_addr))?;
+    Ok(keys
+        .into_iter()
+        .filter(|key| key.state == "active")
+        .map(|key| CredentialRecord {
+            key_id: key.key_id,
+            label: key.label,
+            expires_at: key.expires_at,
+        })
+        .collect())
+}
+
+/// One registered service, as an administrator sees it.
+///
+/// Carries the owning `namespace` because the service NAME alone cannot be
+/// trusted for attribution: a name is whatever its registrant typed, and every
+/// namespace has its own. Account B can register the literal string
+/// `pcxu:<account-A>:mac:app:default` inside B's namespace — the relay is right
+/// to allow it, since namespaces are what isolate them — so a caller matching
+/// on the name alone would show B's service as A's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServiceRecord {
+    /// The relay namespace that owns the registration.
+    pub namespace: u64,
+    /// The service key the registrant chose.
+    pub name: String,
+}
+
+/// Every service the relay knows, across all namespaces, with its owner.
 ///
 /// Admin-scoped deliberately: a per-account credential sees only its own
-/// namespace, which is right for a client but not for a backend answering
-/// "what does this account have registered" — that caller filters by the
-/// account's own key prefix afterwards.
-pub async fn all_service_keys(session: &RelaySession) -> Result<Vec<String>> {
+/// namespace, which is right for a client but not for a backend answering "what
+/// does this account have registered". That caller must filter on BOTH the
+/// namespace and the key prefix — see [`ServiceRecord`] for why the name alone
+/// is not enough.
+pub async fn all_services(session: &RelaySession) -> Result<Vec<ServiceRecord>> {
     let services = session
         .admin()?
         .list_services_all(None)
         .await
         .with_context(|| format!("listing services on {}", session.relay_addr))?;
-    Ok(services.into_iter().map(|svc| svc.service_name).collect())
+    Ok(services
+        .into_iter()
+        .map(|svc| ServiceRecord {
+            namespace: svc.namespace,
+            name: svc.service_name,
+        })
+        .collect())
 }
 
-/// Drop the relay's connections for `service_name`.
+/// Drop the relay's connections for a service in `namespace`.
 ///
 /// For a registration whose owner is gone: the relay still holds the key and
 /// the client that would have released it no longer exists. A live client
 /// reconnects afterwards, so the cost is a brief interruption at worst.
-pub async fn retire_service(session: &RelaySession, service_name: &str) -> Result<u32> {
+///
+/// `namespace` is REQUIRED, and is the account's, not the administrator's.
+/// Omitting it does not mean "wherever this service lives" — the relay reads an
+/// absent namespace as the unscoped one, where an administrator's own
+/// registrations sit. Retiring an account's service without naming its
+/// namespace therefore silently retires nothing.
+pub async fn retire_service(
+    session: &RelaySession,
+    namespace: u64,
+    service_name: &str,
+) -> Result<u32> {
     session
         .admin()?
-        .retire_connections(None, service_name.to_string(), None)
+        .retire_connections(Some(namespace), service_name.to_string(), None)
         .await
-        .with_context(|| format!("retiring `{service_name}` on {}", session.relay_addr))
+        .with_context(|| {
+            format!("retiring `{service_name}` in namespace {namespace} on {}", session.relay_addr)
+        })
 }
 
 /// Withdraw a credential, cancelling whatever it currently holds open.

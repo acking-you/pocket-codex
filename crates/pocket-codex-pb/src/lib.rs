@@ -53,11 +53,11 @@ pub mod publish;
 pub mod session;
 
 pub use admin::{
-    all_service_keys, issue_credential, renew_credential, retire_service, revoke_credential,
-    IssuedCredential,
+    all_services, issue_credential, live_credentials, renew_credential, retire_service,
+    revoke_credential, CredentialRecord, IssuedCredential, ServiceRecord,
 };
 pub use keepalive::keep_credential_alive;
-pub use publish::{publish, PublishError, Published};
+pub use publish::{publish, publish_pending, PublishError, Published};
 pub use session::{
     keys, parse_relay_addr, register, remote_id, service_connections, subscribe, RegisterOptions,
     RelaySession, SubscribeOptions, TUNNEL_READY_TIMEOUT,

@@ -28,7 +28,7 @@
 use anyhow::Result;
 use pb_mapper::{Registration, TunnelStatus};
 
-use crate::session::{register, RegisterOptions, RelaySession};
+use crate::session::{RegisterOptions, RelaySession};
 
 /// Why a publish attempt did not result in a live registration.
 #[derive(Debug, thiserror::Error)]
@@ -103,21 +103,58 @@ impl Published {
     }
 }
 
-/// Publish `opts.local_addr` on the relay under `opts.key`, returning once the
-/// relay has accepted it.
+/// Publish `opts.local_addr` on the relay under `opts.key`.
 ///
 /// The returned handle owns the registration — hold it for as long as the
 /// service should stay published. Transient relay trouble is the SDK's to
 /// retry; only a name conflict comes back as [`PublishError::Conflict`].
+///
+/// Succeeds even when the relay has not CONFIRMED the registration yet, because
+/// the handle's worker is still reconnecting and holding it is what lets the
+/// service come up once the relay is reachable. Use [`publish_pending`] when
+/// that distinction matters to the caller.
 pub async fn publish(
     session: &RelaySession,
     opts: RegisterOptions,
 ) -> Result<Published, PublishError> {
+    publish_pending(session, opts)
+        .await
+        .map(|(published, _)| published)
+}
+
+/// Publish, and say whether it is up YET.
+///
+/// `Ok((handle, false))` means the relay has not confirmed the registration
+/// within the SDK's readiness budget. That is not a failure: the worker keeps
+/// retrying, so a caller that holds the handle gets the service published once
+/// the relay is back — and a caller that needs to report status has the flag to
+/// do it with.
+///
+/// This shape exists because the obvious alternative is a trap: wrapping a
+/// publish in `tokio::time::timeout` CANCELS it, dropping the handle and with
+/// it the retrying worker, so a slow relay would leave the service permanently
+/// unpublished rather than merely late.
+pub async fn publish_pending(
+    session: &RelaySession,
+    opts: RegisterOptions,
+) -> Result<(Published, bool), PublishError> {
     let key = opts.key.clone();
-    match register(session, opts).await {
-        Ok(registration) => Ok(Published {
-            registration,
-        }),
+    match crate::session::register_pending(session, opts).await {
+        Ok((registration, ready)) => {
+            if let Err(err) = &ready {
+                tracing::warn!(
+                    key = %key,
+                    error = %format!("{err:#}"),
+                    "the relay has not confirmed this registration yet; it keeps retrying"
+                );
+            }
+            Ok((
+                Published {
+                    registration,
+                },
+                ready.is_ok(),
+            ))
+        },
         Err(err) => {
             let detail = format!("{err:#}");
             if is_conflict(&detail) {
@@ -168,22 +205,45 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_publish_to_nowhere_is_not_reported_as_a_conflict() {
-        // Port 1 on loopback refuses immediately, so this exercises the real
-        // classification path without a relay: a refused connection must stay
-        // retryable, because treating it as a conflict would permanently fail
-        // hosting whenever the relay is briefly down.
+    async fn an_unreachable_relay_keeps_a_retrying_handle_rather_than_failing() {
+        // Port 1 on loopback refuses immediately, so this is the real "relay is
+        // down" path without a relay. It must NOT be an error: the SDK's worker is
+        // reconnecting, and the handle is what lets the service come up on its own
+        // once the relay is back. Failing here — or dropping the handle — is what
+        // would leave a host permanently unpublished after a blip.
         let session = RelaySession::for_test("127.0.0.1:1");
-        let err = publish(&session, RegisterOptions {
+        let (published, ready) = publish_pending(&session, RegisterOptions {
             key: "pcx:test:app:default".to_string(),
             local_addr: "127.0.0.1:9".to_string(),
             codec: false,
         })
         .await
-        .expect_err("nothing is listening, so this cannot succeed");
-        assert!(
-            matches!(err, PublishError::Other(_)),
-            "an unreachable relay must not read as a name conflict: {err}"
+        .expect("an unreachable relay is a pending publish, not a failed one");
+        assert!(!ready, "nothing is listening, so this cannot be ready");
+        assert!(!published.is_live(), "a retrying tunnel must not read as live");
+        // And not as a permanent failure either: `failure()` is what
+        // `needs_publishing` uses to decide whether to publish AGAIN, and a second
+        // registration for one key is the eviction leapfrog.
+        assert_eq!(
+            published.failure(),
+            None,
+            "a retrying tunnel must not look permanently refused"
         );
+    }
+
+    #[tokio::test]
+    async fn a_publish_to_nowhere_is_not_reported_as_a_conflict() {
+        // `publish` treats not-ready as success for the same reason: the caller
+        // holds the handle, so the retry survives. What it must never do is call an
+        // unreachable relay a name conflict, which would permanently fail hosting.
+        let session = RelaySession::for_test("127.0.0.1:1");
+        let published = publish(&session, RegisterOptions {
+            key: "pcx:test:app:default".to_string(),
+            local_addr: "127.0.0.1:9".to_string(),
+            codec: false,
+        })
+        .await
+        .expect("an unreachable relay must not be reported as a conflict");
+        assert!(!published.is_live());
     }
 }

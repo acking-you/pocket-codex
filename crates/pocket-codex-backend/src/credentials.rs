@@ -76,14 +76,38 @@ impl Credentials {
         &self.relay.relay_addr
     }
 
+    /// This account's relay namespace, or `None` if it has never asked for a
+    /// credential.
+    ///
+    /// The namespace IS the credential's key id, so this is what scopes an
+    /// admin-side listing or retire to one account. `None` is not an error: an
+    /// account with no credential has no services either.
+    pub async fn namespace_of(&self, user_id: &str) -> anyhow::Result<Option<u64>> {
+        if let Some(cached) = self.cache.lock().await.get(user_id) {
+            return Ok(Some(cached.key_id));
+        }
+        Ok(self.adopt_from_relay(user_id).await?.map(|c| c.key_id))
+    }
+
     /// This account's credential, minting or renewing it if needed.
     ///
     /// Returns `(credential, expires_at)`.
     pub async fn for_account(&self, user_id: &str) -> anyhow::Result<(String, u64)> {
         let mut cache = self.cache.lock().await;
         let now = now_secs();
+        // Nothing in memory does NOT mean the account has no credential — this
+        // process may just have restarted. Adopting the live one matters because
+        // the key id is the namespace: minting a replacement would move the
+        // account, so devices still holding the old credential and devices
+        // fetching after the restart would land in different namespaces and stop
+        // seeing each other.
+        if !cache.contains_key(user_id) {
+            if let Some(adopted) = self.adopt_from_relay(user_id).await? {
+                cache.insert(user_id.to_string(), adopted);
+            }
+        }
         if let Some(cached) = cache.get(user_id) {
-            if cached.expires_at > now + RENEW_MARGIN.as_secs() {
+            if cached.expires_at > now + RENEW_MARGIN.as_secs() && !cached.credential.is_empty() {
                 return Ok((cached.credential.clone(), cached.expires_at));
             }
             // Still known to the relay: renewing keeps the SAME key id, so the
@@ -119,9 +143,7 @@ impl Credentials {
         let issued = pocket_codex_pb::issue_credential(
             &self.relay,
             CREDENTIAL_TTL,
-            // Labelled with the account so an operator listing the relay's keys
-            // can tell whose a credential is without consulting the database.
-            Some(format!("pcx-account:{user_id}")),
+            Some(account_label(user_id)),
         )
         .await?;
         let entry = Cached {
@@ -140,7 +162,12 @@ impl Credentials {
     /// forgotten satisfies it. Dropping the cache entry is the part that must
     /// not be skipped, so it happens regardless.
     pub async fn revoke_account(&self, user_id: &str) {
-        let cached = self.cache.lock().await.remove(user_id);
+        let cached = match self.cache.lock().await.remove(user_id) {
+            Some(cached) => Some(cached),
+            // Not in memory: it may still be live on the relay from before a
+            // restart, and "revoked" has to mean revoked.
+            None => self.adopt_from_relay(user_id).await.ok().flatten(),
+        };
         let Some(cached) = cached else { return };
         if let Err(err) = pocket_codex_pb::revoke_credential(&self.relay, cached.key_id).await {
             tracing::warn!(
@@ -151,6 +178,54 @@ impl Credentials {
             );
         }
     }
+
+    /// Recover an account's live credential from the relay's own key table.
+    ///
+    /// The relay is the system of record here, which is why nothing is
+    /// persisted locally: it already holds every issued key, labelled by
+    /// the account it was issued for ([`account_label`]). Reading that back
+    /// after a restart is what keeps an account's namespace stable across
+    /// one — and a namespace change is not a cosmetic problem, it splits
+    /// the account's devices into two sets that cannot see each other.
+    ///
+    /// Returns the key with the LATEST expiry, since only one can be the
+    /// account's namespace and a longer-lived key is the one clients are more
+    /// likely to still hold. The relay does not repeat key material it has
+    /// already delivered, so [`Cached::credential`] comes back empty — enough
+    /// to scope an admin call, and [`Self::for_account`] renews to obtain a
+    /// usable string.
+    async fn adopt_from_relay(&self, user_id: &str) -> anyhow::Result<Option<Cached>> {
+        let label = account_label(user_id);
+        let keys = pocket_codex_pb::live_credentials(&self.relay).await?;
+        let adopted = keys
+            .into_iter()
+            .filter(|key| key.label.as_deref() == Some(label.as_str()))
+            .max_by_key(|key| key.expires_at)
+            .map(|key| Cached {
+                credential: String::new(),
+                key_id: key.key_id,
+                expires_at: key.expires_at,
+            });
+        if let Some(adopted) = &adopted {
+            tracing::info!(
+                user = %user_id,
+                key_id = adopted.key_id,
+                "adopted this account's existing relay credential; its namespace is unchanged"
+            );
+        }
+        Ok(adopted)
+    }
+}
+
+/// The relay-side label an account's credential carries.
+///
+/// Load-bearing rather than cosmetic: it is how
+/// [`Credentials::adopt_from_relay`] finds an account's key again after a
+/// restart, so it must match exactly on both sides. It also lets an operator
+/// listing the relay's keys tell whose is whose without consulting the
+/// database.
+fn account_label(user_id: &str) -> String {
+    format!("pcx-account:{user_id}")
 }
 
 fn now_secs() -> u64 {

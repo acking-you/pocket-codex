@@ -464,23 +464,34 @@ fn unix_now() -> i64 {
 ///
 /// Cached because the app asks for this on every subscribe, probe, and key
 /// derivation, and a round trip per call would put the backend back on a hot
-/// path this whole design exists to take it off. The cache is dropped at logout
-/// (see [`logout`]) so a new sign-in never inherits the old account's
-/// namespace.
+/// path this whole design exists to take it off.
+///
+/// # The cache is keyed by WHO it belongs to
+///
+/// A process-global "current credential" would survive a change of account. The
+/// dangerous path is not logout — that clears it explicitly — but a session
+/// that EXPIRED and was replaced by signing in as someone else: `config.toml`
+/// changes while the cache does not, so the new user would keep publishing into
+/// the previous account's namespace. Keying on `(backend, account id)` means a
+/// different signed-in identity simply misses the cache.
 pub async fn relay_credential(support_dir: &Path) -> Result<RelayCredentialResponse> {
+    let config = load_config(support_dir)?;
+    let owner = CacheOwner::of(&config);
     // Held across the fetch, which is what makes a burst of first-time callers
     // cost one request rather than one each — the same reason [`refresh_lock`]
     // exists for the session token.
     let mut cache = relay_cache().lock().await;
-    if let Some(cached) = cache.as_ref() {
-        // Require some life left, so a credential handed out here is still good
-        // by the time the caller opens a tunnel with it.
-        if cached.expires_at > (unix_now() + RELAY_CACHE_MARGIN_SECS).max(0) as u64 {
+    if let Some((cached_owner, cached)) = cache.as_ref() {
+        // Same identity, and still enough life left that a caller can open a
+        // tunnel with what we hand back.
+        if *cached_owner == owner
+            && cached.expires_at > (unix_now() + RELAY_CACHE_MARGIN_SECS).max(0) as u64
+        {
             return Ok(cached.clone());
         }
     }
     let fetched = fetch_relay_credential(support_dir).await?;
-    *cache = Some(fetched.clone());
+    *cache = Some((owner, fetched.clone()));
     Ok(fetched)
 }
 
@@ -489,12 +500,38 @@ pub async fn forget_relay_credential() {
     *relay_cache().lock().await = None;
 }
 
+/// Who a cached credential belongs to.
+///
+/// The backend too, not just the account: the same GitHub user against a
+/// different backend is a different relay and a different namespace.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CacheOwner {
+    backend: String,
+    account_id: Option<String>,
+    login: Option<String>,
+}
+
+impl CacheOwner {
+    fn of(config: &Config) -> Self {
+        Self {
+            backend: backend_base(config),
+            account_id: config.account_id().map(ToString::to_string),
+            // Carried alongside the id because `account_id` is optional in the
+            // credential the backend issues; two accounts must never compare
+            // equal just because neither reported one.
+            login: config.account_login().map(ToString::to_string),
+        }
+    }
+}
+
 /// Treat a credential with less than this remaining as due for renewal rather
 /// than handing it out.
 const RELAY_CACHE_MARGIN_SECS: i64 = 5 * 60;
 
-fn relay_cache() -> &'static tokio::sync::Mutex<Option<RelayCredentialResponse>> {
-    static CACHE: OnceCell<tokio::sync::Mutex<Option<RelayCredentialResponse>>> = OnceCell::new();
+type RelayCache = tokio::sync::Mutex<Option<(CacheOwner, RelayCredentialResponse)>>;
+
+fn relay_cache() -> &'static RelayCache {
+    static CACHE: OnceCell<RelayCache> = OnceCell::new();
     CACHE.get_or_init(|| tokio::sync::Mutex::new(None))
 }
 
@@ -564,6 +601,48 @@ pub fn start_credential_refresh(support_dir: &Path, expires_at: u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_different_signed_in_account_is_a_different_cache_owner() {
+        // The whole point of keying the cache: a session that EXPIRED and was
+        // replaced by signing in as someone else changes `config.toml` but not the
+        // cache, and an unkeyed cache would hand the new user the previous
+        // account's credential — letting them publish into that namespace.
+        let mut alice = Config::default();
+        alice.set_account_session("tok-a", "ref-a", "alice", Some("1".to_string()));
+        let mut bob = Config::default();
+        bob.set_account_session("tok-b", "ref-b", "bob", Some("2".to_string()));
+        assert_ne!(CacheOwner::of(&alice), CacheOwner::of(&bob));
+
+        // A token ROTATION is the same account, so it must keep the cache: the
+        // credential outlives any one session token, and re-minting on refresh
+        // would change the namespace.
+        let mut alice_refreshed = alice.clone();
+        alice_refreshed.set_account_session("tok-a2", "ref-a2", "alice", Some("1".to_string()));
+        assert_eq!(CacheOwner::of(&alice), CacheOwner::of(&alice_refreshed));
+    }
+
+    #[test]
+    fn two_accounts_without_an_id_are_told_apart_by_login() {
+        // `account_id` is optional in the issued credential. Comparing on it alone
+        // would make every id-less account equal to every other.
+        let mut one = Config::default();
+        one.set_account_session("tok", "ref", "alice", None);
+        let mut two = Config::default();
+        two.set_account_session("tok", "ref", "bob", None);
+        assert_ne!(CacheOwner::of(&one), CacheOwner::of(&two));
+    }
+
+    #[test]
+    fn the_same_account_on_another_backend_is_a_different_owner() {
+        // A different backend means a different relay and a different namespace,
+        // so its credential is not interchangeable.
+        let mut here = Config::default();
+        here.set_account_session("tok", "ref", "alice", Some("1".to_string()));
+        let mut there = here.clone();
+        there.set_account_backend("https://other.example");
+        assert_ne!(CacheOwner::of(&here), CacheOwner::of(&there));
+    }
 
     #[test]
     fn backend_base_defaults_then_uses_config() {

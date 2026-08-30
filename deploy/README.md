@@ -60,10 +60,16 @@ be aware of when upgrading:
    sudo certbot certonly --standalone -d lb7666.top
    ```
    (or reuse an existing cert / a reverse proxy — see "TLS options").
-3. **pb-mapper 0.5+** on the relay, and its 32-byte **administrator** key. Leave
-   `PCX_MSG_HEADER_KEY` unset to have the backend adopt the relay's own key from
-   `/var/lib/pb-mapper/auth/admin.key` — then there is no copy of the secret to
-   keep in sync between two config files.
+3. **pb-mapper 0.5+** on the relay, and its 32-byte **administrator** key
+   (`PCX_MSG_HEADER_KEY`). `deploy.sh` copies it out of
+   `/var/lib/pb-mapper/auth/admin.key` for you when run with `sudo`, and replaces
+   a stale pre-0.5 key if one is already configured.
+
+   The copy is deliberate. That file is `0600 root` and the backend runs as the
+   unprivileged `pcx`, so it cannot be read at runtime; the alternative — widening
+   the relay's own key file — would expose it to every local user. The backend
+   still *tries* the path first, which is what makes a same-user or root
+   deployment configuration-free.
 
 ## One-time server setup
 
@@ -162,8 +168,13 @@ Validated on the live server (Tencent Cloud Ubuntu, 2 GB RAM):
   console** (a local `ufw` won't help) for external clients to reach the API.
   `:7666` is already open, which the direct-connect design needs. `:7900` was the
   old broker port and can be closed.
-- **Relay key:** the relay manages its own administrator key; leave
-  `PCX_MSG_HEADER_KEY` unset and `deploy.sh` adopts it from disk.
+- **Relay key:** the relay manages its own administrator key at
+  `/var/lib/pb-mapper/auth/admin.key`, `0600 root`. `deploy.sh` copies it into
+  `backend.env` because `pcx` cannot read the original; this box was upgraded from
+  0.2, where the same key also lived at
+  `/var/lib/pb-mapper-server/msg_header_key`, so both paths currently hold the
+  same value. A future relay key rotation changes only the 0.5 path — re-run
+  `deploy.sh` after one.
 - **Version skew is what broke this deployment before** (2026-08-30): a 0.2.x
   client against the 0.5.0 relay could not decode the relay's structured
   over-quota error, read a permanent refusal as a transport fault, and reconnected

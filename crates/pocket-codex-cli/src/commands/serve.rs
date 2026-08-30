@@ -45,7 +45,7 @@ use pocket_codex_codex::{
 };
 use pocket_codex_core::{
     config::Config,
-    process::{find_codex_app_server, force_kill},
+    process::{find_codex_app_server, force_kill, send_sigterm},
     service::{default_device_id, ServiceId, ServiceKind},
     state::PbRole,
 };
@@ -151,15 +151,18 @@ pub async fn run(args: ServeArgs) -> Result<()> {
     if !transport.is_account() {
         return Ok(());
     }
-    serve_account_foreground(&transport, &device, &name, local_addr, spawn_opts).await
+    serve_account_foreground(&transport, &device, &name, &key, local_addr, spawn_opts).await
 }
 
 /// Account-mode tail of `serve`: publish the host meta service beside the app
-/// service, supervise codex's health, and hold both until Ctrl-C.
+/// service, supervise codex's health, and hold both until Ctrl-C — then tear
+/// the whole host down, `app_key`'s detached register worker and codex
+/// included.
 async fn serve_account_foreground(
     transport: &Transport,
     device: &str,
     name: &str,
+    app_key: &str,
     local_addr: String,
     mut spawn_opts: SpawnOptions,
 ) -> Result<()> {
@@ -197,18 +200,54 @@ async fn serve_account_foreground(
         host: local.ip().to_string(),
         port: local.port(),
     };
-    tokio::spawn(codex_health_watchdog(local_addr, spawn_opts));
+    tokio::spawn(codex_health_watchdog(local_addr.clone(), spawn_opts));
 
     ui::headline(ui::Tone::Action, "exposing — keep this running, Ctrl-C to stop");
     tokio::signal::ctrl_c()
         .await
         .context("waiting for Ctrl-C")?;
-    // Release the meta registration deliberately rather than letting the drop
-    // abort it, so the relay frees the key now instead of at its next sweep.
+
+    // Ctrl-C was advertised as stopping the host, so it has to stop ALL of it. The
+    // meta service is in-process and dies with us, but the app register worker is
+    // a detached child and codex is its own process — leaving those behind would
+    // keep the app service reachable on the relay while its meta service vanished,
+    // which is a worse state than either fully up or fully down.
+    ui::headline(ui::Tone::Change, "stopping");
+    // Awaited rather than dropped, so the relay frees the meta key now instead of
+    // at its next lease sweep.
     if let Ok(Some(registration)) = meta {
         let _ = registration.stop().await;
     }
+    let stopped = managed_pb::stop_matching(managed_pb::StopFilter {
+        role: Some(PbRole::Register),
+        key: Some(app_key.to_string()),
+    })?;
+    for outcome in &stopped {
+        if let managed_pb::StopOutcome::Stopped(session) = outcome {
+            ui::field("stopped pb register", &session.pid.to_string());
+        }
+    }
+    match stop_codex_at(&local_addr) {
+        Some(pid) => ui::field("stopped codex", &pid.to_string()),
+        None => ui::muted("    codex was already gone"),
+    }
     Ok(())
+}
+
+/// Stop the codex app-server listening on `listen_addr`, returning its pid.
+///
+/// Port-targeted rather than `pocket_codex_codex::stop`, which knows only about
+/// a single recorded codex: this command may be one of several hosts on the
+/// machine, and it must stop the one IT started and no other.
+fn stop_codex_at(listen_addr: &str) -> Option<u32> {
+    let pid = find_codex_app_server(&format!("ws://{listen_addr}"))?;
+    send_sigterm(pid);
+    // Escalate only if it ignores the graceful stop, so a codex mid-write gets a
+    // chance to finish.
+    if !wait_for_port_closed(listen_addr, Duration::from_secs(6)) {
+        force_kill(pid);
+    }
+    Some(pid)
 }
 
 /// Bind a loopback listener for the host meta service, start it (resuming into

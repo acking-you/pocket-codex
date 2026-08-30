@@ -42,7 +42,7 @@ use pocket_codex_core::{
     process::{find_codex_app_server, force_kill, pid_running, send_sigterm, tcp_port_open},
     service::{default_device_id, ServiceId, ServiceKind},
 };
-use pocket_codex_pb::{publish, PublishError, Published, RegisterOptions};
+use pocket_codex_pb::{publish_pending, PublishError, Published, RegisterOptions};
 use tokio::task::JoinHandle;
 
 use crate::engine::{
@@ -238,19 +238,19 @@ pub fn codex_locate() -> Option<String> {
     locate_binary(configured.as_deref()).map(|p| p.display().to_string())
 }
 
-/// How long a serve start waits for the app register tunnel's first outcome
-/// before proceeding optimistically. A reachable backend answers in one round
-/// trip (sub-second); the timeout only bites when the backend is down, where
-/// hosting should still start (the register loop keeps retrying) rather than
-/// fail.
-const REGISTER_PREFLIGHT: Duration = Duration::from_secs(6);
-
 /// Publish `local` on the relay for `kind`, holding the registration.
 ///
 /// Not fallible for the caller's purposes unless the NAME is taken: a relay
-/// that is merely unreachable leaves `None`, and the caller re-publishes on its
-/// next status poll or re-host. That asymmetry is deliberate — a name conflict
-/// cannot resolve itself and must stop hosting, while everything else can.
+/// that is merely unreachable still yields a handle whose worker keeps
+/// retrying, so the service comes up on its own. That asymmetry is deliberate —
+/// a name conflict cannot resolve itself and must stop hosting, while
+/// everything else can.
+///
+/// Deliberately NOT wrapped in `tokio::time::timeout`: cancelling `publish`
+/// drops the handle, and with it the SDK worker doing the retrying, so a slow
+/// relay would leave the service permanently unpublished rather than merely
+/// late. The bound comes from the SDK's own readiness budget instead, and
+/// [`pocket_codex_pb::publish_pending`] hands the handle back either way.
 fn register_service(
     transport: &Transport,
     device: &str,
@@ -259,26 +259,29 @@ fn register_service(
     local: SocketAddr,
 ) -> Result<Option<Published>> {
     let key = transport.key(&ServiceId::new(device, kind, name));
-    let outcome = runtime::runtime().block_on(async {
-        tokio::time::timeout(
-            REGISTER_PREFLIGHT,
-            publish(&transport.session, RegisterOptions {
-                key: key.clone(),
-                local_addr: local.to_string(),
-                codec: false,
-            }),
-        )
-        .await
-    });
+    let outcome =
+        runtime::runtime().block_on(publish_pending(&transport.session, RegisterOptions {
+            key: key.clone(),
+            local_addr: local.to_string(),
+            codec: false,
+        }));
     match outcome {
-        Ok(Ok(published)) => Ok(Some(published)),
+        Ok((published, ready)) => {
+            if !ready {
+                tracing::info!(
+                    key = %key,
+                    "hosting started before the relay confirmed this service; it keeps retrying"
+                );
+            }
+            Ok(Some(published))
+        },
         // The one condition hosting must not proceed through: another live
         // instance owns the name, and publishing anyway makes the two evict each
         // other on the relay in an endless leapfrog.
-        Ok(Err(PublishError::Conflict {
+        Err(PublishError::Conflict {
             detail, ..
-        })) => bail!("`{name}` is already in use by another device: {detail}"),
-        Ok(Err(PublishError::Other(err))) => {
+        }) => bail!("`{name}` is already in use by another device: {detail}"),
+        Err(PublishError::Other(err)) => {
             tracing::warn!(
                 key = %key,
                 error = %format!("{err:#}"),
@@ -286,18 +289,29 @@ fn register_service(
             );
             Ok(None)
         },
-        // Timed out: the relay may yet accept it, but hosting should not wait.
-        Err(_) => {
-            tracing::warn!(key = %key, "publishing did not complete in time; will retry");
-            Ok(None)
-        },
     }
 }
 
-/// `true` if a service is not currently published — no registration held, or
-/// one the relay has permanently refused.
-fn tunnel_down(published: &Option<Published>) -> bool {
+/// `true` if there is no registration to hold — none was created, or the relay
+/// permanently refused the one we have.
+///
+/// Deliberately NOT the same question as "is it serving right now": a handle in
+/// `Retrying` is down but must not be replaced, because its worker is already
+/// reconnecting and a second registration for one key is the eviction leapfrog.
+/// [`is_published`] is what the UI shows; this is what decides whether to
+/// publish again.
+fn needs_publishing(published: &Option<Published>) -> bool {
     published.as_ref().is_none_or(|p| p.failure().is_some())
+}
+
+/// `true` if a service is reachable through the relay right now.
+///
+/// What the UI reports, so `Starting` and `Retrying` read as NOT published: the
+/// key may still be indexed while nothing is forwarding, and showing that as
+/// online is what would withhold the offline / re-register controls from a user
+/// whose service is unreachable.
+fn is_published(published: &Option<Published>) -> bool {
+    published.as_ref().is_some_and(|p| p.is_live())
 }
 
 /// Re-publish whichever of `name`'s three services are not currently published.
@@ -319,7 +333,7 @@ fn republish_dropped(name: &str) -> Result<()> {
                 (ServiceKind::Meta, ls.meta_local, &ls.meta_register),
             ]
             .into_iter()
-            .filter(|(_, _, slot)| tunnel_down(slot))
+            .filter(|(_, _, slot)| needs_publishing(slot))
             .map(|(kind, local, _)| (kind, local))
             .collect();
             (ls.device.clone(), pending)
@@ -1059,7 +1073,20 @@ pub fn serve_start(
 }
 
 /// Snapshot of every local host, sorted by name for a stable UI order.
+///
+/// Also the recovery tick. The UI polls this, and a service the relay
+/// PERMANENTLY refused has no worker left retrying it — the SDK reconnects a
+/// dropped tunnel, but not one it was told to stop. Re-publishing those here is
+/// what lets hosting heal on its own instead of waiting for a user to notice
+/// and re-host. A handle that is merely `Retrying` is left alone
+/// ([`needs_publishing`] excludes it) so we never race the SDK's own reconnect.
 pub fn serve_status() -> Vec<ServeStatus> {
+    // Before reading status, so the snapshot reflects any recovery just made. Its
+    // own errors are the UI's to discover on the next call: `serve_status` has no
+    // way to report one, and a name conflict here means another device took over,
+    // which the `false` registered flag already conveys.
+    republish_refused();
+
     let guard = hosts_locked();
     let mut out: Vec<ServeStatus> = guard
         .values()
@@ -1070,13 +1097,13 @@ pub fn serve_status() -> Vec<ServeStatus> {
             alive: listen_addr_open(&ls.app_local.to_string()),
             app_listen_addr: ls.app_local.to_string(),
             app_service_key: ls.app_key.clone(),
-            app_registered: !tunnel_down(&ls.app_register),
+            app_registered: is_published(&ls.app_register),
             api_listen_addr: ls.api_local.to_string(),
             api_service_key: ls.api_key.clone(),
-            api_registered: !tunnel_down(&ls.api_register),
+            api_registered: is_published(&ls.api_register),
             meta_listen_addr: ls.meta_local.to_string(),
             meta_service_key: ls.meta_key.clone(),
-            meta_registered: !tunnel_down(&ls.meta_register),
+            meta_registered: is_published(&ls.meta_register),
             embedded: ls.embedded.is_some(),
             codex_binary: ls.codex_binary.clone(),
             proxy: ls.proxy.clone(),
@@ -1084,6 +1111,47 @@ pub fn serve_status() -> Vec<ServeStatus> {
         .collect();
     out.sort_by(|a, b| a.name.cmp(&b.name));
     out
+}
+
+/// Re-publish every host's permanently-refused services, quietly.
+///
+/// The self-healing half of [`serve_status`]. Best-effort by construction: it
+/// cannot report to anyone, so a failure just leaves the service unpublished
+/// for the next tick to retry. Rate-limited because status is polled often and
+/// each attempt is a relay round trip — without that, a relay that is down
+/// would turn a 1 Hz UI poll into a 1 Hz publish storm, which is the shape of
+/// the 2026-07-07 outage.
+fn republish_refused() {
+    static LAST: Mutex<Option<Instant>> = Mutex::new(None);
+    /// Minimum gap between recovery sweeps.
+    const RECOVERY_INTERVAL: Duration = Duration::from_secs(30);
+
+    {
+        let mut last = LAST.lock().unwrap_or_else(|poison| poison.into_inner());
+        if last.is_some_and(|at| at.elapsed() < RECOVERY_INTERVAL) {
+            return;
+        }
+        *last = Some(Instant::now());
+    }
+
+    let names: Vec<String> = hosts_locked()
+        .values()
+        .filter(|ls| {
+            needs_publishing(&ls.app_register)
+                || needs_publishing(&ls.api_register)
+                || needs_publishing(&ls.meta_register)
+        })
+        .map(|ls| ls.name.clone())
+        .collect();
+    for name in names {
+        if let Err(err) = republish_dropped(&name) {
+            tracing::debug!(
+                service = %name,
+                error = %format!("{err:#}"),
+                "re-publishing a refused service failed; will retry"
+            );
+        }
+    }
 }
 
 /// Take one service (`kind` = `"app"`/`"api"`/`"meta"`) off the relay without
@@ -1137,7 +1205,7 @@ pub fn serve_reregister(name: &str, kind: &str) -> Result<()> {
             ServiceKind::Meta => (ls.meta_local, &ls.meta_register),
             _ => (ls.app_local, &ls.app_register),
         };
-        tunnel_down(slot).then(|| (ls.device.clone(), local))
+        needs_publishing(slot).then(|| (ls.device.clone(), local))
     }) else {
         return Ok(());
     };

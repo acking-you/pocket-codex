@@ -264,19 +264,54 @@ async fn me(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json
     }))
 }
 
+/// List the caller's own services, as the relay sees them.
+///
+/// Scoped by the account's relay NAMESPACE first and its key prefix second. The
+/// namespace is what actually attributes a registration: a service name is
+/// whatever its registrant typed, so another account could register the literal
+/// string `pcxu:<this-user>:mac:app:default` inside its own namespace, and a
+/// prefix-only filter would show that phantom here. The prefix check stays
+/// because it is what parses the key into device/kind/name.
 async fn services(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> ApiResult<Json<ServicesResponse>> {
     let claims = authed(&state, &headers)?;
-    let prefix = NamespacedServiceId::user_prefix(&claims.sub);
-    let keys = pocket_codex_pb::all_service_keys(&state.relay)
+    let Some(namespace) = state
+        .credentials
+        .namespace_of(&claims.sub)
+        .await
+        .map_err(|e| ApiError::Internal(format!("resolving the account namespace: {e:#}")))?
+    else {
+        // No credential ever issued, so nothing can have been registered.
+        return Ok(Json(ServicesResponse::default()));
+    };
+    let all = pocket_codex_pb::all_services(&state.relay)
         .await
         .map_err(|e| ApiError::Internal(format!("relay status: {e}")))?;
-    let services = keys
-        .into_iter()
-        .filter(|k| k.starts_with(&prefix))
-        .filter_map(|k| NamespacedServiceId::parse_key(&k))
+    Ok(Json(ServicesResponse {
+        services: own_services(&all, namespace, &claims.sub),
+    }))
+}
+
+/// The subset of `all` that belongs to `user_id` in relay `namespace`.
+///
+/// Factored out of the handler so the attribution rule is testable without a
+/// relay — it is the rule that keeps one account's listing from showing
+/// another's registrations.
+fn own_services(
+    all: &[pocket_codex_pb::ServiceRecord],
+    namespace: u64,
+    user_id: &str,
+) -> Vec<ServiceEntry> {
+    let prefix = NamespacedServiceId::user_prefix(user_id);
+    all.iter()
+        // BOTH conditions, and the namespace is the load-bearing one: a service
+        // name is whatever its registrant typed, so account B can register the
+        // literal string `pcxu:<A>:mac:app:default` inside B's own namespace. The
+        // prefix alone would attribute that to A.
+        .filter(|svc| svc.namespace == namespace && svc.name.starts_with(&prefix))
+        .filter_map(|svc| NamespacedServiceId::parse_key(&svc.name))
         // Only surface the kinds clients consume directly. The meta service is a
         // colocated implementation detail (clients derive its key from the app
         // key), and an unrecognised kind must never be sent — an older client
@@ -288,10 +323,7 @@ async fn services(
             kind: nsid.service.kind,
             name: nsid.service.name,
         })
-        .collect();
-    Ok(Json(ServicesResponse {
-        services,
-    }))
+        .collect()
 }
 
 /// Force-deregister one of the caller's own services from the relay. The relay
@@ -314,9 +346,21 @@ async fn deregister_service(
     // backend no longer holds anything to cancel, so the authority it does have —
     // its administrator credential — is what retires the key.
     //
-    // The key is derived from the verified token, so a caller can only ever name
-    // a service inside its own namespace.
-    pocket_codex_pb::retire_service(&state.relay, &relay_key)
+    // Both the namespace and the key come from the verified token, so a caller
+    // can only ever name a service of their own. Naming the namespace is not
+    // optional: the relay reads an absent one as the administrator's, where an
+    // account's services never live, so omitting it would retire nothing.
+    let Some(namespace) = state
+        .credentials
+        .namespace_of(&claims.sub)
+        .await
+        .map_err(|e| ApiError::Internal(format!("resolving the account namespace: {e:#}")))?
+    else {
+        // No credential, so nothing of this account's is registered. The
+        // post-condition the caller wants already holds.
+        return Ok(StatusCode::NO_CONTENT);
+    };
+    pocket_codex_pb::retire_service(&state.relay, namespace, &relay_key)
         .await
         .map_err(|e| ApiError::Internal(format!("retiring {relay_key}: {e:#}")))?;
     Ok(StatusCode::NO_CONTENT)
@@ -348,4 +392,62 @@ async fn relay_credential(
         // one would still be confined by the credential it gets back.
         namespace: NamespacedServiceId::namespace_of(&claims.sub),
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use pocket_codex_pb::ServiceRecord;
+
+    use super::*;
+
+    fn record(namespace: u64, name: &str) -> ServiceRecord {
+        ServiceRecord {
+            namespace,
+            name: name.to_string(),
+        }
+    }
+
+    #[test]
+    fn a_listing_is_scoped_by_namespace_not_just_by_key_prefix() {
+        // The attack this closes: account B registers a name that LOOKS like one of
+        // A's. The relay is right to allow it — B's namespace is B's to fill — so
+        // the filter, not the relay, has to refuse to attribute it to A.
+        const ALICE_NS: u64 = 11;
+        const BOB_NS: u64 = 22;
+        let all = vec![
+            record(ALICE_NS, "pcxu:alice:mac:app:default"),
+            // Bob's namespace, Alice's name. Must NOT appear in Alice's listing.
+            record(BOB_NS, "pcxu:alice:mac:app:phantom"),
+            record(BOB_NS, "pcxu:bob:studio:app:default"),
+        ];
+
+        let alice = own_services(&all, ALICE_NS, "alice");
+        assert_eq!(alice.len(), 1, "expected only Alice's own service, got {alice:?}");
+        assert_eq!(alice[0].name, "default");
+
+        // And the converse: Alice's namespace does not leak into Bob's listing
+        // either, even though one of those names carries his prefix.
+        let bob = own_services(&all, BOB_NS, "bob");
+        assert_eq!(bob.len(), 1, "expected only Bob's own service, got {bob:?}");
+        assert_eq!(bob[0].device, "studio");
+    }
+
+    #[test]
+    fn a_listing_hides_meta_and_unparsable_keys() {
+        const NS: u64 = 7;
+        let all = vec![
+            record(NS, "pcxu:alice:mac:app:default"),
+            record(NS, "pcxu:alice:mac:api:default"),
+            // Colocated implementation detail: clients derive it from the app key.
+            record(NS, "pcxu:alice:mac:meta:default"),
+            // Same namespace, but not one of ours at all.
+            record(NS, "some-unrelated-service"),
+        ];
+        let mut kinds: Vec<String> = own_services(&all, NS, "alice")
+            .into_iter()
+            .map(|s| s.kind.as_key_segment().to_string())
+            .collect();
+        kinds.sort();
+        assert_eq!(kinds, vec!["api", "app"]);
+    }
 }

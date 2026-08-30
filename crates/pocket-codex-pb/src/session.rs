@@ -169,6 +169,25 @@ pub const TUNNEL_READY_TIMEOUT: Duration = Duration::from_secs(30);
 /// and prefer [`Registration::stop`] over dropping it so the teardown is
 /// awaited rather than aborted.
 pub async fn register(session: &RelaySession, opts: RegisterOptions) -> Result<Registration> {
+    let (registration, ready) = register_pending(session, opts).await?;
+    ready?;
+    Ok(registration)
+}
+
+/// Register, returning the handle AND the readiness outcome separately.
+///
+/// For a caller that must keep the registration even when it is not up yet: the
+/// SDK's worker goes on retrying, so the handle is what lets the service appear
+/// once the relay is reachable. [`register`] is this plus "treat not-ready as a
+/// failure", which is right when the caller has nowhere to hold a pending
+/// handle.
+///
+/// An `Err` from this function means the relay REFUSED the registration; the
+/// inner `Err` means it has not confirmed it yet.
+pub async fn register_pending(
+    session: &RelaySession,
+    opts: RegisterOptions,
+) -> Result<(Registration, Result<()>)> {
     let registration = session
         .client()?
         .register(RegisterRequest {
@@ -182,13 +201,13 @@ pub async fn register(session: &RelaySession, opts: RegisterOptions) -> Result<R
         })
         .await
         .with_context(|| format!("registering `{}` on {}", opts.key, session.relay_addr))?;
-    registration
+    let ready = registration
         .wait_ready_timeout(TUNNEL_READY_TIMEOUT)
         .await
         .with_context(|| {
             format!("waiting for `{}` to register on {}", opts.key, session.relay_addr)
-        })?;
-    Ok(registration)
+        });
+    Ok((registration, ready))
 }
 
 /// Subscribe to a remote service and expose it on a local TCP port.
