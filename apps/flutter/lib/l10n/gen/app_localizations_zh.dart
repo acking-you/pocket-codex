@@ -500,6 +500,16 @@ class AppLocalizationsZh extends AppLocalizations {
   }
 
   @override
+  String turnProcessed(String duration) {
+    return '已处理 $duration';
+  }
+
+  @override
+  String turnProcessing(int count) {
+    return '正在处理 $count 步';
+  }
+
+  @override
   String completedAt(String time) {
     return '完成于 $time';
   }

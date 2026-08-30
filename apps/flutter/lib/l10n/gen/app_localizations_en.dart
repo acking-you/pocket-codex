@@ -506,6 +506,16 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
+  String turnProcessed(String duration) {
+    return 'Worked for $duration';
+  }
+
+  @override
+  String turnProcessing(int count) {
+    return 'Working, $count steps so far';
+  }
+
+  @override
   String completedAt(String time) {
     return 'Completed at $time';
   }

@@ -395,6 +395,58 @@ class _PlanCardState extends State<PlanCard> {
   }
 }
 
+/// Everything the agent DID between two messages: a run of consecutive activity
+/// items of any mix of types, folded behind one "已处理 {duration}" row.
+///
+/// The transcript used to show these inline, and only merged runs of the *same*
+/// type — so a real turn, which alternates command / reasoning / search,
+/// collapsed into nothing and buried the answer under a wall of tool rows. What
+/// the reader wants by default is the answer and how long it took; the work is
+/// there when they ask for it.
+///
+/// Two levels on purpose: this folds the whole turn's work, and inside it the
+/// same-type sub-runs stay grouped as [ActivityGroup]s, so expanding gives
+/// "思考 ×2" rather than four loose rows.
+class TurnWork {
+  /// Groups [items], the activity between two messages, in transcript order.
+  TurnWork(this.items);
+
+  /// The activity rows, in transcript order.
+  final List<TranscriptItem> items;
+
+  /// The sub-runs, same-type neighbours merged — the second level of the fold.
+  ///
+  /// A run of one stays a bare item rather than becoming a group of one, which
+  /// would add a disclosure triangle that reveals a single row.
+  List<Object> get groups {
+    final out = <Object>[];
+    var i = 0;
+    while (i < items.length) {
+      var j = i + 1;
+      while (j < items.length && items[j].type == items[i].type) {
+        j++;
+      }
+      out.add(
+        j - i >= 2
+            ? ActivityGroup(items[i].type, items.sublist(i, j))
+            : items[i],
+      );
+      i = j;
+    }
+    return out;
+  }
+
+  /// Whether any of this work is still arriving.
+  bool get streaming => items.any((i) => i.streaming);
+
+  /// The turn's duration in milliseconds, per the server, or null when it did
+  /// not say — a turn still in flight, or an item read from a rollout with no
+  /// turn stamp. Never inferred: a made-up number here would read as fact.
+  int? get durationMs => items
+      .map((i) => i.turnDurationMs)
+      .firstWhere((d) => d != null, orElse: () => null);
+}
+
 /// A run of ≥2 consecutive same-type activity items, collapsed into one row.
 class ActivityGroup {
   ActivityGroup(this.type, this.items);
@@ -521,6 +573,136 @@ class AgentTurn {
   /// can't open the block with an empty paragraph.
   String get text =>
       items.map((i) => i.text.trim()).where((t) => t.isNotEmpty).join('\n\n');
+}
+
+/// The whole of a turn's work behind one line: "已处理 2m 31s ›".
+///
+/// Deliberately quieter than [GroupedActivityCard] — no border, no fill, just a
+/// muted label and a chevron above a hairline. Collapsed is the resting state, so
+/// this row appears in every turn and a bordered card per turn would out-shout
+/// the answers it sits above.
+///
+/// Expanding reveals [TurnWork.groups], each of which is itself expandable, so
+/// the reader descends only as far as they need: turn, then tool run, then the
+/// individual call's output.
+class TurnWorkCard extends StatefulWidget {
+  /// Creates the fold for one turn's work.
+  const TurnWorkCard({super.key, required this.work});
+
+  /// The activity to fold away.
+  final TurnWork work;
+
+  @override
+  State<TurnWorkCard> createState() => _TurnWorkCardState();
+}
+
+class _TurnWorkCardState extends State<TurnWorkCard> {
+  /// Whether the user has taken control of this fold, and in which direction.
+  /// Null means "follow the turn" — open while it runs, shut once it settles.
+  bool? _userExpanded;
+
+  bool get _expanded => _userExpanded ?? widget.work.streaming;
+
+  @override
+  void didUpdateWidget(TurnWorkCard old) {
+    super.didUpdateWidget(old);
+    // A turn that just finished hands control back, so the work it did folds
+    // away on its own. A user who opened or shut it by hand keeps their choice —
+    // being overruled by the turn ending is what makes an auto-fold feel like a
+    // fight.
+    if (old.work.streaming && !widget.work.streaming) {
+      _userExpanded = null;
+    }
+  }
+
+  /// The turn's duration, or null where the server did not report one.
+  String? _duration(AppLocalizations l10n) {
+    final ms = widget.work.durationMs;
+    if (ms == null) return null;
+    return formatElapsed((ms / 1000).round());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    final scheme = Theme.of(context).colorScheme;
+    final muted = scheme.onSurfaceVariant;
+    final duration = _duration(l10n);
+    // While the turn runs there is no duration yet, and a count is what there is
+    // to say. Afterwards the time is the useful summary: how long you waited.
+    final label = switch (duration) {
+      final d? => l10n.turnProcessed(d),
+      _ => l10n.turnProcessing(widget.work.items.length),
+    };
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        InkWell(
+          key: const Key('turn-work-toggle'),
+          mouseCursor: clickable,
+          borderRadius: BorderRadius.circular(kControlRadius),
+          onTap: () => setState(() => _userExpanded = !_expanded),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+            child: Row(
+              children: [
+                Text(
+                  label,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodySmall?.copyWith(color: muted),
+                ),
+                const SizedBox(width: 4),
+                if (widget.work.streaming)
+                  SizedBox(
+                    width: 11,
+                    height: 11,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 1.6,
+                      color: muted,
+                    ),
+                  )
+                else
+                  Icon(
+                    _expanded
+                        ? Icons.keyboard_arrow_down
+                        : Icons.keyboard_arrow_right,
+                    size: 16,
+                    color: muted.withValues(alpha: 0.7),
+                  ),
+              ],
+            ),
+          ),
+        ),
+        AnimatedSize(
+          duration: const Duration(milliseconds: 160),
+          curve: Curves.easeOutCubic,
+          alignment: Alignment.topCenter,
+          child: !_expanded
+              ? const SizedBox(width: double.infinity)
+              : Padding(
+                  padding: const EdgeInsets.only(left: 8, bottom: 4),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      for (final row in widget.work.groups)
+                        if (row is ActivityGroup)
+                          GroupedActivityCard(
+                            key: ValueKey('wg:${row.items.first.id}'),
+                            group: row,
+                          )
+                        else if ((row as TranscriptItem).type == 'fileChange')
+                          FileChangeCard(key: ValueKey(row.id), item: row)
+                        else
+                          ActivityCard(key: ValueKey(row.id), item: row),
+                    ],
+                  ),
+                ),
+        ),
+        Divider(height: 1, thickness: 1, color: scheme.outlineVariant),
+      ],
+    );
+  }
 }
 
 /// Collapses a run of same-type tool calls (e.g. several shell commands) into a

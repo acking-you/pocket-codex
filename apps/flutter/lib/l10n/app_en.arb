@@ -194,6 +194,16 @@
   "@turnElapsed": {
     "placeholders": { "duration": { "type": "String" } }
   },
+  "turnProcessed": "Worked for {duration}",
+  "@turnProcessed": {
+    "description": "Collapsed header for a turn's tool calls and reasoning.",
+    "placeholders": { "duration": { "type": "String" } }
+  },
+  "turnProcessing": "Working, {count} steps so far",
+  "@turnProcessing": {
+    "description": "Same header while the turn is still running, when no duration exists yet.",
+    "placeholders": { "count": { "type": "int" } }
+  },
   "completedAt": "Completed at {time}",
   "@completedAt": {
     "placeholders": { "time": { "type": "String" } }

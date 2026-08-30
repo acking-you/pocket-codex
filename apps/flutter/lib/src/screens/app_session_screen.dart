@@ -492,10 +492,21 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     return null;
   }
 
-  /// The timeline collapsed for display: runs of ≥2 consecutive same-type
-  /// non-message activity items become a single [ActivityGroup] (shown as one
-  /// expandable row); everything else stays a [TranscriptItem]. Computed at build time
-  /// so the flat `_items` upsert path is untouched.
+  /// The timeline collapsed for display. Computed at build time so the flat
+  /// `_items` upsert path is untouched.
+  ///
+  /// Three collapses, in the order they apply:
+  ///
+  /// * A turn's prose, which arrives as several `agentMessage` items, becomes one
+  ///   [AgentTurn] — one reply, one block.
+  /// * Every run of consecutive activity items becomes one [TurnWork], folded
+  ///   behind a duration. This is type-BLIND on purpose: a real turn alternates
+  ///   command / reasoning / search, so the old same-type-only rule collapsed
+  ///   nothing and left the answer buried under a wall of tool rows.
+  /// * Inside a [TurnWork], same-type neighbours stay grouped (see
+  ///   [TurnWork.groups]) so expanding shows "思考 ×2", not four loose rows.
+  ///
+  /// User messages and standalone notices are never folded.
   List<Object> get _rows {
     final out = <Object>[];
     var i = 0;
@@ -528,18 +539,15 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         i++;
         continue;
       }
+      // Everything up to the next message or notice is this turn's work. Note
+      // there is no `type` test here and no length floor: even a single tool call
+      // folds, so every turn presents the same way and the transcript does not
+      // change shape depending on how much the agent happened to do.
       var j = i + 1;
-      while (j < _items.length &&
-          !_items[j].isMessage &&
-          !_items[j].isNotice &&
-          _items[j].type == it.type) {
+      while (j < _items.length && !_items[j].isMessage && !_items[j].isNotice) {
         j++;
       }
-      if (j - i >= 2) {
-        out.add(ActivityGroup(it.type, _items.sublist(i, j)));
-      } else {
-        out.add(it);
-      }
+      out.add(TurnWork(_items.sublist(i, j)));
       i = j;
     }
     return out;
@@ -1154,6 +1162,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
               item.title == 'inProgress',
           turnId: item.turnId,
           turnCompletedAt: item.turnCompletedAt,
+          turnDurationMs: item.turnDurationMs,
         ),
       );
     }
@@ -2321,16 +2330,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     );
   }
 
-  /// Stopwatch-format an elapsed-second count: `m:ss`, or `h:mm:ss` past an
-  /// hour (e.g. `0:08`, `1:23`, `1:02:05`).
-  String _fmtElapsed(int secs) {
-    final s = secs < 0 ? 0 : secs;
-    final h = s ~/ 3600;
-    final m = (s % 3600) ~/ 60;
-    final ss = (s % 60).toString().padLeft(2, '0');
-    if (h > 0) return '$h:${m.toString().padLeft(2, '0')}:$ss';
-    return '$m:$ss';
-  }
+  /// Stopwatch-format an elapsed-second count. Shared with the turn-work fold
+  /// (see [formatElapsed]) so a turn's footnote and its fold cannot disagree
+  /// about how long the same turn took.
+  String _fmtElapsed(int secs) => formatElapsed(secs);
 
   /// Wall-clock `HH:MM:SS` for a completion timestamp.
   String _fmtClock(DateTime t) {
@@ -4146,6 +4149,21 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                                               // A group keys off its first item's stable
                                               // id plus length so expand/collapse and
                                               // run-growth produce a fresh measurement.
+                                              if (row is TurnWork) {
+                                                // Keyed on the first item alone,
+                                                // NOT the length: a running turn
+                                                // grows an item at a time, and
+                                                // re-keying on each would discard
+                                                // the fold's expanded state mid-
+                                                // turn — exactly while the user is
+                                                // watching it work.
+                                                return TurnWorkCard(
+                                                  key: ValueKey(
+                                                    'w:${row.items.first.id}',
+                                                  ),
+                                                  work: row,
+                                                );
+                                              }
                                               if (row is ActivityGroup) {
                                                 return GroupedActivityCard(
                                                   key: ValueKey(
