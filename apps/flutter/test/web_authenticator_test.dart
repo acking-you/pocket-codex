@@ -23,7 +23,8 @@ void main() {
     expect(
       cb.redirectUri,
       isNot(contains('localhost')),
-      reason: 'a name that may resolve to ::1 cannot reach an IPv4-only listener',
+      reason:
+          'a name that may resolve to ::1 cannot reach an IPv4-only listener',
     );
   });
 
@@ -75,7 +76,8 @@ void main() {
     expect(
       handlerFailure,
       isNull,
-      reason: 'the landing page must be latin-1 encodable; write Chinese as '
+      reason:
+          'the landing page must be latin-1 encodable; write Chinese as '
           'numeric entities (&#NNNN;) instead of literal characters',
     );
   });
@@ -109,7 +111,8 @@ void main() {
     expect(
       failure,
       isNotNull,
-      reason: 'binding IPv4 must not accidentally serve ::1; if it does, the '
+      reason:
+          'binding IPv4 must not accidentally serve ::1; if it does, the '
           'localhost-vs-127.0.0.1 distinction would be moot',
     );
   });
