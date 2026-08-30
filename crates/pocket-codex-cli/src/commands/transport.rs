@@ -1,5 +1,4 @@
-//! Transport resolution: which relay to talk to, with which credential, and
-//! under which key namespace.
+//! How a CLI command resolves its [`Transport`] from flags and saved config.
 //!
 //! ```text
 //!   --relay given?  ─yes─▶ self-host: saved/env credential, un-namespaced keys
@@ -11,69 +10,18 @@
 //!                          self-host
 //! ```
 //!
-//! # Why one type, not two
-//!
-//! Account mode used to be a different transport in kind: its bytes went
-//! through the backend's broker, so it needed a TLS connector, a token
-//! provider, a tunnel protocol, and its own register/subscribe implementations.
-//! Now that clients reach the relay directly, the two modes differ in exactly
-//! two values — which credential to present, and whether service keys carry an
-//! account namespace. So this is one struct, and every command downstream has a
-//! single code path instead of a `match` with two parallel implementations.
+//! The type itself, and the key-shape rules that must hold identically here and
+//! in the app, live in [`pocket_codex_pb::transport`]. This module is only the
+//! CLI's half: reading flags and a `Config`. The app resolves the same type
+//! from its support directory instead.
 
 use anyhow::{anyhow, Result};
-use pocket_codex_account_proto::key::NamespacedServiceId;
-use pocket_codex_core::{
-    config::{Config, Mode},
-    service::ServiceId,
-};
+use pocket_codex_core::config::{Config, Mode};
+// Re-exported so callers keep saying `commands::transport::Transport`: for a
+// command, the resolver and the type it returns are one concept.
+pub(crate) use pocket_codex_pb::Transport;
 
 use crate::commands::{account, relay};
-
-/// How a command reaches Pocket-Codex services.
-///
-/// `Debug` comes from [`pocket_codex_pb::RelaySession`]'s, which redacts the
-/// credential — so a transport can appear in a log line or a test assertion
-/// without leaking the key it carries.
-#[derive(Debug)]
-pub(crate) struct Transport {
-    /// The relay address and the credential to present to it.
-    ///
-    /// In account mode this credential came from `/v1/relay` and the relay
-    /// confines it to the account's namespace; in self-host mode it is the
-    /// operator's own key for their own relay.
-    pub session: pocket_codex_pb::RelaySession,
-    /// The account id to namespace service keys under, or `None` in self-host
-    /// mode where keys are un-namespaced `pcx:` ones.
-    pub namespace: Option<String>,
-}
-
-impl Transport {
-    /// The relay key for `service` under this transport.
-    ///
-    /// The one place the two modes' key shapes are decided, so a caller cannot
-    /// register under one shape and subscribe under the other.
-    pub(crate) fn key(&self, service: &ServiceId) -> String {
-        match &self.namespace {
-            Some(ns) => NamespacedServiceId::new(ns, service.clone()).key(),
-            None => service.key(),
-        }
-    }
-
-    /// Parse a relay key back into a [`ServiceId`], accepting whichever shape
-    /// this transport emits. The inverse of [`Self::key`].
-    pub(crate) fn parse_key(&self, key: &str) -> Option<ServiceId> {
-        match self.namespace.is_some() {
-            true => NamespacedServiceId::parse_key(key).map(|nsid| nsid.service),
-            false => ServiceId::parse_key(key),
-        }
-    }
-
-    /// Whether this is a hosted account (as opposed to a self-hosted relay).
-    pub(crate) fn is_account(&self) -> bool {
-        self.namespace.is_some()
-    }
-}
 
 /// Resolve the transport for a command.
 ///
@@ -114,55 +62,10 @@ fn self_host(relay_flag: Option<&str>, config: &Config) -> Result<Transport> {
 
 #[cfg(test)]
 mod tests {
-    use pocket_codex_core::service::ServiceKind;
-
     use super::*;
 
-    fn account_transport() -> Transport {
-        Transport {
-            session: pocket_codex_pb::RelaySession::for_test("relay.example:7666"),
-            namespace: Some("bob".to_string()),
-        }
-    }
-
-    fn self_host_transport() -> Transport {
-        Transport {
-            session: pocket_codex_pb::RelaySession::for_test("relay.example:7666"),
-            namespace: None,
-        }
-    }
-
-    #[test]
-    fn account_keys_are_namespaced_and_self_host_keys_are_not() {
-        let service = ServiceId::new("studio", ServiceKind::App, "default");
-        assert_eq!(account_transport().key(&service), "pcxu:bob:studio:app:default");
-        assert_eq!(self_host_transport().key(&service), "pcx:studio:app:default");
-    }
-
-    #[test]
-    fn parse_key_inverts_key_in_both_modes() {
-        // Register writes a key and connect reads one back; if these ever
-        // disagreed a client would subscribe to a name nothing published.
-        for transport in [account_transport(), self_host_transport()] {
-            let service = ServiceId::new("studio", ServiceKind::Api, "work");
-            let parsed = transport
-                .parse_key(&transport.key(&service))
-                .expect("a key this transport emitted must parse back");
-            assert_eq!(parsed, service);
-        }
-    }
-
-    #[test]
-    fn each_mode_rejects_the_other_shape() {
-        // Not pedantry: an account client that accepted a bare `pcx:` key would
-        // list a self-hoster's services as its own in a shared-relay listing.
-        assert!(account_transport()
-            .parse_key("pcx:studio:app:default")
-            .is_none());
-        assert!(self_host_transport()
-            .parse_key("pcxu:bob:studio:app:default")
-            .is_none());
-    }
+    // Key-shape tests live with the type, in `pocket_codex_pb::transport`. These
+    // cover only what this module adds: how flags and saved config pick a mode.
 
     #[tokio::test]
     async fn explicit_relay_forces_self_host_even_when_signed_in() {

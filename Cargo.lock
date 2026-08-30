@@ -9401,6 +9401,7 @@ version = "0.1.9"
 dependencies = [
  "anyhow",
  "pb-mapper",
+ "pocket-codex-account-proto",
  "pocket-codex-core",
  "serde",
  "serde_json",

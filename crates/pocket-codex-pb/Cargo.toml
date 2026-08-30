@@ -14,6 +14,9 @@ workspace = true
 
 [dependencies]
 pocket-codex-core = { workspace = true }
+# For `NamespacedServiceId`, which `transport::Transport` uses to decide an
+# account-mode key's shape. A pure (no-I/O) crate, so this stays a leaf edge.
+pocket-codex-account-proto = { workspace = true }
 anyhow = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

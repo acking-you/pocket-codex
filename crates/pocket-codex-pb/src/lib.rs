@@ -40,6 +40,9 @@
 //!   clients actually use. Administrator-only.
 //! * [`keepalive`] — renewing an issued credential under a long-lived tunnel,
 //!   because the relay cancels a lapsed credential's tunnels.
+//! * [`transport`] — [`Transport`], which pairs a session with an optional
+//!   account namespace and is the only difference between account and self-host
+//!   mode. Shared so the CLI and the app cannot disagree on a key's shape.
 
 #![forbid(unsafe_code)]
 
@@ -51,6 +54,8 @@ pub mod keepalive;
 pub mod publish;
 /// Register / subscribe primitives.
 pub mod session;
+/// Which relay to talk to, with which credential and key namespace.
+pub mod transport;
 
 pub use admin::{
     all_services, issue_credential, live_credentials, renew_credential, retire_service,
@@ -62,3 +67,4 @@ pub use session::{
     keys, parse_relay_addr, register, remote_id, service_connections, subscribe, RegisterOptions,
     RelaySession, SubscribeOptions, TUNNEL_READY_TIMEOUT,
 };
+pub use transport::Transport;
