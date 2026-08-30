@@ -29,8 +29,15 @@ class TurnMinimapItem {
   final String? assistantText;
 }
 
-/// Below this many turns the rail says nothing a scrollbar doesn't.
-const int kTurnMinimapMinItems = 2;
+/// Below this many turns the rail says nothing a scrollbar doesn't, and the
+/// corner arrows are the better affordance.
+///
+/// The rail earns its place by showing a conversation's *shape* — how many turns
+/// there are and where you sit among them. At two or three ticks there is no
+/// shape to show, and what is left is a hover-only target that steps one turn at
+/// a time, which is exactly what the arrows already do with a visible label and a
+/// touch-sized target. So below this, the arrows come back.
+const int kTurnMinimapMinItems = 4;
 
 /// Nominal spacing between ticks. The rail's natural height is this times the
 /// gaps, then capped to the space available — past that the ticks compress and
@@ -120,8 +127,20 @@ class TurnMinimap extends StatefulWidget {
 
 class _TurnMinimapState extends State<TurnMinimap> {
   /// The tick the pointer (or the keyboard) is on, or null when neither is.
-  /// Drives both the width falloff and the preview.
+  /// Drives the width falloff and the preview.
   int? _active;
+
+  /// The tick last jumped to, kept after the pointer leaves.
+  ///
+  /// A click used to clear [_active], which collapsed the rail to its resting
+  /// width at the exact moment the user landed — so the rail stopped saying
+  /// where in the conversation they now were. This keeps the mark without
+  /// keeping the preview card, which genuinely should go: it would hang over the
+  /// turn just navigated to.
+  int? _landed;
+
+  /// The tick to emphasise: what the pointer is on, else where we last landed.
+  int? get _marked => _active ?? _landed;
 
   /// Whether the pointer is anywhere near the rail. Only used to fade the rail
   /// in on a window too narrow to keep it resting.
@@ -139,24 +158,35 @@ class _TurnMinimapState extends State<TurnMinimap> {
   void didUpdateWidget(TurnMinimap old) {
     super.didUpdateWidget(old);
     // A turn was removed (a rewind, a reload) — an index past the end would
-    // otherwise resolve to nothing and leave a stuck preview.
-    final active = _active;
-    if (active != null && active >= widget.items.length) {
-      _active = widget.items.isEmpty ? null : widget.items.length - 1;
-    }
+    // otherwise resolve to nothing and leave a stuck preview, or a mark on a
+    // tick that no longer exists.
+    _active = _clampIndex(_active);
+    _landed = _clampIndex(_landed);
   }
 
-  /// Where the rail sits: hard against the conversation column's left edge,
-  /// [kTurnMinimapRailInset] clear of the text — the same gap the column keeps
-  /// from its own content. On a wide window that puts it beside the prose rather
-  /// than out at the frame; on a narrow one it falls back to the fixed inset.
-  double get _railLeft => math.max(
-    kTurnMinimapRailInset,
-    widget.gutterWidth - _kHitStripMaxWidth - kTurnMinimapRailInset,
-  );
+  /// [index] pulled back inside the current turn list, or null when there are no
+  /// turns left to point at.
+  int? _clampIndex(int? index) {
+    if (index == null || index < widget.items.length) return index;
+    return widget.items.isEmpty ? null : widget.items.length - 1;
+  }
 
-  /// Rest width of the pointer region: what is left of the gutter once the rail
-  /// is placed, capped. Zero (inert) when the gutter can't hold it.
+  /// Where the rail sits: [kTurnMinimapRailInset] from the window's left edge,
+  /// whatever the gutter is doing.
+  ///
+  /// It used to be placed relative to the conversation column instead, hugging
+  /// its left edge — which tracked the column outward as the window widened and
+  /// left the rail floating in the middle of empty margin. This is an index of
+  /// the whole conversation, so it belongs at the frame where a scrollbar would
+  /// be, not attached to the prose.
+  double get _railLeft => kTurnMinimapRailInset;
+
+  /// Rest width of the pointer region: the gutter minus the rail's inset, capped.
+  /// Zero (inert) when the gutter can't hold it.
+  ///
+  /// The cap is what keeps the strip off the text: the column is centred, so a
+  /// strip that grew with the gutter would eventually reach under the prose and
+  /// swallow clicks meant for it.
   double get _hitWidth => math.max(
     0,
     math.min(
@@ -195,9 +225,13 @@ class _TurnMinimapState extends State<TurnMinimap> {
     if (item == null) return;
     widget.onSelect(item);
     // Drop focus after a jump so the preview doesn't hang over the place the
-    // user just navigated to.
+    // user just navigated to. The tick stays marked via `_landed`, so the rail
+    // remains open and still says where they are.
     _focus.unfocus();
-    setState(() => _active = null);
+    setState(() {
+      _active = null;
+      _landed = index;
+    });
   }
 
   KeyEventResult _onKey(FocusNode node, KeyEvent event) {
@@ -243,14 +277,13 @@ class _TurnMinimapState extends State<TurnMinimap> {
           (widget.items.length - 1) * _kTickSpacing,
         );
         final railHeight = math.min(natural, available);
-        final open = _active != null;
+        // Visible while a tick is marked, which now includes one just jumped to
+        // — so a narrow-gutter rail does not vanish the instant you use it.
+        final open = _marked != null;
         return Align(
           alignment: Alignment.centerLeft,
           child: Padding(
-            // Sat against the window edge the rail read as chrome bolted to the
-            // frame. Anchored off the conversation column instead — the same
-            // distance out from the text as the text is in from the gutter —
-            // it reads as part of the conversation's own margin.
+            // At the frame, where a scrollbar sits — see `_railLeft`.
             padding: EdgeInsets.only(left: _railLeft),
             child: AnimatedOpacity(
               // A wide window has room to show the rail at rest; a narrow one
@@ -317,7 +350,7 @@ class _TurnMinimapState extends State<TurnMinimap> {
   /// The ticks. Each repaints on scroll through [TurnMinimap.visibleRange]
   /// alone, so following a streaming reply never rebuilds the transcript.
   List<Widget> _ticks(double railHeight, ColorScheme scheme) {
-    final active = _active;
+    final active = _marked;
     return [
       for (var i = 0; i < widget.items.length; i++)
         Positioned(

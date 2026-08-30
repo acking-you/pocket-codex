@@ -2807,14 +2807,25 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   double _gutterWidth(double available) =>
       math.max(0, (available - _kColumnWidth) / 2);
 
+  /// How many turns the rail would have ticks for — one per user message, the
+  /// same count [_turnMinimapItems] produces.
+  int get _turnCount => _items.where((i) => i.isUser).length;
+
   /// Whether the gutter rail can take turn navigation over at [available] width,
   /// so the corner arrows can stand down rather than offer the same thing twice.
   ///
   /// Answered from the transcript's own laid-out width, not a MediaQuery: the
   /// conversation sits between two collapsible panes, so the window size says
   /// nothing useful about how much room it actually got.
+  ///
+  /// The turn count is part of the question, not just the width: the rail hides
+  /// itself below [kTurnMinimapMinItems], so without this a three-turn
+  /// conversation on a wide window would get NO turn navigation — the rail gone
+  /// by its own rule and the arrows stood down in deference to it.
   bool _railOwnsTurnNav(double available) =>
-      isDesktop && _gutterWidth(available) > kTurnMinimapRailInset;
+      isDesktop &&
+      _gutterWidth(available) > kTurnMinimapRailInset &&
+      _turnCount >= kTurnMinimapMinItems;
 
   /// The turn rail, plus the corner cluster that defers to it — one layout pass
   /// for both, since the same width decides whether the rail has a gutter and
@@ -2850,9 +2861,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
             Positioned(
               right: 12,
               bottom: 12,
-              child: _navCluster(
-                showTurnNav: _items.where((i) => i.isUser).length >= 2,
-              ),
+              // Two turns is enough for stepping to mean something, which is a
+              // lower bar than the rail's: the arrows carry a label and do not
+              // need a shape to read.
+              child: _navCluster(showTurnNav: _turnCount >= 2),
             ),
         ],
       );
@@ -2878,10 +2890,12 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// the way of the messages.
   ///
   /// [showTurnNav] is false where the left-gutter [TurnMinimap] is carrying turn
-  /// navigation, which does the same job better: the arrows can only step, one
-  /// turn per click, with no sense of how many turns exist or what you will land
-  /// on. They stay for the layouts the rail can't serve — touch, and windows too
-  /// narrow to hold a gutter.
+  /// navigation, which does the same job better *once there is a conversation
+  /// shape to show*: the arrows can only step, one turn per click, with no sense
+  /// of how many turns exist or what you will land on. They stay for the cases
+  /// the rail can't serve — touch, windows too narrow to hold a gutter, and
+  /// conversations short enough that a handful of ticks says less than a labelled
+  /// button (see [kTurnMinimapMinItems]).
   Widget _navCluster({required bool showTurnNav}) {
     final l10n = AppLocalizations.of(context);
     final scheme = Theme.of(context).colorScheme;
