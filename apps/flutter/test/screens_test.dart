@@ -26,6 +26,7 @@ import 'package:pocket_codex/src/widgets/api_service_panel.dart';
 import 'package:pocket_codex/src/widgets/message_images.dart';
 import 'package:pocket_codex/src/screens/app_session_screen.dart';
 import 'package:pocket_codex/src/screens/codex_setup_screen.dart';
+import 'package:pocket_codex/src/screens/onboarding_screen.dart';
 import 'package:pocket_codex/src/screens/services_screen.dart';
 import 'package:pocket_codex/src/screens/settings_screen.dart';
 import 'package:pocket_codex/src/web_authenticator.dart';
@@ -7163,5 +7164,42 @@ void main() {
         expect(api.turnStartCount, 1);
       });
     });
+  });
+  testWidgets('self-host setup can be left again', (t) async {
+    // Reached from account onboarding with `go`, which REPLACES the stack — so
+    // there is nothing to pop, and without an explicit way back the only exits
+    // are finishing self-host setup or killing the app. A user who opened
+    // "Advanced" to look at the relay fields was stranded.
+    await t.pumpWidget(
+      _routerHost(
+        FakeBridgeApi(config: const ConfigInfo(relay: '', hasKey: false)),
+        initial: '/onboarding',
+        routes: [
+          GoRoute(
+            path: '/onboarding',
+            builder: (_, _) => const AccountOnboardingScreen(),
+          ),
+          GoRoute(
+            path: '/onboarding/self-host',
+            builder: (_, _) => const OnboardingScreen(),
+          ),
+        ],
+      ),
+    );
+    await t.pumpAndSettle();
+
+    await t.tap(find.text('高级 / 自部署')); // accountAdvanced
+    await t.pumpAndSettle();
+    await t.tap(find.text('改用自建 relay')); // accountAdvancedSelfHost
+    await t.pumpAndSettle();
+    expect(find.byType(OnboardingScreen), findsOneWidget);
+
+    await t.tap(find.byKey(const Key('self-host-back')));
+    await t.pumpAndSettle();
+    expect(
+      find.byType(AccountOnboardingScreen),
+      findsOneWidget,
+      reason: 'back must return to account onboarding, not strand the user',
+    );
   });
 }

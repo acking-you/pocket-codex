@@ -38,6 +38,57 @@ void main() {
     expect(uri.port, desktopCallbackPort);
   });
 
+  test('the desktop landing page survives being written as latin-1', () async {
+    // flutter_web_auth_2 writes this page with `HttpResponse.write` after
+    // setting `Content-Type: text/html` with NO charset, so Dart encodes the
+    // body as latin-1. A literal CJK character throws INSIDE the listener's
+    // request handler, which kills the listener — the port closes and the
+    // browser shows ERR_CONNECTION_REFUSED, failing sign-in at the last step
+    // with the callback already in hand.
+    //
+    // Reproduced end to end rather than asserted on the string, so the test
+    // fails for the same reason production did.
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => server.close(force: true));
+
+    Object? handlerFailure;
+    server.listen((req) async {
+      try {
+        // Exactly the plugin's two lines.
+        req.response.headers.add('Content-Type', 'text/html');
+        req.response.write(desktopLandingPage);
+      } catch (e) {
+        handlerFailure = e;
+      }
+      await req.response.close();
+    });
+
+    final client = HttpClient();
+    addTearDown(client.close);
+    final response = await (await client.get(
+      '127.0.0.1',
+      server.port,
+      '/',
+    )).close();
+    await response.drain<void>();
+
+    expect(
+      handlerFailure,
+      isNull,
+      reason: 'the landing page must be latin-1 encodable; write Chinese as '
+          'numeric entities (&#NNNN;) instead of literal characters',
+    );
+  });
+
+  test('the landing page still shows Chinese, via entities', () {
+    // The constraint above must not be met by dropping the localization: the
+    // page is bilingual on purpose, since it is served by a plain listener with
+    // no access to the app's l10n.
+    expect(desktopLandingPage, contains('&#'), reason: 'entities expected');
+    expect(desktopLandingPage, contains('<meta charset="utf-8">'));
+    expect(desktopLandingPage, contains('Signed in.'));
+  });
+
   test('an IPv4-only listener is unreachable over ::1', () async {
     // The mechanism itself, so the reasoning above stays verifiable rather than
     // becoming folklore. Skipped where the host has no IPv6 loopback at all.

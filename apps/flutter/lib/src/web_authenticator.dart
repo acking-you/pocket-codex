@@ -5,7 +5,7 @@ library;
 import 'dart:io' show Platform;
 
 import 'package:flutter/foundation.dart'
-    show TargetPlatform, defaultTargetPlatform, kIsWeb;
+    show TargetPlatform, defaultTargetPlatform, kIsWeb, visibleForTesting;
 import 'package:flutter_web_auth_2/flutter_web_auth_2.dart';
 
 /// The custom URL scheme registered for the browser-redirect login deep link
@@ -131,6 +131,23 @@ class FlutterWebAuthenticator implements WebAuthenticator {
 /// machine that may have just failed to reach the internet. Text is bilingual
 /// rather than localized — this is served by a plain HTTP listener that has no
 /// access to the app's l10n, and a signed-in user reads it for two seconds.
+///
+/// # This source must stay ASCII-only
+///
+/// flutter_web_auth_2 writes this with `HttpResponse.write` after setting
+/// `Content-Type: text/html` with NO charset, and Dart then encodes the body as
+/// latin-1. A literal CJK character therefore throws `Invalid argument (string):
+/// Contains invalid characters` INSIDE the listener's request handler, which kills
+/// the listener: the port closes and the browser shows ERR_CONNECTION_REFUSED, so
+/// sign-in fails at the very last step with the callback already in hand.
+///
+/// The Chinese text is written as numeric character references so the bytes are
+/// ASCII while the browser still renders 中文. The `<meta charset>` is what makes
+/// the entities decode; it cannot rescue raw high bytes, because the failure
+/// happens before anything is sent.
+@visibleForTesting
+const String desktopLandingPage = _landingPage;
+
 const String _landingPage = '''
 <!DOCTYPE html>
 <html>
@@ -161,7 +178,10 @@ const String _landingPage = '''
 <body>
   <main>
     <h1>Pocket-Codex</h1>
-    <p>已登录，可以关闭此页面。</p>
+    <!-- Chinese as numeric entities, NOT literal characters: see the note on
+         _landingPage. A raw CJK byte anywhere in this literal kills the
+         listener before the response is sent. -->
+    <p>&#24050;&#30331;&#24405;&#65292;&#21487;&#20197;&#20851;&#38381;&#27492;&#39029;&#38754;&#12290;</p>
     <p class="sub">Signed in. You can close this page and return to the app.</p>
   </main>
 </body>
