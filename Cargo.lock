@@ -9218,7 +9218,7 @@ dependencies = [
 
 [[package]]
 name = "pocket-codex-account-proto"
-version = "0.1.9"
+version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
  "pocket-codex-core",
@@ -9231,7 +9231,7 @@ dependencies = [
 
 [[package]]
 name = "pocket-codex-api-proxy"
-version = "0.1.9"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -9252,7 +9252,7 @@ dependencies = [
 
 [[package]]
 name = "pocket-codex-auth"
-version = "0.1.9"
+version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
  "jsonwebtoken",
@@ -9272,7 +9272,7 @@ dependencies = [
 
 [[package]]
 name = "pocket-codex-backend"
-version = "0.1.9"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -9302,7 +9302,7 @@ dependencies = [
 
 [[package]]
 name = "pocket-codex-cli"
-version = "0.1.9"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -9332,7 +9332,7 @@ dependencies = [
 
 [[package]]
 name = "pocket-codex-codex"
-version = "0.1.9"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -9361,7 +9361,7 @@ dependencies = [
 
 [[package]]
 name = "pocket-codex-core"
-version = "0.1.9"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -9379,7 +9379,7 @@ dependencies = [
 
 [[package]]
 name = "pocket-codex-host-svc"
-version = "0.1.9"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -9396,7 +9396,7 @@ dependencies = [
 
 [[package]]
 name = "pocket-codex-pb"
-version = "0.1.9"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "pb-mapper",
@@ -9413,7 +9413,7 @@ dependencies = [
 
 [[package]]
 name = "pocket-codex-store"
-version = "0.1.9"
+version = "0.2.0"
 dependencies = [
  "sqlx",
  "thiserror 2.0.18",
@@ -9424,7 +9424,7 @@ dependencies = [
 
 [[package]]
 name = "pocket_codex_bridge"
-version = "0.1.9"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
