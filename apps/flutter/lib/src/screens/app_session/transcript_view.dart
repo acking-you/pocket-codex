@@ -23,7 +23,6 @@ import 'package:pocket_codex/src/widgets/links.dart';
 import 'package:pocket_codex/src/widgets/markdown_view.dart';
 import 'package:pocket_codex/src/widgets/message_images.dart';
 import 'package:pocket_codex/src/widgets/realtime_handoff_card.dart';
-import 'package:pocket_codex/src/widgets/status_dots.dart';
 
 /// The "this reply is a plan" marker.
 Widget _planBadge(BuildContext context, ColorScheme scheme) => Row(
@@ -101,34 +100,23 @@ class _MessageViewState extends State<MessageView> {
   @override
   Widget build(BuildContext context) {
     final item = widget.item;
-    // Tool / activity items get specialised rendering: plans → checklist,
-    // file changes → reviewable diff, compaction → a system notice; everything
-    // else → a subtle single-line activity row.
+    // Tool / activity items get specialised rendering: plans → checklist, file
+    // changes → reviewable diff, compaction → a system notice; everything else →
+    // a subtle single-line activity row. Dispatched through [activityRow], which
+    // the turn-work fold also uses, so a kind cannot be handled in one and missed
+    // in the other. The turn footnote stays here: it is not activity, and the
+    // fold never contains one.
     if (!item.isMessage) {
-      final Widget child = switch (item.type) {
-        'plan' => PlanCard(item: item),
-        'fileChange' => FileChangeCard(item: item),
-        'contextCompaction' => SystemNotice(
-          icon: Icons.compress,
-          text: item.streaming
-              ? AppLocalizations.of(context).compactingContext
-              : AppLocalizations.of(context).compacted,
-          active: item.streaming,
-        ),
-        'interrupted' => SystemNotice(
-          icon: Icons.stop_circle_outlined,
-          text: AppLocalizations.of(context).turnStopped,
-        ),
-        'turnDuration' => TurnDurationFooter(
-          duration: item.title,
-          completedAt: item.text,
-          model: item.model,
-          effortWire: item.effortWire,
-          confirmed: item.modelConfirmed,
-          rerouted: item.modelRerouted,
-        ),
-        _ => ActivityCard(item: item),
-      };
+      final Widget child = item.type == 'turnDuration'
+          ? TurnDurationFooter(
+              duration: item.title,
+              completedAt: item.text,
+              model: item.model,
+              effortWire: item.effortWire,
+              confirmed: item.modelConfirmed,
+              rerouted: item.modelRerouted,
+            )
+          : activityRow(item);
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 1),
         child: child,
@@ -320,53 +308,6 @@ class _MessageViewState extends State<MessageView> {
               : CrossAxisAlignment.start,
           children: [content, actions],
         ),
-      ),
-    );
-  }
-}
-
-/// A centered, subtle system notice (e.g. "conversation compacted") so
-/// lifecycle state changes are visible inline in the transcript.
-class SystemNotice extends StatelessWidget {
-  const SystemNotice({
-    super.key,
-    required this.icon,
-    required this.text,
-    this.active = false,
-  });
-  final IconData icon;
-  final String text;
-  final bool active;
-
-  @override
-  Widget build(BuildContext context) {
-    final muted = Theme.of(context).colorScheme.outline;
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Expanded(child: Divider(color: muted.withValues(alpha: 0.3))),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 10),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (active)
-                  PulsingDot(
-                    key: const Key('chat-compaction-progress'),
-                    color: muted,
-                    size: 8,
-                  )
-                else
-                  Icon(icon, size: 13, color: muted),
-                const SizedBox(width: 5),
-                Text(text, style: TextStyle(fontSize: 11.5, color: muted)),
-              ],
-            ),
-          ),
-          Expanded(child: Divider(color: muted.withValues(alpha: 0.3))),
-        ],
       ),
     );
   }

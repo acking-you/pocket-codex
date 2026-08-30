@@ -114,6 +114,8 @@ void main() {
       items: const [
         TurnMinimapItem(rowIndex: 0, userText: 'unanswered'),
         TurnMinimapItem(rowIndex: 4, userText: 'second', assistantText: 'ok'),
+        TurnMinimapItem(rowIndex: 8, userText: 'third', assistantText: 'ok'),
+        TurnMinimapItem(rowIndex: 12, userText: 'fourth', assistantText: 'ok'),
       ],
     );
     await _hoverTick(t, 0);
@@ -132,6 +134,8 @@ void main() {
       items: const [
         TurnMinimapItem(rowIndex: 0, userText: '', assistantText: 'read it'),
         TurnMinimapItem(rowIndex: 4, userText: 'next', assistantText: 'ok'),
+        TurnMinimapItem(rowIndex: 8, userText: 'third', assistantText: 'ok'),
+        TurnMinimapItem(rowIndex: 12, userText: 'fourth', assistantText: 'ok'),
       ],
     );
     await _hoverTick(t, 0);
@@ -147,9 +151,11 @@ void main() {
       items: const [
         TurnMinimapItem(rowIndex: 0, userText: ''),
         TurnMinimapItem(rowIndex: 4, userText: 'next', assistantText: 'ok'),
+        TurnMinimapItem(rowIndex: 8, userText: 'third', assistantText: 'ok'),
+        TurnMinimapItem(rowIndex: 12, userText: 'fourth', assistantText: 'ok'),
       ],
     );
-    expect(_ticks(t), hasLength(2));
+    expect(_ticks(t), hasLength(4));
     await _hoverTick(t, 0);
     expect(find.byKey(const Key('turn-minimap-preview')), findsNothing);
     expect(find.text('next'), findsNothing);
@@ -206,8 +212,10 @@ void main() {
   testWidgets('an on-screen turn is marked whatever the pointer is doing', (
     t,
   ) async {
-    // Two independent cues: colour says where you ARE, width says what you are
-    // pointing at. Reading them off the same state would lose one of them.
+    // Position drives BOTH cues: the on-screen turns are inked strongly and
+    // bulge outward, so the rail's shape shows where you are and reshapes as you
+    // scroll. Hovering is a much larger widening on top, so the two remain
+    // distinguishable.
     final items = _items(4);
     await _pump(
       t,
@@ -226,8 +234,46 @@ void main() {
     Color colorOf(int i) => (ticks[i].decoration! as BoxDecoration).color!;
     // The visible turn is the strong mark; the others are quiet.
     expect(colorOf(2).a, greaterThan(colorOf(0).a));
-    // …and it has NOT been widened, because nothing is hovered.
-    expect(_tickWidthAt(t, 2), _tickWidthAt(t, 0));
+    // …and it is wider, with nothing hovered: the shape alone says where you are.
+    expect(_tickWidthAt(t, 2), greaterThan(_tickWidthAt(t, 0)));
+  });
+
+  testWidgets('the rail reshapes as the transcript scrolls', (t) async {
+    // The bulge has to TRAVEL, not just exist — that is what makes the rail read
+    // as a position indicator rather than a static scale with one odd mark.
+    final items = _items(5);
+    final visible = ValueNotifier<(int, int)?>((
+      items[1].rowIndex,
+      items[1].rowIndex,
+    ));
+    addTearDown(visible.dispose);
+    await t.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 400,
+            height: 600,
+            child: TurnMinimap(
+              items: items,
+              visibleRange: visible,
+              gutterWidth: 120,
+              onSelect: (_) {},
+            ),
+          ),
+        ),
+      ),
+    );
+    await t.pumpAndSettle();
+    expect(_tickWidthAt(t, 1), greaterThan(_tickWidthAt(t, 4)));
+
+    // Scroll to the end of the conversation.
+    visible.value = (items[4].rowIndex, items[4].rowIndex);
+    await t.pumpAndSettle();
+    expect(
+      _tickWidthAt(t, 4),
+      greaterThan(_tickWidthAt(t, 1)),
+      reason: 'the bulge follows the viewport',
+    );
   });
 
   testWidgets('keyboard walks the turns and enter jumps', (t) async {
@@ -271,5 +317,68 @@ void main() {
     final rail = t.getRect(find.byKey(const Key('turn-minimap-rail')));
     expect(rail.height, lessThanOrEqualTo(300));
     expect(_ticks(t), hasLength(200));
+  });
+
+  testWidgets('the rail rests at the window edge, not against the column', (
+    t,
+  ) async {
+    // It used to be placed relative to the conversation column, so it drifted
+    // outward with the gutter and floated in the middle of empty margin on a wide
+    // window. An index of the whole conversation belongs where a scrollbar is.
+    // Asserted across two gutter widths, since the bug was precisely that the
+    // position tracked the gutter.
+    await _pump(t, items: _items(5), gutter: 60);
+    final narrow = t.getTopLeft(find.byKey(const Key('turn-minimap-rail'))).dx;
+    await _pump(t, items: _items(5), gutter: 300);
+    final wide = t.getTopLeft(find.byKey(const Key('turn-minimap-rail'))).dx;
+
+    expect(narrow, wide, reason: 'the rail must not move with the gutter');
+    expect(
+      wide,
+      lessThanOrEqualTo(kTurnMinimapRailInset),
+      reason: 'it sits at the frame, not out beside the prose',
+    );
+  });
+
+  testWidgets('a click leaves the rail open with the landed tick marked', (
+    t,
+  ) async {
+    // The jump used to clear the active tick, collapsing the rail to its resting
+    // width at the very moment the user arrived — so it stopped saying where in
+    // the conversation they now were.
+    final items = _items(5);
+    await _pump(t, items: items);
+    final rail = t.getRect(find.byKey(const Key('turn-minimap-rail')));
+    final gesture = await t.createGesture(kind: PointerDeviceKind.mouse);
+    await gesture.addPointer(location: Offset.zero);
+    addTearDown(gesture.removePointer);
+
+    // Click the last tick, then take the pointer away entirely.
+    await gesture.moveTo(Offset(rail.left + 4, rail.bottom - 1));
+    await t.pumpAndSettle();
+    await t.tapAt(Offset(rail.left + 4, rail.bottom - 1));
+    await t.pumpAndSettle();
+    await gesture.moveTo(const Offset(2000, 2000));
+    await t.pumpAndSettle();
+
+    expect(
+      _tickWidthAt(t, items.length - 1),
+      greaterThan(_tickWidthAt(t, 0)),
+      reason: 'the tick just jumped to stays the widest',
+    );
+    // The preview card is the one thing that must NOT survive the jump: it would
+    // hang over the turn the user just navigated to.
+    expect(find.byKey(const Key('turn-minimap-preview')), findsNothing);
+  });
+
+  testWidgets('three turns is below the rail, four is not', (t) async {
+    // A rail earns its place by showing a conversation's shape. Two or three
+    // ticks show none, and what is left is a hover-only target that steps one
+    // turn at a time — which is what the corner arrows already do, with a label
+    // and a touch-sized target.
+    await _pump(t, items: _items(3));
+    expect(_ticks(t), isEmpty);
+    await _pump(t, items: _items(kTurnMinimapMinItems));
+    expect(_ticks(t), hasLength(kTurnMinimapMinItems));
   });
 }

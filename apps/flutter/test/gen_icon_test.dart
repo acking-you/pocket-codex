@@ -20,6 +20,11 @@
 //   icon/icon_mobile.png       full-bleed opaque tile (iOS + Android legacy)
 //   icon/icon_adaptive_bg.png  solid tile colour (Android adaptive background)
 //   icon/icon_adaptive_fg.png  tile scaled into the safe zone (adaptive fg)
+// Outputs (Windows launcher — from logo_dark.png):
+//   windows/runner/resources/app_icon.ico
+//                              multi-size .ico. NOT flutter_launcher_icons'
+//                              job: it writes one frame, and Windows' own
+//                              downscale to 16/32 px is blurry.
 // Outputs (in-app + splash — theme-matched):
 //   assets/logo/mark_light.png rounded light tile (light theme / light splash)
 //   assets/logo/mark_dark.png  rounded dark tile  (dark theme / dark splash)
@@ -110,11 +115,19 @@ Future<Master> loadMaster(String path) async {
 /// Draws [m]'s tile centred at [fraction] of a [size] canvas, clipped to a
 /// 22% rounded rect. With a [background] the canvas is opaque (full-bleed
 /// consumers); without one the surround stays transparent.
+///
+/// [zoom] enlarges the tile's ARTWORK within that rounded rect, cropping the
+/// master's own padding rather than the tile itself: the rounded silhouette stays
+/// exactly [fraction] of the canvas, while the mark inside grows. The tray needs
+/// this — the glyph is only ~72% of the tile, so at a 16 px frame it lands on
+/// ~10 px and the cloud outline plus the `>_` prompt dissolve into noise. Zooming
+/// spends those pixels on the mark instead of on margin.
 Future<Uint8List> compose(
   Master m, {
   double size = 1024,
   double fraction = 1.0,
   Color? background,
+  double zoom = 1.0,
 }) async {
   final recorder = ui.PictureRecorder();
   final canvas = Canvas(recorder, Rect.fromLTWH(0, 0, size, size));
@@ -129,9 +142,18 @@ Future<Uint8List> compose(
   final dst = Rect.fromLTWH(offset, offset, draw, draw);
   canvas.save();
   canvas.clipRRect(RRect.fromRectAndRadius(dst, Radius.circular(draw * 0.22)));
+  // Zoom crops the SOURCE rect, so the destination — and therefore the rounded
+  // silhouette — is unchanged; only how much of the master fills it varies.
+  final src = zoom == 1.0
+      ? m.tile
+      : Rect.fromCenter(
+          center: m.tile.center,
+          width: m.tile.width / zoom,
+          height: m.tile.height / zoom,
+        );
   canvas.drawImageRect(
     m.image,
-    m.tile,
+    src,
     dst,
     Paint()..filterQuality = FilterQuality.high,
   );
@@ -320,6 +342,33 @@ void main() {
     }
   }, skip: skip);
 
+  test('derive the Windows launcher icon (multi-size ico)', () async {
+    // `flutter_launcher_icons` writes this file too, but with ONE 256 px frame
+    // (`icon_size: 256` in pubspec.yaml is all it can express). Windows then
+    // downscales that single raster everywhere it needs a smaller icon — the
+    // taskbar at 32 px, the title bar and Alt-Tab at 16 px — and a detailed mark
+    // reduced 8:1 in one step comes out visibly blurry. macOS never showed the
+    // problem because its `.appiconset` ships each size as its own file.
+    //
+    // So the launcher icon is rendered per size and packed like the tray icon
+    // below, which has always done this. Written AFTER `flutter_launcher_icons`
+    // runs, since that tool would otherwise overwrite it.
+    final dark = await loadMaster('icon/logo_dark.png');
+    final frames = <img.Image>[];
+    // The sizes Windows actually asks for: 16 title bar / Alt-Tab, 20 and 24 at
+    // fractional DPI scaling, 32 taskbar, 48 large icons, 64 for 150% desktop,
+    // 128 and 256 for the extra-large views and Explorer's tile mode.
+    for (final s in [16, 20, 24, 32, 48, 64, 128, 256]) {
+      final png = await compose(dark, size: s.toDouble(), fraction: 0.9);
+      frames.add(img.decodePng(png)!);
+    }
+    await File(
+      'windows/runner/resources/app_icon.ico',
+    ).writeAsBytes(img.IcoEncoder().encodeImages(frames));
+
+    expect(File('windows/runner/resources/app_icon.ico').existsSync(), isTrue);
+  }, skip: skip);
+
   test('derive tray assets (png + template + multi-size ico)', () async {
     final dark = await loadMaster('icon/logo_dark.png');
     Directory('assets/tray').createSync(recursive: true);
@@ -344,9 +393,28 @@ void main() {
     // load. Render each frame size directly (crisper than downscaling one big
     // raster) and pack them into a PNG-framed ICO (Vista+). LoadImage asks for
     // SM_CXSMICON (16-24 px), so the small frames carry the on-screen look.
+    //
+    // Stays a full-colour rounded tile: that is what a Windows tray icon is, and
+    // what every neighbour in the flyout looks like. (macOS is the odd one — its
+    // tray wants a monochrome TEMPLATE it tints itself, which is why the file
+    // above is black-on-alpha. Do not carry that convention over here.)
+    //
+    // The small frames zoom the artwork instead. The glyph is only ~72% of the
+    // tile, so a 16 px frame gave it ~10 px — the cloud outline and the `>_`
+    // prompt landed on too few pixels and read as a smudge. Zooming trades the
+    // master's own padding for glyph pixels, most aggressively where pixels are
+    // scarcest; past 48 px there are enough to render the mark as drawn.
+    // Bounded at 1.25: past that the glyph starts touching the tile's rounded
+    // corners, which looks cramped rather than crisp.
+    double zoomFor(int px) => switch (px) {
+      <= 24 => 1.25,
+      <= 32 => 1.18,
+      <= 48 => 1.10,
+      _ => 1.0,
+    };
     final frames = <img.Image>[];
-    for (final s in [16, 24, 32, 48, 256]) {
-      final png = await compose(dark, size: s.toDouble());
+    for (final s in [16, 20, 24, 32, 48, 64, 256]) {
+      final png = await compose(dark, size: s.toDouble(), zoom: zoomFor(s));
       frames.add(img.decodePng(png)!);
     }
     final ico = img.IcoEncoder().encodeImages(frames);

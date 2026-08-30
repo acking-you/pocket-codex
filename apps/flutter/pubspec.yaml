@@ -175,11 +175,17 @@ flutter_launcher_icons:
     image_path: "icon/icon_glyph.png"
     background_color: "#FFFFFF"
     theme_color: "#E071A7"
-  # Windows: emits runner/resources/app_icon.ico (window + taskbar).
+  # Windows: NOT generated here. This tool writes a single-frame .ico (one size,
+  # whatever `icon_size` says), and Windows then downscales that one raster for
+  # the taskbar at 32 px and the title bar at 16 px — a detailed mark reduced 8:1
+  # in one step looks visibly blurry, which macOS never showed because its
+  # .appiconset ships every size as its own file.
+  #
+  # `test/gen_icon_test.dart` writes runner/resources/app_icon.ico instead, with
+  # each of the 8 sizes Windows asks for rendered at that size. Re-run it with
+  # REGEN_ICONS=1 after changing the brand masters.
   windows:
-    generate: true
-    image_path: "icon/icon_glyph.png"
-    icon_size: 256
+    generate: false
   # macOS: the Dock shows the icon as-is (no mask); the rounded tile carries
   # the standard ~10% margin baked into icon_glyph.png.
   macos:

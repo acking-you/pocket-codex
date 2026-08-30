@@ -21,6 +21,7 @@ import 'package:pocket_codex/src/attachment_refs.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
 import 'package:pocket_codex/src/image_attachments.dart';
 import 'package:pocket_codex/src/providers.dart';
+import 'package:pocket_codex/src/screens/app_session/activity_cards.dart';
 import 'package:pocket_codex/src/screens/app_session_screen.dart';
 import 'package:pocket_codex/src/ui_prefs.dart';
 import 'package:pocket_codex/src/widgets/message_images.dart';
@@ -230,6 +231,7 @@ void main() {
       ),
     );
     await t.pumpAndSettle();
+    await openTurnWork(t);
 
     // The collapsed peek shows the header with its markup removed.
     expect(find.text('Planning emulator restart'), findsOneWidget);
@@ -2619,6 +2621,262 @@ void main() {
     expect(sendBtn.onPressed, isNotNull);
   });
 
+  group("a turn's work folds behind one row", () {
+    /// Mount a thread whose history is one turn: a question, [work] items, and
+    /// an answer — the shape a real turn arrives in.
+    Future<FakeBridgeApi> openThread(
+      WidgetTester t, {
+      required List<ThreadItem> work,
+      int? durationMs = 151000,
+    }) async {
+      ThreadItem stamp(ThreadItem i) => ThreadItem(
+        id: i.id,
+        itemType: i.itemType,
+        title: i.title,
+        text: i.text,
+        turnId: 'turn-1',
+        turnDurationMs: durationMs,
+      );
+      final api =
+          FakeBridgeApi(
+              config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+            )
+            ..readResult = ThreadHistory(
+              items: [
+                stamp(
+                  const ThreadItem(
+                    id: 'u1',
+                    itemType: 'userMessage',
+                    title: '',
+                    text: 'why does edge fail?',
+                  ),
+                ),
+                ...work.map(stamp),
+                stamp(
+                  const ThreadItem(
+                    id: 'a1',
+                    itemType: 'agentMessage',
+                    title: '',
+                    text: 'It is the taskbar shortcut, not Edge.',
+                  ),
+                ),
+              ],
+              running: false,
+            );
+      await api.appConnect('pcx:lb7666:app:default', 28080);
+      await t.pumpWidget(
+        host(
+          const AppSessionScreen(
+            serviceKey: 'pcx:lb7666:app:default',
+            threadId: 't1',
+          ),
+          api,
+        ),
+      );
+      await t.pumpAndSettle();
+      return api;
+    }
+
+    const alternating = [
+      ThreadItem(
+        id: 'c1',
+        itemType: 'commandExecution',
+        title: 'pwsh -Command x',
+        text: 'out',
+      ),
+      ThreadItem(id: 'r1', itemType: 'reasoning', title: 'checking', text: ''),
+      ThreadItem(
+        id: 'c2',
+        itemType: 'commandExecution',
+        title: 'pwsh -Command y',
+        text: 'out',
+      ),
+      ThreadItem(id: 's1', itemType: 'webSearch', title: 'taskbar', text: ''),
+    ];
+
+    testWidgets('an alternating run folds into ONE row, not four', (t) async {
+      // This is the bug the fold exists for. Grouping used to merge only
+      // same-type neighbours, and a real turn alternates — so four rows of tool
+      // machinery sat between the question and its answer, and nothing collapsed.
+      await openThread(t, work: alternating);
+
+      expect(find.byKey(const Key('turn-work-toggle')), findsOneWidget);
+      for (final hidden in [
+        'pwsh -Command x',
+        'pwsh -Command y',
+        'checking',
+        'taskbar',
+      ]) {
+        expect(find.text(hidden), findsNothing, reason: '$hidden must fold');
+      }
+    });
+
+    testWidgets('the answer stays visible while the work is folded', (t) async {
+      // The point is to surface the answer, not to hide the turn.
+      await openThread(t, work: alternating);
+      expect(
+        find.textContaining('taskbar shortcut', findRichText: true),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets("the row names the turn's duration", (t) async {
+      // From the server's own turn stamp, so it survives a reload — the locally
+      // timed footnote only exists for a turn this app watched run.
+      await openThread(t, work: alternating);
+      expect(find.textContaining('已处理'), findsOneWidget);
+      expect(find.textContaining('2:31'), findsOneWidget);
+    });
+
+    testWidgets('a turn with no reported duration says how much it did', (
+      t,
+    ) async {
+      // A rollout read from disk carries no turn stamp. Better to count the steps
+      // than to invent a time, which would read as fact.
+      await openThread(t, work: alternating, durationMs: null);
+      expect(find.textContaining('已处理'), findsNothing);
+      expect(find.textContaining('4'), findsWidgets);
+    });
+
+    testWidgets('expanding reveals the work, grouped by type', (t) async {
+      // Two levels: the turn opens to sub-runs, and a sub-run opens to its calls.
+      await openThread(t, work: alternating);
+      await openTurnWork(t);
+
+      // The two commands are adjacent in neither position, so they stay separate
+      // rows; each type is present with its own label.
+      expect(find.text('pwsh -Command x'), findsOneWidget);
+      expect(find.text('taskbar'), findsOneWidget);
+    });
+
+    testWidgets('same-type neighbours stay grouped inside the fold', (t) async {
+      await openThread(
+        t,
+        work: const [
+          ThreadItem(id: 'r1', itemType: 'reasoning', title: 'first', text: ''),
+          ThreadItem(
+            id: 'r2',
+            itemType: 'reasoning',
+            title: 'second',
+            text: '',
+          ),
+        ],
+      );
+      await openTurnWork(t);
+      // "思考 ×2", not two loose rows — the inner level survives.
+      expect(find.text('思考 ×2'), findsOneWidget);
+      expect(find.text('first'), findsNothing);
+    });
+
+    testWidgets('one turn is ONE row, however it was interleaved', (t) async {
+      // The reported bug: a turn whose work was broken up by intermediate prose
+      // and a compaction rendered as three 已处理 rows that each reported the
+      // SAME duration — visibly one turn, presented as several.
+      await openThread(
+        t,
+        work: const [
+          ThreadItem(
+            id: 'c1',
+            itemType: 'commandExecution',
+            title: 'first batch',
+            text: '',
+          ),
+          ThreadItem(
+            id: 'p1',
+            itemType: 'agentMessage',
+            title: '',
+            text: 'now let me check the other layer',
+          ),
+          ThreadItem(
+            id: 'cc1',
+            itemType: 'contextCompaction',
+            title: '',
+            text: '',
+          ),
+          ThreadItem(
+            id: 'c2',
+            itemType: 'commandExecution',
+            title: 'second batch',
+            text: '',
+          ),
+        ],
+      );
+
+      expect(
+        find.byKey(const Key('turn-work-toggle')),
+        findsOneWidget,
+        reason: 'one turn, one fold',
+      );
+      // And the answer is still the thing on screen.
+      expect(
+        find.textContaining('taskbar shortcut', findRichText: true),
+        findsOneWidget,
+      );
+      // Everything in between is inside it, prose and compaction included.
+      await openTurnWork(t);
+      expect(find.text('first batch'), findsOneWidget);
+      expect(find.text('second batch'), findsOneWidget);
+      expect(find.text('对话已压缩'), findsOneWidget);
+      expect(
+        find.textContaining('check the other layer', findRichText: true),
+        findsWidgets,
+      );
+    });
+
+    testWidgets('a running turn is already open, and folds when it ends', (
+      t,
+    ) async {
+      final api = FakeBridgeApi(
+        config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+      );
+      await api.appConnect('pcx:lb7666:app:default', 28080);
+      await t.pumpWidget(
+        host(
+          const AppSessionScreen(
+            serviceKey: 'pcx:lb7666:app:default',
+            threadId: 't1',
+          ),
+          api,
+        ),
+      );
+      await t.pumpAndSettle();
+
+      // An in-flight command: visible without anyone opening anything, so the
+      // user can watch the agent work.
+      api.pushEvent(
+        'pcx:lb7666:app:default',
+        const AppEvent(
+          kind: 'item/started',
+          threadId: 't1',
+          itemId: 'c1',
+          itemType: 'commandExecution',
+          title: 'cargo build',
+          text: '',
+          raw: '{}',
+        ),
+      );
+      await t.pump(const Duration(milliseconds: 100));
+      expect(find.text('cargo build'), findsOneWidget);
+
+      // Settling hands control back to the fold, and the work goes away.
+      api.pushEvent(
+        'pcx:lb7666:app:default',
+        const AppEvent(
+          kind: 'item/completed',
+          threadId: 't1',
+          itemId: 'c1',
+          itemType: 'commandExecution',
+          title: 'cargo build',
+          text: 'done',
+          raw: '{}',
+        ),
+      );
+      await t.pumpAndSettle();
+      expect(find.text('cargo build'), findsNothing);
+      expect(find.byKey(const Key('turn-work-toggle')), findsOneWidget);
+    });
+  });
+
   testWidgets('Tool calls render as expandable activity cards', (t) async {
     final api = FakeBridgeApi(
       config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
@@ -2649,6 +2907,8 @@ void main() {
       ),
     );
     await t.pumpAndSettle();
+    // The turn's work is folded by default; open it to see the calls.
+    await openTurnWork(t);
     // Localized label + the query are shown.
     expect(find.text('联网搜索'), findsOneWidget);
     expect(find.text('rust async'), findsOneWidget);
@@ -2719,6 +2979,7 @@ void main() {
       );
     }
     await t.pumpAndSettle();
+    await openTurnWork(t);
 
     for (final label in [
       '协作智能体',
@@ -2779,8 +3040,17 @@ void main() {
       ),
     );
     await t.pump(const Duration(milliseconds: 100));
+    await openTurnWork(t);
     expect(find.text('cargo test'), findsOneWidget);
-    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    // Scoped to the card: the turn-work fold above it spins too while the turn
+    // runs, so a bare type count would pass on either one.
+    expect(
+      find.descendant(
+        of: find.byType(ActivityCard),
+        matching: find.byType(CircularProgressIndicator),
+      ),
+      findsOneWidget,
+    );
 
     api.pushEvent(
       'pcx:lb7666:app:default',
@@ -2795,7 +3065,13 @@ void main() {
       ),
     );
     await t.pumpAndSettle();
-    expect(find.byType(CircularProgressIndicator), findsNothing);
+    expect(
+      find.descendant(
+        of: find.byType(ActivityCard),
+        matching: find.byType(CircularProgressIndicator),
+      ),
+      findsNothing,
+    );
   });
 
   testWidgets('a finished turn drops a 用时 duration footnote', (t) async {
@@ -4013,6 +4289,7 @@ void main() {
       ),
     );
     await t.pumpAndSettle();
+    await openTurnWork(t);
     await t.tap(find.text('Cargo.lock'));
     await t.pumpAndSettle();
 
@@ -4412,11 +4689,17 @@ void main() {
     }
     await t.pumpAndSettle();
 
-    // Collapsed into one "Ran command ×3" row; individual commands hidden.
+    // The turn's work folds first, so nothing about the commands is on screen —
+    // not even the group header.
+    expect(find.text('执行命令 ×3'), findsNothing);
+    expect(find.text('cmd-c1'), findsNothing);
+
+    // First level: the turn's work. Reveals the group, still collapsed.
+    await openTurnWork(t);
     expect(find.text('执行命令 ×3'), findsOneWidget);
     expect(find.text('cmd-c1'), findsNothing);
 
-    // Expanding reveals the individual activity cards.
+    // Second level: the group. Reveals the individual activity cards.
     await t.tap(find.text('执行命令 ×3'));
     await t.pumpAndSettle();
     expect(find.text('cmd-c1'), findsOneWidget);
@@ -4767,6 +5050,7 @@ void main() {
       ),
     );
     await t.pumpAndSettle();
+    await openTurnWork(t);
 
     // Collapsed: an "Edited files" header with the path and the ± counts.
     expect(find.text('修改文件'), findsOneWidget); // toolEdited (zh)
@@ -4851,6 +5135,8 @@ void main() {
     expect(find.byType(AppSessionScreen), findsOneWidget);
     expect(find.text('其他进程运行中'), findsOneWidget);
     expect(find.text('work from the other client'), findsOneWidget);
+    // Compaction happens during a turn, so it folds with the rest of the work.
+    await openTurnWork(t);
     expect(find.text('正在自动压缩上下文'), findsOneWidget);
     expect(find.byKey(const Key('chat-compaction-progress')), findsOneWidget);
     expect(find.byKey(const Key('turn-progress-panel')), findsOneWidget);
@@ -4943,7 +5229,15 @@ void main() {
     );
     await t.pump();
     await t.pump(const Duration(milliseconds: 100));
-    expect(find.text('new progress from subscription'), findsOneWidget);
+    // This prose has a command and a file change AFTER it, so it is the agent
+    // narrating what it is about to do — a preamble, which folds with the work
+    // rather than standing above it as the answer.
+    await openTurnWork(t);
+    // Rendered as markdown inside the fold, hence `findRichText`.
+    expect(
+      find.textContaining('new progress from subscription', findRichText: true),
+      findsWidgets,
+    );
     expect(find.text('cargo test'), findsOneWidget);
     expect(find.textContaining('live.dart'), findsWidgets);
     expect(find.text('第 3 / 3 步'), findsOneWidget);
@@ -5033,6 +5327,7 @@ void main() {
     );
     await t.pump();
     await t.pump(const Duration(milliseconds: 100));
+    // In flight, so the turn's work is already open.
     expect(find.text('正在自动压缩上下文'), findsOneWidget);
     expect(find.byKey(const Key('chat-compaction-progress')), findsOneWidget);
 
@@ -5049,6 +5344,8 @@ void main() {
       ),
     );
     await t.pumpAndSettle();
+    // Settled, so the work folded away with it. Re-open to see the outcome.
+    await openTurnWork(t);
     expect(find.text('对话已压缩'), findsOneWidget); // compacted (zh)
     expect(find.byKey(const Key('chat-compaction-progress')), findsNothing);
   });
@@ -5141,7 +5438,9 @@ void main() {
     expect(find.byKey(const Key('session-error')), findsNothing);
   });
 
-  testWidgets('Consecutive notices are not folded into a group', (t) async {
+  testWidgets('Compactions fold with the work, and are not counted as one', (
+    t,
+  ) async {
     final api = FakeBridgeApi(
       config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
     );
@@ -5172,7 +5471,15 @@ void main() {
       );
     }
     await t.pumpAndSettle();
-    // Both render as their own notice (not collapsed into one "×2" group).
+    // Compaction happens during a turn, so it folds with the work rather than
+    // interrupting it — leaving it out split one turn into several 已处理 rows
+    // that each reported the same duration.
+    expect(find.text('对话已压缩'), findsNothing);
+
+    // Opened, each still renders as its own notice rather than collapsing into a
+    // single "×2" row: a compaction is an event, and two of them mean the context
+    // was squeezed twice.
+    await openTurnWork(t);
     expect(find.text('对话已压缩'), findsNWidgets(2));
   });
 

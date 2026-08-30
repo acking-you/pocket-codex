@@ -221,3 +221,34 @@ Future<void> attachMenu(WidgetTester t, String key) async {
 Finder convTiles() => find.byWidgetPredicate(
   (w) => w.key is ValueKey<String> && '${w.key}'.contains('conv-tile-'),
 );
+
+/// Expand a turn's folded work so its tool calls and reasoning are on screen.
+///
+/// A finished turn presents its activity collapsed behind a "已处理 {duration}"
+/// row, so a test that asserts on a tool call has to open it first. Opens every
+/// fold present, since a test may have produced more than one turn; one that is
+/// still running is already open and is left alone.
+///
+/// Pumps a fixed duration rather than settling: a screen with a running turn
+/// anywhere on it holds a spinner, and `pumpAndSettle` would wait for an
+/// animation that never ends.
+Future<void> openTurnWork(WidgetTester t) async {
+  for (final toggle
+      in find.byKey(const Key('turn-work-toggle')).evaluate().toList()) {
+    final chevron = find.descendant(
+      of: find.byWidget(toggle.widget),
+      matching: find.byIcon(Icons.keyboard_arrow_right),
+    );
+    if (chevron.evaluate().isEmpty) continue; // already open, or still running
+    await t.tap(find.byWidget(toggle.widget));
+    if (find.byType(CircularProgressIndicator).evaluate().isEmpty) {
+      await t.pumpAndSettle();
+    } else {
+      // A spinner is on screen and never settles. Pump enough frames for the
+      // fold's 160 ms expand to lay out instead.
+      for (var i = 0; i < 8; i++) {
+        await t.pump(const Duration(milliseconds: 50));
+      }
+    }
+  }
+}

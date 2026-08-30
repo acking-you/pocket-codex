@@ -164,6 +164,14 @@
   "@turnElapsed": {
     "placeholders": { "duration": { "type": "String" } }
   },
+  "turnProcessed": "已处理 {duration}",
+  "@turnProcessed": {
+    "placeholders": { "duration": { "type": "String" } }
+  },
+  "turnProcessing": "正在处理 {count} 步",
+  "@turnProcessing": {
+    "placeholders": { "count": { "type": "int" } }
+  },
   "completedAt": "完成于 {time}",
   "@completedAt": {
     "placeholders": { "time": { "type": "String" } }

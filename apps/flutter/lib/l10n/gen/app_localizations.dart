@@ -1010,6 +1010,18 @@ abstract class AppLocalizations {
   /// **'Took {duration}'**
   String turnElapsed(String duration);
 
+  /// Collapsed header for a turn's tool calls and reasoning.
+  ///
+  /// In en, this message translates to:
+  /// **'Worked for {duration}'**
+  String turnProcessed(String duration);
+
+  /// Same header while the turn is still running, when no duration exists yet.
+  ///
+  /// In en, this message translates to:
+  /// **'Working, {count} steps so far'**
+  String turnProcessing(int count);
+
   /// No description provided for @completedAt.
   ///
   /// In en, this message translates to:
