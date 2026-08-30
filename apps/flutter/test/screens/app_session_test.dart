@@ -1,3 +1,7 @@
+/// The chat screen: sending turns, rendering the transcript, the composer, and
+/// the panes and pickers around them.
+library;
+
 import 'dart:async';
 import 'dart:convert';
 
@@ -9,230 +13,21 @@ import 'package:flutter_linkify/flutter_linkify.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:go_router/go_router.dart';
 import 'package:file_selector_platform_interface/file_selector_platform_interface.dart'
     as fsel;
-import 'package:image/image.dart' as img;
 import 'package:image_picker_platform_interface/image_picker_platform_interface.dart';
-import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/attachment_refs.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
-import 'package:pocket_codex/src/providers.dart';
-import 'package:pocket_codex/src/ui_prefs.dart';
-import 'package:pocket_codex/src/screens/account_onboarding_screen.dart';
 import 'package:pocket_codex/src/image_attachments.dart';
-import 'package:pocket_codex/src/widgets/api_service_panel.dart';
-import 'package:pocket_codex/src/widgets/message_images.dart';
+import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/screens/app_session_screen.dart';
-import 'package:pocket_codex/src/screens/codex_setup_screen.dart';
-import 'package:pocket_codex/src/screens/onboarding_screen.dart';
-import 'package:pocket_codex/src/screens/services_screen.dart';
-import 'package:pocket_codex/src/screens/settings_screen.dart';
-import 'package:pocket_codex/src/web_authenticator.dart';
-import 'package:pocket_codex/src/widgets/loading.dart';
+import 'package:pocket_codex/src/ui_prefs.dart';
+import 'package:pocket_codex/src/widgets/message_images.dart';
 import 'package:pocket_codex/src/widgets/status_dots.dart';
-import 'fake_bridge_api.dart';
 
-/// Fake browser hand-off: returns a canned redirect URL (or throws) instead of
-/// driving the real platform-channel plugin.
-class _FakeWebAuthenticator implements WebAuthenticator {
-  _FakeWebAuthenticator(this.result, {this.error});
-
-  /// Redirect URL to return from [authenticate] on success.
-  final String result;
-
-  /// When set, [authenticate] throws this instead of returning.
-  final Object? error;
-
-  @override
-  Future<String> authenticate({
-    required String url,
-    required String callbackUrlScheme,
-  }) async {
-    if (error != null) throw error!;
-    return result;
-  }
-}
-
-/// Fake image picker: returns canned [XFile]s instead of driving the real
-/// platform-channel picker (which can't run headless).
-class _FakeImagePicker extends ImagePickerPlatform
-    with MockPlatformInterfaceMixin {
-  /// Files the next pick returns; empty = user cancelled.
-  List<XFile> files = [];
-
-  @override
-  Future<List<XFile>> getMultiImageWithOptions({
-    MultiImagePickerOptions options = const MultiImagePickerOptions(),
-  }) async => files;
-
-  @override
-  Future<XFile?> getImageFromSource({
-    required ImageSource source,
-    ImagePickerOptions options = const ImagePickerOptions(),
-  }) async => files.isEmpty ? null : files.first;
-}
-
-/// Fake file selector: returns canned [XFile]s instead of the native dialog.
-class _FakeFileSelector extends fsel.FileSelectorPlatform
-    with MockPlatformInterfaceMixin {
-  /// Files the next pick returns; empty = user cancelled.
-  List<XFile> files = [];
-
-  @override
-  Future<List<XFile>> openFiles({
-    List<fsel.XTypeGroup>? acceptedTypeGroups,
-    String? initialDirectory,
-    String? confirmButtonText,
-  }) async => files;
-}
-
-/// In-memory [XFile] for picker fixtures. `XFile.fromData` won't do: on
-/// dart:io it ignores `name` (path stays empty), and a real temp file's
-/// `readAsBytes` does real IO that never completes under the fake test clock.
-/// Using the name as the path makes `.name` work; the byte read is overridden
-/// to resolve in-memory.
-class _MemXFile extends XFile {
-  _MemXFile(this._bytes, String name) : super(name);
-  final Uint8List _bytes;
-
-  @override
-  Future<Uint8List> readAsBytes() async => _bytes;
-
-  @override
-  Future<int> length() async => _bytes.length;
-}
-
-/// A tiny in-memory PNG for attachment fixtures.
-Uint8List _tinyPng() {
-  final im = img.Image(width: 6, height: 4);
-  img.fill(im, color: img.ColorRgb8(200, 40, 40));
-  return img.encodePng(im);
-}
-
-/// The same PNG as the `data:` URL history/echo would carry.
-String _tinyPngDataUrl() => 'data:image/png;base64,${base64Encode(_tinyPng())}';
-
-/// Mount [child] with a fake bridge and localizations. Defaults to the
-/// Chinese locale so the existing zh assertions hold; pass [locale] to test
-/// other languages.
-Widget _host(
-  Widget child,
-  BridgeApi api, {
-  Locale locale = const Locale('zh'),
-}) => ProviderScope(
-  overrides: [bridgeApiProvider.overrideWithValue(api)],
-  child: MaterialApp(
-    locale: locale,
-    localizationsDelegates: AppLocalizations.localizationsDelegates,
-    supportedLocales: AppLocalizations.supportedLocales,
-    home: child,
-  ),
-);
-
-/// Mount under a GoRouter so screens that call `context.go(...)` navigate; each
-/// extra [stubs] entry (path → label) renders a Text so a route can be asserted.
-Widget _routerHost(
-  BridgeApi api, {
-  required String initial,
-  required List<GoRoute> routes,
-  List<Override> overrides = const [],
-}) => ProviderScope(
-  overrides: [bridgeApiProvider.overrideWithValue(api), ...overrides],
-  child: MaterialApp.router(
-    locale: const Locale('zh'),
-    localizationsDelegates: AppLocalizations.localizationsDelegates,
-    supportedLocales: AppLocalizations.supportedLocales,
-    routerConfig: GoRouter(initialLocation: initial, routes: routes),
-  ),
-);
-
-GoRoute _stub(String path, String label) => GoRoute(
-  path: path,
-  builder: (_, _) => Scaffold(body: Text(label)),
-);
-
-/// Open the selected device's capabilities, which is where every kind — chat,
-/// API, session sharing — is now listed together.
-///
-/// Services used to be split into protocol tabs, and each of these tests began
-/// by tapping the one it cared about. The page is organised by device now, so
-/// there is no tab to pick and the rows are already on screen; narrow layouts do
-/// gate them behind picking a device, which is what this still does.
-Future<void> _openDevice(WidgetTester t, [String? device]) async {
-  // Wide auto-selects a device, so the capabilities are already up and there is
-  // nothing to tap. Narrow shows the list first; tap whichever device is asked
-  // for, or the only one when the caller doesn't care.
-  final tile = device != null
-      ? find.byKey(Key('device-$device'))
-      : find.byWidgetPredicate((w) {
-          final key = w.key;
-          if (key is! ValueKey<String>) return false;
-          final name = key.value;
-          // `device-<name>` only — not `device-capability-*`/`device-back`.
-          return name.startsWith('device-') &&
-              !name.startsWith('device-capability-') &&
-              name != 'device-back' &&
-              name != 'device-clean-unreachable';
-        });
-  if (tile.evaluate().isEmpty) {
-    // Nothing to tap is only legitimate when the capabilities are already up
-    // (wide auto-selects) or when there are no devices at all. If the page
-    // rendered neither, say so here rather than letting the caller's assertions
-    // pass or fail for a reason that has nothing to do with what they test.
-    final onDetail = find
-        .byWidgetPredicate(
-          (w) =>
-              w.key is ValueKey<String> &&
-              (w.key! as ValueKey<String>).value.startsWith(
-                'device-capability-',
-              ),
-        )
-        .evaluate()
-        .isNotEmpty;
-    final empty = find.text('此设备暂时没有可用能力').evaluate().isNotEmpty;
-    expect(
-      onDetail || empty,
-      isTrue,
-      reason: 'no device tile to open and no capabilities on screen either',
-    );
-    return;
-  }
-  await t.tap(tile.first);
-  await t.pumpAndSettle();
-}
-
-/// A 1×1 transparent PNG — the smallest thing `Image.memory` will decode, so a
-/// host-image test can assert on a real thumbnail rather than a broken one.
-final Uint8List _onePixelPng = base64Decode(
-  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=',
-);
-
-/// Open the composer's turn-settings sheet (fronted by the model chip) and tap
-/// the row for [value] — 'model', 'effort', 'plan' or 'project'. Plan toggles
-/// on the spot; the others open their own picker sheet.
-Future<void> _turnSetting(WidgetTester t, String value) async {
-  await t.tap(find.byKey(const Key('model-chip')));
-  await t.pumpAndSettle();
-  await t.tap(find.byKey(ValueKey('opt-$value')));
-  await t.pumpAndSettle();
-}
-
-/// Open the composer's `+` attachment menu and tap the item keyed [key].
-Future<void> _attachMenu(WidgetTester t, String key) async {
-  await t.tap(find.byKey(const Key('attach-menu-btn')));
-  await t.pumpAndSettle();
-  await t.tap(find.byKey(Key(key)));
-  await t.pumpAndSettle();
-}
-
-/// Every conversation row in the sessions pane. Rows carry no leading icon
-/// (each one is a conversation, so a glyph per row was just noise), so counting
-/// them means matching their `conv-tile-<id>` keys.
-Finder _convTiles() => find.byWidgetPredicate(
-  (w) => w.key is ValueKey<String> && '${w.key}'.contains('conv-tile-'),
-);
+import '../fake_bridge_api.dart';
+import '../support/screen_harness.dart';
 
 void main() {
   // AppSessionScreen keeps per-thread plan/effort memory in process-wide static
@@ -240,1453 +35,6 @@ void main() {
   // lands). Reset it between tests so memory from one test can't leak into
   // another that reuses a thread id.
   setUp(AppSessionScreen.debugResetThreadMemory);
-
-  testWidgets('a device lists every kind it exposes, plus the relay', (
-    t,
-  ) async {
-    final api = FakeBridgeApi(
-      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
-      services: const [
-        ServiceEntry(
-          device: 'lb7666',
-          kind: 'api',
-          name: 'default',
-          key: 'pcx:lb7666:api:default',
-        ),
-        ServiceEntry(
-          device: 'lb7666',
-          kind: 'app',
-          name: 'default',
-          key: 'pcx:lb7666:app:default',
-        ),
-      ],
-    );
-    await t.pumpWidget(_host(const ServicesScreen(), api));
-    await t.pumpAndSettle();
-    expect(find.text('lb7666.top:7666'), findsOneWidget);
-    await _openDevice(t);
-    // Both kinds sit under the one device — no tab to switch between them.
-    expect(
-      find.byKey(const Key('device-capability-pcx:lb7666:api:default')),
-      findsOneWidget,
-    );
-    expect(
-      find.byKey(const Key('device-capability-pcx:lb7666:app:default')),
-      findsOneWidget,
-    );
-  });
-
-  testWidgets('Opening a chat capability returns to the chat on that service', (
-    t,
-  ) async {
-    // "Open" used to push a project picker at /app/:key — a third level whose
-    // project tree and conversation list the chat sidebar already shows. It now
-    // hands the key to the home and goes back to it.
-    final api = FakeBridgeApi(
-      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
-      services: const [
-        ServiceEntry(
-          device: 'lb7666',
-          kind: 'app',
-          name: 'default',
-          key: 'pcx:lb7666:app:default',
-        ),
-      ],
-    );
-    late final ProviderContainer container;
-    await t.pumpWidget(
-      ProviderScope(
-        overrides: [bridgeApiProvider.overrideWithValue(api)],
-        child: Consumer(
-          builder: (c, ref, _) {
-            container = ProviderScope.containerOf(c);
-            return MaterialApp.router(
-              locale: const Locale('zh'),
-              localizationsDelegates: AppLocalizations.localizationsDelegates,
-              supportedLocales: AppLocalizations.supportedLocales,
-              routerConfig: GoRouter(
-                initialLocation: '/manage',
-                routes: [
-                  _stub('/', 'chat-home'),
-                  GoRoute(path: '/manage', builder: (_, _) => ServicesScreen()),
-                ],
-              ),
-            );
-          },
-        ),
-      ),
-    );
-    await t.pumpAndSettle();
-    await _openDevice(t);
-
-    await t.tap(find.text('打开')); // servicesOpen (zh)
-    await t.pumpAndSettle();
-
-    // Back on the chat route, with the service handed over for it to switch to.
-    expect(find.text('chat-home'), findsOneWidget);
-    expect(container.read(requestedServiceProvider), 'pcx:lb7666:app:default');
-  });
-
-  testWidgets('Managing an API capability opens a panel, not a page', (
-    t,
-  ) async {
-    // The /api/:key route was a whole page for one port field and one button.
-    final api = FakeBridgeApi(
-      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
-      services: const [
-        ServiceEntry(
-          device: 'lb7666',
-          kind: 'api',
-          name: 'default',
-          key: 'pcx:lb7666:api:default',
-        ),
-      ],
-    );
-    await t.pumpWidget(_host(const ServicesScreen(), api));
-    await t.pumpAndSettle();
-    await _openDevice(t);
-
-    await t.tap(find.text('管理')); // servicesManage (zh)
-    await t.pumpAndSettle();
-
-    // The panel is up with its subscribe form, and the capability row it acts
-    // on is still mounted behind it — the point of a panel over a route.
-    expect(find.byKey(const Key('subscribe-btn')), findsOneWidget);
-    expect(
-      find.byKey(const Key('device-capability-pcx:lb7666:api:default')),
-      findsOneWidget,
-    );
-  });
-
-  group('Codex setup', () {
-    /// Mount the wizard with [status] seeded, wide enough for the desktop card
-    /// layout.
-    Future<FakeBridgeApi> pump(
-      WidgetTester t, {
-      required CodexSetupStatus status,
-    }) async {
-      final api = FakeBridgeApi(
-        config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
-      )..codexStatus = status;
-      t.view.devicePixelRatio = 1.0;
-      t.view.physicalSize = const Size(1200, 1400);
-      addTearDown(t.view.reset);
-      await t.pumpWidget(_host(const CodexSetupScreen(), api));
-      await t.pumpAndSettle();
-      return api;
-    }
-
-    const unconfigured = CodexSetupStatus(
-      codexHome: r'C:\Users\test\.codex',
-      hasConfig: false,
-      hasAuth: false,
-      hasCustomProvider: false,
-      needsSetup: true,
-      promptVariant: 'default',
-    );
-    const signedIn = CodexSetupStatus(
-      codexHome: r'C:\Users\test\.codex',
-      hasConfig: true,
-      hasAuth: true,
-      hasCustomProvider: false,
-      authMode: 'chatgpt',
-      needsSetup: false,
-      promptVariant: 'default',
-    );
-
-    testWidgets('unconfigured leads with the provider form and says why', (
-      t,
-    ) async {
-      await pump(t, status: unconfigured);
-
-      // The state card answers "is this working" before any method is offered.
-      expect(find.text('尚未配置'), findsOneWidget); // codexSetupStatusNeedSetup
-      // Provider is the open method — it is the one that needs no running host.
-      expect(find.byKey(const Key('codex-base-url')), findsOneWidget);
-      // ChatGPT is present but collapsed: its button is not on screen, only the
-      // way to switch to it.
-      expect(find.byKey(const Key('codex-login-chatgpt')), findsNothing);
-      expect(find.text('改用此项'), findsOneWidget); // codexSetupSwitchTo
-    });
-
-    testWidgets('signed in hides the provider fields it cannot use', (t) async {
-      await pump(t, status: signedIn);
-
-      // The live method leads, marked as such...
-      expect(find.text('使用中'), findsOneWidget); // codexSetupInUse
-      expect(find.byKey(const Key('codex-login-done')), findsOneWidget);
-      expect(find.byKey(const Key('codex-logout-btn')), findsOneWidget);
-      // ...and the three provider inputs — unusable while a credential is in
-      // force — are behind the collapsed row rather than in the user's face.
-      expect(find.byKey(const Key('codex-base-url')), findsNothing);
-      expect(find.byKey(const Key('codex-api-key')), findsNothing);
-    });
-
-    testWidgets('switching to the collapsed method opens its controls', (
-      t,
-    ) async {
-      await pump(t, status: signedIn);
-      expect(find.byKey(const Key('codex-base-url')), findsNothing);
-
-      await t.tap(find.text('改用此项')); // codexSetupSwitchTo
-      await t.pumpAndSettle();
-
-      // The provider form is now open; the ChatGPT row keeps its "in use" pill
-      // (switching the disclosure must not pretend the live method changed).
-      expect(find.byKey(const Key('codex-base-url')), findsOneWidget);
-      expect(find.text('使用中'), findsOneWidget);
-    });
-
-    testWidgets('saving a provider reports success and re-reads the status', (
-      t,
-    ) async {
-      final api = await pump(t, status: unconfigured);
-
-      await t.enterText(
-        find.byKey(const Key('codex-base-url')),
-        'https://example.com/v1',
-      );
-      await t.enterText(find.byKey(const Key('codex-api-key')), 'sk-test');
-      await t.tap(find.byKey(const Key('codex-save-provider')));
-      await t.pumpAndSettle();
-
-      expect(api.lastProvider?.baseUrl, 'https://example.com/v1');
-      expect(find.byKey(const Key('codex-setup-info')), findsOneWidget);
-      // The state card followed the write instead of still reading "not
-      // configured" under a success message.
-      expect(find.text('尚未配置'), findsNothing);
-    });
-
-    testWidgets('the prompt switch lives under Advanced and persists', (
-      t,
-    ) async {
-      final api = await pump(t, status: signedIn);
-      expect(find.text('高级'), findsOneWidget); // codexSetupAdvanced
-
-      await t.tap(find.byKey(const Key('codex-nondegraded-toggle')));
-      await t.pumpAndSettle();
-
-      expect(api.codexStatus.promptVariant, 'non_degraded');
-    });
-  });
-
-  testWidgets('Services shows error state with retry', (t) async {
-    final api = FakeBridgeApi(
-      config: const ConfigInfo(relay: 'r:1', hasKey: true),
-    )..discoverError = Exception('relay down');
-    await t.pumpWidget(_host(const ServicesScreen(), api));
-    await t.pumpAndSettle();
-    expect(find.byKey(const Key('services-error')), findsOneWidget);
-    expect(find.text('重试'), findsOneWidget);
-  });
-
-  testWidgets('Services explains an expired session and offers sign-in', (
-    t,
-  ) async {
-    final api = FakeBridgeApi(
-      config: const ConfigInfo(
-        relay: '',
-        hasKey: false,
-        mode: 'account',
-        accountLogin: 'octocat',
-      ),
-    )..discoverError = StateError('session expired; sign in again');
-    await t.pumpWidget(
-      _routerHost(
-        api,
-        initial: '/manage',
-        routes: [
-          GoRoute(path: '/manage', builder: (_, _) => const ServicesScreen()),
-          GoRoute(
-            path: '/onboarding',
-            builder: (_, state) => Scaffold(
-              body: Text('login:${state.uri.queryParameters['reason']}'),
-            ),
-          ),
-        ],
-      ),
-    );
-    await t.pumpAndSettle();
-
-    expect(find.text('登录已过期'), findsOneWidget);
-    expect(find.textContaining('请重新登录以恢复服务连接'), findsOneWidget);
-    expect(find.text('无法连接到 relay'), findsNothing);
-    expect(find.text('重试'), findsNothing);
-
-    await t.tap(find.byKey(const Key('services-sign-in-again')));
-    await t.pumpAndSettle();
-    expect(find.text('login:session-expired'), findsOneWidget);
-  });
-
-  testWidgets('Onboarding explains why an expired account must sign in', (
-    t,
-  ) async {
-    final api = FakeBridgeApi(
-      config: const ConfigInfo(
-        relay: '',
-        hasKey: false,
-        mode: 'account',
-        accountLogin: 'octocat',
-      ),
-    );
-    await t.pumpWidget(
-      _host(const AccountOnboardingScreen(sessionExpired: true), api),
-    );
-    await t.pumpAndSettle();
-
-    expect(find.byKey(const Key('account-session-expired')), findsOneWidget);
-    expect(find.text('登录已过期'), findsOneWidget);
-    expect(find.textContaining('请重新登录以恢复服务连接'), findsOneWidget);
-    expect(find.text('设备码登录'), findsOneWidget);
-  });
-
-  testWidgets('Settings shows masked key and relay', (t) async {
-    final api = FakeBridgeApi(
-      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
-    );
-    await t.pumpWidget(_host(const SettingsScreen(), api));
-    await t.pumpAndSettle();
-    expect(find.text('lb7666.top:7666'), findsOneWidget);
-    expect(find.text('•••••••• (已设置)'), findsOneWidget);
-    expect(find.byKey(const Key('export-btn')), findsOneWidget);
-  });
-
-  testWidgets('compact Settings can reach the logs', (t) async {
-    // The page menu that carries Logs is desktop-only, and the other compact
-    // shortcut is in the chat drawer — unopenable for the user this matters to,
-    // whose host is unreachable. Without a row here the logs explaining the
-    // failure were only reachable after it was fixed.
-    final api = FakeBridgeApi(
-      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
-    );
-    await t.pumpWidget(
-      _routerHost(
-        api,
-        initial: '/settings',
-        routes: [
-          GoRoute(path: '/settings', builder: (_, _) => const SettingsScreen()),
-          _stub('/logs', 'logs-page'),
-        ],
-      ),
-    );
-    await t.pumpAndSettle();
-
-    // The row is below the fold in a 600 px test viewport.
-    await t.ensureVisible(find.byKey(const Key('diagnostics-btn')));
-    await t.pumpAndSettle();
-    await t.tap(find.byKey(const Key('diagnostics-btn')));
-    await t.pumpAndSettle();
-    expect(find.text('logs-page'), findsOneWidget);
-  });
-
-  testWidgets('a registered-but-dead app-server reads "unreachable", not '
-      '"online"', (t) async {
-    final api = FakeBridgeApi(
-      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
-      services: const [
-        ServiceEntry(
-          device: 'lb7666',
-          kind: 'app',
-          name: 'default',
-          key: 'pcx:lb7666:app:default',
-        ),
-      ],
-    )..reachable['pcx:lb7666:app:default'] = false; // backend probe fails
-    t.view.devicePixelRatio = 1.0;
-    t.view.physicalSize = const Size(400, 900); // narrow: single-pane list
-    addTearDown(t.view.reset);
-
-    await t.pumpWidget(_host(const ServicesScreen(), api));
-    await t.pumpAndSettle();
-    await _openDevice(t);
-
-    // The probe says the backend is dead → honest "不可达" on the app-server.
-    expect(find.text('不可达'), findsOneWidget); // statusUnreachable (zh)
-    // The old bug showed a false green "online" here, off a cached flag.
-    expect(find.text('在线'), findsNothing);
-    // …and it spells out *why*: relay registration up, remote backend down.
-    expect(find.textContaining('远端 app-server 没有响应'), findsOneWidget);
-  });
-
-  testWidgets('account mode shows the GitHub identity, not "(no relay)"', (
-    t,
-  ) async {
-    final api = FakeBridgeApi(
-      config: const ConfigInfo(
-        relay: '',
-        hasKey: false,
-        mode: 'account',
-        accountLogin: 'acking-you',
-      ),
-      services: const [
-        ServiceEntry(
-          device: 'lb7666',
-          kind: 'app',
-          name: 'default',
-          key: 'pcxu:u:lb7666:app:default',
-        ),
-      ],
-    );
-    await t.pumpWidget(_host(const ServicesScreen(), api));
-    await t.pumpAndSettle();
-    // The header shows the signed-in GitHub identity…
-    expect(find.text('@acking-you'), findsOneWidget);
-    // …and never the confusing "(no relay configured)" placeholder.
-    expect(find.text('(未配置 relay)'), findsNothing);
-  });
-
-  FakeBridgeApi accountFake() => FakeBridgeApi(
-    config: const ConfigInfo(
-      relay: '',
-      hasKey: false,
-      mode: 'account',
-      accountLogin: 'acking-you',
-    ),
-    services: const [],
-  );
-
-  testWidgets('desktop account mode: add a host, then stop it', (t) async {
-    // The block is desktop-only; force a desktop target. Reset inside the body
-    // (not addTearDown) so the framework's debug-var invariant check passes.
-    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
-    try {
-      final api = accountFake();
-      await t.pumpWidget(_host(const ServicesScreen(), api));
-      await t.pumpAndSettle();
-      await _openDevice(t);
-
-      // No hosts yet → only the "host another" entry (desktop + account mode).
-      expect(find.byKey(const Key('add-local-host-card')), findsOneWidget);
-
-      // Add a host → start on the default port with the default proxy.
-      await t.tap(find.byKey(const Key('add-local-host-card')));
-      await t.pumpAndSettle();
-      expect(find.byKey(const Key('start-hosting-btn')), findsOneWidget);
-      await t.tap(find.byKey(const Key('start-hosting-btn')));
-      await t.pumpAndSettle();
-      expect(api.lastServePort, 18080);
-      expect(api.lastServeProxy, 'http://127.0.0.1:11111');
-      expect(api.serveHosts, hasLength(1));
-
-      // The running host's card appears; open it → Stop tears it down.
-      expect(find.byKey(const Key('local-host-default')), findsOneWidget);
-      await t.tap(find.byKey(const Key('local-host-default')));
-      await t.pumpAndSettle();
-      expect(find.byKey(const Key('stop-hosting-btn')), findsOneWidget);
-      await t.tap(find.byKey(const Key('stop-hosting-btn')));
-      await t.pumpAndSettle();
-      expect(api.serveHosts, isEmpty);
-    } finally {
-      debugDefaultTargetPlatformOverride = null;
-    }
-  });
-
-  testWidgets('local-host: turning off the proxy passes no proxy', (t) async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
-    try {
-      final api = accountFake();
-      await t.pumpWidget(_host(const ServicesScreen(), api));
-      await t.pumpAndSettle();
-      await _openDevice(t);
-      await t.tap(find.byKey(const Key('add-local-host-card')));
-      await t.pumpAndSettle();
-      // The proxy field shows by default (proxy is mandatory); toggle it off.
-      expect(find.byKey(const Key('proxy-field')), findsOneWidget);
-      await t.tap(find.byKey(const Key('use-proxy-switch')));
-      await t.pumpAndSettle();
-      expect(find.byKey(const Key('proxy-field')), findsNothing);
-      await t.tap(find.byKey(const Key('start-hosting-btn')));
-      await t.pumpAndSettle();
-      expect(api.lastServeProxy, isNull);
-      expect(api.serveHosts, hasLength(1));
-    } finally {
-      debugDefaultTargetPlatformOverride = null;
-    }
-  });
-
-  testWidgets('local-host: "change path" reveals the codex path field', (
-    t,
-  ) async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
-    try {
-      final api = accountFake(); // codexLocate returns a path → "found"
-      await t.pumpWidget(_host(const ServicesScreen(), api));
-      await t.pumpAndSettle();
-      await _openDevice(t);
-      await t.tap(find.byKey(const Key('add-local-host-card')));
-      await t.pumpAndSettle();
-      // Found → no path field, but a "change path" override is offered.
-      expect(find.byKey(const Key('codex-path-field')), findsNothing);
-      expect(find.byKey(const Key('customize-codex-btn')), findsOneWidget);
-      await t.tap(find.byKey(const Key('customize-codex-btn')));
-      await t.pumpAndSettle();
-      expect(find.byKey(const Key('codex-path-field')), findsOneWidget);
-    } finally {
-      debugDefaultTargetPlatformOverride = null;
-    }
-  });
-
-  testWidgets('local-host: a second host coexists with the first', (t) async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
-    // Tall enough that both host cards and the add button build: the detail is
-    // a lazy ListView, so anything below the fold is absent rather than merely
-    // scrolled away, and `ensureVisible` has nothing to scroll to.
-    t.view.physicalSize = const Size(1200, 1600);
-    t.view.devicePixelRatio = 1;
-    addTearDown(t.view.reset);
-    try {
-      final api = accountFake();
-      await t.pumpWidget(_host(const ServicesScreen(), api));
-      await t.pumpAndSettle();
-      await _openDevice(t);
-
-      // First host "default".
-      await t.tap(find.byKey(const Key('add-local-host-card')));
-      await t.pumpAndSettle();
-      await t.tap(find.byKey(const Key('start-hosting-btn')));
-      await t.pumpAndSettle();
-
-      // Second host "work" (codex found → fields are port, name, proxy).
-      await t.tap(find.byKey(const Key('add-local-host-card')));
-      await t.pumpAndSettle();
-      await t.enterText(find.byType(TextField).at(0), '18081');
-      await t.enterText(find.byType(TextField).at(1), 'work');
-      await t.tap(find.byKey(const Key('start-hosting-btn')));
-      await t.pumpAndSettle();
-
-      expect(api.serveHosts, hasLength(2));
-      expect(find.byKey(const Key('local-host-default')), findsOneWidget);
-      expect(find.byKey(const Key('local-host-work')), findsOneWidget);
-    } finally {
-      debugDefaultTargetPlatformOverride = null;
-    }
-  });
-
-  testWidgets('local-host: a hosted server is labeled local in the App-server '
-      'list', (t) async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
-    try {
-      final api = FakeBridgeApi(
-        config: const ConfigInfo(
-          relay: '',
-          hasKey: false,
-          mode: 'account',
-          accountLogin: 'acking-you',
-        ),
-        // A discovered app-server whose key matches the host we'll start.
-        services: const [
-          ServiceEntry(
-            device: 'local',
-            kind: 'app',
-            name: 'default',
-            key: 'pcx:local:app:default',
-          ),
-        ],
-      );
-      await t.pumpWidget(_host(const ServicesScreen(), api));
-      await t.pumpAndSettle();
-      await _openDevice(t);
-      // Before hosting, the device is just a discovered remote one — and the
-      // hosting card belongs to THIS machine, so it isn't shown under a peer.
-      expect(find.text('本机'), findsNothing);
-      expect(find.byKey(const Key('add-local-host-card')), findsNothing);
-
-      // Host "default" locally → its key matches the discovered service. The
-      // title bar's button is the route in when no local device is selected.
-      await t.tap(find.byKey(const Key('host-this-device-btn')));
-      await t.pumpAndSettle();
-      await t.tap(find.byKey(const Key('start-hosting-btn')));
-      await t.pumpAndSettle();
-
-      // The device now reads as this machine rather than a remote peer, and the
-      // host it published is listed under it by name — the state change, not
-      // just the presence of the word somewhere on the page.
-      expect(find.text('本机'), findsWidgets);
-      expect(find.byKey(const Key('local-host-default')), findsOneWidget);
-      // Its app-server capability is the same discovered service as before.
-      expect(
-        find.byKey(const Key('device-capability-pcx:local:app:default')),
-        findsOneWidget,
-      );
-    } finally {
-      debugDefaultTargetPlatformOverride = null;
-    }
-  });
-
-  testWidgets('local-host: a tunnel can be deregistered, then re-registered', (
-    t,
-  ) async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
-    try {
-      final api = accountFake();
-      await t.pumpWidget(_host(const ServicesScreen(), api));
-      await t.pumpAndSettle();
-      await _openDevice(t);
-      // Host one server → it publishes both an app and an api tunnel.
-      await t.tap(find.byKey(const Key('add-local-host-card')));
-      await t.pumpAndSettle();
-      await t.tap(find.byKey(const Key('start-hosting-btn')));
-      await t.pumpAndSettle();
-      expect(api.serveHosts.single.apiRegistered, isTrue);
-      expect(api.serveHosts.single.appRegistered, isTrue);
-
-      // Deregister just the API tunnel. Its capability row owns both actions now
-      // — the separate tunnel list described the same three things twice.
-      const apiMenu = Key('capability-menu-pcx:local:api:default');
-      await t.tap(find.byKey(apiMenu));
-      await t.pumpAndSettle();
-      await t.tap(find.text('注销')); // deregister (zh)
-      await t.pumpAndSettle();
-      await t.tap(find.byKey(const Key('deregister-confirm-btn')));
-      await t.pumpAndSettle();
-      // Only the api tunnel is unpublished; the app tunnel + host stay up.
-      expect(api.serveHosts.single.apiRegistered, isFalse);
-      expect(api.serveHosts.single.appRegistered, isTrue);
-
-      // The row stays — listed as offline — so re-registering is still reachable.
-      // Hiding it would strand the tunnel with no route back.
-      expect(find.text('已下架'), findsOneWidget); // tunnelOffline (zh)
-      await t.tap(find.byKey(apiMenu));
-      await t.pumpAndSettle();
-      await t.tap(find.text('重新注册')); // reregister (zh)
-      await t.pumpAndSettle();
-      expect(api.serveHosts.single.apiRegistered, isTrue);
-    } finally {
-      debugDefaultTargetPlatformOverride = null;
-    }
-  });
-
-  testWidgets('local-host: the session tunnel can be taken down and put back', (
-    t,
-  ) async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
-    try {
-      final api = accountFake();
-      await t.pumpWidget(_host(const ServicesScreen(), api));
-      await t.pumpAndSettle();
-      await _openDevice(t);
-      await t.tap(find.byKey(const Key('add-local-host-card')));
-      await t.pumpAndSettle();
-      await t.tap(find.byKey(const Key('start-hosting-btn')));
-      await t.pumpAndSettle();
-      expect(api.serveHosts.single.metaRegistered, isTrue);
-
-      // Session sharing rides its own tunnel, so it unpublishes like the other
-      // two — the row it replaced offered exactly this.
-      const metaMenu = Key('capability-menu-meta-pcx:local:app:default');
-      await t.tap(find.byKey(metaMenu));
-      await t.pumpAndSettle();
-      await t.tap(find.text('注销')); // deregister (zh)
-      await t.pumpAndSettle();
-      await t.tap(find.byKey(const Key('deregister-confirm-btn')));
-      await t.pumpAndSettle();
-      expect(api.serveHosts.single.metaRegistered, isFalse);
-      // The app tunnel it shares a row-key with is untouched.
-      expect(api.serveHosts.single.appRegistered, isTrue);
-
-      await t.tap(find.byKey(metaMenu));
-      await t.pumpAndSettle();
-      await t.tap(find.text('重新注册')); // reregister (zh)
-      await t.pumpAndSettle();
-      expect(api.serveHosts.single.metaRegistered, isTrue);
-    } finally {
-      debugDefaultTargetPlatformOverride = null;
-    }
-  });
-
-  testWidgets('local-host: each tunnel is described once, address and all', (
-    t,
-  ) async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
-    try {
-      final api = accountFake();
-      await t.pumpWidget(_host(const ServicesScreen(), api));
-      await t.pumpAndSettle();
-      await _openDevice(t);
-      await t.tap(find.byKey(const Key('add-local-host-card')));
-      await t.pumpAndSettle();
-      await t.tap(find.byKey(const Key('start-hosting-btn')));
-      await t.pumpAndSettle();
-
-      // The capability row IS the tunnel row now: each protocol is named once,
-      // on the same line as the listen address that only the tunnel row used to
-      // carry. A second mention would mean the duplicate list is back.
-      expect(find.textContaining('App-server'), findsOneWidget);
-      expect(
-        find.textContaining(RegExp(r'App-server\s+·\s+127\.0\.0\.1:18080')),
-        findsOneWidget,
-      );
-      expect(
-        find.textContaining(RegExp(r'^API\s+·\s+127\.0\.0\.1:')),
-        findsOneWidget,
-      );
-    } finally {
-      debugDefaultTargetPlatformOverride = null;
-    }
-  });
-
-  testWidgets('the identity row is the way into settings', (t) async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
-    try {
-      await t.pumpWidget(
-        _routerHost(
-          accountFake(),
-          initial: '/manage',
-          routes: [
-            GoRoute(path: '/manage', builder: (_, _) => const ServicesScreen()),
-            _stub('/settings', 'settings-page'),
-          ],
-        ),
-      );
-      await t.pumpAndSettle();
-
-      await t.tap(find.byKey(const Key('identity-open-settings')));
-      await t.pumpAndSettle();
-      expect(find.text('settings-page'), findsOneWidget);
-    } finally {
-      debugDefaultTargetPlatformOverride = null;
-    }
-  });
-
-  testWidgets('local-host card is hidden on mobile', (t) async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.android;
-    try {
-      final api = accountFake();
-      await t.pumpWidget(_host(const ServicesScreen(), api));
-      await t.pumpAndSettle();
-      expect(find.byKey(const Key('add-local-host-card')), findsNothing);
-    } finally {
-      debugDefaultTargetPlatformOverride = null;
-    }
-  });
-
-  testWidgets('注销: cancel keeps the service, confirm removes it', (t) async {
-    final api = FakeBridgeApi(
-      config: const ConfigInfo(
-        relay: '',
-        hasKey: false,
-        mode: 'account',
-        accountLogin: 'acking-you',
-      ),
-      services: const [
-        ServiceEntry(
-          device: 'lb7666',
-          kind: 'api',
-          name: 'default',
-          key: 'pcx:lb7666:api:default',
-        ),
-      ],
-    );
-    await t.pumpWidget(_host(const ServicesScreen(), api));
-    await t.pumpAndSettle();
-    await _openDevice(t);
-    // The list card (the wide layout ALSO shows the name in the detail pane,
-    // so presence is asserted on the card key, absence on the text).
-    expect(
-      find.byKey(const Key('device-capability-pcx:lb7666:api:default')),
-      findsOneWidget,
-    );
-
-    // Open the card overflow menu → 注销 → cancel: nothing happens.
-    await t.tap(
-      find.byKey(const Key('capability-menu-pcx:lb7666:api:default')),
-    );
-    await t.pumpAndSettle();
-    await t.tap(find.text('注销'));
-    await t.pumpAndSettle();
-    expect(find.byKey(const Key('deregister-dialog')), findsOneWidget);
-    await t.tap(find.text('取消'));
-    await t.pumpAndSettle();
-    expect(api.lastDeregistered, isNull);
-    expect(
-      find.byKey(const Key('device-capability-pcx:lb7666:api:default')),
-      findsOneWidget,
-    );
-
-    // Re-open → confirm: the service is deregistered + leaves the list.
-    await t.tap(
-      find.byKey(const Key('capability-menu-pcx:lb7666:api:default')),
-    );
-    await t.pumpAndSettle();
-    await t.tap(find.text('注销'));
-    await t.pumpAndSettle();
-    await t.tap(find.byKey(const Key('deregister-confirm-btn')));
-    await t.pumpAndSettle();
-    expect(api.lastDeregistered, 'pcx:lb7666:api:default');
-    expect(find.text('API'), findsNothing);
-  });
-
-  testWidgets('注销 on an unreachable remote entry dismisses it, staying '
-      'hidden even while the relay still lists it', (t) async {
-    final api =
-        FakeBridgeApi(
-            config: const ConfigInfo(
-              relay: '',
-              hasKey: false,
-              mode: 'account',
-              accountLogin: 'acking-you',
-            ),
-            services: const [
-              ServiceEntry(
-                device: 'otherdev',
-                kind: 'api',
-                name: 'orphan',
-                key: 'pcx:otherdev:api:orphan',
-              ),
-            ],
-          )
-          // Unreachable => the honest "remove" path; and the backend can't drop it
-          // (the key lingers on the relay even after the DELETE).
-          ..reachable['pcx:otherdev:api:orphan'] = false
-          ..keepOnDeregister = true;
-    await t.pumpWidget(_host(const ServicesScreen(), api));
-    await t.pumpAndSettle();
-    await _openDevice(t);
-    expect(
-      find.byKey(const Key('device-capability-pcx:otherdev:api:orphan')),
-      findsOneWidget,
-    );
-
-    // Overflow → 注销 → the honest "remove unreachable" dialog → confirm.
-    await t.tap(
-      find.byKey(const Key('capability-menu-pcx:otherdev:api:orphan')),
-    );
-    await t.pumpAndSettle();
-    await t.tap(find.text('注销'));
-    await t.pumpAndSettle();
-    expect(find.text('移除该不可达服务？'), findsOneWidget);
-    await t.tap(find.byKey(const Key('deregister-confirm-btn')));
-    await t.pumpAndSettle();
-
-    // Best-effort backend drop still attempted; and even though discovery STILL
-    // lists the key, the durable dismiss keeps it hidden from the list.
-    expect(api.lastDeregistered, 'pcx:otherdev:api:orphan');
-    expect(find.text('orphan'), findsNothing);
-  });
-
-  testWidgets('a dismissed entry re-appears once it is reachable again '
-      '(recovered in place)', (t) async {
-    final api =
-        FakeBridgeApi(
-            config: const ConfigInfo(
-              relay: '',
-              hasKey: false,
-              mode: 'account',
-              accountLogin: 'acking-you',
-            ),
-            services: const [
-              ServiceEntry(
-                device: 'otherdev',
-                kind: 'api',
-                name: 'orphan',
-                key: 'pcx:otherdev:api:orphan',
-              ),
-            ],
-          )
-          ..reachable['pcx:otherdev:api:orphan'] = false
-          ..keepOnDeregister = true;
-    await t.pumpWidget(_host(const ServicesScreen(), api));
-    await t.pumpAndSettle();
-    await _openDevice(t);
-
-    // Dismiss the unreachable orphan.
-    await t.tap(
-      find.byKey(const Key('capability-menu-pcx:otherdev:api:orphan')),
-    );
-    await t.pumpAndSettle();
-    await t.tap(find.text('注销'));
-    await t.pumpAndSettle();
-    await t.tap(find.byKey(const Key('deregister-confirm-btn')));
-    await t.pumpAndSettle();
-    expect(find.text('orphan'), findsNothing);
-
-    // The backend recovers behind the still-registered key. A re-probe lifts the
-    // durable dismissal — reachability, not discovery-absence, is the un-hide
-    // signal, so a recovered-in-place service is never stranded.
-    api.reachable['pcx:otherdev:api:orphan'] = true;
-    await t.tap(find.byKey(const Key('refresh-btn')));
-    await t.pumpAndSettle();
-    expect(
-      find.byKey(const Key('device-capability-pcx:otherdev:api:orphan')),
-      findsOneWidget,
-    );
-  });
-
-  testWidgets('a registered-but-dead API proxy reads "unreachable", not '
-      '"online"', (t) async {
-    final api = FakeBridgeApi(
-      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
-      services: const [
-        ServiceEntry(
-          device: 'lb7666',
-          kind: 'api',
-          name: 'default',
-          key: 'pcx:lb7666:api:default',
-        ),
-      ],
-    )..reachable['pcx:lb7666:api:default'] = false; // proxy probe fails
-    t.view.devicePixelRatio = 1.0;
-    t.view.physicalSize = const Size(400, 900); // narrow: single-pane list
-    addTearDown(t.view.reset);
-
-    await t.pumpWidget(_host(const ServicesScreen(), api));
-    await t.pumpAndSettle(); // let the API probe resolve
-    await _openDevice(t);
-
-    // The probe says the proxy is dead → honest "不可达" on the API service…
-    expect(find.text('不可达'), findsOneWidget);
-    // …and spells out that the dead link is the remote API service.
-    expect(find.textContaining('远端 API 服务没有响应'), findsOneWidget);
-  });
-
-  testWidgets('app-server auto-re-probes: a recovered server flips to online '
-      'without a manual refresh', (t) async {
-    final api =
-        FakeBridgeApi(
-            config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
-            services: const [
-              ServiceEntry(
-                device: 'lb7666',
-                kind: 'app',
-                name: 'default',
-                key: 'pcx:lb7666:app:default',
-              ),
-            ],
-          )
-          ..reachable['pcx:lb7666:app:default'] =
-              false; // starts registered-but-dead
-    t.view.devicePixelRatio = 1.0;
-    t.view.physicalSize = const Size(400, 900); // narrow: single-pane list
-    addTearDown(t.view.reset);
-
-    await t.pumpWidget(_host(const ServicesScreen(), api));
-    await t.pumpAndSettle();
-    await _openDevice(t);
-    expect(find.text('不可达'), findsOneWidget); // honest dead status
-
-    // The remote app-server comes back up out from under us...
-    api.reachable['pcx:lb7666:app:default'] = true;
-    // ...and the periodic re-probe picks it up with NO manual refresh tap.
-    await t.pump(const Duration(seconds: 16)); // fire the 15s re-probe timer
-    await t.pumpAndSettle(); // let the fresh probe resolve
-
-    expect(find.text('不可达'), findsNothing); // recovered on its own
-    expect(find.text('在线'), findsOneWidget); // the app-server reads online
-  });
-
-  testWidgets('onboarding: sign in shows the code, then authorized opens the '
-      'first-run guide', (t) async {
-    final api = FakeBridgeApi(
-      config: const ConfigInfo(relay: '', hasKey: false),
-    )..accountPollStatus = 'authorized';
-    await t.pumpWidget(
-      _routerHost(
-        api,
-        initial: '/onboarding',
-        routes: [
-          GoRoute(
-            path: '/onboarding',
-            builder: (_, _) => const AccountOnboardingScreen(),
-          ),
-          _stub('/', 'HOME-ROUTE'),
-          _stub('/welcome', 'WELCOME-ROUTE'),
-        ],
-      ),
-    );
-    await t.pumpAndSettle(); // initial onboarding (no spinner yet)
-    // Warm the prefs snapshot so the post-sign-in routing decides
-    // synchronously (the real prefs file load never completes under the
-    // test's fake async, and waiting out its bounded timeout would also
-    // expire the success toast).
-    ProviderScope.containerOf(
-      t.element(find.byType(AccountOnboardingScreen)),
-    ).read(uiPrefsProvider.notifier).setLastService('seed');
-    await t.tap(find.text('设备码登录')); // accountUseDeviceCode (zh): device flow
-    // The polling spinner is a perpetual animation, so advance via bounded pumps
-    // (pumpAndSettle would never settle while it spins).
-    await t.pump(); // _startDevice: accountLoginStart resolves
-    await t.pump(); // setState shows the code + spinner
-    expect(find.text('ABCD-1234'), findsOneWidget); // user code shown
-    expect(find.text('打开 GitHub'), findsOneWidget); // accountOpenGitHub (zh)
-    await t.pump(const Duration(seconds: 6)); // fire the 5s poll interval
-    await t.pump(); // accountLoginPoll resolves → go('/welcome')
-    await t.pump(); // router rebuilds
-    // First sign-in on this device → the focused welcome guide, not the home.
-    expect(find.text('WELCOME-ROUTE'), findsOneWidget);
-  });
-
-  testWidgets('onboarding: the device code copies itself and confirms', (
-    t,
-  ) async {
-    final copied = <String>[];
-    t.binding.defaultBinaryMessenger.setMockMethodCallHandler(
-      SystemChannels.platform,
-      (call) async {
-        if (call.method == 'Clipboard.setData') {
-          copied.add((call.arguments as Map)['text'] as String);
-        }
-        return null;
-      },
-    );
-    addTearDown(
-      () => t.binding.defaultBinaryMessenger.setMockMethodCallHandler(
-        SystemChannels.platform,
-        null,
-      ),
-    );
-    // 'expired' lets the poll reach a terminal state, so no spinner or timer is
-    // left pending at teardown (same reason as the expired-code test below).
-    final api = FakeBridgeApi(
-      config: const ConfigInfo(relay: '', hasKey: false),
-    )..accountPollStatus = 'expired';
-    await t.pumpWidget(_host(const AccountOnboardingScreen(), api));
-    await t.pumpAndSettle();
-    await t.tap(find.text('设备码登录')); // accountUseDeviceCode (zh)
-    await t.pump(); // accountLoginStart resolves
-    await t.pump(); // the code renders
-
-    // The code is the tap target: copying is the only reason it is on screen,
-    // so it doesn't hide behind a separate button.
-    await t.tap(find.byKey(const Key('account-code-copy')));
-    await t.pump();
-    await t.pump(const Duration(milliseconds: 400));
-
-    expect(copied.single, 'ABCD-1234');
-    // And it says so — a silent clipboard write leaves the user unsure whether
-    // to retype the code by hand.
-    expect(find.text('已复制'), findsOneWidget); // copied (zh)
-
-    await t.pump(const Duration(seconds: 6)); // poll fires → expired → stops
-    await t.pumpAndSettle();
-  });
-
-  testWidgets('onboarding: an expired code clears and shows the expired '
-      'message without navigating', (t) async {
-    final api = FakeBridgeApi(
-      config: const ConfigInfo(relay: '', hasKey: false),
-    )..accountPollStatus = 'expired';
-    await t.pumpWidget(
-      _routerHost(
-        api,
-        initial: '/onboarding',
-        routes: [
-          GoRoute(
-            path: '/onboarding',
-            builder: (_, _) => const AccountOnboardingScreen(),
-          ),
-          _stub('/', 'HOME-ROUTE'),
-        ],
-      ),
-    );
-    await t.pumpAndSettle(); // initial onboarding (no spinner yet)
-    await t.tap(find.text('设备码登录')); // device-code fallback
-    await t.pump(); // start resolves
-    await t.pump(); // code + spinner show
-    expect(find.text('ABCD-1234'), findsOneWidget);
-    await t.pump(
-      const Duration(seconds: 6),
-    ); // poll fires → 'expired' → setState
-    // 'expired' clears _device, so the spinner is gone and we can settle.
-    await t.pumpAndSettle();
-    expect(find.text('代码已过期,请重试。'), findsOneWidget); // accountCodeExpired (zh)
-    expect(find.text('ABCD-1234'), findsNothing); // cleared, back to sign-in
-    expect(find.text('HOME-ROUTE'), findsNothing); // did NOT navigate
-  });
-
-  testWidgets('onboarding: browser sign-in (default) exchanges and navigates '
-      'home', (t) async {
-    final api = FakeBridgeApi(
-      config: const ConfigInfo(relay: '', hasKey: false),
-    );
-    await t.pumpWidget(
-      _routerHost(
-        api,
-        initial: '/onboarding',
-        routes: [
-          GoRoute(
-            path: '/onboarding',
-            builder: (_, _) => const AccountOnboardingScreen(),
-          ),
-          _stub('/', 'HOME-ROUTE'),
-          _stub('/welcome', 'WELCOME-ROUTE'),
-        ],
-        // The browser hand-off returns a redirect whose state matches the fake
-        // bridge's started flow ('fake-state'), carrying a one-time code.
-        overrides: [
-          webAuthenticatorProvider.overrideWithValue(
-            _FakeWebAuthenticator(
-              'pocketcodex://auth?exchange_code=xc1&state=fake-state',
-            ),
-          ),
-        ],
-      ),
-    );
-    await t.pumpAndSettle();
-    // Warm the prefs snapshot so the post-sign-in routing decides
-    // synchronously (see the device-code test above).
-    ProviderScope.containerOf(
-      t.element(find.byType(AccountOnboardingScreen)),
-    ).read(uiPrefsProvider.notifier).setLastService('seed');
-    // The PRIMARY button is the browser flow (the convenient default).
-    await t.tap(find.text('使用 GitHub 登录'));
-    // Flush the async chain (start → authenticate → exchange → toast + go) with
-    // bounded pumps; pumpAndSettle would advance past the toast's 3s auto-dismiss.
-    for (var i = 0; i < 8; i++) {
-      await t.pump(const Duration(milliseconds: 20));
-    }
-    // First sign-in on this device → the focused welcome guide.
-    expect(find.text('WELCOME-ROUTE'), findsOneWidget);
-    expect(api.lastWebRedirectUri, isNotNull); // the web flow ran
-    // Success toast (root ScaffoldMessenger) survives the navigation.
-    expect(find.textContaining('octocat'), findsOneWidget);
-    await t.pumpAndSettle(); // drain the SnackBar timer
-  });
-
-  testWidgets('onboarding: a later sign-in on this device skips the guide', (
-    t,
-  ) async {
-    final api = FakeBridgeApi(
-      config: const ConfigInfo(relay: '', hasKey: false),
-    )..accountPollStatus = 'authorized';
-    await t.pumpWidget(
-      _routerHost(
-        api,
-        initial: '/onboarding',
-        routes: [
-          GoRoute(
-            path: '/onboarding',
-            builder: (_, _) => const AccountOnboardingScreen(),
-          ),
-          _stub('/', 'HOME-ROUTE'),
-          _stub('/welcome', 'WELCOME-ROUTE'),
-        ],
-      ),
-    );
-    await t.pumpAndSettle();
-    // The guide was already seen on this device (e.g. sign-out → sign-in).
-    ProviderScope.containerOf(
-      t.element(find.byType(AccountOnboardingScreen)),
-    ).read(uiPrefsProvider.notifier).markGuideSeen();
-    await t.tap(find.text('设备码登录'));
-    await t.pump();
-    await t.pump();
-    await t.pump(const Duration(seconds: 6)); // fire the 5s poll interval
-    await t.pump();
-    await t.pump();
-    expect(find.text('HOME-ROUTE'), findsOneWidget); // straight to the chat
-    expect(find.text('WELCOME-ROUTE'), findsNothing);
-  });
-
-  testWidgets('onboarding: a cancelled browser sign-in guides to device code', (
-    t,
-  ) async {
-    final api = FakeBridgeApi(
-      config: const ConfigInfo(relay: '', hasKey: false),
-    );
-    await t.pumpWidget(
-      _routerHost(
-        api,
-        initial: '/onboarding',
-        routes: [
-          GoRoute(
-            path: '/onboarding',
-            builder: (_, _) => const AccountOnboardingScreen(),
-          ),
-          _stub('/', 'HOME-ROUTE'),
-        ],
-        overrides: [
-          webAuthenticatorProvider.overrideWithValue(
-            _FakeWebAuthenticator(
-              '',
-              error: PlatformException(code: 'CANCELED'),
-            ),
-          ),
-        ],
-      ),
-    );
-    await t.pumpAndSettle();
-    await t.tap(find.text('使用 GitHub 登录'));
-    await t.pumpAndSettle();
-    // Cancelling the browser tab (e.g. after GitHub wouldn't load) does NOT
-    // navigate; it surfaces guidance pointing at the reliable device-code path,
-    // with that button still on screen.
-    expect(find.text('HOME-ROUTE'), findsNothing);
-    expect(
-      find.textContaining('设备码'),
-      findsWidgets,
-    ); // guidance + button mention it
-    expect(find.text('设备码登录'), findsOneWidget); // device-code fallback present
-    expect(
-      find.text('使用 GitHub 登录'),
-      findsOneWidget,
-    ); // can retry the browser too
-  });
-
-  testWidgets('onboarding: a browser sign-in that never returns also guides to '
-      'the device code', (t) async {
-    // Not every browser failure is a dismissal: the desktop loopback listener
-    // can time out, and a redirect can land in a browser profile that isn't
-    // signed in. Those used to surface as a raw transport error with no next
-    // step, even though the remedy is the same as CANCELED's.
-    final api = FakeBridgeApi(
-      config: const ConfigInfo(relay: '', hasKey: false),
-    );
-    await t.pumpWidget(
-      _routerHost(
-        api,
-        initial: '/onboarding',
-        routes: [
-          GoRoute(
-            path: '/onboarding',
-            builder: (_, _) => const AccountOnboardingScreen(),
-          ),
-          _stub('/', 'HOME-ROUTE'),
-        ],
-        overrides: [
-          webAuthenticatorProvider.overrideWithValue(
-            _FakeWebAuthenticator('', error: StateError('listener timed out')),
-          ),
-        ],
-      ),
-    );
-    await t.pumpAndSettle();
-    await t.tap(find.text('使用 GitHub 登录'));
-    await t.pumpAndSettle();
-
-    expect(find.text('HOME-ROUTE'), findsNothing);
-    // Leads with the remedy, and the device-code button is still reachable.
-    expect(find.textContaining('设备码'), findsWidgets);
-    expect(find.text('设备码登录'), findsOneWidget);
-    // The cause is kept, so a real bug stays diagnosable from a screenshot.
-    expect(find.textContaining('listener timed out'), findsOneWidget);
-  });
-
-  testWidgets('settings: account sign-out clears the user and returns to '
-      'onboarding', (t) async {
-    final api = FakeBridgeApi(
-      config: const ConfigInfo(
-        relay: '',
-        hasKey: false,
-        mode: 'account',
-        accountLogin: 'octocat',
-      ),
-    )..accountUser = const AccountUser(login: 'octocat', accountId: '42');
-    await t.pumpWidget(
-      _routerHost(
-        api,
-        initial: '/settings',
-        routes: [
-          GoRoute(path: '/settings', builder: (_, _) => const SettingsScreen()),
-          _stub('/onboarding', 'ONBOARDING-ROUTE'),
-        ],
-      ),
-    );
-    await t.pumpAndSettle();
-    expect(find.text('@octocat'), findsOneWidget); // signed-in identity
-    await t.tap(find.byKey(const Key('sign-out-btn')));
-    await t.pumpAndSettle();
-    expect(api.accountUser, isNull); // accountLogout ran
-    expect(find.text('ONBOARDING-ROUTE'), findsOneWidget); // back to onboarding
-  });
-
-  testWidgets('onboarding: signing in makes the app SEE the account', (
-    t,
-  ) async {
-    // The bug this locks: config is a FutureProvider that had already resolved
-    // (tokenless) before the login, and nothing invalidated it afterwards. The
-    // token reached config.toml, but every `mode == 'account'` gate in the app
-    // — Settings' account section, the home hosting CTA, the Sessions/Hosting
-    // tabs — kept reading the pre-login snapshot and behaved as signed out.
-    final api = FakeBridgeApi(
-      config: const ConfigInfo(relay: '', hasKey: false),
-    )..accountPollStatus = 'authorized';
-    await t.pumpWidget(
-      _routerHost(
-        api,
-        initial: '/onboarding',
-        routes: [
-          GoRoute(
-            path: '/onboarding',
-            builder: (_, _) => const AccountOnboardingScreen(),
-          ),
-          _stub('/', 'HOME-ROUTE'),
-          // Land on the real Settings screen: it is the visible symptom, and it
-          // renders the identity only when the config says we're signed in.
-          GoRoute(path: '/welcome', builder: (_, _) => const SettingsScreen()),
-        ],
-      ),
-    );
-    await t.pumpAndSettle();
-    final container = ProviderScope.containerOf(
-      t.element(find.byType(AccountOnboardingScreen)),
-    );
-    container.read(uiPrefsProvider.notifier).setLastService('seed');
-
-    // Warm the config cache the way the real app does — reading it BEFORE the
-    // login is what made the stale value stick.
-    await container.read(configProvider.future);
-    expect(container.read(configProvider).valueOrNull?.mode, 'unconfigured');
-
-    await t.tap(find.text('设备码登录'));
-    await t.pump();
-    await t.pump();
-    await t.pump(const Duration(seconds: 6));
-    await t.pump();
-    await t.pumpAndSettle();
-
-    // The provider re-read the post-login config, so the identity is on screen.
-    expect(container.read(configProvider).valueOrNull?.mode, 'account');
-    expect(find.text('@octocat'), findsOneWidget);
-  });
-
-  testWidgets('Manage services agrees with a conversation that lost its link', (
-    t,
-  ) async {
-    // The bug: the services list read `appIsConnected`, a CACHED health flag on
-    // the session object, and short-circuited to a green "connected" on it. A
-    // link that had actually dropped still satisfied that flag, so this row
-    // stayed green while the conversation on top of it showed "reconnecting" —
-    // two screens reporting opposite states for one service.
-    final api = FakeBridgeApi(
-      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
-      services: const [
-        ServiceEntry(
-          device: 'lb7666',
-          kind: 'app',
-          name: 'default',
-          key: 'pcx:lb7666:app:default',
-        ),
-      ],
-    );
-    // Connected as far as the session object is concerned.
-    await api.appConnect('pcx:lb7666:app:default', 28080);
-    t.view.devicePixelRatio = 1.0;
-    t.view.physicalSize = const Size(1200, 900);
-    addTearDown(t.view.reset);
-    await t.pumpWidget(_host(const ServicesScreen(), api));
-    await t.pumpAndSettle();
-    await _openDevice(t);
-
-    final container = ProviderScope.containerOf(
-      t.element(find.byType(ServicesScreen)),
-    );
-    // Every kind is listed under the device at once, so the app-server
-    // capability a conversation runs on is on screen already.
-    // Baseline: the stale flag alone reads as connected.
-    expect(find.text('已连接'), findsOneWidget); // statusConnected
-
-    // A conversation observes the link go down — what the session screen
-    // publishes when it enters reconnect or gives up.
-    container.read(observedDisconnectedProvider.notifier).state = {
-      'pcx:lb7666:app:default',
-    };
-    await t.pumpAndSettle();
-
-    // The list now agrees instead of contradicting the transcript.
-    expect(find.text('已连接'), findsNothing);
-    expect(find.text('不可达'), findsOneWidget); // statusUnreachable
-  });
-
-  testWidgets('Manage services keeps theme switching in the page menu', (
-    t,
-  ) async {
-    // Secondary desktop pages keep cross-page + appearance controls in one
-    // quiet menu instead of repeating a row of unrelated icon buttons.
-    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
-    try {
-      final api = FakeBridgeApi(
-        config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
-      );
-      t.view.devicePixelRatio = 1.0;
-      t.view.physicalSize = const Size(1200, 900);
-      addTearDown(t.view.reset);
-      await t.pumpWidget(_host(const ServicesScreen(), api));
-      await t.pumpAndSettle();
-
-      expect(find.byKey(const Key('theme-toggle-btn')), findsNothing);
-      expect(find.byKey(const Key('utility-page-menu')), findsOneWidget);
-      await t.tap(find.byKey(const Key('utility-page-menu')));
-      await t.pumpAndSettle();
-      expect(find.text('页面'), findsOneWidget);
-      expect(find.text('暗黑'), findsOneWidget);
-    } finally {
-      debugDefaultTargetPlatformOverride = null;
-    }
-  });
-
-  testWidgets('onboarding: desktop leads with the device code, mobile with the '
-      'browser', (t) async {
-    // The two idioms don't cost the same per platform: a desktop redirect comes
-    // back through a loopback listener and usually opens whichever browser
-    // profile is default — often not the one signed into GitHub — while the
-    // device code has no redirect at all. On a phone the deep link returns
-    // straight to the app, so tapping through is the shortest path.
-    Future<void> mount() async {
-      await t.pumpWidget(
-        _routerHost(
-          FakeBridgeApi(config: const ConfigInfo(relay: '', hasKey: false)),
-          initial: '/onboarding',
-          routes: [
-            GoRoute(
-              path: '/onboarding',
-              builder: (_, _) => const AccountOnboardingScreen(),
-            ),
-          ],
-        ),
-      );
-      await t.pumpAndSettle();
-    }
-
-    // Primary action = the FilledButton; the other stays available as a
-    // TextButton, so neither platform loses a way in.
-    String primaryLabel() => t
-        .widget<Text>(
-          find.descendant(
-            of: find.byType(FilledButton),
-            matching: find.byType(Text),
-          ),
-        )
-        .data!;
-
-    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
-    try {
-      await mount();
-      expect(primaryLabel(), '设备码登录'); // accountUseDeviceCode
-      expect(find.byType(TextButton), findsWidgets); // browser still offered
-    } finally {
-      debugDefaultTargetPlatformOverride = null;
-    }
-
-    // The harness reports android, which is the mobile default.
-    await mount();
-    expect(primaryLabel(), '使用 GitHub 登录'); // accountSignInButton
-  });
-
-  testWidgets('ApiService rejects an out-of-range port before subscribing', (
-    t,
-  ) async {
-    final api = FakeBridgeApi(
-      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
-    );
-    await t.pumpWidget(
-      _host(
-        const Scaffold(
-          body: ApiServicePanel(serviceKey: 'pcx:lb7666:api:default'),
-        ),
-        api,
-      ),
-    );
-    await t.pumpAndSettle();
-
-    // 70000 parses as an int but exceeds u16; must be rejected client-side.
-    await t.enterText(find.byType(TextField), '70000');
-    await t.tap(find.byKey(const Key('subscribe-btn')));
-    await t.pumpAndSettle();
-
-    expect(find.byKey(const Key('api-error')), findsOneWidget);
-    // Still on the subscribe form (no base-url shown) — nothing was subscribed.
-    expect(find.byKey(const Key('base-url')), findsNothing);
-  });
 
   testWidgets('App session sends a turn and renders the streamed reply', (
     t,
@@ -1701,7 +49,7 @@ void main() {
     t.view.physicalSize = const Size(400, 800);
     addTearDown(t.view.reset);
     await t.pumpWidget(
-      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+      host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
     );
     await t.pumpAndSettle();
 
@@ -1734,7 +82,7 @@ void main() {
     t.view.physicalSize = const Size(360, 780); // a small phone
     addTearDown(t.view.reset);
     await t.pumpWidget(
-      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+      host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
     );
     await t.pumpAndSettle();
 
@@ -1761,7 +109,7 @@ void main() {
     );
     await api.appConnect('pcx:lb7666:app:default', 28080);
     await t.pumpWidget(
-      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+      host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
     );
     await t.pumpAndSettle();
 
@@ -1795,7 +143,7 @@ void main() {
       running: false,
     );
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           threadId: 'th-ide',
@@ -1840,7 +188,7 @@ void main() {
       running: false,
     );
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           threadId: 'th-frag',
@@ -1873,7 +221,7 @@ void main() {
       running: false,
     );
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           threadId: 'th-reason',
@@ -1929,7 +277,7 @@ void main() {
       t.view.physicalSize = const Size(400, 800);
       addTearDown(t.view.reset);
       await t.pumpWidget(
-        _host(
+        host(
           const AppSessionScreen(
             serviceKey: 'pcx:lb7666:app:default',
             threadId: 'th-nav',
@@ -1975,7 +323,7 @@ void main() {
         reasoningEffort: 'high',
       );
       await t.pumpWidget(
-        _host(const AppSessionScreen(serviceKey: key, threadId: 'th-1'), api),
+        host(const AppSessionScreen(serviceKey: key, threadId: 'th-1'), api),
       );
       await t.pumpAndSettle();
       // Status bar carries the active-model chip, resolved to its display name.
@@ -2005,7 +353,7 @@ void main() {
       await api.appConnect(key, 28080);
       api.readResult = const ThreadHistory(items: [], running: false);
       await t.pumpWidget(
-        _host(const AppSessionScreen(serviceKey: key, threadId: 'th-2'), api),
+        host(const AppSessionScreen(serviceKey: key, threadId: 'th-2'), api),
       );
       await t.pumpAndSettle();
       // Nothing reported yet → no chip (never guess).
@@ -2059,7 +407,7 @@ void main() {
       t.view.devicePixelRatio = 1.0;
       t.view.physicalSize = const Size(400, 800);
       addTearDown(t.view.reset);
-      await t.pumpWidget(_host(const AppSessionScreen(serviceKey: key), api));
+      await t.pumpWidget(host(const AppSessionScreen(serviceKey: key), api));
       await t.pumpAndSettle();
       // Turn 1: the server never reported and nothing explicit was sent → the
       // footnote carries no stamp (honest absence beats a guess).
@@ -2101,12 +449,12 @@ void main() {
   });
 
   group('image attachments', () {
-    late _FakeImagePicker picker;
+    late FakeImagePicker picker;
     setUp(() {
       // compute() spawns a real isolate whose completion never lands under the
       // fake test clock — run the processing pipeline inline instead.
       processImageImpl = (bytes) async => processImageBytes(bytes);
-      picker = _FakeImagePicker();
+      picker = FakeImagePicker();
       ImagePickerPlatform.instance = picker;
     });
     tearDown(() {
@@ -2126,7 +474,7 @@ void main() {
       t.view.physicalSize = const Size(400, 800);
       addTearDown(t.view.reset);
       await t.pumpWidget(
-        _host(
+        host(
           AppSessionScreen(
             serviceKey: 'pcx:lb7666:app:default',
             threadId: threadId,
@@ -2141,9 +489,9 @@ void main() {
     testWidgets('attach shows a preview chip; send carries data URLs and '
         'renders bubble thumbnails', (t) async {
       final api = await pumpSession(t);
-      picker.files = [XFile.fromData(_tinyPng(), name: 'shot.png')];
+      picker.files = [XFile.fromData(tinyPng(), name: 'shot.png')];
 
-      await _attachMenu(t, 'attach-btn');
+      await attachMenu(t, 'attach-btn');
       await t.pumpAndSettle();
       expect(find.byKey(const Key('attachment-0')), findsOneWidget);
 
@@ -2166,9 +514,9 @@ void main() {
       t,
     ) async {
       await pumpSession(t);
-      picker.files = [XFile.fromData(_tinyPng(), name: 'shot.png')];
+      picker.files = [XFile.fromData(tinyPng(), name: 'shot.png')];
 
-      await _attachMenu(t, 'attach-btn');
+      await attachMenu(t, 'attach-btn');
       await t.pumpAndSettle();
       await t.enterText(find.byType(TextField), 'who is this?');
       await t.pump();
@@ -2201,9 +549,9 @@ void main() {
 
     testWidgets('an image-only message can be sent (no text)', (t) async {
       final api = await pumpSession(t);
-      picker.files = [XFile.fromData(_tinyPng(), name: 'shot.png')];
+      picker.files = [XFile.fromData(tinyPng(), name: 'shot.png')];
 
-      await _attachMenu(t, 'attach-btn');
+      await attachMenu(t, 'attach-btn');
       await t.pumpAndSettle();
       await t.tap(find.byKey(const Key('send-btn')));
       await t.pumpAndSettle();
@@ -2216,11 +564,11 @@ void main() {
     testWidgets('a staged image opens the viewer before it is sent', (t) async {
       await pumpSession(t);
       picker.files = [
-        XFile.fromData(_tinyPng(), name: 'one.png'),
-        XFile.fromData(_tinyPng(), name: 'two.png'),
+        XFile.fromData(tinyPng(), name: 'one.png'),
+        XFile.fromData(tinyPng(), name: 'two.png'),
       ];
 
-      await _attachMenu(t, 'attach-btn');
+      await attachMenu(t, 'attach-btn');
       await t.pumpAndSettle();
       expect(find.byKey(const Key('attachment-0')), findsOneWidget);
       expect(find.byKey(const Key('attachment-1')), findsOneWidget);
@@ -2245,9 +593,9 @@ void main() {
       t,
     ) async {
       await pumpSession(t);
-      picker.files = [XFile.fromData(_tinyPng(), name: 'shot.png')];
+      picker.files = [XFile.fromData(tinyPng(), name: 'shot.png')];
 
-      await _attachMenu(t, 'attach-btn');
+      await attachMenu(t, 'attach-btn');
       await t.pumpAndSettle();
       await t.tap(find.byKey(const Key('attachment-remove-0')));
       await t.pumpAndSettle();
@@ -2270,7 +618,7 @@ void main() {
             itemType: 'userMessage',
             title: '',
             text: 'look at this',
-            images: [_tinyPngDataUrl()],
+            images: [tinyPngDataUrl()],
           ),
         ],
         running: false,
@@ -2279,7 +627,7 @@ void main() {
       t.view.physicalSize = const Size(400, 800);
       addTearDown(t.view.reset);
       await t.pumpWidget(
-        _host(
+        host(
           const AppSessionScreen(
             serviceKey: 'pcx:lb7666:app:default',
             threadId: 'thread-7',
@@ -2320,7 +668,7 @@ void main() {
       t.view.physicalSize = const Size(400, 800);
       addTearDown(t.view.reset);
       await t.pumpWidget(
-        _host(
+        host(
           const AppSessionScreen(
             serviceKey: 'pcx:lb7666:app:default',
             threadId: 'thread-7',
@@ -2345,7 +693,7 @@ void main() {
       await api.appConnect('pcx:lb7666:app:default', 28080);
       // Inside the project roots, so even a host too old for the
       // transcript-image route hands the bytes over.
-      api.fileBytes['/proj/shot.png'] = _onePixelPng;
+      api.fileBytes['/proj/shot.png'] = onePixelPng;
       api.readResult = const ThreadHistory(
         items: [
           ThreadItem(
@@ -2362,7 +710,7 @@ void main() {
       t.view.physicalSize = const Size(400, 800);
       addTearDown(t.view.reset);
       await t.pumpWidget(
-        _host(
+        host(
           const AppSessionScreen(
             serviceKey: 'pcx:lb7666:app:default',
             threadId: 'thread-8',
@@ -2391,7 +739,7 @@ void main() {
       // returns no bytes), but the host authorises it against the thread's
       // own transcript.
       const temp = 'C:/Users/u/AppData/Local/Temp/codex-clipboard-1.png';
-      api.threadImageBytes[temp] = _onePixelPng;
+      api.threadImageBytes[temp] = onePixelPng;
       api.readResult = const ThreadHistory(
         items: [
           ThreadItem(
@@ -2410,7 +758,7 @@ void main() {
       t.view.physicalSize = const Size(400, 800);
       addTearDown(t.view.reset);
       await t.pumpWidget(
-        _host(
+        host(
           const AppSessionScreen(
             serviceKey: 'pcx:lb7666:app:default',
             threadId: 'thread-9',
@@ -2427,12 +775,12 @@ void main() {
   });
 
   group('file attachments', () {
-    late _FakeFileSelector selector;
+    late FakeFileSelector selector;
     setUp(() {
       // Inline image processing (see the image-attachments group) — a picked
       // .png routes to the image pipeline even from the file picker.
       processImageImpl = (bytes) async => processImageBytes(bytes);
-      selector = _FakeFileSelector();
+      selector = FakeFileSelector();
       fsel.FileSelectorPlatform.instance = selector;
     });
     tearDown(() {
@@ -2440,7 +788,7 @@ void main() {
     });
 
     XFile tmpFile(String name, List<int> bytes) =>
-        _MemXFile(Uint8List.fromList(bytes), name);
+        MemXFile(Uint8List.fromList(bytes), name);
 
     Future<FakeBridgeApi> pumpSession(WidgetTester t) async {
       final api = FakeBridgeApi(
@@ -2451,10 +799,7 @@ void main() {
       t.view.physicalSize = const Size(400, 800);
       addTearDown(t.view.reset);
       await t.pumpWidget(
-        _host(
-          const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'),
-          api,
-        ),
+        host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
       );
       await t.pumpAndSettle();
       return api;
@@ -2464,7 +809,7 @@ void main() {
       await pumpSession(t);
       selector.files = [tmpFile('notes.txt', utf8.encode('x'))];
 
-      await _attachMenu(t, 'attach-file-btn');
+      await attachMenu(t, 'attach-file-btn');
       await t.pumpAndSettle();
       expect(find.byKey(const Key('attachment-0')), findsOneWidget);
 
@@ -2480,7 +825,7 @@ void main() {
       final api = await pumpSession(t);
       selector.files = [tmpFile('notes.txt', utf8.encode('sentinel-content'))];
 
-      await _attachMenu(t, 'attach-file-btn');
+      await attachMenu(t, 'attach-file-btn');
       await t.pumpAndSettle();
       // Uploaded chip shows the filename.
       expect(find.byKey(const Key('attachment-0')), findsOneWidget);
@@ -2514,7 +859,7 @@ void main() {
       selector.files = [
         tmpFile('data.bin', [1, 2, 3]),
       ];
-      await _attachMenu(t, 'attach-file-btn');
+      await attachMenu(t, 'attach-file-btn');
       await t.pumpAndSettle();
       await t.tap(find.byKey(const Key('send-btn')));
       await t.pumpAndSettle();
@@ -2534,7 +879,7 @@ void main() {
       selector.files = [
         tmpFile('x.log', [9]),
       ];
-      await _attachMenu(t, 'attach-file-btn');
+      await attachMenu(t, 'attach-file-btn');
       await t.pumpAndSettle();
 
       expect(find.byKey(const Key('attachment-0')), findsNothing);
@@ -2547,8 +892,8 @@ void main() {
     testWidgets('an image picked through the FILE picker routes to the image '
         'pipeline', (t) async {
       final api = await pumpSession(t);
-      selector.files = [tmpFile('shot.png', _tinyPng())];
-      await _attachMenu(t, 'attach-file-btn');
+      selector.files = [tmpFile('shot.png', tinyPng())];
+      await attachMenu(t, 'attach-file-btn');
       await t.pumpAndSettle();
       await t.tap(find.byKey(const Key('send-btn')));
       await t.pumpAndSettle();
@@ -2581,7 +926,7 @@ void main() {
       t.view.physicalSize = const Size(400, 800);
       addTearDown(t.view.reset);
       await t.pumpWidget(
-        _host(
+        host(
           const AppSessionScreen(
             serviceKey: 'pcx:lb7666:app:default',
             threadId: 'thread-7',
@@ -2623,7 +968,7 @@ void main() {
     );
     await api.appConnect('pcx:lb7666:app:default', 28080);
     await t.pumpWidget(
-      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+      host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
     );
     await t.pumpAndSettle();
     await t.enterText(find.byType(TextField), 'hello');
@@ -2697,7 +1042,7 @@ void main() {
     t.view.physicalSize = const Size(1400, 900);
     addTearDown(t.view.reset);
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           threadId: 'th-merge',
@@ -2733,7 +1078,7 @@ void main() {
     );
     await api.appConnect('pcx:lb7666:app:default', 28080);
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           threadId: 't1',
@@ -2767,7 +1112,7 @@ void main() {
     await api.appConnect('pcx:lb7666:app:default', 28080);
     // A brand-new conversation: no thread id until the first turn starts.
     await t.pumpWidget(
-      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+      host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
     );
     await t.pumpAndSettle();
 
@@ -2801,7 +1146,7 @@ void main() {
     t.view.physicalSize = const Size(1200, 900); // wide → left pane inline
     addTearDown(t.view.reset);
     await t.pumpWidget(
-      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+      host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
     );
     await t.pumpAndSettle();
 
@@ -2831,7 +1176,7 @@ void main() {
     t.view.physicalSize = const Size(1200, 900); // wide → left pane inline
     addTearDown(t.view.reset);
     await t.pumpWidget(
-      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+      host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
     );
     await t.pumpAndSettle();
 
@@ -2848,7 +1193,7 @@ void main() {
     // The new session shows in the pane as a conversation tile, with its message
     // preserved as the preview (not "(未命名)" — the server preview is still
     // empty for a just-started thread, so the optimistic one must win).
-    expect(_convTiles(), findsOneWidget);
+    expect(convTiles(), findsOneWidget);
     expect(find.text('(未命名)'), findsNothing);
   });
 
@@ -2876,7 +1221,7 @@ void main() {
     t.view.physicalSize = const Size(1200, 900);
     addTearDown(t.view.reset);
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           cwd: '/work/alpha',
@@ -2913,7 +1258,7 @@ void main() {
     t.view.physicalSize = const Size(1200, 900);
     addTearDown(t.view.reset);
     await t.pumpWidget(
-      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+      host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
     );
     await t.pumpAndSettle();
 
@@ -2973,7 +1318,7 @@ void main() {
     t.view.physicalSize = const Size(1200, 900); // wide → left pane inline
     addTearDown(t.view.reset);
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           home: true,
@@ -3020,7 +1365,7 @@ void main() {
     t.view.physicalSize = const Size(1200, 900); // wide → left pane inline
     addTearDown(t.view.reset);
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           home: true,
@@ -3068,7 +1413,7 @@ void main() {
     t.view.physicalSize = const Size(1200, 900); // wide → left pane inline
     addTearDown(t.view.reset);
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           home: true,
@@ -3115,7 +1460,7 @@ void main() {
       t.view.physicalSize = const Size(1200, 900);
       addTearDown(t.view.reset);
       await t.pumpWidget(
-        _host(
+        host(
           const AppSessionScreen(
             serviceKey: 'pcx:lb7666:app:default',
             home: true,
@@ -3125,7 +1470,7 @@ void main() {
       );
       await t.pumpAndSettle();
       // Nothing yet: the one shot at listing failed and was swallowed.
-      expect(_convTiles(), findsNothing);
+      expect(convTiles(), findsNothing);
 
       // The retry lands and the pane fills itself in. Without it the sidebar
       // stayed empty for the whole session — nothing else re-lists unless the
@@ -3155,7 +1500,7 @@ void main() {
     // No threadId and no cwd: a brand-new conversation, which is the only case
     // that seeds a default folder.
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           home: true,
@@ -3186,7 +1531,7 @@ void main() {
     t.view.physicalSize = const Size(1200, 900);
     addTearDown(t.view.reset);
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           home: true,
@@ -3213,7 +1558,7 @@ void main() {
     t.view.physicalSize = const Size(1200, 900);
     addTearDown(t.view.reset);
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           home: true,
@@ -3222,7 +1567,7 @@ void main() {
       ),
     );
     await t.pumpAndSettle();
-    expect(_convTiles(), findsNothing, reason: 'host had nothing to list yet');
+    expect(convTiles(), findsNothing, reason: 'host had nothing to list yet');
 
     // The host restarts and now HAS history — exactly the case that left the
     // pane empty: the app listed once at startup against a host with no data
@@ -3272,7 +1617,7 @@ void main() {
     t.view.physicalSize = const Size(1200, 900); // wide → left pane inline
     addTearDown(t.view.reset);
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           home: true,
@@ -3336,7 +1681,7 @@ void main() {
     t.view.physicalSize = const Size(1200, 900);
     addTearDown(t.view.reset);
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           home: true,
@@ -3399,7 +1744,7 @@ void main() {
     t.view.physicalSize = const Size(1200, 900);
     addTearDown(t.view.reset);
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           home: true,
@@ -3424,7 +1769,7 @@ void main() {
     // project tree's compact row while the rest of the list is summarized.
     expect(find.byKey(const Key('activity-tile-a1')), findsOneWidget);
     expect(find.byKey(const Key('activity-tile-a2')), findsOneWidget);
-    expect(_convTiles(), findsNothing);
+    expect(convTiles(), findsNothing);
   });
 
   testWidgets('A finished turn refreshes that row\'s cached summary', (
@@ -3448,7 +1793,7 @@ void main() {
     t.view.physicalSize = const Size(1200, 900);
     addTearDown(t.view.reset);
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           threadId: 'a1',
@@ -3510,7 +1855,7 @@ void main() {
     addTearDown(t.view.reset);
     // a1 is the OPEN conversation; b1 runs in the background.
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           threadId: 'a1',
@@ -3564,7 +1909,7 @@ void main() {
     t.view.physicalSize = const Size(1200, 900);
     addTearDown(t.view.reset);
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           threadId: 'a1',
@@ -3624,7 +1969,7 @@ void main() {
     t.view.physicalSize = const Size(1200, 900);
     addTearDown(t.view.reset);
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           home: true,
@@ -3671,7 +2016,7 @@ void main() {
     t.view.physicalSize = const Size(1200, 900); // wide → left pane inline
     addTearDown(t.view.reset);
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           home: true,
@@ -3706,7 +2051,7 @@ void main() {
     t.view.physicalSize = const Size(1200, 900); // wide → desktop composer
     addTearDown(t.view.reset);
     await t.pumpWidget(
-      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+      host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
     );
     await t.pumpAndSettle();
 
@@ -3745,7 +2090,7 @@ void main() {
     t.view.physicalSize = const Size(1200, 900); // wide → desktop top bar
     addTearDown(t.view.reset);
     await t.pumpWidget(
-      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+      host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
     );
     await t.pumpAndSettle();
     await t.tap(find.text('original preview').first);
@@ -3790,7 +2135,7 @@ void main() {
     t.view.physicalSize = const Size(1200, 900); // wide → desktop top bar
     addTearDown(t.view.reset);
     await t.pumpWidget(
-      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+      host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
     );
     await t.pumpAndSettle();
 
@@ -3830,7 +2175,7 @@ void main() {
     t.view.physicalSize = const Size(1200, 900); // wide → desktop top bar
     addTearDown(t.view.reset);
     await t.pumpWidget(
-      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+      host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
     );
     await t.pumpAndSettle();
     await t.tap(find.text('original preview').first);
@@ -3873,7 +2218,7 @@ void main() {
     t.view.physicalSize = const Size(1200, 900); // wide → desktop top bar
     addTearDown(t.view.reset);
     await t.pumpWidget(
-      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+      host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
     );
     await t.pumpAndSettle();
     await t.tap(find.text('original preview').first);
@@ -3910,7 +2255,7 @@ void main() {
     t.view.physicalSize = const Size(1200, 900); // wide → desktop top bar
     addTearDown(t.view.reset);
     await t.pumpWidget(
-      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+      host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
     );
     await t.pumpAndSettle();
     await t.tap(find.text('original preview').first);
@@ -3966,7 +2311,7 @@ void main() {
     t.view.physicalSize = const Size(1200, 900); // wide → left pane inline
     addTearDown(t.view.reset);
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           home: true,
@@ -4016,7 +2361,7 @@ void main() {
     t.view.physicalSize = const Size(1200, 900); // wide → left pane inline
     addTearDown(t.view.reset);
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           threadId: 't7',
@@ -4056,7 +2401,7 @@ void main() {
     t.view.physicalSize = const Size(1200, 900); // wide → left pane inline
     addTearDown(t.view.reset);
     await t.pumpWidget(
-      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+      host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
     );
     await t.pumpAndSettle();
 
@@ -4085,7 +2430,7 @@ void main() {
     t.view.physicalSize = const Size(1200, 900); // wide → left pane inline
     addTearDown(t.view.reset);
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           threadId: 't1',
@@ -4131,7 +2476,7 @@ void main() {
     t.view.physicalSize = const Size(1200, 900); // wide → left pane inline
     addTearDown(t.view.reset);
     await t.pumpWidget(
-      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+      host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
     );
     await t.pumpAndSettle();
 
@@ -4157,7 +2502,7 @@ void main() {
     t.view.physicalSize = const Size(1200, 900); // wide → desktop top bar
     addTearDown(t.view.reset);
     await t.pumpWidget(
-      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+      host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
     );
     await t.pumpAndSettle();
     await t.tap(find.text('original preview').first);
@@ -4201,10 +2546,7 @@ void main() {
       t.view.physicalSize = const Size(1200, 900); // wide → left pane inline
       addTearDown(t.view.reset);
       await t.pumpWidget(
-        _host(
-          const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'),
-          api,
-        ),
+        host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
       );
       await t.pumpAndSettle();
 
@@ -4237,7 +2579,7 @@ void main() {
     t.view.physicalSize = const Size(1200, 900); // wide → left pane inline
     addTearDown(t.view.reset);
     await t.pumpWidget(
-      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+      host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
     );
     await t.pumpAndSettle();
 
@@ -4250,7 +2592,7 @@ void main() {
     await t.pumpAndSettle();
     expect(find.text('alpha'), findsNothing);
     expect(find.text('beta'), findsNothing);
-    expect(_convTiles(), findsOneWidget);
+    expect(convTiles(), findsOneWidget);
   });
 
   testWidgets('Tapping a guidance card prefills the composer', (t) async {
@@ -4259,7 +2601,7 @@ void main() {
     );
     await api.appConnect('pcx:lb7666:app:default', 28080);
     await t.pumpWidget(
-      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+      host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
     );
     await t.pumpAndSettle();
 
@@ -4283,7 +2625,7 @@ void main() {
     );
     await api.appConnect('pcx:lb7666:app:default', 28080);
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           threadId: 't1',
@@ -4341,7 +2683,7 @@ void main() {
     );
     await api.appConnect('pcx:lb7666:app:default', 28080);
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           threadId: 't1',
@@ -4402,7 +2744,7 @@ void main() {
     );
     await api.appConnect('pcx:lb7666:app:default', 28080);
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           threadId: 't1',
@@ -4462,7 +2804,7 @@ void main() {
     );
     await api.appConnect('pcx:lb7666:app:default', 28080);
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           threadId: 't1',
@@ -4519,7 +2861,7 @@ void main() {
     );
     await api.appConnect('pcx:lb7666:app:default', 28080);
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           threadId: 't1',
@@ -4531,7 +2873,7 @@ void main() {
 
     // Turn on plan so the chip carries the longest label it ever shows
     // (model · effort · plan) on the narrowest phone.
-    await _turnSetting(t, 'plan');
+    await turnSetting(t, 'plan');
     expect(
       t.getRect(find.byKey(const Key('model-chip'))).right,
       lessThanOrEqualTo(360.0),
@@ -4554,7 +2896,7 @@ void main() {
     );
     await api.appConnect('pcx:lb7666:app:default', 28080);
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           threadId: 'thread-42',
@@ -4587,7 +2929,7 @@ void main() {
       running: true,
     );
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           threadId: 'thread-7',
@@ -4615,7 +2957,7 @@ void main() {
     // not restore the model, so without persistence it would reset to default.
     api.threadConfigs['thread-cfg'] = const ThreadConfig(model: 'gpt-5');
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           threadId: 'thread-cfg',
@@ -4638,7 +2980,7 @@ void main() {
     );
     await api.appConnect('pcx:lb7666:app:default', 28080);
     await t.pumpWidget(
-      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+      host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
     );
     await t.pumpAndSettle();
 
@@ -4667,7 +3009,7 @@ void main() {
     );
     await api.appConnect('pcx:lb7666:app:default', 28080);
     await t.pumpWidget(
-      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+      host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
     );
     await t.pumpAndSettle();
 
@@ -4708,7 +3050,7 @@ void main() {
     );
     await api.appConnect('pcx:lb7666:app:default', 28080);
     await t.pumpWidget(
-      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+      host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
     );
     await t.pumpAndSettle();
 
@@ -4769,7 +3111,7 @@ void main() {
       collaborationMode: 'plan',
     );
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           threadId: 'thread-plan-prose',
@@ -4813,7 +3155,7 @@ void main() {
       collaborationMode: 'plan',
     );
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           threadId: 'thread-replan',
@@ -4844,7 +3186,7 @@ void main() {
       running: false,
     );
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           threadId: 't1',
@@ -4866,7 +3208,7 @@ void main() {
     );
     await api.appConnect('pcx:lb7666:app:default', 28080);
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           threadId: 't1',
@@ -4896,12 +3238,12 @@ void main() {
     );
     await api.appConnect('pcx:lb7666:app:default', 28080);
     await t.pumpWidget(
-      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+      host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
     );
     await t.pumpAndSettle();
 
     // Toggle the plan pill on, then send.
-    await _turnSetting(t, 'plan');
+    await turnSetting(t, 'plan');
     await t.pump();
     await t.enterText(find.byType(TextField), 'build a feature');
     await t.pump();
@@ -4940,7 +3282,7 @@ void main() {
       collaborationMode: 'plan',
     );
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           threadId: 'thread-9',
@@ -4972,10 +3314,10 @@ void main() {
     // Screen A: a new plan-mode conversation. Sending creates thread-0 and
     // records its plan mode in the process-wide static cache.
     await t.pumpWidget(
-      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+      host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
     );
     await t.pumpAndSettle();
-    await _turnSetting(t, 'plan');
+    await turnSetting(t, 'plan');
     await t.pump();
     await t.enterText(find.byType(TextField), 'plan it');
     await t.pump();
@@ -5005,7 +3347,7 @@ void main() {
       running: false,
     );
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           threadId: 'thread-0',
@@ -5039,7 +3381,7 @@ void main() {
       collaborationMode: 'plan',
     );
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           threadId: 't1',
@@ -5051,7 +3393,7 @@ void main() {
 
     // The toggle is synced ON from the server mode; tap it OFF and send → the
     // turn carries "default", actually leaving plan mode.
-    await _turnSetting(t, 'plan'); // currently active
+    await turnSetting(t, 'plan'); // currently active
     await t.pump();
     await t.enterText(find.byType(TextField), 'continue');
     await t.pump();
@@ -5075,7 +3417,7 @@ void main() {
     addTearDown(t.view.reset);
 
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           threadId: 'tA',
@@ -5086,7 +3428,7 @@ void main() {
     await t.pumpAndSettle();
 
     // Enter plan mode in tA and send.
-    await _turnSetting(t, 'plan');
+    await turnSetting(t, 'plan');
     await t.pump();
     await t.enterText(find.byType(TextField), 'plan it');
     await t.pump();
@@ -5101,7 +3443,7 @@ void main() {
     await t.pumpAndSettle();
 
     // Turning plan OFF in tA now sends "default" (proving it was restored ON).
-    await _turnSetting(t, 'plan');
+    await turnSetting(t, 'plan');
     await t.pump();
     await t.enterText(find.byType(TextField), 'stop planning');
     await t.pump();
@@ -5119,7 +3461,7 @@ void main() {
     await api.appConnect('pcx:lb7666:app:default', 28080);
     api.readResult = const ThreadHistory(items: [], running: false);
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           threadId: 't1',
@@ -5139,7 +3481,7 @@ void main() {
     // Open the effort picker (the chip shows the localized "Effort" label) and
     // choose High; the next turn carries "high". The pills scroll horizontally,
     // so scroll the chip into view before tapping.
-    await _turnSetting(t, 'effort');
+    await turnSetting(t, 'effort');
     await t.tap(find.text('高'));
     await t.pumpAndSettle();
     await t.enterText(find.byType(TextField), 'think hard');
@@ -5158,7 +3500,7 @@ void main() {
     await api.appConnect('pcx:lb7666:app:default', 28080);
     api.readResult = const ThreadHistory(items: [], running: false);
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           threadId: 't1',
@@ -5169,7 +3511,7 @@ void main() {
     await t.pumpAndSettle();
 
     // The default model (gpt-5.5 in the fake) supports low/medium/high/xhigh.
-    await _turnSetting(t, 'effort');
+    await turnSetting(t, 'effort');
     expect(find.text('极高'), findsOneWidget); // xhigh is offered
     expect(find.text('最低'), findsNothing); // minimal: not supported by gpt-5.5
 
@@ -5196,7 +3538,7 @@ void main() {
       reasoningEffort: 'high',
     );
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           threadId: 't1',
@@ -5218,7 +3560,7 @@ void main() {
     await api.appConnect('pcx:lb7666:app:default', 28080);
     api.readResult = const ThreadHistory(items: [], running: false);
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           threadId: 't1',
@@ -5229,7 +3571,7 @@ void main() {
     await t.pumpAndSettle();
 
     // Set High and send.
-    await _turnSetting(t, 'effort');
+    await turnSetting(t, 'effort');
     await t.tap(find.text('高'));
     await t.pumpAndSettle();
     await t.enterText(find.byType(TextField), 'one');
@@ -5240,7 +3582,7 @@ void main() {
 
     // Now toggle plan ON (no new effort pick) and send: the collaborationMode
     // turn must still carry "high", not wipe the thread's effort to null.
-    await _turnSetting(t, 'plan');
+    await turnSetting(t, 'plan');
     await t.pump();
     await t.enterText(find.byType(TextField), 'two');
     await t.pump();
@@ -5259,7 +3601,7 @@ void main() {
     await api.appConnect('pcx:lb7666:app:default', 28080);
     api.readResult = const ThreadHistory(items: [], running: false);
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           threadId: 't1',
@@ -5270,7 +3612,7 @@ void main() {
     await t.pumpAndSettle();
 
     // Pick xhigh, then send a turn that we hold in-flight via the gate.
-    await _turnSetting(t, 'effort');
+    await turnSetting(t, 'effort');
     await t.tap(find.text('极高'));
     await t.pumpAndSettle();
     api.turnStartGate = Completer<void>();
@@ -5281,7 +3623,7 @@ void main() {
     expect(api.lastReasoningEffort, 'xhigh');
 
     // While the turn is in flight, change effort to High.
-    await _turnSetting(t, 'effort');
+    await turnSetting(t, 'effort');
     await t.tap(find.text('高'));
     await t.pumpAndSettle();
 
@@ -5315,7 +3657,7 @@ void main() {
       running: false,
     );
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           threadId: 't1',
@@ -5343,7 +3685,7 @@ void main() {
       running: false,
     );
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           threadId: 't1',
@@ -5370,7 +3712,7 @@ void main() {
     addTearDown(t.view.reset);
 
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           threadId: 'tA',
@@ -5381,7 +3723,7 @@ void main() {
     await t.pumpAndSettle();
 
     // Pick High on tA but DON'T send.
-    await _turnSetting(t, 'effort');
+    await turnSetting(t, 'effort');
     await t.tap(find.text('高'));
     await t.pumpAndSettle();
     expect(find.textContaining('· 高'), findsOneWidget);
@@ -5414,7 +3756,7 @@ void main() {
       running: false,
     );
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           threadId: 't1',
@@ -5452,7 +3794,7 @@ void main() {
       running: false,
     );
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           threadId: 'thread-10',
@@ -5472,12 +3814,12 @@ void main() {
     );
     await api.appConnect('pcx:lb7666:app:default', 28080);
     await t.pumpWidget(
-      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+      host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
     );
     await t.pumpAndSettle();
 
     // Turn 1: plan mode on → "plan".
-    await _turnSetting(t, 'plan');
+    await turnSetting(t, 'plan');
     await t.pump();
     await t.enterText(find.byType(TextField), 'plan it');
     await t.pump();
@@ -5486,7 +3828,7 @@ void main() {
     expect(api.lastCollaborationMode, 'plan');
 
     // Turn 2: plan mode off → must send "default" to leave sticky plan mode.
-    await _turnSetting(t, 'plan');
+    await turnSetting(t, 'plan');
     await t.pump();
     await t.enterText(find.byType(TextField), 'now normally');
     await t.pump();
@@ -5525,7 +3867,7 @@ void main() {
         collaborationMode: 'plan',
       );
       await t.pumpWidget(
-        _host(
+        host(
           const AppSessionScreen(
             serviceKey: 'pcx:lb7666:app:default',
             threadId: 'thread-11',
@@ -5554,11 +3896,11 @@ void main() {
     )..emptyModelList = true;
     await api.appConnect('pcx:lb7666:app:default', 28080);
     await t.pumpWidget(
-      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+      host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
     );
     await t.pumpAndSettle();
 
-    await _turnSetting(t, 'plan');
+    await turnSetting(t, 'plan');
     await t.pump();
     await t.enterText(find.byType(TextField), 'plan it');
     await t.pump();
@@ -5580,7 +3922,7 @@ void main() {
     );
     await api.appConnect('pcx:lb7666:app:default', 28080);
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           threadId: 't1',
@@ -5638,7 +3980,7 @@ void main() {
       cwd: '/proj',
     );
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           threadId: 't-diff',
@@ -5699,7 +4041,7 @@ void main() {
         '"primary":{"usedPercent":10,"windowDurationMins":300},'
         '"secondary":{"usedPercent":88,"windowDurationMins":10080}}}';
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           threadId: 't1',
@@ -5724,7 +4066,7 @@ void main() {
     t.view.devicePixelRatio = 1.0;
     t.view.physicalSize = const Size(1200, 900); // wide → left pane inline
     addTearDown(t.view.reset);
-    // Its own host rather than `_host`: the button reads the brightness in
+    // Its own host rather than `host`: the button reads the brightness in
     // EFFECT, so the app has to actually carry a light and a dark theme (and
     // honour the stored mode) the way main.dart does.
     await t.pumpWidget(
@@ -5793,7 +4135,7 @@ void main() {
     t.view.physicalSize = const Size(1200, 900); // wide → desktop composer
     addTearDown(t.view.reset);
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           cwd: '/work/alpha',
@@ -5851,7 +4193,7 @@ void main() {
         '+new\n'
         '+more\n';
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           threadId: 'thread-g',
@@ -5917,7 +4259,7 @@ void main() {
     final gate = Completer<void>();
     api.gitDiffGate = gate;
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           threadId: 'thread-cancel',
@@ -5981,7 +4323,7 @@ void main() {
         '-old\n'
         '+new\n';
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           threadId: 'thread-warm',
@@ -6016,7 +4358,7 @@ void main() {
       running: false,
     );
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           threadId: 'thread-c',
@@ -6044,7 +4386,7 @@ void main() {
     );
     await api.appConnect('pcx:lb7666:app:default', 28080);
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           threadId: 't1',
@@ -6097,7 +4439,7 @@ void main() {
     // Wide: the left sessions pane is inline (header + thread visible).
     t.view.physicalSize = const Size(1200, 900);
     await t.pumpWidget(
-      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+      host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
     );
     await t.pumpAndSettle();
     expect(find.text('会话'), findsOneWidget); // conversationsSection (zh)
@@ -6106,7 +4448,7 @@ void main() {
     // Narrow: no inline pane (it moves into a closed drawer).
     t.view.physicalSize = const Size(400, 900);
     await t.pumpWidget(
-      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+      host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
     );
     await t.pumpAndSettle();
     expect(find.text('past chat'), findsNothing);
@@ -6137,7 +4479,7 @@ void main() {
     t.view.physicalSize = const Size(1200, 900);
     addTearDown(t.view.reset);
     await t.pumpWidget(
-      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+      host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
     );
     await t.pumpAndSettle();
 
@@ -6161,7 +4503,7 @@ void main() {
     );
     await api.appConnect('pcx:lb7666:app:default', 28080);
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           threadId: 't1',
@@ -6236,7 +4578,7 @@ void main() {
     addTearDown(t.view.reset);
 
     await t.pumpWidget(
-      _host(const AppSessionScreen(serviceKey: key, threadId: 't-mobile'), api),
+      host(const AppSessionScreen(serviceKey: key, threadId: 't-mobile'), api),
     );
     for (var i = 0; i < 6; i++) {
       await t.pump(const Duration(milliseconds: 100));
@@ -6266,7 +4608,7 @@ void main() {
     );
     await api.appConnect('pcx:lb7666:app:default', 28080);
     await t.pumpWidget(
-      _host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+      host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
     );
     await t.pumpAndSettle();
 
@@ -6279,59 +4621,6 @@ void main() {
     expect(api.lastSandbox, 'workspace-write');
   });
 
-  testWidgets('App-server tile is tappable (not disabled)', (t) async {
-    final api = FakeBridgeApi(
-      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
-      services: const [
-        ServiceEntry(
-          device: 'lb7666',
-          kind: 'app',
-          name: 'default',
-          key: 'pcx:lb7666:app:default',
-        ),
-      ],
-    );
-    await t.pumpWidget(_host(const ServicesScreen(), api));
-    await t.pumpAndSettle();
-    await _openDevice(t);
-    // carries an onTap (a disabled row would have a null callback). The card's
-    // own InkWell is the first descendant (the deregister overflow menu adds its
-    // own InkWell deeper in the tree).
-    final ink = t
-        .widgetList<InkWell>(
-          find.descendant(
-            of: find.byKey(
-              const Key('device-capability-pcx:lb7666:app:default'),
-            ),
-            matching: find.byType(InkWell),
-          ),
-        )
-        .first;
-    expect(ink.onTap, isNotNull);
-  });
-
-  testWidgets('Services renders English strings under Locale(en)', (t) async {
-    final api = FakeBridgeApi(
-      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
-      services: const [
-        ServiceEntry(
-          device: 'lb7666',
-          kind: 'api',
-          name: 'default',
-          key: 'pcx:lb7666:api:default',
-        ),
-      ],
-    );
-    await t.pumpWidget(
-      _host(const ServicesScreen(), api, locale: const Locale('en')),
-    );
-    await t.pumpAndSettle();
-    // English ARB values, proving the locale switch changes strings. The relay
-    // banner's status pill reads "Online" (en) rather than "在线" (zh).
-    expect(find.text('Online'), findsWidgets);
-    expect(find.text('在线'), findsNothing);
-  });
-
   testWidgets('Stop button interrupts the running turn with its turn id', (
     t,
   ) async {
@@ -6340,7 +4629,7 @@ void main() {
     );
     await api.appConnect('pcx:lb7666:app:default', 28080);
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           threadId: 't1',
@@ -6383,7 +4672,7 @@ void main() {
     api.readResult = const ThreadHistory(items: [], running: true);
 
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           threadId: 't1',
@@ -6413,7 +4702,7 @@ void main() {
     t.view.physicalSize = const Size(400, 800);
     addTearDown(t.view.reset);
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           threadId: 't1',
@@ -6448,7 +4737,7 @@ void main() {
     );
     await api.appConnect('pcx:lb7666:app:default', 28080);
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           threadId: 't1',
@@ -6542,7 +4831,7 @@ void main() {
     );
 
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: key,
           threadId: 't-active',
@@ -6720,7 +5009,7 @@ void main() {
     );
     await api.appConnect('pcx:lb7666:app:default', 28080);
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           threadId: 't1',
@@ -6764,49 +5053,6 @@ void main() {
     expect(find.byKey(const Key('chat-compaction-progress')), findsNothing);
   });
 
-  testWidgets('Services list shows availability + subscription status', (
-    t,
-  ) async {
-    final api = FakeBridgeApi(
-      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
-      services: const [
-        ServiceEntry(
-          device: 'lb7666',
-          kind: 'api',
-          name: 'default',
-          key: 'pcx:lb7666:api:default',
-        ),
-        ServiceEntry(
-          device: 'lb7666',
-          kind: 'api',
-          name: 'other',
-          key: 'pcx:lb7666:api:other',
-        ),
-        ServiceEntry(
-          device: 'lb7666',
-          kind: 'app',
-          name: 'default',
-          key: 'pcx:lb7666:app:default',
-        ),
-      ],
-    );
-    // One API service is subscribed (alive) → it reads "subscribed"; the rest
-    // are merely registered → "online".
-    await api.apiSubscribe('pcx:lb7666:api:default', 28080);
-    t.view.devicePixelRatio = 1.0;
-    t.view.physicalSize = const Size(500, 900); // narrow → single list pane
-    addTearDown(t.view.reset);
-
-    await t.pumpWidget(_host(const ServicesScreen(), api));
-    await t.pumpAndSettle();
-    await _openDevice(t);
-
-    expect(find.text('已订阅'), findsOneWidget); // subscribedAlive (zh)
-    expect(find.text('在线'), findsWidgets); // relay + unsubscribed api + app
-    expect(find.byType(StatusDot), findsWidgets); // availability dots render
-    expect(find.byType(PulsingDot), findsNothing); // nothing running
-  });
-
   testWidgets('Running sessions show a pulsing badge in the sessions pane', (
     t,
   ) async {
@@ -6823,7 +5069,7 @@ void main() {
     addTearDown(t.view.reset);
 
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           threadId: 'tOpen',
@@ -6868,7 +5114,7 @@ void main() {
     api.readResult = const ThreadHistory(items: [], running: true);
 
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           threadId: 't1',
@@ -6895,40 +5141,13 @@ void main() {
     expect(find.byKey(const Key('session-error')), findsNothing);
   });
 
-  testWidgets('Services refresh button re-runs discovery', (t) async {
-    final api = FakeBridgeApi(
-      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
-      services: const [
-        ServiceEntry(
-          device: 'lb7666',
-          kind: 'app',
-          name: 'default',
-          key: 'pcx:lb7666:app:default',
-        ),
-      ],
-    );
-    t.view.devicePixelRatio = 1.0;
-    t.view.physicalSize = const Size(500, 900);
-    addTearDown(t.view.reset);
-
-    await t.pumpWidget(_host(const ServicesScreen(), api));
-    await t.pumpAndSettle();
-    await _openDevice(t);
-    expect(find.text('App-server'), findsOneWidget);
-
-    // Tapping refresh re-discovers (skeleton flashes, then data) without error.
-    await t.tap(find.byKey(const Key('refresh-btn')));
-    await t.pumpAndSettle();
-    expect(find.text('App-server'), findsOneWidget);
-  });
-
   testWidgets('Consecutive notices are not folded into a group', (t) async {
     final api = FakeBridgeApi(
       config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
     );
     await api.appConnect('pcx:lb7666:app:default', 28080);
     await t.pumpWidget(
-      _host(
+      host(
         const AppSessionScreen(
           serviceKey: 'pcx:lb7666:app:default',
           threadId: 't1',
@@ -6957,40 +5176,6 @@ void main() {
     expect(find.text('对话已压缩'), findsNWidgets(2));
   });
 
-  testWidgets('Services screen shows a loading skeleton before data', (
-    t,
-  ) async {
-    final api = FakeBridgeApi(
-      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
-      services: const [
-        ServiceEntry(
-          device: 'lb7666',
-          kind: 'app',
-          name: 'default',
-          key: 'pcx:lb7666:app:default',
-        ),
-      ],
-    );
-
-    await t.pumpWidget(_host(const ServicesScreen(), api));
-    // First frame: discovery future hasn't resolved → skeleton.
-    expect(find.byType(ListLoadingSkeleton), findsOneWidget);
-    await t.pumpAndSettle();
-    // Data arrived → skeleton gone, the capability is listed.
-    expect(find.byType(ListLoadingSkeleton), findsNothing);
-    await _openDevice(t);
-    expect(find.text('App-server'), findsOneWidget);
-  });
-
-  testWidgets('Chat loading skeleton renders a shimmer', (t) async {
-    await t.pumpWidget(
-      const MaterialApp(home: Scaffold(body: ChatLoadingSkeleton())),
-    );
-    await t.pump(); // shimmer animates forever — don't settle
-    expect(find.byType(Shimmer), findsOneWidget);
-    expect(find.byType(SkeletonBox), findsWidgets);
-  });
-
   group('Esc state machine + message queue (codex-cli parity)', () {
     const svc = 'pcx:lb7666:app:default';
 
@@ -7015,7 +5200,7 @@ void main() {
       )..autoCompleteTurn = false;
       await api.appConnect(svc, 28080);
       await t.pumpWidget(
-        _host(const AppSessionScreen(serviceKey: svc, threadId: 't1'), api),
+        host(const AppSessionScreen(serviceKey: svc, threadId: 't1'), api),
       );
       await t.pumpAndSettle();
       await t.enterText(find.byKey(const Key('composer-input')), 'first');
@@ -7164,42 +5349,5 @@ void main() {
         expect(api.turnStartCount, 1);
       });
     });
-  });
-  testWidgets('self-host setup can be left again', (t) async {
-    // Reached from account onboarding with `go`, which REPLACES the stack — so
-    // there is nothing to pop, and without an explicit way back the only exits
-    // are finishing self-host setup or killing the app. A user who opened
-    // "Advanced" to look at the relay fields was stranded.
-    await t.pumpWidget(
-      _routerHost(
-        FakeBridgeApi(config: const ConfigInfo(relay: '', hasKey: false)),
-        initial: '/onboarding',
-        routes: [
-          GoRoute(
-            path: '/onboarding',
-            builder: (_, _) => const AccountOnboardingScreen(),
-          ),
-          GoRoute(
-            path: '/onboarding/self-host',
-            builder: (_, _) => const OnboardingScreen(),
-          ),
-        ],
-      ),
-    );
-    await t.pumpAndSettle();
-
-    await t.tap(find.text('高级 / 自部署')); // accountAdvanced
-    await t.pumpAndSettle();
-    await t.tap(find.text('改用自建 relay')); // accountAdvancedSelfHost
-    await t.pumpAndSettle();
-    expect(find.byType(OnboardingScreen), findsOneWidget);
-
-    await t.tap(find.byKey(const Key('self-host-back')));
-    await t.pumpAndSettle();
-    expect(
-      find.byType(AccountOnboardingScreen),
-      findsOneWidget,
-      reason: 'back must return to account onboarding, not strand the user',
-    );
   });
 }
