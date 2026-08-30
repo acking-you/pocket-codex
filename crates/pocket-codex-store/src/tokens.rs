@@ -110,4 +110,40 @@ impl Store {
         .await?;
         Ok(res.rows_affected())
     }
+
+    /// Revoke the user's sessions issued at or before `issued_through`, and
+    /// mark the whole family SETTLED so replaying any of it does not revoke
+    /// again.
+    ///
+    /// Two properties, both learned from the lb7666.top lockout (2026-08-30):
+    ///
+    /// * **Bounded by issue time.** Revoking a family unconditionally means a
+    ///   client still retrying the stolen (or merely stale) token takes down
+    ///   the session the user creates by signing in again — and since that
+    ///   retry keeps arriving, the account cannot be recovered at all. Scoping
+    ///   to tokens that already existed when the abuse was detected invalidates
+    ///   exactly the compromised family and lets a fresh login stick.
+    /// * **Clears `rotated_to`.** That column is what tells a later replay
+    ///   apart from a lost-response retry, and while it is set each replay
+    ///   looks like fresh abuse worth revoking for. Clearing it records
+    ///   "already dealt with", which is what makes the response idempotent. The
+    ///   rotation chain is diagnostic only — nothing reads it once the family
+    ///   is dead.
+    pub async fn revoke_user_refresh_tokens_issued_through(
+        &self,
+        user_id: &str,
+        issued_through: i64,
+        now: i64,
+    ) -> Result<u64> {
+        let res = sqlx::query(
+            "UPDATE refresh_tokens SET revoked_at = COALESCE(revoked_at, ?3), rotated_to = NULL \
+             WHERE user_id = ?1 AND created_at <= ?2",
+        )
+        .bind(user_id)
+        .bind(issued_through)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected())
+    }
 }

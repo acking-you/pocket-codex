@@ -386,11 +386,26 @@ impl Auth {
     }
 
     /// A presented refresh token was not active. Decide whether this is theft
-    /// (a replay of a long-revoked / logged-out token → revoke the whole
-    /// family per RFC 6819) or a benign lost-response retry (a token
-    /// rotated within the grace window → reject only this request, leaving
-    /// the user's other sessions alone so a transient network failure can't
-    /// log every device out).
+    /// (a replay of a long-revoked / logged-out token → revoke the family
+    /// issued up to now, per RFC 6819) or a benign retry that must not log
+    /// the user out.
+    ///
+    /// # Why "already revoked" is not evidence of theft
+    ///
+    /// A client whose refresh fails does not stop; it retries, for as long as
+    /// it is running. So the SECOND replay of a token is expected whenever
+    /// the first one was rejected — and treating each arrival as fresh
+    /// abuse is what turned one lost race into a permanent lockout on
+    /// lb7666.top (2026-08-30): every retry re-revoked the family,
+    /// including any session the user had just created by signing in again,
+    /// at ~10 events/minute for as long as the client stayed up.
+    ///
+    /// The fix is to make the response idempotent. A token that is already
+    /// revoked has already had whatever consequence it deserved, so
+    /// replaying it is rejected — the caller still gets
+    /// [`AuthError::BadRefresh`] — without revoking anything a second time.
+    /// Only the FIRST sighting of an inactive token can revoke a family,
+    /// which is the only sighting that carries new information.
     async fn handle_inactive_refresh(&self, hash: &[u8], now: i64) -> Result<()> {
         let Some(seen) = self.store.refresh_token_by_hash(hash).await? else {
             return Ok(());
@@ -401,13 +416,31 @@ impl Auth {
                 "refresh token replayed within rotation grace window; \
                  rejecting without revoking the user's other sessions"
             );
+        } else if seen.rotated_to.is_none() {
+            // Revoked with NO successor: either a logout, or a family revocation
+            // this same code performed earlier. Both mean the consequence has
+            // already been applied, so rejecting is right but revoking again is
+            // not — re-revoking on every retry is what makes an account
+            // unrecoverable while a client keeps trying.
+            //
+            // A rotated-but-stale token falls through to the branch below instead:
+            // it still carries new information the first time it is seen, because
+            // its successor may be live in someone else's hands.
+            tracing::debug!(
+                user_id = %seen.user_id,
+                revoked_at = ?seen.revoked_at,
+                "replay of an already-settled refresh token; rejecting without re-revoking"
+            );
         } else {
+            // Scoped to sessions that already existed: a client still retrying the
+            // compromised token must not be able to revoke the session the user
+            // creates by signing in after this.
             self.store
-                .revoke_user_refresh_tokens(&seen.user_id, now)
+                .revoke_user_refresh_tokens_issued_through(&seen.user_id, now, now)
                 .await?;
             tracing::warn!(
                 user_id = %seen.user_id,
-                "refresh-token reuse detected; revoked all of the user's sessions"
+                "refresh-token reuse detected; revoked the user's existing sessions"
             );
         }
         Ok(())
@@ -767,6 +800,114 @@ mod tests {
             .expect("consumed poll");
         assert_eq!(consumed.status, DevicePollStatus::Expired);
         assert!(consumed.credential.is_none());
+    }
+
+    /// Sign in through the device flow and return the issued session.
+    ///
+    /// Polls until the fake GitHub authorizes (it reports pending, then
+    /// slow_down, then approves every call after), so this works for a
+    /// SECOND sign-in in the same test — which is the whole point of the
+    /// recovery cases below.
+    async fn signed_in(auth: &Auth, now: i64) -> SessionCredential {
+        let start = auth
+            .device_start(Some("laptop"), now)
+            .await
+            .expect("device start");
+        for at in 1..=5 {
+            let poll = auth
+                .device_poll(&start.poll_handle, now + at)
+                .await
+                .expect("poll");
+            if let Some(credential) = poll.credential {
+                return credential;
+            }
+        }
+        panic!("the fake GitHub should have authorized within five polls");
+    }
+
+    #[tokio::test]
+    async fn a_retried_stale_refresh_cannot_lock_the_account_out() {
+        // The lb7666.top lockout (2026-08-30), as a test. One lost refresh race
+        // revoked the family; the client then retried the same dead token every few
+        // seconds, and because each arrival was treated as fresh abuse it re-revoked
+        // the family ~10x/minute — taking down any session the user created by
+        // signing in again, so the account could not be recovered at all.
+        let github = FakeGithub::spawn().await;
+        let store = Store::connect("sqlite::memory:").await.expect("store");
+        let auth = Auth::new_with_github_base(store, cfg(false), github.base_url()).expect("auth");
+        let now = 1_000_000;
+
+        let first = signed_in(&auth, now).await;
+        // Rotate once, well past the grace window, so the old token is genuinely
+        // inactive and its replay is not a lost-response retry.
+        let rotated = auth
+            .refresh(&first.refresh_token, now + 10)
+            .await
+            .expect("first refresh rotates");
+        let stale = first.refresh_token.clone();
+        let long_after = now + 10 + REUSE_GRACE_SECS + 5;
+
+        // First replay: theft response. The rotated session is revoked with it.
+        assert!(matches!(auth.refresh(&stale, long_after).await, Err(AuthError::BadRefresh)));
+        assert!(
+            auth.refresh(&rotated.refresh_token, long_after + 1)
+                .await
+                .is_err(),
+            "the compromised family must be revoked"
+        );
+
+        // The user signs in again. This is the session that must survive.
+        let recovered = signed_in(&auth, long_after + 2).await;
+
+        // The old client keeps retrying — it has no way to know it was revoked.
+        for attempt in 0..5 {
+            assert!(
+                auth.refresh(&stale, long_after + 10 + attempt)
+                    .await
+                    .is_err(),
+                "a dead token must keep being rejected"
+            );
+        }
+
+        // ...and the recovered session still works. Before the fix, each of those
+        // retries revoked it again and the user was thrown back to the sign-in
+        // screen indefinitely.
+        auth.refresh(&recovered.refresh_token, long_after + 30)
+            .await
+            .expect("a session created AFTER the abuse must survive the old client's retries");
+    }
+
+    #[tokio::test]
+    async fn revoking_a_family_is_idempotent_across_replays() {
+        // The mechanism behind the test above: only the FIRST sighting of an
+        // inactive token may revoke, because only it carries new information. A
+        // client that retries is expected, not evidence of further abuse.
+        let github = FakeGithub::spawn().await;
+        let store = Store::connect("sqlite::memory:").await.expect("store");
+        let auth = Auth::new_with_github_base(store, cfg(false), github.base_url()).expect("auth");
+        let now = 2_000_000;
+
+        let session = signed_in(&auth, now).await;
+        let live = auth
+            .refresh(&session.refresh_token, now + 10)
+            .await
+            .expect("rotate");
+        let stale = session.refresh_token;
+        let after_grace = now + 10 + REUSE_GRACE_SECS + 1;
+
+        assert!(auth.refresh(&stale, after_grace).await.is_err());
+        // `live` is gone as a consequence of the first sighting.
+        assert!(auth
+            .refresh(&live.refresh_token, after_grace + 1)
+            .await
+            .is_err());
+
+        // A session issued after that point is not collateral of later replays.
+        let fresh = signed_in(&auth, after_grace + 2).await;
+        assert!(auth.refresh(&stale, after_grace + 20).await.is_err());
+        auth.refresh(&fresh.refresh_token, after_grace + 30)
+            .await
+            .expect("replays must not revoke sessions issued after the abuse");
     }
 
     struct FakeGithub {

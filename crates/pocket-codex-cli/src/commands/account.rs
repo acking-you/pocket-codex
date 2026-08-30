@@ -443,7 +443,31 @@ async fn valid_token(config: &mut Config, base: &str) -> Result<String> {
             return Ok(token.to_string());
         }
     }
+    // Serialize the refresh, as the bridge does. The refresh token is SINGLE-USE
+    // and rotating: two callers spending the same one means the loser's request
+    // arrives after rotation, which the backend is entitled to read as reuse — and
+    // that response revokes the whole family. One command can easily have several
+    // callers (a services listing plus a relay credential fetch), so this is not a
+    // theoretical race.
+    let _guard = refresh_lock().lock().await;
+    // Re-read and re-check: another waiter may have refreshed while we queued, in
+    // which case its freshly-persisted token is the one to use.
+    *config = Config::load().unwrap_or_else(|_| config.clone());
+    if let Some(token) = config.account_token() {
+        if jwt_exp(token).is_some_and(|exp| exp > unix_now() + 60) {
+            return Ok(token.to_string());
+        }
+    }
     refresh_session(config, base).await
+}
+
+/// Process-global lock serializing token refreshes, so overlapping callers
+/// don't each spend the rotating refresh token (401-ing the losers, and
+/// tripping the backend's reuse detection) or lost-update each other's
+/// persisted credential.
+fn refresh_lock() -> &'static tokio::sync::Mutex<()> {
+    static LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
 }
 
 /// Exchange the refresh token for a new session, persisting the rotation.
