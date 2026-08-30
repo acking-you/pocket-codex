@@ -512,6 +512,20 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     var i = 0;
     while (i < _items.length) {
       final it = _items[i];
+      // Agent prose that answers the turn: the last run of `agentMessage` items
+      // in it. Earlier prose is the agent narrating what it is about to do, which
+      // belongs with the work rather than above it.
+      bool isFinalReplyAt(int at) {
+        if (!_items[at].isAgent) return false;
+        for (var k = at + 1; k < _items.length; k++) {
+          if (_items[k].isUser) break;
+          // Another activity item after this prose means more work followed, so
+          // this was a preamble and not the answer.
+          if (!_items[k].isAgent && !_items[k].standsAlone) return false;
+        }
+        return true;
+      }
+
       // One reply, one block. A turn's prose arrives as several `agentMessage`
       // items (the server gives each its own id — a preamble before a tool
       // batch, then the final answer), and rendering one block per item chopped
@@ -522,7 +536,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       // Items whose turn is unknown (empty id — a rollout file read from disk,
       // or a live item that arrived before `turn/started`) fall back to
       // adjacency, which is what the sequence can tell us.
-      if (it.isAgent) {
+      if (it.isAgent && isFinalReplyAt(i)) {
         var j = i + 1;
         while (j < _items.length &&
             _items[j].isAgent &&
@@ -533,18 +547,26 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         i = j;
         continue;
       }
-      // User messages and standalone notices are never grouped.
-      if (it.isMessage || it.isNotice) {
+      // A user message or a turn footnote always stands alone.
+      if (it.isUser || it.standsAlone) {
         out.add(it);
         i++;
         continue;
       }
-      // Everything up to the next message or notice is this turn's work. Note
-      // there is no `type` test here and no length floor: even a single tool call
-      // folds, so every turn presents the same way and the transcript does not
-      // change shape depending on how much the agent happened to do.
+      // Everything up to the next user message or turn footnote is this turn's
+      // work — including compaction notices and the agent's own intermediate
+      // prose, which are things it did on the way to the answer.
+      //
+      // Deliberately spans them rather than stopping at them. Stopping produced
+      // one 已处理 row per stretch of tool calls, so a turn that thought out loud
+      // between batches rendered as three or four rows carrying the SAME duration
+      // — visibly one turn, presented as several. The final reply is the run's
+      // boundary, so it stays where it is, beneath the fold.
       var j = i + 1;
-      while (j < _items.length && !_items[j].isMessage && !_items[j].isNotice) {
+      while (j < _items.length &&
+          !_items[j].isUser &&
+          !_items[j].standsAlone &&
+          !isFinalReplyAt(j)) {
         j++;
       }
       out.add(TurnWork(_items.sublist(i, j)));

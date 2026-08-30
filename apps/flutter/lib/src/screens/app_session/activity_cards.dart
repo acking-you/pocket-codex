@@ -20,6 +20,7 @@ import 'package:pocket_codex/src/theme.dart';
 import 'package:pocket_codex/src/widgets/app_toast.dart';
 import 'package:pocket_codex/src/widgets/links.dart';
 import 'package:pocket_codex/src/widgets/markdown_view.dart';
+import 'package:pocket_codex/src/widgets/status_dots.dart';
 
 /// One parsed plan step.
 typedef PlanStep = ({String status, String text});
@@ -41,6 +42,67 @@ final _planStepPattern = RegExp(r'^\s*-\s*\[(.)\]\s?(.*)$');
   return (
     isPlan: true,
     text: raw.replaceAll(open, '').replaceAll(close, '').trim(),
+  );
+}
+
+/// The widget for one non-message transcript row.
+///
+/// The single place an activity item's type picks its widget. Both the flat
+/// transcript (via `MessageView`) and the turn-work fold render rows through
+/// here, so a new item kind cannot be handled in one place and missed in the
+/// other — a compaction shown as a bare tool row inside the fold is exactly how
+/// that went wrong once.
+Widget activityRow(TranscriptItem item) => switch (item.type) {
+  'fileChange' => FileChangeCard(key: ValueKey(item.id), item: item),
+  'plan' => PlanCard(key: ValueKey(item.id), item: item),
+  'contextCompaction' => _CompactionNotice(key: ValueKey(item.id), item: item),
+  'interrupted' => _InterruptedNotice(key: ValueKey(item.id)),
+  // Prose the agent wrote on its way to the answer (a preamble before a tool
+  // batch). It reads as prose, not as a one-line tool row — an `ActivityCard`
+  // would show a truncated peek of a paragraph.
+  'agentMessage' => _PreambleProse(key: ValueKey(item.id), item: item),
+  _ => ActivityCard(key: ValueKey(item.id), item: item),
+};
+
+/// Agent prose inside a turn's fold: the narration before a batch of work.
+///
+/// Indented and quieter than a reply, so opening a fold does not look like it
+/// contains several answers.
+class _PreambleProse extends StatelessWidget {
+  const _PreambleProse({super.key, required this.item});
+  final TranscriptItem item;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 6),
+    child: MarkdownView(data: item.text, muted: true),
+  );
+}
+
+/// "Compacting context…" / "Conversation compacted", per the item's state.
+class _CompactionNotice extends StatelessWidget {
+  const _CompactionNotice({super.key, required this.item});
+  final TranscriptItem item;
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    return SystemNotice(
+      icon: Icons.compress,
+      text: item.streaming ? l10n.compactingContext : l10n.compacted,
+      active: item.streaming,
+    );
+  }
+}
+
+/// "Stopped" — the turn was cut short.
+class _InterruptedNotice extends StatelessWidget {
+  const _InterruptedNotice({super.key});
+
+  @override
+  Widget build(BuildContext context) => SystemNotice(
+    icon: Icons.stop_circle_outlined,
+    text: AppLocalizations.of(context).turnStopped,
   );
 }
 
@@ -414,6 +476,15 @@ class TurnWork {
   /// The activity rows, in transcript order.
   final List<TranscriptItem> items;
 
+  /// Item types that stay individual rows inside the fold even when several sit
+  /// together, because "×N" would misdescribe them:
+  ///
+  /// * `contextCompaction` — an event, not a repeated call. Two compactions mean
+  ///   the context was squeezed twice, not one thing done twice over.
+  /// * `agentMessage` — prose. A "×2" header would hide what it says, which is
+  ///   the one thing about a preamble worth reading.
+  static const _neverGrouped = {'contextCompaction', 'agentMessage'};
+
   /// The sub-runs, same-type neighbours merged — the second level of the fold.
   ///
   /// A run of one stays a bare item rather than becoming a group of one, which
@@ -422,6 +493,11 @@ class TurnWork {
     final out = <Object>[];
     var i = 0;
     while (i < items.length) {
+      if (_neverGrouped.contains(items[i].type)) {
+        out.add(items[i]);
+        i++;
+        continue;
+      }
       var j = i + 1;
       while (j < items.length && items[j].type == items[i].type) {
         j++;
@@ -691,10 +767,8 @@ class _TurnWorkCardState extends State<TurnWorkCard> {
                             key: ValueKey('wg:${row.items.first.id}'),
                             group: row,
                           )
-                        else if ((row as TranscriptItem).type == 'fileChange')
-                          FileChangeCard(key: ValueKey(row.id), item: row)
                         else
-                          ActivityCard(key: ValueKey(row.id), item: row),
+                          activityRow(row as TranscriptItem),
                     ],
                   ),
                 ),
@@ -1200,6 +1274,53 @@ class _CopyablePath extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// A centered, subtle system notice (e.g. "conversation compacted") so
+/// lifecycle state changes are visible inline in the transcript.
+class SystemNotice extends StatelessWidget {
+  const SystemNotice({
+    super.key,
+    required this.icon,
+    required this.text,
+    this.active = false,
+  });
+  final IconData icon;
+  final String text;
+  final bool active;
+
+  @override
+  Widget build(BuildContext context) {
+    final muted = Theme.of(context).colorScheme.outline;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Expanded(child: Divider(color: muted.withValues(alpha: 0.3))),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (active)
+                  PulsingDot(
+                    key: const Key('chat-compaction-progress'),
+                    color: muted,
+                    size: 8,
+                  )
+                else
+                  Icon(icon, size: 13, color: muted),
+                const SizedBox(width: 5),
+                Text(text, style: TextStyle(fontSize: 11.5, color: muted)),
+              ],
+            ),
+          ),
+          Expanded(child: Divider(color: muted.withValues(alpha: 0.3))),
+        ],
+      ),
     );
   }
 }

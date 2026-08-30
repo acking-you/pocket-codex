@@ -73,16 +73,28 @@ const double _kPreviewWidth = 300;
 const double _kMinPreviewWidth = 150;
 const double _kMaxPreviewOverhang = 160;
 
+/// Extra width a tick gets for being on screen, so the rail's shape shows where
+/// you are and reshapes as you scroll — the thumb of a scrollbar, drawn as a
+/// bulge in the scale.
+const double _kInViewBulge = 6;
+
 /// Tick widths by distance from the hovered one: the pointed-at tick, its
 /// neighbours, then the rest. A falloff rather than a single highlight, so the
 /// rail reads as one object responding to the cursor instead of a row of
 /// independent marks.
-double _tickWidth(int? distance) => switch (distance) {
-  0 => 22,
-  1 => 15,
-  2 => 10,
-  _ => 7,
-};
+///
+/// [inView] adds [_kInViewBulge] on top. The two cues compose deliberately: the
+/// pointer's falloff is much larger, so a hovered tick still stands out from the
+/// on-screen band it may sit inside.
+double _tickWidth(int? distance, {bool inView = false}) {
+  final base = switch (distance) {
+    0 => 22.0,
+    1 => 15.0,
+    2 => 10.0,
+    _ => 7.0,
+  };
+  return inView ? base + _kInViewBulge : base;
+}
 
 /// A left-gutter rail of one tick per conversation turn: hover a tick to preview
 /// that turn, click to jump to it.
@@ -367,11 +379,16 @@ class _TurnMinimapState extends State<TurnMinimap> {
                 duration: const Duration(milliseconds: 150),
                 curve: Curves.easeOutCubic,
                 height: 2,
-                width: _tickWidth(distance),
+                // Scrolling reshapes the rail, it does not only re-ink it. The
+                // on-screen turns bulge outward, so the rail carries a visible
+                // "you are here" band that travels as you scroll — which is the
+                // job a scrollbar thumb does, and the reason this sits where a
+                // scrollbar would. Ink alone was too quiet to read in passing.
+                width: _tickWidth(distance, inView: inView),
                 decoration: BoxDecoration(
-                  // On-screen turns are the strong marks — that is where you
-                  // are. The hovered tick is emphasised by WIDTH, so the two
-                  // cues stay independent and legible together.
+                  // Width and ink both track position; the hovered tick is the
+                  // widest thing on the rail, so the two cues stay legible
+                  // together rather than competing.
                   color: inView
                       ? scheme.onSurface.withValues(alpha: 0.85)
                       : distance == 0

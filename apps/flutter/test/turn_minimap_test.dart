@@ -212,8 +212,10 @@ void main() {
   testWidgets('an on-screen turn is marked whatever the pointer is doing', (
     t,
   ) async {
-    // Two independent cues: colour says where you ARE, width says what you are
-    // pointing at. Reading them off the same state would lose one of them.
+    // Position drives BOTH cues: the on-screen turns are inked strongly and
+    // bulge outward, so the rail's shape shows where you are and reshapes as you
+    // scroll. Hovering is a much larger widening on top, so the two remain
+    // distinguishable.
     final items = _items(4);
     await _pump(
       t,
@@ -232,8 +234,46 @@ void main() {
     Color colorOf(int i) => (ticks[i].decoration! as BoxDecoration).color!;
     // The visible turn is the strong mark; the others are quiet.
     expect(colorOf(2).a, greaterThan(colorOf(0).a));
-    // …and it has NOT been widened, because nothing is hovered.
-    expect(_tickWidthAt(t, 2), _tickWidthAt(t, 0));
+    // …and it is wider, with nothing hovered: the shape alone says where you are.
+    expect(_tickWidthAt(t, 2), greaterThan(_tickWidthAt(t, 0)));
+  });
+
+  testWidgets('the rail reshapes as the transcript scrolls', (t) async {
+    // The bulge has to TRAVEL, not just exist — that is what makes the rail read
+    // as a position indicator rather than a static scale with one odd mark.
+    final items = _items(5);
+    final visible = ValueNotifier<(int, int)?>((
+      items[1].rowIndex,
+      items[1].rowIndex,
+    ));
+    addTearDown(visible.dispose);
+    await t.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 400,
+            height: 600,
+            child: TurnMinimap(
+              items: items,
+              visibleRange: visible,
+              gutterWidth: 120,
+              onSelect: (_) {},
+            ),
+          ),
+        ),
+      ),
+    );
+    await t.pumpAndSettle();
+    expect(_tickWidthAt(t, 1), greaterThan(_tickWidthAt(t, 4)));
+
+    // Scroll to the end of the conversation.
+    visible.value = (items[4].rowIndex, items[4].rowIndex);
+    await t.pumpAndSettle();
+    expect(
+      _tickWidthAt(t, 4),
+      greaterThan(_tickWidthAt(t, 1)),
+      reason: 'the bulge follows the viewport',
+    );
   });
 
   testWidgets('keyboard walks the turns and enter jumps', (t) async {

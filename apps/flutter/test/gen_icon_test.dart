@@ -20,6 +20,11 @@
 //   icon/icon_mobile.png       full-bleed opaque tile (iOS + Android legacy)
 //   icon/icon_adaptive_bg.png  solid tile colour (Android adaptive background)
 //   icon/icon_adaptive_fg.png  tile scaled into the safe zone (adaptive fg)
+// Outputs (Windows launcher — from logo_dark.png):
+//   windows/runner/resources/app_icon.ico
+//                              multi-size .ico. NOT flutter_launcher_icons'
+//                              job: it writes one frame, and Windows' own
+//                              downscale to 16/32 px is blurry.
 // Outputs (in-app + splash — theme-matched):
 //   assets/logo/mark_light.png rounded light tile (light theme / light splash)
 //   assets/logo/mark_dark.png  rounded dark tile  (dark theme / dark splash)
@@ -318,6 +323,33 @@ void main() {
     ]) {
       expect(File(f).existsSync(), isTrue, reason: '$f not written');
     }
+  }, skip: skip);
+
+  test('derive the Windows launcher icon (multi-size ico)', () async {
+    // `flutter_launcher_icons` writes this file too, but with ONE 256 px frame
+    // (`icon_size: 256` in pubspec.yaml is all it can express). Windows then
+    // downscales that single raster everywhere it needs a smaller icon — the
+    // taskbar at 32 px, the title bar and Alt-Tab at 16 px — and a detailed mark
+    // reduced 8:1 in one step comes out visibly blurry. macOS never showed the
+    // problem because its `.appiconset` ships each size as its own file.
+    //
+    // So the launcher icon is rendered per size and packed like the tray icon
+    // below, which has always done this. Written AFTER `flutter_launcher_icons`
+    // runs, since that tool would otherwise overwrite it.
+    final dark = await loadMaster('icon/logo_dark.png');
+    final frames = <img.Image>[];
+    // The sizes Windows actually asks for: 16 title bar / Alt-Tab, 20 and 24 at
+    // fractional DPI scaling, 32 taskbar, 48 large icons, 64 for 150% desktop,
+    // 128 and 256 for the extra-large views and Explorer's tile mode.
+    for (final s in [16, 20, 24, 32, 48, 64, 128, 256]) {
+      final png = await compose(dark, size: s.toDouble(), fraction: 0.9);
+      frames.add(img.decodePng(png)!);
+    }
+    await File(
+      'windows/runner/resources/app_icon.ico',
+    ).writeAsBytes(img.IcoEncoder().encodeImages(frames));
+
+    expect(File('windows/runner/resources/app_icon.ico').existsSync(), isTrue);
   }, skip: skip);
 
   test('derive tray assets (png + template + multi-size ico)', () async {

@@ -104,22 +104,22 @@ class TranscriptItem {
   /// Whether this row is a message from either side (vs. a tool call).
   bool get isMessage => isUser || isAgent;
 
-  /// Standalone rows that render on their own and must never be folded into a
-  /// turn's work.
-  ///
-  /// Beyond the system notices (compaction / stopped), two kinds earn a place
-  /// here by being *about* a turn rather than part of its work:
+  /// Rows that render on their own and are never folded into a turn's work,
+  /// because they are *about* a turn rather than part of one:
   ///
   /// * `turnDuration` — the footnote carrying the model/effort stamp, which is
   ///   what makes a model switch verifiable per answer.
   /// * `plan` — the agent's stated intent. A checklist the user is tracking is
   ///   the opposite of intermediate noise, and the live progress tracker above
   ///   the composer reads the same item.
-  bool get isNotice =>
-      type == 'contextCompaction' ||
-      type == 'interrupted' ||
-      type == 'turnDuration' ||
-      type == 'plan';
+  /// * `interrupted` — the turn was cut short, which is why there is no answer
+  ///   below. Folding it would leave the transcript silently ending.
+  ///
+  /// `contextCompaction` is deliberately NOT here: compaction happens *during* a
+  /// turn, so leaving it out split one turn's work into several folds that each
+  /// reported the same duration.
+  bool get standsAlone =>
+      type == 'turnDuration' || type == 'plan' || type == 'interrupted';
 }
 
 /// Stopwatch-format an elapsed-second count: `m:ss`, or `h:mm:ss` past an hour

@@ -2768,6 +2768,61 @@ void main() {
       expect(find.text('first'), findsNothing);
     });
 
+    testWidgets('one turn is ONE row, however it was interleaved', (t) async {
+      // The reported bug: a turn whose work was broken up by intermediate prose
+      // and a compaction rendered as three 已处理 rows that each reported the
+      // SAME duration — visibly one turn, presented as several.
+      await openThread(
+        t,
+        work: const [
+          ThreadItem(
+            id: 'c1',
+            itemType: 'commandExecution',
+            title: 'first batch',
+            text: '',
+          ),
+          ThreadItem(
+            id: 'p1',
+            itemType: 'agentMessage',
+            title: '',
+            text: 'now let me check the other layer',
+          ),
+          ThreadItem(
+            id: 'cc1',
+            itemType: 'contextCompaction',
+            title: '',
+            text: '',
+          ),
+          ThreadItem(
+            id: 'c2',
+            itemType: 'commandExecution',
+            title: 'second batch',
+            text: '',
+          ),
+        ],
+      );
+
+      expect(
+        find.byKey(const Key('turn-work-toggle')),
+        findsOneWidget,
+        reason: 'one turn, one fold',
+      );
+      // And the answer is still the thing on screen.
+      expect(
+        find.textContaining('taskbar shortcut', findRichText: true),
+        findsOneWidget,
+      );
+      // Everything in between is inside it, prose and compaction included.
+      await openTurnWork(t);
+      expect(find.text('first batch'), findsOneWidget);
+      expect(find.text('second batch'), findsOneWidget);
+      expect(find.text('对话已压缩'), findsOneWidget);
+      expect(
+        find.textContaining('check the other layer', findRichText: true),
+        findsWidgets,
+      );
+    });
+
     testWidgets('a running turn is already open, and folds when it ends', (
       t,
     ) async {
@@ -5080,6 +5135,8 @@ void main() {
     expect(find.byType(AppSessionScreen), findsOneWidget);
     expect(find.text('其他进程运行中'), findsOneWidget);
     expect(find.text('work from the other client'), findsOneWidget);
+    // Compaction happens during a turn, so it folds with the rest of the work.
+    await openTurnWork(t);
     expect(find.text('正在自动压缩上下文'), findsOneWidget);
     expect(find.byKey(const Key('chat-compaction-progress')), findsOneWidget);
     expect(find.byKey(const Key('turn-progress-panel')), findsOneWidget);
@@ -5172,8 +5229,15 @@ void main() {
     );
     await t.pump();
     await t.pump(const Duration(milliseconds: 100));
-    expect(find.text('new progress from subscription'), findsOneWidget);
+    // This prose has a command and a file change AFTER it, so it is the agent
+    // narrating what it is about to do — a preamble, which folds with the work
+    // rather than standing above it as the answer.
     await openTurnWork(t);
+    // Rendered as markdown inside the fold, hence `findRichText`.
+    expect(
+      find.textContaining('new progress from subscription', findRichText: true),
+      findsWidgets,
+    );
     expect(find.text('cargo test'), findsOneWidget);
     expect(find.textContaining('live.dart'), findsWidgets);
     expect(find.text('第 3 / 3 步'), findsOneWidget);
@@ -5263,6 +5327,7 @@ void main() {
     );
     await t.pump();
     await t.pump(const Duration(milliseconds: 100));
+    // In flight, so the turn's work is already open.
     expect(find.text('正在自动压缩上下文'), findsOneWidget);
     expect(find.byKey(const Key('chat-compaction-progress')), findsOneWidget);
 
@@ -5279,6 +5344,8 @@ void main() {
       ),
     );
     await t.pumpAndSettle();
+    // Settled, so the work folded away with it. Re-open to see the outcome.
+    await openTurnWork(t);
     expect(find.text('对话已压缩'), findsOneWidget); // compacted (zh)
     expect(find.byKey(const Key('chat-compaction-progress')), findsNothing);
   });
@@ -5371,7 +5438,9 @@ void main() {
     expect(find.byKey(const Key('session-error')), findsNothing);
   });
 
-  testWidgets('Consecutive notices are not folded into a group', (t) async {
+  testWidgets('Compactions fold with the work, and are not counted as one', (
+    t,
+  ) async {
     final api = FakeBridgeApi(
       config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
     );
@@ -5402,7 +5471,15 @@ void main() {
       );
     }
     await t.pumpAndSettle();
-    // Both render as their own notice (not collapsed into one "×2" group).
+    // Compaction happens during a turn, so it folds with the work rather than
+    // interrupting it — leaving it out split one turn into several 已处理 rows
+    // that each reported the same duration.
+    expect(find.text('对话已压缩'), findsNothing);
+
+    // Opened, each still renders as its own notice rather than collapsing into a
+    // single "×2" row: a compaction is an event, and two of them mean the context
+    // was squeezed twice.
+    await openTurnWork(t);
     expect(find.text('对话已压缩'), findsNWidgets(2));
   });
 
