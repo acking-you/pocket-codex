@@ -673,6 +673,114 @@ fn set_proxy_env(proxy: &str) {
     }
 }
 
+/// Which codex binary to spawn: explicit override → persisted config → `$PATH`.
+/// `None` for an embedded host, which runs codex in-process and has no binary
+/// to find.
+///
+/// Persists an override that differs from what is saved, so the next start
+/// finds the same codex without the caller passing it again.
+fn resolve_codex_binary(
+    embedded: bool,
+    binary_override: Option<String>,
+    support: &std::path::Path,
+    config: &mut pocket_codex_core::config::Config,
+) -> Result<Option<std::path::PathBuf>> {
+    if embedded {
+        return Ok(None);
+    }
+    let override_trimmed = binary_override
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let candidate = override_trimmed
+        .map(str::to_string)
+        .or_else(|| config.codex.binary.clone());
+    let resolved = locate_binary(candidate.as_deref()).ok_or_else(|| {
+        anyhow!(
+            "could not find the codex binary{}; install codex or set its path",
+            candidate
+                .as_deref()
+                .map(|c| format!(" at `{c}`"))
+                .unwrap_or_default()
+        )
+    })?;
+    if let Some(ov) = override_trimmed {
+        if config.codex.binary.as_deref() != Some(ov) {
+            config.codex.binary = Some(ov.to_string());
+            save_config(support, config)?;
+        }
+    }
+    Ok(Some(resolved))
+}
+
+/// Decide what an existing host under `name` means for this start, under the
+/// hosts lock:
+///
+/// - same name, codex alive → re-register any dropped tunnels; `Some(report)`,
+///   and the caller returns without spawning.
+/// - same name, codex dead  → retire the stale entry; `None`, spawn fresh.
+/// - requested port taken   → error.
+///
+/// Runs before anything is spawned, so a re-host never leaves two codex
+/// processes fighting over one port.
+fn reuse_or_retire_host(name: &str, port: u16) -> Result<Option<ServeReport>> {
+    let mut guard = hosts_locked();
+    if let Some(ls) = guard.get_mut(name) {
+        if listen_addr_open(&ls.app_local.to_string()) {
+            let report = ServeReport {
+                device: ls.device.clone(),
+                name: ls.name.clone(),
+                app_service_key: ls.app_key.clone(),
+                app_listen_addr: ls.app_local.to_string(),
+                api_service_key: ls.api_key.clone(),
+                api_listen_addr: ls.api_local.to_string(),
+                meta_service_key: ls.meta_key.clone(),
+                meta_listen_addr: ls.meta_local.to_string(),
+                pid: ls.pid,
+                reused: true,
+            };
+            // Re-publish OUTSIDE the hosts lock: publishing waits on the relay,
+            // and holding the lock across it would stall every status poll for
+            // as long as the relay takes to answer.
+            drop(guard);
+            republish_dropped(name)?;
+            return Ok(Some(report));
+        }
+        // codex dead → retire the stale entry and fall through to spawn.
+        if let Some(stale) = guard.remove(name) {
+            stop_host_tasks(stale);
+        }
+    }
+    if port != 0 && guard.values().any(|ls| ls.app_local.port() == port) {
+        bail!("port {port} is already used by another local host");
+    }
+    Ok(None)
+}
+
+/// Log, but do not refuse, a host with no codex credential yet.
+///
+/// The API proxy reuses the host's codex login (`CODEX_ACCESS_TOKEN` or
+/// `~/.codex/auth.json`). This used to be a hard gate, but first-run onboarding
+/// must host BEFORE a login exists: either a custom provider (which authorizes
+/// turns on its own) is configured, or the user drives codex's ChatGPT login
+/// over the app-server we are about to start. So a missing login is non-fatal —
+/// the app-server and meta service host fine and the API proxy supervisor keeps
+/// retrying until a credential appears. The onboarding UI surfaces the "no
+/// credential yet" state via `codex_setup_status`.
+fn warn_if_no_codex_login() {
+    if let Err(e) = runtime::runtime().block_on(pocket_codex_api_proxy::check_auth()) {
+        if pocket_codex_codex::setup::has_custom_provider() {
+            tracing::info!("no codex login, but a custom provider is configured; hosting proceeds");
+        } else {
+            tracing::warn!(
+                error = %format!("{e:#}"),
+                "hosting without a codex login yet; configure a provider or complete codex login. \
+                 The API proxy will fail upstream until a credential exists."
+            );
+        }
+    }
+}
+
 pub fn serve_start(
     port: u16,
     binary_override: Option<String>,
@@ -686,36 +794,7 @@ pub fn serve_start(
         bail!("sign in with GitHub before hosting a local app-server");
     }
 
-    // Resolve the codex binary for the external path: explicit override →
-    // persisted config → `$PATH`. Embedded mode runs codex in-process, so there
-    // is no binary to locate.
-    let binary = if embedded {
-        None
-    } else {
-        let override_trimmed = binary_override
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty());
-        let candidate = override_trimmed
-            .map(str::to_string)
-            .or_else(|| config.codex.binary.clone());
-        let resolved = locate_binary(candidate.as_deref()).ok_or_else(|| {
-            anyhow!(
-                "could not find the codex binary{}; install codex or set its path",
-                candidate
-                    .as_deref()
-                    .map(|c| format!(" at `{c}`"))
-                    .unwrap_or_default()
-            )
-        })?;
-        if let Some(ov) = override_trimmed {
-            if config.codex.binary.as_deref() != Some(ov) {
-                config.codex.binary = Some(ov.to_string());
-                save_config(&support, &config)?;
-            }
-        }
-        Some(resolved)
-    };
+    let binary = resolve_codex_binary(embedded, binary_override, &support, &mut config)?;
     // Capture the resolved path for the host details before `binary` is moved
     // into the spawn options below (`None` for an embedded host).
     let codex_binary_display = binary.as_ref().map(|p| p.display().to_string());
@@ -739,62 +818,11 @@ pub fn serve_start(
         pocket_codex_api_proxy::validate_proxy(p)?;
     }
 
-    // Re-host / collision handling, under the hosts lock:
-    // - same name + codex alive  → re-register any dropped tunnels, return.
-    // - same name + codex dead    → drop the stale entry, then spawn fresh.
-    // - requested port taken      → reject.
-    {
-        let mut guard = hosts_locked();
-        if let Some(ls) = guard.get_mut(&name) {
-            if listen_addr_open(&ls.app_local.to_string()) {
-                let report = ServeReport {
-                    device: ls.device.clone(),
-                    name: ls.name.clone(),
-                    app_service_key: ls.app_key.clone(),
-                    app_listen_addr: ls.app_local.to_string(),
-                    api_service_key: ls.api_key.clone(),
-                    api_listen_addr: ls.api_local.to_string(),
-                    meta_service_key: ls.meta_key.clone(),
-                    meta_listen_addr: ls.meta_local.to_string(),
-                    pid: ls.pid,
-                    reused: true,
-                };
-                // Re-publish OUTSIDE the hosts lock: publishing waits on the relay,
-                // and holding the lock across it would stall every status poll for
-                // as long as the relay takes to answer.
-                drop(guard);
-                republish_dropped(&name)?;
-                return Ok(report);
-            }
-            // codex dead → retire the stale entry and fall through to spawn.
-            if let Some(stale) = guard.remove(&name) {
-                stop_host_tasks(stale);
-            }
-        }
-        if port != 0 && guard.values().any(|ls| ls.app_local.port() == port) {
-            bail!("port {port} is already used by another local host");
-        }
+    if let Some(report) = reuse_or_retire_host(&name, port)? {
+        return Ok(report);
     }
 
-    // The API proxy reuses the host's codex login (`CODEX_ACCESS_TOKEN` or
-    // `~/.codex/auth.json`). This used to be a hard gate, but first-run
-    // onboarding must host BEFORE a login exists: either a custom provider (which
-    // authorizes turns on its own) is configured, or the user drives codex's
-    // ChatGPT login over the app-server we're about to start. So a missing login
-    // is non-fatal now — the app-server + meta service host fine and the API
-    // proxy supervisor keeps retrying until a credential appears. The onboarding
-    // UI surfaces the "no credential yet" state via `codex_setup_status`.
-    if let Err(e) = runtime::runtime().block_on(pocket_codex_api_proxy::check_auth()) {
-        if pocket_codex_codex::setup::has_custom_provider() {
-            tracing::info!("no codex login, but a custom provider is configured; hosting proceeds");
-        } else {
-            tracing::warn!(
-                error = %format!("{e:#}"),
-                "hosting without a codex login yet; configure a provider or complete codex login. \
-                 The API proxy will fail upstream until a credential exists."
-            );
-        }
-    }
+    warn_if_no_codex_login();
 
     // Open the (process-global) meta config store before spawning anything, so an
     // unwritable CODEX_HOME surfaces as a hosting error here instead of after a
@@ -1007,15 +1035,11 @@ pub fn serve_start(
         config_store,
         host_config_store,
     ));
-    // Publish the app service FIRST and treat its outcome as decisive: if another
-    // live instance owns this name, everything just built has to come back down
-    // (codex included) rather than leave a host silently fighting for the key.
-    // The other two are best-effort — an api or meta service that could not
-    // publish is re-tried on the next re-host, and neither blocks remote control.
-    // Best-effort: an api or meta service that could not publish is retried on the
-    // next re-host, and neither blocks remote control. The APP service is
-    // published after the host struct exists, so a name conflict can tear
-    // everything back down through the one teardown path.
+    // The api and meta services are best-effort: one that could not publish is
+    // retried on the next re-host, and neither blocks remote control. The APP
+    // service is published last (below), once the host struct exists — its
+    // outcome IS decisive, so a name conflict has to be able to tear everything
+    // built here back down through the one teardown path.
     let api_register = register_service(&transport, &device, ServiceKind::Api, &name, api_local)
         .ok()
         .flatten();
