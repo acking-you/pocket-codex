@@ -11,22 +11,19 @@ members = [
     "crates/pocket-codex-account-proto",
     "crates/pocket-codex-store",
     "crates/pocket-codex-auth",
-    "crates/pocket-codex-broker-client",
-    "crates/pocket-codex-broker-server",
     "crates/pocket-codex-backend",
 ]
-# `deps/codex` and `deps/pb-mapper` are vendored upstream sources kept
-# as git submodules. They are intentionally excluded from this
-# workspace so their own build settings/lints/profiles are not
-# entangled with ours; we import the bits we need via path or git deps
-# from individual crates. `deps/kanal` and `deps/uni-stream` are
-# pinned forks pulled in transitively by pb-mapper — they live here
-# only to make the `[patch]` table below stable.
+# `deps/codex` is a vendored upstream source kept as a git submodule,
+# intentionally excluded from this workspace so its own build
+# settings/lints/profiles are not entangled with ours; we import the bits
+# we need via path deps from individual crates.
+#
+# `deps/pb-mapper` used to sit here too, alongside the `deps/kanal` and
+# `deps/uni-stream` forks it pulled in transitively. All three are gone:
+# pb-mapper is a registry dependency now, so its own transitive pins are
+# its business rather than something this workspace has to mirror.
 exclude = [
     "deps/codex",
-    "deps/pb-mapper",
-    "deps/kanal",
-    "deps/uni-stream",
     "apps/flutter",
 ]
 
@@ -44,6 +41,13 @@ readme = "README.md"
 # from here via `dep = { workspace = true }` so we have a single source
 # of truth for upgrades.
 [workspace.dependencies]
+# The pb-mapper client SDK, from the registry rather than the git submodule it
+# used to be. Pinned here so every consumer moves together: a client older than
+# the deployed relay cannot decode the relay's structured error frames, which is
+# how the 0.2.14-client/0.5.0-relay skew turned an over-quota refusal into an
+# unbacked-off reconnect storm.
+pb-mapper = "0.5.0"
+
 # Internal crates
 pocket-codex-core = { path = "crates/pocket-codex-core" }
 pocket-codex-account-proto = { path = "crates/pocket-codex-account-proto" }
@@ -117,7 +121,7 @@ nix = { version = "0.29", features = ["signal", "process"] }
 sysinfo = "0.32"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 
-# Backend-only deps (server crates: store/auth/broker-server/backend). Kept off
+# Backend-only deps (server crates: store/auth/backend). Kept off
 # the static-musl CLI and the mobile bridge closures. All ring/rustls — no
 # openssl: sqlx's sqlite backend needs no TLS; jsonwebtoken/oauth2 use ring/rustls.
 # sqlx 0.9 (not 0.8) so its bundled `libsqlite3-sys` is 0.37 — the SAME version
@@ -140,8 +144,6 @@ time = { version = "0.3", features = ["formatting", "parsing"] }
 # Internal backend crates
 pocket-codex-store = { path = "crates/pocket-codex-store" }
 pocket-codex-auth = { path = "crates/pocket-codex-auth" }
-pocket-codex-broker-client = { path = "crates/pocket-codex-broker-client" }
-pocket-codex-broker-server = { path = "crates/pocket-codex-broker-server" }
 
 [workspace.lints.rust]
 # Doc coverage is part of the contract — every public item has a comment.
@@ -191,18 +193,12 @@ debug = true
 [profile.dev.package."*"]
 opt-level = 2
 
-# `deps/pb-mapper` declares `kanal` and `uni-stream` as git deps from
-# the `acking-you/*` forks. Cargo resolves those by branch HEAD in our
-# workspace, but the fork's HEAD has since renamed `kanal` to
-# `kanal-plus`, breaking our build. We add both forks as submodules
-# under `deps/` (pinned to known-good commits) and re-route the git
-# source via `[patch]` to those local paths. This keeps the build
-# reproducible across CI and contributor checkouts.
-[patch."https://github.com/acking-you/kanal.git"]
-kanal = { path = "deps/kanal" }
-
-[patch."https://github.com/acking-you/uni-stream.git"]
-uni-stream = { path = "deps/uni-stream" }
+# The `kanal` / `uni-stream` patches that used to live here are gone with the
+# pb-mapper submodule. They existed because that submodule declared both as git
+# deps on `acking-you/*` branch HEADs, and one of those HEADs renamed a crate out
+# from under us — so both forks were vendored and re-routed to keep the build
+# reproducible. A registry dependency resolves its own transitive pins from the
+# lockfile, so none of that is our problem any more.
 
 # codex (deps/codex) requires forked tokio-tungstenite / tungstenite (they add a
 # `proxy` feature on the 0.28 line). The optional `embedded-codex` feature pulls

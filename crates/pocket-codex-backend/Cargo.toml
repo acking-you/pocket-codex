@@ -21,11 +21,10 @@ name = "pocket-codex-backend"
 path = "src/main.rs"
 
 [dependencies]
-pocket-codex-account-proto = { workspace = true, features = ["frame"] }
+pocket-codex-account-proto = { workspace = true }
 pocket-codex-core = { workspace = true }
 pocket-codex-store = { workspace = true }
 pocket-codex-auth = { workspace = true }
-pocket-codex-broker-server = { workspace = true }
 pocket-codex-pb = { workspace = true }
 
 tokio = { workspace = true }
@@ -46,8 +45,6 @@ tracing-subscriber = { workspace = true }
 time = { workspace = true }
 
 [dev-dependencies]
-pocket-codex-broker-client = { workspace = true }
-pb-mapper = { path = "../../deps/pb-mapper" }
 async-trait = { workspace = true }
 jsonwebtoken = { workspace = true }
 reqwest = { workspace = true }

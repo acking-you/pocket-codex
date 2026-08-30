@@ -1,19 +1,24 @@
 //! Host a local codex app-server **and** a local Responses API proxy from the
-//! app, each published through the account broker — the in-app equivalent of
-//! running `pocket-codex serve` + `pocket-codex api serve` under one name.
-//! Desktop only: it spawns the user's `codex` binary as a child process and
-//! reuses its login (`~/.codex/auth.json`) for the API proxy.
+//! app, each published directly on the relay — the in-app equivalent of running
+//! `pocket-codex serve` + `pocket-codex api serve` under one name. Desktop
+//! only: it spawns the user's `codex` binary as a child process and reuses its
+//! login (`~/.codex/auth.json`) for the API proxy.
 //!
-//! One `serve_start` publishes **three** relay tunnels under the same name:
+//! One `serve_start` publishes **three** services under the same name:
 //! `app:<name>` (codex app-server, remote control), `api:<name>` (the
 //! in-process Responses API proxy), and `meta:<name>` (the in-process host meta
-//! service — remote session inventory + per-thread config). The register
-//! tunnels are independent: [`serve_deregister`] takes one off the relay (an
-//! *unpublish*) without stopping codex or the in-process servers, and
-//! [`serve_reregister`] re-publishes it instantly. [`serve_stop`] is the full
-//! teardown (all tunnels + codex + proxy + meta service); [`serve_stop_all`]
+//! service — remote session inventory + per-thread config). Each is a
+//! [`Published`] handle whose lifetime IS the publication: [`serve_deregister`]
+//! drops one (an *unpublish*) without stopping codex or the in-process servers,
+//! and [`serve_reregister`] publishes it again. [`serve_stop`] is the full
+//! teardown (all three + codex + proxy + meta service); [`serve_stop_all`]
 //! (app quit) stops every host so a real quit leaves no orphan — closing to the
 //! tray keeps hosting alive.
+//!
+//! Publishing is the same in account and self-host mode; the only difference is
+//! the credential and key namespace [`Transport`] carries. Reconnecting a
+//! dropped registration is the pb-mapper SDK's job, so the only failure this
+//! module acts on is a name CONFLICT — see [`register_service`].
 //!
 //! The codex spawn/watchdog mirrors
 //! `crates/pocket-codex-cli/src/commands/serve.rs`; the API proxy is the shared
@@ -22,30 +27,31 @@
 
 use std::{
     collections::HashMap,
-    net::{SocketAddr, TcpStream},
+    net::SocketAddr,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
 use anyhow::{anyhow, bail, Context, Result};
 use once_cell::sync::OnceCell;
-use pocket_codex_broker_client::{
-    run_register, Connector, RegisterConfig, RegisterFatal, TokenProvider,
-};
 use pocket_codex_codex::{
     locate_binary, spawn_ready, ListenSpec, SpawnOptions, SpawnReadyError, StartupFailure,
     READY_TIMEOUT,
 };
 use pocket_codex_core::{
-    process::{find_codex_app_server, force_kill, pid_running, send_sigterm, tcp_port_open},
+    process::{
+        find_codex_app_server, force_kill, pid_running, send_sigterm, tcp_port_open,
+        wait_for_port_closed,
+    },
     service::{default_device_id, ServiceId, ServiceKind},
 };
+use pocket_codex_pb::{publish_pending, PublishError, Published, RegisterOptions};
 use tokio::task::JoinHandle;
 
 use crate::engine::{
-    account,
     config::{load_config, save_config},
     logging, runtime,
+    transport::{self, Transport},
 };
 
 /// How often the watchdog probes codex's `/readyz`.
@@ -60,9 +66,9 @@ const HEALTH_RESTART_GRACE: Duration = Duration::from_secs(12);
 const MAX_RESTART_BACKOFF: Duration = Duration::from_secs(300);
 
 /// One active local host: a codex app-server + an in-process Responses API
-/// proxy, each published through its own broker register tunnel. Tracked
-/// process-globally; several can run at once, keyed by service name. The two
-/// register tunnels can be dropped/re-added independently of the processes.
+/// proxy, each published on the relay under its own key. Tracked
+/// process-globally; several can run at once, keyed by service name. The three
+/// registrations can be dropped/re-added independently of the processes.
 struct LocalServe {
     device: String,
     name: String,
@@ -70,10 +76,9 @@ struct LocalServe {
     app_key: String,
     app_local: SocketAddr,
     pid: u32,
-    /// `Some` while the app tunnel is published; `None` once deregistered.
-    /// The task resolves (with the fatal reason) if the registration is ever
-    /// refused because another live instance owns the name.
-    app_register: Option<JoinHandle<RegisterFatal>>,
+    /// `Some` while the app service is published; `None` once deregistered.
+    /// Holding it IS the publication — dropping it unpublishes.
+    app_register: Option<Published>,
     watchdog: JoinHandle<()>,
     /// The in-process codex app-server task (embedded mode). `None` for an
     /// external (spawned-binary) host. Aborted on stop. Swapped for a fresh
@@ -88,15 +93,15 @@ struct LocalServe {
     api_key: String,
     api_local: SocketAddr,
     api_proxy: JoinHandle<()>,
-    /// `Some` while the api tunnel is published; `None` once deregistered.
-    api_register: Option<JoinHandle<RegisterFatal>>,
+    /// `Some` while the api service is published; `None` once deregistered.
+    api_register: Option<Published>,
     // host-side meta service: makes this host's local sessions remote-viewable
     // and persists per-thread config, published as a third `meta:<name>` tunnel.
     meta_key: String,
     meta_local: SocketAddr,
     meta_svc: JoinHandle<()>,
-    /// `Some` while the meta tunnel is published; `None` once deregistered.
-    meta_register: Option<JoinHandle<RegisterFatal>>,
+    /// `Some` while the meta service is published; `None` once deregistered.
+    meta_register: Option<Published>,
     /// The resolved external codex binary path, or `None` for an embedded host
     /// (which runs codex in-process). Surfaced in the host details for
     /// debugging.
@@ -188,12 +193,6 @@ fn hosts_locked() -> std::sync::MutexGuard<'static, HashMap<String, LocalServe>>
     hosts().lock().unwrap_or_else(|poison| poison.into_inner())
 }
 
-/// Stable-per-process client instance id for the broker register handshake (the
-/// broker treats a new instance with the same key as a takeover).
-fn client_instance_id() -> String {
-    format!("app-{}", std::process::id())
-}
-
 /// The process-global per-thread config store, shared by every local meta
 /// service: all hosts on this machine share one `CODEX_HOME` and therefore one
 /// config map, so they must write through one serialized store. Opened once,
@@ -242,63 +241,169 @@ pub fn codex_locate() -> Option<String> {
     locate_binary(configured.as_deref()).map(|p| p.display().to_string())
 }
 
-/// How long a serve start waits for the app register tunnel's first outcome
-/// before proceeding optimistically. A reachable backend answers in one round
-/// trip (sub-second); the timeout only bites when the backend is down, where
-/// hosting should still start (the register loop keeps retrying) rather than
-/// fail.
-const REGISTER_PREFLIGHT: Duration = Duration::from_secs(6);
-
-/// Spawn one broker register tunnel for `kind`, forwarding to `local`.
+/// Publish `local` on the relay for `kind`, holding the registration.
 ///
-/// `first` (optional) resolves with the FIRST decisive outcome — `Ok(())` once
-/// the tunnel is up, `Err(reason)` on a fatal name conflict — so serve start
-/// can pre-flight the registration. The task runs until a fatal rejection;
-/// a finished handle therefore means "no longer publishing" (surfaced by
-/// [`tunnel_down`]).
-fn spawn_register(
-    connector: Arc<dyn Connector>,
-    tokens: Arc<dyn TokenProvider>,
+/// Not fallible for the caller's purposes unless the NAME is taken: a relay
+/// that is merely unreachable still yields a handle whose worker keeps
+/// retrying, so the service comes up on its own. That asymmetry is deliberate —
+/// a name conflict cannot resolve itself and must stop hosting, while
+/// everything else can.
+///
+/// Deliberately NOT wrapped in `tokio::time::timeout`: cancelling `publish`
+/// drops the handle, and with it the SDK worker doing the retrying, so a slow
+/// relay would leave the service permanently unpublished rather than merely
+/// late. The bound comes from the SDK's own readiness budget instead, and
+/// [`pocket_codex_pb::publish_pending`] hands the handle back either way.
+fn register_service(
+    transport: &Transport,
     device: &str,
     kind: ServiceKind,
     name: &str,
     local: SocketAddr,
-    first: Option<tokio::sync::oneshot::Sender<std::result::Result<(), String>>>,
-) -> JoinHandle<RegisterFatal> {
-    runtime::runtime().spawn(run_register(
-        connector,
-        tokens,
-        RegisterConfig {
-            device: device.to_string(),
-            kind,
-            name: name.to_string(),
-            client_instance_id: client_instance_id(),
-            local_addr: local,
-            idle: account::ACCOUNT_DATA_IDLE,
-        },
-        first,
-    ))
-}
-
-/// Wait (bounded) for a just-spawned APP register tunnel's first outcome and
-/// distill it to the caller: `Err` only on a fatal name conflict — the name is
-/// owned by another live instance, so hosting under it cannot work. A timeout
-/// or channel drop proceeds optimistically (backend offline ≠ name taken).
-fn preflight_register(
-    rx: tokio::sync::oneshot::Receiver<std::result::Result<(), String>>,
-) -> Result<()> {
+) -> Result<Option<Published>> {
+    let key = transport.key(&ServiceId::new(device, kind, name));
     let outcome =
-        runtime::runtime().block_on(async { tokio::time::timeout(REGISTER_PREFLIGHT, rx).await });
-    if let Ok(Ok(Err(reason))) = outcome {
-        bail!("app-server name is already in use: {reason}");
+        runtime::runtime().block_on(publish_pending(&transport.session, RegisterOptions {
+            key: key.clone(),
+            local_addr: local.to_string(),
+            codec: false,
+        }));
+    match outcome {
+        Ok((published, ready)) => {
+            if !ready {
+                tracing::info!(
+                    key = %key,
+                    "hosting started before the relay confirmed this service; it keeps retrying"
+                );
+            }
+            Ok(Some(published))
+        },
+        // The one condition hosting must not proceed through: another live
+        // instance owns the name, and publishing anyway makes the two evict each
+        // other on the relay in an endless leapfrog.
+        Err(PublishError::Conflict {
+            detail, ..
+        }) => bail!("`{name}` is already in use by another device: {detail}"),
+        Err(PublishError::Other(err)) => {
+            tracing::warn!(
+                key = %key,
+                error = %format!("{err:#}"),
+                "publishing failed; hosting continues and will retry"
+            );
+            Ok(None)
+        },
     }
-    Ok(())
 }
 
-/// `true` if a register handle is missing or finished (i.e. not publishing —
-/// a finished task gave up on a fatal name conflict).
-fn tunnel_down<T>(handle: &Option<JoinHandle<T>>) -> bool {
-    handle.as_ref().is_none_or(|h| h.is_finished())
+/// `true` if there is no registration to hold — none was created, or the relay
+/// permanently refused the one we have.
+///
+/// Deliberately NOT the same question as "is it serving right now": a handle in
+/// `Retrying` is down but must not be replaced, because its worker is already
+/// reconnecting and a second registration for one key is the eviction leapfrog.
+/// [`is_published`] is what the UI shows; this is what decides whether to
+/// publish again.
+fn needs_publishing(published: &Option<Published>) -> bool {
+    published.as_ref().is_none_or(|p| p.failure().is_some())
+}
+
+/// `true` if a service is reachable through the relay right now.
+///
+/// What the UI reports, so `Starting` and `Retrying` read as NOT published: the
+/// key may still be indexed while nothing is forwarding, and showing that as
+/// online is what would withhold the offline / re-register controls from a user
+/// whose service is unreachable.
+fn is_published(published: &Option<Published>) -> bool {
+    published.as_ref().is_some_and(|p| p.is_live())
+}
+
+/// Re-publish whichever of `name`'s three services are not currently published.
+///
+/// Errors only on a name CONFLICT, which is the one condition a caller must act
+/// on: the local host stays up either way, but a name another device owns can
+/// never publish, so a re-host under it has to say so rather than report
+/// success.
+///
+/// Takes the hosts lock only to read what needs publishing and to store the
+/// results — never across the relay round trip, which would stall status polls.
+fn republish_dropped(name: &str) -> Result<()> {
+    let Some((device, pending)) = ({
+        let guard = hosts_locked();
+        guard.get(name).map(|ls| {
+            let pending: Vec<(ServiceKind, SocketAddr)> = [
+                (ServiceKind::App, ls.app_local, &ls.app_register),
+                (ServiceKind::Api, ls.api_local, &ls.api_register),
+                (ServiceKind::Meta, ls.meta_local, &ls.meta_register),
+            ]
+            .into_iter()
+            .filter(|(_, _, slot)| needs_publishing(slot))
+            .map(|(kind, local, _)| (kind, local))
+            .collect();
+            (ls.device.clone(), pending)
+        })
+    }) else {
+        return Ok(());
+    };
+    if pending.is_empty() {
+        return Ok(());
+    }
+    let transport = transport::resolve_blocking()?;
+
+    let mut conflict = None;
+    for (kind, local) in pending {
+        // Drop the refused registration BEFORE publishing again, so the relay
+        // releases the old key and the fresh publish is not competing with its
+        // own predecessor for the name.
+        take_registration(name, kind);
+        let published = match register_service(&transport, &device, kind, name, local) {
+            Ok(published) => published,
+            Err(err) => {
+                // Keep going: a conflict on one kind (typically `app`) should not
+                // leave the other two unpublished, and the caller wants the app
+                // conflict reported once everything else is up.
+                conflict = conflict.or(Some(err));
+                continue;
+            },
+        };
+        store_registration(name, kind, published);
+    }
+    match conflict {
+        Some(err) => Err(err),
+        None => Ok(()),
+    }
+}
+
+/// Take a host's registration for `kind` out of the map and drop it, releasing
+/// the relay key. No-op for an unknown host.
+fn take_registration(name: &str, kind: ServiceKind) {
+    let mut guard = hosts_locked();
+    if let Some(ls) = guard.get_mut(name) {
+        *registration_slot(ls, kind) = None;
+    }
+}
+
+/// Store a freshly published registration, or clear the slot when publishing
+/// did not produce one. Drops it immediately if the host vanished while we
+/// published.
+fn store_registration(name: &str, kind: ServiceKind, published: Option<Published>) {
+    let mut guard = hosts_locked();
+    match guard.get_mut(name) {
+        Some(ls) => *registration_slot(ls, kind) = published,
+        // The host was stopped while we were publishing; unpublish rather than
+        // leaving a key on the relay with nothing behind it.
+        None => drop(published),
+    }
+}
+
+fn registration_slot(ls: &mut LocalServe, kind: ServiceKind) -> &mut Option<Published> {
+    match kind {
+        ServiceKind::Api => &mut ls.api_register,
+        ServiceKind::Meta => &mut ls.meta_register,
+        // `App` and any future kind share the app slot: a host publishes exactly
+        // these three, and routing an unknown kind here is better than panicking
+        // in a code path that holds the hosts lock.
+        _ => &mut ls.app_register,
+    }
 }
 
 /// Start hosting a local codex app-server **and** a Responses API proxy under
@@ -568,6 +673,114 @@ fn set_proxy_env(proxy: &str) {
     }
 }
 
+/// Which codex binary to spawn: explicit override → persisted config → `$PATH`.
+/// `None` for an embedded host, which runs codex in-process and has no binary
+/// to find.
+///
+/// Persists an override that differs from what is saved, so the next start
+/// finds the same codex without the caller passing it again.
+fn resolve_codex_binary(
+    embedded: bool,
+    binary_override: Option<String>,
+    support: &std::path::Path,
+    config: &mut pocket_codex_core::config::Config,
+) -> Result<Option<std::path::PathBuf>> {
+    if embedded {
+        return Ok(None);
+    }
+    let override_trimmed = binary_override
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let candidate = override_trimmed
+        .map(str::to_string)
+        .or_else(|| config.codex.binary.clone());
+    let resolved = locate_binary(candidate.as_deref()).ok_or_else(|| {
+        anyhow!(
+            "could not find the codex binary{}; install codex or set its path",
+            candidate
+                .as_deref()
+                .map(|c| format!(" at `{c}`"))
+                .unwrap_or_default()
+        )
+    })?;
+    if let Some(ov) = override_trimmed {
+        if config.codex.binary.as_deref() != Some(ov) {
+            config.codex.binary = Some(ov.to_string());
+            save_config(support, config)?;
+        }
+    }
+    Ok(Some(resolved))
+}
+
+/// Decide what an existing host under `name` means for this start, under the
+/// hosts lock:
+///
+/// - same name, codex alive → re-register any dropped tunnels; `Some(report)`,
+///   and the caller returns without spawning.
+/// - same name, codex dead  → retire the stale entry; `None`, spawn fresh.
+/// - requested port taken   → error.
+///
+/// Runs before anything is spawned, so a re-host never leaves two codex
+/// processes fighting over one port.
+fn reuse_or_retire_host(name: &str, port: u16) -> Result<Option<ServeReport>> {
+    let mut guard = hosts_locked();
+    if let Some(ls) = guard.get_mut(name) {
+        if listen_addr_open(&ls.app_local.to_string()) {
+            let report = ServeReport {
+                device: ls.device.clone(),
+                name: ls.name.clone(),
+                app_service_key: ls.app_key.clone(),
+                app_listen_addr: ls.app_local.to_string(),
+                api_service_key: ls.api_key.clone(),
+                api_listen_addr: ls.api_local.to_string(),
+                meta_service_key: ls.meta_key.clone(),
+                meta_listen_addr: ls.meta_local.to_string(),
+                pid: ls.pid,
+                reused: true,
+            };
+            // Re-publish OUTSIDE the hosts lock: publishing waits on the relay,
+            // and holding the lock across it would stall every status poll for
+            // as long as the relay takes to answer.
+            drop(guard);
+            republish_dropped(name)?;
+            return Ok(Some(report));
+        }
+        // codex dead → retire the stale entry and fall through to spawn.
+        if let Some(stale) = guard.remove(name) {
+            stop_host_tasks(stale);
+        }
+    }
+    if port != 0 && guard.values().any(|ls| ls.app_local.port() == port) {
+        bail!("port {port} is already used by another local host");
+    }
+    Ok(None)
+}
+
+/// Log, but do not refuse, a host with no codex credential yet.
+///
+/// The API proxy reuses the host's codex login (`CODEX_ACCESS_TOKEN` or
+/// `~/.codex/auth.json`). This used to be a hard gate, but first-run onboarding
+/// must host BEFORE a login exists: either a custom provider (which authorizes
+/// turns on its own) is configured, or the user drives codex's ChatGPT login
+/// over the app-server we are about to start. So a missing login is non-fatal —
+/// the app-server and meta service host fine and the API proxy supervisor keeps
+/// retrying until a credential appears. The onboarding UI surfaces the "no
+/// credential yet" state via `codex_setup_status`.
+fn warn_if_no_codex_login() {
+    if let Err(e) = runtime::runtime().block_on(pocket_codex_api_proxy::check_auth()) {
+        if pocket_codex_codex::setup::has_custom_provider() {
+            tracing::info!("no codex login, but a custom provider is configured; hosting proceeds");
+        } else {
+            tracing::warn!(
+                error = %format!("{e:#}"),
+                "hosting without a codex login yet; configure a provider or complete codex login. \
+                 The API proxy will fail upstream until a credential exists."
+            );
+        }
+    }
+}
+
 pub fn serve_start(
     port: u16,
     binary_override: Option<String>,
@@ -581,36 +794,7 @@ pub fn serve_start(
         bail!("sign in with GitHub before hosting a local app-server");
     }
 
-    // Resolve the codex binary for the external path: explicit override →
-    // persisted config → `$PATH`. Embedded mode runs codex in-process, so there
-    // is no binary to locate.
-    let binary = if embedded {
-        None
-    } else {
-        let override_trimmed = binary_override
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty());
-        let candidate = override_trimmed
-            .map(str::to_string)
-            .or_else(|| config.codex.binary.clone());
-        let resolved = locate_binary(candidate.as_deref()).ok_or_else(|| {
-            anyhow!(
-                "could not find the codex binary{}; install codex or set its path",
-                candidate
-                    .as_deref()
-                    .map(|c| format!(" at `{c}`"))
-                    .unwrap_or_default()
-            )
-        })?;
-        if let Some(ov) = override_trimmed {
-            if config.codex.binary.as_deref() != Some(ov) {
-                config.codex.binary = Some(ov.to_string());
-                save_config(&support, &config)?;
-            }
-        }
-        Some(resolved)
-    };
+    let binary = resolve_codex_binary(embedded, binary_override, &support, &mut config)?;
     // Capture the resolved path for the host details before `binary` is moved
     // into the spawn options below (`None` for an embedded host).
     let codex_binary_display = binary.as_ref().map(|p| p.display().to_string());
@@ -634,108 +818,11 @@ pub fn serve_start(
         pocket_codex_api_proxy::validate_proxy(p)?;
     }
 
-    // Re-host / collision handling, under the hosts lock:
-    // - same name + codex alive  → re-register any dropped tunnels, return.
-    // - same name + codex dead    → drop the stale entry, then spawn fresh.
-    // - requested port taken      → reject.
-    {
-        let mut guard = hosts_locked();
-        if let Some(ls) = guard.get_mut(&name) {
-            if listen_addr_open(&ls.app_local.to_string()) {
-                let (connector, tokens) = account::broker_transport(&support)?;
-                let dev = ls.device.clone();
-                let nm = ls.name.clone();
-                let app_local = ls.app_local;
-                let api_local = ls.api_local;
-                let meta_local = ls.meta_local;
-                let mut app_preflight = None;
-                if tunnel_down(&ls.app_register) {
-                    let (tx, rx) = tokio::sync::oneshot::channel();
-                    ls.app_register = Some(spawn_register(
-                        connector.clone(),
-                        tokens.clone(),
-                        &dev,
-                        ServiceKind::App,
-                        &nm,
-                        app_local,
-                        Some(tx),
-                    ));
-                    app_preflight = Some(rx);
-                }
-                if tunnel_down(&ls.api_register) {
-                    ls.api_register = Some(spawn_register(
-                        connector.clone(),
-                        tokens.clone(),
-                        &dev,
-                        ServiceKind::Api,
-                        &nm,
-                        api_local,
-                        None,
-                    ));
-                }
-                if tunnel_down(&ls.meta_register) {
-                    ls.meta_register = Some(spawn_register(
-                        connector,
-                        tokens,
-                        &dev,
-                        ServiceKind::Meta,
-                        &nm,
-                        meta_local,
-                        None,
-                    ));
-                }
-                let report = ServeReport {
-                    device: dev,
-                    name: nm,
-                    app_service_key: ls.app_key.clone(),
-                    app_listen_addr: app_local.to_string(),
-                    api_service_key: ls.api_key.clone(),
-                    api_listen_addr: api_local.to_string(),
-                    meta_service_key: ls.meta_key.clone(),
-                    meta_listen_addr: meta_local.to_string(),
-                    pid: ls.pid,
-                    reused: true,
-                };
-                // A re-registered app tunnel can be refused (another live
-                // instance took the name while ours was down) — surface that
-                // instead of reporting a host that can never publish. The
-                // local codex stays up; only this start call errors. Waits
-                // OUTSIDE the hosts lock so status polls don't stall on it.
-                drop(guard);
-                if let Some(rx) = app_preflight {
-                    preflight_register(rx)?;
-                }
-                return Ok(report);
-            }
-            // codex dead → retire the stale entry and fall through to spawn.
-            if let Some(stale) = guard.remove(&name) {
-                stop_host_tasks(stale);
-            }
-        }
-        if port != 0 && guard.values().any(|ls| ls.app_local.port() == port) {
-            bail!("port {port} is already used by another local host");
-        }
+    if let Some(report) = reuse_or_retire_host(&name, port)? {
+        return Ok(report);
     }
 
-    // The API proxy reuses the host's codex login (`CODEX_ACCESS_TOKEN` or
-    // `~/.codex/auth.json`). This used to be a hard gate, but first-run
-    // onboarding must host BEFORE a login exists: either a custom provider (which
-    // authorizes turns on its own) is configured, or the user drives codex's
-    // ChatGPT login over the app-server we're about to start. So a missing login
-    // is non-fatal now — the app-server + meta service host fine and the API
-    // proxy supervisor keeps retrying until a credential appears. The onboarding
-    // UI surfaces the "no credential yet" state via `codex_setup_status`.
-    if let Err(e) = runtime::runtime().block_on(pocket_codex_api_proxy::check_auth()) {
-        if pocket_codex_codex::setup::has_custom_provider() {
-            tracing::info!("no codex login, but a custom provider is configured; hosting proceeds");
-        } else {
-            tracing::warn!(
-                error = %format!("{e:#}"),
-                "hosting without a codex login yet; configure a provider or complete codex login. \
-                 The API proxy will fail upstream until a credential exists."
-            );
-        }
-    }
+    warn_if_no_codex_login();
 
     // Open the (process-global) meta config store before spawning anything, so an
     // unwritable CODEX_HOME surfaces as a hosting error here instead of after a
@@ -884,7 +971,7 @@ pub fn serve_start(
         (app_local, report.info.pid, None, watchdog, Some(log_tail), report.reused)
     };
 
-    // The rest of the start can still fail (loopback listener binds, broker
+    // The rest of the start can still fail (loopback listener binds, relay
     // transport). Run those fallible steps as ONE block so a single failure
     // path can tear the just-brought-up codex back down — a bare `?` here
     // would DROP (and thereby detach, not abort) the supervisor + watchdog
@@ -914,10 +1001,10 @@ pub fn serve_start(
         let meta_local: SocketAddr = meta_std
             .local_addr()
             .context("reading the meta service listener address")?;
-        let (connector, tokens) = account::broker_transport(&support)?;
-        Ok((api_std, api_local, meta_std, meta_local, connector, tokens))
+        let transport = transport::resolve_blocking()?;
+        Ok((api_std, api_local, meta_std, meta_local, transport))
     })();
-    let (api_std, api_local, meta_std, meta_local, connector, tokens) = match bringup_tail {
+    let (api_std, api_local, meta_std, meta_local, transport) = match bringup_tail {
         Ok(tail) => tail,
         Err(e) => {
             watchdog.abort();
@@ -948,42 +1035,26 @@ pub fn serve_start(
         config_store,
         host_config_store,
     ));
-    let (app_first_tx, app_first_rx) = tokio::sync::oneshot::channel();
-    let app_register = Some(spawn_register(
-        connector.clone(),
-        tokens.clone(),
-        &device,
-        ServiceKind::App,
-        &name,
-        app_local,
-        Some(app_first_tx),
-    ));
-    let api_register = Some(spawn_register(
-        connector.clone(),
-        tokens.clone(),
-        &device,
-        ServiceKind::Api,
-        &name,
-        api_local,
-        None,
-    ));
-    let meta_register = Some(spawn_register(
-        connector,
-        tokens,
-        &device,
-        ServiceKind::Meta,
-        &name,
-        meta_local,
-        None,
-    ));
+    // The api and meta services are best-effort: one that could not publish is
+    // retried on the next re-host, and neither blocks remote control. The APP
+    // service is published last (below), once the host struct exists — its
+    // outcome IS decisive, so a name conflict has to be able to tear everything
+    // built here back down through the one teardown path.
+    let api_register = register_service(&transport, &device, ServiceKind::Api, &name, api_local)
+        .ok()
+        .flatten();
+    let meta_register = register_service(&transport, &device, ServiceKind::Meta, &name, meta_local)
+        .ok()
+        .flatten();
 
-    let host = LocalServe {
+    let mut host = LocalServe {
         device: device.clone(),
         name: name.clone(),
         app_key: app_key.clone(),
         app_local,
         pid,
-        app_register,
+        // Filled in immediately below.
+        app_register: None,
         watchdog,
         embedded: embedded_task,
         log_tail,
@@ -999,14 +1070,17 @@ pub fn serve_start(
         proxy: proxy.clone(),
     };
 
-    // Pre-flight the app registration: if another live instance already owns
-    // this name, tear everything just built back down (codex included) and
-    // fail the start with the reason, instead of leaving a host that can never
-    // publish silently fighting for the key. A timeout (backend unreachable)
-    // proceeds optimistically — the register loop keeps retrying.
-    if let Err(conflict) = preflight_register(app_first_rx) {
-        stop_host_tasks(host);
-        return Err(conflict);
+    // Publish the app service last, and treat its outcome as decisive: if another
+    // live instance already owns this name, tear everything just built back down
+    // (codex included) and fail with the reason, rather than leave a host that can
+    // never publish silently fighting for the key. An unreachable relay proceeds
+    // optimistically — the SDK keeps retrying, and a re-host re-publishes.
+    match register_service(&transport, &device, ServiceKind::App, &name, app_local) {
+        Ok(published) => host.app_register = published,
+        Err(conflict) => {
+            stop_host_tasks(host);
+            return Err(conflict);
+        },
     }
 
     hosts_locked().insert(name.clone(), host);
@@ -1026,7 +1100,20 @@ pub fn serve_start(
 }
 
 /// Snapshot of every local host, sorted by name for a stable UI order.
+///
+/// Also the recovery tick. The UI polls this, and a service the relay
+/// PERMANENTLY refused has no worker left retrying it — the SDK reconnects a
+/// dropped tunnel, but not one it was told to stop. Re-publishing those here is
+/// what lets hosting heal on its own instead of waiting for a user to notice
+/// and re-host. A handle that is merely `Retrying` is left alone
+/// ([`needs_publishing`] excludes it) so we never race the SDK's own reconnect.
 pub fn serve_status() -> Vec<ServeStatus> {
+    // Before reading status, so the snapshot reflects any recovery just made. Its
+    // own errors are the UI's to discover on the next call: `serve_status` has no
+    // way to report one, and a name conflict here means another device took over,
+    // which the `false` registered flag already conveys.
+    republish_refused();
+
     let guard = hosts_locked();
     let mut out: Vec<ServeStatus> = guard
         .values()
@@ -1037,13 +1124,13 @@ pub fn serve_status() -> Vec<ServeStatus> {
             alive: listen_addr_open(&ls.app_local.to_string()),
             app_listen_addr: ls.app_local.to_string(),
             app_service_key: ls.app_key.clone(),
-            app_registered: !tunnel_down(&ls.app_register),
+            app_registered: is_published(&ls.app_register),
             api_listen_addr: ls.api_local.to_string(),
             api_service_key: ls.api_key.clone(),
-            api_registered: !tunnel_down(&ls.api_register),
+            api_registered: is_published(&ls.api_register),
             meta_listen_addr: ls.meta_local.to_string(),
             meta_service_key: ls.meta_key.clone(),
-            meta_registered: !tunnel_down(&ls.meta_register),
+            meta_registered: is_published(&ls.meta_register),
             embedded: ls.embedded.is_some(),
             codex_binary: ls.codex_binary.clone(),
             proxy: ls.proxy.clone(),
@@ -1053,167 +1140,122 @@ pub fn serve_status() -> Vec<ServeStatus> {
     out
 }
 
-/// Take one tunnel (`kind` = `"app"`/`"api"`/`"meta"`) off the relay without
-/// stopping the host: abort its register task (so it won't reconnect) and force
-/// the backend to drop the relay key now (aborting alone waits out the lease).
-/// Reversible via [`serve_reregister`].
+/// Re-publish every host's permanently-refused services, quietly.
+///
+/// The self-healing half of [`serve_status`]. Best-effort by construction: it
+/// cannot report to anyone, so a failure just leaves the service unpublished
+/// for the next tick to retry. Rate-limited because status is polled often and
+/// each attempt is a relay round trip — without that, a relay that is down
+/// would turn a 1 Hz UI poll into a 1 Hz publish storm, which is the shape of
+/// the 2026-07-07 outage.
+fn republish_refused() {
+    static LAST: Mutex<Option<Instant>> = Mutex::new(None);
+    /// Minimum gap between recovery sweeps.
+    const RECOVERY_INTERVAL: Duration = Duration::from_secs(30);
+
+    {
+        let mut last = LAST.lock().unwrap_or_else(|poison| poison.into_inner());
+        if last.is_some_and(|at| at.elapsed() < RECOVERY_INTERVAL) {
+            return;
+        }
+        *last = Some(Instant::now());
+    }
+
+    let names: Vec<String> = hosts_locked()
+        .values()
+        .filter(|ls| {
+            needs_publishing(&ls.app_register)
+                || needs_publishing(&ls.api_register)
+                || needs_publishing(&ls.meta_register)
+        })
+        .map(|ls| ls.name.clone())
+        .collect();
+    for name in names {
+        if let Err(err) = republish_dropped(&name) {
+            tracing::debug!(
+                service = %name,
+                error = %format!("{err:#}"),
+                "re-publishing a refused service failed; will retry"
+            );
+        }
+    }
+}
+
+/// Take one service (`kind` = `"app"`/`"api"`/`"meta"`) off the relay without
+/// stopping the host. Reversible via [`serve_reregister`].
+///
+/// Dropping the registration IS the deregistration now, and it releases the
+/// relay key as it goes. It used to need a `DELETE /v1/services` on top,
+/// because the local end of the tunnel was a task the app could abort while the
+/// BACKEND still held the relay-side registration open — so the key lingered
+/// until its lease expired unless the backend was asked to retire it. With the
+/// app registering directly there is no second party holding anything.
 pub fn serve_deregister(name: &str, kind: &str) -> Result<()> {
     let kind: ServiceKind = kind
         .parse()
         .map_err(|_| anyhow!("invalid service kind `{kind}`"))?;
-    let support = runtime::support_dir()?;
-    let (device, svc_name) = {
+    let published = {
         let mut guard = hosts_locked();
         let ls = guard
             .get_mut(name)
             .ok_or_else(|| anyhow!("`{name}` is not hosting locally"))?;
-        match kind {
-            ServiceKind::App => {
-                if let Some(h) = ls.app_register.take() {
-                    h.abort();
-                }
-            },
-            ServiceKind::Api => {
-                if let Some(h) = ls.api_register.take() {
-                    h.abort();
-                }
-            },
-            ServiceKind::Meta => {
-                if let Some(h) = ls.meta_register.take() {
-                    h.abort();
-                }
-            },
-            // `kind` came from FromStr, which never yields Unknown; arm exists
-            // only to keep the match exhaustive.
-            ServiceKind::Unknown => {},
-        }
-        (ls.device.clone(), ls.name.clone())
+        registration_slot(ls, kind).take()
     };
-    // Force the relay to drop the key now (the aborted register tunnel alone
-    // would otherwise linger until its lease expires). Best-effort: the local
-    // forward is already stopped, so a failure only delays the relay drop.
-    if let Err(e) = runtime::runtime().block_on(account::deregister_service(
-        &support,
-        &device,
-        kind.as_key_segment(),
-        &svc_name,
-    )) {
-        tracing::warn!(
-            error = %format!("{e:#}"),
-            service = %svc_name,
-            kind = %kind.as_key_segment(),
-            "force-dropping the relay key on deregister failed; it lingers until lease expiry"
-        );
+    // Awaited outside the hosts lock, and awaited rather than dropped, so the
+    // relay frees the key before a re-register could race its own predecessor.
+    if let Some(published) = published {
+        if let Err(e) = runtime::runtime().block_on(published.stop()) {
+            tracing::warn!(
+                error = %format!("{e:#}"),
+                service = %name,
+                kind = %kind.as_key_segment(),
+                "releasing the relay key on deregister failed; it lingers until lease expiry"
+            );
+        }
     }
     Ok(())
 }
 
-/// Re-publish a previously [`serve_deregister`]'d tunnel: spawn its register
-/// task again, forwarding to the still-running process. No-op if already live.
+/// Re-publish a previously [`serve_deregister`]'d service, forwarding to the
+/// still-running process. No-op if already published.
 pub fn serve_reregister(name: &str, kind: &str) -> Result<()> {
     let kind: ServiceKind = kind
         .parse()
         .map_err(|_| anyhow!("invalid service kind `{kind}`"))?;
-    let support = runtime::support_dir()?;
-    let (connector, tokens) = account::broker_transport(&support)?;
-    let mut guard = hosts_locked();
-    let ls = guard
-        .get_mut(name)
-        .ok_or_else(|| anyhow!("`{name}` is not hosting locally"))?;
-    let device = ls.device.clone();
-    let svc_name = ls.name.clone();
-    let mut app_preflight = None;
-    match kind {
-        ServiceKind::App => {
-            if tunnel_down(&ls.app_register) {
-                let local = ls.app_local;
-                let (tx, rx) = tokio::sync::oneshot::channel();
-                ls.app_register = Some(spawn_register(
-                    connector,
-                    tokens,
-                    &device,
-                    ServiceKind::App,
-                    &svc_name,
-                    local,
-                    Some(tx),
-                ));
-                app_preflight = Some(rx);
-            }
-        },
-        ServiceKind::Api => {
-            if tunnel_down(&ls.api_register) {
-                let local = ls.api_local;
-                ls.api_register = Some(spawn_register(
-                    connector,
-                    tokens,
-                    &device,
-                    ServiceKind::Api,
-                    &svc_name,
-                    local,
-                    None,
-                ));
-            }
-        },
-        ServiceKind::Meta => {
-            if tunnel_down(&ls.meta_register) {
-                let local = ls.meta_local;
-                ls.meta_register = Some(spawn_register(
-                    connector,
-                    tokens,
-                    &device,
-                    ServiceKind::Meta,
-                    &svc_name,
-                    local,
-                    None,
-                ));
-            }
-        },
-        // `kind` came from FromStr, which never yields Unknown.
-        ServiceKind::Unknown => {},
-    }
-    // Surface a name conflict on the re-published app tunnel (waits OUTSIDE
-    // the hosts lock so status polls don't stall on it).
-    drop(guard);
-    if let Some(rx) = app_preflight {
-        preflight_register(rx)?;
-    }
+    let Some((device, local)) = ({
+        let guard = hosts_locked();
+        let ls = guard
+            .get(name)
+            .ok_or_else(|| anyhow!("`{name}` is not hosting locally"))?;
+        let (local, slot) = match kind {
+            ServiceKind::Api => (ls.api_local, &ls.api_register),
+            ServiceKind::Meta => (ls.meta_local, &ls.meta_register),
+            _ => (ls.app_local, &ls.app_register),
+        };
+        needs_publishing(slot).then(|| (ls.device.clone(), local))
+    }) else {
+        return Ok(());
+    };
+    // Publishing waits on the relay, so it happens with the hosts lock RELEASED —
+    // holding it would stall every status poll for as long as the relay takes.
+    let transport = transport::resolve_blocking()?;
+    let published = register_service(&transport, &device, kind, name, local)?;
+    store_registration(name, kind, published);
     Ok(())
 }
 
-/// Fully stop one host by name: abort all register tunnels + watchdog + the
-/// API proxy + meta service tasks, stop its codex, and force the relay to drop
-/// all keys now. Best-effort + idempotent (no-op when that name isn't hosting).
+/// Fully stop one host by name: release its three relay keys, abort the
+/// watchdog, API proxy, and meta service tasks, and stop its codex.
+/// Best-effort and idempotent — a no-op when that name isn't hosting.
 pub fn serve_stop(name: &str) -> Result<()> {
     let removed = hosts_locked().remove(name);
     if let Some(ls) = removed {
-        let device = ls.device.clone();
-        let svc_name = ls.name.clone();
         stop_host_tasks(ls);
-        if let Ok(support) = runtime::support_dir() {
-            runtime::runtime().block_on(async {
-                let _ = account::deregister_service(&support, &device, "app", &svc_name).await;
-                let _ = account::deregister_service(&support, &device, "api", &svc_name).await;
-                // Log the meta drop specifically: a backend not yet rebuilt with
-                // the `meta` kind rejects it, which is worth surfacing (the key
-                // then lingers until its lease expires).
-                if let Err(e) =
-                    account::deregister_service(&support, &device, "meta", &svc_name).await
-                {
-                    tracing::warn!(
-                        error = %format!("{e:#}"),
-                        service = %svc_name,
-                        "force-dropping the meta relay key on stop failed (older backend?); it \
-                         lingers until lease expiry"
-                    );
-                }
-            });
-        }
     }
     Ok(())
 }
 
 /// Stop every host (called on app quit so a real quit leaves no orphan codex).
-/// Process exit closes the broker tunnels, so no explicit relay drop is needed.
 pub fn serve_stop_all() {
     let all: Vec<LocalServe> = hosts_locked().drain().map(|(_, ls)| ls).collect();
     for ls in all {
@@ -1225,15 +1267,23 @@ pub fn serve_stop_all() {
 /// meta service) and stop its codex. Does not touch the relay (callers that
 /// need an immediate relay drop force-deregister separately).
 fn stop_host_tasks(ls: LocalServe) {
-    if let Some(h) = ls.app_register {
-        h.abort();
-    }
-    if let Some(h) = ls.api_register {
-        h.abort();
-    }
-    if let Some(h) = ls.meta_register {
-        h.abort();
-    }
+    // Awaited rather than dropped, so the relay releases all three keys NOW: an
+    // immediate re-host under the same name would otherwise race registrations
+    // this one abandoned but the relay still held.
+    runtime::runtime().block_on(async {
+        for published in [ls.app_register, ls.api_register, ls.meta_register]
+            .into_iter()
+            .flatten()
+        {
+            if let Err(e) = published.stop().await {
+                tracing::warn!(
+                    error = %format!("{e:#}"),
+                    service = %ls.name,
+                    "releasing a relay key on stop failed; it lingers until lease expiry"
+                );
+            }
+        }
+    });
     ls.watchdog.abort();
     ls.api_proxy.abort();
     ls.meta_svc.abort();
@@ -1650,21 +1700,6 @@ fn startup_failure_error(failure: StartupFailure) -> anyhow::Error {
     anyhow::anyhow!(failure.diagnosis(&retry))
 }
 
-/// Block until nothing accepts on `addr`, or `timeout` elapses (`true` on
-/// close).
-fn wait_for_port_closed(addr: &str, timeout: Duration) -> bool {
-    let Ok(sock) = addr.parse::<SocketAddr>() else {
-        return true;
-    };
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if TcpStream::connect_timeout(&sock, Duration::from_millis(200)).is_err() {
-            return true;
-        }
-        std::thread::sleep(Duration::from_millis(200));
-    }
-    false
-}
 
 #[cfg(test)]
 mod tests {

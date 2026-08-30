@@ -102,4 +102,43 @@ diff --git a/a.txt b/a.txt
       expect(d.removed, 1);
     });
   });
+
+  // These were duplicated in the session screen and the desktop review pane
+  // before they moved here. Both surfaces number their rows from them, so a
+  // disagreement between two copies would misnumber one view's lines.
+  group('hunk headers', () {
+    test('reads the new-side start, not the old one', () {
+      expect(hunkNewStart('@@ -1,3 +12,4 @@'), 12);
+      expect(hunkOldStart('@@ -1,3 +12,4 @@'), 1);
+    });
+
+    test('accepts a header with counts omitted', () {
+      // git drops `,1` for a single-line range.
+      expect(hunkNewStart('@@ -5 +7 @@'), 7);
+      expect(hunkOldStart('@@ -5 +7 @@'), 5);
+    });
+
+    test('declines a line that is not a hunk header', () {
+      expect(hunkNewStart('+ an added line'), isNull);
+      expect(hunkOldStart(''), isNull);
+    });
+  });
+
+  group('languageHintForPath', () {
+    test('is the extension, without the dot', () {
+      expect(languageHintForPath('lib/src/main.dart'), 'dart');
+    });
+
+    test('splits on either separator, so a host path from Windows works', () {
+      expect(languageHintForPath(r'C:\repo\lib\main.dart'), 'dart');
+    });
+
+    test('is empty where there is no extension to name', () {
+      // A dotfile's leading dot does not start an extension, and an
+      // extensionless name has none — the highlighter leaves both plain.
+      expect(languageHintForPath('.gitignore'), '');
+      expect(languageHintForPath('Dockerfile'), '');
+      expect(languageHintForPath('src/LICENSE'), '');
+    });
+  });
 }

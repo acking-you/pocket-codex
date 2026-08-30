@@ -18,7 +18,7 @@
   "accountSessionExpiredMessage": "Your saved sign-in can no longer be renewed. Sign in again to reconnect to your services.",
   "accountSignInAgain": "Sign in again",
   "accountWebFailed": "Sign-in didn't complete. Please try again.",
-  "accountWebTrouble": "Browser sign-in didn't finish. If the GitHub page wouldn't load, use the device code below.",
+  "accountWebTrouble": "Browser sign-in didn't finish — either the GitHub page wouldn't load, or the browser couldn't hand the result back to this app. The device code below avoids the hand-off entirely.",
   "accountSignedIn": "Signed in",
   "accountSignedInAs": "Signed in as @{login}",
   "@accountSignedInAs": {
@@ -35,10 +35,7 @@
   "accountBackendHint": "Backend URL (blank = default)",
   "accountSection": "Account",
   "accountSignOut": "Sign out",
-  "apiServicesSection": "API services",
-  "appServerServices": "App-server services",
   "connecting": "Connecting…",
-  "connectFailed": "Couldn't connect to the app-server",
   "conversationsSection": "Conversations",
   "newConversation": "New conversation",
   "noThreads": "No conversations yet",
@@ -58,8 +55,6 @@
   "showLess": "Show less",
   "messageHint": "Message…",
   "send": "Send",
-  "chatRoleYou": "You",
-  "chatRoleAgent": "Codex",
   "voiceLive": "Live voice",
   "voiceSessionEnded": "Live voice · ended",
   "voiceYou": "You",
@@ -135,7 +130,6 @@
   "@newSessionTitleIn": {
     "placeholders": { "project": { "type": "String" } }
   },
-  "currentProject": "Project",
   "remotePathLabel": "Remote folder path (on the host)",
   "remotePathHint": "e.g. /home/ubuntu/myproject — blank uses the host default",
   "model": "Model",
@@ -174,7 +168,6 @@
   "effortHighDesc": "Thorough",
   "effortXhigh": "Extra high",
   "effortXhighDesc": "Most thorough, slowest",
-  "openLink": "Open link",
   "linkOpenFailed": "Couldn't open the link",
   "contextLabel": "Context",
   "contextUsageTitle": "Context & usage",
@@ -236,14 +229,9 @@
   "apiUnreachableReason": "Still registered on the relay, but the remote API service isn't responding — it may not be running, or has crashed.",
   "subscribedAlive": "Subscribed",
   "subscribedDead": "Dropped",
-  "runningSessions": "{count} running",
-  "@runningSessions": {
-    "placeholders": { "count": { "type": "int" } }
-  },
   "compact": "Compact conversation",
   "compactConfirm": "Summarise and shrink this conversation to free up context? This can't be undone.",
   "viewDiff": "View changes",
-  "loadingDiff": "Loading changes…",
   "cancelDiffLoad": "Cancel loading changes",
   "changesTitle": "Changes",
   "noChanges": "No changes vs the main branch.",
@@ -420,8 +408,6 @@
     }
   },
   "localHostingSection": "Local hosting",
-  "localHostTitle": "Local codex",
-  "localHostStopped": "Stopped",
   "localHostRunning": "Hosting",
   "localHostStarting": "Starting…",
   "localHostUnresponsive": "Not responding",
@@ -446,10 +432,6 @@
   "localHostListening": "Listening on {addr}",
   "@localHostListening": {
     "placeholders": { "addr": { "type": "String" } }
-  },
-  "localHostStartError": "Couldn't start hosting: {error}",
-  "@localHostStartError": {
-    "placeholders": { "error": { "type": "String" } }
   },
   "codexFoundAt": "codex found: {path}",
   "@codexFoundAt": {
@@ -530,7 +512,6 @@
   "servicesBrowse": "Browse",
   "servicesNoCapabilities": "No capabilities are currently available on this device",
   "hostSessions": "Host session history",
-  "switchService": "Switch host",
   "homeConnecting": "Connecting to your Codex host…",
   "homeRestoringHost": "Restoring hosting…",
   "homeNoServiceTitle": "No Codex host available",

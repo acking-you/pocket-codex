@@ -1,56 +1,46 @@
 //! Hosted Pocket-Codex backend.
 //!
-//! One self-contained service that:
-//! - serves the GitHub-device-flow HTTP API ([`api::router`]) and the
+//! An identity and credential-vending service, and nothing more. It:
+//! - serves the GitHub-device-flow HTTP API ([`api::router`]) plus the
 //!   per-account `/v1/me` + `/v1/services` views;
-//! - runs the broker ([`pocket_codex_broker_server`]) that bridges
-//!   authenticated client tunnels to a loopback pb-mapper relay holding the
-//!   real `MSG_HEADER_KEY`, namespacing every key per user;
-//! - terminates TLS for both in-process (plain / cert files / ACME).
+//! - vends each account a short-lived pb-mapper credential over `/v1/relay`
+//!   ([`credentials`]), minted under the administrator key this process alone
+//!   holds;
+//! - terminates TLS in-process (plain / cert files / ACME).
 //!
-//! The HTTP and broker logic are exposed as library items so they can be driven
-//! directly from integration tests over plain TCP.
+//! # It is not on the data path
+//!
+//! Clients take that credential and `register`/`connect` against the relay
+//! **directly**. The backend used to tunnel every byte through a broker on its
+//! own port, which cost an extra hop and made backend availability a
+//! prerequisite for two of a user's own devices to talk. Now a device needs the
+//! backend once per credential lifetime and never again.
+//!
+//! HTTP serving is exposed as library items so integration tests can drive it
+//! over plain TCP.
 
 #![forbid(unsafe_code)]
 
 pub mod config;
 
 mod api;
+pub mod credentials;
 mod serve;
 mod tls;
 
-use std::{net::SocketAddr, sync::Arc};
+use std::sync::Arc;
 
 pub use api::{router, AppState};
 pub use config::{ServerConfig, TlsMode};
+pub use credentials::Credentials;
 use pocket_codex_auth::Auth;
-use pocket_codex_broker_server::{BrokerServer, TokenVerifier};
 use pocket_codex_store::Store;
 use tokio::net::TcpListener;
 
-/// Adapts [`Auth`]'s stateless JWT verification to the broker's
-/// [`TokenVerifier`], so the broker never touches the database on the hot path.
-pub struct AuthVerifier(pub Arc<Auth>);
-
-impl TokenVerifier for AuthVerifier {
-    fn verify(&self, token: &str) -> Option<String> {
-        self.0.verify(token).ok().map(|claims| claims.sub)
-    }
-}
-
-/// Run the backend (HTTP API + broker over a shared TLS layer) until a fatal
-/// error or a serving task aborts.
+/// Run the backend (the HTTP API over the configured TLS layer) until a fatal
+/// error.
 pub async fn run(cfg: ServerConfig) -> anyhow::Result<()> {
     let _ = rustls::crypto::ring::default_provider().install_default();
-    // An explicit key, or `None` to adopt the relay's machine-derived key
-    // (matching `pb-mapper-server --use-machine-msg-header-key` on the same host).
-    let configured_key = cfg
-        .msg_header_key
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
-    pocket_codex_pb::set_msg_header_key(configured_key)
-        .map_err(|e| anyhow::anyhow!("invalid msg_header_key: {e}"))?;
 
     let store = Store::connect(&cfg.database_url).await?;
 
@@ -85,36 +75,38 @@ pub async fn run(cfg: ServerConfig) -> anyhow::Result<()> {
         web_callback_url,
     })?);
     tracing::info!(web_login = auth.web_enabled(), "auth flows configured");
-    let relay_addr: SocketAddr = cfg
-        .relay_addr
-        .parse()
-        .map_err(|e| anyhow::anyhow!("relay_addr `{}`: {e}", cfg.relay_addr))?;
+    // Validated at boot even though the SDK takes the address as a string: a
+    // typo'd relay_addr should fail the process here, not surface later as a
+    // per-tunnel connect error on a backend that looked healthy.
+    pocket_codex_pb::parse_relay_addr(&cfg.relay_addr)?;
 
-    let verifier = Arc::new(AuthVerifier(auth.clone()));
-    let broker = BrokerServer::new(verifier, cfg.relay_addr.clone(), cfg.data_idle());
+    // The ADMINISTRATOR credential, which this process alone holds and never
+    // hands out. Two uses, both administrative: minting the per-account
+    // credentials clients do get, and acting on an account's whole relay view
+    // (listing services across namespaces, retiring an abandoned registration).
+    let relay = pocket_codex_pb::RelaySession::new(
+        cfg.relay_addr.clone(),
+        cfg.relay_credential()
+            .ok_or_else(|| anyhow::anyhow!("relay_credential is required"))?,
+    );
+
     let tls = tls::build_tls(&cfg)?;
-
     let http_listener = TcpListener::bind(&cfg.http_listen)
         .await
         .map_err(|e| anyhow::anyhow!("binding http {}: {e}", cfg.http_listen))?;
-    let broker_listener = TcpListener::bind(&cfg.broker_listen)
-        .await
-        .map_err(|e| anyhow::anyhow!("binding broker {}: {e}", cfg.broker_listen))?;
 
     let app = api::router(AppState {
         auth,
-        relay_addr,
-        broker: broker.clone(),
+        credentials: credentials::Credentials::new(relay.clone()),
+        relay,
     });
     tracing::info!(
         http = %cfg.http_listen,
-        broker = %cfg.broker_listen,
+        relay = %cfg.relay_addr,
         tls = ?cfg.tls_mode,
         "pocket-codex backend up"
     );
 
-    let http = tokio::spawn(serve::serve_http(http_listener, app, tls.clone()));
-    let broker = tokio::spawn(serve::serve_broker(broker_listener, broker, tls));
-    tokio::try_join!(http, broker)?;
+    serve::serve_http(http_listener, app, tls).await;
     Ok(())
 }

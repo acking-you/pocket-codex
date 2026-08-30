@@ -8,7 +8,9 @@ use flutter_rust_bridge::frb;
 use pocket_codex_core::config::Mode;
 
 use crate::{
-    engine::{account, app_session, config, discovery, logging, meta, runtime, serve, sessions},
+    engine::{
+        account, app_session, config, discovery, logging, meta, runtime, serve, sessions, transport,
+    },
     frb_generated::StreamSink,
 };
 
@@ -67,27 +69,6 @@ pub fn init_bridge(support_dir: String) -> Result<()> {
     // and its events flow through ours too).
     logging::init();
     runtime::init(PathBuf::from(support_dir))
-}
-
-fn current_relay() -> Result<String> {
-    let cfg = config::load_config(&runtime::support_dir()?)?;
-    cfg.relay()
-        .map(str::to_string)
-        .ok_or_else(|| anyhow!("no relay configured"))
-}
-
-/// Apply the stored MSG_HEADER_KEY to this process (relay validates it).
-fn apply_key() -> Result<()> {
-    let cfg = config::load_config(&runtime::support_dir()?)?;
-    if let Some(k) = cfg.relay_key() {
-        // Guard length here so a hand-edited config.toml can't reach the
-        // upstream length error (which echoes the raw key into its message).
-        if k.len() != 32 {
-            return Err(anyhow!("stored MSG_HEADER_KEY is not 32 bytes; re-run setup"));
-        }
-        pocket_codex_pb::set_msg_header_key(Some(k)).map_err(|e| anyhow!("{e}"))?;
-    }
-    Ok(())
 }
 
 /// Current config view (relay/key presence, locale, and account state).
@@ -288,49 +269,31 @@ pub fn export_config() -> Result<String> {
     config::encode_pcx1(relay, key)
 }
 
-/// Discover services: in account mode from the backend (`/v1/services`), in
-/// self-host mode from the relay (applying the stored key first).
+/// Discover the services this device can reach on the relay.
+///
+/// One query in both modes: an account credential sees only its own namespace,
+/// so the relay's listing IS the account's inventory. Reported with BARE `pcx:`
+/// keys whatever the mode, because that is the identity the app and its Dart
+/// layer use — [`Transport::relay_key`] maps back when the relay is next
+/// addressed.
 pub fn discover_services() -> Result<Vec<ServiceIdDto>> {
-    let dir = runtime::support_dir()?;
-    if config::load_config(&dir)?.account_mode() == Mode::Account {
-        let services = runtime::runtime().block_on(account::services(&dir))?;
-        return Ok(services
-            .into_iter()
-            .map(|s| {
-                let id = s.to_service_id();
-                ServiceIdDto {
-                    device: id.device.clone(),
-                    kind: id.kind.as_key_segment().to_string(),
-                    name: id.name.clone(),
-                    key: id.key(),
-                }
-            })
-            .collect());
-    }
-    apply_key()?;
-    let relay = current_relay()?;
-    let found = runtime::runtime().block_on(discovery::discover(&relay))?;
+    let transport = transport::resolve_blocking()?;
+    let found = runtime::runtime().block_on(discovery::discover(&transport))?;
     Ok(found
         .into_iter()
-        .map(|s| ServiceIdDto {
-            device: s.device,
-            kind: s.kind,
-            name: s.name,
-            key: s.key,
+        .map(|id| ServiceIdDto {
+            device: id.device.clone(),
+            kind: id.kind.as_key_segment().to_string(),
+            name: id.name.clone(),
+            key: id.key(),
         })
         .collect())
 }
 
 /// Subscribe to an API service, exposing it on `127.0.0.1:<local_port>`.
 pub fn api_subscribe(service_key: String, local_port: u16) -> Result<SubStatusDto> {
-    let dir = runtime::support_dir()?;
-    let s = if config::load_config(&dir)?.account_mode() == Mode::Account {
-        runtime::subscribe_account(service_key, local_port, &dir)?
-    } else {
-        apply_key()?;
-        let relay = current_relay()?;
-        runtime::subscribe_service(service_key, local_port, relay)?
-    };
+    let transport = transport::resolve_blocking()?;
+    let s = runtime::subscribe_service(service_key, local_port, &transport)?;
     Ok(SubStatusDto {
         key: s.key,
         local_addr: s.local_addr,
@@ -667,13 +630,7 @@ pub struct ThreadRuntimeConfigDto {
 /// Connect to an app-server service: subscribe on `127.0.0.1:<local_port>`,
 /// open the JSON-RPC websocket and run the `initialize` handshake. Idempotent.
 pub fn app_connect(service_key: String, local_port: u16) -> Result<()> {
-    let dir = runtime::support_dir()?;
-    if config::load_config(&dir)?.account_mode() == Mode::Account {
-        return app_session::connect_account(service_key, local_port, &dir);
-    }
-    apply_key()?;
-    let relay = current_relay()?;
-    app_session::connect(service_key, local_port, relay)
+    app_session::connect(service_key, local_port, &transport::resolve_blocking()?)
 }
 
 /// Whether a live app-server session exists for `service_key`.
@@ -706,13 +663,7 @@ pub fn app_probe(service_key: String) -> Result<bool> {
 /// needs a different fix from a dead backend. This hands the transport's own
 /// words to the UI so it can name the actual problem.
 pub fn app_probe_reason(service_key: String) -> Result<Option<String>> {
-    let dir = runtime::support_dir()?;
-    if config::load_config(&dir)?.account_mode() == Mode::Account {
-        return Ok(app_session::probe_account_reason(service_key, 0, &dir));
-    }
-    apply_key()?;
-    let relay = current_relay()?;
-    Ok(app_session::probe_reason(service_key, 0, relay))
+    Ok(app_session::probe_reason(service_key, 0, &transport::resolve_blocking()?))
 }
 
 /// Probe whether an API proxy is actually REACHABLE — its host answers a
@@ -723,13 +674,7 @@ pub fn app_probe_reason(service_key: String) -> Result<Option<String>> {
 /// a transient tunnel, hits the proxy's local 403 fallback (no upstream model
 /// call), then tears it down.
 pub fn api_probe(service_key: String) -> Result<bool> {
-    let dir = runtime::support_dir()?;
-    if config::load_config(&dir)?.account_mode() == Mode::Account {
-        return Ok(app_session::probe_api_account(service_key, &dir));
-    }
-    apply_key()?;
-    let relay = current_relay()?;
-    Ok(app_session::probe_api(service_key, relay))
+    Ok(app_session::probe_api(service_key, &transport::resolve_blocking()?))
 }
 
 /// Health-check an app-server THIS machine hosts itself, by its loopback
@@ -1285,7 +1230,7 @@ pub fn app_force_resume(service_key: String, thread_id: String) -> Result<ForceR
 // per-thread config persists on the host and is shared across devices. Each
 // takes the app-server `service_key` being viewed; the matching meta key is
 // derived internally. When the host is this app, the meta service is reached
-// over loopback; otherwise through the account broker.
+// over loopback; otherwise by subscribing to it on the relay.
 // ---------------------------------------------------------------------------
 
 fn meta_holder_dto(h: pocket_codex_host_svc::sessions::Holder) -> HolderDto {
@@ -1367,8 +1312,8 @@ fn thread_config_from_dto(c: ThreadConfigDto) -> pocket_codex_host_svc::store::T
 
 /// Remote analogue of [`app_local_sessions`]: list the sessions of the host
 /// behind `service_key` via its meta tunnel (loopback when this app is the
-/// host, broker when remote). Lets a phone see a desktop host's sessions —
-/// including those owned by another codex client.
+/// host, a relay subscription when remote). Lets a phone see a desktop host's
+/// sessions — including those owned by another codex client.
 pub fn meta_sessions(service_key: String) -> Result<Vec<LocalSessionDto>> {
     Ok(meta::sessions(&service_key)?
         .into_iter()

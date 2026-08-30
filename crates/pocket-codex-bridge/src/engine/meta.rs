@@ -1,8 +1,8 @@
 //! Client side of the host meta service.
 //!
-//! Reaches a host's `meta:<name>` tunnel — locally over loopback when this app
-//! is itself the host, or through the account broker when the host is remote —
-//! and calls its HTTP endpoints: remote session inventory, transcript,
+//! Reaches a host's `meta:<name>` service — locally over loopback when this app
+//! is itself the host, or by subscribing to it on the relay when the host is
+//! remote — and calls its HTTP endpoints: remote session inventory, transcript,
 //! force-resume, and per-thread config persistence (requirements #5 and #2).
 //!
 //! Callers pass the app-server `service_key` they are already viewing
@@ -25,7 +25,7 @@ use reqwest::{Client, Method, Url};
 use serde::{de::DeserializeOwned, Deserialize};
 use tokio::sync::broadcast;
 
-use crate::engine::{runtime, serve};
+use crate::engine::{runtime, serve, transport};
 
 /// Per-request timeout: a session scan on a busy host plus a relay hop.
 const META_TIMEOUT: Duration = Duration::from_secs(30);
@@ -113,7 +113,7 @@ fn meta_key_of(service_key: &str) -> Result<String> {
 
 /// Resolve a service key to a reachable meta base [`Url`]. A meta tunnel hosted
 /// by THIS app is served on loopback directly (no relay hop); any other is
-/// reached by subscribing to its broker tunnel (account mode).
+/// reached by subscribing to it on the relay.
 fn base_url(service_key: &str) -> Result<Url> {
     // Loopback short-circuit only when THIS process actually hosts the viewed
     // app-server — match its app key, not just the derived meta key, so a remote
@@ -127,8 +127,7 @@ fn base_url(service_key: &str) -> Result<Url> {
         format!("http://{addr}")
     } else {
         let meta_key = meta_key_of(service_key)?;
-        let dir = runtime::support_dir()?;
-        let sub = runtime::subscribe_account(meta_key, 0, &dir)
+        let sub = runtime::subscribe_service(meta_key, 0, &transport::resolve_blocking()?)
             .context("subscribing to the host meta tunnel")?;
         format!("http://{}", sub.local_addr)
     };

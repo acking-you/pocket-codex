@@ -153,3 +153,32 @@ String _strip(String p) {
   }
   return s;
 }
+
+/// New-file line number a `@@ -a,b +c,d @@` hunk header starts at, or null if it
+/// doesn't parse.
+///
+/// Every diff surface needs this to number its rows, so it lives with the parser
+/// rather than in each view: two copies of the same regex are two chances to
+/// disagree about which side of the `@@` is being read.
+int? hunkNewStart(String header) {
+  final m = RegExp(r'@@\s*-\d+(?:,\d+)?\s*\+(\d+)').firstMatch(header);
+  return m == null ? null : int.tryParse(m.group(1)!);
+}
+
+/// Old-file line number a hunk header starts at, or null if it doesn't parse.
+int? hunkOldStart(String header) {
+  final m = RegExp(r'@@\s*-(\d+)').firstMatch(header);
+  return m == null ? null : int.tryParse(m.group(1)!);
+}
+
+/// A path's extension, as a syntax-highlighter language hint. Empty for a
+/// dotfile or an extensionless name, which the highlighter leaves plain.
+///
+/// Splits on both separators so a Windows path from the host resolves the same
+/// as a POSIX one.
+String languageHintForPath(String path) {
+  final slash = path.lastIndexOf(RegExp(r'[\\/]'));
+  final base = slash < 0 ? path : path.substring(slash + 1);
+  final dot = base.lastIndexOf('.');
+  return dot <= 0 ? '' : base.substring(dot + 1);
+}

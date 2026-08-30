@@ -386,11 +386,26 @@ impl Auth {
     }
 
     /// A presented refresh token was not active. Decide whether this is theft
-    /// (a replay of a long-revoked / logged-out token → revoke the whole
-    /// family per RFC 6819) or a benign lost-response retry (a token
-    /// rotated within the grace window → reject only this request, leaving
-    /// the user's other sessions alone so a transient network failure can't
-    /// log every device out).
+    /// (a replay of a long-revoked / logged-out token → revoke the family
+    /// issued up to now, per RFC 6819) or a benign retry that must not log
+    /// the user out.
+    ///
+    /// # Why "already revoked" is not evidence of theft
+    ///
+    /// A client whose refresh fails does not stop; it retries, for as long as
+    /// it is running. So the SECOND replay of a token is expected whenever
+    /// the first one was rejected — and treating each arrival as fresh
+    /// abuse is what turned one lost race into a permanent lockout on
+    /// lb7666.top (2026-08-30): every retry re-revoked the family,
+    /// including any session the user had just created by signing in again,
+    /// at ~10 events/minute for as long as the client stayed up.
+    ///
+    /// The fix is to make the response idempotent. A token that is already
+    /// revoked has already had whatever consequence it deserved, so
+    /// replaying it is rejected — the caller still gets
+    /// [`AuthError::BadRefresh`] — without revoking anything a second time.
+    /// Only the FIRST sighting of an inactive token can revoke a family,
+    /// which is the only sighting that carries new information.
     async fn handle_inactive_refresh(&self, hash: &[u8], now: i64) -> Result<()> {
         let Some(seen) = self.store.refresh_token_by_hash(hash).await? else {
             return Ok(());
@@ -401,13 +416,31 @@ impl Auth {
                 "refresh token replayed within rotation grace window; \
                  rejecting without revoking the user's other sessions"
             );
+        } else if seen.rotated_to.is_none() {
+            // Revoked with NO successor: either a logout, or a family revocation
+            // this same code performed earlier. Both mean the consequence has
+            // already been applied, so rejecting is right but revoking again is
+            // not — re-revoking on every retry is what makes an account
+            // unrecoverable while a client keeps trying.
+            //
+            // A rotated-but-stale token falls through to the branch below instead:
+            // it still carries new information the first time it is seen, because
+            // its successor may be live in someone else's hands.
+            tracing::debug!(
+                user_id = %seen.user_id,
+                revoked_at = ?seen.revoked_at,
+                "replay of an already-settled refresh token; rejecting without re-revoking"
+            );
         } else {
+            // Scoped to sessions that already existed: a client still retrying the
+            // compromised token must not be able to revoke the session the user
+            // creates by signing in after this.
             self.store
-                .revoke_user_refresh_tokens(&seen.user_id, now)
+                .revoke_user_refresh_tokens_issued_through(&seen.user_id, now, now)
                 .await?;
             tracing::warn!(
                 user_id = %seen.user_id,
-                "refresh-token reuse detected; revoked all of the user's sessions"
+                "refresh-token reuse detected; revoked the user's existing sessions"
             );
         }
         Ok(())
@@ -587,317 +620,4 @@ fn hash_token(token: &str) -> Vec<u8> {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::{
-        io::{Error, ErrorKind},
-        sync::{
-            atomic::{AtomicUsize, Ordering},
-            Arc,
-        },
-        time::{SystemTime, UNIX_EPOCH},
-    };
-
-    use tokio::{
-        io::{AsyncReadExt as _, AsyncWriteExt as _},
-        net::{TcpListener, TcpStream},
-    };
-
-    use super::*;
-
-    #[test]
-    fn lost_response_retry_only_within_grace_of_a_rotation() {
-        let rotated_at = 1_000;
-        // A token rotated within the grace window → benign lost-response retry,
-        // so refresh rejects this one request without nuking the family.
-        assert!(is_lost_response_retry(Some("next"), Some(rotated_at), rotated_at));
-        assert!(is_lost_response_retry(
-            Some("next"),
-            Some(rotated_at),
-            rotated_at + REUSE_GRACE_SECS
-        ));
-        // Rotated long ago → treat the replay as theft (revoke the family).
-        assert!(!is_lost_response_retry(
-            Some("next"),
-            Some(rotated_at),
-            rotated_at + REUSE_GRACE_SECS + 1
-        ));
-        // Revoked via logout (no successor) → theft, even if recent.
-        assert!(!is_lost_response_retry(None, Some(rotated_at), rotated_at));
-        // Never revoked → not an inactive-token replay at all.
-        assert!(!is_lost_response_retry(Some("next"), None, rotated_at));
-    }
-
-    #[test]
-    fn redirect_allowlist_accepts_scheme_and_loopback_only() {
-        // Mobile custom scheme.
-        assert!(is_allowed_redirect("pocketcodex://auth"));
-        assert!(is_allowed_redirect("pocketcodex://auth/callback"));
-        // Desktop / CLI loopback.
-        assert!(is_allowed_redirect("http://127.0.0.1:54321/callback"));
-        assert!(is_allowed_redirect("http://localhost:8080"));
-        // Rejected: arbitrary origins, https non-loopback, other schemes.
-        assert!(!is_allowed_redirect("https://evil.example/callback"));
-        assert!(!is_allowed_redirect("http://evil.example/callback"));
-        assert!(!is_allowed_redirect("https://127.0.0.1/callback"));
-        assert!(!is_allowed_redirect("javascript:alert(1)"));
-        assert!(!is_allowed_redirect("not a url"));
-    }
-
-    #[test]
-    fn pkce_challenge_matches_rfc7636_vector() {
-        // RFC 7636 Appendix B test vector.
-        let verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
-        assert_eq!(pkce_challenge(verifier), "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM");
-    }
-
-    #[test]
-    fn build_redirect_appends_query_for_scheme_and_url() {
-        assert_eq!(
-            build_redirect("pocketcodex://auth", &[("exchange_code", "abc"), ("state", "s1")]),
-            "pocketcodex://auth?exchange_code=abc&state=s1"
-        );
-        // A target that already has a query gets `&`.
-        assert_eq!(
-            build_redirect("http://localhost:8080/cb?x=1", &[("error", "denied")]),
-            "http://localhost:8080/cb?x=1&error=denied"
-        );
-        // Values are percent-encoded.
-        assert_eq!(
-            build_redirect("pocketcodex://auth", &[("error", "exchange failed")]),
-            "pocketcodex://auth?error=exchange+failed"
-        );
-    }
-
-    #[test]
-    fn github_poll_interval_bounds_provider_values() {
-        assert_eq!(github_poll_interval(0), 5);
-        assert_eq!(github_poll_interval(11), 11);
-        assert_eq!(github_poll_interval(u64::MAX), 300);
-    }
-
-    fn cfg(web: bool) -> Config {
-        Config {
-            github_client_id: "Iv1.test".to_string(),
-            github_client_secret: web.then(|| "client-secret".to_string()),
-            github_scope: "read:user".to_string(),
-            jwt_secret: "x".repeat(32),
-            jwt_ttl_secs: 3600,
-            refresh_ttl_secs: 1000,
-            web_callback_url: web.then(|| "https://lb7666.top:8443/auth/web/callback".to_string()),
-        }
-    }
-
-    #[tokio::test]
-    async fn web_start_gates_on_config_and_redirect_allowlist() {
-        // Disabled flow → WebDisabled before touching the store, even for an
-        // otherwise-valid redirect.
-        let store = Store::connect("sqlite::memory:").await.expect("store");
-        let disabled = Auth::new(store, cfg(false)).expect("auth");
-        assert!(!disabled.web_enabled());
-        assert!(matches!(
-            disabled
-                .web_start("pocketcodex://auth", "s", "c", None, 0)
-                .await,
-            Err(AuthError::WebDisabled)
-        ));
-
-        // Enabled flow but a disallowed redirect → BadRedirect (returned before
-        // any store write, so the in-memory pool is never queried).
-        let store = Store::connect("sqlite::memory:").await.expect("store");
-        let enabled = Auth::new(store, cfg(true)).expect("auth");
-        assert!(enabled.web_enabled());
-        assert!(matches!(
-            enabled
-                .web_start("https://evil.example/cb", "s", "c", None, 0)
-                .await,
-            Err(AuthError::BadRedirect)
-        ));
-    }
-
-    #[tokio::test]
-    async fn device_flow_authorizes_after_github_approval() {
-        let github = FakeGithub::spawn().await;
-        let store = Store::connect("sqlite::memory:").await.expect("store");
-        let auth = Auth::new_with_github_base(store, cfg(false), github.base_url()).expect("auth");
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system clock after unix epoch")
-            .as_secs() as i64;
-
-        let start = auth
-            .device_start(Some("laptop"), now)
-            .await
-            .expect("device start");
-        assert_eq!(start.user_code, "ABCD-EFGH");
-        assert_eq!(start.verification_uri, format!("{}/login/device", github.base_url()));
-        assert_eq!(start.interval_secs, 5);
-
-        let pending = auth
-            .device_poll(&start.poll_handle, now + 1)
-            .await
-            .expect("pending poll");
-        assert_eq!(pending.status, DevicePollStatus::Pending);
-        assert!(pending.credential.is_none());
-
-        let slow_down = auth
-            .device_poll(&start.poll_handle, now + 2)
-            .await
-            .expect("slow_down poll");
-        assert_eq!(slow_down.status, DevicePollStatus::SlowDown);
-        assert_eq!(slow_down.interval_secs, Some(11));
-        assert!(slow_down.credential.is_none());
-
-        let authorized = auth
-            .device_poll(&start.poll_handle, now + 3)
-            .await
-            .expect("authorized poll");
-        assert_eq!(authorized.status, DevicePollStatus::Authorized);
-        assert_eq!(authorized.interval_secs, None);
-        let credential = authorized.credential.expect("credential");
-        assert_eq!(credential.login, "octocat");
-        assert_eq!(credential.account_id.as_deref(), Some("42"));
-        let claims = auth.verify(&credential.token).expect("session jwt");
-        assert_eq!(claims.login, "octocat");
-        assert_eq!(claims.gh_id, 42);
-        assert_eq!(github.token_polls(), 3);
-
-        let consumed = auth
-            .device_poll(&start.poll_handle, now + 4)
-            .await
-            .expect("consumed poll");
-        assert_eq!(consumed.status, DevicePollStatus::Expired);
-        assert!(consumed.credential.is_none());
-    }
-
-    struct FakeGithub {
-        base_url: String,
-        token_polls: Arc<AtomicUsize>,
-    }
-
-    impl FakeGithub {
-        async fn spawn() -> Self {
-            let listener = TcpListener::bind("127.0.0.1:0")
-                .await
-                .expect("bind fake github");
-            let addr = listener.local_addr().expect("fake github addr");
-            let base_url = format!("http://{addr}");
-            let token_polls = Arc::new(AtomicUsize::new(0));
-            let server_base = base_url.clone();
-            let server_polls = token_polls.clone();
-            tokio::spawn(async move {
-                while let Ok((mut stream, _)) = listener.accept().await {
-                    let base = server_base.clone();
-                    let polls = server_polls.clone();
-                    tokio::spawn(async move {
-                        if let Ok((method, target, body)) = read_http_request(&mut stream).await {
-                            let (status, json) =
-                                fake_github_response(&base, &polls, &method, &target, &body);
-                            let response = format!(
-                                "HTTP/1.1 {status}\r\nContent-Type: \
-                                 application/json\r\nContent-Length: {}\r\nConnection: \
-                                 close\r\n\r\n{json}",
-                                json.len()
-                            );
-                            let _ = stream.write_all(response.as_bytes()).await;
-                            let _ = stream.shutdown().await;
-                        }
-                    });
-                }
-            });
-            Self {
-                base_url,
-                token_polls,
-            }
-        }
-
-        fn base_url(&self) -> &str {
-            &self.base_url
-        }
-
-        fn token_polls(&self) -> usize {
-            self.token_polls.load(Ordering::SeqCst)
-        }
-    }
-
-    async fn read_http_request(
-        stream: &mut TcpStream,
-    ) -> std::io::Result<(String, String, String)> {
-        let mut buf = Vec::new();
-        let mut chunk = [0u8; 1024];
-        let header_end = loop {
-            let n = stream.read(&mut chunk).await?;
-            if n == 0 {
-                return Err(Error::new(ErrorKind::UnexpectedEof, "request closed before headers"));
-            }
-            buf.extend_from_slice(&chunk[..n]);
-            if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
-                break pos + 4;
-            }
-            if buf.len() > 16 * 1024 {
-                return Err(Error::new(ErrorKind::InvalidData, "request headers too large"));
-            }
-        };
-        let headers = String::from_utf8_lossy(&buf[..header_end]).to_string();
-        let mut lines = headers.lines();
-        let request_line = lines
-            .next()
-            .ok_or_else(|| Error::new(ErrorKind::InvalidData, "missing request line"))?;
-        let mut parts = request_line.split_whitespace();
-        let method = parts
-            .next()
-            .ok_or_else(|| Error::new(ErrorKind::InvalidData, "missing method"))?
-            .to_string();
-        let target = parts
-            .next()
-            .ok_or_else(|| Error::new(ErrorKind::InvalidData, "missing target"))?
-            .to_string();
-        let content_length = headers
-            .lines()
-            .find_map(|line| {
-                let (name, value) = line.split_once(':')?;
-                name.eq_ignore_ascii_case("content-length")
-                    .then(|| value.trim().parse::<usize>().ok())
-                    .flatten()
-            })
-            .unwrap_or(0);
-        while buf.len() < header_end + content_length {
-            let n = stream.read(&mut chunk).await?;
-            if n == 0 {
-                return Err(Error::new(ErrorKind::UnexpectedEof, "request closed before body"));
-            }
-            buf.extend_from_slice(&chunk[..n]);
-        }
-        let body =
-            String::from_utf8_lossy(&buf[header_end..header_end + content_length]).to_string();
-        Ok((method, target, body))
-    }
-
-    fn fake_github_response(
-        base_url: &str,
-        token_polls: &AtomicUsize,
-        method: &str,
-        target: &str,
-        body: &str,
-    ) -> (&'static str, String) {
-        match (method, target) {
-            ("POST", "/login/device/code") if body.contains("client_id=Iv1.test") => (
-                "200 OK",
-                format!(
-                    r#"{{"device_code":"device-123","user_code":"ABCD-EFGH","verification_uri":"{base_url}/login/device","expires_in":900,"interval":1}}"#
-                ),
-            ),
-            ("POST", "/login/oauth/access_token") if body.contains("device_code=device-123") => {
-                match token_polls.fetch_add(1, Ordering::SeqCst) {
-                    0 => ("200 OK", r#"{"error":"authorization_pending"}"#.to_string()),
-                    1 => ("200 OK", r#"{"error":"slow_down","interval":11}"#.to_string()),
-                    _ => ("200 OK", r#"{"access_token":"gh-access"}"#.to_string()),
-                }
-            },
-            ("GET", "/user") => ("200 OK", r#"{"id":42,"login":"octocat"}"#.to_string()),
-            _ => (
-                "404 Not Found",
-                format!(r#"{{"error":"unexpected {method} {target} body={body}"}}"#),
-            ),
-        }
-    }
-}
+mod tests;

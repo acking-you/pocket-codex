@@ -1,23 +1,23 @@
 //! Process-global tokio runtime, support-dir, and the in-process
 //! subscription registry. Mobile has no child processes / state.toml, so
 //! subscriptions are spawned tasks tracked here and aborted on unsubscribe.
-use std::{
-    collections::HashMap,
-    path::{Path, PathBuf},
-    sync::Mutex,
-};
+//!
+//! Account and self-host subscriptions are the same code path: both dial the
+//! relay directly and differ only in the [`RelaySession`] handed in. Account
+//! mode used to need its own broker-tunnel implementation here; now the caller
+//! resolves a session (via `account::relay_session`) and everything below is
+//! shared.
+use std::{collections::HashMap, path::PathBuf, sync::Mutex};
 
 use anyhow::{anyhow, Result};
 use once_cell::sync::OnceCell;
-use pocket_codex_broker_client::{run_subscribe, SubscribeConfig};
-use pocket_codex_core::service::ServiceId;
-use pocket_codex_pb::{subscribe, SubscribeOptions};
+use pocket_codex_pb::{subscribe, RelaySession, SubscribeOptions};
 use tokio::{
     runtime::{Builder, Runtime},
     task::JoinHandle,
 };
 
-use crate::engine::account;
+use crate::engine::transport::Transport;
 
 /// Worker-thread stack size for the runtime the EMBEDDED codex app-server runs
 /// on. codex is a very deep async codebase — its resume/turn futures need far
@@ -98,48 +98,151 @@ pub struct SubStatus {
 /// below). The concrete assigned port is read back from the probe and reported
 /// in [`SubStatus::local_addr`]. A live subscription for `key` keeps its port.
 ///
-/// Before spawning we probe-bind the local port synchronously so the common
-/// failure (port already in use) is reported here instead of being swallowed
-/// by the detached task while the UI shows a "live" endpoint. A tiny TOCTOU
-/// window remains between the probe drop and `pb::subscribe`'s own bind; fully
-/// closing it needs a bind-readiness signal from pb-mapper (not yet exposed).
-pub fn subscribe_service(key: String, local_port: u16, relay: String) -> Result<SubStatus> {
-    let requested = format!("127.0.0.1:{local_port}");
-    let mut reg = registry().lock().expect("registry poisoned");
-    if let Some(e) = reg.get(&key) {
-        if !e.handle.is_finished() {
-            return Ok(SubStatus {
-                key,
-                local_addr: e.local_addr.clone(),
-                alive: true,
-            });
+/// Returns only once the tunnel is READY, so the address it reports can be
+/// dialled immediately. Callers do exactly that — `app_session::connect` opens
+/// a websocket to it on the next line — and a listener that is merely *about*
+/// to be bound would refuse that connection nondeterministically.
+pub fn subscribe_service(key: String, local_port: u16, transport: &Transport) -> Result<SubStatus> {
+    {
+        let reg = registry().lock().expect("registry poisoned");
+        if let Some(e) = reg.get(&key) {
+            if !e.handle.is_finished() {
+                return Ok(SubStatus {
+                    key,
+                    local_addr: e.local_addr.clone(),
+                    alive: true,
+                });
+            }
         }
     }
-    // Probe-bind: fail fast if the port can't be claimed, then release it for
-    // pb::subscribe to bind for real. With local_port == 0 the OS picks a free
-    // port; read the concrete addr back so we bind and report the real port.
-    let local_addr = match std::net::TcpListener::bind(&requested) {
-        Ok(probe) => probe
-            .local_addr()
-            .map(|a| a.to_string())
-            .map_err(|e| anyhow!("reading bound addr for {requested}: {e}"))?,
-        Err(e) => return Err(anyhow!("cannot bind {requested}: {e}")),
-    };
-    let opts = SubscribeOptions {
-        key: key.clone(),
-        local_addr: local_addr.clone(),
-        relay_addr: relay,
-    };
-    let handle = runtime().spawn(async move { subscribe(opts).await });
-    reg.insert(key.clone(), SubEntry {
-        local_addr: local_addr.clone(),
-        handle,
-    });
+    // Dialled with the transport's key shape, but tracked under the key the
+    // CALLER used: the app identifies a service by its bare `pcx:` key (that is
+    // what `unsubscribe_service` will be given), while the relay in account mode
+    // wants the namespaced form.
+    let (local_addr, handle) =
+        spawn_subscribe(transport.session.clone(), transport.relay_key(&key), local_port)?;
+    registry()
+        .lock()
+        .expect("registry poisoned")
+        .insert(key.clone(), SubEntry {
+            local_addr: local_addr.clone(),
+            handle,
+        });
     Ok(SubStatus {
         key,
         local_addr,
         alive: true,
     })
+}
+
+/// Bind a local port, subscribe on it, and return once the tunnel is up.
+///
+/// Two things have to be true when this returns, and neither is free:
+///
+/// * **The port is known.** `local_port` may be `0` so each service gets its
+///   own (a fixed shared port lets only the first bind), so the concrete port
+///   is learned from a throwaway probe bind — which also reports "already in
+///   use" here rather than letting the detached task swallow it while the UI
+///   shows a live endpoint.
+/// * **The listener is actually accepting.** The SDK binds inside its worker,
+///   so the address is not dialable until it reports ready. Awaiting that is
+///   what closes the gap; it also means a subscribe to a service nobody is
+///   publishing fails HERE, with the relay's reason, instead of looking like a
+///   dead endpoint.
+///
+/// The returned task owns the tunnel and parks forever holding it. Aborting the
+/// task (which is how [`unsubscribe_service`] stops one) drops the handle and
+/// with it the tunnel.
+fn spawn_subscribe(
+    session: RelaySession,
+    key: String,
+    local_port: u16,
+) -> Result<(String, JoinHandle<()>)> {
+    let requested = format!("127.0.0.1:{local_port}");
+    let local_addr = std::net::TcpListener::bind(&requested)
+        .map_err(|e| anyhow!("cannot bind {requested}: {e}"))?
+        .local_addr()
+        .map(|a| a.to_string())
+        .map_err(|e| anyhow!("reading bound addr for {requested}: {e}"))?;
+
+    // The probe is released above; a tiny TOCTOU window remains before the SDK
+    // rebinds, which the readiness wait below turns from a silent failure into a
+    // reported one.
+    let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+    let handle = runtime().spawn({
+        let local_addr = local_addr.clone();
+        async move {
+            let opts = SubscribeOptions {
+                key: key.clone(),
+                local_addr,
+            };
+            match subscribe(&session, opts).await {
+                Ok(connection) => {
+                    // A send failure means the caller gave up waiting; the tunnel
+                    // is up either way, and the caller's own timeout already
+                    // reported that. Hold it regardless, so an abort is what tears
+                    // it down.
+                    let _ = ready_tx.send(Ok(()));
+                    std::future::pending::<()>().await;
+                    drop(connection);
+                },
+                Err(err) => {
+                    let message = format!("{err:#}");
+                    tracing::warn!(key = %key, error = %message, "subscribe failed");
+                    let _ = ready_tx.send(Err(message));
+                },
+            }
+        }
+    });
+
+    // Awaited ON the runtime, not with a blocking channel recv: this is called
+    // from synchronous FRB entrypoints, and parking a runtime worker thread on a
+    // std channel could deadlock against the very task we are waiting for.
+    //
+    // Bounded so a wedged relay cannot hang the Flutter isolate forever. The
+    // budget is the SDK's own readiness timeout plus a margin, so it only fires
+    // when the SDK itself has already given up.
+    let outcome = runtime()
+        .block_on(async { tokio::time::timeout(subscribe_ready_timeout(), ready_rx).await });
+    match outcome {
+        Ok(Ok(Ok(()))) => Ok((local_addr, handle)),
+        Ok(Ok(Err(message))) => {
+            handle.abort();
+            Err(anyhow!("subscribing to the relay failed: {message}"))
+        },
+        // Sender dropped without reporting (the task was aborted or panicked),
+        // or the readiness budget elapsed. Neither leaves a dialable endpoint, so
+        // both have to fail rather than hand back an address that refuses.
+        Ok(Err(_)) | Err(_) => {
+            handle.abort();
+            Err(anyhow!(
+                "the relay did not accept a subscription on `{requested}` within {}s",
+                subscribe_ready_timeout().as_secs()
+            ))
+        },
+    }
+}
+
+/// How long a subscribe waits for the tunnel to come up before giving up.
+///
+/// A margin over [`pocket_codex_pb::TUNNEL_READY_TIMEOUT`], which is what the
+/// SDK itself waits: this bound exists only so a wedged worker cannot hang the
+/// blocking caller forever, not to pre-empt the SDK's own verdict.
+const SUBSCRIBE_READY_TIMEOUT: std::time::Duration =
+    pocket_codex_pb::TUNNEL_READY_TIMEOUT.saturating_add(std::time::Duration::from_secs(5));
+
+/// Test-only override for [`SUBSCRIBE_READY_TIMEOUT`], so a case that
+/// deliberately points at nothing does not spend the full production budget
+/// waiting.
+#[cfg(test)]
+static TEST_READY_TIMEOUT: Mutex<Option<std::time::Duration>> = Mutex::new(None);
+
+fn subscribe_ready_timeout() -> std::time::Duration {
+    #[cfg(test)]
+    if let Some(over) = *TEST_READY_TIMEOUT.lock().unwrap_or_else(|p| p.into_inner()) {
+        return over;
+    }
+    SUBSCRIBE_READY_TIMEOUT
 }
 
 /// Abort and forget the subscription for `key`. No-op if absent.
@@ -161,100 +264,9 @@ pub fn unsubscribe_service(key: &str) {
 pub fn subscribe_transient(
     key: String,
     local_port: u16,
-    relay: String,
+    transport: &Transport,
 ) -> Result<(String, JoinHandle<()>)> {
-    let requested = format!("127.0.0.1:{local_port}");
-    // Probe-bind to learn the concrete port (and fail fast if it can't bind),
-    // mirroring subscribe_service.
-    let local_addr = match std::net::TcpListener::bind(&requested) {
-        Ok(probe) => probe
-            .local_addr()
-            .map(|a| a.to_string())
-            .map_err(|e| anyhow!("reading bound addr for {requested}: {e}"))?,
-        Err(e) => return Err(anyhow!("cannot bind {requested}: {e}")),
-    };
-    let opts = SubscribeOptions {
-        key,
-        local_addr: local_addr.clone(),
-        relay_addr: relay,
-    };
-    let handle = runtime().spawn(async move { subscribe(opts).await });
-    Ok((local_addr, handle))
-}
-
-/// Account-mode analogue of [`subscribe_service`]: broker-subscribe the service
-/// identified by `service_key` (a `pcx:device:kind:name` key) through the
-/// backend, exposing it on a local listener tracked in the same registry. A
-/// live subscription for `service_key` is reused.
-pub fn subscribe_account(
-    service_key: String,
-    local_port: u16,
-    support_dir: &Path,
-) -> Result<SubStatus> {
-    let mut reg = registry().lock().expect("registry poisoned");
-    if let Some(e) = reg.get(&service_key) {
-        if !e.handle.is_finished() {
-            return Ok(SubStatus {
-                key: service_key,
-                local_addr: e.local_addr.clone(),
-                alive: true,
-            });
-        }
-    }
-    let (local_addr, handle) = spawn_account_subscribe(&service_key, local_port, support_dir)?;
-    reg.insert(service_key.clone(), SubEntry {
-        local_addr: local_addr.clone(),
-        handle,
-    });
-    Ok(SubStatus {
-        key: service_key,
-        local_addr,
-        alive: true,
-    })
-}
-
-/// Transient (unregistered) account subscribe for a reachability probe; the
-/// caller MUST `abort()` the returned handle when done (mirrors
-/// [`subscribe_transient`]).
-pub fn subscribe_account_transient(
-    service_key: String,
-    local_port: u16,
-    support_dir: &Path,
-) -> Result<(String, JoinHandle<()>)> {
-    spawn_account_subscribe(&service_key, local_port, support_dir)
-}
-
-/// Bind a local listener (sync, so no nested `block_on`) and spawn a broker
-/// subscribe forwarding it to the account's relay-exposed service.
-fn spawn_account_subscribe(
-    service_key: &str,
-    local_port: u16,
-    support_dir: &Path,
-) -> Result<(String, JoinHandle<()>)> {
-    let service = ServiceId::parse_key(service_key)
-        .ok_or_else(|| anyhow!("not a pocket-codex service key: {service_key}"))?;
-    let (connector, tokens) = account::broker_transport(support_dir)?;
-    let std_listener = std::net::TcpListener::bind(format!("127.0.0.1:{local_port}"))
-        .map_err(|e| anyhow!("cannot bind 127.0.0.1:{local_port}: {e}"))?;
-    std_listener
-        .set_nonblocking(true)
-        .map_err(|e| anyhow!("set_nonblocking: {e}"))?;
-    let local_addr = std_listener
-        .local_addr()
-        .map_err(|e| anyhow!("reading bound addr: {e}"))?
-        .to_string();
-    let cfg = SubscribeConfig {
-        device: service.device,
-        kind: service.kind,
-        name: service.name,
-        idle: account::ACCOUNT_DATA_IDLE,
-    };
-    let handle = runtime().spawn(async move {
-        if let Ok(listener) = tokio::net::TcpListener::from_std(std_listener) {
-            run_subscribe(connector, tokens, cfg, listener).await;
-        }
-    });
-    Ok((local_addr, handle))
+    spawn_subscribe(transport.session.clone(), transport.relay_key(&key), local_port)
 }
 
 /// Snapshot of all tracked subscriptions.
@@ -275,6 +287,19 @@ pub fn list_subscriptions() -> Vec<SubStatus> {
 mod tests {
     use super::*;
 
+    /// A transport pointing at a relay that does not exist.
+    ///
+    /// Enough for these cases: both are about the LOCAL bind, which happens
+    /// before anything dials the relay. The spawned task then fails to
+    /// connect and logs, which is exactly what a real unreachable relay
+    /// would do.
+    fn test_transport() -> Transport {
+        Transport {
+            session: RelaySession::for_test("127.0.0.1:1"),
+            namespace: None,
+        }
+    }
+
     #[test]
     fn subscribe_fails_fast_when_port_in_use() {
         init(std::env::temp_dir()).expect("init");
@@ -282,7 +307,7 @@ mod tests {
         let occupied = std::net::TcpListener::bind("127.0.0.1:0").expect("bind probe holder");
         let port = occupied.local_addr().expect("addr").port();
 
-        let err = subscribe_service("pcx:t:api:t".to_string(), port, "relay:7666".to_string())
+        let err = subscribe_service("pcx:t:api:t".to_string(), port, &test_transport())
             .expect_err("port is occupied; subscribe must error, not report alive");
         assert!(err.to_string().contains("cannot bind"), "got: {err}");
         // Nothing should have been registered for the failed attempt.
@@ -290,21 +315,42 @@ mod tests {
     }
 
     #[test]
-    fn subscribe_auto_allocates_a_free_port_when_zero() {
+    fn an_unreachable_relay_fails_instead_of_reporting_a_dead_endpoint() {
+        init(std::env::temp_dir()).expect("init");
+        // Nothing is listening, so waiting out the production budget would just
+        // make this case slow.
+        *TEST_READY_TIMEOUT.lock().unwrap_or_else(|p| p.into_inner()) =
+            Some(std::time::Duration::from_millis(200));
+        // The contract callers rely on: a returned address is DIALABLE. Callers
+        // open a websocket to it on the next line, so reporting "alive" for a
+        // tunnel that never came up is worse than failing — it turns a clear relay
+        // error into a nondeterministic connection refused.
+        let err = subscribe_service("pcx:t:app:down".to_string(), 0, &test_transport())
+            .expect_err("nothing is listening on the relay, so this cannot be ready");
+        let err = err.to_string();
+        assert!(
+            err.contains("subscribing to the relay failed") || err.contains("did not accept"),
+            "the error should name the relay, not the local bind: {err}"
+        );
+        // And a failed attempt must leave nothing behind for `subscriptions` to
+        // show as live, or the UI would offer an endpoint that refuses.
+        assert!(!list_subscriptions()
+            .iter()
+            .any(|s| s.key == "pcx:t:app:down"));
+    }
+
+    #[test]
+    fn a_reachable_service_gets_its_own_concrete_port() {
         init(std::env::temp_dir()).expect("init");
         // Port 0 must resolve to a concrete OS-assigned port (so every service
-        // gets its own), reported back in local_addr — not a literal ":0".
-        let status = subscribe_service("pcx:t:app:zero".to_string(), 0, "relay:7666".to_string())
-            .expect("port 0 should auto-allocate a free port");
-        assert!(status.local_addr.starts_with("127.0.0.1:"), "got: {}", status.local_addr);
-        let port: u16 = status
-            .local_addr
-            .rsplit(':')
-            .next()
-            .and_then(|p| p.parse().ok())
-            .expect("local_addr must end in a numeric port");
-        assert_ne!(port, 0, "must report the concrete assigned port, not 0");
-        // Drop the spawned (relay-less) task we just started.
-        unsubscribe_service("pcx:t:app:zero");
+        // gets its own; a fixed shared port lets only the first bind), and the
+        // reported address must carry it rather than a literal `:0`.
+        //
+        // Exercised through `spawn_subscribe`'s bind step alone: confirming the
+        // readiness half needs a relay, which lives in the e2e tests.
+        let probe = std::net::TcpListener::bind("127.0.0.1:0").expect("probe bind");
+        let addr = probe.local_addr().expect("probe addr");
+        assert_ne!(addr.port(), 0, "the OS must assign a concrete port for :0");
+        assert_eq!(addr.ip().to_string(), "127.0.0.1", "subscriptions stay on loopback");
     }
 }

@@ -19,7 +19,7 @@ use pocket_codex_codex::client::{AppClient, Inbound};
 use serde_json::{json, Value};
 use tokio::{sync::broadcast, task::JoinHandle};
 
-use crate::engine::runtime;
+use crate::engine::{runtime, transport::Transport};
 
 /// A UI-facing app-server event, flattened from a JSON-RPC notification.
 ///
@@ -169,7 +169,7 @@ fn sessions() -> &'static Mutex<HashMap<String, Session>> {
 /// Subscribe to `service_key` (materialising the local ws endpoint), open a
 /// JSON-RPC client over it and run the `initialize` handshake. Idempotent: a
 /// live session for the same key is reused.
-pub fn connect(service_key: String, local_port: u16, relay: String) -> Result<()> {
+pub fn connect(service_key: String, local_port: u16, transport: &Transport) -> Result<()> {
     if reuse_live(&service_key) {
         return Ok(());
     }
@@ -177,22 +177,7 @@ pub fn connect(service_key: String, local_port: u16, relay: String) -> Result<()
     // cleanly rather than reusing a closed socket.
     disconnect(&service_key);
     // Materialise the local ws endpoint via pb-mapper (kind-agnostic subscribe).
-    let sub = runtime::subscribe_service(service_key.clone(), local_port, relay)?;
-    establish(service_key, &sub.local_addr)
-}
-
-/// Account-mode connect: broker-subscribe the service through the backend, then
-/// run the identical JSON-RPC handshake/session as [`connect`].
-pub fn connect_account(
-    service_key: String,
-    local_port: u16,
-    support_dir: &std::path::Path,
-) -> Result<()> {
-    if reuse_live(&service_key) {
-        return Ok(());
-    }
-    disconnect(&service_key);
-    let sub = runtime::subscribe_account(service_key.clone(), local_port, support_dir)?;
+    let sub = runtime::subscribe_service(service_key.clone(), local_port, transport)?;
     establish(service_key, &sub.local_addr)
 }
 
@@ -399,7 +384,7 @@ fn buffered_items(service_key: &str, thread_id: &str) -> Vec<ThreadItem> {
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// How long the API probe waits for its HTTP response to come back. The full
-/// round-trip is local-listener → broker → relay → the api proxy's *register*
+/// round-trip is local-listener → relay → the api proxy's *register*
 /// side → the proxy → all the way back, plus the cold transient tunnel's TLS
 /// handshakes. For a proxy hosted on a remote server that easily exceeds
 /// [`PROBE_TIMEOUT`], which made a perfectly reachable API service read as
@@ -427,7 +412,7 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
 /// a far end that answered and refused the handshake needs a different remedy
 /// from one that is simply down, and the UI can only say so if the transport's
 /// own words survive this far.
-pub fn probe_reason(service_key: String, local_port: u16, relay: String) -> Option<String> {
+pub fn probe_reason(service_key: String, local_port: u16, transport: &Transport) -> Option<String> {
     if is_connected(&service_key) {
         return None;
     }
@@ -436,35 +421,14 @@ pub fn probe_reason(service_key: String, local_port: u16, relay: String) -> Opti
     // teardown — a `connect`/`appConnect` racing this probe for the same
     // service key keeps its own separate entry.
     let (local_addr, handle) =
-        match runtime::subscribe_transient(service_key.clone(), local_port, relay) {
+        match runtime::subscribe_transient(service_key.clone(), local_port, transport) {
             Ok(v) => v,
+            // The tunnel itself never came up: a relay problem, which is a
+            // different failure from "the tunnel opened and the far end said no".
             Err(e) => return Some(format!("{e:#}")),
         };
     let reason = probe_endpoint_error(&local_addr);
     // Tear down ONLY this probe's own transient tunnel.
-    handle.abort();
-    reason
-}
-
-/// Account-mode analogue of [`probe_reason`]: reachability via a transient
-/// broker tunnel, reporting WHY it failed so the UI can name the reason instead
-/// of assuming the far end is down. `None` means reachable.
-pub fn probe_account_reason(
-    service_key: String,
-    local_port: u16,
-    support_dir: &std::path::Path,
-) -> Option<String> {
-    if is_connected(&service_key) {
-        return None;
-    }
-    let (local_addr, handle) =
-        match runtime::subscribe_account_transient(service_key.clone(), local_port, support_dir) {
-            Ok(v) => v,
-            // The tunnel itself never came up: a relay/broker problem, which is
-            // a different failure from "the tunnel opened and the far end said no".
-            Err(e) => return Some(format!("{e:#}")),
-        };
-    let reason = probe_endpoint_error(&local_addr);
     handle.abort();
     reason
 }
@@ -544,22 +508,11 @@ pub fn probe_endpoint_error(local_addr: &str) -> Option<String> {
     }
 }
 
-/// Account-mode reachability of an API proxy: a transient broker tunnel + a
-/// minimal HTTP request. Mirrors [`probe_account`] but for the HTTP proxy.
-pub fn probe_api_account(service_key: String, support_dir: &std::path::Path) -> bool {
-    let Ok((local_addr, handle)) =
-        runtime::subscribe_account_transient(service_key, 0, support_dir)
-    else {
-        return false;
-    };
-    let ok = probe_http_endpoint(&local_addr);
-    handle.abort();
-    ok
-}
-
-/// Self-host analogue of [`probe_api_account`].
-pub fn probe_api(service_key: String, relay: String) -> bool {
-    let Ok((local_addr, handle)) = runtime::subscribe_transient(service_key, 0, relay) else {
+/// Reachability of a remote API proxy: a transient tunnel plus a minimal HTTP
+/// request. The HTTP counterpart of [`probe_reason`], as a bare bool because an
+/// API proxy has no handshake whose failure would need explaining.
+pub fn probe_api(service_key: String, transport: &Transport) -> bool {
+    let Ok((local_addr, handle)) = runtime::subscribe_transient(service_key, 0, transport) else {
         return false;
     };
     let ok = probe_http_endpoint(&local_addr);

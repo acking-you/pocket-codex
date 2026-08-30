@@ -1,7 +1,9 @@
-//! The HTTP API: GitHub device-flow auth, session refresh/logout, and the
-//! per-account `/v1/me` + `/v1/services` views.
+//! The HTTP API: GitHub device-flow auth, session refresh/logout, the
+//! per-account `/v1/me` + `/v1/services` views, and `/v1/relay` — the endpoint
+//! that hands a client its own relay credential so the backend leaves the data
+//! path entirely.
 
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use axum::{
     extract::{Path, Query, State},
@@ -13,13 +15,13 @@ use axum::{
 use pocket_codex_account_proto::{
     http::{
         DevicePollRequest, DevicePollResponse, DeviceStartRequest, DeviceStartResponse,
-        LogoutRequest, MeResponse, RefreshRequest, RefreshResponse, ServiceEntry, ServicesResponse,
-        WebExchangeRequest, WebExchangeResponse, WebStartRequest, WebStartResponse,
+        LogoutRequest, MeResponse, RefreshRequest, RefreshResponse, RelayCredentialResponse,
+        ServiceEntry, ServicesResponse, WebExchangeRequest, WebExchangeResponse, WebStartRequest,
+        WebStartResponse,
     },
     key::NamespacedServiceId,
 };
 use pocket_codex_auth::{Auth, AuthError, Claims};
-use pocket_codex_broker_server::BrokerServer;
 use pocket_codex_core::service::{ServiceId, ServiceKind};
 use serde::Deserialize;
 use tower_http::{limit::RequestBodyLimitLayer, timeout::TimeoutLayer, trace::TraceLayer};
@@ -29,10 +31,12 @@ use tower_http::{limit::RequestBodyLimitLayer, timeout::TimeoutLayer, trace::Tra
 pub struct AppState {
     /// The identity/session service.
     pub auth: Arc<Auth>,
-    /// Loopback relay address, queried for the account's service listing.
-    pub relay_addr: SocketAddr,
-    /// The broker, used to force-deregister a caller's relay key on demand.
-    pub broker: BrokerServer,
+    /// The relay plus the ADMINISTRATOR credential, for the two things the
+    /// backend still does on an account's behalf: listing its services across
+    /// namespaces, and retiring a registration whose owner is gone.
+    pub relay: pocket_codex_pb::RelaySession,
+    /// Vends each account its own short-lived relay credential.
+    pub credentials: crate::credentials::Credentials,
 }
 
 /// Build the HTTP API router.
@@ -48,6 +52,7 @@ pub fn router(state: AppState) -> Router {
         .route("/auth/logout", post(logout))
         .route("/v1/me", get(me))
         .route("/v1/services", get(services))
+        .route("/v1/relay", get(relay_credential))
         .route("/v1/services/{device}/{kind}/{name}", delete(deregister_service))
         // Bound every request so a slow upstream (GitHub) can't pin connections
         // on the unauthenticated /auth/* surface indefinitely.
@@ -259,19 +264,54 @@ async fn me(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json
     }))
 }
 
+/// List the caller's own services, as the relay sees them.
+///
+/// Scoped by the account's relay NAMESPACE first and its key prefix second. The
+/// namespace is what actually attributes a registration: a service name is
+/// whatever its registrant typed, so another account could register the literal
+/// string `pcxu:<this-user>:mac:app:default` inside its own namespace, and a
+/// prefix-only filter would show that phantom here. The prefix check stays
+/// because it is what parses the key into device/kind/name.
 async fn services(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> ApiResult<Json<ServicesResponse>> {
     let claims = authed(&state, &headers)?;
-    let prefix = NamespacedServiceId::user_prefix(&claims.sub);
-    let keys = pocket_codex_pb::keys(state.relay_addr)
+    let Some(namespace) = state
+        .credentials
+        .namespace_of(&claims.sub)
+        .await
+        .map_err(|e| ApiError::Internal(format!("resolving the account namespace: {e:#}")))?
+    else {
+        // No credential ever issued, so nothing can have been registered.
+        return Ok(Json(ServicesResponse::default()));
+    };
+    let all = pocket_codex_pb::all_services(&state.relay)
         .await
         .map_err(|e| ApiError::Internal(format!("relay status: {e}")))?;
-    let services = keys
-        .into_iter()
-        .filter(|k| k.starts_with(&prefix))
-        .filter_map(|k| NamespacedServiceId::parse_key(&k))
+    Ok(Json(ServicesResponse {
+        services: own_services(&all, namespace, &claims.sub),
+    }))
+}
+
+/// The subset of `all` that belongs to `user_id` in relay `namespace`.
+///
+/// Factored out of the handler so the attribution rule is testable without a
+/// relay — it is the rule that keeps one account's listing from showing
+/// another's registrations.
+fn own_services(
+    all: &[pocket_codex_pb::ServiceRecord],
+    namespace: u64,
+    user_id: &str,
+) -> Vec<ServiceEntry> {
+    let prefix = NamespacedServiceId::user_prefix(user_id);
+    all.iter()
+        // BOTH conditions, and the namespace is the load-bearing one: a service
+        // name is whatever its registrant typed, so account B can register the
+        // literal string `pcxu:<A>:mac:app:default` inside B's own namespace. The
+        // prefix alone would attribute that to A.
+        .filter(|svc| svc.namespace == namespace && svc.name.starts_with(&prefix))
+        .filter_map(|svc| NamespacedServiceId::parse_key(&svc.name))
         // Only surface the kinds clients consume directly. The meta service is a
         // colocated implementation detail (clients derive its key from the app
         // key), and an unrecognised kind must never be sent — an older client
@@ -283,10 +323,7 @@ async fn services(
             kind: nsid.service.kind,
             name: nsid.service.name,
         })
-        .collect();
-    Ok(Json(ServicesResponse {
-        services,
-    }))
+        .collect()
 }
 
 /// Force-deregister one of the caller's own services from the relay. The relay
@@ -304,6 +341,113 @@ async fn deregister_service(
         .map_err(|_| ApiError::BadRequest("invalid service kind"))?;
     let relay_key =
         NamespacedServiceId::new(&claims.sub, ServiceId::new(&device, kind, &name)).key();
-    state.broker.deregister_key(&relay_key).await;
+    // Asks the RELAY to drop the registration's connections. It used to cancel a
+    // broker session that owned the tunnel; with clients registering directly the
+    // backend no longer holds anything to cancel, so the authority it does have —
+    // its administrator credential — is what retires the key.
+    //
+    // Both the namespace and the key come from the verified token, so a caller
+    // can only ever name a service of their own. Naming the namespace is not
+    // optional: the relay reads an absent one as the administrator's, where an
+    // account's services never live, so omitting it would retire nothing.
+    let Some(namespace) = state
+        .credentials
+        .namespace_of(&claims.sub)
+        .await
+        .map_err(|e| ApiError::Internal(format!("resolving the account namespace: {e:#}")))?
+    else {
+        // No credential, so nothing of this account's is registered. The
+        // post-condition the caller wants already holds.
+        return Ok(StatusCode::NO_CONTENT);
+    };
+    pocket_codex_pb::retire_service(&state.relay, namespace, &relay_key)
+        .await
+        .map_err(|e| ApiError::Internal(format!("retiring {relay_key}: {e:#}")))?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Hand this account the relay address and a short-lived credential, so the
+/// client can register and subscribe against the relay directly.
+///
+/// This is the endpoint that takes the backend off the data path: everything
+/// after it is client↔relay. The credential is per-account (see
+/// [`crate::credentials`]) and scoped to the account's namespace by the relay
+/// itself, so possession of it grants nothing outside that account.
+async fn relay_credential(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<Json<RelayCredentialResponse>> {
+    let claims = authed(&state, &headers)?;
+    let (credential, expires_at) = state
+        .credentials
+        .for_account(&claims.sub)
+        .await
+        .map_err(|e| ApiError::Internal(format!("issuing a relay credential: {e:#}")))?;
+    Ok(Json(RelayCredentialResponse {
+        relay_addr: state.credentials.relay_addr().to_string(),
+        credential,
+        expires_at,
+        // From the VERIFIED token, never from the request: this is the one place
+        // an account's namespace is decided, and a client that asked for another
+        // one would still be confined by the credential it gets back.
+        namespace: NamespacedServiceId::namespace_of(&claims.sub),
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    use pocket_codex_pb::ServiceRecord;
+
+    use super::*;
+
+    fn record(namespace: u64, name: &str) -> ServiceRecord {
+        ServiceRecord {
+            namespace,
+            name: name.to_string(),
+        }
+    }
+
+    #[test]
+    fn a_listing_is_scoped_by_namespace_not_just_by_key_prefix() {
+        // The attack this closes: account B registers a name that LOOKS like one of
+        // A's. The relay is right to allow it — B's namespace is B's to fill — so
+        // the filter, not the relay, has to refuse to attribute it to A.
+        const ALICE_NS: u64 = 11;
+        const BOB_NS: u64 = 22;
+        let all = vec![
+            record(ALICE_NS, "pcxu:alice:mac:app:default"),
+            // Bob's namespace, Alice's name. Must NOT appear in Alice's listing.
+            record(BOB_NS, "pcxu:alice:mac:app:phantom"),
+            record(BOB_NS, "pcxu:bob:studio:app:default"),
+        ];
+
+        let alice = own_services(&all, ALICE_NS, "alice");
+        assert_eq!(alice.len(), 1, "expected only Alice's own service, got {alice:?}");
+        assert_eq!(alice[0].name, "default");
+
+        // And the converse: Alice's namespace does not leak into Bob's listing
+        // either, even though one of those names carries his prefix.
+        let bob = own_services(&all, BOB_NS, "bob");
+        assert_eq!(bob.len(), 1, "expected only Bob's own service, got {bob:?}");
+        assert_eq!(bob[0].device, "studio");
+    }
+
+    #[test]
+    fn a_listing_hides_meta_and_unparsable_keys() {
+        const NS: u64 = 7;
+        let all = vec![
+            record(NS, "pcxu:alice:mac:app:default"),
+            record(NS, "pcxu:alice:mac:api:default"),
+            // Colocated implementation detail: clients derive it from the app key.
+            record(NS, "pcxu:alice:mac:meta:default"),
+            // Same namespace, but not one of ours at all.
+            record(NS, "some-unrelated-service"),
+        ];
+        let mut kinds: Vec<String> = own_services(&all, NS, "alice")
+            .into_iter()
+            .map(|s| s.kind.as_key_segment().to_string())
+            .collect();
+        kinds.sort();
+        assert_eq!(kinds, vec!["api", "app"]);
+    }
 }

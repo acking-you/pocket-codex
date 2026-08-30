@@ -83,8 +83,6 @@ jobs:
             -p pocket-codex-account-proto \
             -p pocket-codex-store \
             -p pocket-codex-auth \
-            -p pocket-codex-broker-client \
-            -p pocket-codex-broker-server \
             -p pocket-codex-backend
 
   clippy:

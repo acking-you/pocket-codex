@@ -1,250 +1,368 @@
-//! Thin async wrappers around the upstream `pb-mapper` library.
+//! Async wrappers around the published `pb-mapper` client SDK.
 //!
 //! ```text
-//!     Pocket-Codex helper          Upstream pb-mapper entrypoint
-//!     ─────────────────────────    ────────────────────────────────────────
-//!     register(RegisterOptions)  → local::server::run_server_side_cli
-//!                                    <TcpStreamProvider, _> (is_datagram=false)
-//!     subscribe(SubscribeOptions)→ local::client::run_client_side_cli
-//!                                    <TcpListenerProvider, _>
-//!     status(addr, kind)         → local::client::handle_status_cli(StatusOp, addr)
-//!     keys(addr)                 → local::client::status::get_status(
-//!                                    PbConnStatusReq::Keys)
-//!     service_connections(addr,  → local::client::status::get_status(
-//!         key)                       PbConnStatusReq::Service { key })
+//!     Pocket-Codex helper           pb-mapper SDK entrypoint
+//!     ──────────────────────────    ────────────────────────────────────────
+//!     register(RegisterOptions)   → Client::register(RegisterRequest)
+//!     subscribe(SubscribeOptions) → Client::connect(ConnectRequest)
+//!     keys(relay, credential)     → Client::list_keys
+//!     service_connections(…)      → Client::service_status
 //!
-//!         caller TCP socket  ── (relay_addr) ──▶  pb-mapper relay
-//!                                                  │
-//!                                                  ▼
-//!                                         registered service keys /
-//!                                         per-key connection list
+//!         caller ── (relay_addr + credential) ──▶  pb-mapper relay
+//!                                                   │
+//!                                                   ▼
+//!                                          registered service keys /
+//!                                          per-key connection list
 //! ```
 //!
-//! The upstream API takes generic `LocalStream`/`LocalListener` type
-//! parameters and `ToSocketAddrs` for both sides; we lock those down to
-//! TCP and `String` addresses because that's the only combination
-//! Pocket-Codex actually needs (codex app-server speaks WebSocket over
-//! TCP, never UDP). Should we ever need UDP we can extend this module
-//! with a parallel set of helpers.
+//! # Why the credential is a parameter now
+//!
+//! This module used to call `set_process_msg_header_key`, a process-global
+//! mutation, and every entrypoint relied on it having happened first. That made
+//! the relay's shared key ambient state in whatever process wanted to tunnel —
+//! including the Flutter app's bridge. The SDK's credential is per-[`Client`]
+//! instead, so it travels as an argument and two sessions in one process may
+//! hold different credentials. That is what lets the backend keep the admin key
+//! while a client only ever holds a short-lived issued one.
+//!
+//! # Registrations are handles, not futures
+//!
+//! `register`/`subscribe` used to return a future that ran until the session
+//! died, so callers `tokio::spawn`ed it and had no way to ask whether the
+//! tunnel was actually up. The SDK spawns its own worker and hands back a
+//! handle carrying readiness and a `stop()`. We surface that handle so a caller
+//! can wait for the relay to accept the registration and tear it down
+//! deliberately — dropping it aborts the tunnel.
 
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::time::Duration;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use pb_mapper::{
-    common::{
-        config::StatusOp,
-        message::command::{PbConnStatusReq, PbConnStatusResp, PbServiceConnStatus},
-    },
-    local::{
-        client::{handle_status_cli, run_client_side_cli, status::get_status},
-        server::run_server_side_cli,
-    },
+    Client, ClientConfig, ConnectRequest, Connection, RegisterRequest, Registration,
+    ServiceConnection, Transport,
 };
-use tokio::{net::TcpStream, time::timeout};
-use uni_stream::stream::{TcpListenerProvider, TcpStreamProvider};
+
+/// Relay address plus the credential to present to it.
+///
+/// The credential is either the relay's 32-byte administrator key or a
+/// `pbmt1_`-prefixed temporary credential the relay issued. The SDK decides
+/// which from the string's shape; only the admin one may drive admin RPCs.
+///
+/// `Debug` is hand-written to redact the credential. Deriving it would put the
+/// relay's administrator key into any log line, panic message, or error chain
+/// that happened to format a value containing one — and the backend holds
+/// exactly that key.
+#[derive(Clone, PartialEq, Eq)]
+pub struct RelaySession {
+    /// `host:port` of the relay (`pb-mapper server`).
+    pub relay_addr: String,
+    /// Administrator key or `pbmt1_…` temporary credential.
+    pub credential: String,
+    /// Whether to enable TCP keep-alive on relay connections.
+    pub keep_alive: bool,
+}
+
+impl std::fmt::Debug for RelaySession {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RelaySession")
+            .field("relay_addr", &self.relay_addr)
+            // Which KIND of credential is diagnostically useful ("the backend is
+            // presenting a temporary key" is a real bug report); the bytes never
+            // are.
+            .field("credential", &if self.credential.starts_with("pbmt1_") {
+                "<temporary>"
+            } else {
+                "<admin>"
+            })
+            .field("keep_alive", &self.keep_alive)
+            .finish()
+    }
+}
+
+impl RelaySession {
+    /// A session against `relay_addr` presenting `credential`, keep-alive on.
+    ///
+    /// Keep-alive defaults on because every tunnel we open is long-lived: a
+    /// registration outlives the app that published it, and a dead peer that
+    /// never sends a FIN would otherwise hold the slot until the relay's own
+    /// lease sweep noticed.
+    pub fn new(relay_addr: impl Into<String>, credential: impl Into<String>) -> Self {
+        Self {
+            relay_addr: relay_addr.into(),
+            credential: credential.into(),
+            keep_alive: true,
+        }
+    }
+
+    /// A session against `relay_addr` with a syntactically valid throwaway
+    /// credential, for tests that never reach the relay.
+    ///
+    /// Exists because the SDK validates the credential when the client is
+    /// built, so a test exercising, say, token rejection would otherwise
+    /// have to carry a 32-byte literal that has nothing to do with what it
+    /// is testing.
+    pub fn for_test(relay_addr: impl Into<String>) -> Self {
+        Self::new(relay_addr, "0".repeat(32))
+    }
+
+    /// The admin RPC surface for this session.
+    ///
+    /// Fails locally, before any I/O, unless the credential is the
+    /// administrator key — so a client session cannot reach these even by
+    /// accident, and the failure is a programming error surfaced immediately
+    /// rather than a permission error surfaced over the wire.
+    pub(crate) fn admin(&self) -> Result<pb_mapper::Admin> {
+        self.client()?
+            .admin()
+            .map_err(|err| anyhow!("admin access on {}: {err}", self.relay_addr))
+    }
+
+    /// Build the SDK client for this session.
+    fn client(&self) -> Result<Client> {
+        Client::new(ClientConfig {
+            server: self.relay_addr.clone(),
+            credential: self.credential.clone(),
+            keep_alive: self.keep_alive,
+            // Temporary credentials are scoped to their own key id by the
+            // relay; only an admin credential could target another namespace,
+            // and nothing here has a reason to.
+            namespace: None,
+        })
+        .map_err(|err| anyhow!("building pb-mapper client for {}: {err}", self.relay_addr))
+    }
+}
 
 /// Options for registering a local TCP service with a remote relay.
-///
-/// Mirrors `pb-mapper-server-cli tcp-server`.
 #[derive(Debug, Clone)]
 pub struct RegisterOptions {
     /// Service key under which the relay should index the registration.
     pub key: String,
     /// `host:port` of the local service to expose.
     pub local_addr: String,
-    /// `host:port` of the upstream relay (`pb-mapper-server`).
-    pub relay_addr: String,
     /// Enable AES-256-GCM end-to-end encryption (matches `--codec`).
     pub codec: bool,
 }
 
 /// Options for subscribing to a remote service from a client device.
-///
-/// Mirrors `pb-mapper-client-cli tcp-server`.
 #[derive(Debug, Clone)]
 pub struct SubscribeOptions {
     /// Service key the client wants to attach to.
     pub key: String,
-    /// `host:port` of the local listener the client should expose.
+    /// `host:port` of the local listener to expose.
     pub local_addr: String,
-    /// `host:port` of the upstream relay.
-    pub relay_addr: String,
 }
 
-/// Register a local TCP service with the relay.
+/// How long to wait for the relay to accept a registration before treating it
+/// as failed.
 ///
-/// This future runs forever (or until the upstream pb-mapper session
-/// fails) and is intended to be `tokio::spawn`-ed by the caller.
-pub async fn register(opts: RegisterOptions) {
-    let local: Arc<str> = Arc::from(opts.local_addr.as_str());
-    let remote: Arc<str> = Arc::from(opts.relay_addr.as_str());
-    run_server_side_cli::<TcpStreamProvider, _>(
-        local.as_ref(),
-        remote.as_ref(),
-        Arc::from(opts.key.as_str()),
-        opts.codec,
-        false, // is_datagram
-    )
-    .await;
+/// The SDK reports a registration `failed` only once EVERY worker in its
+/// control-connection pool has permanently given up, so an unbounded wait can
+/// sit on a partially-wedged pool. Bounding it means a caller learns about a
+/// relay that is refusing us — an over-quota service, a revoked credential —
+/// instead of hanging.
+pub const TUNNEL_READY_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Publish a local TCP service on the relay.
+///
+/// Returns once the relay has accepted the registration. The returned handle
+/// owns the tunnel: hold it for as long as the service should stay published,
+/// and prefer [`Registration::stop`] over dropping it so the teardown is
+/// awaited rather than aborted.
+pub async fn register(session: &RelaySession, opts: RegisterOptions) -> Result<Registration> {
+    let (registration, ready) = register_pending(session, opts).await?;
+    ready?;
+    Ok(registration)
+}
+
+/// Register, returning the handle AND the readiness outcome separately.
+///
+/// For a caller that must keep the registration even when it is not up yet: the
+/// SDK's worker goes on retrying, so the handle is what lets the service appear
+/// once the relay is reachable. [`register`] is this plus "treat not-ready as a
+/// failure", which is right when the caller has nowhere to hold a pending
+/// handle.
+///
+/// An `Err` from this function means the relay REFUSED the registration; the
+/// inner `Err` means it has not confirmed it yet.
+pub async fn register_pending(
+    session: &RelaySession,
+    opts: RegisterOptions,
+) -> Result<(Registration, Result<()>)> {
+    let registration = session
+        .client()?
+        .register(RegisterRequest {
+            key: opts.key.clone(),
+            local_addr: opts.local_addr.clone(),
+            transport: Transport::Tcp,
+            codec: opts.codec,
+            // Never force a namespace: a temporary credential owns exactly one,
+            // and forcing is an admin-only override we have no use for.
+            force_namespace: false,
+        })
+        .await
+        .with_context(|| format!("registering `{}` on {}", opts.key, session.relay_addr))?;
+    let ready = registration
+        .wait_ready_timeout(TUNNEL_READY_TIMEOUT)
+        .await
+        .with_context(|| {
+            format!("waiting for `{}` to register on {}", opts.key, session.relay_addr)
+        });
+    Ok((registration, ready))
 }
 
 /// Subscribe to a remote service and expose it on a local TCP port.
 ///
-/// This future runs forever (or until the upstream pb-mapper session
-/// fails) and is intended to be `tokio::spawn`-ed by the caller.
-pub async fn subscribe(opts: SubscribeOptions) {
-    let local: Arc<str> = Arc::from(opts.local_addr.as_str());
-    let remote: Arc<str> = Arc::from(opts.relay_addr.as_str());
-    run_client_side_cli::<TcpListenerProvider, _>(
-        local.as_ref(),
-        remote.as_ref(),
-        Arc::from(opts.key.as_str()),
-    )
-    .await;
+/// Returns once the local listener is bound AND the relay has confirmed the
+/// service, so a caller told the tunnel is ready can immediately dial
+/// `opts.local_addr`.
+pub async fn subscribe(session: &RelaySession, opts: SubscribeOptions) -> Result<Connection> {
+    let connection = session
+        .client()?
+        .connect(ConnectRequest {
+            key: opts.key.clone(),
+            local_addr: opts.local_addr.clone(),
+            transport: Transport::Tcp,
+        })
+        .await
+        .with_context(|| format!("subscribing to `{}` on {}", opts.key, session.relay_addr))?;
+    connection
+        .wait_ready_timeout(TUNNEL_READY_TIMEOUT)
+        .await
+        .with_context(|| {
+            format!("waiting for `{}` to subscribe on {}", opts.key, session.relay_addr)
+        })?;
+    Ok(connection)
 }
 
-/// Apply the shared `MSG_HEADER_KEY` to this process and the environment
-/// child workers inherit.
+/// Query the service keys visible to this session's credential.
 ///
-/// Thin wrapper over the upstream
-/// [`pb_mapper::common::checksum::set_process_msg_header_key`]: it both
-/// sets the `MSG_HEADER_KEY` env var (so spawned `__worker` children pick
-/// it up) and updates pb-mapper's in-process key (so calls made from this
-/// process validate too). `Some(non-empty)` must be exactly 32 bytes;
-/// `None`/empty resets to the upstream default. Errors are surfaced as
-/// `anyhow` so callers stay decoupled from pb-mapper's error type.
-pub fn set_msg_header_key(key: Option<&str>) -> Result<()> {
-    pb_mapper::common::checksum::set_process_msg_header_key(key)
-        .map_err(|err| anyhow!("applying MSG_HEADER_KEY: {err}"))
+/// A temporary credential sees only its own namespace, so this is the tenant's
+/// own inventory rather than the relay's whole listing.
+pub async fn keys(session: &RelaySession) -> Result<Vec<String>> {
+    session
+        .client()?
+        .list_keys()
+        .await
+        .with_context(|| format!("listing keys on {}", session.relay_addr))
 }
 
-/// What kind of relay status query to issue.
-#[derive(Debug, Clone, Copy)]
-pub enum StatusKind {
-    /// List active subscription / connection ids.
-    RemoteId,
-    /// List registered service keys.
-    Keys,
-}
-
-/// Pretty-print the relay's view of registered services / clients to
-/// stdout. Mirrors `pb-mapper-{server,client}-cli status …`.
+/// The relay's id for this connection, as the relay reports it.
 ///
-/// `relay_addr` is taken as a pre-resolved [`SocketAddr`] because the
-/// upstream helper requires `Copy + Send + 'static` address types.
-pub async fn status(relay_addr: SocketAddr, kind: StatusKind) {
-    let op = match kind {
-        StatusKind::RemoteId => StatusOp::RemoteId,
-        StatusKind::Keys => StatusOp::Keys,
-    };
-    handle_status_cli(op, relay_addr).await;
-}
-
-/// Query registered service keys from a relay.
-pub async fn keys(relay_addr: SocketAddr) -> Result<Vec<String>> {
-    match query_status(relay_addr, PbConnStatusReq::Keys).await? {
-        PbConnStatusResp::Keys(keys) => Ok(keys),
-        other => Err(anyhow!("relay returned unexpected keys status: {other:?}")),
-    }
+/// Useful only for diagnostics — it names the connection, not the service — but
+/// it is what `pb status remote-id` answers, so it stays exposed.
+pub async fn remote_id(session: &RelaySession) -> Result<String> {
+    session
+        .client()?
+        .remote_id()
+        .await
+        .map(|id| format!("{id:?}"))
+        .with_context(|| format!("querying remote id on {}", session.relay_addr))
 }
 
 /// Query connection health for one registered service key.
 pub async fn service_connections(
-    relay_addr: SocketAddr,
+    session: &RelaySession,
     key: impl Into<String>,
-) -> Result<Vec<PbServiceConnStatus>> {
+) -> Result<Vec<ServiceConnection>> {
     let key = key.into();
-    match query_status(relay_addr, PbConnStatusReq::Service {
-        key: key.clone(),
-    })
-    .await?
-    {
-        PbConnStatusResp::Service {
-            connections, ..
-        } => Ok(connections),
-        other => Err(anyhow!("relay returned unexpected service status for `{key}`: {other:?}")),
-    }
-}
-
-/// Default bound for establishing the relay control connection. Without
-/// it, a dead/black-holed relay makes `TcpStream::connect` hang on the
-/// kernel SYN retry budget (~123s) and the CLI looks frozen.
-const RELAY_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// Connect to the relay, bounding the attempt by `dur`. Split out so the
-/// timeout behaviour is unit-testable without a real dead relay.
-async fn connect_relay(relay_addr: SocketAddr, dur: Duration) -> Result<TcpStream> {
-    match timeout(dur, TcpStream::connect(relay_addr)).await {
-        Ok(result) => result.with_context(|| format!("connecting to pb-mapper relay {relay_addr}")),
-        Err(_) => {
-            Err(anyhow!("connecting to pb-mapper relay {relay_addr} timed out after {dur:?}"))
-        },
-    }
-}
-
-async fn query_status(relay_addr: SocketAddr, req: PbConnStatusReq) -> Result<PbConnStatusResp> {
-    let mut stream = connect_relay(relay_addr, RELAY_CONNECT_TIMEOUT).await?;
-    get_status(&mut stream, req)
+    session
+        .client()?
+        .service_status(key.clone())
         .await
-        .map_err(|err| anyhow!("querying pb-mapper relay status: {err}"))
+        .with_context(|| format!("querying `{key}` status on {}", session.relay_addr))
+}
+
+/// Check that `addr` is a `host:port` a relay session could dial.
+///
+/// Deliberately NOT `SocketAddr::parse`: clients dial the relay by name
+/// (`lb7666.top:7666`), so requiring a literal IP would reject every real
+/// deployment. The SDK resolves the host itself; all we owe a caller is an
+/// early "you typed that wrong" on a value that came from a CLI flag or a
+/// settings field, before it becomes a connection error much later.
+pub fn parse_relay_addr(addr: &str) -> Result<()> {
+    let (host, port) = addr
+        .rsplit_once(':')
+        .ok_or_else(|| anyhow!("`{addr}` is missing a `:port`"))?;
+    // An IPv6 literal keeps its brackets (`[::1]:7666`); `rsplit_once` already
+    // took the port off the end, so anything left is the host.
+    if host.is_empty() {
+        bail!("`{addr}` is missing a host");
+    }
+    port.parse::<u16>()
+        .map(|_| ())
+        .with_context(|| format!("`{addr}` has an invalid port"))
 }
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
     use super::*;
 
     #[test]
-    fn set_msg_header_key_rejects_wrong_length() {
-        // Validation happens before any global mutation, so this is safe to
-        // run in parallel: a 5-byte key can never be accepted.
-        assert!(set_msg_header_key(Some("short")).is_err());
+    fn a_session_rejects_an_empty_credential() {
+        // The SDK validates before any I/O, which is what makes this testable
+        // without a relay — and is why a misconfigured key surfaces at build
+        // time rather than as a connection failure minutes later.
+        let session = RelaySession::new("127.0.0.1:7666", "");
+        assert!(session.client().is_err());
     }
 
-    /// Loopback listener with a backlog of one, saturated so the next TCP
-    /// connect hangs in SYN retransmission instead of completing. Unlike a
-    /// "black-holed" public address (RFC 5737 TEST-NET-1), this stays
-    /// correct on hosts where a TUN-mode proxy/VPN answers every outbound
-    /// SYN locally — keep both the socket and the filler connections alive
-    /// for as long as the connect must keep hanging.
-    fn saturated_listener() -> (socket2::Socket, Vec<std::net::TcpStream>, SocketAddr) {
-        let listener = socket2::Socket::new(socket2::Domain::IPV4, socket2::Type::STREAM, None)
-            .expect("create loopback socket");
-        let bind_addr: SocketAddr = "127.0.0.1:0".parse().expect("loopback addr");
-        listener
-            .bind(&bind_addr.into())
-            .expect("bind loopback socket");
-        listener.listen(1).expect("listen with backlog 1");
-        let addr = listener
-            .local_addr()
-            .expect("local addr")
-            .as_socket()
-            .expect("inet addr");
-
-        // Fill the accept queue: connects succeed instantly until the
-        // backlog is full, then the kernel drops the SYN and the attempt
-        // times out — at that point every later connect hangs too.
-        let mut fillers = Vec::new();
-        while let Ok(stream) =
-            std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(250))
-        {
-            fillers.push(stream);
-            assert!(fillers.len() <= 16, "backlog never saturated");
-        }
-        (listener, fillers, addr)
+    #[test]
+    fn a_session_rejects_a_wrong_length_admin_key() {
+        // Anything that is not a `pbmt1_` credential must be exactly 32 bytes.
+        let session = RelaySession::new("127.0.0.1:7666", "short");
+        assert!(session.client().is_err());
     }
 
-    #[tokio::test]
-    async fn connect_relay_errors_fast_when_connect_hangs() {
-        let (_listener, _fillers, addr) = saturated_listener();
-        let result = tokio::time::timeout(
-            Duration::from_secs(3),
-            connect_relay(addr, Duration::from_millis(200)),
-        )
-        .await;
-        // Outer timeout must NOT fire: connect_relay's own bound returns first.
-        let inner = result.expect("connect_relay hung past its own timeout");
-        assert!(inner.is_err(), "expected a connect error/timeout, got Ok");
+    #[test]
+    fn a_session_accepts_a_32_byte_admin_key() {
+        let session = RelaySession::new("127.0.0.1:7666", "a".repeat(32));
+        assert!(session.client().is_ok());
+    }
+
+    #[test]
+    fn a_session_accepts_a_temporary_credential() {
+        // Shape-checked by the SDK: version byte, non-zero key id, and a
+        // checksum over the payload. This one was issued by a real relay.
+        let session = RelaySession::new(
+            "127.0.0.1:7666",
+            "pbmt1_AQAAAAEAAAAAFNsL8qDUIBWtvMkHusQ9A6kEm0APq_BDwMZTCuoBCzqAsdCp",
+        );
+        assert!(session.client().is_ok());
+    }
+
+    #[test]
+    fn an_empty_relay_address_is_rejected() {
+        let session = RelaySession::new("", "a".repeat(32));
+        assert!(session.client().is_err());
+    }
+
+    #[test]
+    fn debug_never_prints_the_credential() {
+        // The backend holds the relay's ADMINISTRATOR key in one of these, and a
+        // derived Debug would leak it through any log line or error chain that
+        // formatted a value containing one.
+        let admin = "S3CR3T-admin-key-padded-to-32ch!";
+        assert_eq!(admin.len(), 32);
+        let rendered = format!("{:?}", RelaySession::new("127.0.0.1:7666", admin));
+        assert!(!rendered.contains(admin), "credential leaked: {rendered}");
+        assert!(rendered.contains("<admin>"), "kind not shown: {rendered}");
+        assert!(rendered.contains("127.0.0.1:7666"), "address hidden: {rendered}");
+
+        let temp = "pbmt1_AQAAAAEAAAAAFNsL8qDUIBWtvMkHusQ9A6kEm0APq_BDwMZTCuoBCzqAsdCp";
+        let rendered = format!("{:?}", RelaySession::new("127.0.0.1:7666", temp));
+        assert!(!rendered.contains(temp), "credential leaked: {rendered}");
+        assert!(rendered.contains("<temporary>"), "kind not shown: {rendered}");
+    }
+
+    #[test]
+    fn parse_relay_addr_accepts_a_named_host_and_needs_a_port() {
+        // A NAME must be accepted: with clients dialling the relay directly,
+        // `lb7666.top:7666` is the production value, not an edge case.
+        assert!(parse_relay_addr("lb7666.top:7666").is_ok());
+        assert!(parse_relay_addr("127.0.0.1:7666").is_ok());
+        assert!(parse_relay_addr("[::1]:7666").is_ok());
+        assert!(parse_relay_addr("lb7666.top").is_err(), "a missing port is a typo");
+        assert!(parse_relay_addr("lb7666.top:nope").is_err());
+        assert!(parse_relay_addr(":7666").is_err());
     }
 }

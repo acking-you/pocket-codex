@@ -23,7 +23,6 @@ pocket-codex-core = { workspace = true }
 pocket-codex-codex = { workspace = true }
 pocket-codex-pb = { workspace = true }
 pocket-codex-account-proto = { workspace = true }
-pocket-codex-broker-client = { workspace = true }
 pocket-codex-api-proxy = { workspace = true }
 pocket-codex-host-svc = { workspace = true }
 anyhow = { workspace = true }
@@ -34,7 +33,6 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 chrono = { workspace = true }
-base64 = { workspace = true }
 reqwest = { workspace = true }
 async-trait = { workspace = true }
 rustls = { workspace = true }

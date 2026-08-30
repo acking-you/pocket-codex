@@ -64,7 +64,8 @@ class AppLocalizationsZh extends AppLocalizations {
   String get accountWebFailed => '登录未完成,请重试。';
 
   @override
-  String get accountWebTrouble => '浏览器登录未完成。如果 GitHub 页面打不开,请改用下方的设备码登录。';
+  String get accountWebTrouble =>
+      '浏览器登录未完成 —— 可能是 GitHub 页面打不开,也可能是浏览器无法把结果交回给应用。下方的设备码登录不需要这一步交接。';
 
   @override
   String get accountSignedIn => '已登录';
@@ -108,16 +109,7 @@ class AppLocalizationsZh extends AppLocalizations {
   String get accountSignOut => '退出登录';
 
   @override
-  String get apiServicesSection => 'API 服务';
-
-  @override
-  String get appServerServices => 'App-server 服务';
-
-  @override
   String get connecting => '连接中…';
-
-  @override
-  String get connectFailed => '无法连接到 app-server';
 
   @override
   String get conversationsSection => '会话';
@@ -161,12 +153,6 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get send => '发送';
-
-  @override
-  String get chatRoleYou => '你';
-
-  @override
-  String get chatRoleAgent => 'Codex';
 
   @override
   String get voiceLive => '实时语音';
@@ -336,9 +322,6 @@ class AppLocalizationsZh extends AppLocalizations {
   }
 
   @override
-  String get currentProject => '项目';
-
-  @override
   String get remotePathLabel => '远端项目文件夹路径（主机上）';
 
   @override
@@ -451,9 +434,6 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get effortXhighDesc => '最充分，最慢';
-
-  @override
-  String get openLink => '打开链接';
 
   @override
   String get linkOpenFailed => '无法打开链接';
@@ -599,11 +579,6 @@ class AppLocalizationsZh extends AppLocalizations {
   String get subscribedDead => '已断开';
 
   @override
-  String runningSessions(int count) {
-    return '$count 个运行中';
-  }
-
-  @override
   String get compact => '压缩对话';
 
   @override
@@ -611,9 +586,6 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get viewDiff => '查看变更';
-
-  @override
-  String get loadingDiff => '正在加载变更…';
 
   @override
   String get cancelDiffLoad => '取消加载变更';
@@ -1035,12 +1007,6 @@ class AppLocalizationsZh extends AppLocalizations {
   String get localHostingSection => '本地托管';
 
   @override
-  String get localHostTitle => '本地 codex';
-
-  @override
-  String get localHostStopped => '已停止';
-
-  @override
   String get localHostRunning => '托管中';
 
   @override
@@ -1106,11 +1072,6 @@ class AppLocalizationsZh extends AppLocalizations {
   @override
   String localHostListening(String addr) {
     return '正在监听 $addr';
-  }
-
-  @override
-  String localHostStartError(String error) {
-    return '启动托管失败：$error';
   }
 
   @override
@@ -1287,9 +1248,6 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get hostSessions => '主机历史会话';
-
-  @override
-  String get switchService => '切换主机';
 
   @override
   String get homeConnecting => '正在连接 Codex 主机…';

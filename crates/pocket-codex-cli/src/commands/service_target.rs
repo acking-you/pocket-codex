@@ -32,6 +32,11 @@
 //! gated by the call sites: `connect` only queries the relay when the
 //! caller passed neither `--key` nor `--device` *and* no local default
 //! exists, so the common reuse path stays offline.
+//!
+//! Discovery is the same relay query in both modes — an account's credential is
+//! confined to its own namespace, so the relay's own listing IS the account's
+//! inventory. Only the key shape differs, which [`Transport::parse_key`]
+//! handles.
 
 use anyhow::{bail, Result};
 use pocket_codex_core::{
@@ -39,7 +44,8 @@ use pocket_codex_core::{
     service::{default_device_id, ServiceId, ServiceKind, DEFAULT_SERVICE_NAME},
     state::RuntimeState,
 };
-use tokio::net::lookup_host;
+
+use crate::commands::transport::Transport;
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct TargetRequest {
@@ -159,19 +165,21 @@ fn resolved_name(requested_name: Option<&str>, fallback_name: Option<&str>) -> S
         .to_string()
 }
 
-pub(crate) async fn discover_services(relay: &str) -> Result<Vec<ServiceId>> {
-    let relay_addr = resolve_one(relay).await?;
-    let keys = pocket_codex_pb::keys(relay_addr).await?;
+/// Ask the relay which services of `kind` this transport can see.
+///
+/// The relay scopes `list_keys` to the credential's own namespace, so in
+/// account mode this is already the account's inventory and no filtering by
+/// prefix is needed — only the key SHAPE differs, which the transport parses.
+pub(crate) async fn discover_services(
+    transport: &Transport,
+    kind: ServiceKind,
+) -> Result<Vec<ServiceId>> {
+    let keys = pocket_codex_pb::keys(&transport.session).await?;
     Ok(keys
         .into_iter()
-        .filter_map(|key| ServiceId::parse_key(&key))
+        .filter_map(|key| transport.parse_key(&key))
+        .filter(|id| id.kind == kind)
         .collect())
-}
-
-async fn resolve_one(addr: &str) -> Result<std::net::SocketAddr> {
-    let mut iter = lookup_host(addr).await?;
-    iter.next()
-        .ok_or_else(|| anyhow::anyhow!("relay address `{addr}` resolved to no entries"))
 }
 
 #[cfg(test)]

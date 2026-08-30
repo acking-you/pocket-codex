@@ -1,11 +1,15 @@
 //! JSON bodies for the backend's HTTP API (served over HTTPS).
 //!
-//! Auth is GitHub Device Flow, mediated by the backend (which holds the OAuth
-//! client secret): `start` returns a user code + verification URL, the client
-//! polls until the backend has a session, then uses the bearer token for
-//! `/v1/*` and the broker tunnel.
+//! Auth is GitHub login — Device Flow or the browser-redirect flow — mediated
+//! by the backend, which holds the OAuth client secret. `start` returns a user
+//! code and a verification URL, the client polls until the backend has a
+//! session, then uses the bearer token for every `/v1/*` call.
+//!
+//! [`RelayCredentialResponse`] is where a client stops needing the backend: it
+//! carries the relay address and a credential, and everything after it is
+//! client↔relay.
 
-use pocket_codex_core::service::{ServiceId, ServiceKind};
+use pocket_codex_core::service::ServiceKind;
 use serde::{Deserialize, Serialize};
 
 /// Request body for `POST /auth/device/start`.
@@ -120,7 +124,7 @@ pub struct WebExchangeResponse {
 /// long-lived refresh token and the GitHub identity (for display).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionCredential {
-    /// Bearer token (JWT) for `/v1/*` and the broker `HELLO`.
+    /// Bearer token (JWT) for every `/v1/*` call.
     pub token: String,
     /// Opaque refresh token; exchange via `/auth/refresh` when the bearer
     /// expires.
@@ -132,6 +136,24 @@ pub struct SessionCredential {
     /// GitHub account id (opaque), if known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account_id: Option<String>,
+}
+
+/// Read a session token's `exp` claim (unix seconds), or `None` if it is not a
+/// JWT with a numeric `exp`.
+///
+/// The signature is NOT verified, and deliberately so: only the backend holds
+/// the key. A client reads `exp` to decide whether to refresh *before* spending
+/// a request, so a forged token would at worst cause a needless refresh — and
+/// the backend rejects it either way. Never treat a token as authentic because
+/// this returned a value.
+pub fn session_token_exp(token: &str) -> Option<i64> {
+    use base64::Engine as _;
+    let payload = token.split('.').nth(1)?;
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload)
+        .ok()?;
+    let value: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    value.get("exp")?.as_i64()
 }
 
 /// Request body for `POST /auth/refresh`.
@@ -177,17 +199,79 @@ pub struct ServiceEntry {
     pub name: String,
 }
 
-impl ServiceEntry {
-    /// The local (self-host-shaped) [`ServiceId`] the app/CLI uses to identify
-    /// this service in its UI and session layer.
-    pub fn to_service_id(&self) -> ServiceId {
-        ServiceId::new(&self.device, self.kind, &self.name)
-    }
-}
-
 /// Response to `GET /v1/services`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ServicesResponse {
     /// The account's services discovered on the relay.
     pub services: Vec<ServiceEntry>,
+}
+
+/// Response to `GET /v1/relay` — everything a client needs to talk to the relay
+/// itself, so it can register and subscribe WITHOUT the backend on the data
+/// path.
+///
+/// The credential is a short-lived pb-mapper temporary credential, minted by
+/// the backend under its administrator key. The relay confines it to its own
+/// namespace, so one account can neither see nor address another's services
+/// even though both dial the same relay.
+///
+/// It is deliberately per-ACCOUNT rather than per-device: a temporary
+/// credential's namespace is its own key id, so two devices holding different
+/// credentials could not see each other's services — which is the whole point
+/// of the product. Devices on one account share a credential and therefore a
+/// namespace; isolation is between accounts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RelayCredentialResponse {
+    /// `host:port` of the relay to dial.
+    pub relay_addr: String,
+    /// The `pbmt1_…` credential to present.
+    pub credential: String,
+    /// Unix seconds at which the relay stops accepting it. Clients should
+    /// re-request before this; the backend renews rather than re-minting (which
+    /// keeps the credential string identical), so asking again early is cheap.
+    pub expires_at: u64,
+    /// The caller's account id, already sanitised into a key segment.
+    ///
+    /// Clients build their own relay keys from it via
+    /// [`NamespacedServiceId::new`] — the backend no longer prepends the
+    /// namespace on their behalf, because it no longer sees their traffic. It
+    /// is still the backend that DECIDES the value, from the verified
+    /// token, so a client cannot name another account's namespace and have
+    /// the relay honour it: the credential is confined to one namespace
+    /// regardless of the key string presented.
+    ///
+    /// [`NamespacedServiceId::new`]: crate::key::NamespacedServiceId::new
+    pub namespace: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use base64::Engine as _;
+
+    use super::*;
+
+    fn token_with_payload(payload: &[u8]) -> String {
+        let body = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload);
+        format!("h.{body}.s")
+    }
+
+    #[test]
+    fn session_token_exp_reads_the_exp_claim() {
+        let token = token_with_payload(br#"{"exp":1700000000}"#);
+        assert_eq!(session_token_exp(&token), Some(1_700_000_000));
+    }
+
+    #[test]
+    fn session_token_exp_declines_anything_it_cannot_read() {
+        // Every one of these reaches the caller as "I don't know when this
+        // expires", which is the safe answer: the caller refreshes rather than
+        // assuming a token is good.
+        assert_eq!(session_token_exp("not-a-jwt"), None);
+        assert_eq!(session_token_exp(""), None);
+        assert_eq!(session_token_exp("h.!!!not-base64!!!.s"), None);
+        assert_eq!(session_token_exp(&token_with_payload(b"not json")), None);
+        assert_eq!(session_token_exp(&token_with_payload(b"{}")), None);
+        // A non-numeric `exp` is malformed, not a date to coerce.
+        assert_eq!(session_token_exp(&token_with_payload(br#"{"exp":"soon"}"#)), None);
+    }
 }

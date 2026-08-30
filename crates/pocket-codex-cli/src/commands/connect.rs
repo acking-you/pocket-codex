@@ -4,6 +4,9 @@
 //!                       pocket-codex connect …
 //!                                  │
 //!                                  ▼
+//!                       resolve_transport → { session, namespace? }
+//!                                  │
+//!                                  ▼
 //!                       TargetRequest { key?, device?, name }
 //!                                  │
 //!                  ┌── key/device given? ──┐
@@ -11,7 +14,7 @@
 //!                  │ yes                                                  │
 //!                  │                                                       no
 //!                  ▼                                                       ▼
-//!           skip discovery                                  discover_services(relay)
+//!           skip discovery                              discover_services(transport)
 //!                  │                                                       │
 //!                  └─────────────┬─────────────────────────────────────────┘
 //!                                ▼
@@ -20,7 +23,7 @@
 //!                                ▼
 //!                  managed_pb::ensure(PbWorkerSpec {
 //!                    role: PbRole::Subscribe, key, local_addr,
-//!                    relay_addr, codec: false,
+//!                    session, codec: false,
 //!                  })
 //!                                │
 //!                                ▼
@@ -33,22 +36,21 @@
 //! The discovery guard avoids an unnecessary relay round-trip when the
 //! user has already pinned a default through `services default set`
 //! or implicitly via a successful prior `connect`.
+//!
+//! Account and self-host mode run the SAME flow: both subscribe straight to the
+//! relay, differing only in the credential and the key's namespace, which
+//! [`Transport`] already carries.
 
-use std::{sync::Arc, time::Duration};
-
-use anyhow::{Context, Result};
-use pocket_codex_broker_client::{run_subscribe, Connector, SubscribeConfig, TokenProvider};
+use anyhow::Result;
 use pocket_codex_core::{
     config::Config,
     service::ServiceKind,
     state::{PbRole, RuntimeState},
 };
-use tokio::net::TcpListener;
 
 use crate::{
     cli::ConnectArgs,
     commands::{
-        account,
         managed_pb::{self, EnsureOutcome, PbWorkerSpec},
         service_target::{choose_target, discover_services, TargetRequest},
         transport::{self, Transport},
@@ -56,103 +58,82 @@ use crate::{
     },
 };
 
-/// Idle timeout applied to account-mode data bridges.
-const ACCOUNT_DATA_IDLE: Duration = Duration::from_secs(1800);
-
 /// Run the client-side setup flow.
 pub async fn run(args: ConnectArgs) -> Result<()> {
     let config = Config::load()?;
-    match transport::resolve_transport(args.relay.relay.as_deref(), None, &config)? {
-        Transport::SelfHost {
-            relay,
-        } => connect_self_host(args, &config, relay).await,
-        Transport::Account {
-            backend,
-        } => connect_account(args, backend).await,
-    }
+    let transport =
+        transport::resolve_transport(args.relay.relay.as_deref(), None, &config).await?;
+    connect(
+        TargetRequest {
+            key: args.key,
+            device: args.device,
+            name: args.name,
+        },
+        args.local_addr,
+        &config,
+        &transport,
+        ServiceKind::App,
+    )
+    .await
 }
 
-async fn connect_self_host(args: ConnectArgs, config: &Config, relay: String) -> Result<()> {
-    let request = TargetRequest {
-        key: args.key,
-        device: args.device,
-        name: args.name,
-    };
+/// Subscribe to a remote service of `kind` and expose it on `local_addr`.
+///
+/// Shared with `pocket-codex api connect`, which differs only in the kind it
+/// asks for and the summary that gets printed.
+pub(crate) async fn connect(
+    request: TargetRequest,
+    local_addr: String,
+    config: &Config,
+    transport: &Transport,
+    kind: ServiceKind,
+) -> Result<()> {
     let needs_discovery = request.key.is_none() && request.device.is_none();
     let state = RuntimeState::load()?;
-    let has_local_default = config.default_service(ServiceKind::App).is_some()
-        || state.selected_service(ServiceKind::App).is_some();
+    let has_local_default =
+        config.default_service(kind).is_some() || state.selected_service(kind).is_some();
     let discovered = if needs_discovery && !has_local_default {
-        discover_services(&relay).await?
+        discover_services(transport, kind).await?
     } else {
         Vec::new()
     };
-    let target = choose_target(ServiceKind::App, request, config, &state, &discovered)?;
+    let target = choose_target(kind, request, config, &state, &discovered)?;
     let outcome = managed_pb::ensure(PbWorkerSpec {
         role: PbRole::Subscribe,
-        key: target.key,
-        local_addr: args.local_addr,
-        relay_addr: relay,
+        // An explicit `--key` is taken verbatim; anything derived from a
+        // device/name goes through the transport so an account's keys land in its
+        // own namespace.
+        key: match target.service_id.as_ref() {
+            Some(service) => transport.key(service),
+            None => target.key.clone(),
+        },
+        local_addr,
+        session: transport.session.clone(),
         codec: false,
     })
     .await?;
     if let Some(service_id) = target.service_id {
         let mut state = RuntimeState::load()?;
-        state.record_selected_service(ServiceKind::App, service_id.device, service_id.name);
+        state.record_selected_service(kind, service_id.device, service_id.name);
         state.save()?;
     }
-    print_connect_summary(&outcome);
+    print_connect_summary(&outcome, kind);
     Ok(())
 }
 
-/// Account-mode client side: subscribe to a relay-exposed app-server through
-/// the backend broker, exposing it on a local listener. Runs in the foreground.
-async fn connect_account(args: ConnectArgs, backend: String) -> Result<()> {
-    let mut config = Config::load()?;
-    let (device, name) = account::resolve_target(
-        &mut config,
-        &backend,
-        ServiceKind::App,
-        args.device.as_deref(),
-        args.name.as_deref(),
-    )
-    .await?;
-
-    let (host, port) = account::broker_endpoint(&backend)?;
-    let connector: Arc<dyn Connector> = Arc::new(account::BrokerTlsConnector::new(host, port)?);
-    let tokens: Arc<dyn TokenProvider> =
-        Arc::new(account::ConfigTokenProvider::new(backend.clone()));
-    let listener = TcpListener::bind(&args.local_addr)
-        .await
-        .with_context(|| format!("binding local subscriber listener {}", args.local_addr))?;
-
-    ui::headline(ui::Tone::Ok, "account connect");
-    ui::field("service", &format!("{device}/app/{name}"));
-    ui::field("local", &args.local_addr);
-    ui::headline(ui::Tone::Action, "codex remote");
-    ui::code(&codex_remote_command(&args.local_addr));
-    ui::headline(ui::Tone::Action, "keep this running, Ctrl-C to stop");
-
-    run_subscribe(
-        connector,
-        tokens,
-        SubscribeConfig {
-            device,
-            kind: ServiceKind::App,
-            name,
-            idle: ACCOUNT_DATA_IDLE,
-        },
-        listener,
-    )
-    .await;
-    Ok(())
-}
-
-
-fn print_connect_summary(outcome: &EnsureOutcome) {
+fn print_connect_summary(outcome: &EnsureOutcome, kind: ServiceKind) {
     let session = outcome.render("pb subscribe");
-    ui::headline(ui::Tone::Action, "codex remote");
-    ui::code(&codex_remote_command(&session.local_addr));
+    match kind {
+        ServiceKind::Api => {
+            ui::headline(ui::Tone::Action, "codex provider config");
+            ui::muted("    paste into ~/.codex/config.toml:");
+            println!("{}", crate::commands::api::codex_provider_config(&session.local_addr));
+        },
+        _ => {
+            ui::headline(ui::Tone::Action, "codex remote");
+            ui::code(&codex_remote_command(&session.local_addr));
+        },
+    }
 }
 
 pub(crate) fn remote_ws_url(local_addr: &str) -> String {

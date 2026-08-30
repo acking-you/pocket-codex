@@ -52,9 +52,10 @@ Codex login as a relay-reachable Responses API endpoint for any device:
   *Hosted account* — run the optional `pocket-codex-backend` once on your
   server, then every device just signs in with **GitHub**
   (`pocket-codex login`, or "Sign in with GitHub" in the app); the backend
-  brokers each account's services through the relay under per-user
-  `pcxu:<user>:…` keys, so the relay's master key is never handed to clients
-  and accounts can't see each other.
+  hands each account a short-lived relay credential scoped to its own
+  `pcxu:<user>:…` namespace, and devices then talk to the relay directly. The
+  relay's administrator key is never handed to clients, accounts can't see each
+  other, and the backend isn't in the middle of your traffic.
 
 In short: **one machine stays logged in to Codex; every other device —
 the Flutter UI, a remote `codex` CLI, or any OpenAI-compatible tool —
@@ -67,11 +68,11 @@ or a per-account GitHub login (hosted).
 | ------------------------------ | -------------------------------------- |
 | Workspace / lints / CI         | bootstrapped                           |
 | `pocket-codex` CLI             | `login`, `logout`, `account`, `init`, `serve`, `connect`, `api {serve,connect}`, `services {list,default set}`, top-level `status`/`stop`, `codex {start,stop,status}`, `pb {register,subscribe,status}`, `remote-hint`, `version` |
-| `pb-mapper` register/subscribe | wired through `deps/pb-mapper`         |
+| `pb-mapper` register/subscribe | the published `pb-mapper` client SDK   |
 | `codex app-server` supervision | spawn/stop/status via PID + state.toml |
 | Embedded codex (desktop)       | desktop builds compile codex **in-process** behind the `embedded-codex` feature, so a machine can host without a separate `codex` install (Windows/macOS) |
 | Direct Responses API proxy     | local HTTP/WS proxy registered through pb-mapper |
-| Hosted account (GitHub)        | optional `pocket-codex-backend`: GitHub device-flow login, per-user `pcxu:<user>:…` broker tunnels through the relay (master key never leaves the server); self-host preserved behind `--relay`. See [`deploy/`](deploy/README.md) |
+| Hosted account (GitHub)        | optional `pocket-codex-backend`: GitHub login, then a short-lived per-account relay credential (`/v1/relay`) scoped to a `pcxu:<user>:…` namespace — clients register/connect against the relay **directly** and the administrator key never leaves the server; self-host preserved behind `--relay`. See [`deploy/`](deploy/README.md) |
 | Flutter UI (`apps/flutter`)    | chat-first home (opens straight into the latest session; all sessions in the sidebar; auto-connects to the explicit default / last-used / locally hosted / first reachable host, desktop auto-restores hosting); account onboarding ("Sign in with GitHub") + self-host onboarding (relay+key, `pcx1:` import/export); device-first service management, settings, sessions, and logs with shared secondary-page navigation; responsive Material 3 (light/dark) |
 
 Multi-device CLI flows are usable in both modes:
@@ -79,7 +80,8 @@ Multi-device CLI flows are usable in both modes:
 - `pocket-codex login` / `logout` / `account` drive the **hosted-account**
   mode: a GitHub device-flow session (token stored 0600 in `config.toml`) makes
   `serve` / `connect` / `api` / `services` work with **no relay or key** — the
-  backend brokers them under per-user `pcxu:<user>:…` keys. The `--relay`
+  backend vends a per-account credential and the CLI publishes under
+  `pcxu:<user>:…` keys on the relay itself. The `--relay`
   examples below are the **self-host** mode, which an explicit `--relay` flag
   always selects (the escape hatch).
 - `pocket-codex init [--relay <host:port>] [--key <32B>]` persists the
@@ -157,7 +159,7 @@ skips the PATH step. Prefer a package or a from-source build? See below.
 ### Rust workspace
 
 ```bash
-# Clone with all submodules (deps/codex, pb-mapper, kanal, uni-stream).
+# Clone with submodules (deps/codex).
 git clone --recurse-submodules git@github.com:acking-you/pocket-codex.git
 cd pocket-codex
 

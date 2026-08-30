@@ -1,8 +1,8 @@
 //! Host-side **meta service** for Pocket-Codex.
 //!
 //! A small axum HTTP server, run on the machine that hosts a `codex`
-//! app-server, published through the account broker as a third tunnel
-//! (`pcx:<device>:meta:<name>`) alongside the host's `app:` and `api:` tunnels.
+//! app-server, published on the relay as a third service (`meta:<name>`)
+//! alongside the host's `app:` and `api:` ones.
 //! It lets a **remote** client list the host's local `CODEX_HOME` sessions,
 //! read transcripts, force-resume a session, and persist per-thread config —
 //! the things that previously only worked when the Flutter app ran on the host.

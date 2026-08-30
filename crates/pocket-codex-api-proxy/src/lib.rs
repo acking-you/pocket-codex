@@ -101,7 +101,7 @@ pub async fn check_auth() -> Result<()> {
 
 /// Run the Responses API proxy on an already-bound `listener` until the task
 /// is dropped. The in-app host binds `127.0.0.1:0` first (to learn the port it
-/// registers through the broker), then hands the listener here.
+/// registers it on the relay), then hands the listener here.
 pub async fn serve(listener: TcpListener, proxy: Option<String>) -> Result<()> {
     ensure_rustls_crypto_provider();
     let auth_headers = load_auth_headers().await?;

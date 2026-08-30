@@ -1,17 +1,27 @@
-//! Relay address + shared-key resolution for `pocket-codex` commands.
+//! Relay address + credential resolution for `pocket-codex` commands.
 //!
-//! Precedence is `flag > config > $PB_MAPPER_SERVER`. The shared
-//! `MSG_HEADER_KEY` is bound to the *configured* relay: [`resolve_relay`]
-//! applies `config.key` to the process only when the relay it resolves is
-//! the configured one, so both in-process queries and spawned `__worker`
-//! children authenticate with it. An explicit `--relay <other>` therefore
-//! keeps whatever `$MSG_HEADER_KEY` the caller exported for that relay.
+//! Precedence is `flag > config > $PB_MAPPER_SERVER`. The credential is bound
+//! to the *configured* relay: [`resolve_relay`] pairs the resolved address with
+//! `config.key` only when that address IS the configured one, so an explicit
+//! `--relay <other>` uses whatever `$MSG_HEADER_KEY` the caller exported for
+//! that relay rather than silently presenting the saved key to a stranger.
+//!
+//! That rule used to be enforced by conditionally mutating pb-mapper's
+//! process-global key. It is now a returned value, which is a better fit for
+//! the same intent: there is no window in which the process holds a credential
+//! for a relay it is not talking to.
 
 use anyhow::{anyhow, Result};
 use pocket_codex_core::config::Config;
+use pocket_codex_pb::RelaySession;
 
 /// Environment variable pb-mapper and the CLI both read for the relay.
 const RELAY_ENV: &str = "PB_MAPPER_SERVER";
+
+/// Environment variable carrying a relay credential — the administrator key or
+/// a `pbmt1_` temporary credential. Named for pb-mapper's own variable so an
+/// operator's existing export keeps working.
+pub(crate) const CREDENTIAL_ENV: &str = "MSG_HEADER_KEY";
 
 /// Pure precedence resolver, factored out for testing.
 fn resolve_relay_from(
@@ -30,27 +40,36 @@ fn resolve_relay_from(
         })
 }
 
-/// Resolve the effective relay (`flag > config > $PB_MAPPER_SERVER`) and,
-/// when that relay is the configured one, bind the process to the
-/// configured `MSG_HEADER_KEY` so the upcoming query and any spawned
-/// `__worker` child authenticate with it.
-///
-/// Applying the key here — rather than unconditionally at startup — keeps
-/// `--relay <other>` honest: pointing at a different relay leaves any
-/// caller-exported `$MSG_HEADER_KEY` in place instead of clobbering it
-/// with the saved config key. A bad key is logged, not fatal, so it never
-/// blocks the command from reporting its own clearer error.
+/// Resolve the effective relay address (`flag > config > $PB_MAPPER_SERVER`).
 pub(crate) fn resolve_relay(flag: Option<&str>, config: &Config) -> Result<String> {
     let env = std::env::var(RELAY_ENV).ok();
-    let relay = resolve_relay_from(flag, config.relay(), env.as_deref())?;
-    if config_key_applies(&relay, config.relay()) {
-        if let Some(key) = config.relay_key() {
-            if let Err(err) = pocket_codex_pb::set_msg_header_key(Some(key)) {
-                tracing::warn!("ignoring configured relay key: {err}");
-            }
-        }
-    }
-    Ok(relay)
+    resolve_relay_from(flag, config.relay(), env.as_deref())
+}
+
+/// Resolve the relay to talk to AND the credential to present to it.
+///
+/// The saved key is used only for the configured relay; for any other address
+/// the caller's `$MSG_HEADER_KEY` applies. Errors when neither yields one,
+/// because pb-mapper 0.5 fails closed on a missing credential — reporting that
+/// here names the actual problem instead of surfacing it as a connect failure.
+pub(crate) fn resolve_session(flag: Option<&str>, config: &Config) -> Result<RelaySession> {
+    let relay = resolve_relay(flag, config)?;
+    let env = std::env::var(CREDENTIAL_ENV).ok();
+    let credential = if config_key_applies(&relay, config.relay()) {
+        config.relay_key().map(ToString::to_string).or(env)
+    } else {
+        env
+    };
+    let credential = credential
+        .map(|c| c.trim().to_string())
+        .filter(|c| !c.is_empty())
+        .ok_or_else(|| {
+            anyhow!(
+                "no relay credential for {relay}; run `pocket-codex init` or export \
+                 {CREDENTIAL_ENV}"
+            )
+        })?;
+    Ok(RelaySession::new(relay, credential))
 }
 
 /// Whether the configured `MSG_HEADER_KEY` should be applied: only when the

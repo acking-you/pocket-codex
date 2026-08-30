@@ -56,6 +56,19 @@ class _OnboardingState extends ConsumerState<OnboardingScreen> {
     final l10n = AppLocalizations.of(context);
     final api = ref.read(bridgeApiProvider);
     return Scaffold(
+      // A way back is not optional here. This page is reached from account
+      // onboarding via `go`, which REPLACES the stack, so there is nothing to
+      // pop — without this the only exits are completing self-host setup or
+      // killing the app, and a user who opened "Advanced" to look around is
+      // stranded. `go` rather than `pop` for the same reason: there is no
+      // previous route to return to.
+      appBar: AppBar(
+        leading: BackButton(
+          key: const Key('self-host-back'),
+          onPressed: _busy ? null : () => context.go('/onboarding'),
+        ),
+        title: Text(l10n.accountAdvancedSelfHost),
+      ),
       body: SafeArea(
         child: Center(
           child: ConstrainedBox(

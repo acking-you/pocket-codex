@@ -3,14 +3,14 @@
 use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 
-/// Claims carried in a session token. Verified statelessly by the HTTP API and
-/// the broker, so neither hits the database on the hot path.
+/// Claims carried in a session token. Verified statelessly by the HTTP API, so
+/// it never hits the database on the hot path.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Claims {
     /// Internal user id (the relay-key namespace owner).
     pub sub: String,
     /// `pcxu:<user_id>` — the relay-key namespace prefix (informational; the
-    /// broker derives keys from [`Claims::sub`]).
+    /// namespace `/v1/relay` hands out is derived from [`Claims::sub`]).
     pub ns: String,
     /// GitHub login/handle (display).
     pub login: String,

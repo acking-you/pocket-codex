@@ -66,7 +66,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get accountWebTrouble =>
-      'Browser sign-in didn\'t finish. If the GitHub page wouldn\'t load, use the device code below.';
+      'Browser sign-in didn\'t finish — either the GitHub page wouldn\'t load, or the browser couldn\'t hand the result back to this app. The device code below avoids the hand-off entirely.';
 
   @override
   String get accountSignedIn => 'Signed in';
@@ -111,16 +111,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get accountSignOut => 'Sign out';
 
   @override
-  String get apiServicesSection => 'API services';
-
-  @override
-  String get appServerServices => 'App-server services';
-
-  @override
   String get connecting => 'Connecting…';
-
-  @override
-  String get connectFailed => 'Couldn\'t connect to the app-server';
 
   @override
   String get conversationsSection => 'Conversations';
@@ -164,12 +155,6 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get send => 'Send';
-
-  @override
-  String get chatRoleYou => 'You';
-
-  @override
-  String get chatRoleAgent => 'Codex';
 
   @override
   String get voiceLive => 'Live voice';
@@ -341,9 +326,6 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
-  String get currentProject => 'Project';
-
-  @override
   String get remotePathLabel => 'Remote folder path (on the host)';
 
   @override
@@ -458,9 +440,6 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get effortXhighDesc => 'Most thorough, slowest';
-
-  @override
-  String get openLink => 'Open link';
 
   @override
   String get linkOpenFailed => 'Couldn\'t open the link';
@@ -610,11 +589,6 @@ class AppLocalizationsEn extends AppLocalizations {
   String get subscribedDead => 'Dropped';
 
   @override
-  String runningSessions(int count) {
-    return '$count running';
-  }
-
-  @override
   String get compact => 'Compact conversation';
 
   @override
@@ -623,9 +597,6 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get viewDiff => 'View changes';
-
-  @override
-  String get loadingDiff => 'Loading changes…';
 
   @override
   String get cancelDiffLoad => 'Cancel loading changes';
@@ -1056,12 +1027,6 @@ class AppLocalizationsEn extends AppLocalizations {
   String get localHostingSection => 'Local hosting';
 
   @override
-  String get localHostTitle => 'Local codex';
-
-  @override
-  String get localHostStopped => 'Stopped';
-
-  @override
   String get localHostRunning => 'Hosting';
 
   @override
@@ -1130,11 +1095,6 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String localHostListening(String addr) {
     return 'Listening on $addr';
-  }
-
-  @override
-  String localHostStartError(String error) {
-    return 'Couldn\'t start hosting: $error';
   }
 
   @override
@@ -1313,9 +1273,6 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get hostSessions => 'Host session history';
-
-  @override
-  String get switchService => 'Switch host';
 
   @override
   String get homeConnecting => 'Connecting to your Codex host…';

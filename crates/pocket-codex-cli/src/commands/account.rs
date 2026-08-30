@@ -1,32 +1,28 @@
-//! Hosted-account client: GitHub device-flow login, token persistence and
-//! refresh, and the TLS broker connector + token provider the account-mode
-//! transport feeds to [`pocket_codex_broker_client`].
+//! Hosted-account client: GitHub login (device flow or browser redirect), token
+//! persistence and refresh, and the `/v1/relay` call that gets this account its
+//! relay credential.
 //!
-//! The CLI never sees the relay key — it holds only the backend-issued session
-//! token (a JWT, persisted in the same 0600 `config.toml` as the relay key) and
-//! the opaque refresh token used to renew it.
+//! The CLI never sees the relay's ADMINISTRATOR key. It holds a backend-issued
+//! session token (a JWT in the 0600 `config.toml`), the opaque refresh token,
+//! and — after [`fetch_relay_credential`] — a short-lived relay credential
+//! confined to its own account's namespace.
 
-use std::{
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
-use base64::Engine as _;
 use pocket_codex_account_proto::{
     http::{
-        DevicePollResponse, DevicePollStatus, DeviceStartRequest, DeviceStartResponse,
-        LogoutRequest, MeResponse, RefreshRequest, RefreshResponse, ServiceEntry, ServicesResponse,
-        WebExchangeRequest, WebExchangeResponse, WebStartRequest, WebStartResponse,
+        session_token_exp, DevicePollResponse, DevicePollStatus, DeviceStartRequest,
+        DeviceStartResponse, LogoutRequest, MeResponse, RefreshRequest, RefreshResponse,
+        RelayCredentialResponse, WebExchangeRequest, WebExchangeResponse, WebStartRequest,
+        WebStartResponse,
     },
     pkce,
 };
-use pocket_codex_broker_client::{BrokerError, BrokerStream, Connector, TokenProvider};
 use pocket_codex_core::{
     config::{Config, Mode},
-    service::{default_device_id, sanitize_component, ServiceKind, DEFAULT_SERVICE_NAME},
+    service::default_device_id,
 };
-use tokio::net::TcpStream;
 
 use crate::commands::ui;
 
@@ -34,8 +30,6 @@ use crate::commands::ui;
 /// `POCKET_CODEX_BACKEND_HOST` env var (the release pipeline injects the repo's
 /// configured server). An empty/unset value falls back to the bundled default.
 const DEFAULT_BACKEND_HOST: Option<&str> = option_env!("POCKET_CODEX_BACKEND_HOST");
-/// Default broker TLS port; the host is taken from the backend URL.
-const DEFAULT_BROKER_PORT: u16 = 7900;
 const MIN_DEVICE_POLL_INTERVAL_SECS: u64 = 6;
 const MAX_DEVICE_POLL_INTERVAL_SECS: u64 = 300;
 const DEFAULT_DEVICE_CODE_LIFETIME_SECS: u64 = 900;
@@ -65,22 +59,6 @@ pub(crate) fn backend_base(flag: Option<&str>, config: &Config) -> String {
                 .filter(|s| !s.is_empty())
         })
         .unwrap_or_else(default_backend)
-}
-
-/// Derive the broker `host` + `port` from the backend URL
-/// (`$POCKET_CODEX_BROKER_PORT` overrides the default port).
-pub(crate) fn broker_endpoint(backend: &str) -> Result<(String, u16)> {
-    let url =
-        url::Url::parse(backend).with_context(|| format!("parsing backend url `{backend}`"))?;
-    let host = url
-        .host_str()
-        .ok_or_else(|| anyhow!("backend url `{backend}` has no host"))?
-        .to_string();
-    let port = std::env::var("POCKET_CODEX_BROKER_PORT")
-        .ok()
-        .and_then(|s| s.trim().parse().ok())
-        .unwrap_or(DEFAULT_BROKER_PORT);
-    Ok((host, port))
 }
 
 /// `pocket-codex login`: sign in against the backend and persist the session.
@@ -454,66 +432,6 @@ pub(crate) async fn status() -> Result<()> {
     Ok(())
 }
 
-/// Fetch the account's services from the backend, refreshing the token if
-/// needed.
-pub(crate) async fn fetch_services(config: &mut Config, base: &str) -> Result<Vec<ServiceEntry>> {
-    let token = valid_token(config, base).await?;
-    let body: ServicesResponse = reqwest::Client::new()
-        .get(format!("{base}/v1/services"))
-        .bearer_auth(&token)
-        .send()
-        .await
-        .context("calling /v1/services")?
-        .error_for_status()
-        .context("/v1/services failed")?
-        .json()
-        .await
-        .context("parsing /v1/services")?;
-    Ok(body.services)
-}
-
-/// Resolve the target `(device, name)` for a `kind` in account mode: an
-/// explicit `--device` wins; otherwise discover the account's services of that
-/// kind and auto-pick a single one, asking to disambiguate when there is more
-/// than one.
-pub(crate) async fn resolve_target(
-    config: &mut Config,
-    backend: &str,
-    kind: ServiceKind,
-    device: Option<&str>,
-    name: Option<&str>,
-) -> Result<(String, String)> {
-    if let Some(device) = device {
-        let name = name
-            .map(sanitize_component)
-            .unwrap_or_else(|| DEFAULT_SERVICE_NAME.to_string());
-        return Ok((sanitize_component(device), name));
-    }
-    let mut matches: Vec<_> = fetch_services(config, backend)
-        .await?
-        .into_iter()
-        .filter(|s| s.kind == kind)
-        .collect();
-    let label = kind.as_key_segment();
-    match matches.len() {
-        0 => bail!("no {label} services in your account; run the matching serve on the host first"),
-        1 => {
-            let m = matches.remove(0);
-            Ok((m.device, m.name))
-        },
-        _ => {
-            let names: Vec<String> = matches
-                .iter()
-                .map(|s| format!("{}/{}", s.device, s.name))
-                .collect();
-            bail!(
-                "multiple {label} services; pick one with --device <device> [--name <name>]: {}",
-                names.join(", ")
-            )
-        },
-    }
-}
-
 /// Return a currently-valid session token, refreshing it when it is missing,
 /// unparsable, or within a minute of expiry.
 async fn valid_token(config: &mut Config, base: &str) -> Result<String> {
@@ -521,11 +439,35 @@ async fn valid_token(config: &mut Config, base: &str) -> Result<String> {
         // Reuse the token only when we can confirm it is not within a minute of
         // expiry; an unparsable / exp-less token falls through to a refresh
         // (rather than being treated as valid forever).
-        if jwt_exp(token).is_some_and(|exp| exp > unix_now() + 60) {
+        if session_token_exp(token).is_some_and(|exp| exp > unix_now() + 60) {
+            return Ok(token.to_string());
+        }
+    }
+    // Serialize the refresh, as the bridge does. The refresh token is SINGLE-USE
+    // and rotating: two callers spending the same one means the loser's request
+    // arrives after rotation, which the backend is entitled to read as reuse — and
+    // that response revokes the whole family. One command can easily have several
+    // callers (a services listing plus a relay credential fetch), so this is not a
+    // theoretical race.
+    let _guard = refresh_lock().lock().await;
+    // Re-read and re-check: another waiter may have refreshed while we queued, in
+    // which case its freshly-persisted token is the one to use.
+    *config = Config::load().unwrap_or_else(|_| config.clone());
+    if let Some(token) = config.account_token() {
+        if session_token_exp(token).is_some_and(|exp| exp > unix_now() + 60) {
             return Ok(token.to_string());
         }
     }
     refresh_session(config, base).await
+}
+
+/// Process-global lock serializing token refreshes, so overlapping callers
+/// don't each spend the rotating refresh token (401-ing the losers, and
+/// tripping the backend's reuse detection) or lost-update each other's
+/// persisted credential.
+fn refresh_lock() -> &'static tokio::sync::Mutex<()> {
+    static LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
 }
 
 /// Exchange the refresh token for a new session, persisting the rotation.
@@ -562,92 +504,41 @@ async fn refresh_session(config: &mut Config, base: &str) -> Result<String> {
     Ok(cred.token)
 }
 
-/// Decode a JWT's `exp` claim (unix seconds) without verifying the signature.
-fn jwt_exp(token: &str) -> Option<i64> {
-    let payload = token.split('.').nth(1)?;
-    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(payload)
-        .ok()?;
-    let value: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
-    value.get("exp")?.as_i64()
-}
-
 fn unix_now() -> i64 {
     chrono::Utc::now().timestamp()
 }
 
-/// A stable per-process id so a reconnect deterministically takes over the
-/// prior register session rather than racing it.
-pub(crate) fn client_instance_id() -> String {
-    format!("cli-{}", std::process::id())
-}
-
-/// Opens TLS broker tunnels to the backend (host from the backend URL, default
-/// broker port), trusting the OS certificate store.
-pub(crate) struct BrokerTlsConnector {
-    host: String,
-    addr: String,
-    tls: tokio_rustls::TlsConnector,
-}
-
-impl BrokerTlsConnector {
-    /// Build a connector for `host:port`, loading the native root store.
-    pub(crate) fn new(host: String, port: u16) -> Result<Self> {
-        let mut roots = rustls::RootCertStore::empty();
-        let loaded = rustls_native_certs::load_native_certs();
-        for cert in loaded.certs {
-            let _ = roots.add(cert);
-        }
-        anyhow::ensure!(!roots.is_empty(), "no trusted root certificates found on this system");
-        let config = rustls::ClientConfig::builder()
-            .with_root_certificates(roots)
-            .with_no_client_auth();
-        Ok(Self {
-            addr: format!("{host}:{port}"),
-            host,
-            tls: tokio_rustls::TlsConnector::from(Arc::new(config)),
-        })
+/// Fetch this account's relay address, credential, and namespace.
+///
+/// The last thing a client needs the backend for. Everything after it —
+/// register, subscribe, every byte of traffic — goes straight to the relay,
+/// which is why this is one request per command rather than a connection held
+/// open.
+pub(crate) async fn fetch_relay_credential(
+    config: &mut Config,
+    base: &str,
+) -> Result<RelayCredentialResponse> {
+    let token = valid_token(config, base).await?;
+    let resp = reqwest::Client::new()
+        .get(format!("{base}/v1/relay"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .context("calling /v1/relay")?;
+    // A backend without `/v1/relay` is an OLD one that still expects clients to
+    // tunnel through its broker. Saying so beats "404 Not Found", because the fix
+    // is on the server, not here.
+    if resp.status() == reqwest::StatusCode::NOT_FOUND {
+        bail!(
+            "the backend at {base} does not serve /v1/relay — it predates direct relay access; \
+             upgrade it, or use a self-hosted relay with --relay <host:port>"
+        );
     }
-}
-
-#[async_trait::async_trait]
-impl Connector for BrokerTlsConnector {
-    async fn connect(&self) -> std::result::Result<Box<dyn BrokerStream>, BrokerError> {
-        let tcp = TcpStream::connect(&self.addr).await?;
-        let server_name = rustls::pki_types::ServerName::try_from(self.host.clone())
-            .map_err(|e| BrokerError::Token(format!("invalid broker host `{}`: {e}", self.host)))?;
-        let tls = self
-            .tls
-            .connect(server_name, tcp)
-            .await
-            .map_err(BrokerError::Io)?;
-        Ok(Box::new(tls))
-    }
-}
-
-/// Supplies the broker tunnels a valid token on every (re)connect, refreshing
-/// when the stored JWT is within a minute of expiry.
-pub(crate) struct ConfigTokenProvider {
-    base: String,
-}
-
-impl ConfigTokenProvider {
-    /// Build a provider against the given backend base URL.
-    pub(crate) fn new(base: String) -> Self {
-        Self {
-            base,
-        }
-    }
-}
-
-#[async_trait::async_trait]
-impl TokenProvider for ConfigTokenProvider {
-    async fn token(&self) -> std::result::Result<String, BrokerError> {
-        let mut config = Config::load().map_err(|e| BrokerError::Token(e.to_string()))?;
-        valid_token(&mut config, &self.base)
-            .await
-            .map_err(|e| BrokerError::Token(e.to_string()))
-    }
+    resp.error_for_status()
+        .context("/v1/relay failed")?
+        .json()
+        .await
+        .context("parsing /v1/relay")
 }
 
 #[cfg(test)]
@@ -671,23 +562,6 @@ mod tests {
         assert_eq!(backend_base(Some("https://flag"), &config), "https://flag");
     }
 
-    #[test]
-    fn broker_endpoint_takes_host_from_backend_url() {
-        let (host, port) = broker_endpoint("https://lb7666.top:8443").expect("endpoint");
-        assert_eq!(host, "lb7666.top");
-        assert_eq!(port, DEFAULT_BROKER_PORT);
-        assert!(broker_endpoint("not a url").is_err());
-    }
-
-    #[test]
-    fn jwt_exp_reads_exp_claim() {
-        // header.payload.sig with payload {"exp": 1700000000}
-        let payload =
-            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b"{\"exp\":1700000000}");
-        let token = format!("h.{payload}.s");
-        assert_eq!(jwt_exp(&token), Some(1_700_000_000));
-        assert_eq!(jwt_exp("not-a-jwt"), None);
-    }
 
     #[test]
     fn device_login_polling_defaults_zero_bounds() {

@@ -73,6 +73,32 @@ pub fn tcp_port_open(host: &str, port: u16) -> bool {
         .any(|addr| TcpStream::connect_timeout(&addr, timeout).is_ok())
 }
 
+/// Block until nothing accepts on `addr`, or `timeout` elapses. `true` if the
+/// port closed.
+///
+/// Used after asking a supervised process to stop: the PID exiting does not
+/// mean the socket is free (a shimmed `codex` leaves the native child holding
+/// it, and the OS may hold the port briefly regardless), so a caller that
+/// restarts immediately would hit "address in use". Waiting on the port rather
+/// than the PID is what makes a stop-then-start reliable.
+///
+/// An `addr` that is not a literal `host:port` returns `true`: nothing can be
+/// listening on an address we cannot parse, and blocking for `timeout` would
+/// only delay the caller's real error.
+pub fn wait_for_port_closed(addr: &str, timeout: Duration) -> bool {
+    let Ok(sock) = addr.parse::<std::net::SocketAddr>() else {
+        return true;
+    };
+    let deadline = std::time::Instant::now() + timeout;
+    while std::time::Instant::now() < deadline {
+        if TcpStream::connect_timeout(&sock, Duration::from_millis(200)).is_err() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    false
+}
+
 /// Does this process look like a native `codex app-server` launched with
 /// `listen_url`? Matched by executable stem (`codex`) so the `node` /
 /// `powershell` wrappers of an npm install are skipped: they carry the same
@@ -251,5 +277,39 @@ mod tests {
         assert!(
             !matches_codex_app_server("codex", &cmd(&["codex", "exec", "--listen", url]), url,)
         );
+    }
+
+    #[test]
+    fn waiting_on_a_free_port_returns_at_once() {
+        // Bind then drop, so the address is real but nothing is accepting.
+        let addr = {
+            let listener =
+                std::net::TcpListener::bind("127.0.0.1:0").expect("bind a loopback port");
+            listener.local_addr().expect("local addr").to_string()
+        };
+        let started = std::time::Instant::now();
+        assert!(wait_for_port_closed(&addr, Duration::from_secs(5)));
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "a closed port must not burn the whole timeout"
+        );
+    }
+
+    #[test]
+    fn waiting_on_a_live_listener_times_out() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind a loopback port");
+        let addr = listener.local_addr().expect("local addr").to_string();
+        // Held open for the duration, so the port never closes.
+        assert!(!wait_for_port_closed(&addr, Duration::from_millis(600)));
+        drop(listener);
+    }
+
+    #[test]
+    fn an_unparsable_address_does_not_block() {
+        // Nothing can listen on an address we cannot parse, so reporting "closed"
+        // lets the caller reach its real error instead of stalling first.
+        let started = std::time::Instant::now();
+        assert!(wait_for_port_closed("not-an-address", Duration::from_secs(30)));
+        assert!(started.elapsed() < Duration::from_secs(1));
     }
 }

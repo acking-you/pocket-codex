@@ -34,9 +34,11 @@ Two ways to wire devices together, both first-class:
   `MSG_HEADER_KEY`, and talks to the relay directly under `pcx:…` keys.
   Selected by an explicit `--relay`.
 - **Hosted account** — the optional `pocket-codex-backend` runs once on a
-  server; devices sign in with GitHub and the backend brokers their
-  tunnels under per-user `pcxu:<user>:…` keys, so the relay's master key
-  never reaches a client and accounts stay isolated from each other.
+  server; devices sign in with GitHub, and the backend hands each account a
+  short-lived relay credential confined to its own `pcxu:<user>:…`
+  namespace. Devices then talk to the relay **directly**: the relay's
+  administrator key never reaches a client, accounts stay isolated from
+  each other, and the backend is not on the data path.
 
 The repository deliberately does **not** vendor a model runtime; the
 user-supplied `codex` binary (and its login state) is the source of
@@ -79,9 +81,9 @@ Shared / host side:
 | --------------------------- | ---------------------------------------------------------------------------------------------- |
 | `pocket-codex-core`         | configuration schema, on-disk `state.toml`, well-known paths, error types, `service::{ServiceId, ServiceKind, sanitize_component, default_device_id}` for `pcx:<device>:<kind>:<name>` relay keys — small, dependency-light |
 | `pocket-codex-codex`        | spawning / supervising / inspecting the `codex app-server` child process (out-of-process *and* the in-process `embedded-codex` path), JSON-RPC envelope types |
-| `pocket-codex-pb`           | thin async wrappers around `pb_mapper::local::{server,client}` for register / subscribe / status   |
+| `pocket-codex-pb`           | async wrappers around the published `pb-mapper` client SDK: `RelaySession` (address + credential), register / subscribe / status, `publish` (and the one name-conflict failure a caller must not retry), admin credential issuance, and credential keep-alive |
 | `pocket-codex-api-proxy`    | local Responses API proxy: forwards `/v1/responses` (HTTP + WS) to ChatGPT's Codex backend, reusing the host's `codex login`; shared by the CLI worker and the in-app host |
-| `pocket-codex-host-svc`     | host-side meta service — remote-viewable codex sessions, per-thread config, attachment upload — exposed through the account broker |
+| `pocket-codex-host-svc`     | host-side meta service — remote-viewable codex sessions, per-thread config, attachment upload — published on the relay as a third `meta:<name>` service |
 | `pocket-codex-cli`          | user-facing `pocket-codex` binary; account (`login` / `logout` / `account`), setup (`init`), high-level `serve` / `connect` / `api {serve,connect}` / `services {list,default set}` / `status` / `stop`, low-level `codex {start,stop,status}`, `pb {register,subscribe,status}`, `remote-hint`, `version` |
 | `pocket_codex_bridge`       | `cdylib + staticlib` consumed by Flutter via `flutter_rust_bridge`; auto-generated bindings live in `lib/src/rust` of the Flutter app |
 
@@ -92,9 +94,7 @@ Hosted-account mode (all optional — self-host never touches these):
 | `pocket-codex-account-proto` | wire types and `pcxu:<user>:…` key namespacing shared between the backend and its CLI/app clients |
 | `pocket-codex-auth`          | GitHub device-flow + web auth-code login, session JWTs, refresh tokens                            |
 | `pocket-codex-store`         | SQLite persistence (users, refresh tokens, device flows) for the backend                          |
-| `pocket-codex-broker-client` | client side of the broker tunnel (register / subscribe), shared by the CLI and the bridge         |
-| `pocket-codex-broker-server` | server side of the broker: bridges authenticated tunnels to the loopback relay under per-user keys |
-| `pocket-codex-backend`       | the deployable binary: GitHub-login HTTP API + broker; see [`deploy/`](deploy/README.md)          |
+| `pocket-codex-backend`       | the deployable binary: GitHub-login HTTP API + `/v1/relay` credential vending; see [`deploy/`](deploy/README.md) |
 
 When in doubt, prefer adding a new module to an existing crate over
 introducing a new crate. Crates are free; *boundaries* are not.
@@ -184,8 +184,7 @@ cargo fmt --check \
   -p pocket-codex-core -p pocket-codex-codex -p pocket-codex-pb \
   -p pocket-codex-api-proxy -p pocket-codex-host-svc -p pocket-codex-cli \
   -p pocket_codex_bridge -p pocket-codex-account-proto -p pocket-codex-store \
-  -p pocket-codex-auth -p pocket-codex-broker-client \
-  -p pocket-codex-broker-server -p pocket-codex-backend
+  -p pocket-codex-auth -p pocket-codex-backend
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace --locked
 
@@ -232,8 +231,11 @@ git checkout -- apps/flutter/pubspec.yaml   # restore before committing
 
 ## 8. Working with submodules
 
-`deps/codex` and `deps/pb-mapper` are git submodules pinned to specific
-commits. After pulling this repo, materialise them with:
+`deps/codex` is a git submodule pinned to a specific commit — the only one
+left. `deps/pb-mapper` (plus the `deps/kanal` and `deps/uni-stream` forks it
+pulled in transitively) is gone: pb-mapper is a registry dependency now, so its
+own transitive pins come from the lockfile rather than a mirrored `[patch]`
+table. After pulling this repo, materialise the submodule with:
 
 ```bash
 git submodule update --init --recursive
@@ -341,9 +343,13 @@ The order below is our current best guess; it is not a contract.
    app-server or direct Responses API proxy flows independently.
 6. **Hosted account mode (done).** Optional `pocket-codex-backend`:
    GitHub login (device flow + web auth-code), SQLite-backed sessions,
-   and a broker that tunnels each account's services through a loopback
-   relay under `pcxu:<user>:…` keys, so the relay master key never
-   reaches a client. Self-host stays the escape hatch behind `--relay`.
+   and `/v1/relay`, which vends each account a short-lived pb-mapper
+   credential scoped to its own `pcxu:<user>:…` namespace. Clients then
+   register/connect against the relay **directly** — the backend holds the
+   administrator key and stays off the data path. It previously brokered
+   every byte on its own port; direct connect removed that hop, so backend
+   availability is no longer a prerequisite for two of a user's own devices
+   to talk. Self-host stays the escape hatch behind `--relay`.
    Deployment unit lives in [`deploy/`](deploy/README.md).
 7. **Embedded codex (done).** Desktop builds compile codex in-process
    behind the `embedded-codex` feature, so a machine can host without a

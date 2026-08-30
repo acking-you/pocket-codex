@@ -2,39 +2,34 @@
 //! account model.
 //!
 //! The hosted backend lets users authenticate with GitHub and reach their own
-//! pb-mapper services through a TLS broker, without ever holding the relay's
-//! global `MSG_HEADER_KEY`. This crate is the *contract* between the backend
-//! and its clients (the `pocket-codex-cli` and the Flutter bridge):
+//! pb-mapper services without ever holding the relay's administrator key: it
+//! vends each account a short-lived credential, and clients take it straight to
+//! the relay. This crate is the *contract* between the backend and its clients
+//! (the `pocket-codex-cli` and the Flutter bridge):
 //!
 //! - [`key`] — per-user relay-key namespacing
 //!   (`pcxu:<user>:<device>:<kind>:<name>`) layered on top of
 //!   [`pocket_codex_core::service::ServiceId`].
 //! - [`http`] — the JSON request/response bodies for the backend's HTTP API
-//!   (GitHub device flow, session credentials, `/v1/me`, `/v1/services`).
+//!   (GitHub login, session credentials, `/v1/me`, `/v1/services`, and
+//!   `/v1/relay` — the credential handoff after which clients no longer need
+//!   the backend).
 //! - [`pkce`] — client-side PKCE + CSRF helpers for the web
 //!   (authorization-code) login flow.
-//! - [`broker`] — the `HELLO`/`Ack` handshake exchanged over the broker tunnel.
-//! - [`frame`] (behind the `frame` feature) — length-prefixed JSON framing used
-//!   by the broker client and server to exchange the handshake on a byte
-//!   stream.
+//! - [`params`] — shared retry/backoff bounds.
 //!
-//! The crate is deliberately I/O-free by default (just serde types); enabling
-//! `frame` adds the small async read/write helpers.
+//! I/O-free by construction: it is serde types and pure helpers. It used to
+//! also carry a broker tunnel protocol (`HELLO`/`Ack` plus length-prefixed
+//! framing) back when every byte of a client's traffic passed through the
+//! backend; direct relay access removed the tunnel and with it that whole
+//! surface.
 
 #![forbid(unsafe_code)]
 
-pub mod broker;
 pub mod http;
 pub mod key;
 pub mod params;
 pub mod pkce;
 
-#[cfg(feature = "frame")]
-pub mod frame;
-
-#[cfg(feature = "frame")]
-pub mod bridge;
-
-pub use broker::{BrokerAck, BrokerControl, BrokerHello, BrokerRole, TunnelPurpose};
 pub use key::{NamespacedServiceId, SERVICE_NS_PREFIX};
 pub use params::{BoundedRetry, RetryBackoff, MAX_ATTEMPTS};

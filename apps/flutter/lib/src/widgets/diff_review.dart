@@ -10,25 +10,6 @@ import 'package:pocket_codex/src/theme.dart';
 /// syntax-highlighted diff, focused on the changed hunks. Composed by the
 /// session screen into a resizable split; these are the two panes.
 
-/// Extension of a path, as a highlighter language hint. Empty for a dotfile or
-/// an extensionless name, which the highlighter then leaves plain.
-String _langHint(String path) {
-  final slash = path.lastIndexOf(RegExp(r'[\\/]'));
-  final base = slash < 0 ? path : path.substring(slash + 1);
-  final dot = base.lastIndexOf('.');
-  return dot <= 0 ? '' : base.substring(dot + 1);
-}
-
-int? _hunkOldStart(String header) {
-  final m = RegExp(r'@@\s*-(\d+)').firstMatch(header);
-  return m == null ? null : int.tryParse(m.group(1)!);
-}
-
-int? _hunkNewStart(String header) {
-  final m = RegExp(r'@@\s*-\d+(?:,\d+)?\s*\+(\d+)').firstMatch(header);
-  return m == null ? null : int.tryParse(m.group(1)!);
-}
-
 /// One rendered row: either a code line or a "N unmodified lines" gap marker.
 sealed class _Row {
   const _Row();
@@ -100,7 +81,7 @@ class _DiffReviewViewState extends State<DiffReviewView> {
     int? oldNo, newNo; // next old-/new-file line numbers
     for (final line in widget.file.lines) {
       if (line.kind == DiffLineKind.hunk) {
-        final ns = _hunkNewStart(line.text);
+        final ns = hunkNewStart(line.text);
         if (ns != null) {
           // The unchanged run git left out before this hunk, on the new side.
           final gapStart = newNo ?? 1;
@@ -110,7 +91,7 @@ class _DiffReviewViewState extends State<DiffReviewView> {
           }
           newNo = ns;
         }
-        final os = _hunkOldStart(line.text);
+        final os = hunkOldStart(line.text);
         if (os != null) oldNo = os;
         continue;
       }
@@ -182,7 +163,7 @@ class _DiffReviewViewState extends State<DiffReviewView> {
     final scheme = Theme.of(context).colorScheme;
     final l10n = AppLocalizations.of(context);
     final file = widget.file;
-    final lang = _langHint(file.path);
+    final lang = languageHintForPath(file.path);
     final display = _display();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,

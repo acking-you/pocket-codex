@@ -14,6 +14,9 @@ workspace = true
 
 [dependencies]
 pocket-codex-core = { workspace = true }
+# For `NamespacedServiceId`, which `transport::Transport` uses to decide an
+# account-mode key's shape. A pure (no-I/O) crate, so this stays a leaf edge.
+pocket-codex-account-proto = { workspace = true }
 anyhow = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -22,13 +25,17 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
 
-# Vendored upstream pb-mapper (git submodule under deps/). We depend on
-# it via `path` so contributors don't have to publish it to crates.io.
-pb-mapper = { path = "../../deps/pb-mapper" }
-# pb-mapper exposes type-parameter slots that require concrete TCP
-# providers from `uni-stream`. We import the same path-pinned fork the
-# workspace [patch] table redirects to.
-uni-stream = { path = "../../deps/uni-stream" }
+# The published pb-mapper client SDK. Was a `path` dep on the
+# `deps/pb-mapper` submodule pinned at 0.2.14, which is what let the client
+# and the (already-0.5) production relay drift apart: the relay answers an
+# over-quota register with a structured error frame that a 0.2.x client cannot
+# decode, so it read a permanent refusal as a transport fault and retried
+# without backoff. Depending on the release removes the skew by construction.
+#
+# `pb-mapper` is a one-line re-export of `pb_mapper_client::sdk`, which is the
+# whole surface we need — no `uni-stream` type parameters to thread any more,
+# because the SDK picks the TCP providers itself.
+pb-mapper = { workspace = true }
 
 [dev-dependencies]
 # Lets the connect-timeout test build a loopback listener with a tiny,
