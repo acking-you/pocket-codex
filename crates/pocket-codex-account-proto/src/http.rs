@@ -9,7 +9,7 @@
 //! carries the relay address and a credential, and everything after it is
 //! client↔relay.
 
-use pocket_codex_core::service::{ServiceId, ServiceKind};
+use pocket_codex_core::service::ServiceKind;
 use serde::{Deserialize, Serialize};
 
 /// Request body for `POST /auth/device/start`.
@@ -179,14 +179,6 @@ pub struct ServiceEntry {
     pub kind: ServiceKind,
     /// Instance name segment.
     pub name: String,
-}
-
-impl ServiceEntry {
-    /// The local (self-host-shaped) [`ServiceId`] the app/CLI uses to identify
-    /// this service in its UI and session layer.
-    pub fn to_service_id(&self) -> ServiceId {
-        ServiceId::new(&self.device, self.kind, &self.name)
-    }
 }
 
 /// Response to `GET /v1/services`.

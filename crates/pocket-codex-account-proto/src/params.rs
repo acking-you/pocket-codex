@@ -155,16 +155,6 @@ impl BoundedRetry {
         }
         Some(self.backoff.next_delay())
     }
-
-    /// Like [`Self::fail`] but jittered, for the many-clients-one-backend case
-    /// (see [`RetryBackoff::next_delay_jittered`]).
-    pub fn fail_jittered(&mut self, sample: f64) -> Option<Duration> {
-        self.attempt = self.attempt.saturating_add(1);
-        if self.attempt >= self.max_attempts {
-            return None;
-        }
-        Some(self.backoff.next_delay_jittered(sample))
-    }
 }
 
 #[cfg(test)]

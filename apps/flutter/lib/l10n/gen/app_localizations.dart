@@ -290,29 +290,11 @@ abstract class AppLocalizations {
   /// **'Sign out'**
   String get accountSignOut;
 
-  /// No description provided for @apiServicesSection.
-  ///
-  /// In en, this message translates to:
-  /// **'API services'**
-  String get apiServicesSection;
-
-  /// No description provided for @appServerServices.
-  ///
-  /// In en, this message translates to:
-  /// **'App-server services'**
-  String get appServerServices;
-
   /// No description provided for @connecting.
   ///
   /// In en, this message translates to:
   /// **'Connecting…'**
   String get connecting;
-
-  /// No description provided for @connectFailed.
-  ///
-  /// In en, this message translates to:
-  /// **'Couldn\'t connect to the app-server'**
-  String get connectFailed;
 
   /// No description provided for @conversationsSection.
   ///
@@ -391,18 +373,6 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Send'**
   String get send;
-
-  /// No description provided for @chatRoleYou.
-  ///
-  /// In en, this message translates to:
-  /// **'You'**
-  String get chatRoleYou;
-
-  /// No description provided for @chatRoleAgent.
-  ///
-  /// In en, this message translates to:
-  /// **'Codex'**
-  String get chatRoleAgent;
 
   /// No description provided for @voiceLive.
   ///
@@ -692,12 +662,6 @@ abstract class AppLocalizations {
   /// **'What should we build in {project}?'**
   String newSessionTitleIn(String project);
 
-  /// No description provided for @currentProject.
-  ///
-  /// In en, this message translates to:
-  /// **'Project'**
-  String get currentProject;
-
   /// No description provided for @remotePathLabel.
   ///
   /// In en, this message translates to:
@@ -925,12 +889,6 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Most thorough, slowest'**
   String get effortXhighDesc;
-
-  /// No description provided for @openLink.
-  ///
-  /// In en, this message translates to:
-  /// **'Open link'**
-  String get openLink;
 
   /// No description provided for @linkOpenFailed.
   ///
@@ -1190,12 +1148,6 @@ abstract class AppLocalizations {
   /// **'Dropped'**
   String get subscribedDead;
 
-  /// No description provided for @runningSessions.
-  ///
-  /// In en, this message translates to:
-  /// **'{count} running'**
-  String runningSessions(int count);
-
   /// No description provided for @compact.
   ///
   /// In en, this message translates to:
@@ -1213,12 +1165,6 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'View changes'**
   String get viewDiff;
-
-  /// No description provided for @loadingDiff.
-  ///
-  /// In en, this message translates to:
-  /// **'Loading changes…'**
-  String get loadingDiff;
 
   /// No description provided for @cancelDiffLoad.
   ///
@@ -2006,18 +1952,6 @@ abstract class AppLocalizations {
   /// **'Local hosting'**
   String get localHostingSection;
 
-  /// No description provided for @localHostTitle.
-  ///
-  /// In en, this message translates to:
-  /// **'Local codex'**
-  String get localHostTitle;
-
-  /// No description provided for @localHostStopped.
-  ///
-  /// In en, this message translates to:
-  /// **'Stopped'**
-  String get localHostStopped;
-
   /// No description provided for @localHostRunning.
   ///
   /// In en, this message translates to:
@@ -2149,12 +2083,6 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Listening on {addr}'**
   String localHostListening(String addr);
-
-  /// No description provided for @localHostStartError.
-  ///
-  /// In en, this message translates to:
-  /// **'Couldn\'t start hosting: {error}'**
-  String localHostStartError(String error);
 
   /// No description provided for @codexFoundAt.
   ///
@@ -2467,12 +2395,6 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Host session history'**
   String get hostSessions;
-
-  /// No description provided for @switchService.
-  ///
-  /// In en, this message translates to:
-  /// **'Switch host'**
-  String get switchService;
 
   /// No description provided for @homeConnecting.
   ///
