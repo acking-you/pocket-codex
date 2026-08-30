@@ -33,7 +33,6 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 chrono = { workspace = true }
-base64 = { workspace = true }
 reqwest = { workspace = true }
 async-trait = { workspace = true }
 rustls = { workspace = true }

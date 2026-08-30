@@ -138,6 +138,24 @@ pub struct SessionCredential {
     pub account_id: Option<String>,
 }
 
+/// Read a session token's `exp` claim (unix seconds), or `None` if it is not a
+/// JWT with a numeric `exp`.
+///
+/// The signature is NOT verified, and deliberately so: only the backend holds
+/// the key. A client reads `exp` to decide whether to refresh *before* spending
+/// a request, so a forged token would at worst cause a needless refresh — and
+/// the backend rejects it either way. Never treat a token as authentic because
+/// this returned a value.
+pub fn session_token_exp(token: &str) -> Option<i64> {
+    use base64::Engine as _;
+    let payload = token.split('.').nth(1)?;
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload)
+        .ok()?;
+    let value: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    value.get("exp")?.as_i64()
+}
+
 /// Request body for `POST /auth/refresh`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RefreshRequest {
@@ -224,4 +242,36 @@ pub struct RelayCredentialResponse {
     ///
     /// [`NamespacedServiceId::new`]: crate::key::NamespacedServiceId::new
     pub namespace: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use base64::Engine as _;
+
+    use super::*;
+
+    fn token_with_payload(payload: &[u8]) -> String {
+        let body = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload);
+        format!("h.{body}.s")
+    }
+
+    #[test]
+    fn session_token_exp_reads_the_exp_claim() {
+        let token = token_with_payload(br#"{"exp":1700000000}"#);
+        assert_eq!(session_token_exp(&token), Some(1_700_000_000));
+    }
+
+    #[test]
+    fn session_token_exp_declines_anything_it_cannot_read() {
+        // Every one of these reaches the caller as "I don't know when this
+        // expires", which is the safe answer: the caller refreshes rather than
+        // assuming a token is good.
+        assert_eq!(session_token_exp("not-a-jwt"), None);
+        assert_eq!(session_token_exp(""), None);
+        assert_eq!(session_token_exp("h.!!!not-base64!!!.s"), None);
+        assert_eq!(session_token_exp(&token_with_payload(b"not json")), None);
+        assert_eq!(session_token_exp(&token_with_payload(b"{}")), None);
+        // A non-numeric `exp` is malformed, not a date to coerce.
+        assert_eq!(session_token_exp(&token_with_payload(br#"{"exp":"soon"}"#)), None);
+    }
 }

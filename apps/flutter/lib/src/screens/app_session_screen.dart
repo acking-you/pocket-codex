@@ -8984,22 +8984,8 @@ class _DiffFileTile extends StatelessWidget {
   }
 }
 
-/// Extension of a diff path, fed to the highlighter as its language hint. Empty
-/// for a dotfile or an extensionless name (Dockerfile, LICENSE) — the
-/// highlighter then leaves it plain, which is correct.
-String _languageForPath(String path) {
-  final base = _baseOf(path);
-  final dot = base.lastIndexOf('.');
-  if (dot <= 0) return '';
-  return base.substring(dot + 1);
-}
-
-/// New-file line number a `@@ -a,b +c,d @@` hunk header starts at, or null if
-/// it doesn't parse.
-int? _hunkNewStart(String header) {
-  final m = RegExp(r'@@\s*-\d+(?:,\d+)?\s*\+(\d+)').firstMatch(header);
-  return m == null ? null : int.tryParse(m.group(1)!);
-}
+// The hunk-header and language-hint helpers this file used to define now live
+// with the diff parser in `git_diff.dart`, shared with the desktop review pane.
 
 /// One file's diff, rendered as a real code view: syntax-highlighted lines with
 /// a line-number + add/remove gutter, on tinted rows.
@@ -9035,7 +9021,7 @@ class _DiffHunksState extends State<_DiffHunks> {
     final scheme = Theme.of(context).colorScheme;
     final l10n = AppLocalizations.of(context);
     final brightness = Theme.of(context).brightness;
-    final lang = _languageForPath(widget.file.path);
+    final lang = languageHintForPath(widget.file.path);
     final shown = widget.file.lines.take(_maxDiffLines).toList();
 
     final rows = <Widget>[];
@@ -9043,7 +9029,7 @@ class _DiffHunksState extends State<_DiffHunks> {
     for (final line in shown) {
       switch (line.kind) {
         case DiffLineKind.hunk:
-          newNo = _hunkNewStart(line.text);
+          newNo = hunkNewStart(line.text);
           rows.add(_hunkRow(scheme, line.text));
         case DiffLineKind.added:
           rows.add(_codeRow(scheme, brightness, lang, line, newNo));

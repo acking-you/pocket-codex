@@ -17,14 +17,13 @@ use std::{
 };
 
 use anyhow::{anyhow, bail, Context, Result};
-use base64::Engine as _;
 use once_cell::sync::OnceCell;
 use pocket_codex_account_proto::{
     http::{
-        DevicePollRequest, DevicePollResponse, DevicePollStatus, DeviceStartRequest,
-        DeviceStartResponse, LogoutRequest, MeResponse, RefreshRequest, RefreshResponse,
-        RelayCredentialResponse, ServiceEntry, WebExchangeRequest, WebExchangeResponse,
-        WebStartRequest, WebStartResponse,
+        session_token_exp, DevicePollRequest, DevicePollResponse, DevicePollStatus,
+        DeviceStartRequest, DeviceStartResponse, LogoutRequest, MeResponse, RefreshRequest,
+        RefreshResponse, RelayCredentialResponse, ServiceEntry, WebExchangeRequest,
+        WebExchangeResponse, WebStartRequest, WebStartResponse,
     },
     pkce,
 };
@@ -383,7 +382,7 @@ async fn valid_token(support_dir: &Path, config: &mut Config, backend: &str) -> 
     // Fast path: the in-hand token is comfortably valid. An unparsable / exp-less
     // token does NOT count as valid here — it falls through to a refresh.
     if let Some(token) = config.account_token() {
-        if jwt_exp(token).is_some_and(|exp| exp > unix_now() + 60) {
+        if session_token_exp(token).is_some_and(|exp| exp > unix_now() + 60) {
             return Ok(token.to_string());
         }
     }
@@ -395,7 +394,7 @@ async fn valid_token(support_dir: &Path, config: &mut Config, backend: &str) -> 
     // were queued, in which case we reuse its freshly-persisted token.
     *config = load_config(support_dir)?;
     if let Some(token) = config.account_token() {
-        if jwt_exp(token).is_some_and(|exp| exp > unix_now() + 60) {
+        if session_token_exp(token).is_some_and(|exp| exp > unix_now() + 60) {
             return Ok(token.to_string());
         }
     }
@@ -438,16 +437,6 @@ fn refresh_lock() -> &'static tokio::sync::Mutex<()> {
     static LOCK: once_cell::sync::OnceCell<tokio::sync::Mutex<()>> =
         once_cell::sync::OnceCell::new();
     LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
-}
-
-/// Decode a JWT's `exp` (unix seconds) without verifying the signature.
-fn jwt_exp(token: &str) -> Option<i64> {
-    let payload = token.split('.').nth(1)?;
-    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(payload)
-        .ok()?;
-    let value: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
-    value.get("exp")?.as_i64()
 }
 
 fn unix_now() -> i64 {
@@ -662,13 +651,5 @@ mod tests {
         assert_eq!(resolve_backend(&config, None).expect("default backend"), default_backend());
         // An http override is rejected so the bearer token can't go out in cleartext.
         assert!(resolve_backend(&config, Some("http://insecure.example")).is_err());
-    }
-
-    #[test]
-    fn jwt_exp_reads_exp() {
-        let payload =
-            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b"{\"exp\":1700000000}");
-        assert_eq!(jwt_exp(&format!("h.{payload}.s")), Some(1_700_000_000));
-        assert_eq!(jwt_exp("nope"), None);
     }
 }

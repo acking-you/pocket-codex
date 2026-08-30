@@ -10,12 +10,12 @@
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
-use base64::Engine as _;
 use pocket_codex_account_proto::{
     http::{
-        DevicePollResponse, DevicePollStatus, DeviceStartRequest, DeviceStartResponse,
-        LogoutRequest, MeResponse, RefreshRequest, RefreshResponse, RelayCredentialResponse,
-        WebExchangeRequest, WebExchangeResponse, WebStartRequest, WebStartResponse,
+        session_token_exp, DevicePollResponse, DevicePollStatus, DeviceStartRequest,
+        DeviceStartResponse, LogoutRequest, MeResponse, RefreshRequest, RefreshResponse,
+        RelayCredentialResponse, WebExchangeRequest, WebExchangeResponse, WebStartRequest,
+        WebStartResponse,
     },
     pkce,
 };
@@ -439,7 +439,7 @@ async fn valid_token(config: &mut Config, base: &str) -> Result<String> {
         // Reuse the token only when we can confirm it is not within a minute of
         // expiry; an unparsable / exp-less token falls through to a refresh
         // (rather than being treated as valid forever).
-        if jwt_exp(token).is_some_and(|exp| exp > unix_now() + 60) {
+        if session_token_exp(token).is_some_and(|exp| exp > unix_now() + 60) {
             return Ok(token.to_string());
         }
     }
@@ -454,7 +454,7 @@ async fn valid_token(config: &mut Config, base: &str) -> Result<String> {
     // which case its freshly-persisted token is the one to use.
     *config = Config::load().unwrap_or_else(|_| config.clone());
     if let Some(token) = config.account_token() {
-        if jwt_exp(token).is_some_and(|exp| exp > unix_now() + 60) {
+        if session_token_exp(token).is_some_and(|exp| exp > unix_now() + 60) {
             return Ok(token.to_string());
         }
     }
@@ -502,16 +502,6 @@ async fn refresh_session(config: &mut Config, base: &str) -> Result<String> {
     );
     config.save()?;
     Ok(cred.token)
-}
-
-/// Decode a JWT's `exp` claim (unix seconds) without verifying the signature.
-fn jwt_exp(token: &str) -> Option<i64> {
-    let payload = token.split('.').nth(1)?;
-    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(payload)
-        .ok()?;
-    let value: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
-    value.get("exp")?.as_i64()
 }
 
 fn unix_now() -> i64 {
@@ -572,15 +562,6 @@ mod tests {
         assert_eq!(backend_base(Some("https://flag"), &config), "https://flag");
     }
 
-    #[test]
-    fn jwt_exp_reads_exp_claim() {
-        // header.payload.sig with payload {"exp": 1700000000}
-        let payload =
-            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b"{\"exp\":1700000000}");
-        let token = format!("h.{payload}.s");
-        assert_eq!(jwt_exp(&token), Some(1_700_000_000));
-        assert_eq!(jwt_exp("not-a-jwt"), None);
-    }
 
     #[test]
     fn device_login_polling_defaults_zero_bounds() {

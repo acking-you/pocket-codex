@@ -27,7 +27,7 @@
 
 use std::{
     collections::HashMap,
-    net::{SocketAddr, TcpStream},
+    net::SocketAddr,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -39,7 +39,10 @@ use pocket_codex_codex::{
     READY_TIMEOUT,
 };
 use pocket_codex_core::{
-    process::{find_codex_app_server, force_kill, pid_running, send_sigterm, tcp_port_open},
+    process::{
+        find_codex_app_server, force_kill, pid_running, send_sigterm, tcp_port_open,
+        wait_for_port_closed,
+    },
     service::{default_device_id, ServiceId, ServiceKind},
 };
 use pocket_codex_pb::{publish_pending, PublishError, Published, RegisterOptions};
@@ -1673,21 +1676,6 @@ fn startup_failure_error(failure: StartupFailure) -> anyhow::Error {
     anyhow::anyhow!(failure.diagnosis(&retry))
 }
 
-/// Block until nothing accepts on `addr`, or `timeout` elapses (`true` on
-/// close).
-fn wait_for_port_closed(addr: &str, timeout: Duration) -> bool {
-    let Ok(sock) = addr.parse::<SocketAddr>() else {
-        return true;
-    };
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if TcpStream::connect_timeout(&sock, Duration::from_millis(200)).is_err() {
-            return true;
-        }
-        std::thread::sleep(Duration::from_millis(200));
-    }
-    false
-}
 
 #[cfg(test)]
 mod tests {

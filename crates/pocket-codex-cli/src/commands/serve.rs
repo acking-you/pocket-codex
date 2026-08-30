@@ -33,11 +33,7 @@
 //! sockets) are rejected because pb-mapper needs a relayable TCP
 //! endpoint.
 
-use std::{
-    net::{SocketAddr, TcpStream},
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
 use pocket_codex_codex::{
@@ -45,7 +41,7 @@ use pocket_codex_codex::{
 };
 use pocket_codex_core::{
     config::Config,
-    process::{find_codex_app_server, force_kill, send_sigterm},
+    process::{find_codex_app_server, force_kill, send_sigterm, wait_for_port_closed},
     service::{default_device_id, ServiceId, ServiceKind},
     state::PbRole,
 };
@@ -439,21 +435,6 @@ async fn restart_codex(spawn_opts: SpawnOptions) -> Result<()> {
     .context("codex restart task panicked")?
 }
 
-/// Block until nothing accepts TCP connections on `addr`, or `timeout` elapses.
-/// Returns `true` if the port closed, `false` on timeout.
-fn wait_for_port_closed(addr: &str, timeout: Duration) -> bool {
-    let Ok(sock) = addr.parse::<SocketAddr>() else {
-        return true;
-    };
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if TcpStream::connect_timeout(&sock, Duration::from_millis(200)).is_err() {
-            return true;
-        }
-        std::thread::sleep(Duration::from_millis(200));
-    }
-    false
-}
 
 #[cfg(test)]
 mod tests {
