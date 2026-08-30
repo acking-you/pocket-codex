@@ -66,7 +66,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get accountWebTrouble =>
-      'Browser sign-in didn\'t finish. If the GitHub page wouldn\'t load, use the device code below.';
+      'Browser sign-in didn\'t finish — either the GitHub page wouldn\'t load, or the browser couldn\'t hand the result back to this app. The device code below avoids the hand-off entirely.';
 
   @override
   String get accountSignedIn => 'Signed in';

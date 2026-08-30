@@ -209,7 +209,7 @@ abstract class AppLocalizations {
   /// No description provided for @accountWebTrouble.
   ///
   /// In en, this message translates to:
-  /// **'Browser sign-in didn\'t finish. If the GitHub page wouldn\'t load, use the device code below.'**
+  /// **'Browser sign-in didn\'t finish — either the GitHub page wouldn\'t load, or the browser couldn\'t hand the result back to this app. The device code below avoids the hand-off entirely.'**
   String get accountWebTrouble;
 
   /// No description provided for @accountSignedIn.

@@ -26,10 +26,25 @@ typedef WebAuthCallback = ({String redirectUri, String callbackScheme});
 /// Resolve the platform-appropriate callback. Mobile + macOS use the app's
 /// custom scheme (a deep link captured by ASWebAuthenticationSession / Custom
 /// Tabs); Windows + Linux use a loopback http server flutter_web_auth_2 spins up
-/// (its `callbackUrlScheme` must be a full `http://localhost:{port}`).
+/// (its `callbackUrlScheme` must be a full `http://localhost:{port}` or
+/// `http://127.0.0.1:{port}`).
+///
+/// # Why the desktop redirect names 127.0.0.1, not localhost
+///
+/// The plugin binds its listener to IPv4 only (`HttpServer.bind('127.0.0.1', …)`
+/// in its `server.dart`). On a machine where `localhost` resolves to the IPv6
+/// `::1` — the default on Windows, and what this project hit — the browser
+/// follows the redirect to `::1`, finds nothing listening, and the callback never
+/// arrives: the flow appears to hang and then fails on the plugin's timeout with
+/// no indication why.
+///
+/// Naming the literal address sidesteps name resolution entirely, so the browser
+/// reaches the listener whichever family `localhost` happens to prefer.
+/// `callbackScheme` matches, since the plugin parses the port out of it and
+/// accepts either host.
 WebAuthCallback webAuthCallback() {
   if (Platform.isWindows || Platform.isLinux) {
-    final loopback = 'http://localhost:$desktopCallbackPort';
+    final loopback = 'http://127.0.0.1:$desktopCallbackPort';
     return (redirectUri: loopback, callbackScheme: loopback);
   }
   return (redirectUri: '$appAuthScheme://auth', callbackScheme: appAuthScheme);

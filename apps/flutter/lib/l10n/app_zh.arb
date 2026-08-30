@@ -18,7 +18,7 @@
   "accountSessionExpiredMessage": "当前登录状态已失效，无法继续自动续期。请重新登录以恢复服务连接。",
   "accountSignInAgain": "重新登录",
   "accountWebFailed": "登录未完成,请重试。",
-  "accountWebTrouble": "浏览器登录未完成。如果 GitHub 页面打不开,请改用下方的设备码登录。",
+  "accountWebTrouble": "浏览器登录未完成 —— 可能是 GitHub 页面打不开,也可能是浏览器无法把结果交回给应用。下方的设备码登录不需要这一步交接。",
   "accountSignedIn": "已登录",
   "accountSignedInAs": "已登录为 @{login}",
   "@accountSignedInAs": {
