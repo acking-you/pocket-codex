@@ -115,11 +115,19 @@ Future<Master> loadMaster(String path) async {
 /// Draws [m]'s tile centred at [fraction] of a [size] canvas, clipped to a
 /// 22% rounded rect. With a [background] the canvas is opaque (full-bleed
 /// consumers); without one the surround stays transparent.
+///
+/// [zoom] enlarges the tile's ARTWORK within that rounded rect, cropping the
+/// master's own padding rather than the tile itself: the rounded silhouette stays
+/// exactly [fraction] of the canvas, while the mark inside grows. The tray needs
+/// this — the glyph is only ~72% of the tile, so at a 16 px frame it lands on
+/// ~10 px and the cloud outline plus the `>_` prompt dissolve into noise. Zooming
+/// spends those pixels on the mark instead of on margin.
 Future<Uint8List> compose(
   Master m, {
   double size = 1024,
   double fraction = 1.0,
   Color? background,
+  double zoom = 1.0,
 }) async {
   final recorder = ui.PictureRecorder();
   final canvas = Canvas(recorder, Rect.fromLTWH(0, 0, size, size));
@@ -134,9 +142,18 @@ Future<Uint8List> compose(
   final dst = Rect.fromLTWH(offset, offset, draw, draw);
   canvas.save();
   canvas.clipRRect(RRect.fromRectAndRadius(dst, Radius.circular(draw * 0.22)));
+  // Zoom crops the SOURCE rect, so the destination — and therefore the rounded
+  // silhouette — is unchanged; only how much of the master fills it varies.
+  final src = zoom == 1.0
+      ? m.tile
+      : Rect.fromCenter(
+          center: m.tile.center,
+          width: m.tile.width / zoom,
+          height: m.tile.height / zoom,
+        );
   canvas.drawImageRect(
     m.image,
-    m.tile,
+    src,
     dst,
     Paint()..filterQuality = FilterQuality.high,
   );
@@ -353,17 +370,12 @@ void main() {
   }, skip: skip);
 
   test('derive tray assets (png + template + multi-size ico)', () async {
-    // Every tray asset is the bare GLYPH, so no composed tile is needed here.
+    final dark = await loadMaster('icon/logo_dark.png');
     Directory('assets/tray').createSync(recursive: true);
 
-    // Linux loads the icon as a PNG at whatever size its tray uses (~18-22 px).
-    // The glyph for the same reason as Windows below: a tile that small is mostly
-    // surround. Left in the brand's own colours, since Linux trays vary in
-    // background and neither black nor white is safe.
-    await writePng(
-      'assets/tray/tray.png',
-      glyphPng(glyphFromMaster('icon/logo_dark.png'), 256),
-    );
+    // Linux loads the icon as a PNG; a 256 source scales down cleanly to the
+    // ~18-22 px the tray actually shows.
+    await writePng('assets/tray/tray.png', await compose(dark, size: 256));
 
     // macOS wants a TEMPLATE image (black + alpha; the menu bar tints it to
     // match light/dark mode and highlight state). tray_manager loads the
@@ -378,25 +390,32 @@ void main() {
 
     // Windows: tray_manager hands the path to LoadImage(IMAGE_ICON,
     // LR_LOADFROMFILE), which needs a true .ico — a .png silently fails to
-    // load. Render each frame size directly and pack them into a PNG-framed ICO
-    // (Vista+). LoadImage asks for SM_CXSMICON (16-24 px), so the small frames
-    // carry the on-screen look.
+    // load. Render each frame size directly (crisper than downscaling one big
+    // raster) and pack them into a PNG-framed ICO (Vista+). LoadImage asks for
+    // SM_CXSMICON (16-24 px), so the small frames carry the on-screen look.
     //
-    // The GLYPH, not the tile. The tray shows this at ~16 px, and a rounded tile
-    // spends almost all of that on its own surround and corners — the mark inside
-    // lands on a handful of pixels and reads as mush. macOS already uses the bare
-    // glyph for its template icon, for exactly this reason; Windows was still
-    // composing the full tile and looked blurry next to it.
+    // Stays a full-colour rounded tile: that is what a Windows tray icon is, and
+    // what every neighbour in the flyout looks like. (macOS is the odd one — its
+    // tray wants a monochrome TEMPLATE it tints itself, which is why the file
+    // above is black-on-alpha. Do not carry that convention over here.)
     //
-    // White, because the Windows taskbar is dark by default. Unlike the macOS
-    // template there is no tinting, so the colour is fixed here.
-    final glyph = glyphFromMaster(
-      'icon/logo_dark.png',
-      recolor: img.ColorRgb8(255, 255, 255),
-    );
+    // The small frames zoom the artwork instead. The glyph is only ~72% of the
+    // tile, so a 16 px frame gave it ~10 px — the cloud outline and the `>_`
+    // prompt landed on too few pixels and read as a smudge. Zooming trades the
+    // master's own padding for glyph pixels, most aggressively where pixels are
+    // scarcest; past 48 px there are enough to render the mark as drawn.
+    // Bounded at 1.25: past that the glyph starts touching the tile's rounded
+    // corners, which looks cramped rather than crisp.
+    double zoomFor(int px) => switch (px) {
+      <= 24 => 1.25,
+      <= 32 => 1.18,
+      <= 48 => 1.10,
+      _ => 1.0,
+    };
     final frames = <img.Image>[];
     for (final s in [16, 20, 24, 32, 48, 64, 256]) {
-      frames.add(img.decodePng(glyphPng(glyph, s))!);
+      final png = await compose(dark, size: s.toDouble(), zoom: zoomFor(s));
+      frames.add(img.decodePng(png)!);
     }
     final ico = img.IcoEncoder().encodeImages(frames);
     await File('assets/tray/tray.ico').writeAsBytes(ico);
