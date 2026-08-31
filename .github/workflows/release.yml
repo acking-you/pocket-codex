@@ -272,9 +272,13 @@ jobs:
           # flutter_web_auth_2 pulls in transitively for the web login. We use the
           # loopback-server path (useWebview:false), so webkit is never invoked at
           # runtime, but the plugin still compiles + links against it on Linux.
+          # imagemagick: scales the 1024² icon master down to the size the
+          # hicolor directory it is installed into actually claims. Present on
+          # GitHub's ubuntu images, but declared so packaging does not depend on
+          # what the runner image happens to preinstall.
           sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev \
             libayatana-appindicator3-dev libwebkit2gtk-4.1-dev \
-            file desktop-file-utils fakeroot zip
+            file desktop-file-utils fakeroot zip imagemagick
       - name: Activate desktop manifest (bundle Noto Sans SC)
         shell: bash
         working-directory: apps/flutter
@@ -297,6 +301,27 @@ jobs:
           [ -n "${debver}" ] || debver="0.0.0"
           bundle="build/linux/x64/release/bundle"
           mkdir -p dist
+
+          # The desktop-entry icon, resolved ONCE for both the AppImage and the
+          # .deb so the two cannot drift apart. `icon_glyph.png` is the desktop
+          # launcher master (rounded tile + margin) that gen_icon_test.dart
+          # produces; this used to name `icon_square.png`, which the rebrand in
+          # 95d919b deleted without touching this workflow — so Linux packaging
+          # broke silently and shipped no artifacts for v0.1.9.
+          #
+          # Fail loudly rather than let `cp` do it 40 lines later, and check the
+          # name still exists so the next rename is caught here.
+          icon_master=icon/icon_glyph.png
+          [ -f "${icon_master}" ] || {
+            echo "::error::${icon_master} is missing — did the icon set get renamed?"
+            ls -1 icon/
+            exit 1
+          }
+          # Scaled to the size the hicolor directory it lands in claims. The
+          # master is 1024²; shipping that under 256x256/ (as this did) leaves
+          # every desktop rescaling it at runtime.
+          icon_png="$(mktemp -d)/pocket-codex.png"
+          convert "${icon_master}" -resize 256x256 "${icon_png}"
 
           # Bundle the FULL non-GTK Ayatana/dbusmenu runtime closure that the
           # Linux tray plugin links against, so the portable zip AND AppImage run
@@ -327,8 +352,8 @@ jobs:
           # $bundle/lib already carries the Ayatana closure (bundled above), so
           # copying the whole bundle makes the AppImage self-contained too.
           cp -r "$bundle"/* "$appdir/usr/bin/"
-          cp icon/icon_square.png "$appdir/usr/share/icons/hicolor/256x256/apps/pocket-codex.png"
-          cp "$appdir/usr/share/icons/hicolor/256x256/apps/pocket-codex.png" "$appdir/pocket-codex.png"
+          cp "${icon_png}" "$appdir/usr/share/icons/hicolor/256x256/apps/pocket-codex.png"
+          cp "${icon_png}" "$appdir/pocket-codex.png"
           cat > "$appdir/usr/share/applications/pocket-codex.desktop" <<'DESKTOP'
           [Desktop Entry]
           Name=PocketCodex
@@ -359,7 +384,7 @@ jobs:
                    "$deb/usr/share/applications" "$deb/usr/share/icons/hicolor/256x256/apps"
           cp -r "$bundle"/* "$deb/usr/lib/pocket-codex/"
           ln -s /usr/lib/pocket-codex/pocket_codex "$deb/usr/bin/pocket-codex"
-          cp icon/icon_square.png "$deb/usr/share/icons/hicolor/256x256/apps/pocket-codex.png"
+          cp "${icon_png}" "$deb/usr/share/icons/hicolor/256x256/apps/pocket-codex.png"
           cat > "$deb/usr/share/applications/pocket-codex.desktop" <<'DESKTOP'
           [Desktop Entry]
           Name=PocketCodex
