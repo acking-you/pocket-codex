@@ -68,7 +68,11 @@ pub fn init_bridge(support_dir: String) -> Result<()> {
     // layer becomes the global subscriber (codex's later `try_init` is a no-op,
     // and its events flow through ours too).
     logging::init();
-    runtime::init(PathBuf::from(support_dir))
+    let support_dir = PathBuf::from(support_dir);
+    // Mirror the captured log to disk (last 6 hours), so a hang can be read
+    // after the fact instead of only in a viewer that was open at the time.
+    logging::init_file(&support_dir);
+    runtime::init(support_dir)
 }
 
 /// Current config view (relay/key presence, locale, and account state).
@@ -604,6 +608,33 @@ pub struct ThreadHistoryDto {
     /// Whether a live `thread/settings/updated` notification has confirmed
     /// this config (vs only a start/resume snapshot).
     pub config_confirmed: bool,
+    /// Whether earlier items remain unread — [`app_thread_older_page`] fetches
+    /// them. False for a thread whose history arrives whole.
+    pub has_older: bool,
+    /// One entry per turn in the WHOLE thread, oldest first, including turns
+    /// whose items aren't loaded yet. The turn rail shows a conversation's
+    /// shape, so it needs every turn even before their bodies are read.
+    pub turns: Vec<TurnSummaryDto>,
+}
+
+/// A turn reduced to what the rail shows.
+pub struct TurnSummaryDto {
+    /// Id of the turn, for fetching its items on demand.
+    pub turn_id: String,
+    /// The user's message that opened the turn; empty when it had none.
+    pub user_text: String,
+    /// The turn's final agent message; empty when it produced no prose.
+    pub assistant_text: String,
+    /// Whether this turn's items are already in the transcript.
+    pub loaded: bool,
+}
+
+/// One page of older items, and whether history continues before them.
+pub struct OlderPageDto {
+    /// Older items, oldest first, to prepend to the transcript.
+    pub items: Vec<ThreadItemDto>,
+    /// Whether older items still remain.
+    pub has_older: bool,
 }
 
 /// The server-reported runtime configuration of a thread — what its turns
@@ -904,25 +935,28 @@ pub fn app_thread_resume(service_key: String, thread_id: String) -> Result<()> {
     app_session::thread_resume(&service_key, &thread_id)
 }
 
+fn item_dto(i: app_session::ThreadItem) -> ThreadItemDto {
+    ThreadItemDto {
+        id: i.id,
+        item_type: i.item_type,
+        title: i.title,
+        text: i.text,
+        images: i.images,
+        turn_id: i.turn_id,
+        turn_completed_at: i.turn_completed_at,
+        turn_duration_ms: i.turn_duration_ms,
+    }
+}
+
 /// Read a thread's conversation items (oldest first) and whether a turn is
 /// still running, so re-opening an in-flight thread restores live state.
+///
+/// A paginated thread returns only its newest turns' items — walk further back
+/// with [`app_thread_older_page`] — plus a summary of every turn in `turns`.
 pub fn app_thread_read(service_key: String, thread_id: String) -> Result<ThreadHistoryDto> {
     let h = app_session::thread_read(&service_key, &thread_id)?;
     Ok(ThreadHistoryDto {
-        items: h
-            .items
-            .into_iter()
-            .map(|i| ThreadItemDto {
-                id: i.id,
-                item_type: i.item_type,
-                title: i.title,
-                text: i.text,
-                images: i.images,
-                turn_id: i.turn_id,
-                turn_completed_at: i.turn_completed_at,
-                turn_duration_ms: i.turn_duration_ms,
-            })
-            .collect(),
+        items: h.items.into_iter().map(item_dto).collect(),
         running: h.running,
         branch: h.branch,
         cwd: h.cwd,
@@ -935,7 +969,43 @@ pub fn app_thread_read(service_key: String, thread_id: String) -> Result<ThreadH
         approval_policy: h.approval_policy,
         sandbox_mode: h.sandbox_mode,
         config_confirmed: h.config_confirmed,
+        has_older: h.has_older,
+        turns: h
+            .turns
+            .into_iter()
+            .map(|t| TurnSummaryDto {
+                turn_id: t.turn_id,
+                user_text: t.user_text,
+                assistant_text: t.assistant_text,
+                loaded: t.loaded,
+            })
+            .collect(),
     })
+}
+
+/// One page further back through a paginated thread's history.
+///
+/// Returns an empty page when the thread reads whole or is already at its
+/// start.
+pub fn app_thread_older_page(service_key: String, thread_id: String) -> Result<OlderPageDto> {
+    let page = app_session::thread_older_page(&service_key, &thread_id)?;
+    Ok(OlderPageDto {
+        items: page.items.into_iter().map(item_dto).collect(),
+        has_older: page.has_older,
+    })
+}
+
+/// Every item of one turn, oldest first — for jumping to a turn the transcript
+/// hasn't scrolled back to yet.
+pub fn app_thread_turn_items(
+    service_key: String,
+    thread_id: String,
+    turn_id: String,
+) -> Result<Vec<ThreadItemDto>> {
+    Ok(app_session::thread_turn_items(&service_key, &thread_id, &turn_id)?
+        .into_iter()
+        .map(item_dto)
+        .collect())
 }
 
 /// The latest server-reported runtime config for a thread (from its

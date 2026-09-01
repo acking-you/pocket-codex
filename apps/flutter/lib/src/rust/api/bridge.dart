@@ -6,7 +6,7 @@
 import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `apply_key`, `current_relay`, `holder_dto`, `meta_follow_update_dto`, `meta_holder_dto`, `meta_liveness_dto`, `meta_thread_item_dto`, `project_config_dto`, `thread_config_dto`, `thread_config_from_dto`, `to_log_dto`
+// These functions are ignored because they are not marked as `pub`: `holder_dto`, `item_dto`, `meta_follow_update_dto`, `meta_holder_dto`, `meta_liveness_dto`, `meta_thread_item_dto`, `project_config_dto`, `thread_config_dto`, `thread_config_from_dto`, `to_log_dto`
 
 /// Initialise the engine with the platform app-support dir (from Dart's
 /// path_provider). Must be called once after `RustLib.init()`.
@@ -101,8 +101,13 @@ Future<String> importConfig({required String text}) =>
 Future<String> exportConfig() =>
     RustLib.instance.api.crateApiBridgeExportConfig();
 
-/// Discover services: in account mode from the backend (`/v1/services`), in
-/// self-host mode from the relay (applying the stored key first).
+/// Discover the services this device can reach on the relay.
+///
+/// One query in both modes: an account credential sees only its own namespace,
+/// so the relay's listing IS the account's inventory. Reported with BARE `pcx:`
+/// keys whatever the mode, because that is the identity the app and its Dart
+/// layer use — [`Transport::relay_key`] maps back when the relay is next
+/// addressed.
 Future<List<ServiceIdDto>> discoverServices() =>
     RustLib.instance.api.crateApiBridgeDiscoverServices();
 
@@ -339,12 +344,38 @@ Future<void> appThreadResume({
 
 /// Read a thread's conversation items (oldest first) and whether a turn is
 /// still running, so re-opening an in-flight thread restores live state.
+///
+/// A paginated thread returns only its newest turns' items — walk further back
+/// with [`app_thread_older_page`] — plus a summary of every turn in `turns`.
 Future<ThreadHistoryDto> appThreadRead({
   required String serviceKey,
   required String threadId,
 }) => RustLib.instance.api.crateApiBridgeAppThreadRead(
   serviceKey: serviceKey,
   threadId: threadId,
+);
+
+/// One page further back through a paginated thread's history.
+///
+/// Returns an empty page when the thread reads whole or is already at its start.
+Future<OlderPageDto> appThreadOlderPage({
+  required String serviceKey,
+  required String threadId,
+}) => RustLib.instance.api.crateApiBridgeAppThreadOlderPage(
+  serviceKey: serviceKey,
+  threadId: threadId,
+);
+
+/// Every item of one turn, oldest first — for jumping to a turn the transcript
+/// hasn't scrolled back to yet.
+Future<List<ThreadItemDto>> appThreadTurnItems({
+  required String serviceKey,
+  required String threadId,
+  required String turnId,
+}) => RustLib.instance.api.crateApiBridgeAppThreadTurnItems(
+  serviceKey: serviceKey,
+  threadId: threadId,
+  turnId: turnId,
 );
 
 /// The latest server-reported runtime config for a thread (from its
@@ -506,8 +537,8 @@ Future<ForceResumeReportDto> appForceResume({
 
 /// Remote analogue of [`app_local_sessions`]: list the sessions of the host
 /// behind `service_key` via its meta tunnel (loopback when this app is the
-/// host, broker when remote). Lets a phone see a desktop host's sessions —
-/// including those owned by another codex client.
+/// host, a relay subscription when remote). Lets a phone see a desktop host's
+/// sessions — including those owned by another codex client.
 Future<List<LocalSessionDto>> metaSessions({required String serviceKey}) =>
     RustLib.instance.api.crateApiBridgeMetaSessions(serviceKey: serviceKey);
 
@@ -1230,8 +1261,8 @@ class ConfigView {
   /// Signed-in GitHub login (account mode), if any.
   final String? accountLogin;
 
-  /// Signed-in GitHub numeric account id, if any. The UI builds the avatar URL
-  /// from it; there is no avatar field to fetch.
+  /// Signed-in GitHub numeric account id, if any. The UI builds the avatar
+  /// URL from it; there is no avatar field to fetch.
   final String? accountId;
 
   /// Whether an account session token is stored (value withheld).
@@ -1622,6 +1653,28 @@ class ModelInfoDto {
           defaultReasoningEffort == other.defaultReasoningEffort;
 }
 
+/// One page of older items, and whether history continues before them.
+class OlderPageDto {
+  /// Older items, oldest first, to prepend to the transcript.
+  final List<ThreadItemDto> items;
+
+  /// Whether older items still remain.
+  final bool hasOlder;
+
+  const OlderPageDto({required this.items, required this.hasOlder});
+
+  @override
+  int get hashCode => items.hashCode ^ hasOlder.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is OlderPageDto &&
+          runtimeType == other.runtimeType &&
+          items == other.items &&
+          hasOlder == other.hasOlder;
+}
+
 /// The host's project-folder config (mirrored for Dart): the roots a remote
 /// folder browser is confined to, and the default project new sessions open in.
 class ProjectConfigDto {
@@ -1906,6 +1959,15 @@ class ThreadHistoryDto {
   /// this config (vs only a start/resume snapshot).
   final bool configConfirmed;
 
+  /// Whether earlier items remain unread — [`app_thread_older_page`] fetches
+  /// them. False for a thread whose history arrives whole.
+  final bool hasOlder;
+
+  /// One entry per turn in the WHOLE thread, oldest first, including turns
+  /// whose items aren't loaded yet. The turn rail shows a conversation's
+  /// shape, so it needs every turn even before their bodies are read.
+  final List<TurnSummaryDto> turns;
+
   const ThreadHistoryDto({
     required this.items,
     required this.running,
@@ -1920,6 +1982,8 @@ class ThreadHistoryDto {
     this.approvalPolicy,
     this.sandboxMode,
     required this.configConfirmed,
+    required this.hasOlder,
+    required this.turns,
   });
 
   @override
@@ -1936,7 +2000,9 @@ class ThreadHistoryDto {
       modelProvider.hashCode ^
       approvalPolicy.hashCode ^
       sandboxMode.hashCode ^
-      configConfirmed.hashCode;
+      configConfirmed.hashCode ^
+      hasOlder.hashCode ^
+      turns.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -1955,7 +2021,9 @@ class ThreadHistoryDto {
           modelProvider == other.modelProvider &&
           approvalPolicy == other.approvalPolicy &&
           sandboxMode == other.sandboxMode &&
-          configConfirmed == other.configConfirmed;
+          configConfirmed == other.configConfirmed &&
+          hasOlder == other.hasOlder &&
+          turns == other.turns;
 }
 
 /// One materialised conversation item mirrored for Dart.
@@ -2131,6 +2199,45 @@ class ThreadRuntimeConfigDto {
           sandboxMode == other.sandboxMode &&
           collaborationMode == other.collaborationMode &&
           confirmedByUpdate == other.confirmedByUpdate;
+}
+
+/// A turn reduced to what the rail shows.
+class TurnSummaryDto {
+  /// Id of the turn, for fetching its items on demand.
+  final String turnId;
+
+  /// The user's message that opened the turn; empty when it had none.
+  final String userText;
+
+  /// The turn's final agent message; empty when it produced no prose.
+  final String assistantText;
+
+  /// Whether this turn's items are already in the transcript.
+  final bool loaded;
+
+  const TurnSummaryDto({
+    required this.turnId,
+    required this.userText,
+    required this.assistantText,
+    required this.loaded,
+  });
+
+  @override
+  int get hashCode =>
+      turnId.hashCode ^
+      userText.hashCode ^
+      assistantText.hashCode ^
+      loaded.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is TurnSummaryDto &&
+          runtimeType == other.runtimeType &&
+          turnId == other.turnId &&
+          userText == other.userText &&
+          assistantText == other.assistantText &&
+          loaded == other.loaded;
 }
 
 /// A started web (authorization-code) login, mirrored for Dart. The caller

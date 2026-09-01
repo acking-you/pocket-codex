@@ -8,7 +8,7 @@
 //! [`crate::engine::runtime`]; we layer the JSON-RPC client on top of it.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -152,6 +152,56 @@ struct Session {
     /// the server's `thread/read` doesn't return the in-progress turn's
     /// items.
     transcript: Arc<Mutex<HashMap<String, Vec<ThreadItem>>>>,
+    /// Where each paginated thread's history reading got to, keyed by
+    /// `threadId`. Paginated threads reject a whole-history read, so
+    /// [`thread_read`] loads a bounded window and the UI asks for more; the
+    /// cursors to continue from live here because they are server-opaque and
+    /// only meaningful in sequence.
+    pagination: Arc<Mutex<HashMap<String, ThreadPagination>>>,
+}
+
+/// How far back a paginated thread has been read, and where to continue.
+///
+/// Cursors are opaque server tokens. A server that repeats one would spin us
+/// forever, so every cursor is remembered and a repeat is treated as the end of
+/// the history (see [`advancing_cursor`]).
+#[derive(Clone, Debug, Default)]
+struct ThreadPagination {
+    /// Cursor for the next (older) page of items, `None` at the start of the
+    /// thread.
+    next_item_cursor: Option<String>,
+    /// Cursors already followed, so a repeat ends the walk instead of looping.
+    seen_item_cursors: HashSet<String>,
+    /// Turn ids whose items have been loaded, oldest first. The UI jumps by
+    /// turn, so it needs to know which turns it can already show.
+    loaded_turns: Vec<String>,
+}
+
+/// Bridge calls currently occupying an FRB worker thread. Diagnostic only.
+static BRIDGE_BUSY: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Decrements [`BRIDGE_BUSY`] however its scope ends.
+struct BusyGuard;
+
+impl Drop for BusyGuard {
+    fn drop(&mut self) {
+        BRIDGE_BUSY.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// The next cursor to follow, or `None` when the walk is done.
+///
+/// Ends the walk when the server repeats a cursor it already gave us —
+/// otherwise a buggy or racing server turns pagination into an infinite loop.
+fn advancing_cursor(
+    current: Option<&str>,
+    next: Option<String>,
+    seen: &mut HashSet<String>,
+) -> Option<String> {
+    if let Some(current) = current {
+        seen.insert(current.to_string());
+    }
+    next.filter(|next| !next.is_empty() && seen.insert(next.clone()))
 }
 
 impl Drop for Session {
@@ -281,6 +331,7 @@ fn establish(service_key: String, local_addr: &str) -> Result<()> {
             runtime_config,
             pending_approvals,
             transcript,
+            pagination: Arc::new(Mutex::new(HashMap::new())),
         });
     Ok(())
 }
@@ -359,6 +410,171 @@ fn buffer_item(transcript: &Mutex<HashMap<String, Vec<ThreadItem>>>, inbound: &I
         Some(existing) => *existing = parsed, // later snapshot wins
         None => items.push(parsed),           // new id keeps stream order
     }
+}
+
+/// Replace where a thread's paginated reading has got to.
+fn set_pagination(service_key: &str, thread_id: &str, state: ThreadPagination) {
+    if let Some(session) = sessions()
+        .lock()
+        .expect("sessions poisoned")
+        .get(service_key)
+    {
+        session
+            .pagination
+            .lock()
+            .expect("pagination poisoned")
+            .insert(thread_id.to_string(), state);
+    }
+}
+
+/// Forget a thread's pagination — it reads whole, so there is nothing to page.
+fn reset_pagination(service_key: &str, thread_id: &str) {
+    if let Some(session) = sessions()
+        .lock()
+        .expect("sessions poisoned")
+        .get(service_key)
+    {
+        session
+            .pagination
+            .lock()
+            .expect("pagination poisoned")
+            .remove(thread_id);
+    }
+}
+
+/// Where a thread's paginated reading has got to, if it is paginated at all.
+fn pagination_of(service_key: &str, thread_id: &str) -> Option<ThreadPagination> {
+    sessions()
+        .lock()
+        .expect("sessions poisoned")
+        .get(service_key)?
+        .pagination
+        .lock()
+        .expect("pagination poisoned")
+        .get(thread_id)
+        .cloned()
+}
+
+/// One page of older items, and whether older ones still remain.
+#[derive(Clone, Debug)]
+pub struct OlderPage {
+    /// The older items, oldest first, to prepend to the transcript.
+    pub items: Vec<ThreadItem>,
+    /// Whether history continues before these.
+    pub has_older: bool,
+}
+
+/// Walk one page further back through a paginated thread's history.
+///
+/// Returns an empty page when the thread reads whole or is already at its
+/// start, so the caller can treat "nothing older" and "not paginated" alike.
+pub fn thread_older_page(service_key: &str, thread_id: &str) -> Result<OlderPage> {
+    let client = client_for(service_key)?;
+    let empty = || OlderPage {
+        items: Vec::new(),
+        has_older: false,
+    };
+    let Some(mut state) = pagination_of(service_key, thread_id) else {
+        return Ok(empty());
+    };
+    let Some(cursor) = state.next_item_cursor.clone() else {
+        return Ok(empty());
+    };
+    let page = fetch_item_page(&client, thread_id, None, Some(cursor.as_str()), ITEM_PAGE_LIMIT)?;
+    let entries = page
+        .get("data")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    // Items arrive newest first within the page; the transcript reads the other
+    // way, and these are prepended as a block.
+    let mut items = Vec::new();
+    for entry in entries.iter().rev() {
+        let Some(item) = entry.get("item") else {
+            continue;
+        };
+        let turn_id = entry
+            .get("turnId")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let stamp = TurnStamp {
+            id: turn_id.to_string(),
+            completed_at: None,
+            duration_ms: None,
+        };
+        if let Some(parsed) = parse_turn_item(item, &stamp) {
+            if !state.loaded_turns.iter().any(|id| id == turn_id) {
+                state.loaded_turns.insert(0, turn_id.to_string());
+            }
+            items.push(parsed);
+        }
+    }
+    let next = page
+        .get("nextCursor")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    state.next_item_cursor =
+        advancing_cursor(Some(cursor.as_str()), next, &mut state.seen_item_cursors);
+    let has_older = state.next_item_cursor.is_some();
+    set_pagination(service_key, thread_id, state);
+    Ok(OlderPage {
+        items,
+        has_older,
+    })
+}
+
+/// Every item of one turn, oldest first — for jumping straight to a turn the
+/// transcript hasn't scrolled back to yet.
+pub fn thread_turn_items(
+    service_key: &str,
+    thread_id: &str,
+    turn_id: &str,
+) -> Result<Vec<ThreadItem>> {
+    let client = client_for(service_key)?;
+    let mut newest_first = Vec::new();
+    let mut cursor: Option<String> = None;
+    let mut seen = HashSet::new();
+    let stamp = TurnStamp {
+        id: turn_id.to_string(),
+        completed_at: None,
+        duration_ms: None,
+    };
+    // Bounded: a single turn can hold hundreds of items, and draining all of
+    // them serially is what made opening the longest threads time out. Enough
+    // pages to fill a screen; scrolling covers the rest.
+    for _ in 0..MAX_TURN_ITEM_PAGES {
+        let page =
+            fetch_item_page(&client, thread_id, Some(turn_id), cursor.as_deref(), ITEM_PAGE_LIMIT)?;
+        let entries = page
+            .get("data")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        if entries.is_empty() {
+            break;
+        }
+        for entry in &entries {
+            if let Some(parsed) = entry.get("item").and_then(|i| parse_turn_item(i, &stamp)) {
+                newest_first.push(parsed);
+            }
+        }
+        let next = page
+            .get("nextCursor")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        cursor = advancing_cursor(cursor.as_deref(), next, &mut seen);
+        if cursor.is_none() {
+            break;
+        }
+    }
+    newest_first.reverse();
+    if let Some(mut state) = pagination_of(service_key, thread_id) {
+        if !state.loaded_turns.iter().any(|id| id == turn_id) {
+            state.loaded_turns.push(turn_id.to_string());
+            set_pagination(service_key, thread_id, state);
+        }
+    }
+    Ok(newest_first)
 }
 
 /// The item snapshots this session has streamed for `thread_id`, in stream
@@ -1116,28 +1332,159 @@ pub struct ThreadHistory {
     /// Whether a live `thread/settings/updated` has confirmed this config (vs
     /// only a start/resume snapshot).
     pub config_confirmed: bool,
+    /// Whether earlier items remain unread — [`thread_older_page`] can fetch
+    /// them. Always false for a legacy thread, whose history arrives whole.
+    pub has_older: bool,
+    /// One entry per turn in the WHOLE thread, oldest first, even for turns
+    /// whose items aren't loaded. The turn rail shows a conversation's shape,
+    /// so it needs every turn — but only a summary of each, not its items.
+    pub turns: Vec<TurnSummary>,
 }
 
-/// Read a thread's materialised conversation items (oldest first) and whether
-/// a turn is currently running.
-pub fn thread_read(service_key: &str, thread_id: &str) -> Result<ThreadHistory> {
-    let client = client_for(service_key)?;
+/// A turn reduced to what the rail shows: the question, and how it was
+/// answered.
+#[derive(Clone, Debug)]
+pub struct TurnSummary {
+    pub turn_id: String,
+    /// The user's message that opened the turn, empty when it had none.
+    pub user_text: String,
+    /// The turn's final agent message, empty when it produced no prose.
+    pub assistant_text: String,
+    /// Whether this turn's items are already in `ThreadHistory::items`.
+    pub loaded: bool,
+}
+
+/// How many of the newest turns get their items loaded when a thread opens.
+/// Enough to fill a window; the rest arrive as the user scrolls back.
+const INITIAL_TURN_LIMIT: u32 = 5;
+
+/// Items per page when walking back through history. The server caps a page at
+/// 100, so asking for more would just be silently clamped.
+const ITEM_PAGE_LIMIT: u32 = 100;
+
+/// Turns per page when fetching the rail's skeleton. Same server cap as items.
+const TURN_PAGE_LIMIT: u32 = 100;
+
+/// Ceiling on item pages drained for ONE turn. A turn with hundreds of items
+/// would otherwise hold the socket for as many serial round trips as it takes.
+const MAX_TURN_ITEM_PAGES: usize = 3;
+
+/// Ceiling on skeleton pages fetched while a thread opens.
+///
+/// Every page is a serial round trip on the same socket, so this bounds how
+/// long the rail's full length can delay the requests queued behind the open —
+/// notably `thread/resume`, which timed out at 60s when this walked far enough.
+/// At 100 turns a page, five pages already covers a 500-turn conversation; a
+/// longer one gets a rail over its most recent 500 turns rather than a stall.
+const MAX_TURN_PAGES: usize = 5;
+
+/// One thread's loaded history, plus how much of it there is.
+struct LoadedHistory {
+    /// Items to show, oldest first.
+    items: Vec<ThreadItem>,
+    /// The raw turn objects the items came from, newest last. Used for the
+    /// running/active-turn checks, which only concern the newest turn.
+    turns: Vec<Value>,
+    /// Every turn in the thread, oldest first.
+    skeletons: Vec<TurnSummary>,
+    has_older: bool,
+}
+
+/// Whether an error is the server saying it doesn't know a method — the signal
+/// to fall back to an older API rather than surface a failure.
+fn is_unknown_method(err: &anyhow::Error) -> bool {
+    let text = err.to_string().to_lowercase();
+    text.contains("method not found")
+        || text.contains("unknown method")
+        || text.contains("unsupported method")
+}
+
+/// Read a thread's entire history in one call (the legacy shape).
+fn load_whole_history(client: &Arc<AppClient>, thread_id: &str) -> Result<LoadedHistory> {
     let res = runtime::runtime().block_on(
         client.request("thread/read", json!({ "threadId": thread_id, "includeTurns": true })),
     )?;
-    let thread = res.get("thread");
-    let turns = thread
+    let turns = res
+        .get("thread")
         .and_then(|t| t.get("turns"))
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    // Flattened for the UI, but each item keeps its turn's id and timing: the
-    // nesting IS the server's turn boundary, and dropping it forced the UI to
-    // re-infer turns from the item sequence and to invent its own timestamps.
+    let skeletons = turns
+        .iter()
+        .map(|turn| summarize_turn(turn, true))
+        .collect();
+    Ok(LoadedHistory {
+        items: flatten_turns(&turns),
+        turns,
+        skeletons,
+        // The whole history is here, so there is nothing older to ask for.
+        has_older: false,
+    })
+}
+
+/// Reduce a turn object to its rail summary.
+fn summarize_turn(turn: &Value, loaded: bool) -> TurnSummary {
+    let items = turn
+        .get("items")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    // A summary view carries the turn's first user message and its final agent
+    // message; a full view carries everything, so pick those two out of it.
+    let text_of = |want_user: bool| -> String {
+        let mut found = String::new();
+        for item in items {
+            let kind = item
+                .get("type")
+                .or_else(|| item.get("itemType"))
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let is_user = kind.contains("userMessage");
+            let is_agent = kind.contains("agentMessage");
+            if want_user && is_user {
+                // The turn's FIRST user message opens it.
+                return item_plain_text(item);
+            }
+            if !want_user && is_agent {
+                // The turn's LAST agent message concludes it, so keep looking.
+                found = item_plain_text(item);
+            }
+        }
+        found
+    };
+    TurnSummary {
+        turn_id: turn
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        user_text: text_of(true),
+        assistant_text: text_of(false),
+        loaded,
+    }
+}
+
+/// Plain text of a message item, for a rail preview.
+fn item_plain_text(item: &Value) -> String {
+    ["text", "message", "content"]
+        .iter()
+        .find_map(|key| item.get(*key).and_then(Value::as_str))
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// Flatten server turns into UI items, oldest first.
+///
+/// Each item keeps its turn's id and timing: the nesting IS the server's turn
+/// boundary, and dropping it forced the UI to re-infer turns from the item
+/// sequence and to invent its own timestamps.
+fn flatten_turns(turns: &[Value]) -> Vec<ThreadItem> {
     let mut items = Vec::new();
-    for turn in &turns {
-        let turn_items = turn.get("items").and_then(Value::as_array);
-        let Some(turn_items) = turn_items else { continue };
+    for turn in turns {
+        let Some(turn_items) = turn.get("items").and_then(Value::as_array) else {
+            continue;
+        };
         let stamp = TurnStamp::of(turn);
         for item in turn_items {
             if let Some(parsed) = parse_turn_item(item, &stamp) {
@@ -1145,6 +1492,274 @@ pub fn thread_read(service_key: &str, thread_id: &str) -> Result<ThreadHistory> 
             }
         }
     }
+    items
+}
+
+/// Fetch one page of turns. `items_view` decides how much of each turn comes
+/// back: `"notLoaded"` for bare metadata, `"summary"` for the opening question
+/// and final answer, `"full"` for every item.
+fn fetch_turn_page(
+    client: &Arc<AppClient>,
+    thread_id: &str,
+    cursor: Option<&str>,
+    limit: u32,
+    items_view: &str,
+) -> Result<Value> {
+    let mut params = json!({
+        "threadId": thread_id,
+        "limit": limit,
+        "sortDirection": "desc",
+        "itemsView": items_view,
+    });
+    if let Some(cursor) = cursor {
+        params["cursor"] = json!(cursor);
+    }
+    runtime::runtime().block_on(client.request("thread/turns/list", params))
+}
+
+/// Fetch one page of items, newest first. `turn_id` narrows it to a single
+/// turn.
+fn fetch_item_page(
+    client: &Arc<AppClient>,
+    thread_id: &str,
+    turn_id: Option<&str>,
+    cursor: Option<&str>,
+    limit: u32,
+) -> Result<Value> {
+    let mut params = json!({
+        "threadId": thread_id,
+        "limit": limit,
+        "sortDirection": "desc",
+    });
+    if let Some(turn_id) = turn_id {
+        params["turnId"] = json!(turn_id);
+    }
+    if let Some(cursor) = cursor {
+        params["cursor"] = json!(cursor);
+    }
+    runtime::runtime().block_on(client.request("thread/items/list", params))
+}
+
+/// Every turn in the thread, oldest first, as rail summaries.
+///
+/// Walks `thread/turns/list` backwards with a summary view, which the store
+/// answers from indexed columns rather than by replaying items — cheap enough
+/// to do for the whole thread so the rail can show its true length immediately.
+fn fetch_all_turn_summaries(client: &Arc<AppClient>, thread_id: &str) -> Result<Vec<TurnSummary>> {
+    let mut newest_first = Vec::new();
+    let mut cursor: Option<String> = None;
+    let mut seen = HashSet::new();
+    for _ in 0..MAX_TURN_PAGES {
+        let page =
+            fetch_turn_page(client, thread_id, cursor.as_deref(), TURN_PAGE_LIMIT, "summary")?;
+        let turns = page
+            .get("data")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        if turns.is_empty() {
+            break;
+        }
+        for turn in &turns {
+            newest_first.push(summarize_turn(turn, false));
+        }
+        let next = page
+            .get("nextCursor")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        cursor = advancing_cursor(cursor.as_deref(), next, &mut seen);
+        if cursor.is_none() {
+            break;
+        }
+    }
+    newest_first.reverse();
+    Ok(newest_first)
+}
+
+/// Load the newest slice of a paginated thread, plus a full turn skeleton.
+///
+/// The transcript's content comes from ONE bounded item page, never from
+/// `itemsView: "full"`. A full view makes the server walk each returned turn's
+/// items in nested loops inside a single JSON-RPC call, so one turn with
+/// hundreds of items blows past the request timeout and the socket is judged
+/// dead — which read as "connection closed" on exactly the longest threads.
+fn load_paginated_window(
+    client: &Arc<AppClient>,
+    service_key: &str,
+    thread_id: &str,
+) -> Result<LoadedHistory> {
+    let phase = std::time::Instant::now();
+    // Turn shells for timing and status. `notLoaded` keeps this a single indexed
+    // query per page regardless of how much the turns contain.
+    let page = fetch_turn_page(client, thread_id, None, INITIAL_TURN_LIMIT, "notLoaded")?;
+    tracing::debug!(
+        target: "pocket_codex_bridge::history",
+        "  turn shells in {:?}", phase.elapsed()
+    );
+    let mut turns = page
+        .get("data")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    // The wire order is newest first; the transcript reads oldest first.
+    turns.reverse();
+
+    // The newest items, bounded. This is what the view opens on.
+    let phase = std::time::Instant::now();
+    let items_page = fetch_item_page(client, thread_id, None, None, ITEM_PAGE_LIMIT)?;
+    tracing::debug!(
+        target: "pocket_codex_bridge::history",
+        "  newest items in {:?}", phase.elapsed()
+    );
+    let entries = items_page
+        .get("data")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    // Timing lives on the turn shells, so items pick their turn's stamp up here
+    // rather than losing the duration footnote the transcript renders.
+    let stamps: HashMap<String, TurnStamp> = turns
+        .iter()
+        .map(|turn| {
+            let stamp = TurnStamp::of(turn);
+            (stamp.id.clone(), stamp)
+        })
+        .collect();
+    let mut items = Vec::new();
+    let mut loaded_turns: Vec<String> = Vec::new();
+    // Entries arrive newest first; the transcript reads the other way.
+    for entry in entries.iter().rev() {
+        let Some(item) = entry.get("item") else {
+            continue;
+        };
+        let turn_id = entry
+            .get("turnId")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let stamp = stamps.get(turn_id).cloned().unwrap_or(TurnStamp {
+            id: turn_id.to_string(),
+            completed_at: None,
+            duration_ms: None,
+        });
+        if let Some(parsed) = parse_turn_item(item, &stamp) {
+            if !loaded_turns.iter().any(|id| id == turn_id) {
+                loaded_turns.push(turn_id.to_string());
+            }
+            items.push(parsed);
+        }
+    }
+
+    // Every turn, so the rail is full-length from the start. A thread whose
+    // skeleton can't be read still opens — the rail just falls back to the
+    // loaded turns.
+    let phase = std::time::Instant::now();
+    let mut skeletons = fetch_all_turn_summaries(client, thread_id).unwrap_or_else(|_| Vec::new());
+    tracing::debug!(
+        target: "pocket_codex_bridge::history",
+        "  {} turn summaries in {:?}", skeletons.len(), phase.elapsed()
+    );
+    if skeletons.is_empty() {
+        skeletons = turns
+            .iter()
+            .map(|turn| summarize_turn(turn, true))
+            .collect();
+    } else {
+        for skeleton in &mut skeletons {
+            skeleton.loaded = loaded_turns.contains(&skeleton.turn_id);
+        }
+    }
+    let has_older = skeletons.iter().any(|s| !s.loaded);
+
+    // Where older history continues: this page's own continuation cursor.
+    let item_cursor = items_page
+        .get("nextCursor")
+        .and_then(Value::as_str)
+        .filter(|cursor| !cursor.is_empty())
+        .map(str::to_string);
+    set_pagination(service_key, thread_id, ThreadPagination {
+        next_item_cursor: item_cursor,
+        seen_item_cursors: HashSet::new(),
+        loaded_turns,
+    });
+
+    Ok(LoadedHistory {
+        items,
+        turns,
+        skeletons,
+        has_older,
+    })
+}
+
+/// Read a thread's materialised conversation items (oldest first) and whether
+/// a turn is currently running.
+///
+/// Paginated threads (the default for threads created by current servers)
+/// reject a whole-history read, so this loads a bounded tail of the transcript
+/// plus a skeleton of every turn, and [`thread_older_page`] walks further back
+/// on demand. Legacy threads keep the whole-history read: it is the only shape
+/// their rollout supports, and paging methods replay the entire file per call.
+pub fn thread_read(service_key: &str, thread_id: &str) -> Result<ThreadHistory> {
+    // Each call occupies one FRB worker thread for its whole duration (the RPCs
+    // below block rather than yield), so concurrent reads are capped by the pool
+    // size. Log entry/exit to make a pile-up visible.
+    let started = std::time::Instant::now();
+    let depth = BRIDGE_BUSY.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+    let _release = BusyGuard;
+    tracing::info!(
+        target: "pocket_codex_bridge::history",
+        "thread_read START thread={thread_id} in_flight={depth}"
+    );
+    let result = thread_read_inner(service_key, thread_id);
+    match &result {
+        Ok(history) => tracing::info!(
+            target: "pocket_codex_bridge::history",
+            "thread_read DONE thread={thread_id} in {:?} items={} turns={} has_older={}",
+            started.elapsed(),
+            history.items.len(),
+            history.turns.len(),
+            history.has_older
+        ),
+        Err(err) => tracing::error!(
+            target: "pocket_codex_bridge::history",
+            "thread_read FAILED thread={thread_id} after {:?}: {err}", started.elapsed()
+        ),
+    }
+    result
+}
+
+fn thread_read_inner(service_key: &str, thread_id: &str) -> Result<ThreadHistory> {
+    let client = client_for(service_key)?;
+    // Metadata only. Asking for turns here would fail outright on a paginated
+    // thread, and the response carries `historyMode`, which decides the path.
+    let res = runtime::runtime().block_on(
+        client.request("thread/read", json!({ "threadId": thread_id, "includeTurns": false })),
+    )?;
+    let paginated = res
+        .get("thread")
+        .and_then(|t| t.get("historyMode"))
+        .and_then(Value::as_str)
+        .is_some_and(|mode| mode == "paginated");
+    let loaded = if paginated {
+        match load_paginated_window(&client, service_key, thread_id) {
+            Ok(loaded) => loaded,
+            // A server too old to page can still answer the whole-history read.
+            Err(err) if is_unknown_method(&err) => {
+                reset_pagination(service_key, thread_id);
+                load_whole_history(&client, thread_id)?
+            },
+            Err(err) => return Err(err),
+        }
+    } else {
+        reset_pagination(service_key, thread_id);
+        load_whole_history(&client, thread_id)?
+    };
+    let LoadedHistory {
+        mut items,
+        turns,
+        skeletons,
+        has_older,
+    } = loaded;
+    let thread = res.get("thread");
     // Merge in any items this session streamed that `thread/read` didn't return
     // — an in-progress turn's thinking/tool items are buffered by the forwarder
     // but the server omits them here — preserving their stream order so a
@@ -1226,6 +1841,8 @@ pub fn thread_read(service_key: &str, thread_id: &str) -> Result<ThreadHistory> 
         approval_policy: runtime.approval_policy,
         sandbox_mode: runtime.sandbox_mode,
         config_confirmed: runtime.confirmed_by_update,
+        has_older,
+        turns: skeletons,
     })
 }
 
@@ -1239,16 +1856,49 @@ pub fn thread_read(service_key: &str, thread_id: &str) -> Result<ThreadHistory> 
 /// shows and this returns just the sentence rather than shipping a transcript
 /// across the bridge for the caller to trim.
 pub fn thread_summary(service_key: &str, thread_id: &str) -> Result<Option<String>> {
+    // Sidebar rows fetch these concurrently, one FRB worker thread each, and the
+    // pool is only as wide as the CPU count. Counting occupancy here makes a
+    // saturated pool — which stalls every other bridge call, `thread_read`
+    // included — visible in the log instead of looking like a hung server.
+    let depth = BRIDGE_BUSY.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+    let _release = BusyGuard;
+    if depth > 4 {
+        tracing::warn!(
+            target: "pocket_codex_bridge::history",
+            "thread_summary thread={thread_id} with {depth} bridge calls in flight (pool holds {})",
+            std::thread::available_parallelism().map(|n| n.get()).unwrap_or(0)
+        );
+    }
     let client = client_for(service_key)?;
-    let res = runtime::runtime().block_on(
-        client.request("thread/read", json!({ "threadId": thread_id, "includeTurns": true })),
-    )?;
-    let turns = res
-        .get("thread")
-        .and_then(|t| t.get("turns"))
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
+    // A summary view of the newest turns carries each one's final agent message,
+    // which is exactly the sentence wanted — no need to read the transcript.
+    // Several turns, not one, because the newest may be a tool-only turn that
+    // produced no prose.
+    let turns = match fetch_turn_page(&client, thread_id, None, INITIAL_TURN_LIMIT, "summary") {
+        Ok(page) => {
+            let mut turns = page
+                .get("data")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            // The walk below reads oldest first and steps backwards.
+            turns.reverse();
+            turns
+        },
+        // Older servers have no paging methods; their history reads whole.
+        Err(err) if is_unknown_method(&err) => {
+            let res = runtime::runtime().block_on(
+                client
+                    .request("thread/read", json!({ "threadId": thread_id, "includeTurns": true })),
+            )?;
+            res.get("thread")
+                .and_then(|t| t.get("turns"))
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+        },
+        Err(err) => return Err(err),
+    };
     // Walk backwards: the newest agent message is the interesting one, and
     // stopping at the first hit avoids parsing a long history twice over.
     for turn in turns.iter().rev() {

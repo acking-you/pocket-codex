@@ -286,20 +286,64 @@ impl AppClient {
             params,
         };
         let frame = serde_json::to_string(&req).context("serializing request")?;
+        let frame_bytes = frame.len();
 
         let (tx, rx) = oneshot::channel();
-        self.pending.lock().await.insert(id.clone(), tx);
+        let in_flight = {
+            let mut pending = self.pending.lock().await;
+            pending.insert(id.clone(), tx);
+            pending.len()
+        };
+        // How many requests are queued on this socket when this one starts. A
+        // rising number across successive reads is the signature of callers
+        // outpacing the socket rather than any single request being slow.
+        tracing::debug!(
+            target: "pocket_codex_codex::rpc",
+            "-> {method} id={id} bytes={frame_bytes} in_flight={in_flight}"
+        );
+        let started = std::time::Instant::now();
 
         if let Err(e) = self.sink.lock().await.send(WsMessage::text(frame)).await {
             self.pending.lock().await.remove(&id);
+            tracing::warn!(
+                target: "pocket_codex_codex::rpc",
+                "!! {method} id={id} send failed after {:?}: {e}", started.elapsed()
+            );
             return Err(anyhow!("sending request `{method}`: {e}"));
         }
 
         match tokio::time::timeout(REQUEST_TIMEOUT, rx).await {
-            Ok(Ok(result)) => result,
-            Ok(Err(_)) => Err(anyhow!("request `{method}` cancelled")),
+            Ok(Ok(result)) => {
+                let elapsed = started.elapsed();
+                let ok = result.is_ok();
+                // Slow answers are the interesting ones; a server-side walk over
+                // a long thread shows up here and nowhere else.
+                if elapsed > std::time::Duration::from_secs(2) {
+                    tracing::warn!(
+                        target: "pocket_codex_codex::rpc",
+                        "<- {method} id={id} SLOW {elapsed:?} ok={ok}"
+                    );
+                } else {
+                    tracing::debug!(
+                        target: "pocket_codex_codex::rpc",
+                        "<- {method} id={id} {elapsed:?} ok={ok}"
+                    );
+                }
+                result
+            },
+            Ok(Err(_)) => {
+                tracing::warn!(
+                    target: "pocket_codex_codex::rpc",
+                    "<- {method} id={id} cancelled after {:?} (socket closed)", started.elapsed()
+                );
+                Err(anyhow!("request `{method}` cancelled"))
+            },
             Err(_) => {
                 self.pending.lock().await.remove(&id);
+                tracing::error!(
+                    target: "pocket_codex_codex::rpc",
+                    "<- {method} id={id} TIMED OUT after {:?}", started.elapsed()
+                );
                 Err(anyhow!("request `{method}` timed out"))
             },
         }

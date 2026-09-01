@@ -432,20 +432,7 @@ class RustBridgeApi implements BridgeApi {
       threadId: threadId,
     );
     return ThreadHistory(
-      items: h.items
-          .map(
-            (i) => ThreadItem(
-              id: i.id,
-              itemType: i.itemType,
-              title: i.title,
-              text: i.text,
-              images: i.images,
-              turnId: i.turnId,
-              turnCompletedAt: i.turnCompletedAt?.toInt(),
-              turnDurationMs: i.turnDurationMs?.toInt(),
-            ),
-          )
-          .toList(),
+      items: h.items.map(_item).toList(),
       running: h.running,
       branch: h.branch,
       cwd: h.cwd,
@@ -458,7 +445,58 @@ class RustBridgeApi implements BridgeApi {
       approvalPolicy: h.approvalPolicy,
       sandboxMode: h.sandboxMode,
       configConfirmed: h.configConfirmed,
+      hasOlder: h.hasOlder,
+      turns: h.turns
+          .map(
+            (t) => TurnSummary(
+              turnId: t.turnId,
+              userText: t.userText,
+              assistantText: t.assistantText,
+              loaded: t.loaded,
+            ),
+          )
+          .toList(),
     );
+  }
+
+  static ThreadItem _item(frb.ThreadItemDto i) => ThreadItem(
+    id: i.id,
+    itemType: i.itemType,
+    title: i.title,
+    text: i.text,
+    images: i.images,
+    turnId: i.turnId,
+    turnCompletedAt: i.turnCompletedAt?.toInt(),
+    turnDurationMs: i.turnDurationMs?.toInt(),
+  );
+
+  @override
+  Future<OlderPage> appThreadOlderPage(
+    String serviceKey,
+    String threadId,
+  ) async {
+    final page = await frb.appThreadOlderPage(
+      serviceKey: serviceKey,
+      threadId: threadId,
+    );
+    return OlderPage(
+      items: page.items.map(_item).toList(),
+      hasOlder: page.hasOlder,
+    );
+  }
+
+  @override
+  Future<List<ThreadItem>> appThreadTurnItems(
+    String serviceKey,
+    String threadId,
+    String turnId,
+  ) async {
+    final items = await frb.appThreadTurnItems(
+      serviceKey: serviceKey,
+      threadId: threadId,
+      turnId: turnId,
+    );
+    return items.map(_item).toList();
   }
 
   @override

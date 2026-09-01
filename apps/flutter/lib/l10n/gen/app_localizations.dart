@@ -578,6 +578,12 @@ abstract class AppLocalizations {
   /// **'Send a message to start the conversation'**
   String get emptyConversation;
 
+  /// Leading row of a long conversation whose earlier history hasn't been loaded yet; scrolling to it fetches the previous page.
+  ///
+  /// In en, this message translates to:
+  /// **'Scroll up to load earlier messages'**
+  String get olderHistoryHint;
+
   /// No description provided for @turnFailed.
   ///
   /// In en, this message translates to:
