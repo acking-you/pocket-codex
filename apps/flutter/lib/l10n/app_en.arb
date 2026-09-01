@@ -110,6 +110,10 @@
   "interrupt": "Interrupt",
   "thinking": "Thinking…",
   "emptyConversation": "Send a message to start the conversation",
+  "olderHistoryHint": "Scroll up to load earlier messages",
+  "@olderHistoryHint": {
+    "description": "Leading row of a long conversation whose earlier history hasn't been loaded yet; scrolling to it fetches the previous page."
+  },
   "turnFailed": "Turn didn't finish — the connection dropped or the remote codex failed. Retry, or check codex on the host machine (it may need to be logged in again).",
   "sandboxHelperUnavailable": "This built-in (自带) session can't start its command sandbox, so the agent can't run commands or read files here. Switch to \"Full access\" mode to run without a sandbox, or connect to an external/remote codex host.",
   "@sandboxHelperUnavailable": {

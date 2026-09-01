@@ -391,6 +391,20 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   bool _takingOver = false;
   bool _sending = false;
   bool _atBottom = true; // is the list scrolled to the latest message?
+  // Every turn of the open thread, oldest first — including turns whose items
+  // aren't loaded. The rail shows the conversation's shape, so it reads this
+  // rather than the loaded rows. Empty for a thread that arrived whole, whose
+  // rows already cover every turn.
+  List<TurnSummary> _turnSummaries = const [];
+  // Whether older items remain on the server for the open thread.
+  bool _hasOlder = false;
+  // True while an older page (or a single turn's items) is in flight, so a
+  // scroll frame can't queue the same fetch twice.
+  bool _loadingOlder = false;
+  // True while `_scrollToEnd(force: true)` is re-jumping to the bottom. Those
+  // jumps fire scroll events from positions that can look like the top of the
+  // list, which would fetch older history nobody asked for.
+  bool _settlingToEnd = false;
   String? _error;
   VoidCallback? _retry; // action for the error banner's retry button
   bool _connectionLost = false;
@@ -949,6 +963,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       _editingTitle = false;
       _items.clear();
       _itemIndex.clear();
+      // The previous thread's turns and pagination say nothing about this one.
+      _turnSummaries = const [];
+      _hasOlder = false;
+      _loadingOlder = false;
       _approvals.clear();
       _ctx = null;
       _diff = null;
@@ -1063,7 +1081,18 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     if (atBottom != _atBottom) setState(() => _atBottom = atBottom);
     // Publish the visible rows for the turn minimap. Straight onto the notifier
     // — no setState — so a scroll frame repaints ticks, not the transcript.
-    if (_listCtl.isAttached) _visibleRows.value = _listCtl.visibleRange;
+    // Back out the "older history" row so the rail's range is in row indices,
+    // which is what its ticks are numbered in.
+    if (_listCtl.isAttached) _visibleRows.value = _visibleRowRange();
+    // Reading back past the top of what's loaded fetches the previous page.
+    // Suppressed while settling to the bottom, whose repeated jumps generate
+    // scroll frames that would otherwise read as reaching the top on open.
+    if (!_settlingToEnd &&
+        _hasOlder &&
+        !_loadingOlder &&
+        _scroll.position.pixels <= _scroll.position.minScrollExtent + 200) {
+      _loadOlder();
+    }
   }
 
   /// Read a host-side image so it can render as a thumbnail instead of a
@@ -1190,6 +1219,124 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     }
   }
 
+  /// Splice [items] into the transcript by turn order, skipping ids already
+  /// present, and rebuild the id→index map.
+  ///
+  /// Older history arrives as a block that belongs before what's shown, and a
+  /// jumped-to turn lands wherever its turn sits — either way every existing
+  /// index shifts, so [_itemIndex] is rebuilt rather than patched.
+  void _spliceTranscriptItems(List<ThreadItem> items, {required bool atStart}) {
+    final known = _items.map((i) => i.id).toSet();
+    final fresh = <TranscriptItem>[];
+    for (final item in items) {
+      if (item.id.isEmpty || known.contains(item.id)) continue;
+      if (item.itemType == 'userMessage' && isContextFragment(item.text)) {
+        continue;
+      }
+      known.add(item.id);
+      fresh.add(
+        TranscriptItem(
+          id: item.id,
+          type: item.itemType,
+          title: item.title,
+          text: item.text,
+          images: resolveImageUrls(item.images),
+          imageUrls: item.images,
+          turnId: item.turnId,
+          turnCompletedAt: item.turnCompletedAt,
+          turnDurationMs: item.turnDurationMs,
+        ),
+      );
+    }
+    if (fresh.isEmpty) return;
+    if (atStart) {
+      _items.insertAll(0, fresh);
+    } else {
+      // Land the block after the last item of the newest earlier turn, so a
+      // turn fetched out of order still reads in conversation order.
+      final order = _turnSummaries.map((t) => t.turnId).toList();
+      final at = order.indexOf(fresh.first.turnId);
+      var insertAt = _items.length;
+      if (at >= 0) {
+        for (var i = 0; i < _items.length; i++) {
+          final pos = order.indexOf(_items[i].turnId);
+          if (pos >= 0 && pos > at) {
+            insertAt = i;
+            break;
+          }
+        }
+      }
+      _items.insertAll(insertAt, fresh);
+    }
+    _itemIndex.clear();
+    for (var i = 0; i < _items.length; i++) {
+      _itemIndex[_items[i].id] = i;
+    }
+  }
+
+  /// Fetch the page of history before what's shown, keeping the reading
+  /// position: the list corrects its own offset when content is prepended.
+  Future<void> _loadOlder() async {
+    if (_loadingOlder || !_hasOlder || _threadId == null) return;
+    final tid = _threadId!;
+    setState(() => _loadingOlder = true);
+    try {
+      final page = await ref
+          .read(bridgeApiProvider)
+          .appThreadOlderPage(widget.serviceKey, tid);
+      if (!mounted || _threadId != tid) return;
+      setState(() {
+        _spliceTranscriptItems(page.items, atStart: true);
+        _hasOlder = page.hasOlder;
+        _markTurnsLoaded(page.items);
+        _loadingOlder = false;
+      });
+    } catch (_) {
+      // Older history is an enhancement — a failure leaves the transcript as
+      // it is, and scrolling up again retries.
+      if (mounted) setState(() => _loadingOlder = false);
+    }
+  }
+
+  /// Fetch one turn's items, for jumping to a turn not yet scrolled back to.
+  Future<void> _loadTurn(String turnId) async {
+    if (_loadingOlder || turnId.isEmpty || _threadId == null) return;
+    if (_turnSummaries.any((t) => t.turnId == turnId && t.loaded)) return;
+    final tid = _threadId!;
+    setState(() => _loadingOlder = true);
+    try {
+      final items = await ref
+          .read(bridgeApiProvider)
+          .appThreadTurnItems(widget.serviceKey, tid, turnId);
+      if (!mounted || _threadId != tid) return;
+      setState(() {
+        _spliceTranscriptItems(items, atStart: false);
+        _markTurnsLoaded(items);
+        _loadingOlder = false;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _loadingOlder = false);
+    }
+  }
+
+  /// Mark every turn these items belong to as loaded, so the rail stops
+  /// treating it as a turn that still needs fetching.
+  void _markTurnsLoaded(List<ThreadItem> items) {
+    final arrived = items.map((i) => i.turnId).toSet();
+    if (arrived.isEmpty) return;
+    _turnSummaries = [
+      for (final turn in _turnSummaries)
+        arrived.contains(turn.turnId) && !turn.loaded
+            ? TurnSummary(
+                turnId: turn.turnId,
+                userText: turn.userText,
+                assistantText: turn.assistantText,
+                loaded: true,
+              )
+            : turn,
+    ];
+  }
+
   /// Open an existing thread: resume it into the session (so reads and turns
   /// resolve — otherwise the server returns "thread not found"), then load
   /// its history.
@@ -1235,6 +1382,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       setState(() {
         _loading = false;
         _replaceTranscriptItems(history.items);
+        _turnSummaries = history.turns;
+        _hasOlder = history.hasOlder;
+        _loadingOlder = false;
         // Restore the "thinking" state if a turn was still running when we
         // left: live events (delivered after resume) will finish rendering it.
         _streaming = history.running;
@@ -2712,15 +2862,27 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     // maxScrollExtent keeps growing after the first jump. Re-jump to the bottom
     // each frame until it settles — otherwise a long conversation opens blank
     // / mid-content until the user scrolls manually.
+    // Each of those jumps notifies the scroll listener from a position that can
+    // read as the top of a short list, which would fetch older history the user
+    // never asked for. Hold the flag until the jumps are done.
+    _settlingToEnd = true;
     void settle(int tries) {
-      if (!_scroll.hasClients) return;
+      if (!_scroll.hasClients) {
+        _settlingToEnd = false;
+        return;
+      }
       final before = _scroll.position.maxScrollExtent;
       _scroll.jumpTo(before);
-      if (tries <= 0) return;
+      if (tries <= 0) {
+        _settlingToEnd = false;
+        return;
+      }
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (_scroll.hasClients &&
             _scroll.position.maxScrollExtent > before + 1) {
           settle(tries - 1);
+        } else {
+          _settlingToEnd = false;
         }
       });
     }
@@ -2768,10 +2930,112 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
 
   /// One minimap entry per turn: the user's message, and how the turn answered.
   ///
-  /// Derived from the collapsed row list rather than `_items`, because the
-  /// minimap jumps by row index and the two differ — a run of agent prose or a
-  /// batch of tool calls is several items but one row.
+  /// When the server enumerated the thread's turns, every one of them gets a
+  /// tick — including turns whose items aren't loaded, which the rail is meant
+  /// to show because it represents the whole conversation's shape. Loaded turns
+  /// resolve to their real row so selecting one scrolls; the rest carry a
+  /// `rowIndex` of -1 and are fetched on selection.
   List<TurnMinimapItem> _turnMinimapItems(List<Object> rows) {
+    if (_turnSummaries.isEmpty) return _turnMinimapItemsFromRows(rows);
+    // Where each loaded turn's user message ended up among the rows.
+    final rowOfTurn = <String, int>{};
+    for (var i = 0; i < rows.length; i++) {
+      final row = rows[i];
+      if (row is TranscriptItem && row.isUser) {
+        rowOfTurn.putIfAbsent(row.turnId, () => i);
+      }
+    }
+    final out = <TurnMinimapItem>[];
+    for (final turn in _turnSummaries) {
+      final row = rowOfTurn[turn.turnId];
+      final user = _collapseWhitespace(
+        previewWithoutFileRefs(turn.userText, ''),
+      );
+      // A loaded turn's reply comes from the rows, which carry the whole turn;
+      // the skeleton's own summary answers for turns not scrolled back to.
+      final reply = row != null
+          ? _finalReplyAfter(rows, row)
+          : (_collapseWhitespace(turn.assistantText).isEmpty
+                ? null
+                : _collapseWhitespace(turn.assistantText));
+      out.add(
+        TurnMinimapItem(
+          rowIndex: row ?? -1,
+          turnId: turn.turnId,
+          userText: user,
+          assistantText: user.isEmpty && reply == null ? null : reply,
+        ),
+      );
+    }
+    return out;
+  }
+
+  /// The visible range in ROW indices, with the leading "older history" row
+  /// backed out — the rail numbers its ticks by row, not by list position.
+  (int, int)? _visibleRowRange() {
+    final range = _listCtl.visibleRange;
+    if (range == null) return null;
+    if (!_hasOlder) return range;
+    final (first, last) = range;
+    return ((first - 1).clamp(0, 1 << 30), (last - 1).clamp(0, 1 << 30));
+  }
+
+  /// A row saying history continues above, which doubles as the loading state
+  /// while the previous page is in flight.
+  ///
+  /// Tappable as well as scroll-triggered: when the loaded page is shorter than
+  /// the viewport there is nothing to scroll, so reaching the top by scrolling
+  /// is impossible and this row is the only way back.
+  Widget _olderHistoryHeader(AppLocalizations l10n) => Padding(
+    key: const Key('chat-older-history'),
+    padding: const EdgeInsets.symmetric(vertical: 12),
+    child: Center(
+      child: _loadingOlder
+          ? const SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          : InkWell(
+              key: const Key('chat-older-history-load'),
+              onTap: _loadOlder,
+              mouseCursor: clickable,
+              borderRadius: BorderRadius.circular(6),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 4,
+                ),
+                child: Text(
+                  l10n.olderHistoryHint,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+            ),
+    ),
+  );
+
+  /// Jump to a turn the rail selected, fetching it first when the transcript
+  /// hasn't loaded it yet.
+  Future<void> _selectTurn(TurnMinimapItem item) async {
+    if (item.rowIndex >= 0) {
+      _scrollToRow(item.rowIndex);
+      return;
+    }
+    await _loadTurn(item.turnId);
+    if (!mounted) return;
+    // Its row exists now that its items are in; re-derive to find where.
+    final row = _turnMinimapItems(
+      _rows,
+    ).where((entry) => entry.turnId == item.turnId).firstOrNull;
+    if (row != null && row.rowIndex >= 0) _scrollToRow(row.rowIndex);
+  }
+
+  /// Rail entries derived from the loaded rows alone — the shape for a thread
+  /// whose history arrived whole, so the rows already cover every turn.
+  List<TurnMinimapItem> _turnMinimapItemsFromRows(List<Object> rows) {
     final out = <TurnMinimapItem>[];
     for (var i = 0; i < rows.length; i++) {
       final row = rows[i];
@@ -2832,9 +3096,15 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   double _gutterWidth(double available) =>
       math.max(0, (available - _kColumnWidth) / 2);
 
-  /// How many turns the rail would have ticks for — one per user message, the
-  /// same count [_turnMinimapItems] produces.
-  int get _turnCount => _items.where((i) => i.isUser).length;
+  /// How many turns the rail would have ticks for.
+  ///
+  /// Counts the whole thread's turns when the server enumerated them, so a long
+  /// conversation gets its rail immediately instead of only after enough of it
+  /// has been scrolled back into memory. Falls back to the loaded user messages
+  /// for a thread that arrived whole.
+  int get _turnCount => _turnSummaries.isNotEmpty
+      ? _turnSummaries.length
+      : _items.where((i) => i.isUser).length;
 
   /// Whether the gutter rail can take turn navigation over at [available] width,
   /// so the corner arrows can stand down rather than offer the same thing twice.
@@ -2867,7 +3137,12 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                 items: _turnMinimapItems(_rows),
                 visibleRange: _visibleRows,
                 gutterWidth: _gutterWidth(width),
-                onSelect: (item) => _scrollToRow(item.rowIndex),
+                onSelect: _selectTurn,
+                // Hovering a turn the transcript hasn't loaded starts fetching
+                // it, so the jump lands on content rather than a wait.
+                onPreview: (item) {
+                  if (item.rowIndex < 0) _loadTurn(item.turnId);
+                },
               ),
             ),
           // Where the rail has taken the turn jumps, jump-to-latest is all that
@@ -2901,7 +3176,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   void _scrollToRow(int index) {
     if (!_listCtl.isAttached || !_scroll.hasClients) return;
     _listCtl.animateToItem(
-      index: index,
+      // Callers speak in row indices; the list puts the "older history" row
+      // ahead of them, so translate once here rather than at each call site.
+      index: index + (_hasOlder ? 1 : 0),
       scrollController: _scroll,
       alignment: 0,
       duration: (est) => Duration(milliseconds: est.abs() > 2400 ? 420 : 260),
@@ -4145,10 +4422,23 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                                               pad,
                                               12,
                                             ),
+                                            // A leading row when history
+                                            // continues above, so a long
+                                            // conversation says so instead of
+                                            // looking like it starts there.
                                             itemCount:
                                                 rows.length +
+                                                (_hasOlder ? 1 : 0) +
                                                 (_showTyping ? 1 : 0),
                                             itemBuilder: (c, i) {
+                                              if (_hasOlder) {
+                                                if (i == 0) {
+                                                  return _olderHistoryHeader(
+                                                    l10n,
+                                                  );
+                                                }
+                                                i -= 1;
+                                              }
                                               if (i >= rows.length) {
                                                 return TypingIndicator(
                                                   key: _externalWriterRunning

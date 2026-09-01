@@ -671,6 +671,43 @@ class FakeBridgeApi implements BridgeApi {
     String threadId,
   ) async => readResult;
 
+  /// Older pages a paginated thread hands back, oldest batch LAST — each call
+  /// to [appThreadOlderPage] pops the last one, so seeding
+  /// `[oldest, middle]` serves `middle` then `oldest`, the order the UI walks.
+  List<List<ThreadItem>> olderPages = [];
+
+  /// Turn ids passed to [appThreadOlderPage], in call order.
+  int olderPageCalls = 0;
+
+  @override
+  Future<OlderPage> appThreadOlderPage(
+    String serviceKey,
+    String threadId,
+  ) async {
+    olderPageCalls++;
+    if (olderPages.isEmpty) {
+      return const OlderPage(items: [], hasOlder: false);
+    }
+    final items = olderPages.removeLast();
+    return OlderPage(items: items, hasOlder: olderPages.isNotEmpty);
+  }
+
+  /// Items each turn hands back, keyed by turn id.
+  Map<String, List<ThreadItem>> turnItems = {};
+
+  /// Turn ids passed to [appThreadTurnItems], in call order.
+  final List<String> turnItemCalls = [];
+
+  @override
+  Future<List<ThreadItem>> appThreadTurnItems(
+    String serviceKey,
+    String threadId,
+    String turnId,
+  ) async {
+    turnItemCalls.add(turnId);
+    return turnItems[turnId] ?? const [];
+  }
+
   /// Seedable runtime config for the status-bar model indicator tests.
   ThreadRuntimeConfig? runtimeConfig;
 

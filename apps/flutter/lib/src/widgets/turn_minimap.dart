@@ -15,11 +15,18 @@ class TurnMinimapItem {
     required this.rowIndex,
     required this.userText,
     this.assistantText,
+    this.turnId = '',
   });
 
   /// Index of this turn's user message in the transcript's row list — what the
-  /// list controller is asked to scroll to.
+  /// list controller is asked to scroll to. `-1` for a turn the transcript
+  /// hasn't loaded: the tick still marks where the turn sits in the
+  /// conversation, but there is no row to scroll to until its items arrive.
   final int rowIndex;
+
+  /// Id of the turn, so selecting a tick whose [rowIndex] is `-1` can fetch it.
+  /// Empty when the caller derived entries from rows alone.
+  final String turnId;
 
   /// The user's own message, one line, whitespace already collapsed.
   final String userText;
@@ -116,6 +123,7 @@ class TurnMinimap extends StatefulWidget {
     required this.visibleRange,
     required this.gutterWidth,
     required this.onSelect,
+    this.onPreview,
   });
 
   /// The turns, in transcript order.
@@ -132,6 +140,12 @@ class TurnMinimap extends StatefulWidget {
 
   /// Jump to this turn.
   final ValueChanged<TurnMinimapItem> onSelect;
+
+  /// Called when the pointer rests on a turn, before any click. Lets the
+  /// transcript start fetching a turn it hasn't loaded so the jump is instant
+  /// when the click comes. Optional: the preview itself needs no fetch, since
+  /// the entry already carries its text.
+  final ValueChanged<TurnMinimapItem>? onPreview;
 
   @override
   State<TurnMinimap> createState() => _TurnMinimapState();
@@ -338,7 +352,12 @@ class _TurnMinimapState extends State<TurnMinimap> {
           // re-resolving from an X the rail doesn't govern.
           if (event.localPosition.dx > hitWidth) return;
           final next = _indexAt(event.localPosition.dy, railHeight);
-          if (next != _active) setState(() => _active = next);
+          if (next != _active) {
+            setState(() => _active = next);
+            if (next != null && next < widget.items.length) {
+              widget.onPreview?.call(widget.items[next]);
+            }
+          }
         },
         child: GestureDetector(
           behavior: HitTestBehavior.translucent,

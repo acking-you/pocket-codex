@@ -26,6 +26,7 @@ import 'package:pocket_codex/src/screens/app_session_screen.dart';
 import 'package:pocket_codex/src/ui_prefs.dart';
 import 'package:pocket_codex/src/widgets/message_images.dart';
 import 'package:pocket_codex/src/widgets/status_dots.dart';
+import 'package:pocket_codex/src/widgets/turn_minimap.dart';
 
 import '../fake_bridge_api.dart';
 import '../support/screen_harness.dart';
@@ -5655,6 +5656,202 @@ void main() {
         expect(api.lastTurnText, 'first');
         expect(api.turnStartCount, 1);
       });
+    });
+  });
+
+  group('a long thread loads its history a page at a time', () {
+    // The rail is desktop-only by construction, and the test harness forces
+    // android. Restored in a finally so the debug-var invariant check passes.
+    Future<void> onDesktop(Future<void> Function() body) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      try {
+        await body();
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+      }
+    }
+
+    ThreadItem user(String id, String text, String turn) => ThreadItem(
+      id: id,
+      itemType: 'userMessage',
+      title: '',
+      text: text,
+      turnId: turn,
+    );
+    ThreadItem agent(String id, String text, String turn) => ThreadItem(
+      id: id,
+      itemType: 'agentMessage',
+      title: '',
+      text: text,
+      turnId: turn,
+    );
+
+    /// A thread whose newest turn is loaded and whose earlier turns are not.
+    Future<FakeBridgeApi> openPaginated(WidgetTester t) async {
+      final api = FakeBridgeApi(
+        config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+      );
+      await api.appConnect('pcx:lb7666:app:default', 28080);
+      api.readResult = ThreadHistory(
+        items: [
+          user('u5', 'newest question', 't5'),
+          agent('a5', 'newest answer', 't5'),
+        ],
+        running: false,
+        hasOlder: true,
+        // The server enumerated every turn, including the four not loaded.
+        // Five of them, so the count clears kTurnMinimapMinItems and the rail
+        // is the affordance rather than the corner arrows.
+        turns: const [
+          TurnSummary(
+            turnId: 't1',
+            userText: 'first question',
+            assistantText: 'first answer',
+          ),
+          TurnSummary(
+            turnId: 't2',
+            userText: 'second question',
+            assistantText: 'second answer',
+          ),
+          TurnSummary(
+            turnId: 't3',
+            userText: 'third question',
+            assistantText: 'third answer',
+          ),
+          TurnSummary(
+            turnId: 't4',
+            userText: 'fourth question',
+            assistantText: 'fourth answer',
+          ),
+          TurnSummary(
+            turnId: 't5',
+            userText: 'newest question',
+            assistantText: 'newest answer',
+            loaded: true,
+          ),
+        ],
+      );
+      await t.pumpWidget(
+        host(
+          const AppSessionScreen(
+            serviceKey: 'pcx:lb7666:app:default',
+            threadId: 'thread-long',
+          ),
+          api,
+        ),
+      );
+      await t.pumpAndSettle();
+      return api;
+    }
+
+    testWidgets('opening it shows the newest turn, not the whole history', (
+      t,
+    ) async {
+      await openPaginated(t);
+      expect(find.text('newest answer'), findsOneWidget);
+      expect(find.text('first answer'), findsNothing);
+      // And it says so, rather than looking like the conversation starts here.
+      expect(find.byKey(const Key('chat-older-history')), findsOneWidget);
+    });
+
+    testWidgets('the rail has a tick per turn of the WHOLE thread', (t) async {
+      await onDesktop(() async {
+        await t.binding.setSurfaceSize(const Size(1600, 900));
+        addTearDown(() => t.binding.setSurfaceSize(null));
+        await openPaginated(t);
+        // Three turns exist; only one is loaded. A rail derived from loaded rows
+        // would show one tick and misreport the conversation's shape.
+        final rail = t.widget<TurnMinimap>(find.byType(TurnMinimap));
+        expect(rail.items, hasLength(5));
+        expect(rail.items.map((i) => i.turnId), ['t1', 't2', 't3', 't4', 't5']);
+        // Only the loaded turn resolves to a row; the rest await their items.
+        expect(rail.items[0].rowIndex, -1);
+        expect(rail.items[4].rowIndex, greaterThanOrEqualTo(0));
+      });
+    });
+
+    testWidgets('an unloaded tick still previews, without fetching', (t) async {
+      await onDesktop(() async {
+        await t.binding.setSurfaceSize(const Size(1600, 900));
+        addTearDown(() => t.binding.setSurfaceSize(null));
+        final api = await openPaginated(t);
+        final rail = t.widget<TurnMinimap>(find.byType(TurnMinimap));
+        // The skeleton carries the text, so hovering costs no round trip.
+        expect(rail.items[0].userText, 'first question');
+        expect(rail.items[0].assistantText, 'first answer');
+        expect(api.turnItemCalls, isEmpty);
+      });
+    });
+
+    testWidgets('selecting an unloaded turn fetches just that turn', (t) async {
+      await onDesktop(() async {
+        await t.binding.setSurfaceSize(const Size(1600, 900));
+        addTearDown(() => t.binding.setSurfaceSize(null));
+        final api = await openPaginated(t);
+        api.turnItems = {
+          't1': [
+            user('u1', 'first question', 't1'),
+            agent('a1', 'first answer', 't1'),
+          ],
+        };
+        final rail = t.widget<TurnMinimap>(find.byType(TurnMinimap));
+        rail.onSelect(rail.items[0]);
+        await t.pumpAndSettle();
+        expect(api.turnItemCalls, ['t1']);
+        expect(find.text('first answer'), findsOneWidget);
+        // The newest turn is still there — a jump adds, it doesn't replace.
+        expect(find.text('newest answer'), findsOneWidget);
+      });
+    });
+
+    testWidgets('an older page prepends, keeping what was already shown', (
+      t,
+    ) async {
+      final api = await openPaginated(t);
+      api.olderPages = [
+        [
+          user('u2', 'second question', 't2'),
+          agent('a2', 'second answer', 't2'),
+        ],
+      ];
+      // Reaching back past the top. Tapped rather than scrolled because the
+      // loaded page is shorter than the viewport here, so there is nothing to
+      // scroll — which is exactly why the row is tappable.
+      await t.tap(find.byKey(const Key('chat-older-history-load')));
+      await t.pumpAndSettle();
+      expect(api.olderPageCalls, 1);
+      expect(find.text('second answer'), findsOneWidget);
+      expect(find.text('newest answer'), findsOneWidget);
+      // That was the last page, so the header retires.
+      expect(find.byKey(const Key('chat-older-history')), findsNothing);
+    });
+
+    testWidgets('a thread that arrives whole pages nothing', (t) async {
+      final api = FakeBridgeApi(
+        config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+      );
+      await api.appConnect('pcx:lb7666:app:default', 28080);
+      // A legacy thread: every item present, no turn enumeration, no older page.
+      api.readResult = ThreadHistory(
+        items: [
+          user('u1', 'only question', 't1'),
+          agent('a1', 'only answer', 't1'),
+        ],
+        running: false,
+      );
+      await t.pumpWidget(
+        host(
+          const AppSessionScreen(
+            serviceKey: 'pcx:lb7666:app:default',
+            threadId: 'thread-legacy',
+          ),
+          api,
+        ),
+      );
+      await t.pumpAndSettle();
+      expect(find.text('only answer'), findsOneWidget);
+      expect(find.byKey(const Key('chat-older-history')), findsNothing);
+      expect(api.olderPageCalls, 0);
     });
   });
 }
