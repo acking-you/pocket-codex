@@ -1784,6 +1784,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-agent-roles"
+version = "0.0.0"
+dependencies = [
+ "codex-config",
+ "codex-file-system",
+ "codex-utils-absolute-path",
+ "codex-utils-path-uri",
+ "serde",
+ "toml 0.9.12+spec-1.1.0",
+ "tracing",
+]
+
+[[package]]
 name = "codex-analytics"
 version = "0.0.0"
 dependencies = [
@@ -2006,6 +2019,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "codex-apply-patch",
+ "codex-async-utils",
  "codex-exec-server",
  "codex-install-context",
  "codex-linux-sandbox",
@@ -2015,6 +2029,7 @@ dependencies = [
  "codex-utils-home-dir",
  "codex-windows-sandbox",
  "dotenvy",
+ "pathdiff",
  "tempfile",
  "tokio",
 ]
@@ -2126,15 +2141,14 @@ dependencies = [
  "codex-code-mode-protocol",
  "codex-http-client",
  "codex-install-context",
+ "codex-otel",
  "codex-protocol",
- "codex-websocket-client",
  "futures",
  "http-body-util",
  "prost",
  "reqwest 0.12.28",
  "serde_json",
  "tokio",
- "tokio-tungstenite 0.28.0",
  "tokio-util",
  "tonic",
  "tower",
@@ -2263,6 +2277,7 @@ dependencies = [
  "chrono",
  "clap",
  "codex-agent-graph-store",
+ "codex-agent-roles",
  "codex-analytics",
  "codex-api",
  "codex-app-server-protocol",
@@ -2283,6 +2298,7 @@ dependencies = [
  "codex-feedback",
  "codex-file-system",
  "codex-git-utils",
+ "codex-guardian-context",
  "codex-history",
  "codex-hooks",
  "codex-http-client",
@@ -2568,11 +2584,16 @@ name = "codex-feedback"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "bytes",
  "codex-http-client",
  "codex-login",
  "codex-protocol",
+ "flate2",
+ "http 1.4.0",
+ "httpdate",
  "mime_guess",
  "sentry",
+ "tokio",
  "tracing",
  "tracing-subscriber",
 ]
@@ -2669,6 +2690,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-guardian-context"
+version = "0.0.0"
+dependencies = [
+ "codex-protocol",
+ "serde_json",
+]
+
+[[package]]
 name = "codex-guardian-v2"
 version = "0.0.0"
 dependencies = [
@@ -2676,15 +2705,20 @@ dependencies = [
  "codex-core",
  "codex-extension-api",
  "codex-features",
+ "codex-history",
  "codex-http-client",
  "codex-login",
  "codex-model-provider",
+ "codex-models-manager",
+ "codex-network-proxy",
  "codex-protocol",
+ "dirs",
  "http 1.4.0",
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -2830,6 +2864,7 @@ dependencies = [
  "globset",
  "landlock",
  "libc",
+ "rustix 1.1.4",
  "seccompiler",
  "serde",
  "serde_json",
@@ -3110,6 +3145,7 @@ dependencies = [
  "codex-utils-absolute-path",
  "codex-utils-path-uri",
  "codex-utils-plugins",
+ "serde_json",
  "thiserror 2.0.18",
 ]
 
@@ -3150,6 +3186,7 @@ dependencies = [
  "codex-utils-redacted-string",
  "codex-utils-string",
  "encoding_rs",
+ "gix-url",
  "globset",
  "http 1.4.0",
  "icu_decimal",
@@ -3295,6 +3332,7 @@ dependencies = [
  "libc",
  "regex-lite",
  "serde_json",
+ "tokio",
  "tracing",
  "url",
  "which 8.0.4",
