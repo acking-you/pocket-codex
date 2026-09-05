@@ -12,7 +12,8 @@
 //!
 //! [`verify_ready`] closes that gap: after a spawn it polls the app-server's
 //! `/readyz` endpoint (the same one the health watchdog probes) until it
-//! answers, the launch has provably failed, or the timeout elapses. On
+//! answers, the launch has provably failed, or the timeout elapses. Reused
+//! listeners must also answer `initialize` and `thread/list`. On
 //! failure it returns a [`StartupFailure`] carrying the tail of *this run's*
 //! log output (via [`crate::SpawnReport::log_offset`]) and whether that
 //! output points at an address-already-in-use bind error, so the CLI can
@@ -43,7 +44,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+use anyhow::Context as _;
 use pocket_codex_core::process::{pid_running, probe_host};
+use serde_json::json;
 
 use crate::process::{spawn, ws_host_port, SpawnOptions, SpawnReport};
 
@@ -99,6 +102,9 @@ const TAIL_MAX_LINES: usize = 20;
 /// picks it).
 #[derive(Debug)]
 pub struct StartupFailure {
+    /// Functional RPC probe failure when an adopted listener answered HTTP
+    /// but could not initialize and list a thread.
+    pub rpc_error: Option<String>,
     /// The spawned process was observed dead while nothing served the listen
     /// address — it exited during startup (as opposed to still running but
     /// unresponsive).
@@ -157,7 +163,9 @@ impl StartupFailure {
 
 impl fmt::Display for StartupFailure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.process_exited {
+        if let Some(error) = &self.rpc_error {
+            write!(f, "codex app-server on {} failed its readiness probe: {error}", self.listen)
+        } else if self.process_exited {
             write!(f, "codex app-server exited during startup (listen {})", self.listen)
         } else {
             write!(f, "codex app-server did not become ready on {} in time", self.listen)
@@ -173,9 +181,10 @@ impl std::error::Error for StartupFailure {}
 /// Polls `/readyz` on the listen address until it answers 2xx (`Ok`), the
 /// launch provably failed — child gone AND the bind error already in the log
 /// (`Err`, fast) — or `timeout` elapses (`Err`). A reused/adopted server
-/// skips the process-death check — there is no fresh child to watch — but is
-/// still probed, so adopting a wedged listener fails the launch instead of
-/// publishing it. Unix-socket transports have no HTTP endpoint and are only
+/// skips the process-death check — there is no fresh child to watch — but
+/// must also answer initialized thread RPCs within the remaining budget, so
+/// adopting a wedged listener fails the launch instead of publishing it.
+/// Unix-socket transports have no HTTP endpoint and are only
 /// watched briefly for the fatal-bind-error signal.
 ///
 /// When [`crate::spawn`]'s own port wait already ran dry without seeing a
@@ -194,6 +203,15 @@ pub fn verify_ready(report: &SpawnReport, timeout: Duration) -> Result<(), Start
     let mut observed_dead = false;
     loop {
         let down = match probe_readyz(&host, port) {
+            Probe::Ready if report.reused => {
+                let dial_host = probe_host(&host);
+                let authority = if dial_host.contains(':') {
+                    format!("[{dial_host}]:{port}")
+                } else {
+                    format!("{dial_host}:{port}")
+                };
+                return verify_reused_rpc(report, &format!("ws://{authority}"), deadline);
+            },
             Probe::Ready => return Ok(()),
             // Something is listening — a booting server; keep waiting.
             Probe::NotReady => false,
@@ -218,6 +236,58 @@ pub fn verify_ready(report: &SpawnReport, timeout: Duration) -> Result<(), Start
         }
         thread::sleep(POLL_INTERVAL);
     }
+}
+
+/// Verify that an app-server handles initialized RPCs, within one overall
+/// budget. Neither an HTTP health response nor `initialize` alone exercises
+/// the thread request path. No model turn is started by this probe.
+pub async fn probe_rpc(ws_url: &str, budget: Duration) -> anyhow::Result<()> {
+    let deadline = tokio::time::Instant::now() + budget;
+    let (client, _events) =
+        tokio::time::timeout_at(deadline, crate::client::AppClient::connect(ws_url))
+            .await
+            .context("probe: websocket connect timed out")??;
+    tokio::time::timeout_at(
+        deadline,
+        client.request(
+            "initialize",
+            json!({
+                "clientInfo": {"name": "pocket-codex", "version": env!("CARGO_PKG_VERSION")},
+                "capabilities": {"experimentalApi": true}
+            }),
+        ),
+    )
+    .await
+    .context("probe: initialize timed out")??;
+    tokio::time::timeout_at(deadline, client.request("thread/list", json!({"limit": 1})))
+        .await
+        .context("probe: thread/list timed out")??;
+    Ok(())
+}
+
+fn verify_reused_rpc(
+    report: &SpawnReport,
+    ws_url: &str,
+    deadline: Instant,
+) -> Result<(), StartupFailure> {
+    // verify_ready is synchronous and can be called from a Tokio runtime.
+    // A separate thread avoids nesting block_on inside that caller's runtime.
+    let result = thread::scope(|scope| {
+        scope
+            .spawn(|| -> anyhow::Result<()> {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()?
+                    .block_on(probe_rpc(ws_url, deadline.saturating_duration_since(Instant::now())))
+            })
+            .join()
+            .unwrap_or_else(|_| Err(anyhow::anyhow!("readiness probe thread panicked")))
+    });
+    result.map_err(|error| {
+        let mut failure = failure(report, false);
+        failure.rpc_error = Some(format!("{error:#}"));
+        failure
+    })
 }
 
 /// Poll `/readyz` on `host:port` until it answers 2xx (`true`), or `timeout`
@@ -349,6 +419,7 @@ pub(crate) fn bind_failure_logged(log_file: &Path, from_offset: u64) -> bool {
 fn failure(report: &SpawnReport, process_exited: bool) -> StartupFailure {
     let log_tail = read_log_tail(&report.info.log_file, report.log_offset);
     StartupFailure {
+        rpc_error: None,
         process_exited,
         port_in_use: mentions_addr_in_use(&log_tail),
         listen: report.info.listen.clone(),
@@ -468,6 +539,10 @@ fn mentions_addr_in_use(lines: &[String]) -> bool {
 }
 
 #[cfg(test)]
+#[path = "readiness_rpc_tests.rs"]
+mod rpc_tests;
+
+#[cfg(test)]
 mod tests {
     use std::net::TcpListener;
 
@@ -554,12 +629,12 @@ mod tests {
     }
 
     #[test]
-    fn verify_ready_passes_on_a_2xx_readyz() {
+    fn verify_ready_passes_on_a_fresh_2xx_readyz() {
         let port = fake_readyz("HTTP/1.1 200 OK");
         let report = report(
             format!("ws://127.0.0.1:{port}"),
             std::process::id(),
-            true,
+            false,
             PathBuf::from("does-not-exist.log"),
         );
         assert!(verify_ready(&report, Duration::from_secs(5)).is_ok());
@@ -702,6 +777,7 @@ mod tests {
     #[test]
     fn diagnosis_renders_log_location_tail_and_hint() {
         let failure = StartupFailure {
+            rpc_error: None,
             process_exited: true,
             port_in_use: true,
             listen: "ws://127.0.0.1:18080".to_string(),
@@ -719,6 +795,7 @@ mod tests {
     #[test]
     fn diagnosis_without_a_port_conflict_stays_hint_free() {
         let failure = StartupFailure {
+            rpc_error: None,
             process_exited: false,
             port_in_use: false,
             listen: "ws://127.0.0.1:18080".to_string(),

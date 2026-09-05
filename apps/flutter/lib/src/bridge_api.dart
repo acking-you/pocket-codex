@@ -459,6 +459,8 @@ class ThreadHistory {
     this.approvalPolicy,
     this.sandboxMode,
     this.configConfirmed = false,
+    this.hasOlder = false,
+    this.turns = const [],
   });
 
   /// Conversation items, oldest first.
@@ -507,6 +509,50 @@ class ThreadHistory {
   /// Whether a live `thread/settings/updated` notification has confirmed this
   /// config (vs only a start/resume snapshot).
   final bool configConfirmed;
+
+  /// Whether earlier items remain unread — [BridgeApi.appThreadOlderPage]
+  /// fetches them. False for a thread whose history arrives whole.
+  final bool hasOlder;
+
+  /// One entry per turn in the WHOLE thread, oldest first, including turns
+  /// whose items aren't loaded yet. The turn rail shows a conversation's shape,
+  /// so it needs every turn even before their bodies are read.
+  final List<TurnSummary> turns;
+}
+
+/// A turn reduced to what the rail shows: the question, and how it was answered.
+class TurnSummary {
+  /// Creates a turn summary.
+  const TurnSummary({
+    required this.turnId,
+    this.userText = '',
+    this.assistantText = '',
+    this.loaded = false,
+  });
+
+  /// Id of the turn, for fetching its items on demand.
+  final String turnId;
+
+  /// The user's message that opened the turn; empty when it had none.
+  final String userText;
+
+  /// The turn's final agent message; empty when it produced no prose.
+  final String assistantText;
+
+  /// Whether this turn's items are already in the transcript.
+  final bool loaded;
+}
+
+/// One page of older items, and whether history continues before them.
+class OlderPage {
+  /// Creates an older page.
+  const OlderPage({required this.items, required this.hasOlder});
+
+  /// Older items, oldest first, to prepend to the transcript.
+  final List<ThreadItem> items;
+
+  /// Whether older items still remain.
+  final bool hasOlder;
 }
 
 /// The server-reported runtime configuration of a thread — what its turns
@@ -1222,7 +1268,22 @@ abstract interface class BridgeApi {
 
   /// Read a thread's history (items oldest first) and whether a turn is still
   /// running, so re-opening an in-flight thread restores its live state.
+  ///
+  /// A paginated thread returns only its newest turns' items, with
+  /// [ThreadHistory.hasOlder] set and [ThreadHistory.turns] naming every turn.
   Future<ThreadHistory> appThreadRead(String serviceKey, String threadId);
+
+  /// One page further back through a paginated thread's history. Returns an
+  /// empty page when the thread reads whole or is already at its start.
+  Future<OlderPage> appThreadOlderPage(String serviceKey, String threadId);
+
+  /// Every item of one turn, oldest first — for jumping to a turn the
+  /// transcript hasn't scrolled back to yet.
+  Future<List<ThreadItem>> appThreadTurnItems(
+    String serviceKey,
+    String threadId,
+    String turnId,
+  );
 
   /// The latest server-reported runtime config for a thread (from its
   /// start/resume response, kept fresh by `thread/settings/updated`

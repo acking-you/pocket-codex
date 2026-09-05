@@ -7,6 +7,7 @@ import 'package:file_selector/file_selector.dart' show openFiles;
 import 'package:flutter/foundation.dart'
     show listEquals, defaultTargetPlatform, TargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollDirection;
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/app_modes.dart';
 import 'package:pocket_codex/src/attachment_refs.dart';
@@ -31,6 +32,7 @@ import 'package:pocket_codex/src/service_key.dart';
 import 'package:pocket_codex/src/screens/app_session/activity_cards.dart';
 import 'package:pocket_codex/src/screens/app_session/composer_cards.dart';
 import 'package:pocket_codex/src/screens/app_session/transcript_model.dart';
+import 'package:pocket_codex/src/screens/app_session/history_merge.dart';
 import 'package:pocket_codex/src/screens/app_session/transcript_view.dart';
 import 'package:pocket_codex/src/theme.dart';
 import 'package:pocket_codex/src/ui_prefs.dart';
@@ -43,6 +45,7 @@ import 'package:pocket_codex/src/widgets/folder_tree_picker.dart';
 import 'package:pocket_codex/src/widgets/links.dart';
 import 'package:pocket_codex/src/widgets/loading.dart';
 import 'package:pocket_codex/src/widgets/message_images.dart';
+import 'package:pocket_codex/src/widgets/middle_click_scroll.dart';
 import 'package:pocket_codex/src/widgets/project_menu.dart';
 import 'package:pocket_codex/src/widgets/status_dots.dart';
 import 'package:pocket_codex/src/widgets/takeover_dialog.dart';
@@ -391,6 +394,22 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   bool _takingOver = false;
   bool _sending = false;
   bool _atBottom = true; // is the list scrolled to the latest message?
+  // Every turn of the open thread, oldest first — including turns whose items
+  // aren't loaded. The rail shows the conversation's shape, so it reads this
+  // rather than the loaded rows. Empty for a thread that arrived whole, whose
+  // rows already cover every turn.
+  List<TurnSummary> _turnSummaries = const [];
+  // Whether older items remain on the server for the open thread.
+  bool _hasOlder = false;
+  // True while an older page (or a single turn's items) is in flight, so a
+  // scroll frame can't queue the same fetch twice.
+  bool _loadingOlder = false;
+  Future<void>? _historyLoad;
+  int _historyGeneration = 0;
+  // True while `_scrollToEnd(force: true)` is re-jumping to the bottom. Those
+  // jumps fire scroll events from positions that can look like the top of the
+  // list, which would fetch older history nobody asked for.
+  bool _settlingToEnd = false;
   String? _error;
   VoidCallback? _retry; // action for the error banner's retry button
   bool _connectionLost = false;
@@ -623,7 +642,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     _healthTimer = Timer.periodic(const Duration(seconds: 12), (_) {
       if (!mounted || _reconnecting) return;
       if (!ref.read(bridgeApiProvider).appIsConnected(widget.serviceKey)) {
-        _autoReconnect();
+        _onStreamClosed();
       }
     });
   }
@@ -949,6 +968,12 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       _editingTitle = false;
       _items.clear();
       _itemIndex.clear();
+      // The previous thread's turns and pagination say nothing about this one.
+      _turnSummaries = const [];
+      _hasOlder = false;
+      _loadingOlder = false;
+      _historyLoad = null;
+      _historyGeneration++;
       _approvals.clear();
       _ctx = null;
       _diff = null;
@@ -1063,7 +1088,19 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     if (atBottom != _atBottom) setState(() => _atBottom = atBottom);
     // Publish the visible rows for the turn minimap. Straight onto the notifier
     // — no setState — so a scroll frame repaints ticks, not the transcript.
-    if (_listCtl.isAttached) _visibleRows.value = _listCtl.visibleRange;
+    // Back out the "older history" row so the rail's range is in row indices,
+    // which is what its ticks are numbered in.
+    if (_listCtl.isAttached) _visibleRows.value = _visibleRowRange();
+    // Reading back past the top of what's loaded fetches the previous page.
+    // Only user scrolling triggers this. An indexed rail jump must not remove
+    // the older-page header halfway through its animation and shift the target.
+    if (!_settlingToEnd &&
+        _scroll.position.userScrollDirection != ScrollDirection.idle &&
+        _hasOlder &&
+        !_loadingOlder &&
+        _scroll.position.pixels <= _scroll.position.minScrollExtent + 200) {
+      _loadOlder();
+    }
   }
 
   /// Read a host-side image so it can render as a thumbnail instead of a
@@ -1150,7 +1187,11 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     if (!mounted) return;
     // The event stream closing means the socket dropped — recover automatically
     // rather than leaving the session silently dead.
-    setState(() => _streaming = false);
+    setState(() {
+      _streaming = false;
+      _connectionLost = true;
+    });
+    _publishLinkState(down: true);
     _autoReconnect();
   }
 
@@ -1188,6 +1229,127 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         ),
       );
     }
+  }
+
+  /// Splice [items] into the transcript by turn order, skipping ids already
+  /// present, and rebuild the id→index map.
+  ///
+  /// Both sequential pages and jumped-to turns use the skeleton's order.
+  void _spliceTranscriptItems(List<ThreadItem> items, {required bool atStart}) {
+    final known = _items.map((i) => i.id).toSet();
+    final fresh = <TranscriptItem>[];
+    for (final item in items) {
+      if (item.id.isEmpty) continue;
+      if (item.itemType == 'userMessage' && isContextFragment(item.text)) {
+        continue;
+      }
+      if (known.contains(item.id)) {
+        fresh.add(_items[_itemIndex[item.id]!]);
+        continue;
+      }
+      fresh.add(
+        TranscriptItem(
+          id: item.id,
+          type: item.itemType,
+          title: item.title,
+          text: item.text,
+          images: resolveImageUrls(item.images),
+          imageUrls: item.images,
+          turnId: item.turnId,
+          turnCompletedAt: item.turnCompletedAt,
+          turnDurationMs: item.turnDurationMs,
+        ),
+      );
+    }
+    if (fresh.isEmpty) return;
+    final merged = mergeHistoryItems(
+      _items,
+      fresh,
+      turnOrder: _turnSummaries.map((t) => t.turnId),
+      olderPage: atStart,
+    );
+    _items
+      ..clear()
+      ..addAll(merged);
+    _itemIndex.clear();
+    for (var i = 0; i < _items.length; i++) {
+      _itemIndex[_items[i].id] = i;
+    }
+  }
+
+  /// Fetch the page of history before what's shown, keeping the reading
+  /// position: the list corrects its own offset when content is prepended.
+  Future<void> _loadOlder() async {
+    if (_loadingOlder || !_hasOlder || _threadId == null) return;
+    await _startHistoryLoad();
+  }
+
+  /// Fetch one turn's items, for jumping to a turn not yet scrolled back to.
+  Future<void> _loadTurn(String turnId) async {
+    final generation = _historyGeneration;
+    while (_historyLoad != null) {
+      await _historyLoad;
+      if (!mounted || _historyGeneration != generation) return;
+    }
+    if (turnId.isEmpty || _threadId == null) return;
+    // A tail-only page may have marked the turn loaded without its user row.
+    if (_items.any((item) => item.turnId == turnId && item.isUser)) return;
+    await _startHistoryLoad(turnId: turnId);
+  }
+
+  Future<void> _startHistoryLoad({String? turnId}) {
+    final tid = _threadId!;
+    setState(() => _loadingOlder = true);
+    return _historyLoad = _fetchHistory(tid, _historyGeneration, turnId);
+  }
+
+  Future<void> _fetchHistory(String tid, int generation, String? turnId) async {
+    bool current() => mounted && _historyGeneration == generation;
+    try {
+      final api = ref.read(bridgeApiProvider);
+      final page = turnId == null
+          ? await api.appThreadOlderPage(widget.serviceKey, tid)
+          : OlderPage(
+              items: await api.appThreadTurnItems(
+                widget.serviceKey,
+                tid,
+                turnId,
+              ),
+              hasOlder: _hasOlder,
+            );
+      if (!current()) return;
+      setState(() {
+        _spliceTranscriptItems(page.items, atStart: turnId == null);
+        if (turnId == null) _hasOlder = page.hasOlder;
+        _markTurnsLoaded();
+      });
+    } catch (_) {
+      // Keep the existing transcript and let a later navigation retry.
+    } finally {
+      if (current()) {
+        setState(() {
+          _loadingOlder = false;
+          _historyLoad = null;
+        });
+      }
+    }
+  }
+
+  /// A turn is navigable once its opening user row is present.
+  void _markTurnsLoaded() {
+    final arrived = _items.where((i) => i.isUser).map((i) => i.turnId).toSet();
+    if (arrived.isEmpty) return;
+    _turnSummaries = [
+      for (final turn in _turnSummaries)
+        arrived.contains(turn.turnId) && !turn.loaded
+            ? TurnSummary(
+                turnId: turn.turnId,
+                userText: turn.userText,
+                assistantText: turn.assistantText,
+                loaded: true,
+              )
+            : turn,
+    ];
   }
 
   /// Open an existing thread: resume it into the session (so reads and turns
@@ -1235,6 +1397,11 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       setState(() {
         _loading = false;
         _replaceTranscriptItems(history.items);
+        _turnSummaries = history.turns;
+        _hasOlder = history.hasOlder;
+        _loadingOlder = false;
+        _historyLoad = null;
+        _historyGeneration++;
         // Restore the "thinking" state if a turn was still running when we
         // left: live events (delivered after resume) will finish rendering it.
         _streaming = history.running;
@@ -2618,6 +2785,11 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         if (_openLoadRetries.containsKey(_kCwdSeed)) await _seedDefaultCwd();
         if (_rate == null) unawaited(_loadQuota());
         _loadGit(); // the working tree may have moved on while we were away
+        // Content loaders retain old data on failure. A timed-out RPC can
+        // therefore close this new connection without throwing out of them.
+        if (!api.appIsConnected(widget.serviceKey)) {
+          throw StateError('app-server connection closed during reconnect');
+        }
         if (mounted) {
           setState(() {
             _reconnecting = false;
@@ -2712,15 +2884,27 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     // maxScrollExtent keeps growing after the first jump. Re-jump to the bottom
     // each frame until it settles — otherwise a long conversation opens blank
     // / mid-content until the user scrolls manually.
+    // Each of those jumps notifies the scroll listener from a position that can
+    // read as the top of a short list, which would fetch older history the user
+    // never asked for. Hold the flag until the jumps are done.
+    _settlingToEnd = true;
     void settle(int tries) {
-      if (!_scroll.hasClients) return;
+      if (!_scroll.hasClients) {
+        _settlingToEnd = false;
+        return;
+      }
       final before = _scroll.position.maxScrollExtent;
       _scroll.jumpTo(before);
-      if (tries <= 0) return;
+      if (tries <= 0) {
+        _settlingToEnd = false;
+        return;
+      }
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (_scroll.hasClients &&
             _scroll.position.maxScrollExtent > before + 1) {
           settle(tries - 1);
+        } else {
+          _settlingToEnd = false;
         }
       });
     }
@@ -2768,10 +2952,121 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
 
   /// One minimap entry per turn: the user's message, and how the turn answered.
   ///
-  /// Derived from the collapsed row list rather than `_items`, because the
-  /// minimap jumps by row index and the two differ — a run of agent prose or a
-  /// batch of tool calls is several items but one row.
+  /// When the server enumerated the thread's turns, every one of them gets a
+  /// tick — including turns whose items aren't loaded, which the rail is meant
+  /// to show because it represents the whole conversation's shape. Loaded turns
+  /// resolve to their real row so selecting one scrolls; the rest carry a
+  /// `rowIndex` of -1 and are fetched on selection.
   List<TurnMinimapItem> _turnMinimapItems(List<Object> rows) {
+    if (_turnSummaries.isEmpty) return _turnMinimapItemsFromRows(rows);
+    // Where each loaded turn's user message ended up among the rows.
+    final rowOfTurn = <String, int>{};
+    for (var i = 0; i < rows.length; i++) {
+      final row = rows[i];
+      if (row is TranscriptItem && row.isUser) {
+        rowOfTurn.putIfAbsent(row.turnId, () => i);
+      }
+    }
+    final out = <TurnMinimapItem>[];
+    for (final turn in _turnSummaries) {
+      final row = rowOfTurn[turn.turnId];
+      final user = _collapseWhitespace(
+        previewWithoutFileRefs(turn.userText, ''),
+      );
+      // A loaded turn's reply comes from the rows, which carry the whole turn;
+      // the skeleton's own summary answers for turns not scrolled back to.
+      final reply = row != null
+          ? _finalReplyAfter(rows, row)
+          : (_collapseWhitespace(turn.assistantText).isEmpty
+                ? null
+                : _collapseWhitespace(turn.assistantText));
+      out.add(
+        TurnMinimapItem(
+          rowIndex: row ?? -1,
+          turnId: turn.turnId,
+          userText: user,
+          assistantText: user.isEmpty && reply == null ? null : reply,
+        ),
+      );
+    }
+    final snapshotIds = _turnSummaries.map((turn) => turn.turnId).toSet();
+    out.addAll(
+      _turnMinimapItemsFromRows(rows).where(
+        (turn) => turn.turnId.isEmpty || !snapshotIds.contains(turn.turnId),
+      ),
+    );
+    return out;
+  }
+
+  /// The visible range in ROW indices, with the leading "older history" row
+  /// backed out — the rail numbers its ticks by row, not by list position.
+  (int, int)? _visibleRowRange() {
+    final range = _listCtl.visibleRange;
+    if (range == null) return null;
+    if (!_hasOlder) return range;
+    final (first, last) = range;
+    return ((first - 1).clamp(0, 1 << 30), (last - 1).clamp(0, 1 << 30));
+  }
+
+  /// A row saying history continues above, which doubles as the loading state
+  /// while the previous page is in flight.
+  ///
+  /// Tappable as well as scroll-triggered: when the loaded page is shorter than
+  /// the viewport there is nothing to scroll, so reaching the top by scrolling
+  /// is impossible and this row is the only way back.
+  Widget _olderHistoryHeader(AppLocalizations l10n) => Padding(
+    key: const Key('chat-older-history'),
+    padding: const EdgeInsets.symmetric(vertical: 12),
+    child: Center(
+      child: _loadingOlder
+          ? const SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          : InkWell(
+              key: const Key('chat-older-history-load'),
+              onTap: _loadOlder,
+              mouseCursor: clickable,
+              borderRadius: BorderRadius.circular(6),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 4,
+                ),
+                child: Text(
+                  l10n.olderHistoryHint,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+            ),
+    ),
+  );
+
+  /// Jump to a turn the rail selected, fetching it first when the transcript
+  /// hasn't loaded it yet.
+  Future<void> _selectTurn(TurnMinimapItem item) async {
+    final generation = _historyGeneration;
+    if (item.rowIndex >= 0) {
+      _scrollToRow(item.rowIndex);
+      return;
+    }
+    await _loadTurn(item.turnId);
+    // Let the virtual list lay out inserted rows before navigating by index.
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted || _historyGeneration != generation) return;
+    // Its row exists now that its items are in; re-derive to find where.
+    final row = _turnMinimapItems(
+      _rows,
+    ).where((entry) => entry.turnId == item.turnId).firstOrNull;
+    if (row != null && row.rowIndex >= 0) _scrollToRow(row.rowIndex);
+  }
+
+  /// Rail entries derived from the loaded rows alone — the shape for a thread
+  /// whose history arrived whole, so the rows already cover every turn.
+  List<TurnMinimapItem> _turnMinimapItemsFromRows(List<Object> rows) {
     final out = <TurnMinimapItem>[];
     for (var i = 0; i < rows.length; i++) {
       final row = rows[i];
@@ -2790,11 +3085,16 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       // Neither half has anything to show — an empty card that only occludes the
       // conversation. The tick stays; it just has no preview.
       if (user.isEmpty && reply == null) {
-        out.add(TurnMinimapItem(rowIndex: i, userText: ''));
+        out.add(TurnMinimapItem(rowIndex: i, turnId: row.turnId, userText: ''));
         continue;
       }
       out.add(
-        TurnMinimapItem(rowIndex: i, userText: user, assistantText: reply),
+        TurnMinimapItem(
+          rowIndex: i,
+          turnId: row.turnId,
+          userText: user,
+          assistantText: reply,
+        ),
       );
     }
     return out;
@@ -2832,9 +3132,18 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   double _gutterWidth(double available) =>
       math.max(0, (available - _kColumnWidth) / 2);
 
-  /// How many turns the rail would have ticks for — one per user message, the
-  /// same count [_turnMinimapItems] produces.
-  int get _turnCount => _items.where((i) => i.isUser).length;
+  /// How many turns the rail would have ticks for.
+  ///
+  /// Counts the whole thread's turns when the server enumerated them, so a long
+  /// conversation gets its rail immediately instead of only after enough of it
+  /// has been scrolled back into memory. Falls back to the loaded user messages
+  /// for a thread that arrived whole.
+  int get _turnCount {
+    if (_turnSummaries.isEmpty) return _items.where((i) => i.isUser).length;
+    final snapshotIds = _turnSummaries.map((turn) => turn.turnId).toSet();
+    return snapshotIds.length +
+        _items.where((i) => i.isUser && !snapshotIds.contains(i.turnId)).length;
+  }
 
   /// Whether the gutter rail can take turn navigation over at [available] width,
   /// so the corner arrows can stand down rather than offer the same thing twice.
@@ -2867,7 +3176,12 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                 items: _turnMinimapItems(_rows),
                 visibleRange: _visibleRows,
                 gutterWidth: _gutterWidth(width),
-                onSelect: (item) => _scrollToRow(item.rowIndex),
+                onSelect: _selectTurn,
+                // Hovering a turn the transcript hasn't loaded starts fetching
+                // it, so the jump lands on content rather than a wait.
+                onPreview: (item) {
+                  if (item.rowIndex < 0) _loadTurn(item.turnId);
+                },
               ),
             ),
           // Where the rail has taken the turn jumps, jump-to-latest is all that
@@ -2901,7 +3215,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   void _scrollToRow(int index) {
     if (!_listCtl.isAttached || !_scroll.hasClients) return;
     _listCtl.animateToItem(
-      index: index,
+      // Callers speak in row indices; the list puts the "older history" row
+      // ahead of them, so translate once here rather than at each call site.
+      index: index + (_hasOlder ? 1 : 0),
       scrollController: _scroll,
       alignment: 0,
       duration: (est) => Duration(milliseconds: est.abs() > 2400 ? 420 : 260),
@@ -4068,190 +4384,212 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       children: [
         _statusBar(l10n),
         Expanded(
-          child: Stack(
-            key: const Key('chat-conversation-layer'),
-            children: [
-              Positioned.fill(
-                child: AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 250),
-                  child: _loading
-                      ? const ChatLoadingSkeleton(key: ValueKey('chat-loading'))
-                      : KeyedSubtree(
-                          key: const ValueKey('chat-content'),
-                          child: _items.isEmpty && !_showTyping
-                              // A brand-new conversation (no thread yet) gets a richer
-                              // guidance view with tappable starter prompts; an empty
-                              // resumed thread keeps the plain hint.
-                              ? (_threadId == null
-                                    ? _newSessionGuidance(l10n)
-                                    : Center(
-                                        child: Text(
-                                          l10n.emptyConversation,
-                                          style: Theme.of(context)
-                                              .textTheme
-                                              .bodyMedium
-                                              ?.copyWith(
-                                                color: Theme.of(
-                                                  context,
-                                                ).colorScheme.outline,
+          child: MiddleClickScroll(
+            key: ValueKey(_threadId),
+            controller: _scroll,
+            child: Stack(
+              key: const Key('chat-conversation-layer'),
+              children: [
+                Positioned.fill(
+                  child: AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 250),
+                    child: _loading
+                        ? const ChatLoadingSkeleton(
+                            key: ValueKey('chat-loading'),
+                          )
+                        : KeyedSubtree(
+                            key: const ValueKey('chat-content'),
+                            child: _items.isEmpty && !_showTyping
+                                // A brand-new conversation (no thread yet) gets a richer
+                                // guidance view with tappable starter prompts; an empty
+                                // resumed thread keeps the plain hint.
+                                ? (_threadId == null
+                                      ? _newSessionGuidance(l10n)
+                                      : Center(
+                                          child: Text(
+                                            l10n.emptyConversation,
+                                            style: Theme.of(context)
+                                                .textTheme
+                                                .bodyMedium
+                                                ?.copyWith(
+                                                  color: Theme.of(
+                                                    context,
+                                                  ).colorScheme.outline,
+                                                ),
+                                          ),
+                                        ))
+                                // One SelectionArea over the whole conversation so text can be
+                                // drag-selected and copied (desktop drag, mobile long-press) —
+                                // per-message actions appear on hover instead of always-on. The
+                                // list is centered with a max width so it reads well even when
+                                // both side panes are collapsed on a wide screen.
+                                : Stack(
+                                    children: [
+                                      // Full-width scroll area so the scrollbar sits at
+                                      // the window's right edge instead of floating at
+                                      // the centred column's edge; the conversation
+                                      // column itself stays centred via horizontal
+                                      // padding computed from the available width.
+                                      SelectionArea(
+                                        child: LayoutBuilder(
+                                          builder: (context, constraints) {
+                                            // The same gutter the turn rail sits
+                                            // in, so the two never disagree about
+                                            // where the column ends.
+                                            final side = _gutterWidth(
+                                              constraints.maxWidth,
+                                            );
+                                            final pad = side < 16 ? 16.0 : side;
+                                            // Materialize the collapsed timeline ONCE per
+                                            // build: `_rows` is a getter that re-scans
+                                            // `_items` on every access, so reading it for
+                                            // itemCount and again per itemBuilder was
+                                            // O(n²) per frame. Hoisting it here keeps each
+                                            // build O(n).
+                                            final rows = _rows;
+                                            // SuperListView (super_sliver_list) replaces
+                                            // ListView.builder to stabilize the scrollbar:
+                                            // it derives scroll extent from per-item
+                                            // estimates reconciled against real heights as
+                                            // rows pass through the cache area, instead of
+                                            // the single running-average estimate that
+                                            // makes a plain ListView's thumb jump with the
+                                            // wide row-height variance here. Same lazy
+                                            // virtualization, same ScrollController — only
+                                            // visible rows build, so streaming stays cheap.
+                                            return SuperListView.builder(
+                                              controller: _scroll,
+                                              listController: _listCtl,
+                                              padding: EdgeInsets.fromLTRB(
+                                                pad,
+                                                12,
+                                                pad,
+                                                12,
                                               ),
-                                        ),
-                                      ))
-                              // One SelectionArea over the whole conversation so text can be
-                              // drag-selected and copied (desktop drag, mobile long-press) —
-                              // per-message actions appear on hover instead of always-on. The
-                              // list is centered with a max width so it reads well even when
-                              // both side panes are collapsed on a wide screen.
-                              : Stack(
-                                  children: [
-                                    // Full-width scroll area so the scrollbar sits at
-                                    // the window's right edge instead of floating at
-                                    // the centred column's edge; the conversation
-                                    // column itself stays centred via horizontal
-                                    // padding computed from the available width.
-                                    SelectionArea(
-                                      child: LayoutBuilder(
-                                        builder: (context, constraints) {
-                                          // The same gutter the turn rail sits
-                                          // in, so the two never disagree about
-                                          // where the column ends.
-                                          final side = _gutterWidth(
-                                            constraints.maxWidth,
-                                          );
-                                          final pad = side < 16 ? 16.0 : side;
-                                          // Materialize the collapsed timeline ONCE per
-                                          // build: `_rows` is a getter that re-scans
-                                          // `_items` on every access, so reading it for
-                                          // itemCount and again per itemBuilder was
-                                          // O(n²) per frame. Hoisting it here keeps each
-                                          // build O(n).
-                                          final rows = _rows;
-                                          // SuperListView (super_sliver_list) replaces
-                                          // ListView.builder to stabilize the scrollbar:
-                                          // it derives scroll extent from per-item
-                                          // estimates reconciled against real heights as
-                                          // rows pass through the cache area, instead of
-                                          // the single running-average estimate that
-                                          // makes a plain ListView's thumb jump with the
-                                          // wide row-height variance here. Same lazy
-                                          // virtualization, same ScrollController — only
-                                          // visible rows build, so streaming stays cheap.
-                                          return SuperListView.builder(
-                                            controller: _scroll,
-                                            listController: _listCtl,
-                                            padding: EdgeInsets.fromLTRB(
-                                              pad,
-                                              12,
-                                              pad,
-                                              12,
-                                            ),
-                                            itemCount:
-                                                rows.length +
-                                                (_showTyping ? 1 : 0),
-                                            itemBuilder: (c, i) {
-                                              if (i >= rows.length) {
-                                                return TypingIndicator(
-                                                  key: _externalWriterRunning
-                                                      ? const Key(
-                                                          'chat-external-output-indicator',
-                                                        )
-                                                      : null,
-                                                  elapsed: _fmtElapsed(
-                                                    _elapsedSecs,
-                                                  ),
-                                                );
-                                              }
-                                              final row = rows[i];
-                                              // Stable keys let the sliver's
-                                              // extent-reconciliation track each row
-                                              // across rebuilds (streaming upserts,
-                                              // collapse-into-group transitions) instead
-                                              // of recycling element/state by position —
-                                              // which otherwise churns measured heights.
-                                              // A group keys off its first item's stable
-                                              // id plus length so expand/collapse and
-                                              // run-growth produce a fresh measurement.
-                                              if (row is TurnWork) {
-                                                // Keyed on the first item alone,
-                                                // NOT the length: a running turn
-                                                // grows an item at a time, and
-                                                // re-keying on each would discard
-                                                // the fold's expanded state mid-
-                                                // turn — exactly while the user is
-                                                // watching it work.
-                                                return TurnWorkCard(
-                                                  key: ValueKey(
-                                                    'w:${row.items.first.id}',
-                                                  ),
-                                                  work: row,
-                                                );
-                                              }
-                                              if (row is ActivityGroup) {
-                                                return GroupedActivityCard(
-                                                  key: ValueKey(
-                                                    'g:${row.items.first.id}:'
-                                                    '${row.items.length}',
-                                                  ),
-                                                  group: row,
-                                                );
-                                              }
-                                              // A merged reply renders through the
-                                              // same view as a single one, so the two
-                                              // can't drift apart: it is presented as
-                                              // one item whose text is the whole turn.
-                                              if (row is AgentTurn) {
+                                              // A leading row when history
+                                              // continues above, so a long
+                                              // conversation says so instead of
+                                              // looking like it starts there.
+                                              itemCount:
+                                                  rows.length +
+                                                  (_hasOlder ? 1 : 0) +
+                                                  (_showTyping ? 1 : 0),
+                                              itemBuilder: (c, i) {
+                                                if (_hasOlder) {
+                                                  if (i == 0) {
+                                                    return _olderHistoryHeader(
+                                                      l10n,
+                                                    );
+                                                  }
+                                                  i -= 1;
+                                                }
+                                                if (i >= rows.length) {
+                                                  return TypingIndicator(
+                                                    key: _externalWriterRunning
+                                                        ? const Key(
+                                                            'chat-external-output-indicator',
+                                                          )
+                                                        : null,
+                                                    elapsed: _fmtElapsed(
+                                                      _elapsedSecs,
+                                                    ),
+                                                  );
+                                                }
+                                                final row = rows[i];
+                                                // Stable keys let the sliver's
+                                                // extent-reconciliation track each row
+                                                // across rebuilds (streaming upserts,
+                                                // collapse-into-group transitions) instead
+                                                // of recycling element/state by position —
+                                                // which otherwise churns measured heights.
+                                                // A group keys off its first item's stable
+                                                // id plus length so expand/collapse and
+                                                // run-growth produce a fresh measurement.
+                                                if (row is TurnWork) {
+                                                  // Keyed on the first item alone,
+                                                  // NOT the length: a running turn
+                                                  // grows an item at a time, and
+                                                  // re-keying on each would discard
+                                                  // the fold's expanded state mid-
+                                                  // turn — exactly while the user is
+                                                  // watching it work.
+                                                  return TurnWorkCard(
+                                                    key: ValueKey(
+                                                      'w:${row.items.first.id}',
+                                                    ),
+                                                    work: row,
+                                                  );
+                                                }
+                                                if (row is ActivityGroup) {
+                                                  return GroupedActivityCard(
+                                                    key: ValueKey(
+                                                      'g:${row.items.first.id}:'
+                                                      '${row.items.length}',
+                                                    ),
+                                                    group: row,
+                                                  );
+                                                }
+                                                // A merged reply renders through the
+                                                // same view as a single one, so the two
+                                                // can't drift apart: it is presented as
+                                                // one item whose text is the whole turn.
+                                                if (row is AgentTurn) {
+                                                  return MessageView(
+                                                    key: ValueKey(
+                                                      't:${row.items.first.id}:'
+                                                      '${row.items.length}',
+                                                    ),
+                                                    item: TranscriptItem(
+                                                      id: row.items.first.id,
+                                                      type: 'agentMessage',
+                                                      text: row.text,
+                                                      streaming: row.streaming,
+                                                      turnId: row
+                                                          .items
+                                                          .first
+                                                          .turnId,
+                                                      turnCompletedAt:
+                                                          row.completedAt,
+                                                    ),
+                                                    hostImageLoader:
+                                                        _loadHostImage,
+                                                  );
+                                                }
                                                 return MessageView(
                                                   key: ValueKey(
-                                                    't:${row.items.first.id}:'
-                                                    '${row.items.length}',
+                                                    (row as TranscriptItem).id,
                                                   ),
-                                                  item: TranscriptItem(
-                                                    id: row.items.first.id,
-                                                    type: 'agentMessage',
-                                                    text: row.text,
-                                                    streaming: row.streaming,
-                                                    turnId:
-                                                        row.items.first.turnId,
-                                                    turnCompletedAt:
-                                                        row.completedAt,
-                                                  ),
+                                                  item: row,
                                                   hostImageLoader:
                                                       _loadHostImage,
                                                 );
-                                              }
-                                              return MessageView(
-                                                key: ValueKey(
-                                                  (row as TranscriptItem).id,
-                                                ),
-                                                item: row,
-                                                hostImageLoader: _loadHostImage,
-                                              );
-                                            },
-                                          );
-                                        },
+                                              },
+                                            );
+                                          },
+                                        ),
                                       ),
-                                    ),
-                                    // Turn navigation. On a window wide enough
-                                    // to leave a gutter this is the tick rail
-                                    // beside the conversation — hover a turn to
-                                    // preview it, click to jump. Narrower, and
-                                    // on touch, it stays the bottom-right
-                                    // cluster, which also carries jump-to-latest
-                                    // in both cases.
-                                    Positioned.fill(child: _turnNavOverlay()),
-                                  ],
-                                ),
-                        ),
+                                      // Turn navigation. On a window wide enough
+                                      // to leave a gutter this is the tick rail
+                                      // beside the conversation — hover a turn to
+                                      // preview it, click to jump. Narrower, and
+                                      // on touch, it stays the bottom-right
+                                      // cluster, which also carries jump-to-latest
+                                      // in both cases.
+                                      Positioned.fill(child: _turnNavOverlay()),
+                                    ],
+                                  ),
+                          ),
+                  ),
                 ),
-              ),
-              if (runningPlan != null)
-                Positioned(
-                  left: 0,
-                  right: 0,
-                  bottom: 8,
-                  child: _turnProgress(runningPlan, l10n),
-                ),
-            ],
+                if (runningPlan != null)
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: 8,
+                    child: _turnProgress(runningPlan, l10n),
+                  ),
+              ],
+            ),
           ),
         ),
         // Inline server requests: a `request_user_input` elicitation renders as

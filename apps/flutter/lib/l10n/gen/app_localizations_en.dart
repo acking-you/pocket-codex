@@ -280,6 +280,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get emptyConversation => 'Send a message to start the conversation';
 
   @override
+  String get olderHistoryHint => 'Scroll up to load earlier messages';
+
+  @override
   String get turnFailed =>
       'Turn didn\'t finish — the connection dropped or the remote codex failed. Retry, or check codex on the host machine (it may need to be logged in again).';
 

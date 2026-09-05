@@ -140,6 +140,7 @@ mod tests {
     #[test]
     fn startup_failure_error_carries_log_tail_and_port_hint() {
         let failure = StartupFailure {
+            rpc_error: None,
             process_exited: true,
             port_in_use: true,
             listen: "ws://127.0.0.1:18080".to_string(),

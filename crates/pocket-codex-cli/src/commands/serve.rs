@@ -311,19 +311,19 @@ fn websocket_listen_addr(listen: &str) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-/// Background task (account mode): probe the codex app-server's `/readyz` and
-/// restart it when it stops responding, so turns recover without operator
-/// intervention.
+/// Background task (account mode): probe HTTP readiness and initialized
+/// thread RPCs, restarting the app-server after consecutive failures.
 ///
-/// `/readyz` reflects the HTTP acceptor's liveness, so this recovers a codex
-/// that has fully crashed or stopped accepting (process gone, connection
-/// refused, hung acceptor) — the "registered on the relay but the remote is
-/// dead" case. It does NOT catch a codex that still accepts connections but has
-/// wedged deeper (a hung model turn keeps `/readyz` green); detecting that
-/// would need a turn-level probe and is out of scope here.
+/// `thread/list` catches a stalled request dispatcher even when `/readyz`
+/// and WebSocket pongs remain healthy. It does not run a model turn, so a
+/// single hung generation on an otherwise responsive server is not restarted.
 async fn codex_health_watchdog(local_addr: String, spawn_opts: SpawnOptions) {
     let url = format!("http://{local_addr}/readyz");
-    let client = match reqwest::Client::builder().timeout(HEALTH_TIMEOUT).build() {
+    let client = match reqwest::Client::builder()
+        .timeout(HEALTH_TIMEOUT)
+        .no_proxy()
+        .build()
+    {
         Ok(client) => client,
         // Building a loopback HTTP client should never fail; if it somehow does
         // there is nothing useful the watchdog can do, so bow out quietly.
@@ -333,11 +333,24 @@ async fn codex_health_watchdog(local_addr: String, spawn_opts: SpawnOptions) {
     let mut restart_failures: u32 = 0;
     loop {
         tokio::time::sleep(HEALTH_INTERVAL).await;
-        let healthy = matches!(
+        let http_ready = matches!(
             client.get(&url).send().await,
             Ok(resp) if resp.status().is_success()
         );
-        if healthy {
+        let rpc_ready = if http_ready {
+            let result = pocket_codex_codex::readiness::probe_rpc(
+                &format!("ws://{local_addr}"),
+                READY_TIMEOUT,
+            )
+            .await;
+            if let Err(error) = &result {
+                tracing::warn!(%local_addr, error = %format!("{error:#}"), "app-server functional health probe failed");
+            }
+            result.is_ok()
+        } else {
+            false
+        };
+        if rpc_ready {
             consecutive = 0;
             restart_failures = 0;
             continue;

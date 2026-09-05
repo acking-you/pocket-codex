@@ -508,8 +508,17 @@ class FakeBridgeApi implements BridgeApi {
   /// socket), then resets — to exercise the picker's reconnect-and-retry path.
   bool failNextThreadList = false;
 
+  /// Simulate a backend whose handshake works but whose first RPC kills the link.
+  bool disconnectOnThreadList = false;
+
   @override
   Future<List<ThreadMeta>> appThreadList(String serviceKey) async {
+    if (disconnectOnThreadList) {
+      _appConnected.remove(serviceKey);
+      throw StateError(
+        'request `thread/list` timed out; app-server connection closed',
+      );
+    }
     if (failNextThreadList) {
       failNextThreadList = false;
       throw StateError('Trying to work with closed connection');
@@ -670,6 +679,51 @@ class FakeBridgeApi implements BridgeApi {
     String serviceKey,
     String threadId,
   ) async => readResult;
+
+  /// Older pages a paginated thread hands back, oldest batch LAST — each call
+  /// to [appThreadOlderPage] pops the last one, so seeding
+  /// `[oldest, middle]` serves `middle` then `oldest`, the order the UI walks.
+  List<List<ThreadItem>> olderPages = [];
+
+  /// Turn ids passed to [appThreadOlderPage], in call order.
+  int olderPageCalls = 0;
+
+  /// Controlled responses for interleaving requests across threads.
+  final Map<String, Future<OlderPage>> pendingOlderPages = {};
+
+  @override
+  Future<OlderPage> appThreadOlderPage(
+    String serviceKey,
+    String threadId,
+  ) async {
+    olderPageCalls++;
+    if (pendingOlderPages[threadId] case final response?) return response;
+    if (olderPages.isEmpty) {
+      return const OlderPage(items: [], hasOlder: false);
+    }
+    final items = olderPages.removeLast();
+    return OlderPage(items: items, hasOlder: olderPages.isNotEmpty);
+  }
+
+  /// Items each turn hands back, keyed by turn id.
+  Map<String, List<ThreadItem>> turnItems = {};
+
+  /// Turn ids passed to [appThreadTurnItems], in call order.
+  final List<String> turnItemCalls = [];
+
+  /// Controlled responses for hover/select races.
+  final Map<String, Future<List<ThreadItem>>> pendingTurnItems = {};
+
+  @override
+  Future<List<ThreadItem>> appThreadTurnItems(
+    String serviceKey,
+    String threadId,
+    String turnId,
+  ) async {
+    turnItemCalls.add(turnId);
+    if (pendingTurnItems[turnId] case final response?) return response;
+    return turnItems[turnId] ?? const [];
+  }
 
   /// Seedable runtime config for the status-bar model indicator tests.
   ThreadRuntimeConfig? runtimeConfig;

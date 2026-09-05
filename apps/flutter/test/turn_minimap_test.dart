@@ -61,7 +61,7 @@ double _tickWidthAt(WidgetTester t, int index) =>
 
 /// Hover the rail at [fraction] of its height, which is how the widget resolves
 /// which tick the pointer is on.
-Future<void> _hoverTick(WidgetTester t, double fraction) async {
+Future<TestGesture> _hoverTick(WidgetTester t, double fraction) async {
   final rail = t.getRect(find.byKey(const Key('turn-minimap-rail')));
   final gesture = await t.createGesture(kind: PointerDeviceKind.mouse);
   await gesture.addPointer(location: Offset.zero);
@@ -70,6 +70,7 @@ Future<void> _hoverTick(WidgetTester t, double fraction) async {
     Offset(rail.left + 4, rail.top + rail.height * fraction),
   );
   await t.pumpAndSettle();
+  return gesture;
 }
 
 void main() {
@@ -207,6 +208,35 @@ void main() {
     await gesture.moveTo(const Offset(399, 599));
     await t.pumpAndSettle();
     expect(find.text('question 0'), findsNothing);
+    expect(_tickWidthAt(t, 0), 7);
+    expect(t.getSize(find.byKey(const Key('turn-minimap-rail'))).width, 40);
+  });
+
+  testWidgets('leaving for empty space beside the preview restores the rail', (
+    t,
+  ) async {
+    await _pump(t, items: _items(50));
+    final rail = t.getRect(find.byKey(const Key('turn-minimap-rail')));
+    final gesture = await _hoverTick(t, 0);
+    expect(find.byKey(const Key('turn-minimap-preview')), findsOneWidget);
+
+    // Inside the old expanded hit box, but far below the actual preview card.
+    await gesture.moveTo(Offset(rail.left + 200, rail.bottom - 2));
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('turn-minimap-preview')), findsNothing);
+    expect(_tickWidthAt(t, 0), 7);
+    expect(t.getSize(find.byKey(const Key('turn-minimap-rail'))).width, 40);
+  });
+
+  testWidgets('moving into the actual preview keeps it open', (t) async {
+    await _pump(t, items: _items(50));
+    final gesture = await _hoverTick(t, 0);
+    await gesture.moveTo(
+      t.getCenter(find.byKey(const Key('turn-minimap-preview'))),
+    );
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('turn-minimap-preview')), findsOneWidget);
+    expect(_tickWidthAt(t, 0), 22);
   });
 
   testWidgets('an on-screen turn is marked whatever the pointer is doing', (
@@ -340,14 +370,16 @@ void main() {
     );
   });
 
-  testWidgets('a click leaves the rail open with the landed tick marked', (
+  testWidgets('a clicked tick loses its hover width when the pointer leaves', (
     t,
   ) async {
-    // The jump used to clear the active tick, collapsing the rail to its resting
-    // width at the very moment the user arrived — so it stopped saying where in
-    // the conversation they now were.
     final items = _items(5);
-    await _pump(t, items: items);
+    await _pump(
+      t,
+      items: items,
+      visible: (items.last.rowIndex, items.last.rowIndex),
+    );
+    final restingWidth = _tickWidthAt(t, items.length - 1);
     final rail = t.getRect(find.byKey(const Key('turn-minimap-rail')));
     final gesture = await t.createGesture(kind: PointerDeviceKind.mouse);
     await gesture.addPointer(location: Offset.zero);
@@ -363,9 +395,10 @@ void main() {
 
     expect(
       _tickWidthAt(t, items.length - 1),
-      greaterThan(_tickWidthAt(t, 0)),
-      reason: 'the tick just jumped to stays the widest',
+      restingWidth,
+      reason: 'only the viewport highlight remains after pointer exit',
     );
+    expect(t.getSize(find.byKey(const Key('turn-minimap-rail'))).width, 40);
     // The preview card is the one thing that must NOT survive the jump: it would
     // hang over the turn the user just navigated to.
     expect(find.byKey(const Key('turn-minimap-preview')), findsNothing);

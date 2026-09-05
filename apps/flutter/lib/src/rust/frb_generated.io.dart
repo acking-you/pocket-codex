@@ -158,6 +158,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<ThreadMetaDto> dco_decode_list_thread_meta_dto(dynamic raw);
 
   @protected
+  List<TurnSummaryDto> dco_decode_list_turn_summary_dto(dynamic raw);
+
+  @protected
   LocalSessionDto dco_decode_local_session_dto(dynamic raw);
 
   @protected
@@ -165,6 +168,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   ModelInfoDto dco_decode_model_info_dto(dynamic raw);
+
+  @protected
+  OlderPageDto dco_decode_older_page_dto(dynamic raw);
 
   @protected
   String? dco_decode_opt_String(dynamic raw);
@@ -218,6 +224,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   ThreadRuntimeConfigDto dco_decode_thread_runtime_config_dto(dynamic raw);
+
+  @protected
+  TurnSummaryDto dco_decode_turn_summary_dto(dynamic raw);
 
   @protected
   int dco_decode_u_16(dynamic raw);
@@ -412,6 +421,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  List<TurnSummaryDto> sse_decode_list_turn_summary_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   LocalSessionDto sse_decode_local_session_dto(SseDeserializer deserializer);
 
   @protected
@@ -419,6 +433,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   ModelInfoDto sse_decode_model_info_dto(SseDeserializer deserializer);
+
+  @protected
+  OlderPageDto sse_decode_older_page_dto(SseDeserializer deserializer);
 
   @protected
   String? sse_decode_opt_String(SseDeserializer deserializer);
@@ -480,6 +497,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ThreadRuntimeConfigDto sse_decode_thread_runtime_config_dto(
     SseDeserializer deserializer,
   );
+
+  @protected
+  TurnSummaryDto sse_decode_turn_summary_dto(SseDeserializer deserializer);
 
   @protected
   int sse_decode_u_16(SseDeserializer deserializer);
@@ -719,6 +739,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_turn_summary_dto(
+    List<TurnSummaryDto> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_local_session_dto(
     LocalSessionDto self,
     SseSerializer serializer,
@@ -729,6 +755,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_model_info_dto(ModelInfoDto self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_older_page_dto(OlderPageDto self, SseSerializer serializer);
 
   @protected
   void sse_encode_opt_String(String? self, SseSerializer serializer);
@@ -808,6 +837,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_thread_runtime_config_dto(
     ThreadRuntimeConfigDto self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_turn_summary_dto(
+    TurnSummaryDto self,
     SseSerializer serializer,
   );
 

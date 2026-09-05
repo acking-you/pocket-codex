@@ -169,16 +169,38 @@ final codexSetupStatusProvider = FutureProvider<CodexSetupStatus>((ref) async {
 /// (a still-running host re-registers, and hiding it would strand a live entry).
 final pendingRemovalProvider = StateProvider<Set<String>>((ref) => {});
 
-/// A conversation's one-line summary, fetched on demand and cached.
-///
-/// Keyed by `serviceKey|threadId`. Deliberately NOT autoDispose: a row scrolled
-/// out and back must not re-read the thread, and the whole point of fetching
-/// lazily is to pay for each conversation at most once per session. The read is
-/// expensive (a full thread history server-side), so the activity view asks for
-/// these only for rows it actually renders.
-///
-/// A failure yields null rather than an error state: a missing gist is a row
-/// with one less line, not something to interrupt the list for.
+// Bound background RPC traffic. The async summary bridge uses a separate
+// blocking executor, so these requests consume no interactive FRB worker slots.
+final _summaryGate = _Gate(3);
+
+/// A counting semaphore: [acquire] resolves once fewer than [limit] holders are
+/// active, and the returned callback releases the slot.
+class _Gate {
+  _Gate(this.limit);
+
+  final int limit;
+  int _active = 0;
+  final _waiting = <Completer<void>>[];
+
+  Future<void Function()> acquire() async {
+    if (_active >= limit) {
+      final wait = Completer<void>();
+      _waiting.add(wait);
+      await wait.future;
+    }
+    _active++;
+    var released = false;
+    return () {
+      if (released) return;
+      released = true;
+      _active--;
+      if (_waiting.isNotEmpty) _waiting.removeAt(0).complete();
+    };
+  }
+}
+
+/// A conversation's one-line summary, cached by `serviceKey|threadId`.
+/// Kept when a row leaves the viewport; failures leave the summary absent.
 final threadSummaryProvider = FutureProvider.family<String?, String>((
   ref,
   key,
@@ -187,12 +209,15 @@ final threadSummaryProvider = FutureProvider.family<String?, String>((
   if (sep <= 0) return null;
   final serviceKey = key.substring(0, sep);
   final threadId = key.substring(sep + 1);
+  final release = await _summaryGate.acquire();
   try {
     return await ref
         .watch(bridgeApiProvider)
         .appThreadSummary(serviceKey, threadId);
   } catch (_) {
     return null;
+  } finally {
+    release();
   }
 });
 

@@ -26,6 +26,8 @@ import 'package:pocket_codex/src/screens/app_session_screen.dart';
 import 'package:pocket_codex/src/ui_prefs.dart';
 import 'package:pocket_codex/src/widgets/message_images.dart';
 import 'package:pocket_codex/src/widgets/status_dots.dart';
+import 'package:pocket_codex/src/widgets/turn_minimap.dart';
+import 'package:pocket_codex/src/widgets/middle_click_scroll.dart';
 
 import '../fake_bridge_api.dart';
 import '../support/screen_harness.dart';
@@ -1588,6 +1590,35 @@ void main() {
     await t.pump(const Duration(seconds: 13));
     await t.pumpAndSettle();
     expect(find.byKey(const Key('conv-tile-a1')), findsOneWidget);
+  });
+
+  testWidgets('A reconnect stays disconnected when the first RPC times out', (
+    t,
+  ) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    const service = 'pcx:lb7666:app:default';
+    await api.appConnect(service, 28080);
+    await t.pumpWidget(host(const AppSessionScreen(serviceKey: service), api));
+    await t.pumpAndSettle();
+    api.disconnectOnThreadList = true;
+    await api.appDisconnect(service);
+    await t.pump();
+    await t.pump(const Duration(seconds: 13));
+    for (var i = 0; i < 5; i++) {
+      await t.pump(const Duration(seconds: 2));
+      await t.pump();
+    }
+    expect(api.appIsConnected(service), isFalse);
+    expect(
+      find.text('就绪'),
+      findsNothing,
+      reason: 'an initialize response alone must not restore the ready badge',
+    );
+    expect(api.appConnectCount, greaterThan(2));
+    await t.pumpWidget(const SizedBox.shrink());
+    await t.pump(const Duration(seconds: 10));
   });
 
   testWidgets('The activity view groups by day and summarizes each row', (
@@ -5655,6 +5686,338 @@ void main() {
         expect(api.lastTurnText, 'first');
         expect(api.turnStartCount, 1);
       });
+    });
+  });
+
+  group('a long thread loads its history a page at a time', () {
+    // The rail is desktop-only by construction, and the test harness forces
+    // android. Restored in a finally so the debug-var invariant check passes.
+    Future<void> onDesktop(Future<void> Function() body) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      try {
+        await body();
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+      }
+    }
+
+    ThreadItem user(String id, String text, String turn) => ThreadItem(
+      id: id,
+      itemType: 'userMessage',
+      title: '',
+      text: text,
+      turnId: turn,
+    );
+    ThreadItem agent(String id, String text, String turn) => ThreadItem(
+      id: id,
+      itemType: 'agentMessage',
+      title: '',
+      text: text,
+      turnId: turn,
+    );
+
+    /// A thread whose newest turn is loaded and whose earlier turns are not.
+    Future<FakeBridgeApi> openPaginated(
+      WidgetTester t, {
+      bool tailOnly = false,
+      bool longTail = false,
+      bool nextThread = false,
+    }) async {
+      final api = FakeBridgeApi(
+        config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+      );
+      if (nextThread) {
+        api.appThreads.add(
+          const ThreadMeta(
+            id: 'thread-next',
+            preview: 'next history',
+            cwd: '/work',
+            updatedAt: 1,
+          ),
+        );
+      }
+      await api.appConnect('pcx:lb7666:app:default', 28080);
+      api.readResult = ThreadHistory(
+        items: [
+          if (!tailOnly) user('u5', 'newest question', 't5'),
+          agent(
+            'a5',
+            longTail ? 'newest answer\n\n' * 70 : 'newest answer',
+            't5',
+          ),
+        ],
+        running: false,
+        hasOlder: true,
+        // The server enumerated every turn, including the four not loaded.
+        // Five of them, so the count clears kTurnMinimapMinItems and the rail
+        // is the affordance rather than the corner arrows.
+        turns: const [
+          TurnSummary(
+            turnId: 't1',
+            userText: 'first question',
+            assistantText: 'first answer',
+          ),
+          TurnSummary(
+            turnId: 't2',
+            userText: 'second question',
+            assistantText: 'second answer',
+          ),
+          TurnSummary(
+            turnId: 't3',
+            userText: 'third question',
+            assistantText: 'third answer',
+          ),
+          TurnSummary(
+            turnId: 't4',
+            userText: 'fourth question',
+            assistantText: 'fourth answer',
+          ),
+          TurnSummary(
+            turnId: 't5',
+            userText: 'newest question',
+            assistantText: 'newest answer',
+            loaded: true,
+          ),
+        ],
+      );
+      await t.pumpWidget(
+        host(
+          const AppSessionScreen(
+            serviceKey: 'pcx:lb7666:app:default',
+            threadId: 'thread-long',
+          ),
+          api,
+        ),
+      );
+      await t.pumpAndSettle();
+      return api;
+    }
+
+    testWidgets('opening it shows the newest turn, not the whole history', (
+      t,
+    ) async {
+      await openPaginated(t);
+      expect(find.text('newest answer'), findsOneWidget);
+      expect(find.text('first answer'), findsNothing);
+      // And it says so, rather than looking like the conversation starts here.
+      expect(find.byKey(const Key('chat-older-history')), findsOneWidget);
+    });
+
+    testWidgets('the rail has a tick per turn of the WHOLE thread', (t) async {
+      await onDesktop(() async {
+        await t.binding.setSurfaceSize(const Size(1600, 900));
+        addTearDown(() => t.binding.setSurfaceSize(null));
+        await openPaginated(t);
+        // Three turns exist; only one is loaded. A rail derived from loaded rows
+        // would show one tick and misreport the conversation's shape.
+        final rail = t.widget<TurnMinimap>(find.byType(TurnMinimap));
+        expect(rail.items, hasLength(5));
+        expect(rail.items.map((i) => i.turnId), ['t1', 't2', 't3', 't4', 't5']);
+        // Only the loaded turn resolves to a row; the rest await their items.
+        expect(rail.items[0].rowIndex, -1);
+        expect(rail.items[4].rowIndex, greaterThanOrEqualTo(0));
+      });
+    });
+
+    testWidgets('an unloaded tick still previews, without fetching', (t) async {
+      await onDesktop(() async {
+        await t.binding.setSurfaceSize(const Size(1600, 900));
+        addTearDown(() => t.binding.setSurfaceSize(null));
+        final api = await openPaginated(t);
+        final rail = t.widget<TurnMinimap>(find.byType(TurnMinimap));
+        // The skeleton carries the text, so hovering costs no round trip.
+        expect(rail.items[0].userText, 'first question');
+        expect(rail.items[0].assistantText, 'first answer');
+        expect(api.turnItemCalls, isEmpty);
+      });
+    });
+
+    testWidgets('selecting an unloaded turn fetches just that turn', (t) async {
+      await onDesktop(() async {
+        await t.binding.setSurfaceSize(const Size(1600, 900));
+        addTearDown(() => t.binding.setSurfaceSize(null));
+        final api = await openPaginated(t);
+        api.turnItems = {
+          't1': [
+            user('u1', 'first question', 't1'),
+            agent('a1', 'first answer', 't1'),
+          ],
+        };
+        final rail = t.widget<TurnMinimap>(find.byType(TurnMinimap));
+        rail.onSelect(rail.items[0]);
+        await t.pumpAndSettle();
+        expect(api.turnItemCalls, ['t1']);
+        expect(find.text('first answer'), findsOneWidget);
+        // The newest turn is still there — a jump adds, it doesn't replace.
+        expect(find.text('newest answer'), findsOneWidget);
+      });
+    });
+
+    testWidgets('an older page prepends, keeping what was already shown', (
+      t,
+    ) async {
+      final api = await openPaginated(t);
+      api.olderPages = [
+        [
+          user('u2', 'second question', 't2'),
+          agent('a2', 'second answer', 't2'),
+        ],
+      ];
+      // Reaching back past the top. Tapped rather than scrolled because the
+      // loaded page is shorter than the viewport here, so there is nothing to
+      // scroll — which is exactly why the row is tappable.
+      await t.tap(find.byKey(const Key('chat-older-history-load')));
+      await t.pumpAndSettle();
+      expect(api.olderPageCalls, 1);
+      expect(find.text('second answer'), findsOneWidget);
+      expect(find.text('newest answer'), findsOneWidget);
+      // That was the last page, so the header retires.
+      expect(find.byKey(const Key('chat-older-history')), findsNothing);
+    });
+
+    testWidgets('a partially loaded turn can fetch its opening row', (t) async {
+      await onDesktop(() async {
+        await t.binding.setSurfaceSize(const Size(1600, 900));
+        addTearDown(() => t.binding.setSurfaceSize(null));
+        final api = await openPaginated(t, tailOnly: true);
+        api.turnItems['t5'] = [
+          user('u5', 'newest question', 't5'),
+          agent('a5', 'newest answer', 't5'),
+        ];
+        final rail = t.widget<TurnMinimap>(find.byType(TurnMinimap));
+        expect(rail.items.last.rowIndex, -1);
+        rail.onSelect(rail.items.last);
+        await t.pumpAndSettle();
+        expect(api.turnItemCalls, ['t5']);
+        expect(find.text('newest question'), findsOneWidget);
+        expect(
+          t.widget<TurnMinimap>(find.byType(TurnMinimap)).items.last.rowIndex,
+          0,
+        );
+      });
+    });
+
+    testWidgets('older pages keep the order after an arbitrary turn fetch', (
+      t,
+    ) async {
+      await onDesktop(() async {
+        await t.binding.setSurfaceSize(const Size(1600, 900));
+        addTearDown(() => t.binding.setSurfaceSize(null));
+        final api = await openPaginated(t);
+        api.turnItems['t1'] = [user('u1', 'first question', 't1')];
+        final rail = t.widget<TurnMinimap>(find.byType(TurnMinimap));
+        rail.onPreview!(rail.items.first);
+        await t.pumpAndSettle();
+        api.olderPages = [
+          [
+            user('u2', 'second question', 't2'),
+            user('u3', 'third question', 't3'),
+          ],
+        ];
+        await t.tap(find.byKey(const Key('chat-older-history-load')));
+        await t.pumpAndSettle();
+        final rows = t.widget<TurnMinimap>(find.byType(TurnMinimap)).items;
+        expect(rows[0].rowIndex, lessThan(rows[1].rowIndex));
+        expect(rows[1].rowIndex, lessThan(rows[2].rowIndex));
+        expect(rows[2].rowIndex, lessThan(rows[4].rowIndex));
+      });
+    });
+
+    testWidgets(
+      'select waits for an in-flight hover and scrolls when it arrives',
+      (t) async {
+        await onDesktop(() async {
+          await t.binding.setSurfaceSize(const Size(1600, 900));
+          addTearDown(() => t.binding.setSurfaceSize(null));
+          final api = await openPaginated(t, longTail: true);
+          final response = Completer<List<ThreadItem>>();
+          api.pendingTurnItems['t1'] = response.future;
+          final rail = t.widget<TurnMinimap>(find.byType(TurnMinimap));
+          final controller = t
+              .widget<MiddleClickScroll>(find.byType(MiddleClickScroll))
+              .controller;
+          expect(controller.offset, greaterThan(500));
+          rail.onPreview!(rail.items.first);
+          await t.pump();
+          rail.onSelect(rail.items.first);
+          await t.pump();
+          expect(api.turnItemCalls, ['t1']);
+          response.complete([user('u1', 'first question', 't1')]);
+          await t.pumpAndSettle();
+          expect(api.turnItemCalls, ['t1']);
+          expect(controller.offset, lessThan(100));
+          expect(find.text('first question'), findsOneWidget);
+        });
+      },
+    );
+
+    testWidgets('new live turns join the paginated rail', (t) async {
+      await onDesktop(() async {
+        await t.binding.setSurfaceSize(const Size(1600, 900));
+        addTearDown(() => t.binding.setSurfaceSize(null));
+        await openPaginated(t);
+        await t.enterText(find.byType(TextField).last, 'a new live question');
+        await t.pump();
+        await t.tap(find.byKey(const Key('send-btn')));
+        await t.pumpAndSettle();
+        final rail = t.widget<TurnMinimap>(find.byType(TurnMinimap));
+        expect(rail.items, hasLength(6));
+        expect(rail.items.last.userText, 'a new live question');
+        expect(rail.items.last.rowIndex, greaterThanOrEqualTo(0));
+      });
+    });
+
+    testWidgets('a stale failure cannot unlock another thread pagination', (
+      t,
+    ) async {
+      await t.binding.setSurfaceSize(const Size(1600, 900));
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      final api = await openPaginated(t, nextThread: true);
+      final previous = Completer<OlderPage>();
+      final current = Completer<OlderPage>();
+      api.pendingOlderPages['thread-long'] = previous.future;
+      api.pendingOlderPages['thread-next'] = current.future;
+      await t.tap(find.byKey(const Key('chat-older-history-load')));
+      await t.pump();
+      await t.tap(find.byKey(const Key('conv-tile-thread-next')));
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(const Key('chat-older-history-load')));
+      await t.pump();
+      previous.completeError(StateError('previous thread failed'));
+      await t.pump();
+      expect(api.olderPageCalls, 2);
+      expect(find.byKey(const Key('chat-older-history-load')), findsNothing);
+      current.complete(const OlderPage(items: [], hasOlder: false));
+      await t.pumpAndSettle();
+      expect(t.takeException(), isNull);
+    });
+
+    testWidgets('a thread that arrives whole pages nothing', (t) async {
+      final api = FakeBridgeApi(
+        config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+      );
+      await api.appConnect('pcx:lb7666:app:default', 28080);
+      // A legacy thread: every item present, no turn enumeration, no older page.
+      api.readResult = ThreadHistory(
+        items: [
+          user('u1', 'only question', 't1'),
+          agent('a1', 'only answer', 't1'),
+        ],
+        running: false,
+      );
+      await t.pumpWidget(
+        host(
+          const AppSessionScreen(
+            serviceKey: 'pcx:lb7666:app:default',
+            threadId: 'thread-legacy',
+          ),
+          api,
+        ),
+      );
+      await t.pumpAndSettle();
+      expect(find.text('only answer'), findsOneWidget);
+      expect(find.byKey(const Key('chat-older-history')), findsNothing);
+      expect(api.olderPageCalls, 0);
     });
   });
 }
