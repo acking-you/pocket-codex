@@ -17,8 +17,8 @@
 use std::{
     collections::HashMap,
     sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
-        Arc,
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex as StdMutex,
     },
     time::Duration,
 };
@@ -37,6 +37,7 @@ use tokio::{
 use tokio_tungstenite::{
     connect_async, tungstenite::Message as WsMessage, MaybeTlsStream, WebSocketStream,
 };
+use tokio_util::sync::CancellationToken;
 
 use crate::protocol::{Message, Notification, Request, RequestId, Response};
 
@@ -60,7 +61,7 @@ pub struct Inbound {
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 
 type WsSink = SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, WsMessage>;
-type Pending = Arc<Mutex<HashMap<String, oneshot::Sender<Result<Value>>>>>;
+type Pending = Arc<StdMutex<HashMap<String, oneshot::Sender<Result<Value>>>>>;
 /// token (stringified id) → original [`RequestId`], so a server request can be
 /// answered with the exact id type (int stays int) it arrived with.
 type ServerReqs = Arc<Mutex<HashMap<String, RequestId>>>;
@@ -85,11 +86,7 @@ pub struct AppClient {
     next_id: AtomicU64,
     reader: JoinHandle<()>,
     keepalive: JoinHandle<()>,
-    /// Cleared by the keepalive watchdog when the socket goes silent past
-    /// [`LIVENESS_DEADLINE`] (a half-open connection). Callers poll
-    /// [`AppClient::is_alive`] so a wedged-but-not-yet-closed socket is treated
-    /// as dead and reconnected, instead of hanging until a request times out.
-    healthy: Arc<AtomicBool>,
+    closed: CancellationToken,
 }
 
 impl Drop for AppClient {
@@ -108,7 +105,8 @@ impl AppClient {
             .with_context(|| format!("connecting app-server websocket {ws_url}"))?;
         let (sink, mut read) = stream.split();
 
-        let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
+        let sink = Arc::new(Mutex::new(sink));
+        let pending: Pending = Arc::new(StdMutex::new(HashMap::new()));
         let server_reqs: ServerReqs = Arc::new(Mutex::new(HashMap::new()));
         let (notify_tx, notify_rx) = mpsc::unbounded_channel();
 
@@ -116,13 +114,21 @@ impl AppClient {
         // frame (data or Pong), and the keepalive watchdog uses it to tell a
         // live-but-quiet socket from a dead half-open one.
         let activity = Arc::new(AtomicU64::new(0));
-        let healthy = Arc::new(AtomicBool::new(true));
+        let closed = CancellationToken::new();
 
         let reader_pending = Arc::clone(&pending);
         let reader_server_reqs = Arc::clone(&server_reqs);
         let reader_activity = Arc::clone(&activity);
+        let reader_closed = closed.clone();
         let reader = tokio::spawn(async move {
-            while let Some(frame) = read.next().await {
+            loop {
+                let frame = tokio::select! {
+                    _ = reader_closed.cancelled() => break,
+                    frame = read.next() => match frame {
+                        Some(frame) => frame,
+                        None => break,
+                    },
+                };
                 // Any frame — including the Pong answering our keepalive Ping —
                 // proves the socket's read half is alive.
                 reader_activity.fetch_add(1, Ordering::Relaxed);
@@ -138,12 +144,12 @@ impl AppClient {
                 };
                 match msg {
                     Message::Response(r) => {
-                        if let Some(tx) = take_pending(&reader_pending, &r.id).await {
+                        if let Some(tx) = take_pending(&reader_pending, &r.id) {
                             let _ = tx.send(Ok(r.result));
                         }
                     },
                     Message::Error(e) => {
-                        if let Some(tx) = take_pending(&reader_pending, &e.id).await {
+                        if let Some(tx) = take_pending(&reader_pending, &e.id) {
                             let _ = tx.send(Err(anyhow!("{}", e.error.message)));
                         }
                     },
@@ -175,13 +181,9 @@ impl AppClient {
             }
             // Connection closed: fail every in-flight request so callers don't
             // hang on a oneshot that will never resolve.
-            let mut map = reader_pending.lock().await;
-            for (_, tx) in map.drain() {
-                let _ = tx.send(Err(anyhow!("app-server connection closed")));
-            }
+            close_connection(&reader_closed, &reader_pending);
         });
 
-        let sink = Arc::new(Mutex::new(sink));
         // Keepalive + liveness watchdog. Each tick pings (keeping the relay
         // tunnel warm so a backgrounded session isn't idle-closed) then waits a
         // bounded window for ANY return frame. A healthy socket answers the Ping
@@ -192,32 +194,42 @@ impl AppClient {
         // reconnect) and best-effort close the sink to unwedge the reader.
         let keepalive_sink = Arc::clone(&sink);
         let keepalive_activity = Arc::clone(&activity);
-        let keepalive_healthy = Arc::clone(&healthy);
+        let keepalive_closed = closed.clone();
+        let keepalive_pending = Arc::clone(&pending);
         let keepalive = tokio::spawn(async move {
             let mut tick = tokio::time::interval(KEEPALIVE_INTERVAL);
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             tick.tick().await; // consume the immediate first tick
             loop {
-                tick.tick().await;
+                tokio::select! {
+                    _ = keepalive_closed.cancelled() => break,
+                    _ = tick.tick() => {},
+                }
                 let before = keepalive_activity.load(Ordering::Relaxed);
-                let sent = keepalive_sink
-                    .lock()
-                    .await
-                    .send(WsMessage::Ping(Vec::new().into()))
-                    .await;
-                if sent.is_err() {
-                    keepalive_healthy.store(false, Ordering::Relaxed);
+                let sent = tokio::select! {
+                    _ = keepalive_closed.cancelled() => break,
+                    sent = tokio::time::timeout(LIVENESS_DEADLINE, async {
+                        keepalive_sink.lock().await.send(WsMessage::Ping(Vec::new().into())).await
+                    }) => sent,
+                };
+                if !matches!(sent, Ok(Ok(()))) {
                     break;
                 }
                 // Give the Pong (or any traffic) a bounded window to arrive.
-                tokio::time::sleep(LIVENESS_DEADLINE).await;
+                tokio::select! {
+                    _ = keepalive_closed.cancelled() => break,
+                    _ = tokio::time::sleep(LIVENESS_DEADLINE) => {},
+                }
                 if keepalive_activity.load(Ordering::Relaxed) == before {
                     // No return frame within the deadline → half-open/dead.
-                    keepalive_healthy.store(false, Ordering::Relaxed);
-                    let _ = keepalive_sink.lock().await.close().await;
                     break;
                 }
             }
+            close_connection(&keepalive_closed, &keepalive_pending);
+            let _ = tokio::time::timeout(LIVENESS_DEADLINE, async {
+                keepalive_sink.lock().await.close().await
+            })
+            .await;
         });
 
         Ok((
@@ -228,18 +240,18 @@ impl AppClient {
                 next_id: AtomicU64::new(1),
                 reader,
                 keepalive,
-                healthy,
+                closed,
             },
             notify_rx,
         ))
     }
 
     /// Whether the socket is still considered live. Goes `false` once the
-    /// keepalive watchdog sees the connection go silent past
-    /// [`LIVENESS_DEADLINE`] — a half-open socket that still accepts writes.
-    /// Higher layers poll this to reconnect instead of hanging on a dead link.
+    /// reader closes, a write fails, a request times out, or the keepalive
+    /// watchdog sees silence past [`LIVENESS_DEADLINE`]. Higher layers poll
+    /// this to reconnect instead of reusing an unresponsive connection.
     pub fn is_alive(&self) -> bool {
-        self.healthy.load(Ordering::Relaxed)
+        !self.closed.is_cancelled()
     }
 
     /// Answer a server→client request (identified by the `request_id` token
@@ -255,18 +267,14 @@ impl AppClient {
             result,
         };
         let frame = serde_json::to_string(&resp).context("serializing response")?;
-        self.sink
-            .lock()
-            .await
-            .send(WsMessage::text(frame))
-            .await
-            .map_err(|e| anyhow!("sending response: {e}"))
+        self.send_frame(frame).await.context("sending response")
     }
 
     /// Send a JSON-RPC request and await its result, erroring on timeout, a
     /// JSON-RPC error response, or a dropped connection.
     pub async fn request(&self, method: &str, params: Value) -> Result<Value> {
-        self.request_inner(method, Some(params)).await
+        self.request_inner(method, Some(params), REQUEST_TIMEOUT)
+            .await
     }
 
     /// Like [`request`](Self::request) but omits the `params` field entirely.
@@ -274,10 +282,15 @@ impl AppClient {
     /// upstream (`Option<()>`, skipped when absent) and reject an empty `{}`
     /// body as invalid params, so they must be sent with no `params` key.
     pub async fn request_no_params(&self, method: &str) -> Result<Value> {
-        self.request_inner(method, None).await
+        self.request_inner(method, None, REQUEST_TIMEOUT).await
     }
 
-    async fn request_inner(&self, method: &str, params: Option<Value>) -> Result<Value> {
+    async fn request_inner(
+        &self,
+        method: &str,
+        params: Option<Value>,
+        timeout: Duration,
+    ) -> Result<Value> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed).to_string();
         let req = Request {
             jsonrpc: None,
@@ -290,9 +303,16 @@ impl AppClient {
 
         let (tx, rx) = oneshot::channel();
         let in_flight = {
-            let mut pending = self.pending.lock().await;
+            let mut pending = self.pending.lock().unwrap_or_else(|e| e.into_inner());
+            if !self.is_alive() {
+                return Err(anyhow!("app-server connection closed"));
+            }
             pending.insert(id.clone(), tx);
             pending.len()
+        };
+        let _registration = PendingRequest {
+            pending: Arc::clone(&self.pending),
+            id: id.clone(),
         };
         // How many requests are queued on this socket when this one starts. A
         // rising number across successive reads is the signature of callers
@@ -303,17 +323,17 @@ impl AppClient {
         );
         let started = std::time::Instant::now();
 
-        if let Err(e) = self.sink.lock().await.send(WsMessage::text(frame)).await {
-            self.pending.lock().await.remove(&id);
-            tracing::warn!(
-                target: "pocket_codex_codex::rpc",
-                "!! {method} id={id} send failed after {:?}: {e}", started.elapsed()
-            );
-            return Err(anyhow!("sending request `{method}`: {e}"));
-        }
-
-        match tokio::time::timeout(REQUEST_TIMEOUT, rx).await {
-            Ok(Ok(result)) => {
+        // Bound the write and sink lock too: a half-open peer can stop reading
+        // before the request has even reached its response wait.
+        let exchange = async {
+            self.send_frame(frame)
+                .await
+                .with_context(|| format!("sending request `{method}`"))?;
+            rx.await
+                .map_err(|_| anyhow!("app-server connection closed"))?
+        };
+        match tokio::time::timeout(timeout, exchange).await {
+            Ok(result) => {
                 let elapsed = started.elapsed();
                 let ok = result.is_ok();
                 // Slow answers are the interesting ones; a server-side walk over
@@ -331,20 +351,13 @@ impl AppClient {
                 }
                 result
             },
-            Ok(Err(_)) => {
-                tracing::warn!(
-                    target: "pocket_codex_codex::rpc",
-                    "<- {method} id={id} cancelled after {:?} (socket closed)", started.elapsed()
-                );
-                Err(anyhow!("request `{method}` cancelled"))
-            },
             Err(_) => {
-                self.pending.lock().await.remove(&id);
+                close_connection(&self.closed, &self.pending);
                 tracing::error!(
                     target: "pocket_codex_codex::rpc",
                     "<- {method} id={id} TIMED OUT after {:?}", started.elapsed()
                 );
-                Err(anyhow!("request `{method}` timed out"))
+                Err(anyhow!("request `{method}` timed out; app-server connection closed"))
             },
         }
     }
@@ -357,19 +370,66 @@ impl AppClient {
             params: Some(params),
         };
         let frame = serde_json::to_string(&note).context("serializing notification")?;
-        self.sink
-            .lock()
+        self.send_frame(frame)
             .await
-            .send(WsMessage::text(frame))
-            .await
-            .map_err(|e| anyhow!("sending notification `{method}`: {e}"))
+            .with_context(|| format!("sending notification `{method}`"))
+    }
+
+    async fn send_frame(&self, frame: String) -> Result<()> {
+        if !self.is_alive() {
+            return Err(anyhow!("app-server connection closed"));
+        }
+        let result = tokio::select! {
+            biased;
+            _ = self.closed.cancelled() => return Err(anyhow!("app-server connection closed")),
+            result = tokio::time::timeout(REQUEST_TIMEOUT, async {
+                self.sink.lock().await.send(WsMessage::text(frame)).await
+            }) => result,
+        };
+        match result {
+            Ok(Ok(())) => Ok(()),
+            result => {
+                close_connection(&self.closed, &self.pending);
+                Err(anyhow!("app-server connection closed while sending: {result:?}"))
+            },
+        }
     }
 }
 
-async fn take_pending(pending: &Pending, id: &RequestId) -> Option<oneshot::Sender<Result<Value>>> {
+fn take_pending(pending: &Pending, id: &RequestId) -> Option<oneshot::Sender<Result<Value>>> {
     let key = match id {
         RequestId::String(s) => s.clone(),
         RequestId::Number(n) => n.to_string(),
     };
-    pending.lock().await.remove(&key)
+    pending
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&key)
 }
+
+fn close_connection(closed: &CancellationToken, pending: &Pending) {
+    closed.cancel();
+    for (_, tx) in pending.lock().unwrap_or_else(|e| e.into_inner()).drain() {
+        let _ = tx.send(Err(anyhow!("app-server connection closed")));
+    }
+}
+
+// Synchronous removal also runs when an outer timeout or an aborted caller
+// drops the request future. No pending lock is held across an await.
+struct PendingRequest {
+    pending: Pending,
+    id: String,
+}
+
+impl Drop for PendingRequest {
+    fn drop(&mut self) {
+        self.pending
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&self.id);
+    }
+}
+
+#[cfg(test)]
+#[path = "client_tests.rs"]
+mod tests;

@@ -5,8 +5,8 @@
 //! The app never sees the relay's ADMINISTRATOR key. It holds a backend-issued
 //! session token (a JWT in the 0600 `config.toml`), the opaque refresh token,
 //! and a short-lived relay credential the relay confines to this account's
-//! namespace. After [`relay_credential`] the backend is off the path entirely —
-//! see [`crate::engine::transport`].
+//! namespace. The backend is off the data path, but credential issuance and
+//! renewal still require it — see [`crate::engine::transport`].
 //!
 //! Pure async logic (no flutter_rust_bridge); the `api` layer drives it on the
 //! engine runtime.
@@ -448,8 +448,8 @@ fn unix_now() -> i64 {
 
 /// This account's relay credential, from cache when it is still good.
 ///
-/// The last thing the app needs the backend for: everything after it —
-/// register, subscribe, every byte — is app↔relay.
+/// Register, subscribe, and every session byte are app↔relay. Issuing and
+/// renewing the temporary credential still require the backend.
 ///
 /// Cached because the app asks for this on every subscribe, probe, and key
 /// derivation, and a round trip per call would put the backend back on a hot
@@ -464,29 +464,12 @@ fn unix_now() -> i64 {
 /// the previous account's namespace. Keying on `(backend, account id)` means a
 /// different signed-in identity simply misses the cache.
 pub async fn relay_credential(support_dir: &Path) -> Result<RelayCredentialResponse> {
-    let config = load_config(support_dir)?;
-    let owner = CacheOwner::of(&config);
-    // Held across the fetch, which is what makes a burst of first-time callers
-    // cost one request rather than one each — the same reason [`refresh_lock`]
-    // exists for the session token.
-    let mut cache = relay_cache().lock().await;
-    if let Some((cached_owner, cached)) = cache.as_ref() {
-        // Same identity, and still enough life left that a caller can open a
-        // tunnel with what we hand back.
-        if *cached_owner == owner
-            && cached.expires_at > (unix_now() + RELAY_CACHE_MARGIN_SECS).max(0) as u64
-        {
-            return Ok(cached.clone());
-        }
-    }
-    let fetched = fetch_relay_credential(support_dir).await?;
-    *cache = Some((owner, fetched.clone()));
-    Ok(fetched)
+    relay_cache().credential(support_dir, false).await
 }
 
 /// Discard the cached relay credential, so the next call re-fetches.
 pub async fn forget_relay_credential() {
-    *relay_cache().lock().await = None;
+    *relay_cache().current.lock().await = None;
 }
 
 /// Who a cached credential belongs to.
@@ -513,15 +496,58 @@ impl CacheOwner {
     }
 }
 
-/// Treat a credential with less than this remaining as due for renewal rather
-/// than handing it out.
-const RELAY_CACHE_MARGIN_SECS: i64 = 5 * 60;
+#[derive(Default)]
+struct RelayCache {
+    current: tokio::sync::Mutex<Option<(CacheOwner, RelayCredentialResponse)>>,
+    fetching: tokio::sync::Mutex<()>,
+}
 
-type RelayCache = tokio::sync::Mutex<Option<(CacheOwner, RelayCredentialResponse)>>;
+impl RelayCache {
+    async fn valid_for(&self, owner: &CacheOwner) -> Option<RelayCredentialResponse> {
+        self.current
+            .lock()
+            .await
+            .as_ref()
+            .and_then(|(cached_owner, cached)| {
+                // Renewal runs in the background. An issuer outage must not stop
+                // new tunnels while the relay still accepts this credential.
+                (*cached_owner == *owner && cached.expires_at > unix_now().max(0) as u64)
+                    .then(|| cached.clone())
+            })
+    }
+
+    async fn credential(
+        &self,
+        support_dir: &Path,
+        refresh: bool,
+    ) -> Result<RelayCredentialResponse> {
+        let owner = CacheOwner::of(&load_config(support_dir)?);
+        if !refresh {
+            if let Some(cached) = self.valid_for(&owner).await {
+                return Ok(cached);
+            }
+        }
+        // Serialize issuer requests without locking out readers of a valid
+        // credential. A slow or failed renewal leaves the old value usable.
+        let _fetch = self.fetching.lock().await;
+        let owner = CacheOwner::of(&load_config(support_dir)?);
+        if !refresh {
+            if let Some(cached) = self.valid_for(&owner).await {
+                return Ok(cached);
+            }
+        }
+        let fetched = fetch_relay_credential(support_dir).await?;
+        if CacheOwner::of(&load_config(support_dir)?) != owner {
+            bail!("account changed while fetching the relay credential; retry");
+        }
+        *self.current.lock().await = Some((owner, fetched.clone()));
+        Ok(fetched)
+    }
+}
 
 fn relay_cache() -> &'static RelayCache {
     static CACHE: OnceCell<RelayCache> = OnceCell::new();
-    CACHE.get_or_init(|| tokio::sync::Mutex::new(None))
+    CACHE.get_or_init(RelayCache::default)
 }
 
 /// Ask the backend for a relay credential, bypassing the cache.
@@ -576,16 +602,13 @@ pub fn start_credential_refresh(support_dir: &Path, expires_at: u64) {
     let support = support_dir.to_path_buf();
     pocket_codex_pb::keep_credential_alive(expires_at, move || {
         let support = support.clone();
-        async move {
-            // Dropping the cache first is what makes this a REFRESH: the backend
-            // renews the same credential and returns the later expiry, and going
-            // through the cached path would just hand back the value we are
-            // trying to extend.
-            forget_relay_credential().await;
-            Ok(relay_credential(&support).await?.expires_at)
-        }
+        async move { Ok(relay_cache().credential(&support, true).await?.expires_at) }
     });
 }
+
+#[cfg(test)]
+#[path = "account_relay_tests.rs"]
+mod relay_tests;
 
 #[cfg(test)]
 mod tests {

@@ -1591,6 +1591,35 @@ void main() {
     expect(find.byKey(const Key('conv-tile-a1')), findsOneWidget);
   });
 
+  testWidgets('A reconnect stays disconnected when the first RPC times out', (
+    t,
+  ) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+    );
+    const service = 'pcx:lb7666:app:default';
+    await api.appConnect(service, 28080);
+    await t.pumpWidget(host(const AppSessionScreen(serviceKey: service), api));
+    await t.pumpAndSettle();
+    api.disconnectOnThreadList = true;
+    await api.appDisconnect(service);
+    await t.pump();
+    await t.pump(const Duration(seconds: 13));
+    for (var i = 0; i < 5; i++) {
+      await t.pump(const Duration(seconds: 2));
+      await t.pump();
+    }
+    expect(api.appIsConnected(service), isFalse);
+    expect(
+      find.text('就绪'),
+      findsNothing,
+      reason: 'an initialize response alone must not restore the ready badge',
+    );
+    expect(api.appConnectCount, greaterThan(2));
+    await t.pumpWidget(const SizedBox.shrink());
+    await t.pump(const Duration(seconds: 10));
+  });
+
   testWidgets('The activity view groups by day and summarizes each row', (
     t,
   ) async {

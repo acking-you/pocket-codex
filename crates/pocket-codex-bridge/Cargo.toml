@@ -51,6 +51,10 @@ once_cell = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
+[dev-dependencies]
+futures = { workspace = true }
+tokio-tungstenite = { workspace = true }
+
 # Windows + macOS only: pull codex's app-server IN-PROCESS so the app can
 # self-host without an external codex install (the `embedded-codex` feature
 # compiles codex into the bridge). Target-gated, so mobile (android/ios) never

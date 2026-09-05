@@ -1439,7 +1439,7 @@ async fn health_watchdog(local_addr: String, spawn_opts: SpawnOptions) {
     let mut restart_failures: u32 = 0;
     loop {
         tokio::time::sleep(HEALTH_INTERVAL).await;
-        if probe_ready(&client, &url).await {
+        if probe_ready(&client, &url).await && probe_thread_rpc(&local_addr).await {
             consecutive = 0;
             restart_failures = 0;
             continue;
@@ -1492,6 +1492,16 @@ async fn probe_ready(client: &reqwest::Client, url: &str) -> bool {
     matches!(client.get(url).send().await, Ok(resp) if resp.status().is_success())
 }
 
+async fn probe_thread_rpc(local_addr: &str) -> bool {
+    let result =
+        pocket_codex_codex::readiness::probe_rpc(&format!("ws://{local_addr}"), READY_TIMEOUT)
+            .await;
+    if let Err(error) = &result {
+        tracing::warn!(%local_addr, error = %format!("{error:#}"), "app-server functional health probe failed");
+    }
+    result.is_ok()
+}
+
 /// Poll `/readyz` until it answers 2xx or `timeout` elapses — the async,
 /// in-runtime sibling of `pocket_codex_codex::wait_for_readyz` (which parks a
 /// thread).
@@ -1537,7 +1547,7 @@ async fn embedded_health_watchdog(name: String, local_addr: String) {
     let mut restart_failures: u32 = 0;
     loop {
         tokio::time::sleep(HEALTH_INTERVAL).await;
-        if probe_ready(&client, &url).await {
+        if probe_ready(&client, &url).await && probe_thread_rpc(&local_addr).await {
             consecutive = 0;
             restart_failures = 0;
             continue;
@@ -1708,6 +1718,7 @@ mod tests {
     #[test]
     fn startup_failure_error_carries_log_tail_and_port_hint() {
         let failure = StartupFailure {
+            rpc_error: None,
             process_exited: true,
             port_in_use: true,
             listen: "ws://127.0.0.1:18080".to_string(),

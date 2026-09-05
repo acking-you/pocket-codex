@@ -156,23 +156,12 @@ class _TurnMinimapState extends State<TurnMinimap> {
   /// Drives the width falloff and the preview.
   int? _active;
 
-  /// The tick last jumped to, kept after the pointer leaves.
-  ///
-  /// A click used to clear [_active], which collapsed the rail to its resting
-  /// width at the exact moment the user landed — so the rail stopped saying
-  /// where in the conversation they now were. This keeps the mark without
-  /// keeping the preview card, which genuinely should go: it would hang over the
-  /// turn just navigated to.
-  int? _landed;
-
-  /// The tick to emphasise: what the pointer is on, else where we last landed.
-  int? get _marked => _active ?? _landed;
-
   /// Whether the pointer is anywhere near the rail. Only used to fade the rail
   /// in on a window too narrow to keep it resting.
   bool _hovering = false;
 
   final _focus = FocusNode(debugLabel: 'turn-minimap');
+  final _previewKey = GlobalKey();
 
   @override
   void dispose() {
@@ -184,10 +173,8 @@ class _TurnMinimapState extends State<TurnMinimap> {
   void didUpdateWidget(TurnMinimap old) {
     super.didUpdateWidget(old);
     // A turn was removed (a rewind, a reload) — an index past the end would
-    // otherwise resolve to nothing and leave a stuck preview, or a mark on a
-    // tick that no longer exists.
+    // otherwise resolve to nothing and leave a stuck preview.
     _active = _clampIndex(_active);
-    _landed = _clampIndex(_landed);
   }
 
   /// [index] pulled back inside the current turn list, or null when there are no
@@ -251,12 +238,10 @@ class _TurnMinimapState extends State<TurnMinimap> {
     if (item == null) return;
     widget.onSelect(item);
     // Drop focus after a jump so the preview doesn't hang over the place the
-    // user just navigated to. The tick stays marked via `_landed`, so the rail
-    // remains open and still says where they are.
+    // user just navigated to. The visible range keeps marking their position.
     _focus.unfocus();
     setState(() {
       _active = null;
-      _landed = index;
     });
   }
 
@@ -303,9 +288,7 @@ class _TurnMinimapState extends State<TurnMinimap> {
           (widget.items.length - 1) * _kTickSpacing,
         );
         final railHeight = math.min(natural, available);
-        // Visible while a tick is marked, which now includes one just jumped to
-        // — so a narrow-gutter rail does not vanish the instant you use it.
-        final open = _marked != null;
+        final open = _active != null;
         return Align(
           alignment: Alignment.centerLeft,
           child: Padding(
@@ -342,15 +325,22 @@ class _TurnMinimapState extends State<TurnMinimap> {
       child: MouseRegion(
         cursor: clickable,
         onEnter: (_) => setState(() => _hovering = true),
-        onExit: (_) => setState(() {
-          _hovering = false;
-          _active = null;
-        }),
+        onExit: (_) => _leave(),
         onHover: (event) {
-          // Past the resting strip the pointer is over the preview card, which
-          // owns its own text selection — keep the current tick rather than
-          // re-resolving from an X the rail doesn't govern.
-          if (event.localPosition.dx > hitWidth) return;
+          if (event.localPosition.dx > hitWidth) {
+            final card = _previewKey.currentContext?.findRenderObject();
+            // The expanded box also covers empty space beside other ticks.
+            // Only the actual card should keep a preview open off the rail.
+            if (card is RenderBox &&
+                card.hasSize &&
+                (Offset.zero & card.size).contains(
+                  card.globalToLocal(event.position),
+                )) {
+              return;
+            }
+            _leave();
+            return;
+          }
           final next = _indexAt(event.localPosition.dy, railHeight);
           if (next != _active) {
             setState(() => _active = next);
@@ -378,10 +368,18 @@ class _TurnMinimapState extends State<TurnMinimap> {
     );
   }
 
+  void _leave() {
+    if (!_hovering && _active == null) return;
+    setState(() {
+      _hovering = false;
+      _active = null;
+    });
+  }
+
   /// The ticks. Each repaints on scroll through [TurnMinimap.visibleRange]
   /// alone, so following a streaming reply never rebuilds the transcript.
   List<Widget> _ticks(double railHeight, ColorScheme scheme) {
-    final active = _marked;
+    final active = _active;
     return [
       for (var i = 0; i < widget.items.length; i++)
         Positioned(
@@ -457,7 +455,7 @@ class _TurnMinimapState extends State<TurnMinimap> {
       top: railHeight * fraction,
       child: FractionalTranslation(
         translation: Offset(0, align),
-        child: _TurnPreviewCard(item: item, width: width),
+        child: _TurnPreviewCard(key: _previewKey, item: item, width: width),
       ),
     );
   }
@@ -465,7 +463,7 @@ class _TurnMinimapState extends State<TurnMinimap> {
 
 /// The floating preview: what the user asked, and how the turn answered.
 class _TurnPreviewCard extends StatelessWidget {
-  const _TurnPreviewCard({required this.item, required this.width});
+  const _TurnPreviewCard({super.key, required this.item, required this.width});
 
   final TurnMinimapItem item;
 

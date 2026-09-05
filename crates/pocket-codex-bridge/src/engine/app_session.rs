@@ -655,34 +655,11 @@ pub fn probe_reason(service_key: String, local_port: u16, transport: &Transport)
 ///
 /// `local_addr` is a plain `host:port` this process can reach directly. For a
 /// service THIS machine hosts itself, pass its loopback app-listen address to
-/// health-check the backend with no relay hop — a real handshake, so a wedged
-/// or half-open codex (port still `accept`ing but never answering RPC) reads
-/// `false` where a bare TCP-connect check would falsely read "online".
+/// health-check the backend with no relay hop — initialized thread RPCs, so a
+/// wedged or half-open codex (port still `accept`ing but never answering RPC)
+/// reads `false` where a bare TCP-connect check would falsely read "online".
 pub fn probe_endpoint(local_addr: &str) -> bool {
-    let ws_url = format!("ws://{local_addr}");
-    let outcome = runtime::runtime().block_on(async {
-        let (client, _notify_rx) = tokio::time::timeout(PROBE_TIMEOUT, AppClient::connect(&ws_url))
-            .await
-            .context("probe: connect timed out")??;
-        tokio::time::timeout(
-            PROBE_TIMEOUT,
-            client.request(
-                "initialize",
-                json!({
-                    "clientInfo": {
-                        "name": "pocket-codex",
-                        "title": "Pocket-Codex",
-                        "version": env!("CARGO_PKG_VERSION"),
-                    },
-                    "capabilities": { "experimentalApi": true },
-                }),
-            ),
-        )
-        .await
-        .context("probe: initialize timed out")??;
-        Ok::<(), anyhow::Error>(())
-    });
-    outcome.is_ok()
+    probe_endpoint_error(local_addr).is_none()
 }
 
 /// Why a probe failed, or `None` when it succeeded.
@@ -693,37 +670,14 @@ pub fn probe_endpoint(local_addr: &str) -> bool {
 /// rejects the handshake, e.g. a missing or stale authentication code, is the
 /// common case).
 pub fn probe_endpoint_error(local_addr: &str) -> Option<String> {
-    let ws_url = format!("ws://{local_addr}");
-    let outcome = runtime::runtime().block_on(async {
-        let (client, _notify_rx) = tokio::time::timeout(PROBE_TIMEOUT, AppClient::connect(&ws_url))
-            .await
-            .context("probe: connect timed out")??;
-        tokio::time::timeout(
+    runtime::runtime()
+        .block_on(pocket_codex_codex::readiness::probe_rpc(
+            &format!("ws://{local_addr}"),
             PROBE_TIMEOUT,
-            client.request(
-                "initialize",
-                json!({
-                    "clientInfo": {
-                        "name": "pocket-codex",
-                        "title": "Pocket-Codex",
-                        "version": env!("CARGO_PKG_VERSION"),
-                    },
-                    "capabilities": { "experimentalApi": true },
-                }),
-            ),
-        )
-        .await
-        .context("probe: initialize timed out")??;
-        Ok::<(), anyhow::Error>(())
-    });
-    match outcome {
-        Ok(()) => None,
-        // The chain carries the transport's own words (the relay's HTTP status
-        // and body), which is the only place the real reason survives.
-        Err(e) => Some(format!("{e:#}")),
-    }
+        ))
+        .err()
+        .map(|error| format!("{error:#}"))
 }
-
 /// Reachability of a remote API proxy: a transient tunnel plus a minimal HTTP
 /// request. The HTTP counterpart of [`probe_reason`], as a bare bool because an
 /// API proxy has no handshake whose failure would need explaining.
@@ -1467,11 +1421,22 @@ fn summarize_turn(turn: &Value, loaded: bool) -> TurnSummary {
 
 /// Plain text of a message item, for a rail preview.
 fn item_plain_text(item: &Value) -> String {
-    ["text", "message", "content"]
+    if let Some(text) = ["text", "message", "content"]
         .iter()
         .find_map(|key| item.get(*key).and_then(Value::as_str))
+    {
+        return text.to_string();
+    }
+    item.get("content")
+        .and_then(Value::as_array)
+        .map(|parts| {
+            parts
+                .iter()
+                .filter_map(|part| part.get("text").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
         .unwrap_or_default()
-        .to_string()
 }
 
 /// Flatten server turns into UI items, oldest first.
@@ -1668,14 +1633,15 @@ fn load_paginated_window(
             skeleton.loaded = loaded_turns.contains(&skeleton.turn_id);
         }
     }
-    let has_older = skeletons.iter().any(|s| !s.loaded);
-
     // Where older history continues: this page's own continuation cursor.
     let item_cursor = items_page
         .get("nextCursor")
         .and_then(Value::as_str)
         .filter(|cursor| !cursor.is_empty())
         .map(str::to_string);
+    // Seeing one item from every turn does not mean every item was loaded:
+    // even a single turn can fill several pages. The item cursor is authoritative.
+    let has_older = item_cursor.is_some();
     set_pagination(service_key, thread_id, ThreadPagination {
         next_item_cursor: item_cursor,
         seen_item_cursors: HashSet::new(),
@@ -2913,6 +2879,10 @@ fn recursive_text(v: &Value) -> Option<String> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+#[path = "app_session_pagination_tests.rs"]
+mod pagination_tests;
 
 #[cfg(test)]
 mod tests {

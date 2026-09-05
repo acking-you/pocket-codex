@@ -508,8 +508,17 @@ class FakeBridgeApi implements BridgeApi {
   /// socket), then resets — to exercise the picker's reconnect-and-retry path.
   bool failNextThreadList = false;
 
+  /// Simulate a backend whose handshake works but whose first RPC kills the link.
+  bool disconnectOnThreadList = false;
+
   @override
   Future<List<ThreadMeta>> appThreadList(String serviceKey) async {
+    if (disconnectOnThreadList) {
+      _appConnected.remove(serviceKey);
+      throw StateError(
+        'request `thread/list` timed out; app-server connection closed',
+      );
+    }
     if (failNextThreadList) {
       failNextThreadList = false;
       throw StateError('Trying to work with closed connection');
