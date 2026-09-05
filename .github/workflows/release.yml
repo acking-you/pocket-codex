@@ -133,6 +133,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # The embedded codex closure is large enough that rustc/LLVM can
+          # access-violate during a single-unit ThinLTO build on Windows. Keep
+          # the workspace release profile everywhere else, but split Windows
+          # codegen and skip its cross-crate LTO pass. This changes neither the
+          # CLI feature set nor its runtime panic behaviour.
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
+            export CARGO_PROFILE_RELEASE_LTO=false
+          fi
           if [ "${{ matrix.cross }}" = "true" ]; then
             cross build --release --locked --bin pocket-codex --target ${{ matrix.target }}
           else
@@ -167,6 +176,12 @@ jobs:
     name: App (Windows)
     needs: prepare
     runs-on: windows-latest
+    # The embedded codex closure is large enough that rustc/LLVM can
+    # access-violate during a single-unit ThinLTO build on Windows. Apply the
+    # cap to both Cargokit and the separately built sandbox helpers.
+    env:
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+      CARGO_PROFILE_RELEASE_LTO: "false"
     steps:
       - uses: actions/checkout@v4
         with:
