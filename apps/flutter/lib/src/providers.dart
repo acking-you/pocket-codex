@@ -169,23 +169,8 @@ final codexSetupStatusProvider = FutureProvider<CodexSetupStatus>((ref) async {
 /// (a still-running host re-registers, and hiding it would strand a live entry).
 final pendingRemovalProvider = StateProvider<Set<String>>((ref) => {});
 
-/// A conversation's one-line summary, fetched on demand and cached.
-///
-/// Keyed by `serviceKey|threadId`. Deliberately NOT autoDispose: a row scrolled
-/// out and back must not re-read the thread, and the whole point of fetching
-/// lazily is to pay for each conversation at most once per session. The read is
-/// expensive (a full thread history server-side), so the activity view asks for
-/// these only for rows it actually renders.
-///
-/// A failure yields null rather than an error state: a missing gist is a row
-/// with one less line, not something to interrupt the list for.
-/// Caps how many summary fetches run at once.
-///
-/// Each bridge call occupies one worker thread of a pool only as wide as the CPU
-/// count, and it BLOCKS that thread for the whole round trip. A sidebar with
-/// dozens of rows asks for every gist concurrently, which saturated the pool and
-/// left nothing for the call that actually matters — opening a conversation —
-/// until the summaries drained. Gists are decoration; they queue.
+// Bound background RPC traffic. The async summary bridge uses a separate
+// blocking executor, so these requests consume no interactive FRB worker slots.
 final _summaryGate = _Gate(3);
 
 /// A counting semaphore: [acquire] resolves once fewer than [limit] holders are
@@ -214,6 +199,8 @@ class _Gate {
   }
 }
 
+/// A conversation's one-line summary, cached by `serviceKey|threadId`.
+/// Kept when a row leaves the viewport; failures leave the summary absent.
 final threadSummaryProvider = FutureProvider.family<String?, String>((
   ref,
   key,

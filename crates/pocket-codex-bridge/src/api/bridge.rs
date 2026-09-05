@@ -1053,8 +1053,12 @@ pub fn app_compact(service_key: String, thread_id: String) -> Result<()> {
 /// `thread/list` carries no summary: the only source is a full `thread/read`,
 /// so the UI fetches these lazily for the rows it actually shows instead of
 /// paying for every conversation up front.
-pub fn app_thread_summary(service_key: String, thread_id: String) -> Result<Option<String>> {
-    app_session::thread_summary(&service_key, &thread_id)
+pub async fn app_thread_summary(service_key: String, thread_id: String) -> Result<Option<String>> {
+    // Summary RPCs must not occupy the CPU-sized FRB pool, even on one-core
+    // devices. The UI separately bounds how many background requests run.
+    runtime::runtime()
+        .spawn_blocking(move || app_session::thread_summary(&service_key, &thread_id))
+        .await?
 }
 
 /// Rename a conversation. The title is persisted by the app-server (so it

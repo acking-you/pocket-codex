@@ -15,7 +15,7 @@ use std::{
     collections::VecDeque,
     fs::{self, File, OpenOptions},
     io::Write,
-    path::Path,
+    path::{Path, PathBuf},
     sync::Mutex,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -44,14 +44,72 @@ const RING_CAPACITY: usize = 2000;
 /// reported to Dart as a gap rather than blocking the logger).
 const CHANNEL_CAPACITY: usize = 1024;
 
-/// How long a log file is kept before it is pruned at startup.
+/// How long an inactive log file is kept after its last write.
 const FILE_RETENTION: Duration = Duration::from_secs(6 * 60 * 60);
+const FILE_MAINTENANCE_INTERVAL: Duration = Duration::from_secs(60);
 
 static CHANNEL: OnceCell<broadcast::Sender<LogLine>> = OnceCell::new();
 static RING: OnceCell<Mutex<VecDeque<LogLine>>> = OnceCell::new();
-/// Append handle for the on-disk log, `None` when no directory was set (tests)
-/// or the file could not be opened.
-static FILE: OnceCell<Mutex<Option<File>>> = OnceCell::new();
+/// Hourly on-disk sink; absent when no support directory was set (tests).
+static FILE: OnceCell<Mutex<RotatingFile>> = OnceCell::new();
+
+struct RotatingFile {
+    dir: PathBuf,
+    hour: Option<u64>,
+    file: Option<File>,
+    last_prune: Option<SystemTime>,
+}
+
+impl RotatingFile {
+    fn new(dir: PathBuf) -> Self {
+        Self {
+            dir,
+            hour: None,
+            file: None,
+            last_prune: None,
+        }
+    }
+
+    fn maintain(&mut self, now: SystemTime) {
+        let hour = now.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() / 3600;
+        if self.hour != Some(hour) {
+            // Close before pruning: Windows cannot delete our open file.
+            self.file = None;
+            self.hour = Some(hour);
+        }
+        let due = self
+            .last_prune
+            .and_then(|last| now.duration_since(last).ok())
+            .is_none_or(|elapsed| elapsed >= FILE_MAINTENANCE_INTERVAL);
+        if due {
+            prune_old_logs(&self.dir, now);
+            self.last_prune = Some(now);
+        }
+    }
+
+    fn write(&mut self, line: &LogLine, now: SystemTime) {
+        self.maintain(now);
+        if self.file.is_none() {
+            let hour = self.hour.unwrap_or(0);
+            let path = self.dir.join(format!(
+                "pocket-codex-{}-{:02}.log",
+                date_stamp(hour * 3600),
+                hour % 24
+            ));
+            self.file = OpenOptions::new().create(true).append(true).open(path).ok();
+        }
+        if let Some(file) = &mut self.file {
+            let _ = writeln!(
+                file,
+                "{} {:5} {} {}",
+                clock(line.timestamp_ms),
+                line.level,
+                line.target,
+                line.message
+            );
+        }
+    }
+}
 
 /// Install the capture layer as the global subscriber. Idempotent — safe to
 /// call once at boot; a second call (or codex's own `try_init`) is a no-op.
@@ -121,8 +179,9 @@ fn parse_level(raw: &str) -> &'static str {
     "INFO"
 }
 
-/// Start writing captured lines to `<dir>/logs/pocket-codex-<date>.log`, and
-/// drop files older than [`FILE_RETENTION`].
+/// Write hourly logs under `<dir>/logs/` and prune inactive files after six
+/// hours. Maintenance runs every minute, including while the app is idle in the
+/// tray.
 ///
 /// Separate from [`init`] because the support directory isn't known that early.
 /// Failure is silent: the in-memory viewer is the primary sink, and losing the
@@ -132,26 +191,29 @@ pub fn init_file(support_dir: &Path) {
     if fs::create_dir_all(&dir).is_err() {
         return;
     }
-    prune_old_logs(&dir);
-    let path = dir.join(format!("pocket-codex-{}.log", today_stamp()));
-    let file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-        .ok();
-    let opened = file.is_some();
-    FILE.get_or_init(|| Mutex::new(file));
-    if opened {
-        tracing::info!(target: "pocket_codex_bridge::logging", "log file: {}", path.display());
-    }
+    FILE.get_or_init(|| {
+        let mut log = RotatingFile::new(dir.clone());
+        log.maintain(SystemTime::now());
+        let _ = std::thread::Builder::new()
+            .name("pcx-log-retention".into())
+            .spawn(|| loop {
+                std::thread::sleep(FILE_MAINTENANCE_INTERVAL);
+                if let Some(log) = FILE.get() {
+                    log.lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .maintain(SystemTime::now());
+                }
+            });
+        Mutex::new(log)
+    });
+    tracing::info!(target: "pocket_codex_bridge::logging", "log directory: {}", dir.display());
 }
 
 /// Delete log files last modified longer ago than [`FILE_RETENTION`].
-fn prune_old_logs(dir: &Path) {
+fn prune_old_logs(dir: &Path, now: SystemTime) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
     };
-    let now = SystemTime::now();
     for entry in entries.flatten() {
         let name = entry.file_name();
         let name = name.to_string_lossy();
@@ -171,11 +233,7 @@ fn prune_old_logs(dir: &Path) {
 }
 
 /// `YYYY-MM-DD` in UTC, for the log file name.
-fn today_stamp() -> String {
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+fn date_stamp(secs: u64) -> String {
     let days = secs / 86_400;
     // Civil-from-days (Howard Hinnant's algorithm), so no date dependency here.
     let z = days as i64 + 719_468;
@@ -208,17 +266,9 @@ fn emit(line: LogLine) {
         r.push_back(line.clone());
     }
     if let Some(file) = FILE.get() {
-        let mut guard = file.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(file) = guard.as_mut() {
-            let _ = writeln!(
-                file,
-                "{} {:5} {} {}",
-                clock(line.timestamp_ms),
-                line.level,
-                line.target,
-                line.message
-            );
-        }
+        file.lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .write(&line, SystemTime::now());
     }
     if let Some(tx) = CHANNEL.get() {
         // Err just means no viewers are open — the ring already retained it.
@@ -232,6 +282,10 @@ fn now_ms() -> i64 {
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
 }
+
+#[cfg(test)]
+#[path = "logging_tests.rs"]
+mod tests;
 
 /// A `tracing` layer that funnels every (filtered) event into [`emit`].
 struct CaptureLayer;

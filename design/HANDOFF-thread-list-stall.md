@@ -4,6 +4,33 @@
 **状态**：已修复可确定复现的连接状态、复用探测与分页缺陷；原 Mac 进程内部阻塞的根因仍未确认
 **分支**：`chore/codex-upstream-sync`，交接时的分页与日志改动已在 `0a52779` 提交
 
+## PR 审查修复（2026-09-06）
+
+本轮处理最初收到的 8 条 P2 意见，聚焦正确性与稳定性，不循环追逐后续新增审查。
+
+- 分页与按需回合加载共用顺序合并，重叠 item 作为锚点，保留实时内容；只包含尾部
+  的回合仍可获取开头。无 turn ID 的乐观消息保持原顺序。
+  `apps/flutter/lib/src/screens/app_session/history_merge.dart:7`。
+- 预加载与点击等待同一次请求；请求代次隔离会话切换及重新加载后的旧结果与异常。
+  跳转等待虚拟列表完成布局，程序跳转不再自动拉旧页、移除表头而错位。
+  `apps/flutter/lib/src/screens/app_session_screen.dart:1280`。
+- 回合游标与计数纳入打开会话后新增的实时回合；分页时间缓存保留已枚举回合的完成
+  时间与耗时，并用于初始窗口、旧页和单回合读取。原有最多 500 回合的骨架枚举上限
+  保持不变。`crates/pocket-codex-bridge/src/engine/app_session.rs:1510`。
+- 摘要 API 改为 async，慢 RPC 转到独立的阻塞执行器，不占用交互所用的 FRB 工作线程。
+  Dart 仍限制后台请求并发量；单异步工作线程测试验证摘要等待期间交互请求可完成。
+  Rust/Dart 绑定已重新生成。`crates/pocket-codex-bridge/src/api/bridge.rs:1056`。
+- 磁盘日志按 UTC 小时轮转，每分钟检查并删除最后写入超过六小时的日志，空闲驻留
+  托盘时也清理。仍兼容清理旧的按日命名日志，轮转先关闭文件以支持 Windows。
+  `crates/pocket-codex-bridge/src/engine/logging.rs:58`。
+- 全量 Flutter **435 passed，3 skipped**；WSL 全量 Rust **293 passed，6 ignored**；
+  全部第一方 Rust fmt、clippy 与 Dart format、analyze 通过。Windows 本轮原生构建
+  使用桌面 manifest 与独立 Profile 产物，结果记录在 PR 的验证说明中。
+
+新增回归覆盖跨回合顺序、同回合重叠分页、尾部补全、预加载后跳转、实时回合、切换
+会话后的迟到失败、跨页时间信息、单线程异步调度与运行期间日志清理。原 Mac 内部
+阻塞原因仍未确认，本轮不扩大该结论。
+
 ## 本次续接结果（2026-09-05）
 
 ### 已确认并修复

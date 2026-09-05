@@ -175,6 +175,8 @@ struct ThreadPagination {
     /// Turn ids whose items have been loaded, oldest first. The UI jumps by
     /// turn, so it needs to know which turns it can already show.
     loaded_turns: Vec<String>,
+    /// Timing from every enumerated turn, reused by later item pages.
+    turn_stamps: HashMap<String, TurnStamp>,
 }
 
 /// Bridge calls currently occupying an FRB worker thread. Diagnostic only.
@@ -497,11 +499,7 @@ pub fn thread_older_page(service_key: &str, thread_id: &str) -> Result<OlderPage
             .get("turnId")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        let stamp = TurnStamp {
-            id: turn_id.to_string(),
-            completed_at: None,
-            duration_ms: None,
-        };
+        let stamp = turn_stamp(&state.turn_stamps, turn_id);
         if let Some(parsed) = parse_turn_item(item, &stamp) {
             if !state.loaded_turns.iter().any(|id| id == turn_id) {
                 state.loaded_turns.insert(0, turn_id.to_string());
@@ -534,11 +532,10 @@ pub fn thread_turn_items(
     let mut newest_first = Vec::new();
     let mut cursor: Option<String> = None;
     let mut seen = HashSet::new();
-    let stamp = TurnStamp {
-        id: turn_id.to_string(),
-        completed_at: None,
-        duration_ms: None,
-    };
+    let stamps = pagination_of(service_key, thread_id)
+        .map(|state| state.turn_stamps)
+        .unwrap_or_default();
+    let stamp = turn_stamp(&stamps, turn_id);
     // Bounded: a single turn can hold hundreds of items, and draining all of
     // them serially is what made opening the longest threads time out. Enough
     // pages to fill a screen; scrolling covers the rest.
@@ -1510,7 +1507,11 @@ fn fetch_item_page(
 /// Walks `thread/turns/list` backwards with a summary view, which the store
 /// answers from indexed columns rather than by replaying items — cheap enough
 /// to do for the whole thread so the rail can show its true length immediately.
-fn fetch_all_turn_summaries(client: &Arc<AppClient>, thread_id: &str) -> Result<Vec<TurnSummary>> {
+fn fetch_all_turn_summaries(
+    client: &Arc<AppClient>,
+    thread_id: &str,
+    stamps: &mut HashMap<String, TurnStamp>,
+) -> Result<Vec<TurnSummary>> {
     let mut newest_first = Vec::new();
     let mut cursor: Option<String> = None;
     let mut seen = HashSet::new();
@@ -1526,6 +1527,8 @@ fn fetch_all_turn_summaries(client: &Arc<AppClient>, thread_id: &str) -> Result<
             break;
         }
         for turn in &turns {
+            let stamp = TurnStamp::of(turn);
+            stamps.insert(stamp.id.clone(), stamp);
             newest_first.push(summarize_turn(turn, false));
         }
         let next = page
@@ -1583,7 +1586,7 @@ fn load_paginated_window(
         .unwrap_or_default();
     // Timing lives on the turn shells, so items pick their turn's stamp up here
     // rather than losing the duration footnote the transcript renders.
-    let stamps: HashMap<String, TurnStamp> = turns
+    let mut stamps: HashMap<String, TurnStamp> = turns
         .iter()
         .map(|turn| {
             let stamp = TurnStamp::of(turn);
@@ -1601,13 +1604,9 @@ fn load_paginated_window(
             .get("turnId")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        let stamp = stamps.get(turn_id).cloned().unwrap_or(TurnStamp {
-            id: turn_id.to_string(),
-            completed_at: None,
-            duration_ms: None,
-        });
+        let stamp = turn_stamp(&stamps, turn_id);
         if let Some(parsed) = parse_turn_item(item, &stamp) {
-            if !loaded_turns.iter().any(|id| id == turn_id) {
+            if parsed.item_type == "userMessage" && !loaded_turns.iter().any(|id| id == turn_id) {
                 loaded_turns.push(turn_id.to_string());
             }
             items.push(parsed);
@@ -1618,7 +1617,8 @@ fn load_paginated_window(
     // skeleton can't be read still opens — the rail just falls back to the
     // loaded turns.
     let phase = std::time::Instant::now();
-    let mut skeletons = fetch_all_turn_summaries(client, thread_id).unwrap_or_else(|_| Vec::new());
+    let mut skeletons =
+        fetch_all_turn_summaries(client, thread_id, &mut stamps).unwrap_or_else(|_| Vec::new());
     tracing::debug!(
         target: "pocket_codex_bridge::history",
         "  {} turn summaries in {:?}", skeletons.len(), phase.elapsed()
@@ -1626,11 +1626,18 @@ fn load_paginated_window(
     if skeletons.is_empty() {
         skeletons = turns
             .iter()
-            .map(|turn| summarize_turn(turn, true))
+            .map(|turn| summarize_turn(turn, false))
             .collect();
-    } else {
-        for skeleton in &mut skeletons {
-            skeleton.loaded = loaded_turns.contains(&skeleton.turn_id);
+    }
+    for skeleton in &mut skeletons {
+        skeleton.loaded = loaded_turns.contains(&skeleton.turn_id);
+    }
+    // The item window can cross more turns than the initial status shells.
+    // Summary pages carry the same timing metadata without loading their items.
+    for item in &mut items {
+        if let Some(stamp) = stamps.get(&item.turn_id) {
+            item.turn_completed_at = stamp.completed_at;
+            item.turn_duration_ms = stamp.duration_ms;
         }
     }
     // Where older history continues: this page's own continuation cursor.
@@ -1646,6 +1653,7 @@ fn load_paginated_window(
         next_item_cursor: item_cursor,
         seen_item_cursors: HashSet::new(),
         loaded_turns,
+        turn_stamps: stamps,
     });
 
     Ok(LoadedHistory {
@@ -1822,17 +1830,14 @@ fn thread_read_inner(service_key: &str, thread_id: &str) -> Result<ThreadHistory
 /// shows and this returns just the sentence rather than shipping a transcript
 /// across the bridge for the caller to trim.
 pub fn thread_summary(service_key: &str, thread_id: &str) -> Result<Option<String>> {
-    // Sidebar rows fetch these concurrently, one FRB worker thread each, and the
-    // pool is only as wide as the CPU count. Counting occupancy here makes a
-    // saturated pool — which stalls every other bridge call, `thread_read`
-    // included — visible in the log instead of looking like a hung server.
+    // The async API runs these on the engine's blocking executor, separate from
+    // interactive FRB workers. Count them with other history calls for diagnosis.
     let depth = BRIDGE_BUSY.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
     let _release = BusyGuard;
     if depth > 4 {
         tracing::warn!(
             target: "pocket_codex_bridge::history",
-            "thread_summary thread={thread_id} with {depth} bridge calls in flight (pool holds {})",
-            std::thread::available_parallelism().map(|n| n.get()).unwrap_or(0)
+            "thread_summary thread={thread_id} with {depth} history calls in flight"
         );
     }
     let client = client_for(service_key)?;
@@ -2536,6 +2541,13 @@ struct TurnStamp {
     id: String,
     completed_at: Option<i64>,
     duration_ms: Option<i64>,
+}
+
+fn turn_stamp(stamps: &HashMap<String, TurnStamp>, turn_id: &str) -> TurnStamp {
+    stamps.get(turn_id).cloned().unwrap_or_else(|| TurnStamp {
+        id: turn_id.to_string(),
+        ..TurnStamp::default()
+    })
 }
 
 impl TurnStamp {

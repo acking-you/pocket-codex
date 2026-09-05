@@ -688,12 +688,16 @@ class FakeBridgeApi implements BridgeApi {
   /// Turn ids passed to [appThreadOlderPage], in call order.
   int olderPageCalls = 0;
 
+  /// Controlled responses for interleaving requests across threads.
+  final Map<String, Future<OlderPage>> pendingOlderPages = {};
+
   @override
   Future<OlderPage> appThreadOlderPage(
     String serviceKey,
     String threadId,
   ) async {
     olderPageCalls++;
+    if (pendingOlderPages[threadId] case final response?) return response;
     if (olderPages.isEmpty) {
       return const OlderPage(items: [], hasOlder: false);
     }
@@ -707,6 +711,9 @@ class FakeBridgeApi implements BridgeApi {
   /// Turn ids passed to [appThreadTurnItems], in call order.
   final List<String> turnItemCalls = [];
 
+  /// Controlled responses for hover/select races.
+  final Map<String, Future<List<ThreadItem>>> pendingTurnItems = {};
+
   @override
   Future<List<ThreadItem>> appThreadTurnItems(
     String serviceKey,
@@ -714,6 +721,7 @@ class FakeBridgeApi implements BridgeApi {
     String turnId,
   ) async {
     turnItemCalls.add(turnId);
+    if (pendingTurnItems[turnId] case final response?) return response;
     return turnItems[turnId] ?? const [];
   }
 

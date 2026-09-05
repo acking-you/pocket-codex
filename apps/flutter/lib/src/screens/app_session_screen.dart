@@ -7,6 +7,7 @@ import 'package:file_selector/file_selector.dart' show openFiles;
 import 'package:flutter/foundation.dart'
     show listEquals, defaultTargetPlatform, TargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollDirection;
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/app_modes.dart';
 import 'package:pocket_codex/src/attachment_refs.dart';
@@ -31,6 +32,7 @@ import 'package:pocket_codex/src/service_key.dart';
 import 'package:pocket_codex/src/screens/app_session/activity_cards.dart';
 import 'package:pocket_codex/src/screens/app_session/composer_cards.dart';
 import 'package:pocket_codex/src/screens/app_session/transcript_model.dart';
+import 'package:pocket_codex/src/screens/app_session/history_merge.dart';
 import 'package:pocket_codex/src/screens/app_session/transcript_view.dart';
 import 'package:pocket_codex/src/theme.dart';
 import 'package:pocket_codex/src/ui_prefs.dart';
@@ -402,6 +404,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   // True while an older page (or a single turn's items) is in flight, so a
   // scroll frame can't queue the same fetch twice.
   bool _loadingOlder = false;
+  Future<void>? _historyLoad;
+  int _historyGeneration = 0;
   // True while `_scrollToEnd(force: true)` is re-jumping to the bottom. Those
   // jumps fire scroll events from positions that can look like the top of the
   // list, which would fetch older history nobody asked for.
@@ -968,6 +972,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       _turnSummaries = const [];
       _hasOlder = false;
       _loadingOlder = false;
+      _historyLoad = null;
+      _historyGeneration++;
       _approvals.clear();
       _ctx = null;
       _diff = null;
@@ -1086,9 +1092,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     // which is what its ticks are numbered in.
     if (_listCtl.isAttached) _visibleRows.value = _visibleRowRange();
     // Reading back past the top of what's loaded fetches the previous page.
-    // Suppressed while settling to the bottom, whose repeated jumps generate
-    // scroll frames that would otherwise read as reaching the top on open.
+    // Only user scrolling triggers this. An indexed rail jump must not remove
+    // the older-page header halfway through its animation and shift the target.
     if (!_settlingToEnd &&
+        _scroll.position.userScrollDirection != ScrollDirection.idle &&
         _hasOlder &&
         !_loadingOlder &&
         _scroll.position.pixels <= _scroll.position.minScrollExtent + 200) {
@@ -1227,18 +1234,19 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// Splice [items] into the transcript by turn order, skipping ids already
   /// present, and rebuild the id→index map.
   ///
-  /// Older history arrives as a block that belongs before what's shown, and a
-  /// jumped-to turn lands wherever its turn sits — either way every existing
-  /// index shifts, so [_itemIndex] is rebuilt rather than patched.
+  /// Both sequential pages and jumped-to turns use the skeleton's order.
   void _spliceTranscriptItems(List<ThreadItem> items, {required bool atStart}) {
     final known = _items.map((i) => i.id).toSet();
     final fresh = <TranscriptItem>[];
     for (final item in items) {
-      if (item.id.isEmpty || known.contains(item.id)) continue;
+      if (item.id.isEmpty) continue;
       if (item.itemType == 'userMessage' && isContextFragment(item.text)) {
         continue;
       }
-      known.add(item.id);
+      if (known.contains(item.id)) {
+        fresh.add(_items[_itemIndex[item.id]!]);
+        continue;
+      }
       fresh.add(
         TranscriptItem(
           id: item.id,
@@ -1254,25 +1262,15 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       );
     }
     if (fresh.isEmpty) return;
-    if (atStart) {
-      _items.insertAll(0, fresh);
-    } else {
-      // Land the block after the last item of the newest earlier turn, so a
-      // turn fetched out of order still reads in conversation order.
-      final order = _turnSummaries.map((t) => t.turnId).toList();
-      final at = order.indexOf(fresh.first.turnId);
-      var insertAt = _items.length;
-      if (at >= 0) {
-        for (var i = 0; i < _items.length; i++) {
-          final pos = order.indexOf(_items[i].turnId);
-          if (pos >= 0 && pos > at) {
-            insertAt = i;
-            break;
-          }
-        }
-      }
-      _items.insertAll(insertAt, fresh);
-    }
+    final merged = mergeHistoryItems(
+      _items,
+      fresh,
+      turnOrder: _turnSummaries.map((t) => t.turnId),
+      olderPage: atStart,
+    );
+    _items
+      ..clear()
+      ..addAll(merged);
     _itemIndex.clear();
     for (var i = 0; i < _items.length; i++) {
       _itemIndex[_items[i].id] = i;
@@ -1283,51 +1281,63 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// position: the list corrects its own offset when content is prepended.
   Future<void> _loadOlder() async {
     if (_loadingOlder || !_hasOlder || _threadId == null) return;
-    final tid = _threadId!;
-    setState(() => _loadingOlder = true);
-    try {
-      final page = await ref
-          .read(bridgeApiProvider)
-          .appThreadOlderPage(widget.serviceKey, tid);
-      if (!mounted || _threadId != tid) return;
-      setState(() {
-        _spliceTranscriptItems(page.items, atStart: true);
-        _hasOlder = page.hasOlder;
-        _markTurnsLoaded(page.items);
-        _loadingOlder = false;
-      });
-    } catch (_) {
-      // Older history is an enhancement — a failure leaves the transcript as
-      // it is, and scrolling up again retries.
-      if (mounted) setState(() => _loadingOlder = false);
-    }
+    await _startHistoryLoad();
   }
 
   /// Fetch one turn's items, for jumping to a turn not yet scrolled back to.
   Future<void> _loadTurn(String turnId) async {
-    if (_loadingOlder || turnId.isEmpty || _threadId == null) return;
-    if (_turnSummaries.any((t) => t.turnId == turnId && t.loaded)) return;
+    final generation = _historyGeneration;
+    while (_historyLoad != null) {
+      await _historyLoad;
+      if (!mounted || _historyGeneration != generation) return;
+    }
+    if (turnId.isEmpty || _threadId == null) return;
+    // A tail-only page may have marked the turn loaded without its user row.
+    if (_items.any((item) => item.turnId == turnId && item.isUser)) return;
+    await _startHistoryLoad(turnId: turnId);
+  }
+
+  Future<void> _startHistoryLoad({String? turnId}) {
     final tid = _threadId!;
     setState(() => _loadingOlder = true);
+    return _historyLoad = _fetchHistory(tid, _historyGeneration, turnId);
+  }
+
+  Future<void> _fetchHistory(String tid, int generation, String? turnId) async {
+    bool current() => mounted && _historyGeneration == generation;
     try {
-      final items = await ref
-          .read(bridgeApiProvider)
-          .appThreadTurnItems(widget.serviceKey, tid, turnId);
-      if (!mounted || _threadId != tid) return;
+      final api = ref.read(bridgeApiProvider);
+      final page = turnId == null
+          ? await api.appThreadOlderPage(widget.serviceKey, tid)
+          : OlderPage(
+              items: await api.appThreadTurnItems(
+                widget.serviceKey,
+                tid,
+                turnId,
+              ),
+              hasOlder: _hasOlder,
+            );
+      if (!current()) return;
       setState(() {
-        _spliceTranscriptItems(items, atStart: false);
-        _markTurnsLoaded(items);
-        _loadingOlder = false;
+        _spliceTranscriptItems(page.items, atStart: turnId == null);
+        if (turnId == null) _hasOlder = page.hasOlder;
+        _markTurnsLoaded();
       });
     } catch (_) {
-      if (mounted) setState(() => _loadingOlder = false);
+      // Keep the existing transcript and let a later navigation retry.
+    } finally {
+      if (current()) {
+        setState(() {
+          _loadingOlder = false;
+          _historyLoad = null;
+        });
+      }
     }
   }
 
-  /// Mark every turn these items belong to as loaded, so the rail stops
-  /// treating it as a turn that still needs fetching.
-  void _markTurnsLoaded(List<ThreadItem> items) {
-    final arrived = items.map((i) => i.turnId).toSet();
+  /// A turn is navigable once its opening user row is present.
+  void _markTurnsLoaded() {
+    final arrived = _items.where((i) => i.isUser).map((i) => i.turnId).toSet();
     if (arrived.isEmpty) return;
     _turnSummaries = [
       for (final turn in _turnSummaries)
@@ -1390,6 +1400,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         _turnSummaries = history.turns;
         _hasOlder = history.hasOlder;
         _loadingOlder = false;
+        _historyLoad = null;
+        _historyGeneration++;
         // Restore the "thinking" state if a turn was still running when we
         // left: live events (delivered after resume) will finish rendering it.
         _streaming = history.running;
@@ -2977,6 +2989,12 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         ),
       );
     }
+    final snapshotIds = _turnSummaries.map((turn) => turn.turnId).toSet();
+    out.addAll(
+      _turnMinimapItemsFromRows(rows).where(
+        (turn) => turn.turnId.isEmpty || !snapshotIds.contains(turn.turnId),
+      ),
+    );
     return out;
   }
 
@@ -3030,12 +3048,15 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// Jump to a turn the rail selected, fetching it first when the transcript
   /// hasn't loaded it yet.
   Future<void> _selectTurn(TurnMinimapItem item) async {
+    final generation = _historyGeneration;
     if (item.rowIndex >= 0) {
       _scrollToRow(item.rowIndex);
       return;
     }
     await _loadTurn(item.turnId);
-    if (!mounted) return;
+    // Let the virtual list lay out inserted rows before navigating by index.
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted || _historyGeneration != generation) return;
     // Its row exists now that its items are in; re-derive to find where.
     final row = _turnMinimapItems(
       _rows,
@@ -3064,11 +3085,16 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       // Neither half has anything to show — an empty card that only occludes the
       // conversation. The tick stays; it just has no preview.
       if (user.isEmpty && reply == null) {
-        out.add(TurnMinimapItem(rowIndex: i, userText: ''));
+        out.add(TurnMinimapItem(rowIndex: i, turnId: row.turnId, userText: ''));
         continue;
       }
       out.add(
-        TurnMinimapItem(rowIndex: i, userText: user, assistantText: reply),
+        TurnMinimapItem(
+          rowIndex: i,
+          turnId: row.turnId,
+          userText: user,
+          assistantText: reply,
+        ),
       );
     }
     return out;
@@ -3112,9 +3138,12 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// conversation gets its rail immediately instead of only after enough of it
   /// has been scrolled back into memory. Falls back to the loaded user messages
   /// for a thread that arrived whole.
-  int get _turnCount => _turnSummaries.isNotEmpty
-      ? _turnSummaries.length
-      : _items.where((i) => i.isUser).length;
+  int get _turnCount {
+    if (_turnSummaries.isEmpty) return _items.where((i) => i.isUser).length;
+    final snapshotIds = _turnSummaries.map((turn) => turn.turnId).toSet();
+    return snapshotIds.length +
+        _items.where((i) => i.isUser && !snapshotIds.contains(i.turnId)).length;
+  }
 
   /// Whether the gutter rail can take turn navigation over at [available] width,
   /// so the corner arrows can stand down rather than offer the same thing twice.

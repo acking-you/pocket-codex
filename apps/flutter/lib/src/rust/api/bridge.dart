@@ -357,7 +357,8 @@ Future<ThreadHistoryDto> appThreadRead({
 
 /// One page further back through a paginated thread's history.
 ///
-/// Returns an empty page when the thread reads whole or is already at its start.
+/// Returns an empty page when the thread reads whole or is already at its
+/// start.
 Future<OlderPageDto> appThreadOlderPage({
   required String serviceKey,
   required String threadId,
