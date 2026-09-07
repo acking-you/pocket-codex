@@ -63,15 +63,7 @@ async fn run() -> Result<()> {
         };
         let notifications = tokio::spawn(async move { while events.recv().await.is_some() {} });
         println!("connection {round}");
-        request(
-            &client,
-            "initialize",
-            json!({
-                "clientInfo": {"name": "pocket-codex", "version": env!("CARGO_PKG_VERSION")},
-                "capabilities": {"experimentalApi": true}
-            }),
-        )
-        .await?;
+        client.initialize("pocket-codex", true).await?;
         for _ in 0..3 {
             let list =
                 request(&client, "thread/list", json!({"limit": 100, "sortKey": "updated_at"}))

@@ -96,17 +96,7 @@ async fn resume_into(app_ws_addr: SocketAddr, thread_id: &str) -> Result<()> {
         .await
         .context("connecting colocated app-server")?;
     client
-        .request(
-            "initialize",
-            json!({
-                "clientInfo": {
-                    "name": "pocket-codex-host-svc",
-                    "title": "Pocket-Codex",
-                    "version": env!("CARGO_PKG_VERSION"),
-                },
-                "capabilities": { "experimentalApi": true },
-            }),
-        )
+        .initialize("pocket-codex-host-svc", true)
         .await
         .context("app-server initialize")?;
     client

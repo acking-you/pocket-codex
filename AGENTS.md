@@ -354,7 +354,11 @@ The order below is our current best guess; it is not a contract.
 7. **Embedded codex (done).** Desktop builds compile codex in-process
    behind the `embedded-codex` feature, so a machine can host without a
    separate `codex` install; see §8.1 for the shims this requires.
-8. **Strongly-typed JSON-RPC client (next).** Replace the
+8. **App-server protocol sync (2026-09-07).** Codex fork merged upstream main
+   `db0568dbb`; CLI and UI share the acknowledged initialization handshake.
+   Flutter reads v2 accounts and current thread model/effort, and answers
+   asynchronous questions with `turn/steer` while running or `turn/start` when idle.
+   **Strongly-typed JSON-RPC client (next).** Replace the
    `serde_json::Value` surface in `pocket-codex-codex::protocol` with
    the upstream `codex-app-server-protocol` types so the Flutter UI
    gets compile-time-checked methods.

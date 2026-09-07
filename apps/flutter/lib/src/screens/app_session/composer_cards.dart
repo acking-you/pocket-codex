@@ -140,12 +140,20 @@ class _UserInputCardState extends State<UserInputCard> {
       if (a != null) answers[q.id] = [a];
     }
     setState(() => _submitting = true);
-    await widget.onAnswer(widget.prompt, answers);
+    try {
+      await widget.onAnswer(widget.prompt, answers);
+    } finally {
+      if (mounted) setState(() => _submitting = false);
+    }
   }
 
   Future<void> _cancel() async {
     setState(() => _submitting = true);
-    await widget.onAnswer(widget.prompt, const {});
+    try {
+      await widget.onAnswer(widget.prompt, const {});
+    } finally {
+      if (mounted) setState(() => _submitting = false);
+    }
   }
 
   @override

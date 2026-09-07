@@ -29,6 +29,7 @@ import 'package:pocket_codex/src/ide_context.dart';
 import 'package:pocket_codex/src/image_attachments.dart';
 import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/service_key.dart';
+import 'package:pocket_codex/src/screens/app_session/async_questions.dart';
 import 'package:pocket_codex/src/screens/app_session/activity_cards.dart';
 import 'package:pocket_codex/src/screens/app_session/composer_cards.dart';
 import 'package:pocket_codex/src/screens/app_session/transcript_model.dart';
@@ -200,6 +201,15 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   final List<TranscriptItem> _items = [];
   final Map<String, int> _itemIndex = {};
   int _localSeq = 0; // ids for optimistic local user messages
+  final Map<String, AsyncQuestionPrompt> _asyncQuestions = {};
+  Set<String> get _answeredAsyncQuestions =>
+      ref.read(answeredAsyncQuestionsProvider(widget.serviceKey));
+
+  void _markAsyncQuestionAnswered(String threadId, String itemId) {
+    ref.read(answeredAsyncQuestionsProvider(widget.serviceKey).notifier).state =
+        {..._answeredAsyncQuestions, '$threadId:$itemId'};
+  }
+
   final List<AppEvent> _approvals = []; // pending command-approval prompts
   StreamSubscription<AppEvent>? _sub;
 
@@ -975,6 +985,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       _historyLoad = null;
       _historyGeneration++;
       _approvals.clear();
+      _asyncQuestions.clear();
       _ctx = null;
       _diff = null;
       _branch = null;
@@ -1198,7 +1209,13 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   void _replaceTranscriptItems(List<ThreadItem> items) {
     _items.clear();
     _itemIndex.clear();
+    _asyncQuestions.clear();
     for (final item in items) {
+      final questions = AsyncQuestionPrompt.parse(item.id, item.questionsJson);
+      if (questions != null &&
+          !_answeredAsyncQuestions.contains('$_threadId:${item.id}')) {
+        _asyncQuestions[item.id] = questions;
+      }
       // Defensively collapse a back-to-back duplicate user message. A genuine
       // re-ask has the model's reply in between, so it remains distinct.
       if (item.itemType == 'userMessage' &&
@@ -1472,15 +1489,16 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         final hadPendingToggle = _plan != _planActive;
         _planActive = restored;
         if (!hadPendingToggle) _plan = _planActive;
-        // Restore the thread's current effort: prefer the server value (from the
-        // resume response), else the persisted store, else our per-thread
-        // memory. A pending pick (_effort) is left untouched — the chip shows
+        // A reported runtime model makes even a null effort authoritative.
+        // Only older servers without runtime metadata need the persisted value.
+        // A pending pick (_effort) is left untouched — the chip shows
         // `_effort ?? _effortActive`, so it survives a drop/reload unclobbered.
         final serverEffort = ReasoningEffort.fromWire(history.reasoningEffort);
-        _effortActive =
-            serverEffort ??
-            ReasoningEffort.fromWire(persisted.reasoningEffort) ??
-            (tid != null ? _effortByThread[_threadKey(tid)] : null);
+        _effortActive = history.model != null || history.configConfirmed
+            ? serverEffort
+            : serverEffort ??
+                  ReasoningEffort.fromWire(persisted.reasoningEffort) ??
+                  (tid != null ? _effortByThread[_threadKey(tid)] : null);
         // Drop a restored effort the restored model can't run (mirrors the guard
         // in _pickModel/_seedDefaults) so a stale persisted pairing never asserts
         // an unsupported level on the next turn.
@@ -1561,6 +1579,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       _error = null;
       _retry = null;
       _approvals.clear();
+      _asyncQuestions.clear();
     });
     _loadGit();
     _subscribeExternalWriter(threadId, epoch);
@@ -1763,6 +1782,15 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     if (e.requestId != null) {
       setState(() => _approvals.add(e));
       return;
+    }
+    if (e.kind == 'item/completed' &&
+        e.itemType == 'agentMessage' &&
+        e.itemId != null) {
+      final questions = AsyncQuestionPrompt.fromEvent(e);
+      if (questions != null &&
+          !_answeredAsyncQuestions.contains('$_threadId:${e.itemId}')) {
+        setState(() => _asyncQuestions[e.itemId!] = questions);
+      }
     }
     // Status-bar feeds: token usage + quota updates carry their data in `raw`
     // (map_event is a generic passthrough, so no item fields are set).
@@ -2858,6 +2886,44 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       // A dropped host between the elicitation and the answer must not surface an
       // uncaught async error.
       debugPrint('appRespondUserInput failed: $e');
+    }
+  }
+
+  Future<void> _answerAsyncInput(
+    AsyncQuestionPrompt prompt,
+    Map<String, List<String>> answers,
+  ) async {
+    final threadId = _threadId;
+    if (threadId == null || _sending || _reconnecting) return;
+    if (answers.isEmpty) {
+      setState(() {
+        _asyncQuestions.remove(prompt.id);
+        _markAsyncQuestionAnswered(threadId, prompt.id);
+      });
+      return;
+    }
+    final text = prompt.answerText(answers);
+    setState(() => _sending = true);
+    try {
+      final api = ref.read(bridgeApiProvider);
+      if (_streaming) {
+        final turnId = _turnId;
+        await api.appTurnSteer(widget.serviceKey, threadId, turnId, text);
+      } else {
+        await api.appTurnStart(widget.serviceKey, threadId, text);
+      }
+      if (!mounted || _threadId != threadId) return;
+      setState(() {
+        _asyncQuestions.remove(prompt.id);
+        _markAsyncQuestionAnswered(threadId, prompt.id);
+        _error = null;
+      });
+    } catch (e) {
+      if (mounted && _threadId == threadId) {
+        setState(() => _error = friendlyError(e));
+      }
+    } finally {
+      if (mounted) setState(() => _sending = false);
     }
   }
 
@@ -4611,6 +4677,25 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
               prompt: a,
               onDecide: _decide,
             ),
+        if (!_externalWriterMode && _asyncQuestions.isNotEmpty)
+          ConstrainedBox(
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.sizeOf(context).height * 0.4,
+            ),
+            child: SingleChildScrollView(
+              child: Column(
+                children: [
+                  for (final prompt in _asyncQuestions.values)
+                    UserInputCard(
+                      key: ValueKey('async-${prompt.id}'),
+                      prompt: prompt.cardEvent,
+                      onAnswer: (_, answers) =>
+                          _answerAsyncInput(prompt, answers),
+                    ),
+                ],
+              ),
+            ),
+          ),
         // After a plan-mode turn, offer to implement the plan (persists across
         // restart since it's derived from the trailing plan item).
         if (!_externalWriterMode && _planReady) _implementBar(l10n),

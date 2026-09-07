@@ -557,6 +557,8 @@ pub struct ThreadItemDto {
     pub title: String,
     /// Body / detail text.
     pub text: String,
+    /// Structured asynchronous questions on an agent message, as JSON.
+    pub questions_json: Option<String>,
     /// Image URLs attached to a `userMessage`: `data:image/...` URLs render
     /// inline; a host-local path (from a `localImage` input) renders as a
     /// filename chip. Empty for every other item kind.
@@ -903,6 +905,16 @@ pub fn app_thread_start(
     app_session::thread_start(&service_key, model, cwd, approval_policy, sandbox)
 }
 
+/// Append an asynchronous answer to the expected active turn.
+pub fn app_turn_steer(
+    service_key: String,
+    thread_id: String,
+    turn_id: Option<String>,
+    text: String,
+) -> Result<()> {
+    app_session::turn_steer(&service_key, &thread_id, turn_id.as_deref(), &text)
+}
+
 /// Answer a server approval request. `decision` is the wire value the session
 /// layer recognises: `accept` or `acceptForSession` to grant, any other value
 /// (e.g. `decline`) to decline.
@@ -945,6 +957,7 @@ fn item_dto(i: app_session::ThreadItem) -> ThreadItemDto {
         turn_id: i.turn_id,
         turn_completed_at: i.turn_completed_at,
         turn_duration_ms: i.turn_duration_ms,
+        questions_json: i.questions_json,
     }
 }
 
@@ -1271,6 +1284,7 @@ pub fn app_local_session_transcript(thread_id: String) -> Result<Vec<ThreadItemD
             turn_id: String::new(),
             turn_completed_at: None,
             turn_duration_ms: None,
+            questions_json: None,
         })
         .collect())
 }
@@ -1340,6 +1354,7 @@ fn meta_thread_item_dto(value: pocket_codex_host_svc::sessions::TranscriptItem) 
         turn_id: String::new(),
         turn_completed_at: None,
         turn_duration_ms: None,
+        questions_json: None,
     }
 }
 

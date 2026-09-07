@@ -805,6 +805,22 @@ class FakeBridgeApi implements BridgeApi {
     c.add(AppEvent(kind: 'turn/completed', threadId: threadId, raw: '{}'));
   }
 
+  String? lastSteerText;
+  String? lastSteerTurnId;
+  String? steerError;
+
+  @override
+  Future<void> appTurnSteer(
+    String serviceKey,
+    String threadId,
+    String? turnId,
+    String text,
+  ) async {
+    if (steerError != null) throw StateError(steerError!);
+    lastSteerText = text;
+    lastSteerTurnId = turnId;
+  }
+
   /// Records the last turn id passed to [appTurnInterrupt].
   String? lastInterruptTurnId;
   bool interrupted = false;
