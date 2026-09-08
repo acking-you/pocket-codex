@@ -632,7 +632,11 @@ class ThreadItem {
     this.turnId = '',
     this.turnCompletedAt,
     this.turnDurationMs,
+    this.questionsJson,
   });
+
+  /// Structured asynchronous questions from an agent message, as JSON.
+  final String? questionsJson;
 
   /// Item id.
   final String id;
@@ -1315,6 +1319,14 @@ abstract interface class BridgeApi {
     String? collaborationMode,
     String? reasoningEffort,
   });
+
+  /// Send an asynchronous answer to the expected active turn.
+  Future<void> appTurnSteer(
+    String serviceKey,
+    String threadId,
+    String? turnId,
+    String text,
+  );
 
   /// Interrupt the running turn. [turnId] (from the latest `turn/started`) is
   /// required by the server to identify which turn to abort.

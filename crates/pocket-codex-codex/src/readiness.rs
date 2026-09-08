@@ -247,18 +247,9 @@ pub async fn probe_rpc(ws_url: &str, budget: Duration) -> anyhow::Result<()> {
         tokio::time::timeout_at(deadline, crate::client::AppClient::connect(ws_url))
             .await
             .context("probe: websocket connect timed out")??;
-    tokio::time::timeout_at(
-        deadline,
-        client.request(
-            "initialize",
-            json!({
-                "clientInfo": {"name": "pocket-codex", "version": env!("CARGO_PKG_VERSION")},
-                "capabilities": {"experimentalApi": true}
-            }),
-        ),
-    )
-    .await
-    .context("probe: initialize timed out")??;
+    tokio::time::timeout_at(deadline, client.initialize("pocket-codex", true))
+        .await
+        .context("probe: initialize timed out")??;
     tokio::time::timeout_at(deadline, client.request("thread/list", json!({"limit": 1})))
         .await
         .context("probe: thread/list timed out")??;

@@ -42,7 +42,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.12.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -216609835;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -246576737;
 
 
 // Section: executor
@@ -1751,6 +1751,49 @@ fn wire__crate__api__bridge__app_turn_start_impl(
                             api_sandbox,
                             api_collaboration_mode,
                             api_reasoning_effort,
+                        )?;
+                        Ok(output_ok)
+                    })(),
+                )
+            }
+        },
+    )
+}
+fn wire__crate__api__bridge__app_turn_steer_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "app_turn_steer",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_service_key = <String>::sse_decode(&mut deserializer);
+            let api_thread_id = <String>::sse_decode(&mut deserializer);
+            let api_turn_id = <Option<String>>::sse_decode(&mut deserializer);
+            let api_text = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
+                    (move || {
+                        let output_ok = crate::api::bridge::app_turn_steer(
+                            api_service_key,
+                            api_thread_id,
+                            api_turn_id,
+                            api_text,
                         )?;
                         Ok(output_ok)
                     })(),
@@ -4000,6 +4043,7 @@ impl SseDecode for crate::api::bridge::ThreadItemDto {
         let mut var_itemType = <String>::sse_decode(deserializer);
         let mut var_title = <String>::sse_decode(deserializer);
         let mut var_text = <String>::sse_decode(deserializer);
+        let mut var_questionsJson = <Option<String>>::sse_decode(deserializer);
         let mut var_images = <Vec<String>>::sse_decode(deserializer);
         let mut var_turnId = <String>::sse_decode(deserializer);
         let mut var_turnCompletedAt = <Option<i64>>::sse_decode(deserializer);
@@ -4009,6 +4053,7 @@ impl SseDecode for crate::api::bridge::ThreadItemDto {
             item_type: var_itemType,
             title: var_title,
             text: var_text,
+            questions_json: var_questionsJson,
             images: var_images,
             turn_id: var_turnId,
             turn_completed_at: var_turnCompletedAt,
@@ -4216,77 +4261,78 @@ fn pde_ffi_dispatcher_primary_impl(
         },
         45 => wire__crate__api__bridge__app_turn_interrupt_impl(port, ptr, rust_vec_len, data_len),
         46 => wire__crate__api__bridge__app_turn_start_impl(port, ptr, rust_vec_len, data_len),
-        48 => wire__crate__api__bridge__codex_auth_status_impl(port, ptr, rust_vec_len, data_len),
-        49 => wire__crate__api__bridge__codex_locate_impl(port, ptr, rust_vec_len, data_len),
-        50 => wire__crate__api__bridge__codex_login_cancel_impl(port, ptr, rust_vec_len, data_len),
-        51 => wire__crate__api__bridge__codex_login_chatgpt_start_impl(
+        47 => wire__crate__api__bridge__app_turn_steer_impl(port, ptr, rust_vec_len, data_len),
+        49 => wire__crate__api__bridge__codex_auth_status_impl(port, ptr, rust_vec_len, data_len),
+        50 => wire__crate__api__bridge__codex_locate_impl(port, ptr, rust_vec_len, data_len),
+        51 => wire__crate__api__bridge__codex_login_cancel_impl(port, ptr, rust_vec_len, data_len),
+        52 => wire__crate__api__bridge__codex_login_chatgpt_start_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        52 => wire__crate__api__bridge__codex_logout_impl(port, ptr, rust_vec_len, data_len),
-        53 => {
+        53 => wire__crate__api__bridge__codex_logout_impl(port, ptr, rust_vec_len, data_len),
+        54 => {
             wire__crate__api__bridge__codex_prompt_variant_impl(port, ptr, rust_vec_len, data_len)
         },
-        54 => wire__crate__api__bridge__codex_set_prompt_variant_impl(
+        55 => wire__crate__api__bridge__codex_set_prompt_variant_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        55 => {
+        56 => {
             wire__crate__api__bridge__codex_setup_provider_impl(port, ptr, rust_vec_len, data_len)
         },
-        56 => wire__crate__api__bridge__codex_setup_status_impl(port, ptr, rust_vec_len, data_len),
-        57 => wire__crate__api__bridge__discover_services_impl(port, ptr, rust_vec_len, data_len),
-        58 => {
+        57 => wire__crate__api__bridge__codex_setup_status_impl(port, ptr, rust_vec_len, data_len),
+        58 => wire__crate__api__bridge__discover_services_impl(port, ptr, rust_vec_len, data_len),
+        59 => {
             wire__crate__api__bridge__embedded_codex_version_impl(port, ptr, rust_vec_len, data_len)
         },
-        59 => wire__crate__api__bridge__export_config_impl(port, ptr, rust_vec_len, data_len),
-        60 => wire__crate__api__bridge__get_config_impl(port, ptr, rust_vec_len, data_len),
-        62 => wire__crate__api__bridge__import_config_impl(port, ptr, rust_vec_len, data_len),
-        63 => wire__crate__api__simple__init_app_impl(port, ptr, rust_vec_len, data_len),
-        64 => wire__crate__api__bridge__init_bridge_impl(port, ptr, rust_vec_len, data_len),
-        65 => wire__crate__api__bridge__log_events_impl(port, ptr, rust_vec_len, data_len),
-        66 => wire__crate__api__bridge__meta_force_resume_impl(port, ptr, rust_vec_len, data_len),
-        67 => wire__crate__api__bridge__meta_list_dir_impl(port, ptr, rust_vec_len, data_len),
-        68 => wire__crate__api__bridge__meta_list_files_impl(port, ptr, rust_vec_len, data_len),
-        69 => wire__crate__api__bridge__meta_project_config_impl(port, ptr, rust_vec_len, data_len),
-        70 => wire__crate__api__bridge__meta_read_file_impl(port, ptr, rust_vec_len, data_len),
-        71 => {
+        60 => wire__crate__api__bridge__export_config_impl(port, ptr, rust_vec_len, data_len),
+        61 => wire__crate__api__bridge__get_config_impl(port, ptr, rust_vec_len, data_len),
+        63 => wire__crate__api__bridge__import_config_impl(port, ptr, rust_vec_len, data_len),
+        64 => wire__crate__api__simple__init_app_impl(port, ptr, rust_vec_len, data_len),
+        65 => wire__crate__api__bridge__init_bridge_impl(port, ptr, rust_vec_len, data_len),
+        66 => wire__crate__api__bridge__log_events_impl(port, ptr, rust_vec_len, data_len),
+        67 => wire__crate__api__bridge__meta_force_resume_impl(port, ptr, rust_vec_len, data_len),
+        68 => wire__crate__api__bridge__meta_list_dir_impl(port, ptr, rust_vec_len, data_len),
+        69 => wire__crate__api__bridge__meta_list_files_impl(port, ptr, rust_vec_len, data_len),
+        70 => wire__crate__api__bridge__meta_project_config_impl(port, ptr, rust_vec_len, data_len),
+        71 => wire__crate__api__bridge__meta_read_file_impl(port, ptr, rust_vec_len, data_len),
+        72 => {
             wire__crate__api__bridge__meta_read_thread_image_impl(port, ptr, rust_vec_len, data_len)
         },
-        72 => wire__crate__api__bridge__meta_retry_events_impl(port, ptr, rust_vec_len, data_len),
-        73 => wire__crate__api__bridge__meta_session_events_impl(port, ptr, rust_vec_len, data_len),
-        74 => {
+        73 => wire__crate__api__bridge__meta_retry_events_impl(port, ptr, rust_vec_len, data_len),
+        74 => wire__crate__api__bridge__meta_session_events_impl(port, ptr, rust_vec_len, data_len),
+        75 => {
             wire__crate__api__bridge__meta_session_liveness_impl(port, ptr, rust_vec_len, data_len)
         },
-        75 => wire__crate__api__bridge__meta_session_transcript_impl(
+        76 => wire__crate__api__bridge__meta_session_transcript_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        76 => wire__crate__api__bridge__meta_sessions_impl(port, ptr, rust_vec_len, data_len),
-        77 => wire__crate__api__bridge__meta_set_project_config_impl(
+        77 => wire__crate__api__bridge__meta_sessions_impl(port, ptr, rust_vec_len, data_len),
+        78 => wire__crate__api__bridge__meta_set_project_config_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        78 => {
+        79 => {
             wire__crate__api__bridge__meta_thread_config_get_impl(port, ptr, rust_vec_len, data_len)
         },
-        79 => {
+        80 => {
             wire__crate__api__bridge__meta_thread_config_set_impl(port, ptr, rust_vec_len, data_len)
         },
-        80 => wire__crate__api__bridge__meta_upload_file_impl(port, ptr, rust_vec_len, data_len),
-        81 => wire__crate__api__bridge__meta_write_file_impl(port, ptr, rust_vec_len, data_len),
-        82 => wire__crate__api__bridge__set_key_impl(port, ptr, rust_vec_len, data_len),
-        83 => wire__crate__api__bridge__set_locale_impl(port, ptr, rust_vec_len, data_len),
-        84 => wire__crate__api__bridge__set_relay_impl(port, ptr, rust_vec_len, data_len),
-        85 => wire__crate__api__bridge__subscriptions_impl(port, ptr, rust_vec_len, data_len),
+        81 => wire__crate__api__bridge__meta_upload_file_impl(port, ptr, rust_vec_len, data_len),
+        82 => wire__crate__api__bridge__meta_write_file_impl(port, ptr, rust_vec_len, data_len),
+        83 => wire__crate__api__bridge__set_key_impl(port, ptr, rust_vec_len, data_len),
+        84 => wire__crate__api__bridge__set_locale_impl(port, ptr, rust_vec_len, data_len),
+        85 => wire__crate__api__bridge__set_relay_impl(port, ptr, rust_vec_len, data_len),
+        86 => wire__crate__api__bridge__subscriptions_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -4301,8 +4347,8 @@ fn pde_ffi_dispatcher_sync_impl(
     match func_id {
         19 => wire__crate__api__bridge__app_is_connected_impl(ptr, rust_vec_len, data_len),
         41 => wire__crate__api__bridge__app_thread_runtime_config_impl(ptr, rust_vec_len, data_len),
-        47 => wire__crate__api__simple__bridge_version_impl(ptr, rust_vec_len, data_len),
-        61 => wire__crate__api__simple__greet_impl(ptr, rust_vec_len, data_len),
+        48 => wire__crate__api__simple__bridge_version_impl(ptr, rust_vec_len, data_len),
+        62 => wire__crate__api__simple__greet_impl(ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -4955,6 +5001,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::bridge::ThreadItemDto {
             self.item_type.into_into_dart().into_dart(),
             self.title.into_into_dart().into_dart(),
             self.text.into_into_dart().into_dart(),
+            self.questions_json.into_into_dart().into_dart(),
             self.images.into_into_dart().into_dart(),
             self.turn_id.into_into_dart().into_dart(),
             self.turn_completed_at.into_into_dart().into_dart(),
@@ -5654,6 +5701,7 @@ impl SseEncode for crate::api::bridge::ThreadItemDto {
         <String>::sse_encode(self.item_type, serializer);
         <String>::sse_encode(self.title, serializer);
         <String>::sse_encode(self.text, serializer);
+        <Option<String>>::sse_encode(self.questions_json, serializer);
         <Vec<String>>::sse_encode(self.images, serializer);
         <String>::sse_encode(self.turn_id, serializer);
         <Option<i64>>::sse_encode(self.turn_completed_at, serializer);

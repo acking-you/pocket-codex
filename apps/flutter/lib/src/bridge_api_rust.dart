@@ -468,6 +468,7 @@ class RustBridgeApi implements BridgeApi {
     turnId: i.turnId,
     turnCompletedAt: i.turnCompletedAt?.toInt(),
     turnDurationMs: i.turnDurationMs?.toInt(),
+    questionsJson: i.questionsJson,
   );
 
   @override
@@ -568,6 +569,19 @@ class RustBridgeApi implements BridgeApi {
     sandbox: sandbox,
     collaborationMode: collaborationMode,
     reasoningEffort: reasoningEffort,
+  );
+
+  @override
+  Future<void> appTurnSteer(
+    String serviceKey,
+    String threadId,
+    String? turnId,
+    String text,
+  ) => frb.appTurnSteer(
+    serviceKey: serviceKey,
+    threadId: threadId,
+    turnId: turnId,
+    text: text,
   );
 
   @override
@@ -675,6 +689,7 @@ class RustBridgeApi implements BridgeApi {
             turnId: i.turnId,
             turnCompletedAt: i.turnCompletedAt?.toInt(),
             turnDurationMs: i.turnDurationMs?.toInt(),
+            questionsJson: i.questionsJson,
           ),
         )
         .toList();
@@ -784,6 +799,7 @@ class RustBridgeApi implements BridgeApi {
             turnId: i.turnId,
             turnCompletedAt: i.turnCompletedAt?.toInt(),
             turnDurationMs: i.turnDurationMs?.toInt(),
+            questionsJson: i.questionsJson,
           ),
         )
         .toList();

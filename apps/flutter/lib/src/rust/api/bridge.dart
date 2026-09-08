@@ -302,6 +302,19 @@ Future<String> appThreadStart({
   sandbox: sandbox,
 );
 
+/// Append an asynchronous answer to the expected active turn.
+Future<void> appTurnSteer({
+  required String serviceKey,
+  required String threadId,
+  String? turnId,
+  required String text,
+}) => RustLib.instance.api.crateApiBridgeAppTurnSteer(
+  serviceKey: serviceKey,
+  threadId: threadId,
+  turnId: turnId,
+  text: text,
+);
+
 /// Answer a server approval request. `decision` is the wire value the session
 /// layer recognises: `accept` or `acceptForSession` to grant, any other value
 /// (e.g. `decline`) to decline.
@@ -2042,6 +2055,9 @@ class ThreadItemDto {
   /// Body / detail text.
   final String text;
 
+  /// Structured asynchronous questions on an agent message, as JSON.
+  final String? questionsJson;
+
   /// Image URLs attached to a `userMessage`: `data:image/...` URLs render
   /// inline; a host-local path (from a `localImage` input) renders as a
   /// filename chip. Empty for every other item kind.
@@ -2064,6 +2080,7 @@ class ThreadItemDto {
     required this.itemType,
     required this.title,
     required this.text,
+    this.questionsJson,
     required this.images,
     required this.turnId,
     this.turnCompletedAt,
@@ -2076,6 +2093,7 @@ class ThreadItemDto {
       itemType.hashCode ^
       title.hashCode ^
       text.hashCode ^
+      questionsJson.hashCode ^
       images.hashCode ^
       turnId.hashCode ^
       turnCompletedAt.hashCode ^
@@ -2090,6 +2108,7 @@ class ThreadItemDto {
           itemType == other.itemType &&
           title == other.title &&
           text == other.text &&
+          questionsJson == other.questionsJson &&
           images == other.images &&
           turnId == other.turnId &&
           turnCompletedAt == other.turnCompletedAt &&

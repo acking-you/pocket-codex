@@ -98,6 +98,9 @@ pub struct ThreadItem {
     pub title: String,
     /// Body / detail text (message content, command output, tool result…).
     pub text: String,
+    /// Live asynchronous questions retained for reconnects, as JSON.
+    /// Historical items alone must not introduce pending questions.
+    pub questions_json: Option<String>,
     /// Image URLs attached to a `userMessage`: `data:image/...` URLs render
     /// inline; a host-local path (from a `localImage` input) renders as a
     /// filename chip. Empty for every other item kind.
@@ -263,28 +266,10 @@ fn establish(service_key: String, local_addr: &str) -> Result<()> {
     // registrant alive, codex app-server gone) fails fast instead of hanging
     // the connecting UI forever.
     runtime::runtime().block_on(async {
-        tokio::time::timeout(
-            CONNECT_TIMEOUT,
-            client.request(
-                "initialize",
-                json!({
-                    "clientInfo": {
-                        "name": "pocket-codex",
-                        "title": "Pocket-Codex",
-                        "version": env!("CARGO_PKG_VERSION"),
-                    },
-                    // `experimentalApi` unlocks v2 features the UI relies on,
-                    // notably `turn/start.collaborationMode` (plan mode).
-                    // Without it the server rejects plan turns with
-                    // "turn/start.collaborationMode requires experimentalApi
-                    // capability".
-                    "capabilities": { "experimentalApi": true },
-                }),
-            ),
-        )
-        .await
-        .context("app-server initialize timed out")?
-        .context("app-server initialize")
+        tokio::time::timeout(CONNECT_TIMEOUT, client.initialize("pocket-codex", true))
+            .await
+            .context("app-server initialize timed out")?
+            .context("app-server initialize")
     })?;
 
     let (events_tx, _) = broadcast::channel::<AppEvent>(512);
@@ -383,12 +368,13 @@ fn buffer_item(transcript: &Mutex<HashMap<String, Vec<ThreadItem>>>, inbound: &I
             .map(|ms| ms / 1000),
         duration_ms: None,
     };
-    let parsed = if inbound.method == "turn/plan/updated" {
+    let mut parsed = if inbound.method == "turn/plan/updated" {
         ThreadItem {
             id: plan_item_id(params),
             item_type: "plan".to_string(),
             title: String::new(),
             text: encode_plan(params),
+            questions_json: None,
             images: Vec::new(),
             turn_id: live_turn.id.clone(),
             turn_completed_at: None,
@@ -403,6 +389,13 @@ fn buffer_item(transcript: &Mutex<HashMap<String, Vec<ThreadItem>>>, inbound: &I
         };
         parsed
     };
+    if inbound.method == "item/completed" {
+        parsed.questions_json = params
+            .get("item")
+            .and_then(|item| item.get("questions"))
+            .filter(|value| value.is_array())
+            .map(Value::to_string);
+    }
     if parsed.id.is_empty() {
         return;
     }
@@ -1739,9 +1732,15 @@ fn thread_read_inner(service_key: &str, thread_id: &str) -> Result<ThreadHistory
     // but the server omits them here — preserving their stream order so a
     // re-opened conversation shows the live progress instead of a blank turn.
     {
-        let seen: std::collections::HashSet<String> = items.iter().map(|i| i.id.clone()).collect();
+        let positions: HashMap<String, usize> = items
+            .iter()
+            .enumerate()
+            .map(|(index, item)| (item.id.clone(), index))
+            .collect();
         for buffered in buffered_items(service_key, thread_id) {
-            if !seen.contains(&buffered.id) {
+            if let Some(index) = positions.get(&buffered.id) {
+                items[*index].questions_json = buffered.questions_json;
+            } else {
                 items.push(buffered);
             }
         }
@@ -1774,8 +1773,8 @@ fn thread_read_inner(service_key: &str, thread_id: &str) -> Result<ThreadHistory
         .filter(|s| !s.is_empty())
         .map(str::to_string);
     // The runtime config (model / effort / permissions / collaboration mode)
-    // isn't on the thread/read response — it comes from the cached start/resume
-    // response, kept fresh by live `thread/settings/updated` notifications.
+    // comes from the cached start/resume response and live settings updates.
+    // The Thread fields below refresh model and effort on current servers.
     let runtime = thread_runtime_config(service_key, thread_id).unwrap_or_default();
     // Collaboration mode: the cache only ever learns it from a live settings
     // update; keep the forward-compatible read of the response in case a future
@@ -1792,15 +1791,8 @@ fn thread_read_inner(service_key: &str, thread_id: &str) -> Result<ThreadHistory
             .filter(|s| !s.is_empty())
             .map(str::to_string)
     });
-    // Reasoning effort: from the cache, with the same forward-compat fallback.
-    let reasoning_effort = runtime.reasoning_effort.clone().or_else(|| {
-        thread
-            .and_then(|t| t.get("reasoningEffort"))
-            .or_else(|| res.get("reasoningEffort"))
-            .and_then(Value::as_str)
-            .filter(|s| !s.is_empty())
-            .map(str::to_string)
-    });
+    let runtime = runtime_config_with_thread(runtime, thread);
+    let reasoning_effort = runtime.reasoning_effort.clone();
     Ok(ThreadHistory {
         items,
         running,
@@ -1818,6 +1810,26 @@ fn thread_read_inner(service_key: &str, thread_id: &str) -> Result<ThreadHistory
         has_older,
         turns: skeletons,
     })
+}
+
+// New servers expose these fields on Thread itself. Presence, including null,
+// takes precedence over cached start/resume values; older servers omit them.
+fn runtime_config_with_thread(
+    mut cached: ThreadRuntimeConfig,
+    thread: Option<&Value>,
+) -> ThreadRuntimeConfig {
+    if let Some(thread) = thread {
+        if let Some(model) = thread.get("model") {
+            cached.model = nonempty_str(Some(model));
+        }
+        if let Some(effort) = thread.get("reasoningEffort") {
+            cached.reasoning_effort = nonempty_str(Some(effort));
+        }
+        if let Some(provider) = thread.get("modelProvider") {
+            cached.model_provider = nonempty_str(Some(provider));
+        }
+    }
+    cached
 }
 
 /// A one-line gist of where a thread got to: the opening sentence of its most
@@ -2035,8 +2047,8 @@ pub fn parse_token_usage(usage: Option<&Value>) -> (Option<i64>, Option<i64>) {
 /// shape is nested and volatile, so the raw JSON is returned for Dart to parse.
 pub fn rate_limits(service_key: &str) -> Result<String> {
     let client = client_for(service_key)?;
-    // No-params method: the server types `params` as `Option<()>` and rejects an
-    // empty `{}` body, so omit `params` entirely.
+    // Omission remains supported by both the new capability-bearing request
+    // and older servers that required Option<()> here.
     let res = runtime::runtime().block_on(client.request_no_params("account/rateLimits/read"))?;
     Ok(res.to_string())
 }
@@ -2144,14 +2156,14 @@ fn is_login_server_bind_failure(e: &anyhow::Error) -> bool {
 /// [`login_chatgpt_start`] to learn when the browser flow completed.
 pub fn auth_status(service_key: &str) -> Result<(bool, Option<String>)> {
     let client = client_for(service_key)?;
-    // GetAuthStatusParams: both fields optional; `{}` reads status without a token.
-    let res = runtime::runtime().block_on(client.request("account/getAuthStatus", json!({})))?;
-    let method = res
-        .get("authMethod")
-        .and_then(Value::as_str)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string);
-    Ok((method.is_some(), method))
+    let res = runtime::runtime().block_on(client.request("account/read", json!({})))?;
+    Ok(auth_status_from_response(&res))
+}
+
+fn auth_status_from_response(res: &Value) -> (bool, Option<String>) {
+    let method = nonempty_str(res.get("account").and_then(|account| account.get("type")))
+        .map(|method| if method == "apiKey" { "apikey".into() } else { method });
+    (method.is_some(), method)
 }
 
 /// Cancel an in-flight browser login (identified by the `login_id` from
@@ -2302,6 +2314,40 @@ pub fn turn_start(
         }
     }
     runtime::runtime().block_on(client.request("turn/start", Value::Object(params)))?;
+    Ok(())
+}
+
+/// Deliver an asynchronous answer to the expected running turn.
+/// A stale turn id is reported to the caller instead of starting another turn.
+pub fn turn_steer(
+    service_key: &str,
+    thread_id: &str,
+    turn_id: Option<&str>,
+    text: &str,
+) -> Result<()> {
+    let (client, expected_turn) = {
+        let map = sessions().lock().unwrap_or_else(|e| e.into_inner());
+        let session = map
+            .get(service_key)
+            .ok_or_else(|| anyhow!("not connected to {service_key}"))?;
+        let tracked = session
+            .active_turns
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(thread_id)
+            .cloned();
+        (Arc::clone(&session.client), turn_id.map(Value::from).or(tracked))
+    };
+    let expected_turn =
+        expected_turn.context("the active turn is not available; reload the thread")?;
+    runtime::runtime().block_on(client.request(
+        "turn/steer",
+        json!({
+            "threadId": thread_id,
+            "expectedTurnId": expected_turn,
+            "input": build_turn_input(text, &[])?,
+        }),
+    ))?;
     Ok(())
 }
 
@@ -2578,6 +2624,7 @@ fn parse_turn_item(item: &Value, turn: &TurnStamp) -> Option<ThreadItem> {
         item_type,
         title,
         text,
+        questions_json: None,
         images: item_images(item),
         turn_id: turn.id.clone(),
         turn_completed_at: turn.completed_at,
@@ -3550,3 +3597,7 @@ mod tests {
         assert_eq!(stamp.duration_ms, None);
     }
 }
+
+#[cfg(test)]
+#[path = "app_session_protocol_tests.rs"]
+mod protocol_tests;

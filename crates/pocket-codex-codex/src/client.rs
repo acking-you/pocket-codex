@@ -254,6 +254,26 @@ impl AppClient {
         !self.closed.is_cancelled()
     }
 
+    /// Initialize this connection and acknowledge the server before sending
+    /// RPCs.
+    pub async fn initialize(&self, name: &str, experimental_api: bool) -> Result<Value> {
+        let response = self
+            .request(
+                "initialize",
+                serde_json::json!({
+                    "clientInfo": {
+                        "name": name,
+                        "title": "Pocket-Codex",
+                        "version": env!("CARGO_PKG_VERSION"),
+                    },
+                    "capabilities": { "experimentalApi": experimental_api },
+                }),
+            )
+            .await?;
+        self.notify("initialized", serde_json::json!({})).await?;
+        Ok(response)
+    }
+
     /// Answer a server→client request (identified by the `request_id` token
     /// from an [`Inbound`]) with `result`. No-op if the token is unknown.
     pub async fn respond(&self, token: &str, result: Value) -> Result<()> {
@@ -278,7 +298,7 @@ impl AppClient {
     }
 
     /// Like [`request`](Self::request) but omits the `params` field entirely.
-    /// A few methods (e.g. `account/rateLimits/read`) are typed no-params
+    /// A few methods (e.g. `account/logout`) are typed no-params
     /// upstream (`Option<()>`, skipped when absent) and reject an empty `{}`
     /// body as invalid params, so they must be sent with no `params` key.
     pub async fn request_no_params(&self, method: &str) -> Result<Value> {

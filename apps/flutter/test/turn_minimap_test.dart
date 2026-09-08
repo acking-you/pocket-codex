@@ -11,6 +11,7 @@ List<TurnMinimapItem> _items(int count) => [
   for (var i = 0; i < count; i++)
     TurnMinimapItem(
       rowIndex: i * 3,
+      turnId: 'turn-$i',
       userText: 'question $i',
       assistantText: 'answer $i',
     ),
@@ -47,17 +48,24 @@ Future<List<TurnMinimapItem>> _pump(
 }
 
 /// The rail's tick widgets, in transcript order.
-List<AnimatedContainer> _ticks(WidgetTester t) => t
-    .widgetList<AnimatedContainer>(
+List<Container> _ticks(WidgetTester t) => t
+    .widgetList<Container>(
       find.descendant(
         of: find.byType(TurnMinimap),
-        matching: find.byType(AnimatedContainer),
+        matching: find.byWidgetPredicate(
+          (widget) =>
+              widget is Container &&
+              widget.key is ValueKey<String> &&
+              (widget.key! as ValueKey<String>).value.startsWith(
+                'turn-minimap-tick-',
+              ),
+        ),
       ),
     )
     .toList();
 
 double _tickWidthAt(WidgetTester t, int index) =>
-    _ticks(t)[index].constraints!.maxWidth;
+    t.getSize(find.byKey(ValueKey('turn-minimap-tick-$index'))).width;
 
 /// Hover the rail at [fraction] of its height, which is how the widget resolves
 /// which tick the pointer is on.
@@ -208,7 +216,7 @@ void main() {
     await gesture.moveTo(const Offset(399, 599));
     await t.pumpAndSettle();
     expect(find.text('question 0'), findsNothing);
-    expect(_tickWidthAt(t, 0), 7);
+    expect(_tickWidthAt(t, 0), 6);
     expect(t.getSize(find.byKey(const Key('turn-minimap-rail'))).width, 40);
   });
 
@@ -224,7 +232,7 @@ void main() {
     await gesture.moveTo(Offset(rail.left + 200, rail.bottom - 2));
     await t.pumpAndSettle();
     expect(find.byKey(const Key('turn-minimap-preview')), findsNothing);
-    expect(_tickWidthAt(t, 0), 7);
+    expect(_tickWidthAt(t, 0), 6);
     expect(t.getSize(find.byKey(const Key('turn-minimap-rail'))).width, 40);
   });
 
@@ -236,41 +244,255 @@ void main() {
     );
     await t.pumpAndSettle();
     expect(find.byKey(const Key('turn-minimap-preview')), findsOneWidget);
-    expect(_tickWidthAt(t, 0), 22);
+    expect(_tickWidthAt(t, 0), 26);
   });
 
-  testWidgets('an on-screen turn is marked whatever the pointer is doing', (
+  for (final count in [4, 12, 400]) {
+    testWidgets('$count turns: padded rail ends remain clickable', (t) async {
+      final items = _items(count);
+      final selected = await _pump(t, items: items, height: 300);
+      final rail = t.getRect(find.byKey(const Key('turn-minimap-rail')));
+      final mouse = await _hoverTick(t, 0);
+      for (final (point, index) in [
+        (Offset(rail.left - 8, rail.top - 8), 0),
+        (Offset(rail.left - 8, rail.bottom + 8), count - 1),
+      ]) {
+        await mouse.moveTo(point);
+        await t.pumpAndSettle();
+        expect(find.text('question $index'), findsOneWidget);
+        await mouse.down(point);
+        await mouse.up();
+        await t.pumpAndSettle();
+        expect(selected.last, same(items[index]));
+      }
+      expect(selected, hasLength(2));
+    });
+
+    testWidgets('$count turns: crossing the gap keeps the preview target', (
+      t,
+    ) async {
+      final items = _items(count);
+      final selected = await _pump(t, items: items, height: 300);
+      final index = count ~/ 2;
+      final mouse = await _hoverTick(t, index / (count - 1));
+      final tick = t.getRect(find.byKey(ValueKey('turn-minimap-tick-$index')));
+      final gap = Offset(tick.right + 5, tick.center.dy + 8);
+      await mouse.moveTo(gap);
+      await t.pumpAndSettle();
+      expect(find.text('question $index'), findsOneWidget);
+      expect(_tickWidthAt(t, index), 26);
+      await mouse.down(gap);
+      await mouse.up();
+      await t.pumpAndSettle();
+      expect(selected.single, same(items[index]));
+      expect(find.byKey(const Key('turn-minimap-preview')), findsNothing);
+    });
+
+    for (final index in [0, count - 1]) {
+      testWidgets(
+        '$count turns: end preview $index accepts an imprecise click',
+        (t) async {
+          final items = _items(count);
+          final selected = await _pump(t, items: items, height: 300);
+          final rail = t.getRect(find.byKey(const Key('turn-minimap-rail')));
+          final mouse = await _hoverTick(t, index / (count - 1));
+          final card = t.getRect(find.byKey(const Key('turn-minimap-preview')));
+          final point = index == 0
+              ? Offset(card.right + 4, card.bottom + 4)
+              : Offset(card.right + 4, card.top - 4);
+          if (count == 4) {
+            expect(rail.contains(point), isFalse);
+          }
+          await mouse.moveTo(point);
+          await t.pumpAndSettle();
+          expect(find.text('question $index'), findsOneWidget);
+          await mouse.down(point);
+          await mouse.up();
+          await t.pumpAndSettle();
+          expect(selected.single, same(items[index]));
+        },
+      );
+    }
+  }
+
+  for (final hasTurnId in [true, false]) {
+    testWidgets(
+      'a preview keeps its target across row updates, turn id: $hasTurnId',
+      (t) async {
+        var items = [
+          for (var i = 0; i < 12; i++)
+            TurnMinimapItem(
+              rowIndex: i * 3,
+              userText: i == 0 ? 'question 5' : 'question $i',
+              assistantText: 'answer $i',
+              turnId: hasTurnId ? 'turn-$i' : '',
+              messageId: 'user-$i',
+            ),
+        ];
+        late StateSetter rebuild;
+        final selected = <TurnMinimapItem>[];
+        final visible = ValueNotifier<(int, int)?>(null);
+        addTearDown(visible.dispose);
+        await t.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: SizedBox(
+                width: 400,
+                height: 300,
+                child: StatefulBuilder(
+                  builder: (context, setState) {
+                    rebuild = setState;
+                    return TurnMinimap(
+                      items: items,
+                      visibleRange: visible,
+                      gutterWidth: 120,
+                      onSelect: selected.add,
+                    );
+                  },
+                ),
+              ),
+            ),
+          ),
+        );
+        final mouse = await _hoverTick(t, 5 / 11);
+        final card = t.getCenter(find.byKey(const Key('turn-minimap-preview')));
+        await mouse.moveTo(card);
+        await t.pumpAndSettle();
+        await mouse.down(card);
+        await t.pump(const Duration(milliseconds: 150));
+        rebuild(() {
+          items = [
+            const TurnMinimapItem(
+              rowIndex: 0,
+              userText: 'older',
+              turnId: 'older',
+            ),
+            for (final item in items)
+              TurnMinimapItem(
+                rowIndex: item.rowIndex + 20,
+                userText: item.userText,
+                assistantText: item.assistantText,
+                turnId: item.turnId,
+                messageId: item.messageId,
+              ),
+          ];
+        });
+        await t.pumpAndSettle();
+        expect(find.text('question 5'), findsOneWidget);
+        await mouse.up();
+        await t.pumpAndSettle();
+        expect(selected.single.turnId, hasTurnId ? 'turn-5' : '');
+        expect(selected.single.messageId, 'user-5');
+        expect(selected.single.rowIndex, 35);
+      },
+    );
+  }
+
+  testWidgets('a cancelled press does not jump', (t) async {
+    final selected = await _pump(t, items: _items(400), height: 300);
+    final mouse = await _hoverTick(t, 0.5);
+    final card = t.getCenter(find.byKey(const Key('turn-minimap-preview')));
+    await mouse.down(card);
+    await t.pump(const Duration(milliseconds: 150));
+    expect(selected, isEmpty);
+    await mouse.moveBy(const Offset(60, 0));
+    await mouse.up();
+    await t.pumpAndSettle();
+    expect(selected, isEmpty);
+  });
+
+  testWidgets('empty space beside a preview passes clicks to the transcript', (
     t,
   ) async {
-    // Position drives BOTH cues: the on-screen turns are inked strongly and
-    // bulge outward, so the rail's shape shows where you are and reshapes as you
-    // scroll. Hovering is a much larger widening on top, so the two remain
-    // distinguishable.
-    final items = _items(4);
+    var backgroundClicks = 0;
+    final selected = <TurnMinimapItem>[];
+    final visible = ValueNotifier<(int, int)?>(null);
+    addTearDown(visible.dispose);
+    await t.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 400,
+            height: 300,
+            child: Stack(
+              children: [
+                Positioned.fill(
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () => backgroundClicks++,
+                  ),
+                ),
+                Positioned.fill(
+                  child: TurnMinimap(
+                    items: _items(400),
+                    visibleRange: visible,
+                    gutterWidth: 120,
+                    onSelect: selected.add,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    await _hoverTick(t, 0);
+    final rail = t.getRect(find.byKey(const Key('turn-minimap-rail')));
+    await t.tapAt(Offset(rail.left + 200, rail.bottom - 2));
+    await t.pumpAndSettle();
+    expect(backgroundClicks, 1);
+    expect(selected, isEmpty);
+  });
+
+  testWidgets('hover takes over one position highlight and exit restores it', (
+    t,
+  ) async {
+    final items = _items(8);
     await _pump(
       t,
       items: items,
-      visible: (items[2].rowIndex, items[2].rowIndex),
+      visible: (items[2].rowIndex, items[6].rowIndex),
     );
 
-    final ticks = t
-        .widgetList<AnimatedContainer>(
-          find.descendant(
-            of: find.byType(TurnMinimap),
-            matching: find.byType(AnimatedContainer),
-          ),
-        )
-        .toList();
-    Color colorOf(int i) => (ticks[i].decoration! as BoxDecoration).color!;
-    // The visible turn is the strong mark; the others are quiet.
-    expect(colorOf(2).a, greaterThan(colorOf(0).a));
-    // …and it is wider, with nothing hovered: the shape alone says where you are.
-    expect(_tickWidthAt(t, 2), greaterThan(_tickWidthAt(t, 0)));
+    List<double> widths() => [
+      for (var i = 0; i < items.length; i++) _tickWidthAt(t, i),
+    ];
+    List<int> darkTicks() {
+      final ticks = _ticks(t);
+      final alphas = [
+        for (final tick in ticks) (tick.decoration! as BoxDecoration).color!.a,
+      ];
+      final strongest = alphas.reduce((a, b) => a > b ? a : b);
+      return [
+        for (var i = 0; i < alphas.length; i++)
+          if (alphas[i] == strongest) i,
+      ];
+    }
+
+    final resting = widths();
+    expect(resting, [6, 6, 13, 6, 6, 6, 6, 6]);
+    expect(darkTicks(), [2]);
+    final rail = t.getRect(find.byKey(const Key('turn-minimap-rail')));
+    final gesture = await _hoverTick(t, 1 / 7);
+    expect(widths(), [20, 26, 20, 14, 10, 6, 6, 6]);
+    expect(darkTicks(), [1]);
+
+    // Inspect rendered geometry before a transition could settle: the new
+    // pointed-at tick must already be the sole longest/darkest one.
+    await gesture.moveTo(Offset(rail.left + 4, rail.top + rail.height * 5 / 7));
+    await t.pump();
+    await t.pump(const Duration(milliseconds: 30));
+    expect(widths(), [6, 6, 10, 14, 20, 26, 20, 14]);
+    expect(darkTicks(), [5]);
+
+    await gesture.moveTo(const Offset(2000, 2000));
+    await t.pump();
+    expect(widths(), resting);
+    expect(darkTicks(), [2]);
+    expect(find.byKey(const Key('turn-minimap-preview')), findsNothing);
   });
 
   testWidgets('the rail reshapes as the transcript scrolls', (t) async {
-    // The bulge has to TRAVEL, not just exist — that is what makes the rail read
-    // as a position indicator rather than a static scale with one odd mark.
     final items = _items(5);
     final visible = ValueNotifier<(int, int)?>((
       items[1].rowIndex,
@@ -296,13 +518,19 @@ void main() {
     await t.pumpAndSettle();
     expect(_tickWidthAt(t, 1), greaterThan(_tickWidthAt(t, 4)));
 
+    // The user message can leave the viewport while its reply is still being
+    // read. Other visible turns must not take over that position marker.
+    visible.value = (items[1].rowIndex + 1, items[3].rowIndex);
+    await t.pumpAndSettle();
+    expect(_tickWidthAt(t, 1), greaterThan(_tickWidthAt(t, 3)));
+
     // Scroll to the end of the conversation.
     visible.value = (items[4].rowIndex, items[4].rowIndex);
     await t.pumpAndSettle();
     expect(
       _tickWidthAt(t, 4),
       greaterThan(_tickWidthAt(t, 1)),
-      reason: 'the bulge follows the viewport',
+      reason: 'the single position marker follows the viewport',
     );
   });
 
@@ -341,7 +569,7 @@ void main() {
   testWidgets('many turns compress instead of overflowing the window', (
     t,
   ) async {
-    // 200 turns at the nominal 8 px spacing would be a 1600 px rail in a 300 px
+    // 200 turns at the nominal 10 px spacing would be a 2000 px rail in a 300 px
     // window. The rail caps and the ticks pack tighter.
     await _pump(t, items: _items(200), height: 300);
     final rail = t.getRect(find.byKey(const Key('turn-minimap-rail')));

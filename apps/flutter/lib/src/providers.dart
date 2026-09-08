@@ -53,6 +53,11 @@ final sessionDefaultsProvider = StateProvider.family<SessionDefaults, String>(
   (ref, serviceKey) => const SessionDefaults(),
 );
 
+/// Answered or dismissed live questions, retained while the bridge can replay
+/// its connection buffer across screen navigation. Keys are threadId:itemId.
+final answeredAsyncQuestionsProvider =
+    StateProvider.family<Set<String>, String>((ref, serviceKey) => {});
+
 /// Current persisted config (relay + whether a key is set).
 final configProvider = FutureProvider<ConfigInfo>((ref) async {
   return ref.watch(bridgeApiProvider).getConfig();

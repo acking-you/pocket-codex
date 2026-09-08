@@ -23,7 +23,7 @@ async fn adopted_server(answer_list: bool, wildcard: bool) -> Result<(), Startup
         let mut ws = accept_async(listener.accept().await.expect("RPC connection").0)
             .await
             .expect("websocket handshake");
-        for method in ["initialize", "thread/list"] {
+        for method in ["initialize", "initialized", "thread/list"] {
             let text = ws
                 .next()
                 .await
@@ -33,6 +33,10 @@ async fn adopted_server(answer_list: bool, wildcard: bool) -> Result<(), Startup
                 .expect("text frame");
             let request: Value = serde_json::from_str(&text).expect("JSON request");
             assert_eq!(request["method"], method);
+            if method == "initialized" {
+                assert!(request.get("id").is_none());
+                continue;
+            }
             if method == "thread/list" && !answer_list {
                 std::future::pending::<()>().await;
             }

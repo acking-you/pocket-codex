@@ -1,3 +1,7 @@
+// The desktop host instantiates the embedded app-server's deeply nested
+// futures.
+#![recursion_limit = "256"]
+
 pub mod api;
 mod engine;
 mod frb_generated;

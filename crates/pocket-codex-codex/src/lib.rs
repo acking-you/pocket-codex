@@ -15,6 +15,8 @@
 //! decide whether to talk over stdio, a unix socket, or a websocket.
 
 #![forbid(unsafe_code)]
+// The embedded app-server's dispatch future exceeds the default layout-query depth.
+#![recursion_limit = "256"]
 
 /// The `deps/codex` submodule commit the embedded (自带) app-server was built
 /// from, baked at compile time by `build.rs`. codex's own crate version is a
