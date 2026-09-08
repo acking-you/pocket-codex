@@ -215,7 +215,7 @@ void main() {
     await gesture.moveTo(const Offset(399, 599));
     await t.pumpAndSettle();
     expect(find.text('question 0'), findsNothing);
-    expect(_tickWidthAt(t, 0), 7);
+    expect(_tickWidthAt(t, 0), 6);
     expect(t.getSize(find.byKey(const Key('turn-minimap-rail'))).width, 40);
   });
 
@@ -231,7 +231,7 @@ void main() {
     await gesture.moveTo(Offset(rail.left + 200, rail.bottom - 2));
     await t.pumpAndSettle();
     expect(find.byKey(const Key('turn-minimap-preview')), findsNothing);
-    expect(_tickWidthAt(t, 0), 7);
+    expect(_tickWidthAt(t, 0), 6);
     expect(t.getSize(find.byKey(const Key('turn-minimap-rail'))).width, 40);
   });
 
@@ -243,7 +243,7 @@ void main() {
     );
     await t.pumpAndSettle();
     expect(find.byKey(const Key('turn-minimap-preview')), findsOneWidget);
-    expect(_tickWidthAt(t, 0), 22);
+    expect(_tickWidthAt(t, 0), 26);
   });
 
   testWidgets('hover takes over one position highlight and exit restores it', (
@@ -272,11 +272,11 @@ void main() {
     }
 
     final resting = widths();
-    expect(resting, [7, 7, 13, 7, 7, 7, 7, 7]);
+    expect(resting, [6, 6, 13, 6, 6, 6, 6, 6]);
     expect(darkTicks(), [2]);
     final rail = t.getRect(find.byKey(const Key('turn-minimap-rail')));
     final gesture = await _hoverTick(t, 1 / 7);
-    expect(widths(), [15, 22, 15, 10, 7, 7, 7, 7]);
+    expect(widths(), [20, 26, 20, 14, 10, 6, 6, 6]);
     expect(darkTicks(), [1]);
 
     // Inspect rendered geometry before a transition could settle: the new
@@ -284,7 +284,7 @@ void main() {
     await gesture.moveTo(Offset(rail.left + 4, rail.top + rail.height * 5 / 7));
     await t.pump();
     await t.pump(const Duration(milliseconds: 30));
-    expect(widths(), [7, 7, 7, 10, 15, 22, 15, 10]);
+    expect(widths(), [6, 6, 10, 14, 20, 26, 20, 14]);
     expect(darkTicks(), [5]);
 
     await gesture.moveTo(const Offset(2000, 2000));
@@ -371,7 +371,7 @@ void main() {
   testWidgets('many turns compress instead of overflowing the window', (
     t,
   ) async {
-    // 200 turns at the nominal 8 px spacing would be a 1600 px rail in a 300 px
+    // 200 turns at the nominal 10 px spacing would be a 2000 px rail in a 300 px
     // window. The rail caps and the ticks pack tighter.
     await _pump(t, items: _items(200), height: 300);
     final rail = t.getRect(find.byKey(const Key('turn-minimap-rail')));

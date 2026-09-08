@@ -49,7 +49,7 @@ const int kTurnMinimapMinItems = 4;
 /// Nominal spacing between ticks. The rail's natural height is this times the
 /// gaps, then capped to the space available — past that the ticks compress and
 /// the rail stops growing.
-const double _kTickSpacing = 8;
+const double _kTickSpacing = 10;
 
 /// Left inset of the rail within the gutter. Exported because the transcript
 /// needs it to tell whether the gutter can hold the rail at all — with less than
@@ -80,14 +80,15 @@ const double _kPreviewWidth = 300;
 const double _kMinPreviewWidth = 150;
 const double _kMaxPreviewOverhang = 160;
 
-const double _kTickWidth = 7;
+const double _kTickWidth = 6;
 const double _kCurrentTickWidth = 13;
-const double _kPreviewTickWidth = 22;
+const double _kPreviewTickWidth = 26;
 
 double _hoverTickWidth(int distance) => switch (distance) {
   0 => _kPreviewTickWidth,
-  1 => 15,
-  2 => 10,
+  1 => 20,
+  2 => 14,
+  3 => 10,
   _ => _kTickWidth,
 };
 
@@ -405,9 +406,10 @@ class _TurnMinimapState extends State<TurnMinimap> {
                 : _kTickWidth,
             decoration: BoxDecoration(
               color: i == highlighted
-                  ? scheme.onSurface.withValues(alpha: 0.85)
-                  : scheme.onSurfaceVariant.withValues(alpha: 0.4),
-              borderRadius: BorderRadius.circular(1),
+                  ? scheme.onSurface
+                  : scheme.onSurface.withValues(
+                      alpha: scheme.brightness == Brightness.dark ? 0.15 : 0.25,
+                    ),
             ),
           ),
         ),
