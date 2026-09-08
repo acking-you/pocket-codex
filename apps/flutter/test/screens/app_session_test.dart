@@ -5097,6 +5097,108 @@ void main() {
     expect(find.textContaining('old', findRichText: true), findsOneWidget);
   });
 
+  for (final refreshAt in ['none', 'while pressed', 'after release']) {
+    testWidgets(
+      'external writer first-turn navigation survives snapshot refresh: $refreshAt',
+      (t) async {
+        final previousPlatform = debugDefaultTargetPlatformOverride;
+        debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+        try {
+          await t.binding.setSurfaceSize(const Size(1600, 900));
+          addTearDown(() => t.binding.setSurfaceSize(null));
+          const service = 'pcx:lb7666:app:default';
+          const thread = 'external-navigation';
+          final api =
+              FakeBridgeApi(
+                  config: const ConfigInfo(
+                    relay: 'lb7666.top:7666',
+                    hasKey: true,
+                  ),
+                )
+                ..appThreadResumeError = StateError(
+                  'thread already has an active writer',
+                );
+          await api.appConnect(service, 28080);
+          final items = [
+            for (var i = 0; i < 12; i++) ...[
+              ThreadItem(
+                id: 'user-$i',
+                itemType: 'userMessage',
+                title: '',
+                text: 'external question $i',
+              ),
+              ThreadItem(
+                id: 'reply-$i',
+                itemType: 'agentMessage',
+                title: '',
+                text: List.filled(20, 'reply $i').join('\n\n'),
+              ),
+            ],
+          ];
+          const liveness = SessionLiveness(
+            threadId: thread,
+            turnState: 'completed',
+            heldOpen: true,
+            safety: 'ownedIdle',
+            allowsResume: true,
+            requiresTakeover: true,
+            holders: [],
+          );
+          api.transcripts[thread] = items;
+          api.liveness[thread] = liveness;
+          await t.pumpWidget(
+            host(
+              const AppSessionScreen(serviceKey: service, threadId: thread),
+              api,
+            ),
+          );
+          await t.pumpAndSettle();
+          expect(find.byKey(const Key('chat-takeover-action')), findsOneWidget);
+          final scroll = t
+              .widget<MiddleClickScroll>(find.byType(MiddleClickScroll))
+              .controller;
+          expect(scroll.offset, greaterThan(500));
+          final rail = t.getRect(find.byKey(const Key('turn-minimap-rail')));
+          final mouse = await t.createGesture(kind: PointerDeviceKind.mouse);
+          await mouse.addPointer(location: Offset.zero);
+          addTearDown(mouse.removePointer);
+          final point = Offset(rail.left + 4, rail.top);
+          await mouse.moveTo(point);
+          await t.pumpAndSettle();
+          await mouse.down(point);
+          await t.pump(const Duration(milliseconds: 150));
+          if (refreshAt == 'while pressed') {
+            api.pushMetaSessionUpdate(
+              thread,
+              SessionFollowUpdate(liveness: liveness, items: [...items]),
+            );
+            await t.pumpAndSettle();
+          }
+          await mouse.up();
+          if (refreshAt == 'after release') {
+            api.pushMetaSessionUpdate(
+              thread,
+              SessionFollowUpdate(liveness: liveness, items: [...items]),
+            );
+          }
+          await mouse.moveTo(const Offset(1500, 850));
+          await t.pumpAndSettle();
+          expect(scroll.offset, lessThan(20));
+          expect(find.text('external question 0'), findsOneWidget);
+          final firstTick = t.widget<Container>(
+            find.byKey(const ValueKey('turn-minimap-tick-0')),
+          );
+          expect(firstTick.constraints!.maxWidth, 13);
+          expect(find.byKey(const Key('chat-takeover-action')), findsOneWidget);
+          expect(api.lastMetaResumedThread, isNull);
+          await t.pumpWidget(const SizedBox());
+        } finally {
+          debugDefaultTargetPlatformOverride = previousPlatform;
+        }
+      },
+    );
+  }
+
   testWidgets('Active writer stays in chat read-only, then can be taken over', (
     t,
   ) async {

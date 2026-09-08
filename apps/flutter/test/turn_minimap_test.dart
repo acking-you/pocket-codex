@@ -315,60 +315,78 @@ void main() {
     }
   }
 
-  testWidgets('a preview keeps its turn when loading changes rows and order', (
-    t,
-  ) async {
-    var items = _items(12);
-    late StateSetter rebuild;
-    final selected = <TurnMinimapItem>[];
-    final visible = ValueNotifier<(int, int)?>(null);
-    addTearDown(visible.dispose);
-    await t.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: SizedBox(
-            width: 400,
-            height: 300,
-            child: StatefulBuilder(
-              builder: (context, setState) {
-                rebuild = setState;
-                return TurnMinimap(
-                  items: items,
-                  visibleRange: visible,
-                  gutterWidth: 120,
-                  onSelect: selected.add,
-                );
-              },
+  for (final hasTurnId in [true, false]) {
+    testWidgets(
+      'a preview keeps its target across row updates, turn id: $hasTurnId',
+      (t) async {
+        var items = [
+          for (var i = 0; i < 12; i++)
+            TurnMinimapItem(
+              rowIndex: i * 3,
+              userText: i == 0 ? 'question 5' : 'question $i',
+              assistantText: 'answer $i',
+              turnId: hasTurnId ? 'turn-$i' : '',
+              messageId: 'user-$i',
+            ),
+        ];
+        late StateSetter rebuild;
+        final selected = <TurnMinimapItem>[];
+        final visible = ValueNotifier<(int, int)?>(null);
+        addTearDown(visible.dispose);
+        await t.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: SizedBox(
+                width: 400,
+                height: 300,
+                child: StatefulBuilder(
+                  builder: (context, setState) {
+                    rebuild = setState;
+                    return TurnMinimap(
+                      items: items,
+                      visibleRange: visible,
+                      gutterWidth: 120,
+                      onSelect: selected.add,
+                    );
+                  },
+                ),
+              ),
             ),
           ),
-        ),
-      ),
+        );
+        final mouse = await _hoverTick(t, 5 / 11);
+        final card = t.getCenter(find.byKey(const Key('turn-minimap-preview')));
+        await mouse.moveTo(card);
+        await t.pumpAndSettle();
+        await mouse.down(card);
+        await t.pump(const Duration(milliseconds: 150));
+        rebuild(() {
+          items = [
+            const TurnMinimapItem(
+              rowIndex: 0,
+              userText: 'older',
+              turnId: 'older',
+            ),
+            for (final item in items)
+              TurnMinimapItem(
+                rowIndex: item.rowIndex + 20,
+                userText: item.userText,
+                assistantText: item.assistantText,
+                turnId: item.turnId,
+                messageId: item.messageId,
+              ),
+          ];
+        });
+        await t.pumpAndSettle();
+        expect(find.text('question 5'), findsOneWidget);
+        await mouse.up();
+        await t.pumpAndSettle();
+        expect(selected.single.turnId, hasTurnId ? 'turn-5' : '');
+        expect(selected.single.messageId, 'user-5');
+        expect(selected.single.rowIndex, 35);
+      },
     );
-    final mouse = await _hoverTick(t, 5 / 11);
-    final card = t.getCenter(find.byKey(const Key('turn-minimap-preview')));
-    await mouse.moveTo(card);
-    await t.pumpAndSettle();
-    await mouse.down(card);
-    await t.pump(const Duration(milliseconds: 150));
-    rebuild(() {
-      items = [
-        const TurnMinimapItem(rowIndex: 0, userText: 'older', turnId: 'older'),
-        for (final item in items)
-          TurnMinimapItem(
-            rowIndex: item.rowIndex + 20,
-            userText: item.userText,
-            assistantText: item.assistantText,
-            turnId: item.turnId,
-          ),
-      ];
-    });
-    await t.pumpAndSettle();
-    expect(find.text('question 5'), findsOneWidget);
-    await mouse.up();
-    await t.pumpAndSettle();
-    expect(selected.single.turnId, 'turn-5');
-    expect(selected.single.rowIndex, 35);
-  });
+  }
 
   testWidgets('a cancelled press does not jump', (t) async {
     final selected = await _pump(t, items: _items(400), height: 300);

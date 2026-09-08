@@ -3151,13 +3151,21 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       // Neither half has anything to show — an empty card that only occludes the
       // conversation. The tick stays; it just has no preview.
       if (user.isEmpty && reply == null) {
-        out.add(TurnMinimapItem(rowIndex: i, turnId: row.turnId, userText: ''));
+        out.add(
+          TurnMinimapItem(
+            rowIndex: i,
+            turnId: row.turnId,
+            messageId: row.id,
+            userText: '',
+          ),
+        );
         continue;
       }
       out.add(
         TurnMinimapItem(
           rowIndex: i,
           turnId: row.turnId,
+          messageId: row.id,
           userText: user,
           assistantText: reply,
         ),

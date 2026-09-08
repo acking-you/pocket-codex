@@ -17,6 +17,7 @@ class TurnMinimapItem {
     required this.userText,
     this.assistantText,
     this.turnId = '',
+    this.messageId = '',
   });
 
   /// Index of this turn's user message in the transcript's row list — what the
@@ -28,6 +29,10 @@ class TurnMinimapItem {
   /// Id of the turn, so selecting a tick whose [rowIndex] is `-1` can fetch it.
   /// Empty when the caller derived entries from rows alone.
   final String turnId;
+
+  /// Stable user-message id for read-only transcripts that have no turn ids.
+  /// Keeps the same target across snapshot refreshes and row regrouping.
+  final String messageId;
 
   /// The user's own message, one line, whitespace already collapsed.
   final String userText;
@@ -164,9 +169,9 @@ class _TurnMinimapState extends State<TurnMinimap> {
   void didUpdateWidget(TurnMinimap old) {
     super.didUpdateWidget(old);
     final active = _active;
-    final turnId = active == null ? '' : old.items[active].turnId;
-    if (turnId.isNotEmpty) {
-      final index = widget.items.indexWhere((item) => item.turnId == turnId);
+    final item = active == null ? null : old.items[active];
+    if (item != null && (item.turnId.isNotEmpty || item.messageId.isNotEmpty)) {
+      final index = _indexOf(item);
       _active = index < 0 ? null : index;
       return;
     }
@@ -396,6 +401,12 @@ class _TurnMinimapState extends State<TurnMinimap> {
     if (next != null) widget.onPreview?.call(widget.items[next]);
   }
 
+  int _indexOf(TurnMinimapItem item) => widget.items.indexWhere((entry) {
+    if (item.turnId.isNotEmpty) return entry.turnId == item.turnId;
+    if (item.messageId.isNotEmpty) return entry.messageId == item.messageId;
+    return identical(entry, item);
+  });
+
   Widget _tapTarget({
     required int? Function(TapDownDetails) indexAt,
     required Widget child,
@@ -412,11 +423,7 @@ class _TurnMinimapState extends State<TurnMinimap> {
       if (item == null) return;
       // Loading a preview can replace entries and shift row indices between
       // press and release. Resolve the same turn in the latest list.
-      final index = widget.items.indexWhere(
-        (entry) => item.turnId.isNotEmpty
-            ? entry.turnId == item.turnId
-            : identical(entry, item),
-      );
+      final index = _indexOf(item);
       if (index >= 0) _select(index);
     },
     child: child,
