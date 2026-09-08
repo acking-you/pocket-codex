@@ -47,17 +47,24 @@ Future<List<TurnMinimapItem>> _pump(
 }
 
 /// The rail's tick widgets, in transcript order.
-List<AnimatedContainer> _ticks(WidgetTester t) => t
-    .widgetList<AnimatedContainer>(
+List<Container> _ticks(WidgetTester t) => t
+    .widgetList<Container>(
       find.descendant(
         of: find.byType(TurnMinimap),
-        matching: find.byType(AnimatedContainer),
+        matching: find.byWidgetPredicate(
+          (widget) =>
+              widget is Container &&
+              widget.key is ValueKey<String> &&
+              (widget.key! as ValueKey<String>).value.startsWith(
+                'turn-minimap-tick-',
+              ),
+        ),
       ),
     )
     .toList();
 
 double _tickWidthAt(WidgetTester t, int index) =>
-    _ticks(t)[index].constraints!.maxWidth;
+    t.getSize(find.byKey(ValueKey('turn-minimap-tick-$index'))).width;
 
 /// Hover the rail at [fraction] of its height, which is how the widget resolves
 /// which tick the pointer is on.
@@ -239,38 +246,55 @@ void main() {
     expect(_tickWidthAt(t, 0), 22);
   });
 
-  testWidgets('an on-screen turn is marked whatever the pointer is doing', (
+  testWidgets('hover takes over one position highlight and exit restores it', (
     t,
   ) async {
-    // Position drives BOTH cues: the on-screen turns are inked strongly and
-    // bulge outward, so the rail's shape shows where you are and reshapes as you
-    // scroll. Hovering is a much larger widening on top, so the two remain
-    // distinguishable.
-    final items = _items(4);
+    final items = _items(8);
     await _pump(
       t,
       items: items,
-      visible: (items[2].rowIndex, items[2].rowIndex),
+      visible: (items[2].rowIndex, items[6].rowIndex),
     );
 
-    final ticks = t
-        .widgetList<AnimatedContainer>(
-          find.descendant(
-            of: find.byType(TurnMinimap),
-            matching: find.byType(AnimatedContainer),
-          ),
-        )
-        .toList();
-    Color colorOf(int i) => (ticks[i].decoration! as BoxDecoration).color!;
-    // The visible turn is the strong mark; the others are quiet.
-    expect(colorOf(2).a, greaterThan(colorOf(0).a));
-    // …and it is wider, with nothing hovered: the shape alone says where you are.
-    expect(_tickWidthAt(t, 2), greaterThan(_tickWidthAt(t, 0)));
+    List<double> widths() => [
+      for (var i = 0; i < items.length; i++) _tickWidthAt(t, i),
+    ];
+    List<int> darkTicks() {
+      final ticks = _ticks(t);
+      final alphas = [
+        for (final tick in ticks) (tick.decoration! as BoxDecoration).color!.a,
+      ];
+      final strongest = alphas.reduce((a, b) => a > b ? a : b);
+      return [
+        for (var i = 0; i < alphas.length; i++)
+          if (alphas[i] == strongest) i,
+      ];
+    }
+
+    final resting = widths();
+    expect(resting, [7, 7, 13, 7, 7, 7, 7, 7]);
+    expect(darkTicks(), [2]);
+    final rail = t.getRect(find.byKey(const Key('turn-minimap-rail')));
+    final gesture = await _hoverTick(t, 1 / 7);
+    expect(widths(), [15, 22, 15, 10, 7, 7, 7, 7]);
+    expect(darkTicks(), [1]);
+
+    // Inspect rendered geometry before a transition could settle: the new
+    // pointed-at tick must already be the sole longest/darkest one.
+    await gesture.moveTo(Offset(rail.left + 4, rail.top + rail.height * 5 / 7));
+    await t.pump();
+    await t.pump(const Duration(milliseconds: 30));
+    expect(widths(), [7, 7, 7, 10, 15, 22, 15, 10]);
+    expect(darkTicks(), [5]);
+
+    await gesture.moveTo(const Offset(2000, 2000));
+    await t.pump();
+    expect(widths(), resting);
+    expect(darkTicks(), [2]);
+    expect(find.byKey(const Key('turn-minimap-preview')), findsNothing);
   });
 
   testWidgets('the rail reshapes as the transcript scrolls', (t) async {
-    // The bulge has to TRAVEL, not just exist — that is what makes the rail read
-    // as a position indicator rather than a static scale with one odd mark.
     final items = _items(5);
     final visible = ValueNotifier<(int, int)?>((
       items[1].rowIndex,
@@ -296,13 +320,19 @@ void main() {
     await t.pumpAndSettle();
     expect(_tickWidthAt(t, 1), greaterThan(_tickWidthAt(t, 4)));
 
+    // The user message can leave the viewport while its reply is still being
+    // read. Other visible turns must not take over that position marker.
+    visible.value = (items[1].rowIndex + 1, items[3].rowIndex);
+    await t.pumpAndSettle();
+    expect(_tickWidthAt(t, 1), greaterThan(_tickWidthAt(t, 3)));
+
     // Scroll to the end of the conversation.
     visible.value = (items[4].rowIndex, items[4].rowIndex);
     await t.pumpAndSettle();
     expect(
       _tickWidthAt(t, 4),
       greaterThan(_tickWidthAt(t, 1)),
-      reason: 'the bulge follows the viewport',
+      reason: 'the single position marker follows the viewport',
     );
   });
 

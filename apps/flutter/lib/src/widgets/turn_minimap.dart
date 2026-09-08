@@ -80,28 +80,16 @@ const double _kPreviewWidth = 300;
 const double _kMinPreviewWidth = 150;
 const double _kMaxPreviewOverhang = 160;
 
-/// Extra width a tick gets for being on screen, so the rail's shape shows where
-/// you are and reshapes as you scroll — the thumb of a scrollbar, drawn as a
-/// bulge in the scale.
-const double _kInViewBulge = 6;
+const double _kTickWidth = 7;
+const double _kCurrentTickWidth = 13;
+const double _kPreviewTickWidth = 22;
 
-/// Tick widths by distance from the hovered one: the pointed-at tick, its
-/// neighbours, then the rest. A falloff rather than a single highlight, so the
-/// rail reads as one object responding to the cursor instead of a row of
-/// independent marks.
-///
-/// [inView] adds [_kInViewBulge] on top. The two cues compose deliberately: the
-/// pointer's falloff is much larger, so a hovered tick still stands out from the
-/// on-screen band it may sit inside.
-double _tickWidth(int? distance, {bool inView = false}) {
-  final base = switch (distance) {
-    0 => 22.0,
-    1 => 15.0,
-    2 => 10.0,
-    _ => 7.0,
-  };
-  return inView ? base + _kInViewBulge : base;
-}
+double _hoverTickWidth(int distance) => switch (distance) {
+  0 => _kPreviewTickWidth,
+  1 => 15,
+  2 => 10,
+  _ => _kTickWidth,
+};
 
 /// A left-gutter rail of one tick per conversation turn: hover a tick to preview
 /// that turn, click to jump to it.
@@ -153,7 +141,7 @@ class TurnMinimap extends StatefulWidget {
 
 class _TurnMinimapState extends State<TurnMinimap> {
   /// The tick the pointer (or the keyboard) is on, or null when neither is.
-  /// Drives the width falloff and the preview.
+  /// Takes over the single position highlight and opens the preview.
   int? _active;
 
   /// Whether the pointer is anywhere near the rail. Only used to fade the rail
@@ -224,6 +212,20 @@ class _TurnMinimapState extends State<TurnMinimap> {
     if (count == 1) return 0;
     final progress = (localY / railHeight).clamp(0.0, 1.0);
     return (progress * (count - 1)).round().clamp(0, count - 1);
+  }
+
+  /// The turn containing the viewport's first row, even when its user message
+  /// has scrolled offscreen. Unloaded turns have no row to compare against.
+  int? _currentIndex((int, int)? range) {
+    if (range == null) return null;
+    int? current;
+    for (var i = 0; i < widget.items.length; i++) {
+      final row = widget.items[i].rowIndex;
+      if (row < 0) continue;
+      if (row > range.$1) return current ?? (row <= range.$2 ? i : null);
+      current = i;
+    }
+    return current;
   }
 
   void _move(int delta) {
@@ -359,9 +361,16 @@ class _TurnMinimapState extends State<TurnMinimap> {
           // No spine behind the ticks: it read as a stray vertical rule against
           // the page's left edge, and the ticks already line up into a scale on
           // their own.
-          child: Stack(
-            clipBehavior: Clip.none,
-            children: [..._ticks(railHeight, scheme), ?_preview(railHeight)],
+          child: ValueListenableBuilder<(int, int)?>(
+            valueListenable: widget.visibleRange,
+            child: _preview(railHeight),
+            builder: (context, range, preview) => Stack(
+              clipBehavior: Clip.none,
+              children: [
+                ..._ticks(railHeight, scheme, _active ?? _currentIndex(range)),
+                ?preview,
+              ],
+            ),
           ),
         ),
       ),
@@ -378,43 +387,28 @@ class _TurnMinimapState extends State<TurnMinimap> {
 
   /// The ticks. Each repaints on scroll through [TurnMinimap.visibleRange]
   /// alone, so following a streaming reply never rebuilds the transcript.
-  List<Widget> _ticks(double railHeight, ColorScheme scheme) {
-    final active = _active;
+  List<Widget> _ticks(double railHeight, ColorScheme scheme, int? highlighted) {
     return [
       for (var i = 0; i < widget.items.length; i++)
         Positioned(
           left: 0,
           top: railHeight * _fractionOf(i) - 1,
-          child: ValueListenableBuilder<(int, int)?>(
-            valueListenable: widget.visibleRange,
-            builder: (context, range, _) {
-              final row = widget.items[i].rowIndex;
-              final inView =
-                  range != null && row >= range.$1 && row <= range.$2;
-              final distance = active == null ? null : (i - active).abs();
-              return AnimatedContainer(
-                duration: const Duration(milliseconds: 150),
-                curve: Curves.easeOutCubic,
-                height: 2,
-                // Scrolling reshapes the rail, it does not only re-ink it. The
-                // on-screen turns bulge outward, so the rail carries a visible
-                // "you are here" band that travels as you scroll — which is the
-                // job a scrollbar thumb does, and the reason this sits where a
-                // scrollbar would. Ink alone was too quiet to read in passing.
-                width: _tickWidth(distance, inView: inView),
-                decoration: BoxDecoration(
-                  // Width and ink both track position; the hovered tick is the
-                  // widest thing on the rail, so the two cues stay legible
-                  // together rather than competing.
-                  color: inView
-                      ? scheme.onSurface.withValues(alpha: 0.85)
-                      : distance == 0
-                      ? scheme.onSurfaceVariant
-                      : scheme.onSurfaceVariant.withValues(alpha: 0.4),
-                  borderRadius: BorderRadius.circular(1),
-                ),
-              );
-            },
+          // Switch immediately so the pointed-at tick is always the longest,
+          // including while the pointer moves between ticks.
+          child: Container(
+            key: ValueKey('turn-minimap-tick-$i'),
+            height: 2,
+            width: _active != null
+                ? _hoverTickWidth((i - _active!).abs())
+                : i == highlighted
+                ? _kCurrentTickWidth
+                : _kTickWidth,
+            decoration: BoxDecoration(
+              color: i == highlighted
+                  ? scheme.onSurface.withValues(alpha: 0.85)
+                  : scheme.onSurfaceVariant.withValues(alpha: 0.4),
+              borderRadius: BorderRadius.circular(1),
+            ),
           ),
         ),
     ];
@@ -442,7 +436,7 @@ class _TurnMinimapState extends State<TurnMinimap> {
         ? -1.0
         : -0.5;
     // Clear of the widest tick, so the card never sits on the mark it describes.
-    final left = _tickWidth(0) + 10;
+    final left = _kPreviewTickWidth + 10;
     // The card is allowed to overhang the gutter — it has to be readable, and a
     // 300 px card cannot fit a 60 px margin — but not by so much that it buries
     // the conversation. Past this it narrows instead, and if it cannot stay
