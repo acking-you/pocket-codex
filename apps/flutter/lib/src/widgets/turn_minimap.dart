@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart' show ValueListenable;
+import 'package:flutter/gestures.dart' show PointerDeviceKind;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:pocket_codex/src/desktop_theme.dart';
@@ -60,9 +61,10 @@ const double kTurnMinimapRailInset = 12;
 /// the strip can never reach over the centred column and swallow a selection.
 const double _kHitStripMaxWidth = 40;
 
-/// How wide the pointer region grows while a preview is open, so travelling
-/// toward the card doesn't leave the strip and dismiss it.
-const double _kExpandedHitWidth = 352;
+/// Invisible tolerance around the rail ends and the preview card.
+const double _kRailHitPadding = 12;
+const double _kPreviewHitPadding = 8;
+const double _kPreviewGap = 10;
 
 /// Gutter at or above which the rail simply stays visible. Narrower than this
 /// there isn't room for it to rest without crowding the text, so it fades in on
@@ -150,7 +152,7 @@ class _TurnMinimapState extends State<TurnMinimap> {
   bool _hovering = false;
 
   final _focus = FocusNode(debugLabel: 'turn-minimap');
-  final _previewKey = GlobalKey();
+  TurnMinimapItem? _pressed;
 
   @override
   void dispose() {
@@ -161,6 +163,13 @@ class _TurnMinimapState extends State<TurnMinimap> {
   @override
   void didUpdateWidget(TurnMinimap old) {
     super.didUpdateWidget(old);
+    final active = _active;
+    final turnId = active == null ? '' : old.items[active].turnId;
+    if (turnId.isNotEmpty) {
+      final index = widget.items.indexWhere((item) => item.turnId == turnId);
+      _active = index < 0 ? null : index;
+      return;
+    }
     // A turn was removed (a rewind, a reload) — an index past the end would
     // otherwise resolve to nothing and leave a stuck preview.
     _active = _clampIndex(_active);
@@ -291,25 +300,37 @@ class _TurnMinimapState extends State<TurnMinimap> {
           (widget.items.length - 1) * _kTickSpacing,
         );
         final railHeight = math.min(natural, available);
+        final railTop = (constraints.maxHeight - railHeight) / 2;
         final open = _active != null;
-        return Align(
-          alignment: Alignment.centerLeft,
-          child: Padding(
-            // At the frame, where a scrollbar sits — see `_railLeft`.
-            padding: EdgeInsets.only(left: _railLeft),
+        final scheme = Theme.of(context).colorScheme;
+        return Focus(
+          focusNode: _focus,
+          onKeyEvent: _onKey,
+          onFocusChange: (has) =>
+              setState(() => _active = has ? (_active ?? 0) : null),
+          child: MouseRegion(
+            opaque: false,
+            hitTestBehavior: HitTestBehavior.deferToChild,
+            cursor: clickable,
+            onEnter: (event) {
+              setState(() => _hovering = true);
+              if (_active == null) {
+                _hoverAt(event.localPosition.dy - railTop, railHeight);
+              }
+            },
+            onExit: (_) => _leave(),
             child: AnimatedOpacity(
-              // A wide window has room to show the rail at rest; a narrow one
-              // would have it crowding the prose, so there it waits for the
-              // pointer to come looking.
               opacity: _persistent || _hovering || open ? 1 : 0,
               duration: const Duration(milliseconds: 150),
-              child: SizedBox(
-                key: const Key('turn-minimap-rail'),
-                height: railHeight,
-                // Only the resting strip takes the pointer; the preview extends
-                // past it and is allowed to overhang.
-                width: open ? _kExpandedHitWidth : hitWidth,
-                child: _rail(railHeight, hitWidth),
+              // Both hit targets live in the viewport, since a short rail can
+              // have a preview taller than itself. Empty space stays pass-through.
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  _rail(railHeight, railTop, hitWidth, scheme),
+                  _railTarget(railHeight, railTop, hitWidth),
+                  ?_preview(railHeight, railTop),
+                ],
               ),
             ),
           ),
@@ -318,65 +339,88 @@ class _TurnMinimapState extends State<TurnMinimap> {
     );
   }
 
-  Widget _rail(double railHeight, double hitWidth) {
-    final scheme = Theme.of(context).colorScheme;
-    return Focus(
-      focusNode: _focus,
-      onKeyEvent: _onKey,
-      onFocusChange: (has) =>
-          setState(() => _active = has ? (_active ?? 0) : null),
-      child: MouseRegion(
-        cursor: clickable,
-        onEnter: (_) => setState(() => _hovering = true),
-        onExit: (_) => _leave(),
-        onHover: (event) {
-          if (event.localPosition.dx > hitWidth) {
-            final card = _previewKey.currentContext?.findRenderObject();
-            // The expanded box also covers empty space beside other ticks.
-            // Only the actual card should keep a preview open off the rail.
-            if (card is RenderBox &&
-                card.hasSize &&
-                (Offset.zero & card.size).contains(
-                  card.globalToLocal(event.position),
-                )) {
-              return;
-            }
-            _leave();
-            return;
-          }
-          final next = _indexAt(event.localPosition.dy, railHeight);
-          if (next != _active) {
-            setState(() => _active = next);
-            if (next != null && next < widget.items.length) {
-              widget.onPreview?.call(widget.items[next]);
-            }
-          }
-        },
-        child: GestureDetector(
-          behavior: HitTestBehavior.translucent,
-          onTapDown: (details) {
-            if (details.localPosition.dx > hitWidth) return;
-            final index = _indexAt(details.localPosition.dy, railHeight);
-            if (index != null) _select(index);
-          },
-          // No spine behind the ticks: it read as a stray vertical rule against
-          // the page's left edge, and the ticks already line up into a scale on
-          // their own.
-          child: ValueListenableBuilder<(int, int)?>(
-            valueListenable: widget.visibleRange,
-            child: _preview(railHeight),
-            builder: (context, range, preview) => Stack(
-              clipBehavior: Clip.none,
-              children: [
-                ..._ticks(railHeight, scheme, _active ?? _currentIndex(range)),
-                ?preview,
-              ],
+  Widget _rail(
+    double railHeight,
+    double railTop,
+    double hitWidth,
+    ColorScheme scheme,
+  ) => Positioned(
+    left: _railLeft,
+    top: railTop,
+    width: hitWidth,
+    height: railHeight,
+    child: IgnorePointer(
+      child: SizedBox(
+        key: const Key('turn-minimap-rail'),
+        child: ValueListenableBuilder<(int, int)?>(
+          valueListenable: widget.visibleRange,
+          builder: (context, range, _) => Stack(
+            clipBehavior: Clip.none,
+            children: _ticks(
+              railHeight,
+              scheme,
+              _active ?? _currentIndex(range),
             ),
           ),
         ),
       ),
-    );
+    ),
+  );
+
+  Widget _railTarget(double railHeight, double railTop, double hitWidth) =>
+      Positioned(
+        left: 0,
+        top: railTop - _kRailHitPadding,
+        width: _railLeft + hitWidth,
+        height: railHeight + 2 * _kRailHitPadding,
+        child: MouseRegion(
+          onHover: (event) =>
+              _hoverAt(event.localPosition.dy - _kRailHitPadding, railHeight),
+          child: _tapTarget(
+            indexAt: (details) =>
+                details.kind == PointerDeviceKind.mouse && _active != null
+                ? _active
+                : _indexAt(
+                    details.localPosition.dy - _kRailHitPadding,
+                    railHeight,
+                  ),
+            child: const SizedBox.expand(),
+          ),
+        ),
+      );
+
+  void _hoverAt(double localY, double railHeight) {
+    final next = _indexAt(localY, railHeight);
+    if (next == _active) return;
+    setState(() => _active = next);
+    if (next != null) widget.onPreview?.call(widget.items[next]);
   }
+
+  Widget _tapTarget({
+    required int? Function(TapDownDetails) indexAt,
+    required Widget child,
+  }) => GestureDetector(
+    behavior: HitTestBehavior.opaque,
+    onTapDown: (details) {
+      final index = indexAt(details);
+      _pressed = index == null ? null : widget.items.elementAtOrNull(index);
+    },
+    onTapCancel: () => _pressed = null,
+    onTap: () {
+      final item = _pressed;
+      _pressed = null;
+      if (item == null) return;
+      // Loading a preview can replace entries and shift row indices between
+      // press and release. Resolve the same turn in the latest list.
+      final index = widget.items.indexWhere(
+        (entry) => item.turnId.isNotEmpty
+            ? entry.turnId == item.turnId
+            : identical(entry, item),
+      );
+      if (index >= 0) _select(index);
+    },
+    child: child,
+  );
 
   void _leave() {
     if (!_hovering && _active == null) return;
@@ -418,7 +462,7 @@ class _TurnMinimapState extends State<TurnMinimap> {
 
   /// The hover card, anchored to its tick rather than to the cursor, so it holds
   /// still while the pointer travels into it.
-  Widget? _preview(double railHeight) {
+  Widget? _preview(double railHeight, double railTop) {
     final active = _active;
     if (active == null) return null;
     final item = widget.items.elementAtOrNull(active);
@@ -438,7 +482,7 @@ class _TurnMinimapState extends State<TurnMinimap> {
         ? -1.0
         : -0.5;
     // Clear of the widest tick, so the card never sits on the mark it describes.
-    final left = _kPreviewTickWidth + 10;
+    const left = _kPreviewTickWidth + _kPreviewGap;
     // The card is allowed to overhang the gutter — it has to be readable, and a
     // 300 px card cannot fit a 60 px margin — but not by so much that it buries
     // the conversation. Past this it narrows instead, and if it cannot stay
@@ -447,11 +491,28 @@ class _TurnMinimapState extends State<TurnMinimap> {
     final width = math.min(_kPreviewWidth, room);
     if (width < _kMinPreviewWidth) return null;
     return Positioned(
-      left: left,
-      top: railHeight * fraction,
+      left: _railLeft + _kPreviewTickWidth,
+      // Compensate for the invisible padding to keep the visual anchor fixed.
+      top:
+          railTop +
+          railHeight * fraction -
+          _kPreviewHitPadding * (1 + 2 * align),
       child: FractionalTranslation(
         translation: Offset(0, align),
-        child: _TurnPreviewCard(key: _previewKey, item: item, width: width),
+        child: _tapTarget(
+          indexAt: (_) => _active,
+          child: Padding(
+            // The gap is part of the card's target: moving sideways latches the
+            // preview instead of scanning more tightly packed ticks on the way.
+            padding: const EdgeInsets.fromLTRB(
+              _kPreviewGap,
+              _kPreviewHitPadding,
+              _kPreviewHitPadding,
+              _kPreviewHitPadding,
+            ),
+            child: _TurnPreviewCard(item: item, width: width),
+          ),
+        ),
       ),
     );
   }
@@ -459,7 +520,7 @@ class _TurnMinimapState extends State<TurnMinimap> {
 
 /// The floating preview: what the user asked, and how the turn answered.
 class _TurnPreviewCard extends StatelessWidget {
-  const _TurnPreviewCard({super.key, required this.item, required this.width});
+  const _TurnPreviewCard({required this.item, required this.width});
 
   final TurnMinimapItem item;
 
