@@ -100,7 +100,7 @@ async fn resume_into(app_ws_addr: SocketAddr, thread_id: &str) -> Result<()> {
         .await
         .context("app-server initialize")?;
     client
-        .request("thread/resume", json!({ "threadId": thread_id }))
+        .request("thread/resume", json!({ "threadId": thread_id, "excludeTurns": true }))
         .await
         .context("thread/resume")?;
     Ok(())

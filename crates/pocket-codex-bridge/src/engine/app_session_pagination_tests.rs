@@ -59,6 +59,12 @@ fn mock_client(
                 let request: Value =
                     serde_json::from_str(&frame).expect("pagination test operation");
                 assert_eq!(request["method"], method);
+                if method == "thread/resume" {
+                    assert_eq!(
+                        request["params"]["excludeTurns"], true,
+                        "resume must not hydrate full history"
+                    );
+                }
                 socket
                     .send(Message::text(json!({"id": request["id"], "result": result}).to_string()))
                     .await
@@ -227,4 +233,59 @@ fn pending_summary_yields_on_a_single_async_worker() {
         assert_eq!(summary.await.expect("summary task").expect("summary"), None);
     });
     runtime::runtime().block_on(peer).expect("test peer");
+}
+
+#[test]
+fn resume_requests_metadata_and_retains_the_runtime_configuration() {
+    runtime::init(std::env::temp_dir()).expect("init runtime");
+    let (client, peer) = mock_client(vec![(
+        "thread/resume",
+        json!({
+            "thread": {"id": "thread"}, "model": "test-model", "reasoningEffort": "high"
+        }),
+    )]);
+    let session = TestSession::new(client);
+    thread_resume(&session.0, "thread").expect("resume");
+    assert_eq!(
+        thread_runtime_config(&session.0, "thread")
+            .expect("config")
+            .model
+            .as_deref(),
+        Some("test-model")
+    );
+    runtime::runtime().block_on(peer).expect("peer");
+}
+
+#[test]
+#[ignore = "manual: PCX_SOAK_WS and PCX_SOAK_THREAD_IDS select existing idle threads"]
+fn real_session_switch_soak() {
+    use std::time::Instant;
+    runtime::init(std::env::temp_dir()).expect("init runtime");
+    let addr = std::env::var("PCX_SOAK_WS").expect("PCX_SOAK_WS host:port");
+    let threads = std::env::var("PCX_SOAK_THREAD_IDS").expect("comma-separated idle thread ids");
+    let threads: Vec<&str> = threads.split(',').collect();
+    let rounds = std::env::var("PCX_SOAK_ROUNDS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(100);
+    let session = TestSession("session-switch-soak".into());
+    establish(session.0.clone(), &addr).expect("connect");
+    let mut times = Vec::new();
+    for i in 0..rounds {
+        let thread = threads[i % threads.len()];
+        let start = Instant::now();
+        thread_resume(&session.0, thread).expect("resume");
+        let history = thread_read(&session.0, thread).expect("history");
+        assert!(!history.items.is_empty(), "fixture should include a transcript");
+        assert!(is_connected(&session.0), "same connection survives every switch");
+        times.push(start.elapsed());
+    }
+    times.sort();
+    eprintln!(
+        "{rounds} switches, p50={:?}, p95={:?}, p99={:?}, max={:?}",
+        times[rounds / 2],
+        times[rounds * 95 / 100],
+        times[rounds * 99 / 100],
+        times.last().expect("samples")
+    );
 }

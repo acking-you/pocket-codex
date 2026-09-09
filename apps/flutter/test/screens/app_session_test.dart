@@ -4768,6 +4768,80 @@ void main() {
     expect(find.text('past chat'), findsNothing);
   });
 
+  for (final stage in ['resume', 'history']) {
+    testWidgets('rapid A B A switching ignores obsolete $stage results', (
+      t,
+    ) async {
+      final api = FakeBridgeApi(
+        config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+      );
+      await api.appConnect('pcx:lb7666:app:default', 28080);
+      api.appThreads.addAll([
+        const ThreadMeta(id: 'a', preview: 'chat A', cwd: '', updatedAt: 0),
+        const ThreadMeta(id: 'b', preview: 'chat B', cwd: '', updatedAt: 0),
+      ]);
+      final resume = Completer<void>();
+      final history = Completer<ThreadHistory>();
+      if (stage == 'resume') api.pendingResumes['a'] = [resume.future];
+      if (stage == 'history') api.pendingReads['a'] = [history.future];
+      api.readResult = const ThreadHistory(
+        items: [
+          ThreadItem(
+            id: 'fresh',
+            itemType: 'agentMessage',
+            title: '',
+            text: 'fresh transcript',
+          ),
+        ],
+        running: false,
+      );
+      t.view.devicePixelRatio = 1;
+      t.view.physicalSize = const Size(1200, 900);
+      addTearDown(t.view.reset);
+      await t.pumpWidget(
+        host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+      );
+      await t.pumpAndSettle();
+      await t.tap(find.text('chat A'));
+      await t.pump(const Duration(milliseconds: 50));
+      await t.tap(find.text('chat B'));
+      await t.pumpAndSettle();
+      await t.tap(find.text('chat A'));
+      await t.pumpAndSettle();
+      if (stage == 'resume') {
+        resume.complete();
+      } else {
+        history.complete(
+          const ThreadHistory(
+            items: [
+              ThreadItem(
+                id: 'stale',
+                itemType: 'agentMessage',
+                title: '',
+                text: 'obsolete transcript',
+              ),
+            ],
+            running: false,
+          ),
+        );
+      }
+      await t.pumpAndSettle();
+      expect(
+        find.textContaining('fresh transcript', findRichText: true),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('obsolete transcript', findRichText: true),
+        findsNothing,
+      );
+      expect(
+        api.threadReads.where((id) => id == 'a').length,
+        stage == 'resume' ? 1 : 2,
+      );
+      expect(t.takeException(), isNull);
+    });
+  }
+
   testWidgets('Sessions pane buttons switch threads without crashing', (
     t,
   ) async {

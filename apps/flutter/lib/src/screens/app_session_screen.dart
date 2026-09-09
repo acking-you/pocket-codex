@@ -422,6 +422,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   bool _settlingToEnd = false;
   String? _error;
   VoidCallback? _retry; // action for the error banner's retry button
+  int _threadLoadGeneration = 0;
   bool _connectionLost = false;
   // True while an automatic reconnect is in progress (drives the status bar's
   // "reconnecting" state). Auto-reconnect is attempted on stream close, on a
@@ -967,6 +968,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       ref.read(uiPrefsProvider.notifier).setLastThread(widget.serviceKey, tid);
     }
     _cancelExternalWriterSubscription();
+    _threadLoadGeneration++;
     setState(() {
       _threadId = tid;
       _cwd = cwd;
@@ -1369,9 +1371,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     ];
   }
 
-  /// Open an existing thread: resume it into the session (so reads and turns
-  /// resolve — otherwise the server returns "thread not found"), then load
-  /// its history.
+  /// Attach to an existing thread for live events and turns, then load history.
   Future<void> _resumeAndLoad() async {
     // Guard: a stale event (e.g. thread/compacted from a prior thread) can
     // arrive after switching to a new, unsaved conversation — don't `_threadId!`
@@ -1383,16 +1383,23 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       _retry = null;
     });
     final startTid = _threadId!;
+    final generation = ++_threadLoadGeneration;
+    bool current() =>
+        mounted && _threadId == startTid && generation == _threadLoadGeneration;
     try {
       final api = ref.read(bridgeApiProvider);
       await api.appThreadResume(widget.serviceKey, startTid);
+      // An obsolete resume must not fan out into more history/config requests.
+      if (!current()) return;
       // Read the thread history and its persisted config concurrently. The
       // config is best-effort (an unreachable host meta tunnel yields an
       // all-unset config and we fall back to the server / in-memory restore).
       final historyFuture = api.appThreadRead(widget.serviceKey, startTid);
       final persistedFuture = _loadPersistedConfig(startTid);
       final history = await historyFuture;
+      if (!current()) return;
       final persisted = await persistedFuture;
+      if (!current()) return;
       // Restore the model from the server's own report first (the resume
       // response says what the thread actually runs with); fall back to the
       // persisted pick for older servers that don't report one. Resolve the id
@@ -1410,7 +1417,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         }
       }
       // The user may have switched threads during the awaits above.
-      if (!mounted || _threadId != startTid) return;
+      if (!current()) return;
       setState(() {
         _loading = false;
         _replaceTranscriptItems(history.items);
@@ -1533,7 +1540,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       // events that would normally flush it were missed during the drop).
       _maybeFlushQueue();
     } catch (e) {
-      if (!mounted || _threadId != startTid) return;
+      if (!current()) return;
       if (_isActiveWriterError(e)) {
         _enterExternalWriterMode(startTid);
         return;

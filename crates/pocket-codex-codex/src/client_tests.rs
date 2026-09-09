@@ -55,43 +55,118 @@ async fn cancelling_a_request_removes_its_pending_entry() {
 }
 
 #[tokio::test]
-async fn rpc_timeout_closes_even_a_peer_that_keeps_sending_pongs() {
-    let (client, mut inbound, mut server) = connection().await;
+async fn slow_rpc_does_not_disconnect_other_requests_or_late_replies() {
+    let (client, _inbound, mut server) = connection().await;
     let peer = tokio::spawn(async move {
-        let mut tick = tokio::time::interval(Duration::from_millis(10));
-        loop {
-            tokio::select! {
-                frame = server.next() => match frame {
-                    Some(Ok(WsMessage::Text(_))) | Some(Ok(WsMessage::Ping(_))) => {},
-                    _ => break,
-                },
-                _ = tick.tick() => {
-                    if server.send(WsMessage::Pong(Vec::new().into())).await.is_err() {
-                        break;
-                    }
-                }
-            }
+        let mut requests = Vec::new();
+        for _ in 0..2 {
+            let frame = server
+                .next()
+                .await
+                .expect("frame")
+                .expect("read")
+                .into_text()
+                .expect("text");
+            requests.push(serde_json::from_str::<Value>(&frame).expect("json"));
         }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        for request in requests.into_iter().rev() {
+            server
+                .send(WsMessage::text(
+                    json!({"id": request["id"], "result": {"ok": true}}).to_string(),
+                ))
+                .await
+                .expect("reply");
+        }
+        let frame = server
+            .next()
+            .await
+            .expect("frame")
+            .expect("read")
+            .into_text()
+            .expect("text");
+        let request: Value = serde_json::from_str(&frame).expect("json");
+        server
+            .send(WsMessage::text(json!({"id": request["id"], "result": {"ok": true}}).to_string()))
+            .await
+            .expect("reply");
+        server
     });
-    let (timed_out, other) = tokio::join!(
-        client.request_inner("thread/list", Some(json!({})), Duration::from_millis(100)),
+    let (slow, other) = tokio::join!(
+        client.request_inner("thread/resume", Some(json!({})), Duration::from_millis(30)),
         client.request("thread/read", json!({"threadId": "other"})),
     );
-    assert!(timed_out
-        .expect_err("operation must fail")
-        .to_string()
-        .contains("timed out"));
-    assert!(other
-        .expect_err("operation must fail")
-        .to_string()
-        .contains("connection closed"));
-    assert!(!client.is_alive());
-    assert!(tokio::time::timeout(Duration::from_secs(1), inbound.recv())
+    let error = slow.expect_err("slow handler").to_string();
+    assert!(error.contains("timed out"), "{error}");
+    assert!(!error.contains("connection closed"), "{error}");
+    assert_eq!(other.expect("other request survives")["ok"], true);
+    assert!(client.is_alive());
+    assert_eq!(
+        client
+            .request("thread/list", json!({}))
+            .await
+            .expect("still usable")["ok"],
+        true
+    );
+    assert!(client.pending.lock().expect("pending").is_empty());
+    let _server = peer.await.expect("peer");
+}
+
+#[tokio::test]
+async fn large_history_frame_and_repeated_switches_keep_the_same_connection() {
+    let (client, _inbound, mut server) = connection().await;
+    let peer = tokio::spawn(async move {
+        for i in 0..100 {
+            let frame = server
+                .next()
+                .await
+                .expect("frame")
+                .expect("read")
+                .into_text()
+                .expect("text");
+            let request: Value = serde_json::from_str(&frame).expect("json");
+            let text = if i == 0 { "x".repeat(17 << 20) } else { i.to_string() };
+            server
+                .send(WsMessage::text(
+                    json!({"id": request["id"], "result": {"text": text}}).to_string(),
+                ))
+                .await
+                .expect("reply");
+        }
+        server
+    });
+    for i in 0..100 {
+        let reply = client
+            .request("thread/read", json!({"threadId": format!("t{}", i % 5)}))
+            .await
+            .expect("history");
+        assert_eq!(
+            reply["text"].as_str().expect("text").len(),
+            if i == 0 { 17 << 20 } else { i.to_string().len() }
+        );
+    }
+    let _server = peer.await.expect("peer");
+    assert!(client.is_alive());
+}
+
+#[tokio::test]
+async fn websocket_protocol_failure_preserves_the_underlying_reason() {
+    use tokio::io::AsyncWriteExt;
+    let (client, mut inbound, mut server) = connection().await;
+    // An unmasked, final reserved opcode is invalid regardless of payload.
+    server
+        .get_mut()
+        .write_all(&[0x83, 0x00])
         .await
-        .expect("test operation")
-        .is_none());
-    assert!(client.pending.lock().expect("test operation").is_empty());
-    peer.abort();
+        .expect("invalid frame");
+    assert!(inbound.recv().await.is_none());
+    let error = client
+        .request("thread/list", json!({}))
+        .await
+        .expect_err("invalid protocol")
+        .to_string();
+    assert!(error.contains("websocket read failed"), "{error}");
+    assert!(error.contains("invalid opcode"), "{error}");
 }
 
 #[tokio::test]
