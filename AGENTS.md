@@ -55,23 +55,17 @@ deps/
   codex/                   # acking-you/codex fork, branch `pocket-codex`
                            # (git submodule) = upstream openai/codex main +
                            # our adaptations; see §8
-  pb-mapper/               # upstream pb-mapper (git submodule)
-  kanal/                   # fork pinned to a known-good commit; transitively
-                           # required by pb-mapper, redirected via [patch]
-  uni-stream/              # ditto; transitively required by pb-mapper
 docs/                      # design notes, protocol references, CLI verification
 scripts/                   # install scripts, local CI, CI affected-surface gate
 ```
 
 `Cargo.toml` is a workspace root; every crate under `crates/` is a
 workspace member (see the `members` list for the canonical set).
-Submodules under `deps/` are kept **out** of the workspace via the
-`exclude` list — the pinned
-upstream crates use their own lints/profiles and we depend on them
-through explicit path or git deps where needed. The root manifest's
-`[patch]` table redirects `acking-you/kanal` and `acking-you/uni-stream`
-to the local submodules so the build stays reproducible across
-contributor checkouts and CI even after the upstream forks evolve.
+The Codex submodule under `deps/` is kept **out** of the workspace via the
+`exclude` list and retains its upstream lints/profiles. Cargo fetches pb-mapper
+from its dedicated `pocket-codex` Git branch; `Cargo.lock` pins the exact commit
+and its registry dependencies. No pb-mapper, kanal, or uni-stream submodules
+or local dependency patches are needed.
 
 ## 3. Crate responsibilities
 
@@ -81,7 +75,7 @@ Shared / host side:
 | --------------------------- | ---------------------------------------------------------------------------------------------- |
 | `pocket-codex-core`         | configuration schema, on-disk `state.toml`, well-known paths, error types, `service::{ServiceId, ServiceKind, sanitize_component, default_device_id}` for `pcx:<device>:<kind>:<name>` relay keys — small, dependency-light |
 | `pocket-codex-codex`        | spawning / supervising / inspecting the `codex app-server` child process (out-of-process *and* the in-process `embedded-codex` path), JSON-RPC envelope types |
-| `pocket-codex-pb`           | async wrappers around the published `pb-mapper` client SDK: `RelaySession` (address + credential), register / subscribe / status, `publish` (and the one name-conflict failure a caller must not retry), admin credential issuance, and credential keep-alive |
+| `pocket-codex-pb`           | async wrappers around the Git-pinned `pb-mapper` client SDK: `RelaySession` (address + credential), register / subscribe / status, `publish` (and the one name-conflict failure a caller must not retry), admin credential issuance, and credential keep-alive |
 | `pocket-codex-api-proxy`    | local Responses API proxy: forwards `/v1/responses` (HTTP + WS) to ChatGPT's Codex backend, reusing the host's `codex login`; shared by the CLI worker and the in-app host |
 | `pocket-codex-host-svc`     | host-side meta service — remote-viewable codex sessions, per-thread config, attachment upload — published on the relay as a third `meta:<name>` service |
 | `pocket-codex-cli`          | user-facing `pocket-codex` binary; account (`login` / `logout` / `account`), setup (`init`), high-level `serve` / `connect` / `api {serve,connect}` / `services {list,default set}` / `status` / `stop`, low-level `codex {start,stop,status}`, `pb {register,subscribe,status}`, `remote-hint`, `version` |
@@ -233,9 +227,12 @@ git checkout -- apps/flutter/pubspec.yaml   # restore before committing
 
 `deps/codex` is a git submodule pinned to a specific commit — the only one
 left. `deps/pb-mapper` (plus the `deps/kanal` and `deps/uni-stream` forks it
-pulled in transitively) is gone: pb-mapper is a registry dependency now, so its
-own transitive pins come from the lockfile rather than a mirrored `[patch]`
-table. After pulling this repo, materialise the submodule with:
+pulled in transitively) is gone. pb-mapper is a Cargo Git dependency on
+`https://github.com/acking-you/pb-mapper`, branch `pocket-codex`; `Cargo.lock`
+pins its exact commit. Push SDK fixes to that branch, then run
+`cargo update -p pb-mapper` here and commit the resulting lockfile after
+verification. Normal builds use `--locked` and do not automatically follow
+branch updates. After pulling this repo, materialise the Codex submodule with:
 
 ```bash
 git submodule update --init --recursive

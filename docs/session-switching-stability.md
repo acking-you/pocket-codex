@@ -86,23 +86,22 @@ cargo test -p pocket_codex_bridge real_session_switch_soak -- --ignored --nocapt
 
 ## 接入与验证边界
 
-Pocket-Codex 仍保留仓库原有的 registry 依赖 `pb-mapper = "0.5.0"`。
-pb-mapper 的源码修复在独立仓库；正式接入应先发布修复版本，再更新这里的依赖和
-Cargo.lock，不能提交只在当前机器成立的绝对路径依赖。本地联编可通过 Cargo 的
-`patch.crates-io.pb-mapper-client.path` 和 `patch.crates-io.pb-mapper-protocol.path`
-指向旁边的仓库；完成后恢复 registry lockfile。本轮已按此方式联编并通过上述 300 次切换验证。
-
-从 Pocket-Codex 根目录执行本地联编（需要相邻的 `../pb-mapper` checkout）：
+pb-mapper 修复已通过 [PR #10](https://github.com/acking-you/pb-mapper/pull/10)
+合入远端，并包含在供 Pocket-Codex 使用的 `pocket-codex` 分支中。
+Pocket-Codex 直接使用该 Git 分支，不再等待 crates.io 版本发布：
 
 ```sh
-cargo \
-  --config 'patch.crates-io.pb-mapper-client.path="../pb-mapper/crates/pb-mapper-client"' \
-  --config 'patch.crates-io.pb-mapper-protocol.path="../pb-mapper/crates/pb-mapper-protocol"' \
-  test --workspace --no-run
+cargo test --workspace --locked
 ```
 
-该命令会将 lockfile 的两个 registry 包临时解析到本地。运行前备份自己的
-Cargo.lock，测试完成后恢复备份；本轮工作树没有保留本地路径 lockfile。
+`Cargo.toml` 使用 `git = "https://github.com/acking-you/pb-mapper"` 和
+`branch = "pocket-codex"`；`Cargo.lock` 固定到包含本次修复的
+`f0ed4271de962b8759d11171bcf901aa6df458cc`。普通构建不会自动追随分支变化。
+以后将兼容修复推送到该分支，再在本仓库运行 `cargo update -p pb-mapper`，
+检查锁定提交并完成回归验证后提交 Cargo.lock。
+
+上述 300 次切换在该 Git 接入之前，使用相同修复源码的临时本地联编完成；
+现在正常依赖解析即可包含这些修复，无需绝对路径依赖或本地 patch。
 
 上述结果验证本地链路和隔离历史上的稳定性，不是公网延迟或长期在线 SLA。
 当前运行的旧桌面进程在调查中也出现过 `/readyz` 无响应；线程采样已保存，

@@ -1,4 +1,4 @@
-//! Async wrappers around the published `pb-mapper` client SDK.
+//! Async wrappers around the Git-pinned `pb-mapper` client SDK.
 //!
 //! ```text
 //!     Pocket-Codex helper           pb-mapper SDK entrypoint

@@ -20,8 +20,8 @@ members = [
 #
 # `deps/pb-mapper` used to sit here too, alongside the `deps/kanal` and
 # `deps/uni-stream` forks it pulled in transitively. All three are gone:
-# pb-mapper is a registry dependency now, so its own transitive pins are
-# its business rather than something this workspace has to mirror.
+# pb-mapper is fetched by Cargo from its dedicated Git branch; its transitive
+# dependencies are locked here without vendoring additional submodules.
 exclude = [
     "deps/codex",
     "apps/flutter",
@@ -41,12 +41,9 @@ readme = "README.md"
 # from here via `dep = { workspace = true }` so we have a single source
 # of truth for upgrades.
 [workspace.dependencies]
-# The pb-mapper client SDK, from the registry rather than the git submodule it
-# used to be. Pinned here so every consumer moves together: a client older than
-# the deployed relay cannot decode the relay's structured error frames, which is
-# how the 0.2.14-client/0.5.0-relay skew turned an over-quota refusal into an
-# unbacked-off reconnect storm.
-pb-mapper = "0.5.0"
+# The dedicated branch carries the SDK fixes used by Pocket-Codex. Cargo.lock
+# pins its exact commit; update it deliberately with `cargo update -p pb-mapper`.
+pb-mapper = { git = "https://github.com/acking-you/pb-mapper", branch = "pocket-codex" }
 
 # Internal crates
 pocket-codex-core = { path = "crates/pocket-codex-core" }
@@ -197,8 +194,8 @@ opt-level = 2
 # pb-mapper submodule. They existed because that submodule declared both as git
 # deps on `acking-you/*` branch HEADs, and one of those HEADs renamed a crate out
 # from under us — so both forks were vendored and re-routed to keep the build
-# reproducible. A registry dependency resolves its own transitive pins from the
-# lockfile, so none of that is our problem any more.
+# reproducible. The current SDK uses registry dependencies for both crates,
+# whose versions are recorded in Cargo.lock without local patches.
 
 # codex (deps/codex) requires forked tokio-tungstenite / tungstenite (they add a
 # `proxy` feature on the 0.28 line). The optional `embedded-codex` feature pulls
