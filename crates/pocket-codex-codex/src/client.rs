@@ -35,7 +35,9 @@ use tokio::{
     task::JoinHandle,
 };
 use tokio_tungstenite::{
-    connect_async, tungstenite::Message as WsMessage, MaybeTlsStream, WebSocketStream,
+    connect_async_with_config,
+    tungstenite::{protocol::WebSocketConfig, Message as WsMessage},
+    MaybeTlsStream, WebSocketStream,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -54,6 +56,9 @@ pub struct Inbound {
     /// [`AppClient::respond`]; `None` for notifications.
     pub request_id: Option<String>,
 }
+
+/// Largest accepted JSON-RPC message and frame.
+const MAX_MESSAGE_BYTES: usize = 64 << 20;
 
 /// Default per-request timeout. A model turn streams via notifications, so
 /// individual request/response round-trips (initialize, thread/start, …) are
@@ -87,6 +92,7 @@ pub struct AppClient {
     reader: JoinHandle<()>,
     keepalive: JoinHandle<()>,
     closed: CancellationToken,
+    close_reason: Arc<StdMutex<Option<String>>>,
 }
 
 impl Drop for AppClient {
@@ -100,7 +106,12 @@ impl AppClient {
     /// Connect to `ws_url` (e.g. `ws://127.0.0.1:28080`) and start the reader
     /// task. Returns the client plus the receiver of inbound notifications.
     pub async fn connect(ws_url: &str) -> Result<(Self, mpsc::UnboundedReceiver<Inbound>)> {
-        let (stream, _resp) = connect_async(ws_url)
+        // A JSON-RPC response is one frame. Match the message limit so valid
+        // legacy histories between 16 and 64 MiB do not close the connection.
+        let config = WebSocketConfig::default()
+            .max_frame_size(Some(MAX_MESSAGE_BYTES))
+            .max_message_size(Some(MAX_MESSAGE_BYTES));
+        let (stream, _resp) = connect_async_with_config(ws_url, Some(config), true)
             .await
             .with_context(|| format!("connecting app-server websocket {ws_url}"))?;
         let (sink, mut read) = stream.split();
@@ -115,18 +126,23 @@ impl AppClient {
         // live-but-quiet socket from a dead half-open one.
         let activity = Arc::new(AtomicU64::new(0));
         let closed = CancellationToken::new();
+        let close_reason = Arc::new(StdMutex::new(None));
 
         let reader_pending = Arc::clone(&pending);
         let reader_server_reqs = Arc::clone(&server_reqs);
         let reader_activity = Arc::clone(&activity);
         let reader_closed = closed.clone();
+        let reader_reason = close_reason.clone();
         let reader = tokio::spawn(async move {
             loop {
                 let frame = tokio::select! {
                     _ = reader_closed.cancelled() => break,
                     frame = read.next() => match frame {
                         Some(frame) => frame,
-                        None => break,
+                        None => {
+                            record_close_reason(&reader_reason, "peer ended the websocket stream".into());
+                            break;
+                        },
                     },
                 };
                 // Any frame — including the Pong answering our keepalive Ping —
@@ -135,7 +151,17 @@ impl AppClient {
                 let text = match frame {
                     Ok(WsMessage::Text(t)) => t.to_string(),
                     Ok(WsMessage::Binary(b)) => String::from_utf8_lossy(&b).into_owned(),
-                    Ok(WsMessage::Close(_)) | Err(_) => break,
+                    Ok(WsMessage::Close(frame)) => {
+                        record_close_reason(&reader_reason, format!("peer sent close: {frame:?}"));
+                        break;
+                    },
+                    Err(error) => {
+                        record_close_reason(
+                            &reader_reason,
+                            format!("websocket read failed: {error}"),
+                        );
+                        break;
+                    },
                     // Ping/Pong/Frame: nothing to dispatch.
                     Ok(_) => continue,
                 };
@@ -181,7 +207,7 @@ impl AppClient {
             }
             // Connection closed: fail every in-flight request so callers don't
             // hang on a oneshot that will never resolve.
-            close_connection(&reader_closed, &reader_pending);
+            close_connection(&reader_closed, &reader_pending, &reader_reason);
         });
 
         // Keepalive + liveness watchdog. Each tick pings (keeping the relay
@@ -196,6 +222,7 @@ impl AppClient {
         let keepalive_activity = Arc::clone(&activity);
         let keepalive_closed = closed.clone();
         let keepalive_pending = Arc::clone(&pending);
+        let keepalive_reason = close_reason.clone();
         let keepalive = tokio::spawn(async move {
             let mut tick = tokio::time::interval(KEEPALIVE_INTERVAL);
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -213,6 +240,10 @@ impl AppClient {
                     }) => sent,
                 };
                 if !matches!(sent, Ok(Ok(()))) {
+                    record_close_reason(
+                        &keepalive_reason,
+                        format!("websocket ping write failed: {sent:?}"),
+                    );
                     break;
                 }
                 // Give the Pong (or any traffic) a bounded window to arrive.
@@ -221,11 +252,14 @@ impl AppClient {
                     _ = tokio::time::sleep(LIVENESS_DEADLINE) => {},
                 }
                 if keepalive_activity.load(Ordering::Relaxed) == before {
-                    // No return frame within the deadline → half-open/dead.
+                    record_close_reason(
+                        &keepalive_reason,
+                        "websocket liveness deadline exceeded".into(),
+                    );
                     break;
                 }
             }
-            close_connection(&keepalive_closed, &keepalive_pending);
+            close_connection(&keepalive_closed, &keepalive_pending, &keepalive_reason);
             let _ = tokio::time::timeout(LIVENESS_DEADLINE, async {
                 keepalive_sink.lock().await.close().await
             })
@@ -241,13 +275,14 @@ impl AppClient {
                 reader,
                 keepalive,
                 closed,
+                close_reason,
             },
             notify_rx,
         ))
     }
 
     /// Whether the socket is still considered live. Goes `false` once the
-    /// reader closes, a write fails, a request times out, or the keepalive
+    /// reader closes, a write fails, or the keepalive
     /// watchdog sees silence past [`LIVENESS_DEADLINE`]. Higher layers poll
     /// this to reconnect instead of reusing an unresponsive connection.
     pub fn is_alive(&self) -> bool {
@@ -325,7 +360,7 @@ impl AppClient {
         let in_flight = {
             let mut pending = self.pending.lock().unwrap_or_else(|e| e.into_inner());
             if !self.is_alive() {
-                return Err(anyhow!("app-server connection closed"));
+                return Err(connection_error(&self.close_reason));
             }
             pending.insert(id.clone(), tx);
             pending.len()
@@ -345,12 +380,13 @@ impl AppClient {
 
         // Bound the write and sink lock too: a half-open peer can stop reading
         // before the request has even reached its response wait.
+        let mut sent = false;
         let exchange = async {
             self.send_frame(frame)
                 .await
                 .with_context(|| format!("sending request `{method}`"))?;
-            rx.await
-                .map_err(|_| anyhow!("app-server connection closed"))?
+            sent = true;
+            rx.await.map_err(|_| connection_error(&self.close_reason))?
         };
         match tokio::time::timeout(timeout, exchange).await {
             Ok(result) => {
@@ -372,12 +408,25 @@ impl AppClient {
                 result
             },
             Err(_) => {
-                close_connection(&self.closed, &self.pending);
+                // A slow handler is not a dead transport. Late responses are
+                // discarded by id; other requests and streaming keep working.
+                // A cancelled partial write, however, cannot safely be reused.
+                if !sent {
+                    record_close_reason(
+                        &self.close_reason,
+                        format!("request `{method}` write timed out"),
+                    );
+                    close_connection(&self.closed, &self.pending, &self.close_reason);
+                }
                 tracing::error!(
                     target: "pocket_codex_codex::rpc",
                     "<- {method} id={id} TIMED OUT after {:?}", started.elapsed()
                 );
-                Err(anyhow!("request `{method}` timed out; app-server connection closed"))
+                if sent {
+                    Err(anyhow!("request `{method}` timed out"))
+                } else {
+                    Err(connection_error(&self.close_reason))
+                }
             },
         }
     }
@@ -397,11 +446,11 @@ impl AppClient {
 
     async fn send_frame(&self, frame: String) -> Result<()> {
         if !self.is_alive() {
-            return Err(anyhow!("app-server connection closed"));
+            return Err(connection_error(&self.close_reason));
         }
         let result = tokio::select! {
             biased;
-            _ = self.closed.cancelled() => return Err(anyhow!("app-server connection closed")),
+            _ = self.closed.cancelled() => return Err(connection_error(&self.close_reason)),
             result = tokio::time::timeout(REQUEST_TIMEOUT, async {
                 self.sink.lock().await.send(WsMessage::text(frame)).await
             }) => result,
@@ -409,8 +458,12 @@ impl AppClient {
         match result {
             Ok(Ok(())) => Ok(()),
             result => {
-                close_connection(&self.closed, &self.pending);
-                Err(anyhow!("app-server connection closed while sending: {result:?}"))
+                record_close_reason(
+                    &self.close_reason,
+                    format!("websocket write failed: {result:?}"),
+                );
+                close_connection(&self.closed, &self.pending, &self.close_reason);
+                Err(connection_error(&self.close_reason))
             },
         }
     }
@@ -427,10 +480,27 @@ fn take_pending(pending: &Pending, id: &RequestId) -> Option<oneshot::Sender<Res
         .remove(&key)
 }
 
-fn close_connection(closed: &CancellationToken, pending: &Pending) {
+fn record_close_reason(reason: &StdMutex<Option<String>>, message: String) {
+    let mut reason = reason.lock().unwrap_or_else(|e| e.into_inner());
+    if reason.is_none() {
+        tracing::warn!(reason = %message, "app-server connection closed");
+        *reason = Some(message);
+    }
+}
+
+fn connection_error(reason: &StdMutex<Option<String>>) -> anyhow::Error {
+    let reason = reason.lock().unwrap_or_else(|e| e.into_inner());
+    anyhow!("app-server connection closed: {}", reason.as_deref().unwrap_or("connection ended"))
+}
+
+fn close_connection(
+    closed: &CancellationToken,
+    pending: &Pending,
+    reason: &StdMutex<Option<String>>,
+) {
     closed.cancel();
     for (_, tx) in pending.lock().unwrap_or_else(|e| e.into_inner()).drain() {
-        let _ = tx.send(Err(anyhow!("app-server connection closed")));
+        let _ = tx.send(Err(connection_error(reason)));
     }
 }
 

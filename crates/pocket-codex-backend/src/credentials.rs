@@ -50,15 +50,15 @@ struct Cached {
     expires_at: u64,
 }
 
+type AccountCache = Arc<Mutex<Option<Cached>>>;
+
 /// Mints and caches one relay credential per account.
 #[derive(Clone)]
 pub struct Credentials {
     relay: RelaySession,
-    /// Keyed by internal user id. A mutex rather than a lock-free map because
-    /// the contended path is a relay round trip, and holding the lock
-    /// across it is what stops a thundering herd of first-time requests
-    /// from minting one credential each.
-    cache: Arc<Mutex<HashMap<String, Cached>>>,
+    /// Serialize credential changes per account. A slow relay operation must
+    /// not block unrelated accounts from reading their cached credentials.
+    cache: Arc<Mutex<HashMap<String, AccountCache>>>,
 }
 
 impl Credentials {
@@ -83,17 +83,29 @@ impl Credentials {
     /// admin-side listing or retire to one account. `None` is not an error: an
     /// account with no credential has no services either.
     pub async fn namespace_of(&self, user_id: &str) -> anyhow::Result<Option<u64>> {
-        if let Some(cached) = self.cache.lock().await.get(user_id) {
-            return Ok(Some(cached.key_id));
+        let account = self.account(user_id).await;
+        let mut cached = account.lock().await;
+        if cached.is_none() {
+            *cached = self.adopt_from_relay(user_id).await?;
         }
-        Ok(self.adopt_from_relay(user_id).await?.map(|c| c.key_id))
+        Ok(cached.as_ref().map(|entry| entry.key_id))
+    }
+
+    async fn account(&self, user_id: &str) -> AccountCache {
+        self.cache
+            .lock()
+            .await
+            .entry(user_id.to_string())
+            .or_default()
+            .clone()
     }
 
     /// This account's credential, minting or renewing it if needed.
     ///
     /// Returns `(credential, expires_at)`.
     pub async fn for_account(&self, user_id: &str) -> anyhow::Result<(String, u64)> {
-        let mut cache = self.cache.lock().await;
+        let account = self.account(user_id).await;
+        let mut cache = account.lock().await;
         let now = now_secs();
         // Nothing in memory does NOT mean the account has no credential — this
         // process may just have restarted. Adopting the live one matters because
@@ -101,12 +113,12 @@ impl Credentials {
         // account, so devices still holding the old credential and devices
         // fetching after the restart would land in different namespaces and stop
         // seeing each other.
-        if !cache.contains_key(user_id) {
+        if cache.is_none() {
             if let Some(adopted) = self.adopt_from_relay(user_id).await? {
-                cache.insert(user_id.to_string(), adopted);
+                *cache = Some(adopted);
             }
         }
-        if let Some(cached) = cache.get(user_id) {
+        if let Some(cached) = cache.as_ref() {
             if cached.expires_at > now + RENEW_MARGIN.as_secs() && !cached.credential.is_empty() {
                 return Ok((cached.credential.clone(), cached.expires_at));
             }
@@ -123,19 +135,22 @@ impl Credentials {
                         key_id: renewed.key_id,
                         expires_at: renewed.expires_at,
                     };
-                    cache.insert(user_id.to_string(), entry.clone());
+                    *cache = Some(entry.clone());
                     return Ok((entry.credential, entry.expires_at));
                 },
                 Err(err) => {
-                    // Expired past renewal, revoked, or lost to a state reset.
-                    // Falling through to a fresh mint is the only way back, and
-                    // it is worth a log line because the account's namespace
-                    // changes with it.
+                    // A failed renewal can be a lost response or a temporary
+                    // relay failure. Only a successful listing that confirms
+                    // this key is gone justifies changing the namespace.
+                    let live = pocket_codex_pb::live_credentials(&self.relay).await?;
+                    if live.iter().any(|key| key.key_id == cached.key_id) {
+                        return Err(err);
+                    }
                     tracing::warn!(
                         user = %user_id,
                         key_id = cached.key_id,
                         error = %format!("{err:#}"),
-                        "renewing the relay credential failed; minting a new one"
+                        "relay confirmed the old credential is gone; minting a new one"
                     );
                 },
             }
@@ -151,7 +166,7 @@ impl Credentials {
             key_id: issued.key_id,
             expires_at: issued.expires_at,
         };
-        cache.insert(user_id.to_string(), entry.clone());
+        *cache = Some(entry.clone());
         Ok((entry.credential, entry.expires_at))
     }
 
@@ -162,10 +177,10 @@ impl Credentials {
     /// forgotten satisfies it. Dropping the cache entry is the part that must
     /// not be skipped, so it happens regardless.
     pub async fn revoke_account(&self, user_id: &str) {
-        let cached = match self.cache.lock().await.remove(user_id) {
+        let account = self.account(user_id).await;
+        let mut entry = account.lock().await;
+        let cached = match entry.take() {
             Some(cached) => Some(cached),
-            // Not in memory: it may still be live on the relay from before a
-            // restart, and "revoked" has to mean revoked.
             None => self.adopt_from_relay(user_id).await.ok().flatten(),
         };
         let Some(cached) = cached else { return };
@@ -234,3 +249,7 @@ fn now_secs() -> u64 {
         .map(|d| d.as_secs())
         .unwrap_or_default()
 }
+
+#[cfg(test)]
+#[path = "credentials_tests.rs"]
+mod tests;

@@ -661,6 +661,9 @@ class FakeBridgeApi implements BridgeApi {
 
   /// Records the last resumed thread id for assertions.
   String? lastResumed;
+  final Map<String, List<Future<void>>> pendingResumes = {};
+  final Map<String, List<Future<ThreadHistory>>> pendingReads = {};
+  final List<String> threadReads = [];
 
   /// Optional failure thrown by [appThreadResume].
   Object? appThreadResumeError;
@@ -669,6 +672,8 @@ class FakeBridgeApi implements BridgeApi {
   Future<void> appThreadResume(String serviceKey, String threadId) async {
     if (appThreadResumeError != null) throw appThreadResumeError!;
     lastResumed = threadId;
+    final pending = pendingResumes[threadId];
+    if (pending != null && pending.isNotEmpty) await pending.removeAt(0);
   }
 
   /// Seedable history for resume tests.
@@ -678,7 +683,12 @@ class FakeBridgeApi implements BridgeApi {
   Future<ThreadHistory> appThreadRead(
     String serviceKey,
     String threadId,
-  ) async => readResult;
+  ) async {
+    threadReads.add(threadId);
+    final pending = pendingReads[threadId];
+    if (pending != null && pending.isNotEmpty) return await pending.removeAt(0);
+    return readResult;
+  }
 
   /// Older pages a paginated thread hands back, oldest batch LAST — each call
   /// to [appThreadOlderPage] pops the last one, so seeding

@@ -221,16 +221,36 @@ fn sessions() -> &'static Mutex<HashMap<String, Session>> {
     SESSIONS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+// Weak entries serialize connect/disconnect for one service without keeping
+// obsolete services alive or holding the session registry over network I/O.
+fn lifecycle(service_key: &str) -> Arc<Mutex<()>> {
+    type Locks = Mutex<HashMap<String, std::sync::Weak<Mutex<()>>>>;
+    static LOCKS: OnceCell<Locks> = OnceCell::new();
+    let mut locks = LOCKS
+        .get_or_init(Mutex::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if let Some(lock) = locks.get(service_key).and_then(std::sync::Weak::upgrade) {
+        return lock;
+    }
+    locks.retain(|_, lock| lock.strong_count() > 0);
+    let lock = Arc::new(Mutex::new(()));
+    locks.insert(service_key.to_string(), Arc::downgrade(&lock));
+    lock
+}
+
 /// Subscribe to `service_key` (materialising the local ws endpoint), open a
 /// JSON-RPC client over it and run the `initialize` handshake. Idempotent: a
 /// live session for the same key is reused.
 pub fn connect(service_key: String, local_port: u16, transport: &Transport) -> Result<()> {
+    let lifecycle = lifecycle(&service_key);
+    let _guard = lifecycle.lock().unwrap_or_else(|e| e.into_inner());
     if reuse_live(&service_key) {
         return Ok(());
     }
     // No live session: drop any stale one (and its subscription) so we reconnect
     // cleanly rather than reusing a closed socket.
-    disconnect(&service_key);
+    disconnect_inner(&service_key);
     // Materialise the local ws endpoint via pb-mapper (kind-agnostic subscribe).
     let sub = runtime::subscribe_service(service_key.clone(), local_port, transport)?;
     establish(service_key, &sub.local_addr)
@@ -725,6 +745,12 @@ pub fn is_connected(service_key: &str) -> bool {
 
 /// Drop the session for `service_key` and its pb-mapper subscription.
 pub fn disconnect(service_key: &str) {
+    let lifecycle = lifecycle(service_key);
+    let _guard = lifecycle.lock().unwrap_or_else(|e| e.into_inner());
+    disconnect_inner(service_key);
+}
+
+fn disconnect_inner(service_key: &str) {
     sessions()
         .lock()
         .expect("sessions poisoned")
@@ -1225,8 +1251,9 @@ fn track_pending_approval(pending: &Mutex<HashMap<String, Value>>, inbound: &Inb
 /// view's gists are what break first.
 pub fn thread_resume(service_key: &str, thread_id: &str) -> Result<()> {
     let client = client_for(service_key)?;
-    let res = runtime::runtime()
-        .block_on(client.request("thread/resume", json!({ "threadId": thread_id })))?;
+    let res = runtime::runtime().block_on(
+        client.request("thread/resume", json!({ "threadId": thread_id, "excludeTurns": true })),
+    )?;
     // The resume response carries the thread's effective runtime config —
     // model, modelProvider, reasoningEffort, approvalPolicy, sandbox — none of
     // which `thread/read` exposes. Refresh the cache unconditionally: the

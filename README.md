@@ -68,7 +68,7 @@ or a per-account GitHub login (hosted).
 | ------------------------------ | -------------------------------------- |
 | Workspace / lints / CI         | bootstrapped                           |
 | `pocket-codex` CLI             | `login`, `logout`, `account`, `init`, `serve`, `connect`, `api {serve,connect}`, `services {list,default set}`, top-level `status`/`stop`, `codex {start,stop,status}`, `pb {register,subscribe,status}`, `remote-hint`, `version` |
-| `pb-mapper` register/subscribe | the published `pb-mapper` client SDK   |
+| `pb-mapper` register/subscribe | Git SDK from the `pocket-codex` branch, pinned by `Cargo.lock`; includes connection timeout and interactive TCP latency fixes |
 | `codex app-server` supervision | spawn/stop/status via PID + state.toml |
 | App-server protocol | synced to upstream main `db0568dbb` (2026-09-07); acknowledged initialization, v2 account reads, current thread model/effort, and asynchronous question replies |
 | Embedded codex (desktop)       | desktop builds compile codex **in-process** behind the `embedded-codex` feature, so a machine can host without a separate `codex` install (Windows/macOS) |
