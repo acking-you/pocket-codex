@@ -30,16 +30,17 @@ Future<void> setKey({required String key}) =>
 Future<void> setLocale({required String locale}) =>
     RustLib.instance.api.crateApiBridgeSetLocale(locale: locale);
 
-/// Detect whether the 自带 codex has a usable provider + credentials. Drives
-/// the first-run setup wizard: `needs_setup` is `true` when neither a login nor
-/// a custom provider is configured.
+/// Detect whether the external codex has a usable provider + credentials.
+/// Drives the first-run setup wizard: `needs_setup` is `true` when neither a
+/// login nor a custom provider is configured.
 Future<CodexSetupStatusDto> codexSetupStatus() =>
     RustLib.instance.api.crateApiBridgeCodexSetupStatus();
 
 /// Configure a minimal custom OpenAI-compatible provider (base URL + API key)
-/// for the 自带 codex, writing `$CODEX_HOME/config.toml`. No `codex login` is
-/// needed — the key rides as the provider's bearer token. `model` is optional
-/// (defaults to a sensible model). Takes effect on the next hosting start.
+/// for the external codex, writing `$CODEX_HOME/config.toml`. No `codex login`
+/// is needed — the key rides as the provider's bearer token. `model` is
+/// optional (defaults to a sensible model). Takes effect on the next hosting
+/// start.
 Future<void> codexSetupProvider({
   required String baseUrl,
   required String apiKey,
@@ -50,12 +51,12 @@ Future<void> codexSetupProvider({
   model: model,
 );
 
-/// The active 自带-codex system-prompt variant (`default` / `non_degraded` /
-/// `custom`).
+/// The active external-codex system-prompt variant (`default` / `non_degraded`
+/// / `custom`).
 Future<String> codexPromptVariant() =>
     RustLib.instance.api.crateApiBridgeCodexPromptVariant();
 
-/// Switch the 自带-codex system prompt. `non_degraded` swaps in the bundled
+/// Switch the external-codex system prompt. `non_degraded` swaps in the bundled
 /// prompt that drops the commentary / intermediary-update mandates (which can
 /// starve reasoning, see openai/codex#30364); `default` restores codex's
 /// built-in prompt. Takes effect for threads started after the change.
@@ -89,7 +90,8 @@ Future<void> codexLoginCancel({
   loginId: loginId,
 );
 
-/// Sign the 自带 codex out (revoke + delete its `auth.json`) on `service_key`.
+/// Sign the external codex out (revoke + delete its `auth.json`) on
+/// `service_key`.
 Future<void> codexLogout({required String serviceKey}) =>
     RustLib.instance.api.crateApiBridgeCodexLogout(serviceKey: serviceKey);
 
@@ -128,9 +130,7 @@ Future<void> apiUnsubscribe({required String serviceKey}) =>
 Future<List<SubStatusDto>> subscriptions() =>
     RustLib.instance.api.crateApiBridgeSubscriptions();
 
-/// The `deps/codex` commit the compiled-in (自带) codex app-server was built
-/// from — its meaningful "version", since codex's own crate version is a
-/// `0.0.0` placeholder. The host details show this for an embedded host.
+/// Legacy version endpoint; returns `unavailable` because no engine is bundled.
 Future<String> embeddedCodexVersion() =>
     RustLib.instance.api.crateApiBridgeEmbeddedCodexVersion();
 
@@ -138,9 +138,8 @@ Future<String> embeddedCodexVersion() =>
 /// signed-in account, publishing both `app:<name>` and `api:<name>`. Re-hosting
 /// a name whose codex is still alive just re-registers any dropped tunnels.
 /// `proxy` is the upstream proxy both use to reach chatgpt.com (`None` =
-/// inherit env). `embedded` runs codex's app-server in-process (the compiled-in
-/// `embedded-codex`) instead of spawning an external binary — desktop only; the
-/// `binary_override` is ignored when `embedded` is set. Desktop only.
+/// inherit env). Desktop only. `embedded` is retained for bridge compatibility;
+/// passing true returns a built-in-engine-not-implemented error before startup.
 Future<AppServeDto> appServeStart({
   required int port,
   String? binaryOverride,
@@ -1056,11 +1055,10 @@ class AppServeStatusDto {
   /// The meta tunnel is currently published.
   final bool metaRegistered;
 
-  /// This host runs codex IN-PROCESS (the compiled-in `embedded-codex`)
-  /// rather than a spawned external binary.
+  /// Legacy runtime flag; always false for external Codex hosts.
   final bool embedded;
 
-  /// The resolved external codex binary path, or `None` for an embedded host.
+  /// The resolved external codex binary path.
   final String? codexBinary;
 
   /// Upstream proxy codex + the API proxy were started with, or `None` when
@@ -1151,7 +1149,7 @@ class CodexAuthStatusDto {
           method == other.method;
 }
 
-/// A started ChatGPT login on the 自带 codex, mirrored for Dart. `mode` is
+/// A started ChatGPT login on the external codex, mirrored for Dart. `mode` is
 /// `"browser"` (open `auth_url`) or `"device"` (open `verification_url` and
 /// enter `user_code`) — codex falls back to device code when it can't bind its
 /// local OAuth callback port.
@@ -1199,7 +1197,8 @@ class CodexLoginStartDto {
           userCode == other.userCode;
 }
 
-/// What the 自带 codex has on disk in `CODEX_HOME`, for the onboarding wizard.
+/// What the external codex has on disk in `CODEX_HOME`, for the onboarding
+/// wizard.
 class CodexSetupStatusDto {
   /// Resolved `CODEX_HOME` (display path).
   final String codexHome;

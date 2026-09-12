@@ -1,5 +1,3 @@
-import 'dart:io' show Platform;
-
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -40,35 +38,14 @@ class _LocalHostDialogState extends ConsumerState<LocalHostDialog> {
   bool _overridePath = false; // user chose to customize the codex path
   String? _codexPath; // auto-detected codex (config → PATH), null = not found
   bool _codexChecked = false;
-  // Codex source: false = external codex (auto-detect/path, the default);
-  // true = the app's built-in in-process app-server (desktop self-contained).
-  bool _embedded = false;
   bool _busy = false;
   String? _error;
-  // The built-in codex commit for a RUNNING embedded host (its "version"),
-  // loaded lazily in initState. Null until loaded / for an external host.
-  String? _embeddedVersion;
-
   bool get _isExisting => widget.existing != null;
   bool get _codexFound => _codexPath != null;
-  // The built-in (in-process) codex ships only in the Windows + macOS desktop
-  // builds (Linux desktop uses the external path — see the bridge's target-cfg).
-  bool get _embeddedAvailable => Platform.isWindows || Platform.isMacOS;
-
   @override
   void initState() {
     super.initState();
-    if (_isExisting) {
-      // Running host: load the built-in codex commit (its version) for the
-      // details panel when this host runs the embedded codex.
-      if (widget.existing!.embedded) {
-        Future.microtask(() async {
-          final v = await ref.read(bridgeApiProvider).embeddedCodexVersion();
-          if (mounted) setState(() => _embeddedVersion = v);
-        });
-      }
-      return;
-    }
+    if (_isExisting) return;
     // Auto-detect codex: when found we just show "available" (with a "change
     // path" override); when not, the user picks a path (persisted on start) or
     // installs codex and taps "re-detect".
@@ -116,19 +93,13 @@ class _LocalHostDialogState extends ConsumerState<LocalHostDialog> {
       setState(() => _error = l10n.localHostPort);
       return;
     }
-    // codex source. Built-in (in-process) needs no binary. External: auto-
-    // detected and not overridden → let the bridge resolve it; otherwise the
-    // path the user typed / picked.
-    String? override;
-    if (!_embedded) {
-      final manual = !_codexFound || _overridePath;
-      final o = manual ? _path.text.trim() : '';
-      if (manual && o.isEmpty) {
-        setState(() => _error = l10n.codexPathRequired);
-        return;
-      }
-      override = o.isEmpty ? null : o;
+    final manual = !_codexFound || _overridePath;
+    final path = manual ? _path.text.trim() : '';
+    if (manual && path.isEmpty) {
+      setState(() => _error = l10n.codexPathRequired);
+      return;
     }
+    final override = path.isEmpty ? null : path;
     // A proxy is mandatory unless the user explicitly turned it off.
     final proxy = _useProxy ? _proxy.text.trim() : null;
     if (_useProxy && (proxy == null || proxy.isEmpty)) {
@@ -148,7 +119,7 @@ class _LocalHostDialogState extends ConsumerState<LocalHostDialog> {
             binaryOverride: override,
             name: name.isEmpty ? null : name,
             proxy: proxy,
-            embedded: _embedded,
+            embedded: false,
           );
       // Remember the params so a desktop cold start can restore this hosting
       // without another trip through this dialog.
@@ -159,7 +130,7 @@ class _LocalHostDialogState extends ConsumerState<LocalHostDialog> {
               port: port,
               name: name.isEmpty ? 'default' : name,
               proxy: proxy,
-              embedded: _embedded,
+              embedded: false,
               binaryOverride: override,
             ),
           );
@@ -240,8 +211,7 @@ class _LocalHostDialogState extends ConsumerState<LocalHostDialog> {
             style: small?.copyWith(color: scheme.onSurfaceVariant),
           ),
         )
-        // Runtime details: built-in (in-process) vs external codex, its version
-        // (the fork commit for the built-in one), and the active upstream proxy.
+        // Runtime details for the external Codex process.
         ..add(const Divider(height: 24))
         ..add(
           Text(
@@ -253,21 +223,15 @@ class _LocalHostDialogState extends ConsumerState<LocalHostDialog> {
         ..add(
           Text(
             '${l10n.hostRuntimeMode}: '
-            '${existing.embedded ? l10n.codexSourceBuiltin : l10n.codexSourceExternal}',
+            '${l10n.codexSourceExternal}',
             style: small,
           ),
         )
         ..add(
-          existing.embedded
-              ? Text(
-                  '${l10n.hostCodexVersion}: '
-                  '${_embeddedVersion == null ? '…' : 'fork @$_embeddedVersion'}',
-                  style: small?.copyWith(color: scheme.onSurfaceVariant),
-                )
-              : SelectableText(
-                  '${l10n.hostCodexPath}: ${existing.codexBinary ?? '—'}',
-                  style: small?.copyWith(color: scheme.onSurfaceVariant),
-                ),
+          SelectableText(
+            '${l10n.hostCodexPath}: ${existing.codexBinary ?? '—'}',
+            style: small?.copyWith(color: scheme.onSurfaceVariant),
+          ),
         )
         ..add(
           Text(
@@ -281,41 +245,28 @@ class _LocalHostDialogState extends ConsumerState<LocalHostDialog> {
         ..add(ProjectFoldersEditor(serviceKey: existing.appServiceKey));
     } else {
       children.add(const SizedBox(height: 16));
-      // --- codex source: built-in (in-process) vs external (desktop only) ---
-      if (_embeddedAvailable) {
-        children
-          ..add(
-            SegmentedButton<bool>(
-              segments: [
-                ButtonSegment(
-                  value: false,
-                  label: Text(l10n.codexSourceExternal),
-                ),
-                ButtonSegment(
-                  value: true,
-                  label: Text(l10n.codexSourceBuiltin),
-                ),
-              ],
-              selected: {_embedded},
-              onSelectionChanged: _busy
-                  ? null
-                  : (s) => setState(() => _embedded = s.first),
-            ),
-          )
-          ..add(const SizedBox(height: 12));
-      }
-      // --- codex availability (external only) ---
-      if (_embedded) {
-        children.add(
-          Row(
-            children: [
-              Icon(Icons.bolt, size: 18, color: scheme.primary),
-              const SizedBox(width: 6),
-              Expanded(child: Text(l10n.codexBuiltinNote, style: small)),
+      children
+        ..add(
+          SegmentedButton<bool>(
+            segments: [
+              ButtonSegment(
+                value: false,
+                label: Text(l10n.codexSourceExternal),
+              ),
+              ButtonSegment(
+                value: true,
+                enabled: false,
+                label: Text(l10n.codexSourceBuiltin),
+              ),
             ],
+            selected: const {false},
+            onSelectionChanged: _busy ? null : (_) {},
           ),
-        );
-      } else if (!_codexChecked) {
+        )
+        ..add(const SizedBox(height: 8))
+        ..add(Text(l10n.codexBuiltinNote, style: small))
+        ..add(const SizedBox(height: 12));
+      if (!_codexChecked) {
         children.add(const LinearProgressIndicator());
       } else if (_codexFound && !_overridePath) {
         children.add(

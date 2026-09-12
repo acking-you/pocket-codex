@@ -105,7 +105,7 @@ http = "1.3"
 # dropped (api_proxy sets reqwest::Proxy explicitly).
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "socks", "http2", "charset", "rustls-tls-webpki-roots"] }
 # Pinned to the 0.28 line to match codex's forked tokio-tungstenite (the
-# `embedded-codex` path requires that fork via [patch] below). The fork ships
+# protocol dependency graph uses that fork via [patch] below). The fork ships
 # `rustls-tls-webpki-roots`, and our WS client only uses the stable
 # connect_async / Message API, so this is a drop-in for us.
 tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
@@ -122,7 +122,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "serd
 # the static-musl CLI and the mobile bridge closures. All ring/rustls — no
 # openssl: sqlx's sqlite backend needs no TLS; jsonwebtoken/oauth2 use ring/rustls.
 # sqlx 0.9 (not 0.8) so its bundled `libsqlite3-sys` is 0.37 — the SAME version
-# codex's `codex-state` links under the embedded-codex feature. Two crates
+# the protocol graph's transitive `codex-state` dependency links. Two crates
 # linking native `sqlite3` at different versions is a hard cargo `links`
 # conflict, so this MUST track whatever `libsqlite3-sys` codex pins whenever
 # deps/codex is bumped (see AGENTS.md §8).
@@ -171,14 +171,7 @@ unescaped_backticks = "deny"
 opt-level = 3
 lto = "thin"
 codegen-units = 1
-# UNWIND, not abort: the desktop app runs codex's app-server IN-PROCESS
-# (embedded 自带 mode), so a panic in any codex-spawned task — e.g. a
-# per-connection handler reacting to a remote client — must NOT abort the whole
-# desktop. With unwind, tokio/std contain a task/thread panic (the bad
-# connection dies, the embedded supervisor restarts the server) instead of
-# taking down the process. `examples/panic_probe.rs` in pocket-codex-core
-# demonstrates the difference. (flutter_rust_bridge also relies on unwinding to
-# turn a panic in a bridge call into a Dart exception rather than a hard crash.)
+# flutter_rust_bridge catches panics at the FFI boundary.
 panic = "unwind"
 strip = "symbols"
 
@@ -197,11 +190,8 @@ opt-level = 2
 # reproducible. The current SDK uses registry dependencies for both crates,
 # whose versions are recorded in Cargo.lock without local patches.
 
-# codex (deps/codex) requires forked tokio-tungstenite / tungstenite (they add a
-# `proxy` feature on the 0.28 line). The optional `embedded-codex` feature pulls
-# codex-app-server, whose transport depends on these forks, so we mirror codex's
-# own [patch] table. The forks also expose `rustls-tls-webpki-roots`, so our own
-# WS client keeps working. Harmless (unused) when embedded-codex is off.
+# Keep the WebSocket forks aligned with upstream protocol support crates.
+# Our client uses the same forks with rustls-tls-webpki-roots.
 [patch.crates-io]
 tokio-tungstenite = { git = "https://github.com/openai-oss-forks/tokio-tungstenite", rev = "0e5b2d73aa18dd9f0a50ee9ff199d5aef7594186" }
 tungstenite = { git = "https://github.com/openai-oss-forks/tungstenite-rs", rev = "4fffad30fe373adbdcffab9545e9e9bf4f2fc19f" }

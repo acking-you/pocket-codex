@@ -112,7 +112,7 @@ class UiPrefs {
 }
 
 /// The `appServeStart` parameters of the last hosting the user started, so a
-/// cold start can re-run it verbatim.
+/// cold start can restore external hosting.
 class AutoHostPrefs {
   /// Creates an auto-host record.
   const AutoHostPrefs({
@@ -132,7 +132,7 @@ class AutoHostPrefs {
   /// Upstream proxy URL, or null when the user turned the proxy off.
   final String? proxy;
 
-  /// Whether the in-process (built-in) codex was used.
+  /// Legacy field retained for old records; restored hosts use external Codex.
   final bool embedded;
 
   /// Explicit codex binary path, when the user customized it.
@@ -143,7 +143,7 @@ class AutoHostPrefs {
     port: json['port'] is int ? json['port'] as int : 0,
     name: json['name'] is String ? json['name'] as String : 'default',
     proxy: json['proxy'] is String ? json['proxy'] as String : null,
-    embedded: json['embedded'] == true,
+    embedded: false,
     binaryOverride: json['binaryOverride'] is String
         ? json['binaryOverride'] as String
         : null,
@@ -154,7 +154,7 @@ class AutoHostPrefs {
     'port': port,
     'name': name,
     if (proxy != null) 'proxy': proxy,
-    'embedded': embedded,
+    'embedded': false,
     if (binaryOverride != null) 'binaryOverride': binaryOverride,
   };
 }

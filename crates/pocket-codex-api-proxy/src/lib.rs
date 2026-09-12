@@ -142,13 +142,16 @@ pub async fn serve(listener: TcpListener, proxy: Option<String>) -> Result<()> {
         ),
         proxy: upstream_proxy,
     };
-    let app = Router::new()
-        .route("/v1/responses", post(forward_http).get(forward_ws))
-        .fallback(proxy_forbidden)
-        .with_state(Arc::new(state));
-    axum::serve(listener, app)
+    axum::serve(listener, proxy_router(state))
         .await
         .context("running API proxy server")
+}
+
+fn proxy_router(state: ProxyState) -> Router {
+    Router::new()
+        .route("/v1/responses", post(forward_http).get(forward_ws))
+        .fallback(proxy_forbidden)
+        .with_state(Arc::new(state))
 }
 
 async fn load_auth_headers() -> Result<HeaderMap> {
@@ -654,9 +657,205 @@ async fn socks5_tunnel(proxy: &UpstreamProxy, host: &str, port: u16) -> Result<T
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use http::header::SET_COOKIE;
 
     use super::*;
+
+    const HTTP_REQUEST: &str = r#"{"model":"test-model","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}],"tool_choice":"auto","parallel_tool_calls":true,"reasoning":null,"store":false,"stream":true,"include":[]}"#;
+    // ResponsesWsRequest is internally tagged: request fields stay at the top
+    // level.
+    const WS_REQUEST: &str = r#"{"type":"response.create","model":"test-model","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}],"tool_choice":"auto","parallel_tool_calls":true,"reasoning":null,"store":false,"stream":true,"include":[],"previous_response_id":"resp-previous"}"#;
+
+    async fn test_server(app: Router) -> (SocketAddr, tokio::task::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test server");
+        let addr = listener.local_addr().expect("test address");
+        let task = tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("test server");
+        });
+        (addr, task)
+    }
+
+    fn test_proxy(upstream: SocketAddr) -> Router {
+        ensure_rustls_crypto_provider();
+        proxy_router(ProxyState {
+            client: Client::builder()
+                .no_proxy()
+                .build()
+                .expect("test HTTP client"),
+            auth_headers: bearer_headers("test-host-token", Some("test-account".into()), false)
+                .expect("test credentials"),
+            http_upstream_url: format!("http://{upstream}/responses"),
+            ws_upstream_url: format!("ws://{upstream}/responses"),
+            proxy: None,
+        })
+    }
+
+    fn assert_upstream_headers(headers: &HeaderMap) {
+        assert_eq!(headers[AUTHORIZATION], "Bearer test-host-token");
+        assert_eq!(headers["chatgpt-account-id"], "test-account");
+        assert_eq!(headers["x-client-marker"], "preserved");
+    }
+
+    #[tokio::test]
+    async fn http_responses_preserve_streaming_errors_and_host_auth() {
+        let release = Arc::new(tokio::sync::Notify::new());
+        let gate = release.clone();
+        let upstream = Router::new().route(
+            "/responses",
+            post(move |headers: HeaderMap, body: Bytes| {
+                let gate = gate.clone();
+                async move {
+                    assert_upstream_headers(&headers);
+                    if body == "error" {
+                        return Response::builder()
+                            .status(StatusCode::TOO_MANY_REQUESTS)
+                            .header("content-type", "application/json")
+                            .header("retry-after", "2")
+                            .body(Body::from(r#"{"error":{"code":"rate_limit_exceeded"}}"#))
+                            .expect("error response");
+                    }
+                    assert_eq!(body, HTTP_REQUEST);
+                    let first = futures::stream::once(async {
+                        Ok::<_, std::io::Error>("data: {\"type\":\"response.created\"}\n\n")
+                    });
+                    let second = futures::stream::once(async move {
+                        gate.notified().await;
+                        Ok::<_, std::io::Error>("data: {\"type\":\"response.completed\"}\n\n")
+                    });
+                    Response::builder()
+                        .header("content-type", "text/event-stream")
+                        .header("x-request-id", "test-request")
+                        .body(Body::from_stream(first.chain(second)))
+                        .expect("stream response")
+                }
+            }),
+        );
+        let (upstream_addr, upstream_task) = test_server(upstream).await;
+        let (proxy_addr, proxy_task) = test_server(test_proxy(upstream_addr)).await;
+        let client = Client::builder()
+            .no_proxy()
+            .build()
+            .expect("downstream client");
+        let request = || {
+            client
+                .post(format!("http://{proxy_addr}/v1/responses"))
+                .bearer_auth("downstream-token-must-not-reach-upstream")
+                .header("chatgpt-account-id", "downstream-account")
+                .header("x-client-marker", "preserved")
+        };
+        let response = request()
+            .body(HTTP_REQUEST)
+            .send()
+            .await
+            .expect("HTTP Responses request");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()["content-type"], "text/event-stream");
+        assert_eq!(response.headers()["x-request-id"], "test-request");
+        let mut stream = response.bytes_stream();
+        let first = tokio::time::timeout(Duration::from_secs(5), stream.next())
+            .await
+            .expect("first event must arrive before the upstream completes")
+            .expect("first chunk")
+            .expect("first event");
+        assert_eq!(first, "data: {\"type\":\"response.created\"}\n\n");
+        release.notify_one();
+        let second = tokio::time::timeout(Duration::from_secs(5), stream.next())
+            .await
+            .expect("completion timeout")
+            .expect("completion chunk")
+            .expect("completion event");
+        assert_eq!(second, "data: {\"type\":\"response.completed\"}\n\n");
+        let error = request().body("error").send().await.expect("error request");
+        assert_eq!(error.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(error.headers()["retry-after"], "2");
+        assert_eq!(
+            error.text().await.expect("error body"),
+            r#"{"error":{"code":"rate_limit_exceeded"}}"#
+        );
+        assert_eq!(
+            client
+                .get(format!("http://{proxy_addr}/other"))
+                .send()
+                .await
+                .expect("other route")
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+        proxy_task.abort();
+        upstream_task.abort();
+    }
+
+    #[tokio::test]
+    async fn websocket_responses_forward_frames_and_host_auth() {
+        let upstream = Router::new().route(
+            "/responses",
+            axum::routing::get(|ws: WebSocketUpgrade, headers: HeaderMap| async move {
+                assert_upstream_headers(&headers);
+                ws.on_upgrade(|mut socket| async move {
+                    let request = socket
+                        .recv()
+                        .await
+                        .expect("request frame")
+                        .expect("request");
+                    assert_eq!(request.into_text().expect("text request"), WS_REQUEST);
+                    socket
+                        .send(AxumMessage::Text(r#"{"type":"response.created"}"#.into()))
+                        .await
+                        .expect("created");
+                    socket
+                        .send(AxumMessage::Text(r#"{"type":"response.completed"}"#.into()))
+                        .await
+                        .expect("completed");
+                    let binary = socket.recv().await.expect("binary frame").expect("binary");
+                    assert!(
+                        matches!(&binary, AxumMessage::Binary(data) if data.as_ref() == b"payload")
+                    );
+                    socket.send(binary).await.expect("binary echo");
+                })
+            }),
+        );
+        let (upstream_addr, upstream_task) = test_server(upstream).await;
+        let (proxy_addr, proxy_task) = test_server(test_proxy(upstream_addr)).await;
+        let mut request = format!("ws://{proxy_addr}/v1/responses")
+            .into_client_request()
+            .expect("WS request");
+        request
+            .headers_mut()
+            .insert(AUTHORIZATION, HeaderValue::from_static("Bearer downstream"));
+        request
+            .headers_mut()
+            .insert("x-client-marker", HeaderValue::from_static("preserved"));
+        let (mut socket, handshake) = connect_async(request).await.expect("WS handshake");
+        assert_eq!(handshake.status(), StatusCode::SWITCHING_PROTOCOLS);
+        socket
+            .send(TungsteniteMessage::Text(WS_REQUEST.into()))
+            .await
+            .expect("send response.create");
+        for kind in ["response.created", "response.completed"] {
+            let event = tokio::time::timeout(Duration::from_secs(5), socket.next())
+                .await
+                .expect("event timeout")
+                .expect("event frame")
+                .expect("event");
+            assert_eq!(event.into_text().expect("event text"), format!(r#"{{"type":"{kind}"}}"#));
+        }
+        socket
+            .send(TungsteniteMessage::Binary(Bytes::from_static(b"payload")))
+            .await
+            .expect("send binary");
+        let echo = tokio::time::timeout(Duration::from_secs(5), socket.next())
+            .await
+            .expect("echo timeout")
+            .expect("echo frame")
+            .expect("echo");
+        assert_eq!(echo, TungsteniteMessage::Binary(Bytes::from_static(b"payload")));
+        proxy_task.abort();
+        upstream_task.abort();
+    }
 
     #[test]
     fn forwarded_headers_drop_hop_by_hop_headers() {

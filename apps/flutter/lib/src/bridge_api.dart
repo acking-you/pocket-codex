@@ -156,11 +156,10 @@ class AppServeStatus {
   /// The meta tunnel is currently published.
   final bool metaRegistered;
 
-  /// This host runs codex IN-PROCESS (the compiled-in 自带 codex) rather than a
-  /// spawned external binary.
+  /// Legacy runtime flag; always false for external Codex hosts.
   final bool embedded;
 
-  /// The resolved external codex binary path, or `null` for an embedded host.
+  /// The resolved external Codex binary path.
   final String? codexBinary;
 
   /// Upstream proxy codex + the API proxy were started with, or `null` when
@@ -918,7 +917,7 @@ class HostFileEntry {
   final int mtime;
 }
 
-/// What the 自带 codex has on disk in `CODEX_HOME`, for the setup wizard.
+/// What the external Codex has on disk in `CODEX_HOME`, for the setup wizard.
 class CodexSetupStatus {
   /// Creates a codex setup status.
   const CodexSetupStatus({
@@ -954,7 +953,7 @@ class CodexSetupStatus {
   final String promptVariant;
 }
 
-/// A started ChatGPT login on the 自带 codex. [mode] is `browser` (open
+/// A started ChatGPT login on the external Codex. [mode] is `browser` (open
 /// [authUrl] and poll) or `device` (open [verificationUrl], show [userCode], and
 /// poll) — codex falls back to device code when it can't bind its local OAuth
 /// callback port. Poll [BridgeApi.codexAuthStatus] until authenticated either way.
@@ -1030,15 +1029,15 @@ abstract interface class BridgeApi {
   /// it, meaning follow the system locale.
   Future<void> setLocale(String locale);
 
-  // --- 自带 codex bootstrap: provider setup, ChatGPT login, system prompt ---
+  // --- external Codex bootstrap: provider setup, ChatGPT login, system prompt ---
 
-  /// Detect whether the 自带 codex has a usable provider + credentials. Drives
+  /// Detect whether the external Codex has a usable provider + credentials. Drives
   /// the first-run setup wizard: `needsSetup` is true when neither a login nor a
   /// custom provider is configured.
   Future<CodexSetupStatus> codexSetupStatus();
 
   /// Configure a minimal custom OpenAI-compatible provider (base URL + API key)
-  /// for the 自带 codex — writes `$CODEX_HOME/config.toml`, no login needed.
+  /// for the external Codex — writes `$CODEX_HOME/config.toml`, no login needed.
   /// [model] is optional (a sensible default is used when null/blank).
   Future<void> codexSetupProvider({
     required String baseUrl,
@@ -1046,11 +1045,11 @@ abstract interface class BridgeApi {
     String? model,
   });
 
-  /// The active 自带-codex system-prompt variant (`default` / `non_degraded` /
+  /// The active external-Codex system-prompt variant (`default` / `non_degraded` /
   /// `custom`).
   Future<String> codexPromptVariant();
 
-  /// Switch the 自带-codex system prompt. `non_degraded` drops the commentary /
+  /// Switch the external-Codex system prompt. `non_degraded` drops the commentary /
   /// intermediary-update mandates that can starve reasoning (openai/codex#30364);
   /// `default` restores codex's built-in prompt.
   Future<void> codexSetPromptVariant(String variant);
@@ -1066,7 +1065,7 @@ abstract interface class BridgeApi {
   /// Cancel an in-flight ChatGPT login (from [codexLoginChatgptStart]).
   Future<void> codexLoginCancel(String serviceKey, String loginId);
 
-  /// Sign the 自带 codex out (revoke + delete its `auth.json`) on [serviceKey].
+  /// Sign the external Codex out (revoke + delete its `auth.json`) on [serviceKey].
   Future<void> codexLogout(String serviceKey);
 
   // --- Hosted account (GitHub device-flow login) ---
@@ -1137,9 +1136,7 @@ abstract interface class BridgeApi {
   /// Snapshot of every local host (for the status cards + periodic re-probe).
   Future<List<AppServeStatus>> appServeStatus();
 
-  /// The `deps/codex` commit the compiled-in (自带) codex was built from — the
-  /// meaningful "version" for an embedded host (codex's crate version is a
-  /// `0.0.0` placeholder). Shown in the host details.
+  /// Legacy endpoint returning `unavailable`; no built-in engine is bundled.
   Future<String> embeddedCodexVersion();
 
   /// Take one tunnel ([kind] = 'app' or 'api') of a local host off the relay

@@ -1,6 +1,6 @@
 //! Manual end-to-end verification harness (`#[ignore]`d — never runs in CI).
 //!
-//! Drives the REAL stack exactly as the Flutter app does through FRB: embedded
+//! Drives the REAL stack exactly as the Flutter app does through FRB: external
 //! codex host → relay tunnel → `turn/start` with an image
 //! attachment → live event stream → `thread/read` history echo. Needs a
 //! signed-in account in the app's support dir and spends one real model call.
@@ -21,7 +21,7 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 /// 1×1 red PNG, pre-encoded.
 const TINY_PNG_DATA_URL: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 
-fn init_and_host(name: &str, embedded: bool) -> crate::api::bridge::AppServeDto {
+fn init_and_host(name: &str) -> crate::api::bridge::AppServeDto {
     use crate::api::bridge as api;
     // The app's real support dir (the account login lives there).
     let support = std::env::var("POCKET_CODEX_E2E_SUPPORT").unwrap_or_else(|_| {
@@ -29,14 +29,6 @@ fn init_and_host(name: &str, embedded: bool) -> crate::api::bridge::AppServeDto 
         format!("{appdata}\\io.github.acking_you\\pocket_codex")
     });
     api::init_bridge(support).expect("init_bridge");
-    // Host a codex under a dedicated name; the caller stops it. Embedded
-    // (自带) hosts CAN run the agent's tools: with a `danger-full-access`
-    // (no-sandbox) turn nothing extra is needed, and with a real sandbox it is
-    // enough to stage the two Windows helper exes next to the binary (see
-    // `stage_windows_sandbox_helpers`) — the app then auto-selects the unelevated
-    // (no-admin) restricted-token level. Both are proven by the
-    // embedded_file_turn_* tests below.
-    //
     // POCKET_CODEX_E2E_PORT: adopt a codex you started yourself on that port
     // (`codex app-server --listen ws://127.0.0.1:<port>`) instead of spawning
     // one — serve_start reuses a live listener on the requested port. Useful
@@ -45,13 +37,8 @@ fn init_and_host(name: &str, embedded: bool) -> crate::api::bridge::AppServeDto 
         .ok()
         .and_then(|p| p.parse().ok())
         .unwrap_or(0);
-    // Adopting a pre-started codex is inherently EXTERNAL hosting: the
-    // embedded path rejects a taken port outright (it would otherwise publish
-    // a listener it doesn't own), while the external `spawn` adopts a live
-    // listener on the requested port after verifying its /readyz.
-    let embedded = embedded && port == 0;
-    let host = api::app_serve_start(port, None, Some(name.into()), None, embedded)
-        .expect("app_serve_start");
+    let host =
+        api::app_serve_start(port, None, Some(name.into()), None, false).expect("app_serve_start");
     println!("hosting: app={} (pid {})", host.app_service_key, host.pid);
     host
 }
@@ -64,8 +51,7 @@ fn image_turn_round_trips_through_a_real_host() {
     // for the old name on the relay (until lease expiry), and a fresh
     // subscribe may route to it — fresh names sidestep that entirely.
     let name = format!("e2e-img-{}", std::process::id());
-    // Embedded is fine here: describing an image needs no agent tools.
-    let host = init_and_host(&name, true);
+    let host = init_and_host(&name);
     let result = std::panic::catch_unwind(|| run_image_turn(&host.app_service_key));
     let _ = api::app_serve_stop(name);
     if let Err(p) = result {
@@ -85,283 +71,10 @@ fn image_turn_round_trips_through_a_real_host() {
 fn file_turn_round_trips_through_a_real_host() {
     use crate::api::bridge as api;
     let name = format!("e2e-file-{}", std::process::id());
-    let host = init_and_host(&name, false);
+    let host = init_and_host(&name);
     // An external codex may predate thread/settings/updated — don't assert it.
     let result = std::panic::catch_unwind(|| {
         run_file_turn(&host.app_service_key, "read-only", /* expect_settings_update */ false)
-    });
-    let _ = api::app_serve_stop(name);
-    if let Err(p) = result {
-        std::panic::resume_unwind(p);
-    }
-}
-
-/// EMBEDDED (自带) codex reading an uploaded file — the follow-up this fixes.
-/// Uses the `danger-full-access` (no-sandbox) preset, which the app exposes as
-/// the explicit "full" permission mode: with no OS sandbox, codex runs the
-/// shell tool directly, so an in-process host needs neither the Windows sandbox
-/// helper exes nor arg0 self-dispatch. Sandboxed embedded modes (read-only /
-/// workspace-write) additionally need the helper exes staged next to the binary
-/// — shipped for desktop as a follow-up.
-#[test]
-#[ignore = "manual e2e: needs a signed-in account and spends a real model call"]
-fn embedded_file_turn_no_sandbox_round_trips() {
-    use crate::api::bridge as api;
-    let name = format!("e2e-file-emb-{}", std::process::id());
-    let host = init_and_host(&name, true);
-    let result = std::panic::catch_unwind(|| {
-        run_file_turn(
-            &host.app_service_key,
-            "danger-full-access",
-            // expect_settings_update
-            true,
-        )
-    });
-    let _ = api::app_serve_stop(name);
-    if let Err(p) = result {
-        std::panic::resume_unwind(p);
-    }
-}
-
-/// Stage the two Windows sandbox helper exes into `<test-exe
-/// dir>/codex-resources/` — the exact layout the desktop release bundles and
-/// that both codex (`find_setup_exe` / `resolve_helper_for_launch`) and our own
-/// `embedded_config_overrides` look for next to the running binary. Build them
-/// first: `cargo build [--release] -p codex-windows-sandbox
-/// --bin codex-windows-sandbox-setup --bin codex-command-runner`. Searches both
-/// `target/debug` and `target/release`. No-op off Windows / when sources
-/// absent.
-#[cfg(target_os = "windows")]
-fn stage_windows_sandbox_helpers() {
-    let exe = std::env::current_exe().expect("current exe");
-    // Test binary lives at target/<profile>/deps/<name>.exe; helper bins are at
-    // target/<profile>/<name>.exe, i.e. under the target dir (deps' grandparent).
-    let deps_dir = exe.parent().expect("exe dir");
-    let target_dir = deps_dir
-        .parent()
-        .and_then(|p| p.parent())
-        .expect("target dir");
-    // embedded resolves helpers from `<exe dir>/codex-resources/`.
-    let resources = deps_dir.join("codex-resources");
-    std::fs::create_dir_all(&resources).expect("create codex-resources");
-    for name in ["codex-windows-sandbox-setup.exe", "codex-command-runner.exe"] {
-        let src = ["release", "debug"]
-            .into_iter()
-            .map(|profile| target_dir.join(profile).join(name))
-            .find(|p| p.is_file());
-        let Some(src) = src else {
-            println!("helper source missing (build it first): {name}");
-            continue;
-        };
-        let dst = resources.join(name);
-        match std::fs::copy(&src, &dst) {
-            Ok(_) => println!("staged helper: {} -> {}", src.display(), dst.display()),
-            // A prior sandboxed run can leave the helper open briefly.
-            Err(e) if dst.exists() => println!("kept staged helper {}: {e}", dst.display()),
-            Err(e) => panic!("staging {}: {e}", dst.display()),
-        }
-    }
-}
-
-/// EMBEDDED codex with a real OS sandbox (`read-only`) — the packaged desktop
-/// behavior. Staging the two helpers into `codex-resources/` is all it takes:
-/// `embedded_config_overrides` sees them and auto-selects the unelevated
-/// restricted-token sandbox (no `POCKET_CODEX_CODEX_CONFIG`, no admin/UAC),
-/// then the in-process host runs the sandboxed shell tool and reads the file.
-/// This exercises exactly what the release bundle ships.
-#[cfg(target_os = "windows")]
-#[test]
-#[ignore = "manual e2e: needs a signed-in account, staged sandbox helpers, spends a real model call"]
-fn embedded_file_turn_sandboxed_with_staged_helpers() {
-    use crate::api::bridge as api;
-    stage_windows_sandbox_helpers();
-    let name = format!("e2e-file-sbx-{}", std::process::id());
-    let host = init_and_host(&name, true);
-    let result = std::panic::catch_unwind(|| {
-        run_file_turn(&host.app_service_key, "read-only", /* expect_settings_update */ true)
-    });
-    let _ = api::app_serve_stop(name);
-    if let Err(p) = result {
-        std::panic::resume_unwind(p);
-    }
-}
-
-/// LIVE host for debugging the "phone enters the embedded host → desktop
-/// crashes" bug WITH a real phone. Hosts the embedded (自带) app-server under a
-/// findable name, registers it on the account relay, installs a panic hook that
-/// logs EVERY panic (from any thread — including codex's in-process tasks) to
-/// `<support>/host_embedded_panic.log` before it unwinds, then blocks with a
-/// heartbeat so the operator can drive it from a phone.
-///
-/// A test binary always UNWINDS (libtest overrides `panic = "abort"`), which is
-/// exactly the FIXED release behavior — so if a codex panic fires when the
-/// phone enters, the hook captures the precise site (root cause) AND the host
-/// survives (the heartbeat keeps ticking), demonstrating the fix. A gap in the
-/// heartbeat / a missing survival line = the host died.
-///
-/// `HOST_NAME=phonetest cargo test -p pocket_codex_bridge live_host_for_phone
-/// -- --ignored --nocapture` (needs a signed-in account; runs ~15 min or until
-/// killed). Stops the host on exit.
-#[test]
-#[ignore = "manual: hosts an embedded app-server for a REAL phone to drive; blocks ~15 min"]
-fn live_host_for_phone() {
-    use crate::api::bridge as api;
-
-    if std::env::var_os("RUST_BACKTRACE").is_none() {
-        // SAFETY: set before any worker threads spawn.
-        unsafe { std::env::set_var("RUST_BACKTRACE", "1") };
-    }
-    let support = std::env::var("POCKET_CODEX_E2E_SUPPORT").unwrap_or_else(|_| {
-        let appdata = std::env::var("APPDATA").expect("APPDATA not set");
-        format!("{appdata}\\io.github.acking_you\\pocket_codex")
-    });
-    let panic_log = format!("{support}\\host_embedded_panic.log");
-    // Log every panic (any thread) with a backtrace before it unwinds, so a
-    // codex in-process task panic triggered by the phone is captured precisely.
-    let prev = std::panic::take_hook();
-    let log_path = panic_log.clone();
-    std::panic::set_hook(Box::new(move |info| {
-        let bt = std::backtrace::Backtrace::force_capture();
-        let thread = std::thread::current();
-        let msg = format!(
-            "\n=== PANIC on thread {:?} ===\n{info}\n--- backtrace ---\n{bt}\n",
-            thread.name().unwrap_or("<unnamed>")
-        );
-        eprintln!("{msg}");
-        if let Ok(mut f) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&log_path)
-        {
-            use std::io::Write as _;
-            let _ = f.write_all(msg.as_bytes());
-        }
-        prev(info);
-    }));
-
-    let name = std::env::var("HOST_NAME").unwrap_or_else(|_| "phonetest".to_string());
-    let host = init_and_host(&name, /* embedded */ true);
-    println!("================ EMBEDDED HOST UP ================");
-    println!("name       : {name}");
-    println!("app key    : {}", host.app_service_key);
-    println!("pid        : {}", std::process::id());
-    println!("panic log  : {panic_log}");
-    println!(">> On your PHONE (same account): open Pocket-Codex, find the");
-    println!(">> app-server '{name}', tap ENTER, then send a message.");
-    println!(">> Heartbeat below proves the host is alive; if it STOPS, it died.");
-    println!("=================================================");
-
-    // Positive activity signal: the newest rollout's mtime in CODEX_HOME
-    // advances whenever a turn runs. Logging when it moves PROVES the phone
-    // actually drove this host (vs. the host merely idling), so a surviving
-    // heartbeat across real activity is meaningful. Baseline it now.
-    let newest_rollout_mtime = || -> u64 {
-        pocket_codex_codex::rollout::scan_sessions()
-            .map(|v| v.iter().map(|s| s.updated_at).max().unwrap_or(0))
-            .unwrap_or(0) as u64
-    };
-    let mut last_activity = newest_rollout_mtime();
-    println!("(baseline newest-rollout mtime = {last_activity})");
-
-    let deadline = Instant::now() + Duration::from_secs(30 * 60);
-    let mut tick = 0u64;
-    while Instant::now() < deadline {
-        std::thread::sleep(Duration::from_secs(3));
-        tick += 1;
-        let status = api::app_serve_status();
-        let s = status.iter().find(|s| s.name == name);
-        let now = newest_rollout_mtime();
-        if now > last_activity {
-            println!(
-                ">>> PHONE ACTIVITY: a turn ran on the host (rollout advanced {last_activity} -> \
-                 {now}) and the host is STILL ALIVE"
-            );
-            last_activity = now;
-        }
-        println!(
-            "heartbeat #{tick}  host_alive={}  app_registered={}",
-            s.map(|s| s.alive).unwrap_or(false),
-            s.map(|s| s.app_registered).unwrap_or(false),
-        );
-    }
-    let _ = api::app_serve_stop(name);
-    println!("live host stopped (deadline reached)");
-}
-
-/// Repro for the "remote phone entering the embedded host panics the whole
-/// desktop" bug. Entering the app-server on a device runs
-/// `app_probe` (a transient connect+initialize+teardown) → `app_connect`
-/// (persistent) → `thread/list`, and the HOST's own services screen probes the
-/// same embedded server every 15s — so a real "enter" produces SEVERAL
-/// concurrent connections to the in-process app-server, a path the
-/// single-connect turn tests never exercise. This hammers that: a persistent
-/// session plus many concurrent transient probes + `thread/list` calls against
-/// one embedded host. A panic in any codex-spawned task shows as a
-/// `thread '…' panicked` line under `--nocapture` (and, in a release build with
-/// `panic = "abort"`, would abort the whole process — the reported symptom).
-///
-/// `POCKET_CODEX_E2E_SUPPORT=… cargo test -p pocket_codex_bridge
-/// remote_enter_concurrent_smoke -- --ignored --nocapture` (dev profile so a
-/// panic is captured, not aborted).
-#[test]
-#[ignore = "manual e2e: needs a signed-in account; reproduces the embedded remote-enter crash"]
-fn remote_enter_concurrent_smoke() {
-    use crate::api::bridge as api;
-    let name = format!("e2e-enter-{}", std::process::id());
-    let host = init_and_host(&name, true);
-    let key = host.app_service_key.clone();
-    let result = std::panic::catch_unwind(|| {
-        // The "phone" enters: probe, then a persistent session, then list.
-        assert!(api::app_probe(key.clone()).unwrap_or(false), "probe should succeed");
-        connect_with_retry(&key);
-        let listed = api::app_thread_list(key.clone()).expect("thread_list");
-        println!("thread_list returned {} existing threads", listed.len());
-        // Resume + read the account's REAL existing threads (what a phone does
-        // when opening a conversation) — a specific rollout's content could
-        // panic codex's resume/read path where a fresh thread wouldn't.
-        for meta in listed.iter().take(12) {
-            let _ = api::app_thread_resume(key.clone(), meta.id.clone());
-            let _ = api::app_thread_read(key.clone(), meta.id.clone());
-            let _ = api::meta_thread_config_get(key.clone(), meta.id.clone());
-        }
-        // A thread to read/resume through the tunnel like opening a conversation.
-        let cwd = std::env::temp_dir().join("pcx-e2e-enter");
-        std::fs::create_dir_all(&cwd).ok();
-        let tid = api::app_thread_start(
-            key.clone(),
-            None,
-            Some(cwd.to_string_lossy().into_owned()),
-            Some("never".into()),
-            Some("danger-full-access".into()),
-        )
-        .expect("thread_start");
-        // A fresh thread isn't materialized until its first user message, so
-        // thread_read may legitimately error here — that's not the bug; ignore.
-        let _ = api::app_thread_read(key.clone(), tid.clone());
-        // Now flood the embedded server with concurrent transient connections
-        // (probes) + reads + fresh `thread/list`s, as several devices + the
-        // host's periodic probe would. Each app_probe opens its OWN connection.
-        let mut handles = Vec::new();
-        for _ in 0..8 {
-            let k = key.clone();
-            let t = tid.clone();
-            handles.push(std::thread::spawn(move || {
-                for _ in 0..6 {
-                    let _ = api::app_probe(k.clone());
-                    let _ = api::app_thread_list(k.clone());
-                    let _ = api::app_thread_read(k.clone(), t.clone());
-                    let _ = api::meta_thread_config_get(k.clone(), t.clone());
-                }
-            }));
-        }
-        for h in handles {
-            let _ = h.join();
-        }
-        // Re-enter: disconnect + reconnect + list, like navigating back in.
-        api::app_disconnect(key.clone());
-        connect_with_retry(&key);
-        let _ = api::app_thread_list(key.clone()).expect("thread_list after reconnect");
-        println!("remote-enter smoke OK: no panic surfaced");
     });
     let _ = api::app_serve_stop(name);
     if let Err(p) = result {

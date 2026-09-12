@@ -1,9 +1,7 @@
 //! Reproduce app-server stalls without the relay or Flutter.
 //!
 //! `cargo run -p pocket-codex-codex --example app_server_probe -- <ws-url>`
-//! adds repeated list/read requests to an existing server. Build with
-//! `--features embedded-codex` and append `--embedded` to start an isolated
-//! listener using the same Codex configuration as the desktop host.
+//! adds repeated list/read requests to an external server.
 //! `--resume` also resumes threads before reading history; use a copied
 //! `CODEX_HOME` for this mode. `--hold` keeps the listener up for a UI client.
 
@@ -39,17 +37,7 @@ async fn run() -> Result<()> {
         .first()
         .context("expected ws://host:port [--embedded] [--resume] [--hold]")?;
     if args.iter().any(|arg| arg == "--embedded") {
-        #[cfg(feature = "embedded-codex")]
-        {
-            let listen = url.clone();
-            tokio::spawn(async move {
-                if let Err(error) = pocket_codex_codex::embedded::run(&listen).await {
-                    eprintln!("embedded app-server: {error:#}");
-                }
-            });
-        }
-        #[cfg(not(feature = "embedded-codex"))]
-        anyhow::bail!("--embedded requires --features embedded-codex");
+        anyhow::bail!("the built-in engine is not implemented; start an external codex app-server");
     }
 
     for round in 1..=5 {

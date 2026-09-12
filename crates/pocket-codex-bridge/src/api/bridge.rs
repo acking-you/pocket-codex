@@ -59,14 +59,9 @@ pub struct SubStatusDto {
 /// Initialise the engine with the platform app-support dir (from Dart's
 /// path_provider). Must be called once after `RustLib.init()`.
 pub fn init_bridge(support_dir: String) -> Result<()> {
-    // With the embedded-codex feature, codex pulls in `aws-lc-rs` alongside our
-    // `ring`, so rustls can no longer auto-select a process-level crypto
-    // provider and panics on first TLS use. Pin it to `ring` (our configured
-    // provider) before any TLS happens. Idempotent / no-op without the feature.
+    // Pin the process crypto provider before any TLS connection is opened.
     let _ = rustls::crypto::ring::default_provider().install_default();
-    // Start capturing `tracing` events for the in-app log viewer. First so our
-    // layer becomes the global subscriber (codex's later `try_init` is a no-op,
-    // and its events flow through ours too).
+    // Capture bridge events before starting local services.
     logging::init();
     let support_dir = PathBuf::from(support_dir);
     // Mirror the captured log to disk (last 6 hours), so a hang can be read
@@ -124,10 +119,12 @@ pub fn set_locale(locale: String) -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
-// 自带 codex bootstrap: CODEX_HOME provider setup, ChatGPT login, system prompt
+// external codex bootstrap: CODEX_HOME provider setup, ChatGPT login, system
+// prompt
 // ---------------------------------------------------------------------------
 
-/// What the 自带 codex has on disk in `CODEX_HOME`, for the onboarding wizard.
+/// What the external codex has on disk in `CODEX_HOME`, for the onboarding
+/// wizard.
 pub struct CodexSetupStatusDto {
     /// Resolved `CODEX_HOME` (display path).
     pub codex_home: String,
@@ -146,9 +143,9 @@ pub struct CodexSetupStatusDto {
     pub prompt_variant: String,
 }
 
-/// Detect whether the 自带 codex has a usable provider + credentials. Drives
-/// the first-run setup wizard: `needs_setup` is `true` when neither a login nor
-/// a custom provider is configured.
+/// Detect whether the external codex has a usable provider + credentials.
+/// Drives the first-run setup wizard: `needs_setup` is `true` when neither a
+/// login nor a custom provider is configured.
 pub fn codex_setup_status() -> Result<CodexSetupStatusDto> {
     let s = pocket_codex_codex::setup::setup_status()?;
     Ok(CodexSetupStatusDto {
@@ -163,9 +160,10 @@ pub fn codex_setup_status() -> Result<CodexSetupStatusDto> {
 }
 
 /// Configure a minimal custom OpenAI-compatible provider (base URL + API key)
-/// for the 自带 codex, writing `$CODEX_HOME/config.toml`. No `codex login` is
-/// needed — the key rides as the provider's bearer token. `model` is optional
-/// (defaults to a sensible model). Takes effect on the next hosting start.
+/// for the external codex, writing `$CODEX_HOME/config.toml`. No `codex login`
+/// is needed — the key rides as the provider's bearer token. `model` is
+/// optional (defaults to a sensible model). Takes effect on the next hosting
+/// start.
 pub fn codex_setup_provider(
     base_url: String,
     api_key: String,
@@ -174,13 +172,13 @@ pub fn codex_setup_provider(
     pocket_codex_codex::setup::write_provider_config(&base_url, &api_key, model.as_deref())
 }
 
-/// The active 自带-codex system-prompt variant (`default` / `non_degraded` /
-/// `custom`).
+/// The active external-codex system-prompt variant (`default` / `non_degraded`
+/// / `custom`).
 pub fn codex_prompt_variant() -> Result<String> {
     Ok(pocket_codex_codex::setup::setup_status()?.prompt_variant)
 }
 
-/// Switch the 自带-codex system prompt. `non_degraded` swaps in the bundled
+/// Switch the external-codex system prompt. `non_degraded` swaps in the bundled
 /// prompt that drops the commentary / intermediary-update mandates (which can
 /// starve reasoning, see openai/codex#30364); `default` restores codex's
 /// built-in prompt. Takes effect for threads started after the change.
@@ -188,7 +186,7 @@ pub fn codex_set_prompt_variant(variant: String) -> Result<()> {
     pocket_codex_codex::setup::set_prompt_variant(&variant)
 }
 
-/// A started ChatGPT login on the 自带 codex, mirrored for Dart. `mode` is
+/// A started ChatGPT login on the external codex, mirrored for Dart. `mode` is
 /// `"browser"` (open `auth_url`) or `"device"` (open `verification_url` and
 /// enter `user_code`) — codex falls back to device code when it can't bind its
 /// local OAuth callback port.
@@ -247,7 +245,8 @@ pub fn codex_login_cancel(service_key: String, login_id: String) -> Result<()> {
     app_session::login_cancel(&service_key, &login_id)
 }
 
-/// Sign the 自带 codex out (revoke + delete its `auth.json`) on `service_key`.
+/// Sign the external codex out (revoke + delete its `auth.json`) on
+/// `service_key`.
 pub fn codex_logout(service_key: String) -> Result<()> {
     app_session::codex_logout(&service_key)
 }
@@ -381,19 +380,16 @@ pub struct AppServeStatusDto {
     pub meta_service_key: String,
     /// The meta tunnel is currently published.
     pub meta_registered: bool,
-    /// This host runs codex IN-PROCESS (the compiled-in `embedded-codex`)
-    /// rather than a spawned external binary.
+    /// Legacy runtime flag; always false for external Codex hosts.
     pub embedded: bool,
-    /// The resolved external codex binary path, or `None` for an embedded host.
+    /// The resolved external codex binary path.
     pub codex_binary: Option<String>,
     /// Upstream proxy codex + the API proxy were started with, or `None` when
     /// they inherit the app's environment.
     pub proxy: Option<String>,
 }
 
-/// The `deps/codex` commit the compiled-in (自带) codex app-server was built
-/// from — its meaningful "version", since codex's own crate version is a
-/// `0.0.0` placeholder. The host details show this for an embedded host.
+/// Legacy version endpoint; returns `unavailable` because no engine is bundled.
 pub fn embedded_codex_version() -> String {
     pocket_codex_codex::EMBEDDED_CODEX_COMMIT.to_string()
 }
@@ -402,9 +398,8 @@ pub fn embedded_codex_version() -> String {
 /// signed-in account, publishing both `app:<name>` and `api:<name>`. Re-hosting
 /// a name whose codex is still alive just re-registers any dropped tunnels.
 /// `proxy` is the upstream proxy both use to reach chatgpt.com (`None` =
-/// inherit env). `embedded` runs codex's app-server in-process (the compiled-in
-/// `embedded-codex`) instead of spawning an external binary — desktop only; the
-/// `binary_override` is ignored when `embedded` is set. Desktop only.
+/// inherit env). Desktop only. `embedded` is retained for bridge compatibility;
+/// passing true returns a built-in-engine-not-implemented error before startup.
 pub fn app_serve_start(
     port: u16,
     binary_override: Option<String>,

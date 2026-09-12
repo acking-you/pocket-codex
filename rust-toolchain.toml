@@ -5,18 +5,11 @@
 # options. The actual production code is kept compatible with stable Rust;
 # you can swap the channel locally to verify that.
 #
-# This channel is also what the desktop app compiles the embedded codex with:
-# our cargokit patch (apps/flutter/rust_builder/.../builder.dart) reads this
-# `channel` so `flutter build` uses the pinned toolchain (auto-installed by
-# rustup) instead of a possibly-stale `stable`. So it must stay >= codex's own
-# rustc floor (deps/codex/codex-rs/rust-toolchain.toml).
+# The desktop bridge and upstream protocol dependencies must share a compiler
+# at or above the protocol crates' Rust floor.
 
 [toolchain]
-# A recent nightly that supports every rustfmt option in `rustfmt.toml` and is
-# new enough for the embedded codex (needs rustc >= 1.95). NOTE: not just "the
-# latest" — nightlies after ~2026-06 hit a `queries overflow the depth limit`
-# rustc regression compiling codex-goal-extension, so this is pinned to the
-# newest nightly verified to build the embedded codex.
+# Keep this verified pin in sync with CI and release builds.
 channel = "nightly-2026-06-01"
 
 # Targets we want available out of the box. `wasm32-unknown-unknown` is

@@ -35,7 +35,7 @@ enum _Method {
   provider,
 }
 
-/// 自带 codex 首次配置向导。
+/// First-run configuration for external Codex.
 ///
 /// 当本机 `CODEX_HOME` 既没有凭证(`auth.json`)也没有自定义 provider 时,codex
 /// 无法发起任何模型调用。这个页面用两种方式引导用户配好:

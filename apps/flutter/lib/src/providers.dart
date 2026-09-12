@@ -158,7 +158,7 @@ final localServeListProvider = FutureProvider<List<AppServeStatus>>((
   return ref.watch(bridgeApiProvider).appServeStatus();
 });
 
-/// The 自带 codex's config/credential status on THIS machine (config.toml /
+/// The external Codex's config/credential status on THIS machine (config.toml /
 /// auth.json / custom provider). The chat uses it to guide the user to the
 /// setup wizard when the local host's codex can't make model calls yet. Refresh
 /// via `ref.invalidate` after the setup wizard changes anything.

@@ -2033,19 +2033,19 @@ abstract class AppLocalizations {
   /// No description provided for @codexSourceExternal.
   ///
   /// In en, this message translates to:
-  /// **'External codex'**
+  /// **'External Codex'**
   String get codexSourceExternal;
 
   /// No description provided for @codexSourceBuiltin.
   ///
   /// In en, this message translates to:
-  /// **'Built-in'**
+  /// **'Built-in engine'**
   String get codexSourceBuiltin;
 
   /// No description provided for @codexBuiltinNote.
   ///
   /// In en, this message translates to:
-  /// **'Runs the app\'s built-in codex in-process — no install needed.'**
+  /// **'Not implemented yet. Use external Codex.'**
   String get codexBuiltinNote;
 
   /// No description provided for @hostRuntimeInfo.

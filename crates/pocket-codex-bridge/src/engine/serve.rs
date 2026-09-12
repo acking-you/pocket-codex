@@ -80,14 +80,7 @@ struct LocalServe {
     /// Holding it IS the publication — dropping it unpublishes.
     app_register: Option<Published>,
     watchdog: JoinHandle<()>,
-    /// The in-process codex app-server task (embedded mode). `None` for an
-    /// external (spawned-binary) host. Aborted on stop. Swapped for a fresh
-    /// task by [`embedded_health_watchdog`] when the server wedges, so this
-    /// always holds the LIVE supervisor.
-    embedded: Option<JoinHandle<()>>,
-    /// Tails an external codex's log file into the in-app log viewer. `Some`
-    /// for an external host, `None` for embedded (whose logs already stream
-    /// through the in-process tracing layer). Aborted on stop.
+    /// Tails the external codex log into the in-app viewer. Aborted on stop.
     log_tail: Option<JoinHandle<()>>,
     // in-process Responses API proxy.
     api_key: String,
@@ -102,9 +95,7 @@ struct LocalServe {
     meta_svc: JoinHandle<()>,
     /// `Some` while the meta service is published; `None` once deregistered.
     meta_register: Option<Published>,
-    /// The resolved external codex binary path, or `None` for an embedded host
-    /// (which runs codex in-process). Surfaced in the host details for
-    /// debugging.
+    /// The resolved external codex binary path, surfaced in host details.
     codex_binary: Option<String>,
     /// The upstream proxy codex + the API proxy were started with, or `None`
     /// when they inherit the app's own environment. Surfaced for debugging.
@@ -165,10 +156,9 @@ pub struct ServeStatus {
     pub meta_service_key: String,
     /// The meta tunnel is published (register task live).
     pub meta_registered: bool,
-    /// This host runs codex IN-PROCESS (the compiled-in `embedded-codex`)
-    /// rather than spawning an external binary.
+    /// Legacy runtime flag; always false for external Codex hosts.
     pub embedded: bool,
-    /// The resolved external codex binary path, or `None` for an embedded host.
+    /// The resolved external codex binary path.
     pub codex_binary: Option<String>,
     /// Upstream proxy codex + the API proxy were started with, or `None` when
     /// they inherit the app's environment.
@@ -406,119 +396,11 @@ fn registration_slot(ls: &mut LocalServe, kind: ServiceKind) -> &mut Option<Publ
     }
 }
 
-/// Start hosting a local codex app-server **and** a Responses API proxy under
-/// the signed-in account, publishing both `app:<name>` and `api:<name>`.
-/// Re-hosting a name whose codex is still alive just re-registers any dropped
-/// tunnels (no restart). `proxy` is the upstream proxy both codex and the API
-/// proxy use to reach chatgpt.com (`None` = inherit the app's environment).
-/// Run codex's app-server in-process on `listen_url`, restarting it if it ever
-/// exits, until the task is aborted on stop. This is the embedded-mode
-/// equivalent of the spawned `codex` binary. It only reacts to the task
-/// EXITING (clean return, error, panic); a wedged-but-alive server never
-/// trips it — that is [`embedded_health_watchdog`]'s job.
-#[cfg(any(target_os = "windows", target_os = "macos"))]
-async fn run_embedded_supervised(listen_url: String) {
-    // Bounded restart backoff so a persistently-broken embedded codex (bad
-    // state, a bind that never frees) can't hot-loop at ~1 Hz; a run that lasts
-    // a while resets it so a one-off crash still restarts promptly.
-    let mut failures: u32 = 0;
-    loop {
-        let started = std::time::Instant::now();
-        // Run the in-process app-server as its OWN task and await its handle, so
-        // a PANIC in codex's top-level accept future is delivered here as a
-        // JoinError instead of unwinding through (and, in a release build,
-        // aborting) the whole desktop. We log and restart, exactly as for a
-        // clean exit or an error. (Panics inside codex's per-connection subtasks
-        // are already contained by the tokio runtime under the unwind panic
-        // strategy — see the workspace `[profile.release] panic = "unwind"`
-        // note; this guards the supervisor's own future too so the embedded
-        // server auto-recovers rather than the service silently dying.)
-        let url = listen_url.clone();
-        let handle =
-            runtime::runtime().spawn(async move { pocket_codex_codex::embedded::run(&url).await });
-        // Aborting THIS supervisor must stop the server too: dropping a
-        // JoinHandle DETACHES its task, so without this guard an abort (a
-        // failed start, `serve_stop`) would leave the inner app-server
-        // serving the port forever — unsupervised and unpublished.
-        let _abort_inner = AbortOnDrop(handle.abort_handle());
-        match handle.await {
-            Ok(Ok(())) => {
-                tracing::warn!(%listen_url, "embedded codex app-server exited; restarting")
-            },
-            Ok(Err(e)) => {
-                eprintln!("[embedded codex] failed on {listen_url}: {e:#}; restarting");
-                tracing::error!(%listen_url, "embedded codex app-server failed: {e:#}; restarting")
-            },
-            Err(join_err) if join_err.is_panic() => {
-                eprintln!("[embedded codex] PANICKED on {listen_url}: {join_err}; restarting");
-                tracing::error!(%listen_url, "embedded codex app-server PANICKED: {join_err}; restarting")
-            },
-            Err(join_err) => {
-                // Cancelled (e.g. runtime shutdown) — don't hot-loop.
-                tracing::warn!(%listen_url, "embedded codex app-server task ended: {join_err}");
-            },
-        }
-        // A healthy run (up long enough to have served) clears the backoff so a
-        // transient crash restarts fast; repeated fast failures back off.
-        failures = if started.elapsed() >= Duration::from_secs(30) {
-            0
-        } else {
-            failures.saturating_add(1)
-        };
-        tokio::time::sleep(proxy_restart_backoff(failures)).await;
-    }
-}
-
-/// Aborts the wrapped task when dropped. Guards a spawned inner task across
-/// an `.await` in its supervisor: if the supervisor is itself aborted at that
-/// point, the drop aborts the inner task too, where dropping the bare
-/// `JoinHandle` would silently DETACH it. Dropping after a completed task is
-/// a no-op abort.
-#[cfg(any(target_os = "windows", target_os = "macos"))]
-struct AbortOnDrop(tokio::task::AbortHandle);
-
-#[cfg(any(target_os = "windows", target_os = "macos"))]
-impl Drop for AbortOnDrop {
-    fn drop(&mut self) {
-        self.0.abort();
-    }
-}
-
-/// Block until `host:port` accepts a TCP connection (the embedded WS listener
-/// is up) or `timeout` elapses.
-#[cfg(any(target_os = "windows", target_os = "macos"))]
-fn wait_for_listener(host: &str, port: u16, timeout: Duration) -> Result<()> {
-    let deadline = std::time::Instant::now() + timeout;
-    while std::time::Instant::now() < deadline {
-        if tcp_port_open(host, port) {
-            return Ok(());
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    bail!("embedded codex app-server never listened on {host}:{port} within {timeout:?}")
-}
-
 /// Reserve a free loopback port (when the caller passed 0 for an automatic
 /// one).
 fn free_loopback_port() -> Result<u16> {
     let l = std::net::TcpListener::bind("127.0.0.1:0").context("reserving a loopback port")?;
     Ok(l.local_addr()?.port())
-}
-
-/// Prove the user-chosen port is actually bindable by binding-and-dropping it,
-/// BEFORE the embedded supervisor exists. The supervisor swallows its bind
-/// failure into a silent retry loop, and neither TCP wait can tell our
-/// listener from a foreign one — this probe fails a taken port in
-/// milliseconds, with the true cause, and also catches holders that never
-/// accept at all (classically a leaked WSL mirrored-networking lease, which
-/// would otherwise burn the whole listener wait and die with a generic
-/// "never listened").
-#[cfg(any(target_os = "windows", target_os = "macos"))]
-fn probe_port_free(port: u16) -> Result<()> {
-    match std::net::TcpListener::bind(("127.0.0.1", port)) {
-        Ok(_) => Ok(()),
-        Err(cause) => Err(embedded_bind_conflict_error(port, &cause)),
-    }
 }
 
 /// Size at which a running host's log file is truncated by its tailer.
@@ -573,8 +455,7 @@ fn per_host_log_file(name: &str) -> Result<std::path::PathBuf> {
 }
 
 /// Tail an external codex process's log file (its own `tracing` output) into
-/// the in-app log stream, so the viewer shows a spawned (外接) app-server's
-/// logs the same way the in-process (自带) one already does. Starts at
+/// the in-app log stream. Starts at
 /// `start_pos` (this run's first byte), polls for appended content, and emits
 /// each complete new line under a `codex(<name>)` target. Aborted on stop.
 fn tail_codex_log(log_file: std::path::PathBuf, start_pos: u64, name: String) -> JoinHandle<()> {
@@ -654,40 +535,14 @@ fn tail_codex_log(log_file: std::path::PathBuf, start_pos: u64, name: String) ->
     })
 }
 
-/// Make the host's proxy visible to in-process codex via the process
-/// environment (a spawned child gets it via its command env instead). Loopback
-/// is kept direct so codex's own WS and our local services aren't proxied.
-#[cfg(any(target_os = "windows", target_os = "macos"))]
-#[allow(
-    deprecated_safe_2024,
-    reason = "set_var is safe in edition 2021; called once at host start before concurrent env use"
-)]
-fn set_proxy_env(proxy: &str) {
-    for key in ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"]
-    {
-        std::env::set_var(key, proxy);
-    }
-    if std::env::var_os("NO_PROXY").is_none() && std::env::var_os("no_proxy").is_none() {
-        std::env::set_var("NO_PROXY", "localhost,127.0.0.1,::1");
-        std::env::set_var("no_proxy", "localhost,127.0.0.1,::1");
-    }
-}
-
 /// Which codex binary to spawn: explicit override → persisted config → `$PATH`.
-/// `None` for an embedded host, which runs codex in-process and has no binary
-/// to find.
-///
 /// Persists an override that differs from what is saved, so the next start
 /// finds the same codex without the caller passing it again.
 fn resolve_codex_binary(
-    embedded: bool,
     binary_override: Option<String>,
     support: &std::path::Path,
     config: &mut pocket_codex_core::config::Config,
 ) -> Result<Option<std::path::PathBuf>> {
-    if embedded {
-        return Ok(None);
-    }
     let override_trimmed = binary_override
         .as_deref()
         .map(str::trim)
@@ -781,6 +636,8 @@ fn warn_if_no_codex_login() {
     }
 }
 
+/// Host an external Codex process and publish its app, API, and meta services.
+/// The legacy `embedded` option is rejected before configuration or startup.
 pub fn serve_start(
     port: u16,
     binary_override: Option<String>,
@@ -788,15 +645,18 @@ pub fn serve_start(
     proxy: Option<String>,
     embedded: bool,
 ) -> Result<ServeReport> {
+    if embedded {
+        bail!("the built-in engine is not implemented; use an external codex binary");
+    }
     let support = runtime::support_dir()?;
     let mut config = load_config(&support)?;
     if config.account_token().is_none() {
         bail!("sign in with GitHub before hosting a local app-server");
     }
 
-    let binary = resolve_codex_binary(embedded, binary_override, &support, &mut config)?;
+    let binary = resolve_codex_binary(binary_override, &support, &mut config)?;
     // Capture the resolved path for the host details before `binary` is moved
-    // into the spawn options below (`None` for an embedded host).
+    // into the spawn options below.
     let codex_binary_display = binary.as_ref().map(|p| p.display().to_string());
 
     let device = default_device_id();
@@ -830,79 +690,13 @@ pub fn serve_start(
     let config_store = config_store()?;
     let host_config_store = host_store()?;
 
-    // Resolve an automatic port (0) HERE, for both paths: the external spawn
+    // Resolve an automatic port (0) here: the external spawn
     // can't take 0 (codex would bind an ephemeral port that neither `spawn`'s
     // port wait nor `verify_ready` ever learns), and the hosting form + the
     // startup-failure hint both promise 0 works.
     let port = if port == 0 { free_loopback_port()? } else { port };
 
-    // Bring up codex serving 127.0.0.1:<port>: in-process (embedded) or as a
-    // spawned child binary. Both yield the local app-server socket, a pid (our
-    // own for embedded), the embedded task handle (`None` for external), and a
-    // watchdog keeping codex alive, and (external only) a log-file tailer. Runs
-    // on the flutter_rust_bridge worker thread, so the blocking port poll is fine.
-    #[allow(
-        clippy::type_complexity,
-        reason = "a local bring-up tuple immediately destructured into named bindings"
-    )]
-    let (app_local, pid, embedded_task, watchdog, log_tail, adopted): (
-        SocketAddr,
-        u32,
-        Option<JoinHandle<()>>,
-        JoinHandle<()>,
-        Option<JoinHandle<()>>,
-        bool,
-    ) = if embedded {
-        #[cfg(any(target_os = "windows", target_os = "macos"))]
-        {
-            // In-process codex reaches chatgpt via the host's proxy from the
-            // process environment (the spawned child gets it via its command env).
-            if let Some(px) = proxy.as_deref() {
-                set_proxy_env(px);
-            }
-            // Fail a taken port BEFORE the supervisor exists — its own bind
-            // failure disappears into a silent retry loop, and neither TCP
-            // wait below can tell our listener from a foreign process's.
-            probe_port_free(port)?;
-            let listen_url = format!("ws://127.0.0.1:{port}");
-            let task = runtime::runtime().spawn(run_embedded_supervised(listen_url));
-            if let Err(e) = wait_for_listener("127.0.0.1", port, Duration::from_secs(30)) {
-                // Abort the supervisor, or it would keep retrying the bind
-                // forever after this start already failed — and could later
-                // come up unpublished and out of reach of `serve_stop`.
-                task.abort();
-                return Err(e);
-            }
-            // An accepting port is still NOT proof our embedded codex is the
-            // one serving it (the probe→bind handoff has a window a foreign
-            // process could grab; embedded's bind would then quietly retry in
-            // the supervisor while the FOREIGN listener satisfies the TCP
-            // wait) — and the app/api/meta tunnels would publish an unrelated
-            // server. Only a 2xx /readyz proves a live codex app-server
-            // answers before anything is published.
-            if !pocket_codex_codex::wait_for_readyz("127.0.0.1", port, READY_TIMEOUT) {
-                task.abort();
-                return Err(embedded_not_ready_error(port));
-            }
-            let app_local: SocketAddr = format!("127.0.0.1:{port}")
-                .parse()
-                .expect("loopback socket addr");
-            // The supervisor only restarts the in-process server when its task
-            // EXITS; a wedged-but-alive server (hung accept loop that stops
-            // answering /readyz) never exits, so — exactly like the external
-            // path — a watchdog probes /readyz and abort+respawns the
-            // supervisor when it goes quiet.
-            let watchdog = runtime::runtime()
-                .spawn(embedded_health_watchdog(name.clone(), app_local.to_string()));
-            // Embedded codex's logs already stream through the in-process tracing
-            // layer, so there's no separate log file to tail.
-            (app_local, std::process::id(), Some(task), watchdog, None, false)
-        }
-        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-        {
-            bail!("this build has no embedded codex; use an external codex binary");
-        }
-    } else {
+    let (app_local, pid, watchdog, log_tail, adopted) = {
         let spawn_opts = SpawnOptions {
             binary,
             listen: ListenSpec::WebSocket {
@@ -968,7 +762,7 @@ pub fn serve_start(
         // the file its stdout/stderr are redirected to, from this run's offset.
         let log_tail =
             tail_codex_log(report.info.log_file.clone(), report.log_offset, name.clone());
-        (app_local, report.info.pid, None, watchdog, Some(log_tail), report.reused)
+        (app_local, report.info.pid, watchdog, Some(log_tail), report.reused)
     };
 
     // The rest of the start can still fail (loopback listener binds, relay
@@ -1011,15 +805,8 @@ pub fn serve_start(
             if let Some(t) = &log_tail {
                 t.abort();
             }
-            match &embedded_task {
-                // In-process: aborting the supervisor stops the inner server
-                // (its AbortOnDrop guard) and frees the port.
-                Some(t) => t.abort(),
-                // External: reap the fresh child. An ADOPTED (pre-existing,
-                // reused) server is never ours to kill — mirrors the
-                // verify_ready failure path above.
-                None if !adopted => stop_codex_at(&app_local.to_string()),
-                None => {},
+            if !adopted {
+                stop_codex_at(&app_local.to_string());
             }
             return Err(e);
         },
@@ -1056,7 +843,6 @@ pub fn serve_start(
         // Filled in immediately below.
         app_register: None,
         watchdog,
-        embedded: embedded_task,
         log_tail,
         api_key: api_key.clone(),
         api_local,
@@ -1131,7 +917,7 @@ pub fn serve_status() -> Vec<ServeStatus> {
             meta_listen_addr: ls.meta_local.to_string(),
             meta_service_key: ls.meta_key.clone(),
             meta_registered: is_published(&ls.meta_register),
-            embedded: ls.embedded.is_some(),
+            embedded: false,
             codex_binary: ls.codex_binary.clone(),
             proxy: ls.proxy.clone(),
         })
@@ -1290,19 +1076,7 @@ fn stop_host_tasks(ls: LocalServe) {
     if let Some(h) = ls.log_tail {
         h.abort();
     }
-    if let Some(h) = ls.embedded {
-        // Embedded codex is an in-process task: abort it (its supervisor stops
-        // and the WS listener closes). Skip the port-targeted process kill — the
-        // listener is our own process. The abort is only DELIVERED at the
-        // task's next await, so wait (bounded, like the external path's
-        // stop_codex_at) for the port to actually close: an immediate re-host
-        // on the same port would otherwise race the dying listener and fail
-        // its probe_port_free. Normally this returns in one connect probe.
-        h.abort();
-        wait_for_port_closed(&ls.app_local.to_string(), Duration::from_secs(6));
-    } else {
-        stop_codex_at(&ls.app_local.to_string());
-    }
+    stop_codex_at(&ls.app_local.to_string());
 }
 
 /// Stop the codex app-server listening on `listen_addr` — graceful SIGTERM,
@@ -1465,18 +1239,16 @@ async fn health_watchdog(local_addr: String, spawn_opts: SpawnOptions) {
 }
 
 /// Grace before probing resumes after a watchdog-driven restart, doubling per
-/// consecutive failed recovery up to [`MAX_RESTART_BACKOFF`] — shared by the
-/// external and embedded watchdogs so their recovery pacing can't drift apart.
+/// consecutive failed recovery up to [`MAX_RESTART_BACKOFF`].
 fn health_restart_backoff(restart_failures: u32) -> Duration {
     HEALTH_RESTART_GRACE
         .saturating_mul(1u32 << restart_failures.min(5))
         .min(MAX_RESTART_BACKOFF)
 }
 
-/// The HTTP client both watchdogs probe `/readyz` with. Built with
+/// The HTTP client the watchdog probes `/readyz` with. Built with
 /// `.no_proxy()`: probes only ever target our own loopback server, and the
-/// process environment can carry an upstream proxy (the user's own, or the one
-/// `set_proxy_env` installs for an embedded host) whose `NO_PROXY` doesn't
+/// process environment can carry an upstream proxy whose `NO_PROXY` doesn't
 /// cover loopback — a proxied probe then fails against a perfectly healthy
 /// server and the watchdog would keep "recovering" it forever.
 fn probe_client() -> Option<reqwest::Client> {
@@ -1500,115 +1272,6 @@ async fn probe_thread_rpc(local_addr: &str) -> bool {
         tracing::warn!(%local_addr, error = %format!("{error:#}"), "app-server functional health probe failed");
     }
     result.is_ok()
-}
-
-/// Poll `/readyz` until it answers 2xx or `timeout` elapses — the async,
-/// in-runtime sibling of `pocket_codex_codex::wait_for_readyz` (which parks a
-/// thread).
-#[cfg(any(target_os = "windows", target_os = "macos"))]
-async fn wait_ready(client: &reqwest::Client, url: &str, timeout: Duration) -> bool {
-    let deadline = Instant::now() + timeout;
-    loop {
-        if probe_ready(client, url).await {
-            return true;
-        }
-        if Instant::now() >= deadline {
-            return false;
-        }
-        tokio::time::sleep(Duration::from_millis(250)).await;
-    }
-}
-
-/// Probe the EMBEDDED codex app-server's `/readyz` and, when it stops
-/// answering, abort + respawn its supervisor task — the embedded twin of
-/// [`health_watchdog`], with the same probe cadence, failure threshold, and
-/// restart backoff.
-///
-/// [`run_embedded_supervised`] only restarts the in-process server when its
-/// task EXITS; a wedged-but-not-exited server (hung accept loop that stops
-/// answering `/readyz`) never trips it, and without this watchdog the
-/// published app/api/meta tunnels would forward to a dead server until the
-/// user restarted hosting by hand. Limit: task abortion is cooperative — an
-/// inner task that never reaches an await can't be cancelled and then keeps
-/// the port bound (the fresh supervisor just retries its bind); every wedge
-/// that still yields recovers.
-///
-/// Returns (stops probing) once its host entry is gone or belongs to a
-/// successor host — `serve_stop` aborts this task anyway; the checks inside
-/// [`respawn_embedded_supervisor`] are the backstop for the window between
-/// entry removal and that abort.
-#[cfg(any(target_os = "windows", target_os = "macos"))]
-async fn embedded_health_watchdog(name: String, local_addr: String) {
-    let url = format!("http://{local_addr}/readyz");
-    let Some(client) = probe_client() else {
-        return;
-    };
-    let mut consecutive: u32 = 0;
-    let mut restart_failures: u32 = 0;
-    loop {
-        tokio::time::sleep(HEALTH_INTERVAL).await;
-        if probe_ready(&client, &url).await && probe_thread_rpc(&local_addr).await {
-            consecutive = 0;
-            restart_failures = 0;
-            continue;
-        }
-        consecutive += 1;
-        if consecutive < HEALTH_FAILURES {
-            continue;
-        }
-        tracing::warn!(
-            %local_addr,
-            "embedded codex app-server failed {HEALTH_FAILURES} health checks; restarting it"
-        );
-        if !respawn_embedded_supervisor(&name, &local_addr) {
-            return;
-        }
-        // The respawn itself cannot fail (it only spawns a task); whether the
-        // server actually came back is only visible on /readyz. Verify that
-        // bounded — the embedded analogue of the external path's
-        // `verify_ready` — so repeated failed recoveries engage the restart
-        // backoff instead of re-aborting at probe cadence.
-        if wait_ready(&client, &url, READY_TIMEOUT).await {
-            tracing::info!(%local_addr, "embedded codex app-server restarted");
-            restart_failures = 0;
-        } else {
-            restart_failures += 1;
-            tracing::warn!(
-                %local_addr,
-                attempt = restart_failures,
-                "restarted embedded codex app-server did not become ready"
-            );
-        }
-        consecutive = 0;
-        tokio::time::sleep(health_restart_backoff(restart_failures)).await;
-    }
-}
-
-/// Abort the embedded supervisor of host `name` and install a fresh one on
-/// the same listen URL, swapping the handle in the host entry so a later
-/// `serve_stop` aborts the LIVE task rather than a dead handle. Aborting the
-/// supervisor also stops the inner app-server (its `AbortOnDrop` guard),
-/// which frees the port for the fresh supervisor's bind-retry loop. Returns
-/// `false` — the calling watchdog must stand down — when the host is gone or
-/// is no longer this embedded server on this address (stopped or replaced
-/// concurrently: an aborted watchdog still runs sync code until its next
-/// await, so it must never touch a successor host's entry).
-#[cfg(any(target_os = "windows", target_os = "macos"))]
-fn respawn_embedded_supervisor(name: &str, local_addr: &str) -> bool {
-    let mut guard = hosts_locked();
-    let Some(ls) = guard.get_mut(name) else {
-        return false;
-    };
-    if ls.app_local.to_string() != local_addr {
-        return false;
-    }
-    let Some(old) = ls.embedded.take() else {
-        return false;
-    };
-    old.abort();
-    let listen_url = format!("ws://{local_addr}");
-    ls.embedded = Some(runtime::runtime().spawn(run_embedded_supervised(listen_url)));
-    true
 }
 
 /// Stop the wedged codex and spawn a fresh one on the same port (escalating to
@@ -1656,47 +1319,12 @@ async fn restart_codex(spawn_opts: SpawnOptions) -> Result<()> {
 }
 
 /// The caller's phrasing of the pick-another-port remedy (the hosting form's
-/// port field), shared by the embedded startup errors and
-/// [`startup_failure_error`].
+/// port field) for [`startup_failure_error`].
 fn port_retry_hint(port: u16) -> String {
     match port.checked_add(1) {
         Some(next) => format!("retry with port {next}, or 0 to pick a free port automatically"),
         None => "retry with a different port".to_string(),
     }
-}
-
-/// The hosting error for an embedded start whose port failed the pre-spawn
-/// bind probe: definitively held by another process (or an invisible
-/// port-lease holder), so the in-process app-server can never serve there.
-#[cfg(any(target_os = "windows", target_os = "macos"))]
-fn embedded_bind_conflict_error(port: u16, cause: &std::io::Error) -> anyhow::Error {
-    let retry = port_retry_hint(port);
-    // Mirror StartupFailure::diagnosis's Windows hint: the usual invisible
-    // holder is a WSL mirrored-networking port lease — nothing shows in
-    // netstat, yet binds fail with 10048.
-    #[cfg(windows)]
-    let free_hint = " — or free it (a leaked WSL mirrored-networking lease holds ports invisibly; \
-                     `wsl --shutdown` releases them)";
-    #[cfg(not(windows))]
-    let free_hint = "";
-    anyhow::anyhow!(
-        "port {port} is already in use (binding 127.0.0.1:{port} failed: {cause}), so the \
-         embedded codex app-server cannot serve there — {retry}{free_hint}"
-    )
-}
-
-/// The hosting error for an embedded start whose port passed the bind probe
-/// and got a listener, but where `/readyz` never answered 2xx: either another
-/// process grabbed the port in the probe→bind handoff, or our own app-server
-/// came up wedged. Publishing tunnels to it would be wrong either way.
-#[cfg(any(target_os = "windows", target_os = "macos"))]
-fn embedded_not_ready_error(port: u16) -> anyhow::Error {
-    let retry = port_retry_hint(port);
-    anyhow::anyhow!(
-        "the embedded codex app-server did not become ready on 127.0.0.1:{port} in time (the \
-         listener there never answered codex's /readyz — another process may have grabbed the \
-         port, or the app-server failed to start) — {retry}"
-    )
 }
 
 /// Render a [`StartupFailure`] as the hosting error surfaced to the UI —
@@ -1779,188 +1407,12 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    #[cfg(any(target_os = "windows", target_os = "macos"))]
     #[test]
-    fn probe_port_free_fails_a_held_port_with_cause_and_remedy() {
-        // Hold a port, then probe it: must fail with the true cause and the
-        // pick-another-port remedy (matching the external path's phrasing).
-        let held = std::net::TcpListener::bind("127.0.0.1:0").expect("bind a probe target");
-        let port = held.local_addr().expect("local addr").port();
-        let msg = probe_port_free(port)
-            .expect_err("probing a held port must fail")
-            .to_string();
-        assert!(msg.contains(&format!("port {port} is already in use")), "{msg}");
-        assert!(
-            msg.contains(&port_retry_hint(port)),
-            "should suggest the next port or an automatic one: {msg}"
-        );
-        #[cfg(windows)]
-        assert!(msg.contains("wsl --shutdown"), "should carry the WSL-lease hint: {msg}");
-
-        // A freed port probes clean.
-        drop(held);
-        assert!(probe_port_free(port).is_ok());
-    }
-
-    #[cfg(any(target_os = "windows", target_os = "macos"))]
-    #[test]
-    fn embedded_not_ready_error_names_both_causes_and_the_remedy() {
-        let msg = embedded_not_ready_error(18080).to_string();
-        assert!(msg.contains("did not become ready on 127.0.0.1:18080"), "{msg}");
-        assert!(msg.contains("/readyz"), "{msg}");
-        assert!(
-            msg.contains("retry with port 18081, or 0 to pick a free port automatically"),
-            "should suggest the next port or an automatic one: {msg}"
-        );
-        // The next-port hint must not overflow at the port ceiling.
-        let msg = embedded_not_ready_error(u16::MAX).to_string();
-        assert!(msg.contains("retry with a different port"), "{msg}");
-    }
-
-    /// A host entry whose task slots are inert pending futures — enough
-    /// structure to exercise the respawn swap against the real hosts map.
-    #[cfg(any(target_os = "windows", target_os = "macos"))]
-    fn fake_embedded_host(name: &str, app_local: SocketAddr) -> LocalServe {
-        let rt = runtime::runtime();
-        let dummy: SocketAddr = "127.0.0.1:1".parse().expect("dummy addr");
-        LocalServe {
-            device: "test-device".to_string(),
-            name: name.to_string(),
-            app_key: format!("pcx:test-device:app:{name}"),
-            app_local,
-            pid: std::process::id(),
-            app_register: None,
-            watchdog: rt.spawn(std::future::pending::<()>()),
-            embedded: Some(rt.spawn(std::future::pending::<()>())),
-            log_tail: None,
-            api_key: format!("pcx:test-device:api:{name}"),
-            api_local: dummy,
-            api_proxy: rt.spawn(std::future::pending::<()>()),
-            api_register: None,
-            meta_key: format!("pcx:test-device:meta:{name}"),
-            meta_local: dummy,
-            meta_svc: rt.spawn(std::future::pending::<()>()),
-            meta_register: None,
-            codex_binary: None,
-            proxy: None,
-        }
-    }
-
-    #[cfg(any(target_os = "windows", target_os = "macos"))]
-    #[test]
-    fn respawn_embedded_supervisor_swaps_in_a_live_task() {
-        crate::engine::runtime::init(std::env::temp_dir()).expect("init runtime");
-        // Hold the app port for the whole test so the respawned supervisor's
-        // inner bind fails-and-retries instead of starting a real app-server
-        // inside the test process.
-        let held = std::net::TcpListener::bind("127.0.0.1:0").expect("hold the app port");
-        let app_local = held.local_addr().expect("local addr");
-        let name = format!("respawn-swap-test-{}", std::process::id());
-        let host = fake_embedded_host(&name, app_local);
-        let old_task = host
-            .embedded
-            .as_ref()
-            .expect("embedded slot")
-            .abort_handle();
-        hosts_locked().insert(name.clone(), host);
-
-        assert!(
-            respawn_embedded_supervisor(&name, &app_local.to_string()),
-            "a live matching host must be respawned"
-        );
-
-        // The wedged (here: pending-forever) supervisor must get aborted...
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while !old_task.is_finished() && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(20));
-        }
-        assert!(old_task.is_finished(), "the old supervisor should be aborted");
-        // ...and the entry must now hold a LIVE replacement — the handle a
-        // later serve_stop aborts.
-        {
-            let guard = hosts_locked();
-            let fresh = guard
-                .get(&name)
-                .expect("host entry survives the swap")
-                .embedded
-                .as_ref()
-                .expect("a fresh embedded task is installed")
-                .abort_handle();
-            assert!(!fresh.is_finished(), "the replacement supervisor should be running");
-        }
-        if let Some(ls) = hosts_locked().remove(&name) {
-            stop_host_tasks(ls);
-        }
-    }
-
-    #[cfg(any(target_os = "windows", target_os = "macos"))]
-    #[test]
-    fn respawn_embedded_supervisor_stands_down_when_host_is_gone_or_replaced() {
-        crate::engine::runtime::init(std::env::temp_dir()).expect("init runtime");
-        // Unknown name: the host was stopped — nothing to respawn.
-        assert!(!respawn_embedded_supervisor("no-such-host", "127.0.0.1:1"));
-
-        // Same name on a DIFFERENT address (a successor host): a stale
-        // watchdog must not abort the successor's supervisor.
-        let name = format!("respawn-guard-test-{}", std::process::id());
-        let app_local: SocketAddr = "127.0.0.1:2".parse().expect("addr");
-        let host = fake_embedded_host(&name, app_local);
-        let successor = host
-            .embedded
-            .as_ref()
-            .expect("embedded slot")
-            .abort_handle();
-        hosts_locked().insert(name.clone(), host);
-        assert!(!respawn_embedded_supervisor(&name, "127.0.0.1:3"));
-        assert!(
-            !successor.is_finished(),
-            "a stale watchdog must never abort a successor host's supervisor"
-        );
-        if let Some(ls) = hosts_locked().remove(&name) {
-            stop_host_tasks(ls);
-        }
-    }
-
-    #[cfg(any(target_os = "windows", target_os = "macos"))]
-    #[test]
-    fn wait_ready_sees_a_2xx_and_times_out_on_a_dead_port() {
-        crate::engine::runtime::init(std::env::temp_dir()).expect("init runtime");
-        // A fake /readyz answering 200 for every connection (the poll loop
-        // probes repeatedly). The serving thread leaks; fine for a test.
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind fake readyz");
-        let addr = listener.local_addr().expect("local addr");
-        std::thread::spawn(move || {
-            use std::io::{Read, Write};
-            for stream in listener.incoming().flatten() {
-                let mut stream = stream;
-                let mut buf = [0u8; 512];
-                let _ = stream.read(&mut buf);
-                let _ = stream.write_all(
-                    b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
-                );
-            }
-        });
-        // Via `probe_client` rather than a hand-rolled builder, so the test
-        // exercises the SAME client production probes with. Building one here
-        // without `.no_proxy()` made this test fail on any machine with a system
-        // HTTP proxy whose exceptions miss loopback: the probe went to the proxy
-        // instead of the test's own listener — precisely the trap
-        // `probe_client`'s doc comment describes.
-        let client = probe_client().expect("build probe client");
-        let url = format!("http://{addr}/readyz");
-        assert!(runtime::runtime().block_on(wait_ready(&client, &url, Duration::from_secs(5))));
-
-        // Nothing listening: false at the deadline, not a hang.
-        let dead = {
-            let l = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
-            l.local_addr().expect("local addr")
-        };
-        let url = format!("http://{dead}/readyz");
-        assert!(!runtime::runtime().block_on(wait_ready(
-            &client,
-            &url,
-            Duration::from_millis(400)
-        )));
+    fn built_in_engine_is_rejected_before_loading_configuration() {
+        let err = serve_start(0, None, None, None, true).expect_err("built-in unavailable");
+        assert!(err
+            .to_string()
+            .contains("built-in engine is not implemented"));
     }
 
     #[test]

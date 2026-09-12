@@ -84,7 +84,7 @@ GoRouter buildRouter({
     GoRoute(path: '/welcome', builder: (c, s) => const WelcomeGuideScreen()),
     GoRoute(path: '/manage', builder: (c, s) => const ServicesScreen()),
     GoRoute(path: '/settings', builder: (c, s) => const SettingsScreen()),
-    // 自带 codex 配置向导: 检测 CODEX_HOME、填 provider 或官方登录、切换 prompt。
+    // External Codex setup: detect CODEX_HOME, configure login/provider and prompt.
     GoRoute(path: '/setup/codex', builder: (c, s) => const CodexSetupScreen()),
     GoRoute(path: '/logs', builder: (c, s) => const LogViewScreen()),
     // Session browser: no param = this machine's CODEX_HOME; ?svc=<key> = the

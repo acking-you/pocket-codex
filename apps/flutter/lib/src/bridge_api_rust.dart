@@ -241,7 +241,7 @@ class RustBridgeApi implements BridgeApi {
   @override
   Future<void> setLocale(String locale) => frb.setLocale(locale: locale);
 
-  // --- 自带 codex bootstrap: provider setup, ChatGPT login, system prompt ---
+  // --- external Codex bootstrap: provider setup, ChatGPT login, system prompt ---
 
   @override
   Future<CodexSetupStatus> codexSetupStatus() async {

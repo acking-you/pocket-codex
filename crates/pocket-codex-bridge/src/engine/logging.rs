@@ -147,7 +147,7 @@ pub fn subscribe() -> Option<broadcast::Receiver<LogLine>> {
 
 /// Feed a log line from an EXTERNAL source into the same stream — used to tail
 /// a spawned (外接) codex process's own log file, so the viewer shows its logs
-/// the way the in-process (自带) one already does. The level is a best-effort
+/// into the same viewer as Pocket-Codex logs. The level is a best-effort
 /// parse of the raw line (for coloring); the raw line itself is the message.
 pub fn push_external(target: &str, raw: &str) {
     emit(LogLine {

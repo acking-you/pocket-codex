@@ -2,7 +2,7 @@
 //!
 //! codex reads its provider + model credentials from `$CODEX_HOME/config.toml`
 //! and `$CODEX_HOME/auth.json`. A fresh machine has neither, so Pocket-Codex's
-//! own (自带) app-server can't make a single model call and hosting fails at
+//! external app-server can't make a single model call and hosting fails at
 //! the auth gate. This module lets the setup wizard bootstrap that config
 //! without the user hand-editing TOML:
 //!
@@ -53,7 +53,7 @@ const NONDEGRADED_PROMPT_FILE: &str = "pocket-codex-nondegraded-prompt.md";
 /// of narrating. Written to `CODEX_HOME` on demand by [`set_prompt_variant`].
 pub const NONDEGRADED_PROMPT: &str = include_str!("../assets/prompts/gpt-5.5-non-degraded.md");
 
-/// Which system-prompt variant is active for the 自带 codex.
+/// Which system-prompt variant is active for the external Codex.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PromptVariant {
     /// codex's built-in model prompt (no `model_instructions_file`).

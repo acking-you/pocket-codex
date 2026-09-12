@@ -305,39 +305,40 @@ void main() {
     },
   );
 
-  testWidgets('Desktop cold start restores the hosting the user left running', (
-    t,
-  ) async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
-    try {
-      final api = FakeBridgeApi(config: _accountConfig);
-      await _pumpHome(
-        t,
-        api,
-        seed: (c) => c
-            .read(uiPrefsProvider.notifier)
-            .setAutoHost(
-              const AutoHostPrefs(
-                port: 18080,
-                name: 'default',
-                proxy: 'http://127.0.0.1:11111',
-                embedded: true,
+  testWidgets(
+    'Desktop cold start migrates built-in hosting to external Codex',
+    (t) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      try {
+        final api = FakeBridgeApi(config: _accountConfig);
+        await _pumpHome(
+          t,
+          api,
+          seed: (c) => c
+              .read(uiPrefsProvider.notifier)
+              .setAutoHost(
+                const AutoHostPrefs(
+                  port: 18080,
+                  name: 'default',
+                  proxy: 'http://127.0.0.1:11111',
+                  embedded: true,
+                ),
               ),
-            ),
-      );
-      await t.pumpAndSettle();
+        );
+        await t.pumpAndSettle();
 
-      // Hosting was re-run with the persisted params and the chat opened on
-      // the freshly published local service.
-      expect(api.lastServePort, 18080);
-      expect(api.lastServeEmbedded, isTrue);
-      expect(api.lastServeProxy, 'http://127.0.0.1:11111');
-      expect(find.byKey(const Key('send-btn')), findsOneWidget);
-      expect(api.appIsConnected('pcx:local:app:default'), isTrue);
-    } finally {
-      debugDefaultTargetPlatformOverride = null;
-    }
-  });
+        // Hosting was re-run with the persisted params and the chat opened on
+        // the freshly published local service.
+        expect(api.lastServePort, 18080);
+        expect(api.lastServeEmbedded, isFalse);
+        expect(api.lastServeProxy, 'http://127.0.0.1:11111');
+        expect(find.byKey(const Key('send-btn')), findsOneWidget);
+        expect(api.appIsConnected('pcx:local:app:default'), isTrue);
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+      }
+    },
+  );
 
   testWidgets('Home drawer on a phone: no back tile, footer shortcuts shown', (
     t,

@@ -15,14 +15,8 @@
 //! decide whether to talk over stdio, a unix socket, or a websocket.
 
 #![forbid(unsafe_code)]
-// The embedded app-server's dispatch future exceeds the default layout-query depth.
-#![recursion_limit = "256"]
-
-/// The `deps/codex` submodule commit the embedded (自带) app-server was built
-/// from, baked at compile time by `build.rs`. codex's own crate version is a
-/// `0.0.0` placeholder, so this short commit is the meaningful "version" of the
-/// in-process codex. `"unknown"` if git was unavailable at build time.
-pub const EMBEDDED_CODEX_COMMIT: &str = env!("EMBEDDED_CODEX_COMMIT");
+/// Legacy built-in version marker. No Codex runtime is bundled with the app.
+pub const EMBEDDED_CODEX_COMMIT: &str = "unavailable";
 
 /// JSON-RPC 2.0 envelopes used by the codex app-server.
 pub mod protocol;
@@ -53,11 +47,6 @@ pub mod liveness;
 /// Combine transcript + liveness into a resume-safety verdict and
 /// implement force takeover of a held-open session.
 pub mod takeover;
-
-/// Desktop self-contained mode: run codex's app-server in-process (compiled in)
-/// instead of spawning an external binary. Only built with `embedded-codex`.
-#[cfg(feature = "embedded-codex")]
-pub mod embedded;
 
 pub use process::{
     locate_binary, spawn, status, stop, ListenSpec, SpawnOptions, SpawnReport, StatusReport,

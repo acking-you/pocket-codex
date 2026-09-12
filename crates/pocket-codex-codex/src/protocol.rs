@@ -5,10 +5,9 @@
 //! WebSocket text frames over `ws://`. The `jsonrpc` field is *not*
 //! required on the wire — Codex omits it — but we tolerate either.
 //!
-//! Today these types are intentionally schema-less: `params`, `result`
-//! and `error.data` use [`serde_json::Value`]. Once the upstream
-//! `codex-app-server-protocol` crate stabilises we can introduce
-//! strongly-typed variants here.
+//! Method payloads remain open-ended [`serde_json::Value`]s. The error
+//! payload comes from `codex-app-server-protocol`; local envelopes preserve
+//! the optional `jsonrpc` marker and the existing request-id API.
 
 use serde::{Deserialize, Serialize};
 
@@ -108,17 +107,8 @@ pub struct ErrorResponse {
     pub error: ErrorPayload,
 }
 
-/// JSON-RPC error object.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ErrorPayload {
-    /// Numeric error code (`-32001` is "server overloaded; retry").
-    pub code: i64,
-    /// Human-readable description.
-    pub message: String,
-    /// Optional structured data.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub data: Option<serde_json::Value>,
-}
+/// JSON-RPC error object from the upstream app-server protocol.
+pub use codex_app_server_protocol::JSONRPCErrorError as ErrorPayload;
 
 #[cfg(test)]
 mod tests {

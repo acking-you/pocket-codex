@@ -1071,14 +1071,13 @@ class AppLocalizationsEn extends AppLocalizations {
   String get codexRedetect => 'Re-detect';
 
   @override
-  String get codexSourceExternal => 'External codex';
+  String get codexSourceExternal => 'External Codex';
 
   @override
-  String get codexSourceBuiltin => 'Built-in';
+  String get codexSourceBuiltin => 'Built-in engine';
 
   @override
-  String get codexBuiltinNote =>
-      'Runs the app\'s built-in codex in-process — no install needed.';
+  String get codexBuiltinNote => 'Not implemented yet. Use external Codex.';
 
   @override
   String get hostRuntimeInfo => 'Runtime';

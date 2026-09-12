@@ -74,7 +74,7 @@ Shared / host side:
 | Crate                       | Owns                                                                                           |
 | --------------------------- | ---------------------------------------------------------------------------------------------- |
 | `pocket-codex-core`         | configuration schema, on-disk `state.toml`, well-known paths, error types, `service::{ServiceId, ServiceKind, sanitize_component, default_device_id}` for `pcx:<device>:<kind>:<name>` relay keys — small, dependency-light |
-| `pocket-codex-codex`        | spawning / supervising / inspecting the `codex app-server` child process (out-of-process *and* the in-process `embedded-codex` path), JSON-RPC envelope types |
+| `pocket-codex-codex`        | spawning / supervising / inspecting the external `codex app-server` child process, upstream protocol types and compatible JSON-RPC envelopes |
 | `pocket-codex-pb`           | async wrappers around the Git-pinned `pb-mapper` client SDK: `RelaySession` (address + credential), register / subscribe / status, `publish` (and the one name-conflict failure a caller must not retry), admin credential issuance, and credential keep-alive |
 | `pocket-codex-api-proxy`    | local Responses API proxy: forwards `/v1/responses` (HTTP + WS) to ChatGPT's Codex backend, reusing the host's `codex login`; shared by the CLI worker and the in-app host |
 | `pocket-codex-host-svc`     | host-side meta service — remote-viewable codex sessions, per-thread config, attachment upload — published on the relay as a third `meta:<name>` service |
@@ -238,82 +238,64 @@ branch updates. After pulling this repo, materialise the Codex submodule with:
 git submodule update --init --recursive
 ```
 
-### 8.1 `deps/codex` is a fork branch, not vanilla upstream
+### 8.1 External Codex only; built-in engine is unimplemented
 
-`deps/codex` tracks the **`pocket-codex` branch** of our fork
-`git@github.com:acking-you/codex.git` (pinned via `branch = pocket-codex`
-in `.gitmodules`). That branch is **upstream `openai/codex` main plus a
-small, self-contained set of pocket-codex adaptations** — it is not a
-vanilla upstream checkout. The adaptations are the *only* first-party
-changes allowed to live inside `deps/codex`, and they exist because the
-desktop app compiles codex **in-process** (the `embedded-codex` feature,
-Windows/macOS), so codex's own child processes run under our GUI host:
+**All platforms must run Codex as an external executable. Do not compile,
+link, bundle, or launch the Codex model runtime in Pocket-Codex.** The UI
+reserves a disabled **Built-in engine / 内置引擎** option marked **Not
+implemented yet / 暂未实现**. Do not re-enable it through a Cargo feature,
+target-specific dependency, build script, or release packaging step without
+an explicit change to this product requirement.
 
-- **Windows `CREATE_NO_WINDOW` console suppression.** Every `git` / shell /
-  hook / plugin / PTY child codex spawns gets `creation_flags(0x08000000)`.
-  Without it a console-subsystem child flashes a black terminal window
-  because the host process has no console. Applied at each spawn site and
-  the central git-command helpers.
-- **Embedded PTY `HPCON` → std `RawHandle` cast** so the ConPTY code builds
-  as an in-workspace path dependency.
+- First-party crates may depend directly on upstream **protocol crates only**
+  (`codex-app-server-protocol` / `codex-protocol`). No direct dependencies on
+  `codex-app-server`, `codex-core`, `codex-arg0`, `codex-config`, runtime
+  extensions, or executable/helper crates, even as optional dependencies.
+- Upstream protocol crates currently have their own transitive support
+  dependencies. Audit the resolved graph on every submodule bump; do not
+  claim these are a standalone, dependency-free schema. The graph must not
+  include `codex-app-server`, `codex-core`, `codex-arg0`, `codex-exec`,
+  `codex-tui`, `codex-windows-sandbox`, or `codex-goal-extension`.
+- Keep the external spawn/supervision/readiness/logging path. Resolve the
+  binary from an explicit path, saved configuration, then `PATH`. Missing
+  Codex must produce an installation/path error; never fall back to a bundled
+  runtime.
+- Keep the existing bridge `embedded` field/argument for compatibility:
+  status reports false, explicit true starts fail before side effects, and
+  legacy auto-host preferences restore through external Codex. Users who
+  previously relied on embedded hosting must install Codex or select its path.
+- Do not build or package upstream Windows sandbox helpers. The installed
+  external Codex owns its runtime, sandbox helpers, and version.
+- Keep the standalone Responses API proxy functional: both HTTP POST and
+  WebSocket GET on `/v1/responses` must forward requests, host authentication,
+  streaming events, and upstream errors without requiring an embedded engine.
+  Verify both transports when changing Codex dependencies or hosting.
+- Avoid parallel duplicate Rust builds and monitor disk space during local
+  verification. Prefer reusing build caches; only remove reproducible build
+  artifacts when cleanup is needed, never user data or source directories.
 
-**Rule: never carry pocket-codex logic in `deps/codex` beyond these
-host-integration shims.** Anything else belongs in the `crates/` above codex.
+### 8.2 Updating the protocol submodule
 
-### 8.2 Periodically merging upstream
+`deps/codex` remains pinned to the `pocket-codex` branch of
+`git@github.com:acking-you/codex.git`. Its historical host-integration shims
+are not built into this application. Do not add new runtime shims for this
+project. Continue to merge upstream into the shared fork branch rather than
+rebasing published history, and record the verified submodule pointer here.
 
-The `pocket-codex` branch is long-lived; we bring in upstream by **merging
-`origin/main` into it** (never rebasing — it is shared and pinned). Roughly
-every so often:
+After a protocol bump:
 
-```bash
-cd deps/codex
-git fetch origin                       # fork's main mirrors openai/codex main
-git checkout pocket-codex
-git merge origin/main                  # re-apply our shims onto upstream refactors
-# resolve conflicts by TAKING UPSTREAM's new structure, then re-inject the
-# CREATE_NO_WINDOW suppression into the moved/renamed git-command builders.
-git push origin pocket-codex
-```
-
-Then, back in **this** repo, record the new codex + keep the build green:
-
-```bash
-git add deps/codex .gitmodules         # bump the submodule pointer
-```
-
-- **Mirror codex's `[patch]` table.** codex pins forked
-  `tokio-tungstenite` / `tungstenite` (and may add others). Copy the exact
-  `rev`s from `deps/codex/codex-rs/Cargo.toml`'s `[patch]` into the root
-  `Cargo.toml` `[patch]` (both the `crates-io` and the `ssh://…tungstenite`
-  blocks) — our WS client shares those forks.
-- **Regenerate `Cargo.lock`** (`cargo update -w`); the CLI release builds
-  `--locked`.
-- **Compile the embedded path**: on Windows/macOS `cargo check -p
-  pocket_codex_bridge` pulls codex in-process, so it is the real test that
-  the merge + our shims + the patch revs still build. The `embedded-codex`
-  dependency is target-gated to Windows/macOS, so **Linux CI does not compile
-  codex at all** and will not catch codex-integration breakage — check it
-  locally on a desktop OS before opening the PR.
-- **Keep `sqlx` in lock-step with codex's `libsqlite3-sys`.** codex's
-  `codex-state` links the native `sqlite3` at a specific `libsqlite3-sys`
-  version; so does the backend's `sqlx`. Cargo forbids two `sqlite3`-linking
-  crates at *different* versions in one workspace graph, so a codex bump that
-  moves `libsqlite3-sys` breaks the whole workspace resolve. When bumping
-  codex, read `deps/codex/codex-rs/Cargo.toml`'s `libsqlite3-sys` pin and set
-  the root `sqlx` to a version whose bundled `libsqlite3-sys` matches it
-  (codex `0.37` ↔ sqlx `0.9`; codex `0.30`/`0.28` ↔ sqlx `0.8`).
-- **Keep the root `rust-toolchain.toml` at/above codex's rustc floor.** codex
-  pins its own toolchain in `deps/codex/codex-rs/rust-toolchain.toml` (e.g.
-  `1.95.0`). The desktop app compiles codex through cargokit, which we patched
-  (`apps/flutter/rust_builder/cargokit/build_tool/lib/src/builder.dart`) to read
-  the root `rust-toolchain.toml` `channel` — so `flutter build` and `cargo`
-  share ONE pinned toolchain that `rustup` auto-installs (a one-click build),
-  instead of cargokit's default stale `stable`. When codex raises its floor,
-  bump the root `rust-toolchain.toml` (and the matching `RUST_TOOLCHAIN` in
-  `ci.yml` / `release.yml`) to a nightly at/above it, and re-run
-  `cargo fmt --check` on the new nightly (rustfmt output can shift between
-  nightlies and force a reformat).
+1. Inspect the protocol manifests and run `cargo metadata --format-version 1`
+   / `cargo tree -p pocket_codex_bridge` to verify the dependency restriction
+   above on all targets/features.
+2. Mirror any still-required upstream WebSocket fork patches exactly and
+   regenerate `Cargo.lock` without unrelated dependency upgrades.
+3. Keep `sqlx` compatible with the protocol graph's transitive
+   `libsqlite3-sys` version: Cargo permits only one native sqlite3 linker.
+4. Keep the root Rust toolchain at or above the protocol crates' compiler
+   floor and keep CI/release toolchains in sync.
+5. Run the full first-party verification in §7 and build the desktop UI.
+   Never run formatting or lint rewrites inside `deps/codex` for a routine
+   application change.
 
 ## 9. Roadmap (rough)
 
@@ -348,9 +330,10 @@ The order below is our current best guess; it is not a contract.
    availability is no longer a prerequisite for two of a user's own devices
    to talk. Self-host stays the escape hatch behind `--relay`.
    Deployment unit lives in [`deploy/`](deploy/README.md).
-7. **Embedded codex (done).** Desktop builds compile codex in-process
-   behind the `embedded-codex` feature, so a machine can host without a
-   separate `codex` install; see §8.1 for the shims this requires.
+7. **External Codex only (2026-09-13).** All desktop hosts use an installed
+   external `codex`. The former embedded runtime is removed from builds and
+   packaging; **Built-in engine** is a disabled, unimplemented placeholder.
+   Only upstream protocol crates may be direct Codex dependencies (see §8.1).
 8. **App-server protocol sync (2026-09-07).** Codex fork merged upstream main
    `db0568dbb`; CLI and UI share the acknowledged initialization handshake.
    Flutter reads v2 accounts and current thread model/effort, and answers

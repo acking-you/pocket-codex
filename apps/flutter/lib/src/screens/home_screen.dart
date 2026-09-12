@@ -228,7 +228,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
               binaryOverride: host.binaryOverride,
               name: host.name,
               proxy: host.proxy,
-              embedded: host.embedded,
+              // Legacy built-in hosts are restored through the external binary.
+              embedded: false,
             );
             ref.invalidate(localServeListProvider);
             ref.invalidate(servicesProvider);
