@@ -567,3 +567,59 @@ fn evicted_turn_continues_without_advertising_a_suffix_as_its_opening() {
     assert!(opening.has_more);
     runtime::runtime().block_on(peer).expect("peer");
 }
+
+#[test]
+fn continuation_sends_only_new_items_but_reopening_retains_the_window() {
+    runtime::init(std::env::temp_dir()).expect("init");
+    let entry = |id: &str| json!({"turnId": "turn", "item": {"id": id, "type": "agentMessage", "text": "x".repeat(4096)}});
+    let (client, peer) = mock_client(vec![
+        ("thread/items/list", json!({"data": [entry("one")], "nextCursor": "two"})),
+        ("thread/items/list", json!({"data": [entry("one"), entry("two")], "nextCursor": "three"})),
+        ("thread/items/list", json!({"data": [entry("three")], "nextCursor": null})),
+    ]);
+    let session = TestSession::new(client);
+    let first = thread_turn_page_delta(&session.0, "thread", "turn", false).expect("opening");
+    assert_eq!(first.items.len(), 1);
+    for id in ["two", "three"] {
+        let page =
+            thread_turn_page_delta(&session.0, "thread", "turn", true).expect("continuation");
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].id, id);
+        assert_eq!(page.has_more, id == "two");
+    }
+    let exhausted = thread_turn_page_delta(&session.0, "thread", "turn", true).expect("exhausted");
+    assert!(exhausted.items.is_empty());
+    assert!(!exhausted.has_more);
+    let cached = thread_turn_page_delta(&session.0, "thread", "turn", false).expect("cached");
+    assert_eq!(cached.items.len(), 3);
+    runtime::runtime().block_on(peer).expect("peer");
+}
+
+#[test]
+fn monitoring_omits_selected_windows_without_losing_reopen_cache() {
+    runtime::init(std::env::temp_dir()).expect("init");
+    let metadata = json!({"thread": {"id": "monitor", "historyMode": "paginated", "updatedAt": 1}});
+    let entry = json!({"turnId": "t1", "item": {"id": "selected", "type": "agentMessage", "text": "saved history"}});
+    let (client, peer) = mock_client(vec![
+        ("thread/items/list", json!({"data": [entry], "nextCursor": null})),
+        ("thread/read", metadata.clone()),
+        (
+            "thread/turns/list",
+            json!({"data": [{"id": "t1", "status": "completed", "items": []}], "nextCursor": null}),
+        ),
+        ("thread/items/list", json!({"data": [], "nextCursor": null})),
+        (
+            "thread/turns/list",
+            json!({"data": [{"id": "t1", "status": "completed", "items": []}], "nextCursor": null}),
+        ),
+        ("thread/read", metadata),
+    ]);
+    let session = TestSession::new(client);
+    thread_turn_page_delta(&session.0, "monitor", "t1", false).expect("selection");
+    let update = thread_read_with_pages(&session.0, "monitor", false).expect("monitor");
+    assert!(update.turn_pages.is_empty());
+    let reopen = thread_read(&session.0, "monitor").expect("reopen");
+    assert_eq!(reopen.turn_pages.len(), 1);
+    assert_eq!(reopen.turn_pages[0].items[0].id, "selected");
+    runtime::runtime().block_on(peer).expect("peer");
+}

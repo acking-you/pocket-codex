@@ -196,11 +196,13 @@ Future<TurnItemsPageDto> appThreadTurnPage({
   required String threadId,
   required String turnId,
   required bool loadMore,
+  bool? deltaOnly,
 }) => RustLib.instance.api.crateApiBridgeAppThreadTurnPage(
   serviceKey: serviceKey,
   threadId: threadId,
   turnId: turnId,
   loadMore: loadMore,
+  deltaOnly: deltaOnly,
 );
 
 /// Connect to an app-server service: subscribe on `127.0.0.1:<local_port>`,
@@ -375,9 +377,11 @@ Future<void> appThreadResume({
 Future<ThreadHistoryDto> appThreadRead({
   required String serviceKey,
   required String threadId,
+  bool? includeTurnPages,
 }) => RustLib.instance.api.crateApiBridgeAppThreadRead(
   serviceKey: serviceKey,
   threadId: threadId,
+  includeTurnPages: includeTurnPages,
 );
 
 /// One page further back through a paginated thread's history.

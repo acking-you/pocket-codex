@@ -38,6 +38,7 @@ Future<List<TurnMinimapItem>> _pump(
             visibleRange: ValueNotifier<(int, int)?>(visible),
             gutterWidth: gutter,
             onSelect: selected.add,
+            onOpenOutline: () {},
           ),
         ),
       ),
@@ -82,6 +83,24 @@ Future<TestGesture> _hoverTick(WidgetTester t, double fraction) async {
 }
 
 void main() {
+  testWidgets(
+    'ten thousand turns keep spaced ticks and an exact current marker',
+    (t) async {
+      await _pump(t, items: _items(10000), visible: (15003, 15005));
+      expect(_ticks(t).length, lessThanOrEqualTo(65));
+      expect(
+        find.byKey(const ValueKey('turn-minimap-tick-5001')),
+        findsOneWidget,
+      );
+      expect(find.text('5002 / 10000'), findsOneWidget);
+      expect(find.byKey(const ValueKey('turn-minimap-tick-0')), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('turn-minimap-tick-9999')),
+        findsOneWidget,
+      );
+    },
+  );
+
   testWidgets('renders one tick per turn', (t) async {
     await _pump(t, items: _items(5));
     expect(_ticks(t), hasLength(5));
@@ -347,6 +366,7 @@ void main() {
                       visibleRange: visible,
                       gutterWidth: 120,
                       onSelect: selected.add,
+                      onOpenOutline: () {},
                     );
                   },
                 ),
@@ -428,6 +448,7 @@ void main() {
                     visibleRange: visible,
                     gutterWidth: 120,
                     onSelect: selected.add,
+                    onOpenOutline: () {},
                   ),
                 ),
               ],
@@ -543,10 +564,12 @@ void main() {
     // rail's own Focus widget — an ancestor scope would take the key events.
     final focus = t
         .widget<Focus>(
-          find.descendant(
-            of: find.byType(TurnMinimap),
-            matching: find.byType(Focus),
-          ),
+          find
+              .descendant(
+                of: find.byType(TurnMinimap),
+                matching: find.byType(Focus),
+              )
+              .first,
         )
         .focusNode!;
     focus.requestFocus();
@@ -570,11 +593,17 @@ void main() {
     t,
   ) async {
     // 200 turns at the nominal 10 px spacing would be a 2000 px rail in a 300 px
-    // window. The rail caps and the ticks pack tighter.
+    // window. The overview samples turns while preserving readable spacing.
     await _pump(t, items: _items(200), height: 300);
     final rail = t.getRect(find.byKey(const Key('turn-minimap-rail')));
     expect(rail.height, lessThanOrEqualTo(300));
-    expect(_ticks(t), hasLength(200));
+    expect(_ticks(t).length, lessThanOrEqualTo(27));
+    final positions = _ticks(
+      t,
+    ).map((tick) => t.getTopLeft(find.byKey(tick.key!)).dy).toList();
+    for (var i = 1; i < positions.length; i++) {
+      expect(positions[i] - positions[i - 1], greaterThan(7));
+    }
   });
 
   testWidgets('the rail rests at the window edge, not against the column', (

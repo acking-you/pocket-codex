@@ -2,6 +2,8 @@
 // sessions. No model turn, takeover, deletion, or message is sent.
 // Run with PCX_LIVE_UI=true and PCX_HISTORY_THREAD_IDS (comma-separated).
 import 'dart:io';
+import 'dart:ui' show FrameTiming;
+import 'package:flutter/scheduler.dart' show SchedulerBinding;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -53,6 +55,12 @@ void main() {
         markTestSkipped('existing local-host sessions not configured');
         return;
       }
+      final timings = <FrameTiming>[];
+      void record(List<FrameTiming> frames) => timings.addAll(frames);
+      SchedulerBinding.instance.addTimingsCallback(record);
+      addTearDown(
+        () => SchedulerBinding.instance.removeTimingsCallback(record),
+      );
       await application.main();
       await windowManager.ensureInitialized();
       await windowManager.setSize(const Size(1440, 960));
@@ -146,6 +154,21 @@ void main() {
             debugPrint('Native jump + continuation + monitor refresh passed');
           }
         }
+        await _until(
+          () => find
+              .byKey(const Key('history-navigation-status'))
+              .evaluate()
+              .isEmpty,
+        );
+        for (var swipe = 0; swipe < 3; swipe++) {
+          await tester.timedDrag(
+            find.byType(SuperListView).first,
+            const Offset(0, -260),
+            const Duration(milliseconds: 400),
+          );
+          await Future<void>.delayed(const Duration(milliseconds: 250));
+          expect(tester.takeException(), isNull);
+        }
         final handle = find.byKey(const Key('composer-resize-handle'));
         if (handle.evaluate().isNotEmpty) {
           await tester.drag(handle, const Offset(0, -64));
@@ -161,6 +184,22 @@ void main() {
         expect(tester.takeException(), isNull);
       }
       debugPrint('Native open samples (ms): $samples');
+      if (timings.isNotEmpty) {
+        final builds =
+            timings
+                .map((frame) => frame.buildDuration.inMicroseconds / 1000)
+                .toList()
+              ..sort();
+        final rasters =
+            timings
+                .map((frame) => frame.rasterDuration.inMicroseconds / 1000)
+                .toList()
+              ..sort();
+        final at = ((timings.length - 1) * .95).floor();
+        debugPrint(
+          'Native debug frames: ${timings.length}; build p95 ${builds[at].toStringAsFixed(1)} ms; raster p95 ${rasters[at].toStringAsFixed(1)} ms',
+        );
+      }
       await tester.pumpWidget(const SizedBox.shrink());
       await tester.pump();
     },

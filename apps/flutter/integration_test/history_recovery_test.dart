@@ -41,9 +41,14 @@ class _ObservedBridge extends RustBridgeApi {
   @override
   Future<ThreadHistory> appThreadRead(
     String serviceKey,
-    String threadId,
-  ) async {
-    final history = await super.appThreadRead(serviceKey, threadId);
+    String threadId, {
+    bool includeTurnPages = true,
+  }) async {
+    final history = await super.appThreadRead(
+      serviceKey,
+      threadId,
+      includeTurnPages: includeTurnPages,
+    );
     histories[threadId] = history;
     return history;
   }

@@ -641,5 +641,72 @@
   "codexSetupCodexHomeLabel": "Config directory",
   "codexSetupCredentialExists": "credential present",
   "resizeComposer": "Drag to resize; double-click to reset",
-  "historyGap": "Load messages in this gap"
+  "historyGap": "Load messages in this gap",
+  "reviewRequest": "Automatic review request",
+  "reviewResult": "Model review result",
+  "reviewAllowed": "Allowed",
+  "reviewDenied": "Denied",
+  "reviewLow": "Low",
+  "reviewMedium": "Medium",
+  "reviewHigh": "High",
+  "reviewCritical": "Critical",
+  "reviewUnknown": "Unknown",
+  "reviewRisk": "Risk: {level}",
+  "@reviewRisk": {
+    "placeholders": {
+      "level": {
+        "type": "String"
+      }
+    }
+  },
+  "reviewAuthorization": "Authorization: {level}",
+  "@reviewAuthorization": {
+    "placeholders": {
+      "level": {
+        "type": "String"
+      }
+    }
+  },
+  "reviewRaw": "View original content",
+  "conversationOutline": "Conversation outline",
+  "searchTurns": "Search messages or enter a turn number",
+  "turnPosition": "Turn {current} of {total}",
+  "@turnPosition": {
+    "placeholders": {
+      "current": {
+        "type": "int"
+      },
+      "total": {
+        "type": "int"
+      }
+    }
+  },
+  "stepRange": "Steps {first}–{last} of {total}",
+  "@stepRange": {
+    "placeholders": {
+      "first": {
+        "type": "int"
+      },
+      "last": {
+        "type": "int"
+      },
+      "total": {
+        "type": "int"
+      }
+    }
+  },
+  "previousSteps": "Previous steps",
+  "nextSteps": "Next steps",
+  "latestSteps": "Latest steps",
+  "jumpToStep": "Jump to step",
+  "stepNumber": "Step number",
+  "noMatchingTurns": "No matching turns",
+  "loadingTurn": "Opening turn {number}…",
+  "@loadingTurn": {
+    "placeholders": {
+      "number": {
+        "type": "int"
+      }
+    }
+  }
 }

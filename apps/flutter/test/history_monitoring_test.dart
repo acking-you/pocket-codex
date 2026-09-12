@@ -179,6 +179,7 @@ void main() {
         hasLength(1),
       );
       expect(api.turnItemCalls, ['early', 'early', 'middle']);
+      expect(api.threadReadIncludesPages.last, isFalse);
       expect(t.takeException(), isNull);
       await t.pumpWidget(const SizedBox.shrink());
       debugDefaultTargetPlatformOverride = null;

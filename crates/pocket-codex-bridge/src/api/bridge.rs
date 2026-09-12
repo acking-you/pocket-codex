@@ -637,13 +637,22 @@ fn turn_page_dto(page: app_session::TurnItemsPage) -> TurnItemsPageDto {
 }
 
 /// Read or continue a selected turn, reusing its previously loaded pages.
+/// `delta_only` opts into new items only on continuation; omission preserves
+/// cumulative windows for older callers. Opening always returns the cached
+/// prefix.
 pub fn app_thread_turn_page(
     service_key: String,
     thread_id: String,
     turn_id: String,
     load_more: bool,
+    delta_only: Option<bool>,
 ) -> Result<TurnItemsPageDto> {
-    app_session::thread_turn_page(&service_key, &thread_id, &turn_id, load_more).map(turn_page_dto)
+    let read = if delta_only.unwrap_or(false) {
+        app_session::thread_turn_page_delta
+    } else {
+        app_session::thread_turn_page
+    };
+    read(&service_key, &thread_id, &turn_id, load_more).map(turn_page_dto)
 }
 
 /// A turn reduced to what the rail shows.
@@ -993,8 +1002,18 @@ fn item_dto(i: app_session::ThreadItem) -> ThreadItemDto {
 ///
 /// A paginated thread returns only its newest turns' items — walk further back
 /// with [`app_thread_older_page`] — plus a summary of every turn in `turns`.
-pub fn app_thread_read(service_key: String, thread_id: String) -> Result<ThreadHistoryDto> {
-    let h = app_session::thread_read(&service_key, &thread_id)?;
+/// Monitoring clients set `include_turn_pages` to false to omit cached windows
+/// they already hold. Omission retains the full reopening response.
+pub fn app_thread_read(
+    service_key: String,
+    thread_id: String,
+    include_turn_pages: Option<bool>,
+) -> Result<ThreadHistoryDto> {
+    let h = if include_turn_pages.unwrap_or(true) {
+        app_session::thread_read(&service_key, &thread_id)?
+    } else {
+        app_session::thread_read_with_pages(&service_key, &thread_id, false)?
+    };
     Ok(ThreadHistoryDto {
         items: h.items.into_iter().map(item_dto).collect(),
         running: h.running,

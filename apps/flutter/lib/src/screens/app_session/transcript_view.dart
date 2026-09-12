@@ -7,6 +7,8 @@
 library;
 
 import 'package:flutter/material.dart';
+import 'approval_review.dart';
+import 'approval_review_card.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart' show DateFormat;
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
@@ -57,6 +59,9 @@ class MessageView extends StatefulWidget {
 }
 
 class _MessageViewState extends State<MessageView> {
+  String? _reviewText;
+  ApprovalReviewRequest? _reviewRequest;
+  ApprovalReviewResult? _reviewResult;
   // Hover drives only the copy-button fade. Held in a notifier (not setState)
   // so a hover repaint doesn't rebuild the message content — Linkify /
   // MarkdownBody allocate fresh TapGestureRecognizers per link on every build
@@ -125,6 +130,18 @@ class _MessageViewState extends State<MessageView> {
 
     final scheme = Theme.of(context).colorScheme;
     final isUser = item.isUser;
+    if (!identical(_reviewText, item.text)) {
+      _reviewText = item.text;
+      _reviewRequest = isUser ? ApprovalReviewRequest.parse(item.text) : null;
+      _reviewResult = isUser ? null : ApprovalReviewResult.parse(item.text);
+    }
+    if (_reviewRequest != null || _reviewResult != null) {
+      return ApprovalReviewCard(
+        raw: item.text,
+        request: _reviewRequest,
+        result: _reviewResult,
+      );
+    }
     // A Live voice handoff is a different kind of turn: a stretch of spoken
     // back-and-forth, not one typed message. It gets its own card.
     final handoff = isUser ? parseRealtimeDelegation(item.text) : null;

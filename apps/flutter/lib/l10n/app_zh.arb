@@ -540,5 +540,72 @@
   "codexSetupCodexHomeLabel": "配置目录",
   "codexSetupCredentialExists": "凭证已存在",
   "resizeComposer": "拖动调整输入框高度；双击恢复默认",
-  "historyGap": "加载此处的历史消息"
+  "historyGap": "加载此处的历史消息",
+  "reviewRequest": "自动审核请求",
+  "reviewResult": "模型审核结果",
+  "reviewAllowed": "允许",
+  "reviewDenied": "拒绝",
+  "reviewLow": "低",
+  "reviewMedium": "中",
+  "reviewHigh": "高",
+  "reviewCritical": "严重",
+  "reviewUnknown": "未知",
+  "reviewRisk": "风险：{level}",
+  "@reviewRisk": {
+    "placeholders": {
+      "level": {
+        "type": "String"
+      }
+    }
+  },
+  "reviewAuthorization": "授权程度：{level}",
+  "@reviewAuthorization": {
+    "placeholders": {
+      "level": {
+        "type": "String"
+      }
+    }
+  },
+  "reviewRaw": "查看原始内容",
+  "conversationOutline": "会话目录",
+  "searchTurns": "搜索内容或输入轮次编号",
+  "turnPosition": "第 {current} / {total} 轮",
+  "@turnPosition": {
+    "placeholders": {
+      "current": {
+        "type": "int"
+      },
+      "total": {
+        "type": "int"
+      }
+    }
+  },
+  "stepRange": "步骤 {first}–{last} / {total}",
+  "@stepRange": {
+    "placeholders": {
+      "first": {
+        "type": "int"
+      },
+      "last": {
+        "type": "int"
+      },
+      "total": {
+        "type": "int"
+      }
+    }
+  },
+  "previousSteps": "上一段步骤",
+  "nextSteps": "下一段步骤",
+  "latestSteps": "最新步骤",
+  "jumpToStep": "跳到步骤",
+  "stepNumber": "步骤编号",
+  "noMatchingTurns": "没有匹配的轮次",
+  "loadingTurn": "正在定位第 {number} 轮…",
+  "@loadingTurn": {
+    "placeholders": {
+      "number": {
+        "type": "int"
+      }
+    }
+  }
 }

@@ -1558,4 +1558,83 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get historyGap => '加载此处的历史消息';
+
+  @override
+  String get reviewRequest => '自动审核请求';
+
+  @override
+  String get reviewResult => '模型审核结果';
+
+  @override
+  String get reviewAllowed => '允许';
+
+  @override
+  String get reviewDenied => '拒绝';
+
+  @override
+  String get reviewLow => '低';
+
+  @override
+  String get reviewMedium => '中';
+
+  @override
+  String get reviewHigh => '高';
+
+  @override
+  String get reviewCritical => '严重';
+
+  @override
+  String get reviewUnknown => '未知';
+
+  @override
+  String reviewRisk(String level) {
+    return '风险：$level';
+  }
+
+  @override
+  String reviewAuthorization(String level) {
+    return '授权程度：$level';
+  }
+
+  @override
+  String get reviewRaw => '查看原始内容';
+
+  @override
+  String get conversationOutline => '会话目录';
+
+  @override
+  String get searchTurns => '搜索内容或输入轮次编号';
+
+  @override
+  String turnPosition(int current, int total) {
+    return '第 $current / $total 轮';
+  }
+
+  @override
+  String stepRange(int first, int last, int total) {
+    return '步骤 $first–$last / $total';
+  }
+
+  @override
+  String get previousSteps => '上一段步骤';
+
+  @override
+  String get nextSteps => '下一段步骤';
+
+  @override
+  String get latestSteps => '最新步骤';
+
+  @override
+  String get jumpToStep => '跳到步骤';
+
+  @override
+  String get stepNumber => '步骤编号';
+
+  @override
+  String get noMatchingTurns => '没有匹配的轮次';
+
+  @override
+  String loadingTurn(int number) {
+    return '正在定位第 $number 轮…';
+  }
 }

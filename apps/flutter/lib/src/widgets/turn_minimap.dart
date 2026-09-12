@@ -99,8 +99,8 @@ double _hoverTickWidth(int distance) => switch (distance) {
   _ => _kTickWidth,
 };
 
-/// A left-gutter rail of one tick per conversation turn: hover a tick to preview
-/// that turn, click to jump to it.
+/// A left-gutter overview with spaced ticks: hover to preview, click to jump.
+/// Dense histories are sampled visually; every turn remains in the outline.
 ///
 /// This replaces a pair of prev/next arrows in the bottom-right corner. Those
 /// could only step, one turn at a time, with no indication of how many turns
@@ -120,6 +120,7 @@ class TurnMinimap extends StatefulWidget {
     required this.gutterWidth,
     required this.onSelect,
     this.onPreview,
+    this.onOpenOutline,
   });
 
   /// The turns, in transcript order.
@@ -137,11 +138,12 @@ class TurnMinimap extends StatefulWidget {
   /// Jump to this turn.
   final ValueChanged<TurnMinimapItem> onSelect;
 
-  /// Called when the pointer rests on a turn, before any click. Lets the
-  /// transcript start fetching a turn it hasn't loaded so the jump is instant
-  /// when the click comes. Optional: the preview itself needs no fetch, since
-  /// the entry already carries its text.
+  /// Preview notification only. Use the supplied summary; never fetch history
+  /// on hover. Only explicit selection should start a page request.
   final ValueChanged<TurnMinimapItem>? onPreview;
+
+  /// Opens the exact, searchable index without loading transcript pages.
+  final VoidCallback? onOpenOutline;
 
   @override
   State<TurnMinimap> createState() => _TurnMinimapState();
@@ -158,6 +160,24 @@ class _TurnMinimapState extends State<TurnMinimap> {
 
   final _focus = FocusNode(debugLabel: 'turn-minimap');
   TurnMinimapItem? _pressed;
+  List<int> _loadedIndices = [];
+
+  void _indexLoadedRows() {
+    _loadedIndices =
+        [
+          for (var i = 0; i < widget.items.length; i++)
+            if (widget.items[i].rowIndex >= 0) i,
+        ]..sort(
+          (a, b) =>
+              widget.items[a].rowIndex.compareTo(widget.items[b].rowIndex),
+        );
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _indexLoadedRows();
+  }
 
   @override
   void dispose() {
@@ -168,6 +188,7 @@ class _TurnMinimapState extends State<TurnMinimap> {
   @override
   void didUpdateWidget(TurnMinimap old) {
     super.didUpdateWidget(old);
+    if (!identical(old.items, widget.items)) _indexLoadedRows();
     final active = _active;
     final item = active == null ? null : old.items[active];
     if (item != null && (item.turnId.isNotEmpty || item.messageId.isNotEmpty)) {
@@ -232,15 +253,21 @@ class _TurnMinimapState extends State<TurnMinimap> {
   /// The turn containing the viewport's first row, even when its user message
   /// has scrolled offscreen. Unloaded turns have no row to compare against.
   int? _currentIndex((int, int)? range) {
-    if (range == null) return null;
-    int? current;
-    for (var i = 0; i < widget.items.length; i++) {
-      final row = widget.items[i].rowIndex;
-      if (row < 0) continue;
-      if (row > range.$1) return current ?? (row <= range.$2 ? i : null);
-      current = i;
+    if (range == null || _loadedIndices.isEmpty) return null;
+    var low = 0;
+    var high = _loadedIndices.length;
+    while (low < high) {
+      final middle = (low + high) ~/ 2;
+      if (widget.items[_loadedIndices[middle]].rowIndex <= range.$1) {
+        low = middle + 1;
+      } else {
+        high = middle;
+      }
     }
-    return current;
+    if (low > 0) return _loadedIndices[low - 1];
+    return widget.items[_loadedIndices.first].rowIndex <= range.$2
+        ? _loadedIndices.first
+        : null;
   }
 
   void _move(int delta) {
@@ -335,6 +362,28 @@ class _TurnMinimapState extends State<TurnMinimap> {
                   _rail(railHeight, railTop, hitWidth, scheme),
                   _railTarget(railHeight, railTop, hitWidth),
                   ?_preview(railHeight, railTop),
+                  if (widget.onOpenOutline != null)
+                    Positioned(
+                      left: 0,
+                      top: railTop + railHeight + 14,
+                      child: ValueListenableBuilder<(int, int)?>(
+                        valueListenable: widget.visibleRange,
+                        builder: (_, range, _) => TextButton(
+                          key: const Key('turn-minimap-outline'),
+                          onPressed: widget.onOpenOutline,
+                          style: TextButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(horizontal: 4),
+                            minimumSize: const Size(40, 32),
+                            textStyle: Theme.of(
+                              context,
+                            ).textTheme.labelSmall?.copyWith(fontSize: 10),
+                          ),
+                          child: Text(
+                            '${(_currentIndex(range) ?? 0) + 1} / ${widget.items.length}',
+                          ),
+                        ),
+                      ),
+                    ),
                 ],
               ),
             ),
@@ -402,8 +451,8 @@ class _TurnMinimapState extends State<TurnMinimap> {
   }
 
   int _indexOf(TurnMinimapItem item) => widget.items.indexWhere((entry) {
-    if (item.turnId.isNotEmpty) return entry.turnId == item.turnId;
     if (item.messageId.isNotEmpty) return entry.messageId == item.messageId;
+    if (item.turnId.isNotEmpty) return entry.turnId == item.turnId;
     return identical(entry, item);
   });
 
@@ -421,8 +470,8 @@ class _TurnMinimapState extends State<TurnMinimap> {
       final item = _pressed;
       _pressed = null;
       if (item == null) return;
-      // Loading a preview can replace entries and shift row indices between
-      // press and release. Resolve the same turn in the latest list.
+      // Monitoring can shift rows between press and release. Resolve the same
+      // message or turn in the latest list.
       final index = _indexOf(item);
       if (index >= 0) _select(index);
     },
@@ -440,8 +489,17 @@ class _TurnMinimapState extends State<TurnMinimap> {
   /// The ticks. Each repaints on scroll through [TurnMinimap.visibleRange]
   /// alone, so following a streaming reply never rebuilds the transcript.
   List<Widget> _ticks(double railHeight, ColorScheme scheme, int? highlighted) {
+    // Paint a bounded overview. The exact active turn remains addressable via
+    // pointer mapping, keyboard, and the outline even between sampled marks.
+    final count = widget.items.length;
+    final slots = math.min(count, math.max(2, (railHeight / 8).floor() + 1));
+    final indices = <int>{
+      for (var slot = 0; slot < slots; slot++)
+        (slot * (count - 1) / (slots - 1)).round(),
+      ?highlighted,
+    }.toList()..sort();
     return [
-      for (var i = 0; i < widget.items.length; i++)
+      for (final i in indices)
         Positioned(
           left: 0,
           top: railHeight * _fractionOf(i) - 1,
@@ -450,8 +508,10 @@ class _TurnMinimapState extends State<TurnMinimap> {
           child: Container(
             key: ValueKey('turn-minimap-tick-$i'),
             height: 2,
-            width: _active != null
+            width: _active != null && count == slots
                 ? _hoverTickWidth((i - _active!).abs())
+                : i == _active
+                ? _kPreviewTickWidth
                 : i == highlighted
                 ? _kCurrentTickWidth
                 : _kTickWidth,
@@ -517,7 +577,12 @@ class _TurnMinimapState extends State<TurnMinimap> {
               _kPreviewHitPadding,
               _kPreviewHitPadding,
             ),
-            child: _TurnPreviewCard(item: item, width: width),
+            child: _TurnPreviewCard(
+              item: item,
+              width: width,
+              index: active,
+              total: widget.items.length,
+            ),
           ),
         ),
       ),
@@ -527,12 +592,19 @@ class _TurnMinimapState extends State<TurnMinimap> {
 
 /// The floating preview: what the user asked, and how the turn answered.
 class _TurnPreviewCard extends StatelessWidget {
-  const _TurnPreviewCard({required this.item, required this.width});
+  const _TurnPreviewCard({
+    required this.item,
+    required this.width,
+    required this.index,
+    required this.total,
+  });
 
   final TurnMinimapItem item;
 
   /// Resolved width — the preferred one, or less where the gutter is tight.
   final double width;
+  final int index;
+  final int total;
 
   @override
   Widget build(BuildContext context) {
@@ -556,6 +628,11 @@ class _TurnPreviewCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
+          Text(
+            '${index + 1} / $total',
+            style: theme.textTheme.labelSmall?.copyWith(color: scheme.primary),
+          ),
+          const SizedBox(height: 4),
           // An attachment-only turn has no words of its own to head the card, so
           // the reply stands alone rather than under an empty line.
           if (question.isNotEmpty)

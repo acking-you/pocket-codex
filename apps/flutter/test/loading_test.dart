@@ -1,8 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/widgets/loading.dart';
 
 Widget _host(Widget child, {bool reduceMotion = false}) => MaterialApp(
+  localizationsDelegates: AppLocalizations.localizationsDelegates,
+  supportedLocales: AppLocalizations.supportedLocales,
+  locale: const Locale('en'),
   home: MediaQuery(
     data: MediaQueryData(disableAnimations: reduceMotion),
     child: Scaffold(body: child),
@@ -29,6 +33,25 @@ BoxDecoration _firstSkeleton(WidgetTester t) =>
         as BoxDecoration;
 
 void main() {
+  testWidgets(
+    'history loading is delayed and static, and cancels on cache hit',
+    (t) async {
+      await t.pumpWidget(_host(const ChatLoadingSkeleton()));
+      expect(find.byType(Text), findsNothing);
+      await t.pump(const Duration(milliseconds: 200));
+      expect(find.byType(Text), findsNothing);
+      await t.pumpWidget(_host(const Text('cached conversation')));
+      await t.pump(const Duration(milliseconds: 300));
+      expect(find.text('cached conversation'), findsOneWidget);
+      await t.pumpWidget(_host(const ChatLoadingSkeleton()));
+      await t.pump(const Duration(milliseconds: 250));
+      expect(find.byType(Text), findsOneWidget);
+      expect(find.byType(Shimmer), findsNothing);
+      expect(t.binding.hasScheduledFrame, isFalse);
+      await t.pumpWidget(_host(const SizedBox()));
+    },
+  );
+
   testWidgets('a skeleton inside a shimmer paints a moving gradient', (
     t,
   ) async {
@@ -37,7 +60,7 @@ void main() {
     // alphas never reached the screen and the skeleton looked frozen. Forcing
     // the shape opaque to "fix" that made srcATop yield solid black bars.
     // The sweep is a gradient fill now, with no blend mode in the way.
-    await t.pumpWidget(_host(const ChatLoadingSkeleton()));
+    await t.pumpWidget(_host(const ListLoadingSkeleton(rows: 2)));
     final first = _firstSkeleton(t).gradient! as LinearGradient;
     expect(first.colors.first.a, lessThan(0.2), reason: 'base stays subtle');
     expect(first.colors[1].a, greaterThan(first.colors.first.a * 2));

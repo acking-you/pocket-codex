@@ -352,7 +352,9 @@ The order below is our current best guess; it is not a contract.
    host (last used → locally hosted → first reachable), auto-connects,
    and opens the latest session with all sessions in the sidebar; the
    services hub lives on at `/manage`; desktop auto-restores hosting on
-   boot (`ui_state.json`).
+   boot (`ui_state.json`). P4 adds structured Guardian review history,
+   a searchable turn directory, bounded long-step browsing, and coordinated
+   initial-load / continuation / navigation / monitoring feedback.
 
 When you ship a milestone, update `README.md` (Status table) **and**
 this file's roadmap so the source of truth stays in sync.
@@ -375,6 +377,26 @@ this file's roadmap so the source of truth stays in sync.
   load one bounded page, with cached pages and in-flight requests reused.
   Coalesce adjacent missing ranges into one action without losing the next
   cursor. A monitoring refresh must not resurrect an exhausted window.
+- Continuation across FRB uses `delta_only=true`: send only newly read items,
+  merge by item ID, and return an empty exhausted page without another RPC.
+  Opening a turn still returns its cached prefix. Monitoring reads use
+  `include_turn_pages=false`; do not retransmit selected windows already held
+  by Flutter. Preserve the cumulative/default response for older callers.
+- Initial history uses a delayed static loading label, without mock conversation
+  shimmer or overlapping outgoing/incoming transcripts. Supplementary loads
+  keep the existing content visible. Show feedback only at the requested gap,
+  top boundary, or selected turn; cancellation and new scroll intent must win
+  over late anchor restoration. Background tail updates must remain quiet.
+- Limit minimap tick density by available height. Keep the exact active marker
+  and all turns reachable through a lazy searchable directory and keyboard.
+  Long work lists use a bounded lazy viewport with explicit step ranges; never
+  animate the height of hundreds of steps. Appends must preserve the reader's
+  selected range, and a manually expanded group must stay open when it finishes.
+- Guardian review history is display-only: recognize the explicit request
+  envelope and the complete assessment schema, show outcome/risk/authorization/
+  rationale, and retain exact original copy plus lazy detail expansion. Never
+  turn a historical model assessment into an interactive approval or execute
+  command text extracted for presentation. Unknown formats keep normal rendering.
 - Keep the composer compact by default, resizable with mouse/touch and
   accessibility actions, and persist its height with the UI preferences.
 - Branding uses the same blue/neutral palette as the UI. When changing it,
@@ -425,3 +447,9 @@ this file's roadmap so the source of truth stays in sync.
 - Cite files as `path:line`.
 - State assumptions explicitly. If an assumption could change the
   design or risk breakage/data loss, **stop and ask**.
+
+- Further reference: T3 Code's [bounded work list and long-message folding](https://github.com/pingdotgg/t3code/blob/af2baccd100604f9885d6af97a5fa99622dd1c4f/apps/web/src/components/chat/MessagesTimeline.tsx)
+  preserves scroll anchors and virtualizes expanded activity. Our adaptive tick
+  sampling and step-range controls are Pocket-Codex adaptations, not claimed
+  upstream behavior. Guardian format is defined by
+  `deps/codex/codex-rs/core/src/guardian/prompt.rs`.

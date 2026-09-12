@@ -425,11 +425,13 @@ class RustBridgeApi implements BridgeApi {
   @override
   Future<ThreadHistory> appThreadRead(
     String serviceKey,
-    String threadId,
-  ) async {
+    String threadId, {
+    bool includeTurnPages = true,
+  }) async {
     final h = await frb.appThreadRead(
       serviceKey: serviceKey,
       threadId: threadId,
+      includeTurnPages: includeTurnPages,
     );
     return ThreadHistory(
       items: h.items.map(_item).toList(),
@@ -491,6 +493,7 @@ class RustBridgeApi implements BridgeApi {
       threadId: threadId,
       turnId: turnId,
       loadMore: loadMore,
+      deltaOnly: true,
     ),
   );
 

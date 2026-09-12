@@ -1457,12 +1457,16 @@ fn wire__crate__api__bridge__app_thread_read_impl(
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
             let api_service_key = <String>::sse_decode(&mut deserializer);
             let api_thread_id = <String>::sse_decode(&mut deserializer);
+            let api_include_turn_pages = <Option<bool>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
                     (move || {
-                        let output_ok =
-                            crate::api::bridge::app_thread_read(api_service_key, api_thread_id)?;
+                        let output_ok = crate::api::bridge::app_thread_read(
+                            api_service_key,
+                            api_thread_id,
+                            api_include_turn_pages,
+                        )?;
                         Ok(output_ok)
                     })(),
                 )
@@ -1691,6 +1695,7 @@ fn wire__crate__api__bridge__app_thread_turn_page_impl(
             let api_thread_id = <String>::sse_decode(&mut deserializer);
             let api_turn_id = <String>::sse_decode(&mut deserializer);
             let api_load_more = <bool>::sse_decode(&mut deserializer);
+            let api_delta_only = <Option<bool>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
@@ -1700,6 +1705,7 @@ fn wire__crate__api__bridge__app_thread_turn_page_impl(
                             api_thread_id,
                             api_turn_id,
                             api_load_more,
+                            api_delta_only,
                         )?;
                         Ok(output_ok)
                     })(),

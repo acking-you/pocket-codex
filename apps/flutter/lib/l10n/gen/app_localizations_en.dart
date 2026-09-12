@@ -1602,4 +1602,83 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get historyGap => 'Load messages in this gap';
+
+  @override
+  String get reviewRequest => 'Automatic review request';
+
+  @override
+  String get reviewResult => 'Model review result';
+
+  @override
+  String get reviewAllowed => 'Allowed';
+
+  @override
+  String get reviewDenied => 'Denied';
+
+  @override
+  String get reviewLow => 'Low';
+
+  @override
+  String get reviewMedium => 'Medium';
+
+  @override
+  String get reviewHigh => 'High';
+
+  @override
+  String get reviewCritical => 'Critical';
+
+  @override
+  String get reviewUnknown => 'Unknown';
+
+  @override
+  String reviewRisk(String level) {
+    return 'Risk: $level';
+  }
+
+  @override
+  String reviewAuthorization(String level) {
+    return 'Authorization: $level';
+  }
+
+  @override
+  String get reviewRaw => 'View original content';
+
+  @override
+  String get conversationOutline => 'Conversation outline';
+
+  @override
+  String get searchTurns => 'Search messages or enter a turn number';
+
+  @override
+  String turnPosition(int current, int total) {
+    return 'Turn $current of $total';
+  }
+
+  @override
+  String stepRange(int first, int last, int total) {
+    return 'Steps $first–$last of $total';
+  }
+
+  @override
+  String get previousSteps => 'Previous steps';
+
+  @override
+  String get nextSteps => 'Next steps';
+
+  @override
+  String get latestSteps => 'Latest steps';
+
+  @override
+  String get jumpToStep => 'Jump to step';
+
+  @override
+  String get stepNumber => 'Step number';
+
+  @override
+  String get noMatchingTurns => 'No matching turns';
+
+  @override
+  String loadingTurn(int number) {
+    return 'Opening turn $number…';
+  }
 }

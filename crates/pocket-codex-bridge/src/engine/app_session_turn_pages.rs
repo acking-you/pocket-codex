@@ -48,6 +48,27 @@ pub fn thread_turn_page(
     turn_id: &str,
     load_more: bool,
 ) -> Result<TurnItemsPage> {
+    thread_turn_page_inner(service_key, thread_id, turn_id, load_more, false)
+}
+
+/// Read a cached opening window, or only new items when continuing it.
+/// Exhausted continuations return an empty page without contacting the server.
+pub fn thread_turn_page_delta(
+    service_key: &str,
+    thread_id: &str,
+    turn_id: &str,
+    load_more: bool,
+) -> Result<TurnItemsPage> {
+    thread_turn_page_inner(service_key, thread_id, turn_id, load_more, true)
+}
+
+fn thread_turn_page_inner(
+    service_key: &str,
+    thread_id: &str,
+    turn_id: &str,
+    load_more: bool,
+    delta_only: bool,
+) -> Result<TurnItemsPage> {
     let client = client_for(service_key)?;
     let gate = ensure_pagination(service_key, thread_id).request_gate;
     let _request = gate
@@ -58,7 +79,11 @@ pub fn thread_turn_page(
         if (!load_more && !page.evicted) || (load_more && page.next_cursor.is_none()) {
             return Ok(TurnItemsPage {
                 turn_id: turn_id.into(),
-                items: page.items.as_ref().clone(),
+                items: if delta_only && load_more {
+                    Vec::new()
+                } else {
+                    page.items.as_ref().clone()
+                },
                 has_more: page.next_cursor.is_some(),
             });
         }
@@ -95,14 +120,14 @@ pub fn thread_turn_page(
         advancing_cursor(window.next_cursor.as_deref(), next, &mut window.seen)
     };
     let mut known: HashSet<_> = window.items.iter().map(|item| item.id.clone()).collect();
-    Arc::make_mut(&mut window.items).extend(
-        items
-            .into_iter()
-            .filter(|item| known.insert(item.id.clone())),
-    );
+    let delta: Vec<_> = items
+        .into_iter()
+        .filter(|item| known.insert(item.id.clone()))
+        .collect();
+    Arc::make_mut(&mut window.items).extend(delta.iter().cloned());
     let result = TurnItemsPage {
         turn_id: turn_id.into(),
-        items: window.items.as_ref().clone(),
+        items: if delta_only && load_more { delta } else { window.items.as_ref().clone() },
         has_more: window.next_cursor.is_some(),
     };
     if window.evicted {

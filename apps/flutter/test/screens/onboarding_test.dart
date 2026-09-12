@@ -614,9 +614,9 @@ void main() {
     expect(primaryLabel(), '使用 GitHub 登录'); // accountSignInButton
   });
 
-  testWidgets('Chat loading skeleton renders a shimmer', (t) async {
+  testWidgets('List loading skeleton renders a shimmer', (t) async {
     await t.pumpWidget(
-      const MaterialApp(home: Scaffold(body: ChatLoadingSkeleton())),
+      const MaterialApp(home: Scaffold(body: ListLoadingSkeleton(rows: 2))),
     );
     await t.pump(); // shimmer animates forever — don't settle
     expect(find.byType(Shimmer), findsOneWidget);

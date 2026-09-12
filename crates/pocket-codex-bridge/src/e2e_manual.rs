@@ -297,7 +297,7 @@ fn run_image_turn(key: &str) {
 
     // History must echo the user message with the image data URL intact — this
     // is what a re-opened conversation (and a second device) renders from.
-    let h = api::app_thread_read(key.to_string(), tid).expect("app_thread_read");
+    let h = api::app_thread_read(key.to_string(), tid, None).expect("app_thread_read");
     let user = h
         .items
         .iter()

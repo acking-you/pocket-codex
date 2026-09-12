@@ -459,7 +459,7 @@ use history_cache::{
 #[path = "app_session_turn_pages.rs"]
 mod turn_pages;
 use turn_pages::{cached_turn_pages, TurnWindow};
-pub use turn_pages::{thread_turn_page, TurnItemsPage};
+pub use turn_pages::{thread_turn_page, thread_turn_page_delta, TurnItemsPage};
 
 /// One page of older items, and whether older ones still remain.
 #[derive(Clone, Debug)]
@@ -1761,6 +1761,16 @@ fn load_paginated_window(
 /// on demand. Legacy threads keep the whole-history read: it is the only shape
 /// their rollout supports, and paging methods replay the entire file per call.
 pub fn thread_read(service_key: &str, thread_id: &str) -> Result<ThreadHistory> {
+    thread_read_with_pages(service_key, thread_id, true)
+}
+
+/// Read the current tail, optionally omitting cached selected-turn windows.
+/// Monitoring clients already hold those windows and need only tail updates.
+pub fn thread_read_with_pages(
+    service_key: &str,
+    thread_id: &str,
+    include_turn_pages: bool,
+) -> Result<ThreadHistory> {
     // Each call occupies one FRB worker thread for its whole duration (the RPCs
     // below block rather than yield), so concurrent reads are capped by the pool
     // size. Log entry/exit to make a pile-up visible.
@@ -1771,7 +1781,7 @@ pub fn thread_read(service_key: &str, thread_id: &str) -> Result<ThreadHistory> 
         target: "pocket_codex_bridge::history",
         "thread_read START thread={thread_id} in_flight={depth}"
     );
-    let result = thread_read_inner(service_key, thread_id);
+    let result = thread_read_inner(service_key, thread_id, include_turn_pages);
     match &result {
         Ok(history) => tracing::info!(
             target: "pocket_codex_bridge::history",
@@ -1789,7 +1799,11 @@ pub fn thread_read(service_key: &str, thread_id: &str) -> Result<ThreadHistory> 
     result
 }
 
-fn thread_read_inner(service_key: &str, thread_id: &str) -> Result<ThreadHistory> {
+fn thread_read_inner(
+    service_key: &str,
+    thread_id: &str,
+    include_turn_pages: bool,
+) -> Result<ThreadHistory> {
     let client = client_for(service_key)?;
     let gate = ensure_pagination(service_key, thread_id).request_gate;
     let _request = gate
@@ -1924,7 +1938,11 @@ fn thread_read_inner(service_key: &str, thread_id: &str) -> Result<ThreadHistory
         has_older,
         turns: skeletons,
         first_turn_id: pagination_of(service_key, thread_id).and_then(|p| p.first_turn_id),
-        turn_pages: cached_turn_pages(service_key, thread_id),
+        turn_pages: if include_turn_pages {
+            cached_turn_pages(service_key, thread_id)
+        } else {
+            Vec::new()
+        },
     })
 }
 

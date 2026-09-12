@@ -222,6 +222,7 @@ abstract class RustLibApi extends BaseApi {
   Future<ThreadHistoryDto> crateApiBridgeAppThreadRead({
     required String serviceKey,
     required String threadId,
+    bool? includeTurnPages,
   });
 
   Future<void> crateApiBridgeAppThreadResume({
@@ -258,6 +259,7 @@ abstract class RustLibApi extends BaseApi {
     required String threadId,
     required String turnId,
     required bool loadMore,
+    bool? deltaOnly,
   });
 
   Future<void> crateApiBridgeAppTurnInterrupt({
@@ -1664,6 +1666,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   Future<ThreadHistoryDto> crateApiBridgeAppThreadRead({
     required String serviceKey,
     required String threadId,
+    bool? includeTurnPages,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -1671,6 +1674,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_String(serviceKey, serializer);
           sse_encode_String(threadId, serializer);
+          sse_encode_opt_box_autoadd_bool(includeTurnPages, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -1683,7 +1687,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: sse_decode_AnyhowException,
         ),
         constMeta: kCrateApiBridgeAppThreadReadConstMeta,
-        argValues: [serviceKey, threadId],
+        argValues: [serviceKey, threadId, includeTurnPages],
         apiImpl: this,
       ),
     );
@@ -1692,7 +1696,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiBridgeAppThreadReadConstMeta =>
       const TaskConstMeta(
         debugName: "app_thread_read",
-        argNames: ["serviceKey", "threadId"],
+        argNames: ["serviceKey", "threadId", "includeTurnPages"],
       );
 
   @override
@@ -1880,6 +1884,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     required String threadId,
     required String turnId,
     required bool loadMore,
+    bool? deltaOnly,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -1889,6 +1894,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_String(threadId, serializer);
           sse_encode_String(turnId, serializer);
           sse_encode_bool(loadMore, serializer);
+          sse_encode_opt_box_autoadd_bool(deltaOnly, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -1901,7 +1907,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: sse_decode_AnyhowException,
         ),
         constMeta: kCrateApiBridgeAppThreadTurnPageConstMeta,
-        argValues: [serviceKey, threadId, turnId, loadMore],
+        argValues: [serviceKey, threadId, turnId, loadMore, deltaOnly],
         apiImpl: this,
       ),
     );
@@ -1910,7 +1916,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiBridgeAppThreadTurnPageConstMeta =>
       const TaskConstMeta(
         debugName: "app_thread_turn_page",
-        argNames: ["serviceKey", "threadId", "turnId", "loadMore"],
+        argNames: ["serviceKey", "threadId", "turnId", "loadMore", "deltaOnly"],
       );
 
   @override

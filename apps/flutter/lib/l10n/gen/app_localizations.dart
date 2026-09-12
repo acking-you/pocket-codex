@@ -2965,6 +2965,144 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Load messages in this gap'**
   String get historyGap;
+
+  /// No description provided for @reviewRequest.
+  ///
+  /// In en, this message translates to:
+  /// **'Automatic review request'**
+  String get reviewRequest;
+
+  /// No description provided for @reviewResult.
+  ///
+  /// In en, this message translates to:
+  /// **'Model review result'**
+  String get reviewResult;
+
+  /// No description provided for @reviewAllowed.
+  ///
+  /// In en, this message translates to:
+  /// **'Allowed'**
+  String get reviewAllowed;
+
+  /// No description provided for @reviewDenied.
+  ///
+  /// In en, this message translates to:
+  /// **'Denied'**
+  String get reviewDenied;
+
+  /// No description provided for @reviewLow.
+  ///
+  /// In en, this message translates to:
+  /// **'Low'**
+  String get reviewLow;
+
+  /// No description provided for @reviewMedium.
+  ///
+  /// In en, this message translates to:
+  /// **'Medium'**
+  String get reviewMedium;
+
+  /// No description provided for @reviewHigh.
+  ///
+  /// In en, this message translates to:
+  /// **'High'**
+  String get reviewHigh;
+
+  /// No description provided for @reviewCritical.
+  ///
+  /// In en, this message translates to:
+  /// **'Critical'**
+  String get reviewCritical;
+
+  /// No description provided for @reviewUnknown.
+  ///
+  /// In en, this message translates to:
+  /// **'Unknown'**
+  String get reviewUnknown;
+
+  /// No description provided for @reviewRisk.
+  ///
+  /// In en, this message translates to:
+  /// **'Risk: {level}'**
+  String reviewRisk(String level);
+
+  /// No description provided for @reviewAuthorization.
+  ///
+  /// In en, this message translates to:
+  /// **'Authorization: {level}'**
+  String reviewAuthorization(String level);
+
+  /// No description provided for @reviewRaw.
+  ///
+  /// In en, this message translates to:
+  /// **'View original content'**
+  String get reviewRaw;
+
+  /// No description provided for @conversationOutline.
+  ///
+  /// In en, this message translates to:
+  /// **'Conversation outline'**
+  String get conversationOutline;
+
+  /// No description provided for @searchTurns.
+  ///
+  /// In en, this message translates to:
+  /// **'Search messages or enter a turn number'**
+  String get searchTurns;
+
+  /// No description provided for @turnPosition.
+  ///
+  /// In en, this message translates to:
+  /// **'Turn {current} of {total}'**
+  String turnPosition(int current, int total);
+
+  /// No description provided for @stepRange.
+  ///
+  /// In en, this message translates to:
+  /// **'Steps {first}–{last} of {total}'**
+  String stepRange(int first, int last, int total);
+
+  /// No description provided for @previousSteps.
+  ///
+  /// In en, this message translates to:
+  /// **'Previous steps'**
+  String get previousSteps;
+
+  /// No description provided for @nextSteps.
+  ///
+  /// In en, this message translates to:
+  /// **'Next steps'**
+  String get nextSteps;
+
+  /// No description provided for @latestSteps.
+  ///
+  /// In en, this message translates to:
+  /// **'Latest steps'**
+  String get latestSteps;
+
+  /// No description provided for @jumpToStep.
+  ///
+  /// In en, this message translates to:
+  /// **'Jump to step'**
+  String get jumpToStep;
+
+  /// No description provided for @stepNumber.
+  ///
+  /// In en, this message translates to:
+  /// **'Step number'**
+  String get stepNumber;
+
+  /// No description provided for @noMatchingTurns.
+  ///
+  /// In en, this message translates to:
+  /// **'No matching turns'**
+  String get noMatchingTurns;
+
+  /// No description provided for @loadingTurn.
+  ///
+  /// In en, this message translates to:
+  /// **'Opening turn {number}…'**
+  String loadingTurn(int number);
 }
 
 class _AppLocalizationsDelegate

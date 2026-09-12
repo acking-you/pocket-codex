@@ -668,6 +668,7 @@ class FakeBridgeApi implements BridgeApi {
   final Map<String, List<Future<void>>> pendingResumes = {};
   final Map<String, List<Future<ThreadHistory>>> pendingReads = {};
   final List<String> threadReads = [];
+  final List<bool> threadReadIncludesPages = [];
 
   /// Optional failure thrown by [appThreadResume].
   Object? appThreadResumeError;
@@ -686,9 +687,11 @@ class FakeBridgeApi implements BridgeApi {
   @override
   Future<ThreadHistory> appThreadRead(
     String serviceKey,
-    String threadId,
-  ) async {
+    String threadId, {
+    bool includeTurnPages = true,
+  }) async {
     threadReads.add(threadId);
+    threadReadIncludesPages.add(includeTurnPages);
     final pending = pendingReads[threadId];
     if (pending != null && pending.isNotEmpty) return await pending.removeAt(0);
     return readResult;

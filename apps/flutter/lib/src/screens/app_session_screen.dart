@@ -53,6 +53,8 @@ import 'package:pocket_codex/src/widgets/status_dots.dart';
 import 'package:pocket_codex/src/widgets/takeover_dialog.dart';
 import 'package:pocket_codex/src/widgets/theme_toggle.dart';
 import 'package:pocket_codex/src/widgets/turn_minimap.dart';
+import 'package:pocket_codex/src/widgets/turn_outline.dart';
+import 'package:pocket_codex/src/screens/app_session/approval_review.dart';
 import 'package:pocket_codex/src/widgets/window_title_bar.dart';
 
 /// Local port for the app-server ws tunnel (shared with the service screen).
@@ -433,9 +435,19 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   // scroll frame can't queue the same fetch twice.
   bool _loadingOlder = false;
   (String?, bool)? _historyTarget;
+  TurnMinimapItem? _navigatingTurn;
+  bool _navigationLoading = false;
+  List<Object>? _minimapRows;
+  List<TurnSummary>? _minimapTurns;
+  String? _minimapLastText;
+  List<TurnMinimapItem> _minimapEntries = const [];
   Future<void>? _historyLoad;
   int _historyGeneration = 0;
   int _turnNavigation = 0;
+  int _scrollIntent = 0;
+  int _settleEpoch = 0;
+  bool _historyFromTop = false;
+  Locale? _minimapLocale;
   // True while `_scrollToEnd(force: true)` is re-jumping to the bottom. Those
   // jumps fire scroll events from positions that can look like the top of the
   // list, which would fetch older history nobody asked for.
@@ -988,6 +1000,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       _firstTurnId = null;
       _cachedRows = null;
       _loadingOlder = false;
+      _navigatingTurn = null;
+      _navigationLoading = false;
       _historyLoad = null;
       _historyGeneration++;
       _approvals.clear();
@@ -1322,7 +1336,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// position: the list corrects its own offset when content is prepended.
   Future<void> _loadOlder() async {
     if (_loadingOlder || !_hasOlder || _threadId == null) return;
-    await _startHistoryLoad();
+    await _startHistoryLoad(fromTop: true);
   }
 
   bool get _startsAtBeginning {
@@ -1361,7 +1375,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         previous--;
       }
       if (previous >= 0) {
-        await _loadTurn(_turnSummaries[previous].turnId);
+        await _loadTurn(_turnSummaries[previous].turnId, fromTop: true);
         return;
       }
     }
@@ -1374,30 +1388,45 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   }
 
   /// Fetch one turn's items, for jumping to a turn not yet scrolled back to.
-  Future<void> _loadTurn(String turnId, {bool preserveAnchor = true}) async {
+  Future<void> _loadTurn(
+    String turnId, {
+    bool preserveAnchor = true,
+    bool fromTop = false,
+    int? navigation,
+  }) async {
     final generation = _historyGeneration;
     while (_historyLoad != null) {
       await _historyLoad;
-      if (!mounted || _historyGeneration != generation) return;
+      if (!mounted ||
+          _historyGeneration != generation ||
+          (navigation != null && navigation != _turnNavigation)) {
+        return;
+      }
     }
     if (turnId.isEmpty || _threadId == null || _fetchedTurns.contains(turnId)) {
       return;
     }
     // A tail-only page may have marked the turn loaded without its user row.
     if (_items.any((item) => item.turnId == turnId && item.isUser)) return;
-    await _startHistoryLoad(turnId: turnId, preserveAnchor: preserveAnchor);
+    await _startHistoryLoad(
+      turnId: turnId,
+      preserveAnchor: preserveAnchor,
+      fromTop: fromTop,
+    );
   }
 
   Future<void> _startHistoryLoad({
     String? turnId,
     bool loadMore = false,
     bool preserveAnchor = true,
+    bool fromTop = false,
   }) {
     final tid = _threadId!;
     setState(() {
       _loadingOlder = true;
       _historyError = false;
       _historyTarget = (turnId, loadMore);
+      _historyFromTop = fromTop;
     });
     return _historyLoad = _fetchHistory(
       tid,
@@ -1430,6 +1459,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
               loadMore: loadMore,
             );
       if (!current()) return;
+      final items = older?.items ?? turn!.items;
       if (turn != null && loadMore) {
         final prefix = _turnWindows[turnId]?.items ?? const <ThreadItem>[];
         final known = prefix.map((item) => item.id).toSet();
@@ -1439,7 +1469,6 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           hasMore: turn.hasMore,
         );
       }
-      final items = older?.items ?? turn!.items;
       final anchor = preserveAnchor ? _captureHistoryAnchor() : null;
       setState(() {
         _spliceTranscriptItems(items, atStart: true);
@@ -1484,12 +1513,17 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
 
   void _restoreHistoryAnchor((Key, double) anchor, int generation) {
     final navigation = _turnNavigation;
+    final intent = _scrollIntent;
+    final epoch = ++_settleEpoch;
     _settlingToEnd = true;
     void restore(int remaining) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted ||
             generation != _historyGeneration ||
-            navigation != _turnNavigation) {
+            navigation != _turnNavigation ||
+            intent != _scrollIntent ||
+            epoch != _settleEpoch) {
+          if (epoch == _settleEpoch) _settlingToEnd = false;
           return;
         }
         if (!_scroll.hasClients || !_listCtl.isAttached) {
@@ -1917,7 +1951,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       if (!current()) return;
       final history = await ref
           .read(bridgeApiProvider)
-          .appThreadRead(widget.serviceKey, threadId);
+          .appThreadRead(widget.serviceKey, threadId, includeTurnPages: false);
       if (!current() || _externalWriterLegacy) return;
       final followTail = _loading || _atBottom;
       final anchor = followTail ? null : _captureHistoryAnchor();
@@ -3257,15 +3291,16 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// that (e.g. right after the user sends or taps the jump button).
   void _scrollToEnd({bool force = false}) {
     if (!force && !_atBottom) return;
+    final intent = _scrollIntent;
+    final generation = _historyGeneration;
     if (!force) {
-      // Auto-follow while streaming: a smooth nudge to the latest content.
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (_scroll.hasClients) {
-          _scroll.animateTo(
-            _scroll.position.maxScrollExtent,
-            duration: const Duration(milliseconds: 200),
-            curve: Curves.easeOut,
-          );
+        if (mounted &&
+            generation == _historyGeneration &&
+            intent == _scrollIntent &&
+            _atBottom &&
+            _scroll.hasClients) {
+          _scroll.jumpTo(_scroll.position.maxScrollExtent);
         }
       });
       return;
@@ -3279,13 +3314,22 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     // read as the top of a short list, which would fetch older history the user
     // never asked for. Hold the flag until the jumps are done.
     _settlingToEnd = true;
+    final epoch = ++_settleEpoch;
     void settle(int tries) {
+      if (!mounted ||
+          generation != _historyGeneration ||
+          intent != _scrollIntent ||
+          epoch != _settleEpoch) {
+        if (epoch == _settleEpoch) _settlingToEnd = false;
+        return;
+      }
       if (!_scroll.hasClients) {
         _settlingToEnd = false;
         return;
       }
       final before = _scroll.position.maxScrollExtent;
       _scroll.jumpTo(before);
+      if (_listCtl.isAttached) _visibleRows.value = _visibleRowRange();
       if (tries <= 0) {
         _settlingToEnd = false;
         return;
@@ -3349,6 +3393,37 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// resolve to their real row so selecting one scrolls; the rest carry a
   /// `rowIndex` of -1 and are fetched on selection.
   List<TurnMinimapItem> _turnMinimapItems(List<Object> rows) {
+    final locale = Localizations.localeOf(context);
+    if (_minimapLocale == locale &&
+        identical(rows, _minimapRows) &&
+        identical(_turnSummaries, _minimapTurns) &&
+        identical(_items.lastOrNull?.text, _minimapLastText)) {
+      return _minimapEntries;
+    }
+    _minimapLocale = locale;
+    _minimapRows = rows;
+    _minimapTurns = _turnSummaries;
+    _minimapLastText = _items.lastOrNull?.text;
+    return _minimapEntries = _buildTurnMinimapItems(rows);
+  }
+
+  String _requestPreview(String text) {
+    final request = ApprovalReviewRequest.parse(text);
+    return request == null
+        ? previewWithoutFileRefs(text, '')
+        : '${request.tool} · ${request.summary}';
+  }
+
+  String _replyPreview(String text) {
+    final result = ApprovalReviewResult.parse(text);
+    if (result == null) return _collapseWhitespace(text);
+    final l10n = AppLocalizations.of(context);
+    return _collapseWhitespace(
+      '${result.outcome == 'allow' ? l10n.reviewAllowed : l10n.reviewDenied} · ${result.rationale}',
+    );
+  }
+
+  List<TurnMinimapItem> _buildTurnMinimapItems(List<Object> rows) {
     if (_turnSummaries.isEmpty) return _turnMinimapItemsFromRows(rows);
     // Where each loaded turn's user message ended up among the rows.
     final rowOfTurn = <String, int>{};
@@ -3361,16 +3436,14 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     final out = <TurnMinimapItem>[];
     for (final turn in _turnSummaries) {
       final row = rowOfTurn[turn.turnId];
-      final user = _collapseWhitespace(
-        previewWithoutFileRefs(turn.userText, ''),
-      );
+      final user = _collapseWhitespace(_requestPreview(turn.userText));
       // A loaded turn's reply comes from the rows, which carry the whole turn;
       // the skeleton's own summary answers for turns not scrolled back to.
       final reply = row != null
           ? _finalReplyAfter(rows, row)
           : (_collapseWhitespace(turn.assistantText).isEmpty
                 ? null
-                : _collapseWhitespace(turn.assistantText));
+                : _replyPreview(turn.assistantText));
       out.add(
         TurnMinimapItem(
           rowIndex: row ?? -1,
@@ -3429,13 +3502,15 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                     : const Key('chat-older-history-load'),
                 onPressed: _loadingOlder ? null : _loadAtTop,
                 icon: Icon(
-                  _historyError ? Icons.refresh_rounded : Icons.history_rounded,
+                  _historyError && _historyFromTop
+                      ? Icons.refresh_rounded
+                      : Icons.history_rounded,
                   size: 16,
                 ),
                 label: Text(
-                  _loadingOlder
+                  _loadingOlder && _historyFromTop
                       ? l10n.historyLoading
-                      : _historyError
+                      : _historyError && _historyFromTop
                       ? l10n.historyRetry
                       : l10n.olderHistoryHint,
                 ),
@@ -3459,10 +3534,19 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     final navigation = ++_turnNavigation;
     final generation = _historyGeneration;
     if (item.rowIndex >= 0) {
+      setState(() {
+        _navigatingTurn = null;
+        _navigationLoading = false;
+      });
       _scrollToRow(item.rowIndex);
       return;
     }
-    await _loadTurn(item.turnId, preserveAnchor: false);
+    setState(() {
+      _navigatingTurn = item;
+      _navigationLoading = true;
+    });
+    // Keep the current reading position until the latest target is ready.
+    await _loadTurn(item.turnId, navigation: navigation);
     // Let the virtual list lay out inserted rows before navigating by index.
     await WidgetsBinding.instance.endOfFrame;
     if (!mounted ||
@@ -3474,7 +3558,33 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     final row = _turnMinimapItems(
       _rows,
     ).where((entry) => entry.turnId == item.turnId).firstOrNull;
+    setState(() {
+      _navigationLoading = false;
+      if (row != null && row.rowIndex >= 0) _navigatingTurn = null;
+    });
     if (row != null && row.rowIndex >= 0) _scrollToRow(row.rowIndex);
+  }
+
+  Future<void> _openTurnOutline() async {
+    final items = _turnMinimapItems(_rows);
+    final visible = _visibleRowRange()?.$1 ?? 0;
+    var current = 0;
+    for (var i = 0; i < items.length; i++) {
+      if (items[i].rowIndex >= 0 && items[i].rowIndex <= visible) current = i;
+    }
+    final generation = _historyGeneration;
+    final item = await showTurnOutline(context, items: items, current: current);
+    if (mounted && generation == _historyGeneration && item != null) {
+      // Rows can shift while the outline is open; resolve the stable identity.
+      final target = _turnMinimapItems(_rows)
+          .where(
+            (entry) => item.messageId.isNotEmpty
+                ? entry.messageId == item.messageId
+                : entry.turnId == item.turnId,
+          )
+          .firstOrNull;
+      if (target != null) await _selectTurn(target);
+    }
   }
 
   /// Rail entries derived from the loaded rows alone — the shape for a thread
@@ -3493,7 +3603,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       // a card whose headline was the word "file" above the reply, which named
       // the attachment instead of the turn. With nothing to head the card, the
       // reply speaks for the turn by itself.
-      final user = _collapseWhitespace(previewWithoutFileRefs(row.text, ''));
+      final user = _collapseWhitespace(_requestPreview(row.text));
       final reply = _finalReplyAfter(rows, i);
       // Neither half has anything to show — an empty card that only occludes the
       // conversation. The tick stays; it just has no preview.
@@ -3534,7 +3644,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         last = row.text;
       }
     }
-    final text = _collapseWhitespace(last ?? '');
+    final text = _replyPreview(last ?? '');
     return text.isEmpty ? null : text;
   }
 
@@ -3597,6 +3707,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
             Positioned.fill(
               child: TurnMinimap(
                 items: _turnMinimapItems(_rows),
+                onOpenOutline: _openTurnOutline,
                 visibleRange: _visibleRows,
                 gutterWidth: _gutterWidth(width),
                 onSelect: _selectTurn,
@@ -3632,6 +3743,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// minimap and the compact prev/next buttons so both land identically.
   void _scrollToRow(int index) {
     if (!_listCtl.isAttached || !_scroll.hasClients) return;
+    _scrollIntent++;
+    _settleEpoch++;
     _settlingToEnd = true;
     _listCtl.jumpToItem(
       // Callers speak in row indices; the list puts the "older history" row
@@ -3695,6 +3808,12 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
             mainAxisSize: MainAxisSize.min,
             children: [
               if (showTurnNav) ...[
+                btn(
+                  const Key('nav-turn-outline'),
+                  Icons.format_list_numbered,
+                  l10n.conversationOutline,
+                  _openTurnOutline,
+                ),
                 btn(
                   const Key('nav-prev-turn'),
                   Icons.keyboard_arrow_up,
@@ -4802,7 +4921,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   Widget _transcriptRow(Object row) {
     if (row is HistoryGap) {
       final l10n = AppLocalizations.of(context);
-      final targeted = _historyTarget == (row.turnId, row.continuation);
+      final targeted =
+          !_historyFromTop &&
+          _navigatingTurn == null &&
+          _historyTarget == (row.turnId, row.continuation);
       final loading = _loadingOlder && targeted;
       final failed = _historyError && targeted;
       return SizedBox(
@@ -4883,155 +5005,226 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       children: [
         _statusBar(l10n),
         Expanded(
-          child: MiddleClickScroll(
-            key: ValueKey(_threadId),
-            controller: _scroll,
-            child: Stack(
-              key: const Key('chat-conversation-layer'),
-              children: [
-                Positioned.fill(
-                  child: AnimatedSwitcher(
-                    duration: const Duration(milliseconds: 250),
-                    child: _loading
-                        ? const ChatLoadingSkeleton(
-                            key: ValueKey('chat-loading'),
-                          )
-                        : KeyedSubtree(
-                            key: const ValueKey('chat-content'),
-                            child: _items.isEmpty && !_showTyping
-                                // A brand-new conversation (no thread yet) gets a richer
-                                // guidance view with tappable starter prompts; an empty
-                                // resumed thread keeps the plain hint.
-                                ? (_threadId == null
-                                      ? _newSessionGuidance(l10n)
-                                      : Center(
-                                          child: Text(
-                                            l10n.emptyConversation,
-                                            style: Theme.of(context)
-                                                .textTheme
-                                                .bodyMedium
-                                                ?.copyWith(
-                                                  color: Theme.of(
-                                                    context,
-                                                  ).colorScheme.outline,
+          child: NotificationListener<UserScrollNotification>(
+            onNotification: (event) {
+              if (event.depth == 0 && event.direction != ScrollDirection.idle) {
+                _scrollIntent++;
+                _settlingToEnd = false;
+              }
+              return false;
+            },
+            child: MiddleClickScroll(
+              key: ValueKey(_threadId),
+              controller: _scroll,
+              child: Stack(
+                key: const Key('chat-conversation-layer'),
+                children: [
+                  Positioned.fill(
+                    child: AnimatedSwitcher(
+                      duration: Duration.zero,
+                      child: _loading
+                          ? const ChatLoadingSkeleton(
+                              key: ValueKey('chat-loading'),
+                            )
+                          : KeyedSubtree(
+                              key: const ValueKey('chat-content'),
+                              child: _items.isEmpty && !_showTyping
+                                  // A brand-new conversation (no thread yet) gets a richer
+                                  // guidance view with tappable starter prompts; an empty
+                                  // resumed thread keeps the plain hint.
+                                  ? (_threadId == null
+                                        ? _newSessionGuidance(l10n)
+                                        : Center(
+                                            child: Text(
+                                              l10n.emptyConversation,
+                                              style: Theme.of(context)
+                                                  .textTheme
+                                                  .bodyMedium
+                                                  ?.copyWith(
+                                                    color: Theme.of(
+                                                      context,
+                                                    ).colorScheme.outline,
+                                                  ),
+                                            ),
+                                          ))
+                                  // One SelectionArea over the whole conversation so text can be
+                                  // drag-selected and copied (desktop drag, mobile long-press) —
+                                  // per-message actions appear on hover instead of always-on. The
+                                  // list is centered with a max width so it reads well even when
+                                  // both side panes are collapsed on a wide screen.
+                                  : Stack(
+                                      children: [
+                                        // Full-width scroll area so the scrollbar sits at
+                                        // the window's right edge instead of floating at
+                                        // the centred column's edge; the conversation
+                                        // column itself stays centred via horizontal
+                                        // padding computed from the available width.
+                                        SelectionArea(
+                                          child: LayoutBuilder(
+                                            builder: (context, constraints) {
+                                              // The same gutter the turn rail sits
+                                              // in, so the two never disagree about
+                                              // where the column ends.
+                                              final side = _gutterWidth(
+                                                constraints.maxWidth,
+                                              );
+                                              final pad = side < 16
+                                                  ? 16.0
+                                                  : side;
+                                              // Reuse the memoized row topology across
+                                              // builders and scroll notifications.
+                                              final rows = _rows;
+                                              final indices = <Key, int>{
+                                                const ValueKey(
+                                                  'history-header',
+                                                ): 0,
+                                                for (
+                                                  var i = 0;
+                                                  i < rows.length;
+                                                  i++
+                                                )
+                                                  _anchorKey(rows[i]): i + 1,
+                                              };
+                                              // SuperListView (super_sliver_list) replaces
+                                              // ListView.builder to stabilize the scrollbar:
+                                              // it derives scroll extent from per-item
+                                              // estimates reconciled against real heights as
+                                              // rows pass through the cache area, instead of
+                                              // the single running-average estimate that
+                                              // makes a plain ListView's thumb jump with the
+                                              // wide row-height variance here. Same lazy
+                                              // virtualization, same ScrollController — only
+                                              // visible rows build, so streaming stays cheap.
+                                              return SuperListView.builder(
+                                                controller: _scroll,
+                                                listController: _listCtl,
+                                                findChildIndexCallback: (key) =>
+                                                    indices[key],
+                                                delayPopulatingCacheArea: true,
+                                                padding: EdgeInsets.fromLTRB(
+                                                  pad,
+                                                  12,
+                                                  pad,
+                                                  12,
                                                 ),
+                                                // A leading row when history
+                                                // continues above, so a long
+                                                // conversation says so instead of
+                                                // looking like it starts there.
+                                                itemCount:
+                                                    rows.length +
+                                                    1 +
+                                                    (_showTyping ? 1 : 0),
+                                                itemBuilder: (c, i) {
+                                                  if (i == 0) {
+                                                    return _olderHistoryHeader(
+                                                      l10n,
+                                                    );
+                                                  }
+                                                  i -= 1;
+                                                  if (i >= rows.length) {
+                                                    return TypingIndicator(
+                                                      key:
+                                                          _externalWriterRunning
+                                                          ? const Key(
+                                                              'chat-external-output-indicator',
+                                                            )
+                                                          : null,
+                                                      elapsed: _fmtElapsed(
+                                                        _elapsedSecs,
+                                                      ),
+                                                    );
+                                                  }
+                                                  final row = rows[i];
+                                                  return KeyedSubtree(
+                                                    key: _anchorKey(row),
+                                                    child: _transcriptRow(row),
+                                                  );
+                                                },
+                                              );
+                                            },
                                           ),
-                                        ))
-                                // One SelectionArea over the whole conversation so text can be
-                                // drag-selected and copied (desktop drag, mobile long-press) —
-                                // per-message actions appear on hover instead of always-on. The
-                                // list is centered with a max width so it reads well even when
-                                // both side panes are collapsed on a wide screen.
-                                : Stack(
-                                    children: [
-                                      // Full-width scroll area so the scrollbar sits at
-                                      // the window's right edge instead of floating at
-                                      // the centred column's edge; the conversation
-                                      // column itself stays centred via horizontal
-                                      // padding computed from the available width.
-                                      SelectionArea(
-                                        child: LayoutBuilder(
-                                          builder: (context, constraints) {
-                                            // The same gutter the turn rail sits
-                                            // in, so the two never disagree about
-                                            // where the column ends.
-                                            final side = _gutterWidth(
-                                              constraints.maxWidth,
-                                            );
-                                            final pad = side < 16 ? 16.0 : side;
-                                            // Reuse the memoized row topology across
-                                            // builders and scroll notifications.
-                                            final rows = _rows;
-                                            final indices = <Key, int>{
-                                              const ValueKey('history-header'):
-                                                  0,
-                                              for (
-                                                var i = 0;
-                                                i < rows.length;
-                                                i++
-                                              )
-                                                _anchorKey(rows[i]): i + 1,
-                                            };
-                                            // SuperListView (super_sliver_list) replaces
-                                            // ListView.builder to stabilize the scrollbar:
-                                            // it derives scroll extent from per-item
-                                            // estimates reconciled against real heights as
-                                            // rows pass through the cache area, instead of
-                                            // the single running-average estimate that
-                                            // makes a plain ListView's thumb jump with the
-                                            // wide row-height variance here. Same lazy
-                                            // virtualization, same ScrollController — only
-                                            // visible rows build, so streaming stays cheap.
-                                            return SuperListView.builder(
-                                              controller: _scroll,
-                                              listController: _listCtl,
-                                              findChildIndexCallback: (key) =>
-                                                  indices[key],
-                                              delayPopulatingCacheArea: true,
-                                              padding: EdgeInsets.fromLTRB(
-                                                pad,
-                                                12,
-                                                pad,
-                                                12,
-                                              ),
-                                              // A leading row when history
-                                              // continues above, so a long
-                                              // conversation says so instead of
-                                              // looking like it starts there.
-                                              itemCount:
-                                                  rows.length +
-                                                  1 +
-                                                  (_showTyping ? 1 : 0),
-                                              itemBuilder: (c, i) {
-                                                if (i == 0) {
-                                                  return _olderHistoryHeader(
-                                                    l10n,
-                                                  );
-                                                }
-                                                i -= 1;
-                                                if (i >= rows.length) {
-                                                  return TypingIndicator(
-                                                    key: _externalWriterRunning
-                                                        ? const Key(
-                                                            'chat-external-output-indicator',
-                                                          )
-                                                        : null,
-                                                    elapsed: _fmtElapsed(
-                                                      _elapsedSecs,
-                                                    ),
-                                                  );
-                                                }
-                                                final row = rows[i];
-                                                return KeyedSubtree(
-                                                  key: _anchorKey(row),
-                                                  child: _transcriptRow(row),
-                                                );
-                                              },
-                                            );
-                                          },
                                         ),
+                                        // Turn navigation. On a window wide enough
+                                        // to leave a gutter this is the tick rail
+                                        // beside the conversation — hover a turn to
+                                        // preview it, click to jump. Narrower, and
+                                        // on touch, it stays the bottom-right
+                                        // cluster, which also carries jump-to-latest
+                                        // in both cases.
+                                        Positioned.fill(
+                                          child: _turnNavOverlay(),
+                                        ),
+                                      ],
+                                    ),
+                            ),
+                    ),
+                  ),
+                  if (_navigatingTurn case final target?)
+                    Positioned(
+                      top: 8,
+                      left: 16,
+                      right: 16,
+                      child: Align(
+                        alignment: Alignment.topCenter,
+                        child: Material(
+                          color: surfacePanel(Theme.of(context).colorScheme),
+                          borderRadius: BorderRadius.circular(kControlRadius),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 10),
+                            child: Row(
+                              key: const Key('history-navigation-status'),
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                if (_navigationLoading)
+                                  Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                      vertical: 10,
+                                    ),
+                                    child: Text(
+                                      l10n.loadingTurn(
+                                        _turnMinimapItems(_rows).indexWhere(
+                                              (item) =>
+                                                  item.turnId == target.turnId,
+                                            ) +
+                                            1,
                                       ),
-                                      // Turn navigation. On a window wide enough
-                                      // to leave a gutter this is the tick rail
-                                      // beside the conversation — hover a turn to
-                                      // preview it, click to jump. Narrower, and
-                                      // on touch, it stays the bottom-right
-                                      // cluster, which also carries jump-to-latest
-                                      // in both cases.
-                                      Positioned.fill(child: _turnNavOverlay()),
-                                    ],
+                                    ),
+                                  )
+                                else
+                                  TextButton.icon(
+                                    onPressed: () => _selectTurn(target),
+                                    icon: const Icon(Icons.refresh, size: 16),
+                                    label: Text(l10n.historyRetry),
                                   ),
+                                IconButton(
+                                  tooltip: MaterialLocalizations.of(
+                                    context,
+                                  ).closeButtonTooltip,
+                                  icon: const Icon(Icons.close, size: 16),
+                                  onPressed: () {
+                                    _turnNavigation++;
+                                    setState(() {
+                                      _navigatingTurn = null;
+                                      _navigationLoading = false;
+                                    });
+                                  },
+                                ),
+                              ],
+                            ),
                           ),
-                  ),
-                ),
-                if (runningPlan != null)
-                  Positioned(
-                    left: 0,
-                    right: 0,
-                    bottom: 8,
-                    child: _turnProgress(runningPlan, l10n),
-                  ),
-              ],
+                        ),
+                      ),
+                    ),
+                  if (runningPlan != null)
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: 8,
+                      child: _turnProgress(runningPlan, l10n),
+                    ),
+                ],
+              ),
             ),
           ),
         ),

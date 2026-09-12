@@ -9,6 +9,7 @@
 library;
 
 import 'package:flutter/material.dart';
+import 'dart:math' as math;
 import 'package:flutter/services.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/desktop_theme.dart';
@@ -687,18 +688,6 @@ class _TurnWorkCardState extends State<TurnWorkCard> {
 
   bool get _expanded => _userExpanded ?? widget.work.streaming;
 
-  @override
-  void didUpdateWidget(TurnWorkCard old) {
-    super.didUpdateWidget(old);
-    // A turn that just finished hands control back, so the work it did folds
-    // away on its own. A user who opened or shut it by hand keeps their choice —
-    // being overruled by the turn ending is what makes an auto-fold feel like a
-    // fight.
-    if (old.work.streaming && !widget.work.streaming) {
-      _userExpanded = null;
-    }
-  }
-
   /// The turn's duration, or null where the server did not report one.
   String? _duration(AppLocalizations l10n) {
     final ms = widget.work.durationMs;
@@ -759,30 +748,182 @@ class _TurnWorkCardState extends State<TurnWorkCard> {
             ),
           ),
         ),
-        AnimatedSize(
-          duration: const Duration(milliseconds: 160),
-          curve: Curves.easeOutCubic,
-          alignment: Alignment.topCenter,
+        _workExpansion(
+          animate:
+              widget.work.items.length <= 40 &&
+              !MediaQuery.disableAnimationsOf(context),
           child: !_expanded
               ? const SizedBox(width: double.infinity)
               : Padding(
                   padding: const EdgeInsets.only(left: 8, bottom: 4),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      for (final row in widget.work.groups)
-                        if (row is ActivityGroup)
-                          GroupedActivityCard(
-                            key: ValueKey('wg:${row.items.first.id}'),
-                            group: row,
-                          )
-                        else
-                          activityRow(row as TranscriptItem),
-                    ],
-                  ),
+                  child: widget.work.items.length > 40
+                      ? _WorkSteps(
+                          items: widget.work.items,
+                          active: widget.active,
+                        )
+                      : Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            for (final row in widget.work.groups)
+                              if (row is ActivityGroup)
+                                GroupedActivityCard(
+                                  key: ValueKey('wg:${row.items.first.id}'),
+                                  group: row,
+                                )
+                              else
+                                activityRow(row as TranscriptItem),
+                          ],
+                        ),
                 ),
         ),
         Divider(height: 1, thickness: 1, color: scheme.outlineVariant),
+      ],
+    );
+  }
+}
+
+Widget _workExpansion({required bool animate, required Widget child}) => animate
+    ? AnimatedSize(
+        duration: const Duration(milliseconds: 160),
+        curve: Curves.easeOutCubic,
+        alignment: Alignment.topCenter,
+        child: child,
+      )
+    : child;
+
+/// Long work stays in a bounded viewport; changing pages never loads history.
+class _WorkSteps extends StatefulWidget {
+  const _WorkSteps({required this.items, this.active = false});
+  final List<TranscriptItem> items;
+  final bool active;
+  @override
+  State<_WorkSteps> createState() => _WorkStepsState();
+}
+
+class _WorkStepsState extends State<_WorkSteps> {
+  static const _pageSize = 25;
+  late int _start = widget.active
+      ? math.max(0, widget.items.length - _pageSize)
+      : 0;
+  final _scroll = ScrollController();
+  @override
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  void _go(int start) {
+    setState(
+      () =>
+          _start = start.clamp(0, math.max(0, widget.items.length - 1)).toInt(),
+    );
+    if (_scroll.hasClients) _scroll.jumpTo(0);
+  }
+
+  Future<void> _choose() async {
+    final l10n = AppLocalizations.of(context);
+    var input = '${_start + 1}';
+    final picked = await showDialog<int>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(l10n.jumpToStep),
+        content: TextFormField(
+          initialValue: input,
+          onChanged: (value) => input = value,
+          autofocus: true,
+          keyboardType: TextInputType.number,
+          inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+          decoration: InputDecoration(
+            labelText: l10n.stepNumber,
+            helperText: '1–${widget.items.length}',
+          ),
+          onFieldSubmitted: (value) =>
+              Navigator.pop(context, int.tryParse(value)),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text(MaterialLocalizations.of(context).cancelButtonLabel),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, int.tryParse(input)),
+            child: Text(MaterialLocalizations.of(context).okButtonLabel),
+          ),
+        ],
+      ),
+    );
+    if (mounted && picked != null) _go(picked - 1);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    final start = _start.clamp(0, math.max(0, widget.items.length - 1)).toInt();
+    final end = math.min(start + _pageSize, widget.items.length);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Wrap(
+          crossAxisAlignment: WrapCrossAlignment.center,
+          spacing: 2,
+          children: [
+            TextButton(
+              key: const Key('work-step-picker'),
+              onPressed: _choose,
+              child: Text(l10n.stepRange(start + 1, end, widget.items.length)),
+            ),
+            IconButton(
+              tooltip: l10n.previousSteps,
+              icon: const Icon(Icons.chevron_left),
+              onPressed: start == 0
+                  ? null
+                  : () => _go(math.max(0, start - _pageSize)),
+            ),
+            IconButton(
+              tooltip: l10n.nextSteps,
+              icon: const Icon(Icons.chevron_right),
+              onPressed: end == widget.items.length ? null : () => _go(end),
+            ),
+            TextButton(
+              onPressed: () =>
+                  _go(math.max(0, widget.items.length - _pageSize)),
+              child: Text(l10n.latestSteps),
+            ),
+          ],
+        ),
+        SizedBox(
+          height: math.min(360, MediaQuery.sizeOf(context).height * .45),
+          child: ListView.builder(
+            key: const Key('work-step-list'),
+            primary: false,
+            controller: _scroll,
+            itemCount: end - start,
+            itemBuilder: (_, offset) {
+              final i = start + offset;
+              return Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(
+                    width: 36,
+                    child: Padding(
+                      padding: const EdgeInsets.only(top: 13),
+                      child: Text(
+                        '${i + 1}',
+                        style: Theme.of(context).textTheme.labelSmall,
+                      ),
+                    ),
+                  ),
+                  Expanded(
+                    child: KeyedSubtree(
+                      key: ValueKey('work-step-${widget.items[i].id}'),
+                      child: activityRow(widget.items[i]),
+                    ),
+                  ),
+                ],
+              );
+            },
+          ),
+        ),
       ],
     );
   }
@@ -860,15 +1001,17 @@ class _GroupedActivityCardState extends State<GroupedActivityCard> {
         if (_expanded)
           Padding(
             padding: const EdgeInsets.only(left: 16, top: 2),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                for (final it in widget.group.items)
-                  it.type == 'fileChange'
-                      ? FileChangeCard(item: it)
-                      : ActivityCard(item: it),
-              ],
-            ),
+            child: widget.group.items.length > 40
+                ? _WorkSteps(items: widget.group.items, active: anyStreaming)
+                : Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      for (final it in widget.group.items)
+                        it.type == 'fileChange'
+                            ? FileChangeCard(item: it)
+                            : ActivityCard(item: it),
+                    ],
+                  ),
           ),
       ],
     );

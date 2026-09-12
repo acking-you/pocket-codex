@@ -6383,6 +6383,48 @@ void main() {
       });
     });
 
+    testWidgets(
+      'slow turn selection has one status and cancellation preserves reading position',
+      (t) async {
+        await onDesktop(() async {
+          await t.binding.setSurfaceSize(const Size(1600, 900));
+          addTearDown(() => t.binding.setSurfaceSize(null));
+          final api = await openPaginated(t, longTail: true);
+          final pending = Completer<List<ThreadItem>>();
+          api.pendingTurnItems['t1'] = pending.future;
+          final rail = t.widget<TurnMinimap>(find.byType(TurnMinimap));
+          final scroll = t
+              .widget<MiddleClickScroll>(find.byType(MiddleClickScroll))
+              .controller;
+          final before = scroll.offset;
+          rail.onSelect(rail.items.first);
+          await t.pump();
+          expect(
+            find.byKey(const Key('history-navigation-status')),
+            findsOneWidget,
+          );
+          expect(find.text('正在加载历史消息…'), findsNothing);
+          expect(scroll.offset, before);
+          await t.tap(
+            find.descendant(
+              of: find.byKey(const Key('history-navigation-status')),
+              matching: find.byType(IconButton),
+            ),
+          );
+          await t.pump();
+          expect(
+            find.byKey(const Key('history-navigation-status')),
+            findsNothing,
+          );
+          pending.complete([user('u1', 'first question', 't1')]);
+          await t.pumpAndSettle();
+          expect(scroll.offset, greaterThan(500));
+          expect(api.turnItemCalls, ['t1']);
+          expect(t.takeException(), isNull);
+        });
+      },
+    );
+
     testWidgets('new live turns join the paginated rail', (t) async {
       await onDesktop(() async {
         await t.binding.setSurfaceSize(const Size(1600, 900));

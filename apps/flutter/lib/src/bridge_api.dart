@@ -1306,7 +1306,11 @@ abstract interface class BridgeApi {
   ///
   /// A paginated thread returns only its newest turns' items, with
   /// [ThreadHistory.hasOlder] set and [ThreadHistory.turns] naming every turn.
-  Future<ThreadHistory> appThreadRead(String serviceKey, String threadId);
+  Future<ThreadHistory> appThreadRead(
+    String serviceKey,
+    String threadId, {
+    bool includeTurnPages = true,
+  });
 
   /// One page further back through a paginated thread's history. Returns an
   /// empty page when the thread reads whole or is already at its start.

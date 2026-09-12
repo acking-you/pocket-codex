@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 
 /// Drives the sweep for the skeleton shapes ([SkeletonBox]) beneath it, so a
 /// screen waiting on data reads as "content is coming" rather than as a frozen
@@ -122,52 +125,46 @@ class _SlideGradient extends GradientTransform {
       Matrix4.translationValues((t * 2 - 1) * bounds.width, 0, 0);
 }
 
-/// A shimmer skeleton mimicking a conversation while a thread loads.
-class ChatLoadingSkeleton extends StatelessWidget {
-  /// Creates the chat skeleton.
+/// A quiet initial-history state. Fast cache hits never flash a loading shape.
+class ChatLoadingSkeleton extends StatefulWidget {
   const ChatLoadingSkeleton({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    Widget bubble({required bool me, required double w, int lines = 1}) =>
-        Align(
-          alignment: me ? Alignment.centerRight : Alignment.centerLeft,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 9),
-            child: Column(
-              crossAxisAlignment: me
-                  ? CrossAxisAlignment.end
-                  : CrossAxisAlignment.start,
-              children: [
-                for (var i = 0; i < lines; i++) ...[
-                  SkeletonBox(
-                    width: w * (i == lines - 1 ? 0.55 : 1),
-                    height: 12,
-                  ),
-                  if (i < lines - 1) const SizedBox(height: 7),
-                ],
-              ],
-            ),
-          ),
-        );
+  State<ChatLoadingSkeleton> createState() => _ChatLoadingSkeletonState();
+}
 
-    return Shimmer(
-      child: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 820),
-          child: ListView(
-            padding: const EdgeInsets.fromLTRB(16, 18, 16, 12),
-            children: [
-              bubble(me: true, w: 220),
-              bubble(me: false, w: 340, lines: 3),
-              bubble(me: true, w: 150),
-              bubble(me: false, w: 300, lines: 2),
-            ],
-          ),
-        ),
-      ),
-    );
+class _ChatLoadingSkeletonState extends State<ChatLoadingSkeleton> {
+  bool _visible = false;
+  late final Timer _delay = Timer(const Duration(milliseconds: 250), () {
+    if (mounted) setState(() => _visible = true);
+  });
+
+  @override
+  void initState() {
+    super.initState();
+    _delay;
   }
+
+  @override
+  void dispose() {
+    _delay.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => Center(
+    child: _visible
+        ? Semantics(
+            liveRegion: true,
+            child: Text(
+              AppLocalizations.of(context).historyLoading,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
+          )
+        : const SizedBox.shrink(),
+  );
 }
 
 /// A shimmer skeleton mimicking a list (services / sessions) while it loads.
