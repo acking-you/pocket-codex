@@ -926,6 +926,14 @@ pub fn serve_status() -> Vec<ServeStatus> {
     out
 }
 
+/// Resolve this process's own app and meta listeners without relay probes.
+pub(super) fn local_endpoints(service_key: &str) -> Option<(String, String)> {
+    hosts_locked()
+        .values()
+        .find(|host| host.app_key == service_key)
+        .map(|host| (host.app_local.to_string(), host.meta_local.to_string()))
+}
+
 /// Re-publish every host's permanently-refused services, quietly.
 ///
 /// The self-healing half of [`serve_status`]. Best-effort by construction: it

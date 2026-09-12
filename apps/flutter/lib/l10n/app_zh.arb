@@ -86,7 +86,10 @@
   "interrupt": "打断",
   "thinking": "思考中…",
   "emptyConversation": "发送消息开始对话",
-  "olderHistoryHint": "向上滚动加载更早的消息",
+  "olderHistoryHint": "加载更早的消息",
+  "historyStart": "对话开始",
+  "historyLoading": "正在加载历史…",
+  "historyRetry": "加载失败，点击重试",
   "turnFailed": "本轮未完成 —— 连接中断或远程 codex 异常。请重试,或检查主机上的 codex(可能需重新登录)。",
   "sandboxHelperUnavailable": "此自带会话无法启动命令沙箱,因此智能体在这里无法执行命令或读取文件。请切换到「完全放行」模式(不使用沙箱运行),或连接到外部/远程 codex 主机。",
   "disconnect": "断开连接",
@@ -531,5 +534,7 @@
   "codexSetupStatusNeedSetupHint": "codex 还不能发起模型调用。在下面任选一种方式配置。",
   "codexSetupStatusReadyHint": "codex 可以发起模型调用了。",
   "codexSetupCodexHomeLabel": "配置目录",
-  "codexSetupCredentialExists": "凭证已存在"
+  "codexSetupCredentialExists": "凭证已存在",
+  "resizeComposer": "拖动调整输入框高度；双击恢复默认",
+  "historyGap": "加载此处的历史消息"
 }

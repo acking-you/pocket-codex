@@ -40,8 +40,8 @@ class GroupCard extends StatelessWidget {
           Container(
             // A minimum rather than a fixed height, so a wrapped hint grows the
             // header instead of being clipped by it.
-            constraints: const BoxConstraints(minHeight: 46),
-            padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+            constraints: const BoxConstraints(minHeight: 56),
+            padding: const EdgeInsets.fromLTRB(18, 14, 18, 14),
             child: Row(
               children: [
                 Expanded(
@@ -51,7 +51,10 @@ class GroupCard extends StatelessWidget {
                     children: [
                       Text(
                         title,
-                        style: const TextStyle(fontWeight: FontWeight.w600),
+                        style: const TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                       if (hint != null) ...[
                         const SizedBox(height: 2),

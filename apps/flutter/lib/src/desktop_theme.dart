@@ -7,7 +7,7 @@ import 'package:flutter/material.dart';
 /// OSes we ship). Instead it re-tunes Material itself for a desktop language:
 /// denser, quieter, bordered surfaces rather than tonal elevation, tighter
 /// radii, crisp inputs, hover feedback instead of touch ripples. Applied only
-/// on desktop (see `theme.dart`), so mobile keeps stock Material untouched.
+/// on desktop (see `theme.dart`); mobile keeps the shared touch-ready defaults.
 ///
 /// The feel to aim at is VS Code / Linear / Zed — an app design language, not a
 /// skin of any one OS. [DesktopTokens] carries the handful of values shared
@@ -22,10 +22,10 @@ import 'package:flutter/material.dart';
 const double kPanelRadius = 12.0;
 
 /// The composer card and other large raised frames.
-const double kComposerRadius = 24.0;
+const double kComposerRadius = 20.0;
 
 /// Small controls: chips, pills, suggestion rows, hover chips.
-const double kControlRadius = 8.0;
+const double kControlRadius = 10.0;
 
 /// The desktop corner radius. Follows the design's control radius so a
 /// desktop-tuned button and a chat-surface chip round the same amount.
@@ -158,7 +158,9 @@ ThemeData desktopize(ThemeData base) {
     // `SelectionArea` and links resolve their own cursor (`textable` /
     // per-span), so an I-beam still wins where the content is selectable.
     iconButtonTheme: IconButtonThemeData(
-      style: ButtonStyle(mouseCursor: clickable),
+      style: IconButton.styleFrom(
+        minimumSize: const Size(36, 36),
+      ).copyWith(mouseCursor: clickable),
     ),
     listTileTheme: base.listTileTheme.copyWith(mouseCursor: clickable),
     checkboxTheme: base.checkboxTheme.copyWith(mouseCursor: clickable),

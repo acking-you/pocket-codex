@@ -23,6 +23,7 @@ class UiPrefs {
     this.autoHost,
     this.guideSeen = false,
     this.themeMode,
+    this.composerHeight,
   });
 
   /// Full relay key of the app service explicitly chosen as the default host.
@@ -48,6 +49,9 @@ class UiPrefs {
   /// index-shift-proof.
   final String? themeMode;
 
+  /// Preferred input height in logical pixels; null uses the compact default.
+  final double? composerHeight;
+
   /// Copy with the given fields replaced. `clearAutoHost` removes the
   /// auto-host record; `clearThemeMode` returns to follow-system (a plain
   /// null argument means "keep").
@@ -60,6 +64,7 @@ class UiPrefs {
     bool? guideSeen,
     String? themeMode,
     bool clearThemeMode = false,
+    double? composerHeight,
   }) => UiPrefs(
     preferredAppServiceKey:
         preferredAppServiceKey ?? this.preferredAppServiceKey,
@@ -68,6 +73,7 @@ class UiPrefs {
     autoHost: clearAutoHost ? null : (autoHost ?? this.autoHost),
     guideSeen: guideSeen ?? this.guideSeen,
     themeMode: clearThemeMode ? null : (themeMode ?? this.themeMode),
+    composerHeight: composerHeight ?? this.composerHeight,
   );
 
   /// Parse from JSON; any shape surprise degrades to defaults.
@@ -95,6 +101,10 @@ class UiPrefs {
       themeMode: json['themeMode'] == 'light' || json['themeMode'] == 'dark'
           ? json['themeMode'] as String
           : null,
+      composerHeight: switch (json['composerHeight']) {
+        num value when value.isFinite => value.toDouble().clamp(28, 280),
+        _ => null,
+      },
     );
   }
 
@@ -108,6 +118,7 @@ class UiPrefs {
     if (autoHost != null) 'autoHost': autoHost!.toJson(),
     if (guideSeen) 'guideSeen': true,
     if (themeMode != null) 'themeMode': themeMode,
+    if (composerHeight != null) 'composerHeight': composerHeight,
   };
 }
 
@@ -199,6 +210,7 @@ class UiPrefsStore extends AsyncNotifier<UiPrefs> {
         // Only ever flips false→true, so OR-merging is lossless.
         guideSeen: raced.guideSeen || loaded.guideSeen,
         themeMode: raced.themeMode ?? loaded.themeMode,
+        composerHeight: raced.composerHeight ?? loaded.composerHeight,
       );
       _enqueueWrite(merged);
       return merged;
@@ -286,6 +298,14 @@ class UiPrefsStore extends AsyncNotifier<UiPrefs> {
     final next = mode == null
         ? _current.copyWith(clearThemeMode: true)
         : _current.copyWith(themeMode: mode);
+    state = AsyncData(next);
+    _enqueueWrite(next);
+  }
+
+  /// Persist the preferred input height within the supported range.
+  void setComposerHeight(double height) {
+    if (!height.isFinite) return;
+    final next = _current.copyWith(composerHeight: height.clamp(28, 280));
     state = AsyncData(next);
     _enqueueWrite(next);
   }

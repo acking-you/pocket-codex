@@ -109,8 +109,12 @@ pub struct TranscriptItem {
 pub struct SessionFollowUpdate {
     /// Current ownership and resume-safety state.
     pub liveness: SessionLiveness,
-    /// Full materialised transcript at this revision of the rollout.
+    /// Full transcript for legacy clients, empty in metadata-only mode.
     pub items: Vec<TranscriptItem>,
+    /// Opaque rollout revision when items are omitted for app-server paging.
+    /// Absent on legacy full-transcript streams.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history_revision: Option<String>,
 }
 
 impl From<rollout::TranscriptItem> for TranscriptItem {
@@ -198,5 +202,6 @@ pub fn follow_update(thread_id: &str, protected: &[u32]) -> Result<SessionFollow
     Ok(SessionFollowUpdate {
         liveness: liveness(thread_id, protected)?,
         items: transcript(thread_id)?,
+        history_revision: None,
     })
 }

@@ -119,11 +119,7 @@ fn base_url(service_key: &str) -> Result<Url> {
     // app-server — match its app key, not just the derived meta key, so a remote
     // host that happens to share this device id + instance name can't misroute
     // to our local loopback meta service.
-    let base = if let Some(addr) = serve::serve_status()
-        .into_iter()
-        .find(|s| s.app_service_key == service_key)
-        .map(|s| s.meta_listen_addr)
-    {
+    let base = if let Some((_, addr)) = serve::local_endpoints(service_key) {
         format!("http://{addr}")
     } else {
         let meta_key = meta_key_of(service_key)?;
@@ -304,18 +300,21 @@ pub fn transcript(service_key: &str, thread_id: &str) -> Result<Vec<TranscriptIt
 /// Follow a remote session until the response closes or `on_update` declines
 /// another snapshot. The host emits Server-Sent Events only when either the
 /// rollout or its ownership changes, so one relay connection replaces client
-/// polling while retaining the full-snapshot recovery semantics.
+/// polling. New hosts emit revisions for bounded app-server reads; old hosts
+/// that ignore the query retain their full-snapshot response semantics.
 pub async fn follow_session<F>(service_key: &str, thread_id: &str, mut on_update: F) -> Result<()>
 where
     F: FnMut(SessionFollowUpdate) -> bool,
 {
-    let url = endpoint(service_key, &["sessions", thread_id, "follow"])?;
+    let mut url = endpoint(service_key, &["sessions", thread_id, "follow"])?;
+    url.query_pairs_mut().append_pair("metadata_only", "true");
     let response = tokio::time::timeout(META_TIMEOUT, stream_client().get(url.clone()).send())
         .await
         .with_context(|| format!("meta session follow connection to {url} timed out"))?
         .context("opening meta session follow")?;
     let mut response = ensure_ok(response).await?;
     let mut pending = Vec::new();
+    let mut revision = None;
     while let Some(chunk) = response
         .chunk()
         .await
@@ -326,6 +325,10 @@ where
             let Some(update) = decode_follow_event(&event)? else {
                 continue;
             };
+            if update.history_revision.is_some() && update.history_revision != revision {
+                super::app_session::external_history_changed(service_key, thread_id);
+                revision.clone_from(&update.history_revision);
+            }
             if !on_update(update) {
                 return Ok(());
             }

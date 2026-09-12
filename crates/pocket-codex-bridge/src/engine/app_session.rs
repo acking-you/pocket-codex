@@ -10,7 +10,7 @@
 use std::{
     collections::{HashMap, HashSet},
     sync::{Arc, Mutex},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -180,6 +180,22 @@ struct ThreadPagination {
     loaded_turns: Vec<String>,
     /// Timing from every enumerated turn, reused by later item pages.
     turn_stamps: HashMap<String, TurnStamp>,
+    /// Serializes reads for this thread without holding the session map lock.
+    request_gate: Arc<Mutex<()>>,
+    /// Invalidated by destructive history changes such as compaction.
+    generation: u64,
+    /// Any live item/turn update invalidates snapshot reuse, but immutable
+    /// older pages remain valid unless generation changes
+    /// (rollback/compaction).
+    source_revision: u64,
+    /// Metadata verified by thread/read before reusing an idle snapshot.
+    metadata: Option<Value>,
+    cached: Option<Arc<LoadedHistory>>,
+    cached_at: Option<Instant>,
+    /// Actual oldest turn, set only after exhausting the summary cursor.
+    first_turn_id: Option<String>,
+    /// Independently paged turns selected through the timeline.
+    turn_pages: HashMap<String, TurnWindow>,
 }
 
 /// Bridge calls currently occupying an FRB worker thread. Diagnostic only.
@@ -251,6 +267,9 @@ pub fn connect(service_key: String, local_port: u16, transport: &Transport) -> R
     // No live session: drop any stale one (and its subscription) so we reconnect
     // cleanly rather than reusing a closed socket.
     disconnect_inner(&service_key);
+    if let Some((addr, _)) = super::serve::local_endpoints(&service_key) {
+        return establish(service_key, &addr);
+    }
     // Materialise the local ws endpoint via pb-mapper (kind-agnostic subscribe).
     let sub = runtime::subscribe_service(service_key.clone(), local_port, transport)?;
     establish(service_key, &sub.local_addr)
@@ -305,6 +324,8 @@ fn establish(service_key: String, local_addr: &str) -> Result<()> {
     let runtime_config: Arc<Mutex<HashMap<String, ThreadRuntimeConfig>>> =
         Arc::new(Mutex::new(HashMap::new()));
     let config_for_forwarder = Arc::clone(&runtime_config);
+    let pagination = Arc::new(Mutex::new(HashMap::new()));
+    let pagination_for_forwarder = Arc::clone(&pagination);
     let forwarder = runtime::runtime().spawn(async move {
         while let Some(inbound) = notify_rx.recv().await {
             // Learn the active turnId per thread before mapping, so interrupt
@@ -321,6 +342,7 @@ fn establish(service_key: String, local_addr: &str) -> Result<()> {
             // in-progress turn's items even though the broadcast below is
             // dropped while no UI is attached.
             buffer_item(&transcript_for_forwarder, &inbound);
+            invalidate_history(&pagination_for_forwarder, &inbound);
             // Ignore send errors: no current subscribers is fine, the event
             // is simply dropped (the UI re-reads thread state on attach).
             let _ = forward_tx.send(map_event(inbound));
@@ -338,7 +360,7 @@ fn establish(service_key: String, local_addr: &str) -> Result<()> {
             runtime_config,
             pending_approvals,
             transcript,
-            pagination: Arc::new(Mutex::new(HashMap::new())),
+            pagination,
         });
     Ok(())
 }
@@ -427,48 +449,17 @@ fn buffer_item(transcript: &Mutex<HashMap<String, Vec<ThreadItem>>>, inbound: &I
     }
 }
 
-/// Replace where a thread's paginated reading has got to.
-fn set_pagination(service_key: &str, thread_id: &str, state: ThreadPagination) {
-    if let Some(session) = sessions()
-        .lock()
-        .expect("sessions poisoned")
-        .get(service_key)
-    {
-        session
-            .pagination
-            .lock()
-            .expect("pagination poisoned")
-            .insert(thread_id.to_string(), state);
-    }
-}
+#[path = "app_session_history_cache.rs"]
+mod history_cache;
+use history_cache::{
+    cache_history, ensure_pagination, invalidate_history, pagination_of, reset_pagination,
+    set_pagination,
+};
 
-/// Forget a thread's pagination — it reads whole, so there is nothing to page.
-fn reset_pagination(service_key: &str, thread_id: &str) {
-    if let Some(session) = sessions()
-        .lock()
-        .expect("sessions poisoned")
-        .get(service_key)
-    {
-        session
-            .pagination
-            .lock()
-            .expect("pagination poisoned")
-            .remove(thread_id);
-    }
-}
-
-/// Where a thread's paginated reading has got to, if it is paginated at all.
-fn pagination_of(service_key: &str, thread_id: &str) -> Option<ThreadPagination> {
-    sessions()
-        .lock()
-        .expect("sessions poisoned")
-        .get(service_key)?
-        .pagination
-        .lock()
-        .expect("pagination poisoned")
-        .get(thread_id)
-        .cloned()
-}
+#[path = "app_session_turn_pages.rs"]
+mod turn_pages;
+use turn_pages::{cached_turn_pages, TurnWindow};
+pub use turn_pages::{thread_turn_page, TurnItemsPage};
 
 /// One page of older items, and whether older ones still remain.
 #[derive(Clone, Debug)]
@@ -485,6 +476,10 @@ pub struct OlderPage {
 /// start, so the caller can treat "nothing older" and "not paginated" alike.
 pub fn thread_older_page(service_key: &str, thread_id: &str) -> Result<OlderPage> {
     let client = client_for(service_key)?;
+    let gate = ensure_pagination(service_key, thread_id).request_gate;
+    let _request = gate
+        .lock()
+        .map_err(|_| anyhow!("history request lock poisoned"))?;
     let empty = || OlderPage {
         items: Vec::new(),
         has_older: false,
@@ -524,10 +519,27 @@ pub fn thread_older_page(service_key: &str, thread_id: &str) -> Result<OlderPage
         .get("nextCursor")
         .and_then(Value::as_str)
         .map(str::to_string);
-    state.next_item_cursor =
-        advancing_cursor(Some(cursor.as_str()), next, &mut state.seen_item_cursors);
+    state.next_item_cursor = if entries.is_empty() {
+        None
+    } else {
+        advancing_cursor(Some(cursor.as_str()), next, &mut state.seen_item_cursors)
+    };
     let has_older = state.next_item_cursor.is_some();
-    set_pagination(service_key, thread_id, state);
+    if let Some(cached) = state.cached.as_mut() {
+        let history = Arc::make_mut(cached);
+        let known: HashSet<_> = history.items.iter().map(|item| item.id.clone()).collect();
+        let mut merged: Vec<_> = items
+            .iter()
+            .filter(|item| !known.contains(&item.id))
+            .cloned()
+            .collect();
+        merged.append(&mut history.items);
+        history.items = merged;
+        history.has_older = has_older;
+    }
+    if !set_pagination(service_key, thread_id, state) {
+        bail!("history changed while loading; retry the page");
+    }
     Ok(OlderPage {
         items,
         has_older,
@@ -542,6 +554,10 @@ pub fn thread_turn_items(
     turn_id: &str,
 ) -> Result<Vec<ThreadItem>> {
     let client = client_for(service_key)?;
+    let gate = ensure_pagination(service_key, thread_id).request_gate;
+    let _request = gate
+        .lock()
+        .map_err(|_| anyhow!("history request lock poisoned"))?;
     let mut newest_first = Vec::new();
     let mut cursor: Option<String> = None;
     let mut seen = HashSet::new();
@@ -1264,6 +1280,21 @@ pub fn thread_resume(service_key: &str, thread_id: &str) -> Result<()> {
     Ok(())
 }
 
+pub(super) fn external_history_changed(service_key: &str, thread_id: &str) {
+    let pages = sessions().lock().ok().and_then(|sessions| {
+        sessions
+            .get(service_key)
+            .map(|session| Arc::clone(&session.pagination))
+    });
+    if let Some(pages) = pages {
+        invalidate_history(&pages, &Inbound {
+            method: "item/completed".into(),
+            params: Some(json!({"threadId": thread_id})),
+            request_id: None,
+        });
+    }
+}
+
 /// A thread's recovered history plus whether a turn is still running, so the
 /// UI can restore the "thinking" state when re-opening an in-flight thread.
 /// Also carries the thread metadata the status bar / git chip seed from.
@@ -1310,6 +1341,10 @@ pub struct ThreadHistory {
     /// whose items aren't loaded. The turn rail shows a conversation's shape,
     /// so it needs every turn — but only a summary of each, not its items.
     pub turns: Vec<TurnSummary>,
+    /// Actual first turn, when the server's summary cursor was exhausted.
+    pub first_turn_id: Option<String>,
+    /// Cached independently loaded turns, including their continuation state.
+    pub turn_pages: Vec<TurnItemsPage>,
 }
 
 /// A turn reduced to what the rail shows: the question, and how it was
@@ -1350,6 +1385,7 @@ const MAX_TURN_ITEM_PAGES: usize = 3;
 const MAX_TURN_PAGES: usize = 5;
 
 /// One thread's loaded history, plus how much of it there is.
+#[derive(Clone, Debug)]
 struct LoadedHistory {
     /// Items to show, oldest first.
     items: Vec<ThreadItem>,
@@ -1531,6 +1567,7 @@ fn fetch_all_turn_summaries(
     client: &Arc<AppClient>,
     thread_id: &str,
     stamps: &mut HashMap<String, TurnStamp>,
+    first_turn_id: &mut Option<String>,
 ) -> Result<Vec<TurnSummary>> {
     let mut newest_first = Vec::new();
     let mut cursor: Option<String> = None;
@@ -1544,6 +1581,9 @@ fn fetch_all_turn_summaries(
             .cloned()
             .unwrap_or_default();
         if turns.is_empty() {
+            *first_turn_id = newest_first
+                .last()
+                .map(|turn: &TurnSummary| turn.turn_id.clone());
             break;
         }
         for turn in &turns {
@@ -1555,8 +1595,12 @@ fn fetch_all_turn_summaries(
             .get("nextCursor")
             .and_then(Value::as_str)
             .map(str::to_string);
+        let exhausted = next.as_ref().is_none_or(String::is_empty);
         cursor = advancing_cursor(cursor.as_deref(), next, &mut seen);
         if cursor.is_none() {
+            if exhausted {
+                *first_turn_id = newest_first.last().map(|turn| turn.turn_id.clone());
+            }
             break;
         }
     }
@@ -1576,6 +1620,7 @@ fn load_paginated_window(
     service_key: &str,
     thread_id: &str,
 ) -> Result<LoadedHistory> {
+    let previous = ensure_pagination(service_key, thread_id);
     let phase = std::time::Instant::now();
     // Turn shells for timing and status. `notLoaded` keeps this a single indexed
     // query per page regardless of how much the turns contain.
@@ -1637,8 +1682,10 @@ fn load_paginated_window(
     // skeleton can't be read still opens — the rail just falls back to the
     // loaded turns.
     let phase = std::time::Instant::now();
+    let mut first_turn_id = None;
     let mut skeletons =
-        fetch_all_turn_summaries(client, thread_id, &mut stamps).unwrap_or_else(|_| Vec::new());
+        fetch_all_turn_summaries(client, thread_id, &mut stamps, &mut first_turn_id)
+            .unwrap_or_else(|_| Vec::new());
     tracing::debug!(
         target: "pocket_codex_bridge::history",
         "  {} turn summaries in {:?}", skeletons.len(), phase.elapsed()
@@ -1661,20 +1708,41 @@ fn load_paginated_window(
         }
     }
     // Where older history continues: this page's own continuation cursor.
-    let item_cursor = items_page
+    let mut item_cursor = items_page
         .get("nextCursor")
         .and_then(Value::as_str)
         .filter(|cursor| !cursor.is_empty())
         .map(str::to_string);
+    // A refreshed tail that overlaps the cached window proves continuity.
+    // Keep the immutable prefix and its exhausted/older cursor, while the new
+    // tail replaces any live snapshots. Disjoint tails start a fresh window.
+    let mut seen_item_cursors = HashSet::new();
+    if let Some(cached) = previous.cached.as_ref() {
+        if let Some(first) = items.first() {
+            if let Some(at) = cached.items.iter().position(|item| item.id == first.id) {
+                let mut prefix = cached.items[..at].to_vec();
+                prefix.append(&mut items);
+                items = prefix;
+                item_cursor = previous.next_item_cursor.clone();
+                seen_item_cursors = previous.seen_item_cursors.clone();
+            }
+        }
+    }
     // Seeing one item from every turn does not mean every item was loaded:
     // even a single turn can fill several pages. The item cursor is authoritative.
     let has_older = item_cursor.is_some();
-    set_pagination(service_key, thread_id, ThreadPagination {
+    if !set_pagination(service_key, thread_id, ThreadPagination {
         next_item_cursor: item_cursor,
-        seen_item_cursors: HashSet::new(),
+        seen_item_cursors,
         loaded_turns,
         turn_stamps: stamps,
-    });
+        metadata: None,
+        cached: None,
+        first_turn_id,
+        ..previous
+    }) {
+        bail!("history changed while loading; reopen the thread");
+    }
 
     Ok(LoadedHistory {
         items,
@@ -1723,6 +1791,11 @@ pub fn thread_read(service_key: &str, thread_id: &str) -> Result<ThreadHistory> 
 
 fn thread_read_inner(service_key: &str, thread_id: &str) -> Result<ThreadHistory> {
     let client = client_for(service_key)?;
+    let gate = ensure_pagination(service_key, thread_id).request_gate;
+    let _request = gate
+        .lock()
+        .map_err(|_| anyhow!("history request lock poisoned"))?;
+    let before = ensure_pagination(service_key, thread_id);
     // Metadata only. Asking for turns here would fail outright on a paginated
     // thread, and the response carries `historyMode`, which decides the path.
     let res = runtime::runtime().block_on(
@@ -1733,7 +1806,18 @@ fn thread_read_inner(service_key: &str, thread_id: &str) -> Result<ThreadHistory
         .and_then(|t| t.get("historyMode"))
         .and_then(Value::as_str)
         .is_some_and(|mode| mode == "paginated");
-    let loaded = if paginated {
+    let metadata = res.get("thread").cloned();
+    let cached = pagination_of(service_key, thread_id)
+        .filter(|state| {
+            state.generation == before.generation
+                && state.source_revision == before.source_revision
+                && state.metadata.is_some()
+                && state.metadata == metadata
+        })
+        .and_then(|state| state.cached);
+    let loaded = if let Some(cached) = cached {
+        (*cached).clone()
+    } else if paginated {
         match load_paginated_window(&client, service_key, thread_id) {
             Ok(loaded) => loaded,
             // A server too old to page can still answer the whole-history read.
@@ -1747,6 +1831,9 @@ fn thread_read_inner(service_key: &str, thread_id: &str) -> Result<ThreadHistory
         reset_pagination(service_key, thread_id);
         load_whole_history(&client, thread_id)?
     };
+    if paginated {
+        cache_history(service_key, thread_id, before.source_revision, metadata, &loaded);
+    }
     let LoadedHistory {
         mut items,
         turns,
@@ -1836,6 +1923,8 @@ fn thread_read_inner(service_key: &str, thread_id: &str) -> Result<ThreadHistory
         config_confirmed: runtime.confirmed_by_update,
         has_older,
         turns: skeletons,
+        first_turn_id: pagination_of(service_key, thread_id).and_then(|p| p.first_turn_id),
+        turn_pages: cached_turn_pages(service_key, thread_id),
     })
 }
 

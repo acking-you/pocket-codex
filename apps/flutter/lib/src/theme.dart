@@ -2,77 +2,46 @@ import 'package:flutter/material.dart';
 import 'package:pocket_codex/src/desktop_theme.dart';
 import 'package:pocket_codex/src/fonts.dart';
 
-/// The brand accent, at the same value in both themes: the design system
-/// carries a single accent rather than one per brightness.
-const _accent = Color(0xFFE071A7);
-
-/// The ink — the colour every foreground and every container wash is derived
-/// from. Warm near-black on paper in light, pure white in dark.
-const _inkLight = Color(0xFF1A1A19);
-const _inkDark = Color(0xFFFFFFFF);
-
-/// The design's two rules for deriving a scheme from the ink, and the reason
-/// the ladders below are alphas rather than resolved colours:
-///
-/// * **The ink ramp is translucent.** `onSurfaceVariant` (75%), the muted level
-///   (50%) and the outlines (14% light / 20% dark) are the foreground ink at an
-///   alpha. The same label and the same hairline are drawn on the page *and* on
-///   a raised card, which only works if they composite.
-/// * **The container ladder is translucent too** — `surfaceContainerLowest`
-///   through `Highest` are ink washes at rising alphas, so one fill reads
-///   correctly on both grounds. Only `surface` and `surfaceBright` are opaque,
-///   because they are the grounds everything else sits on.
-///
-/// Dark hairlines need the extra step (20% vs 14%) to hold an edge — the one
-/// value that isn't the same alpha in both themes.
+/// Shared neutral surfaces and a restrained, accessible blue accent.
 ColorScheme _flowScheme(Brightness brightness) {
   final light = brightness == Brightness.light;
-  final ink = light ? _inkLight : _inkDark;
-  Color wash(double alpha) => ink.withValues(alpha: alpha);
-
-  return ColorScheme(
+  return ColorScheme.fromSeed(
+    seedColor: const Color(0xFF355ACF),
     brightness: brightness,
-    primary: _accent,
-    onPrimary: light ? const Color(0xFFFFFFFF) : const Color(0xFF1E1E1E),
-    primaryContainer: light ? const Color(0xFFF6E9ED) : const Color(0xFF432B37),
+  ).copyWith(
+    primary: light ? const Color(0xFF355ACF) : const Color(0xFFA5B8FF),
+    onPrimary: light ? Colors.white : const Color(0xFF162352),
+    primaryContainer: light ? const Color(0xFFE8EDFF) : const Color(0xFF263459),
     onPrimaryContainer: light
-        ? const Color(0xFF8C3A67)
-        : const Color(0xFFF5CFE1),
-    secondary: light ? const Color(0xFF525251) : const Color(0xFFC5C5C5),
-    onSecondary: light ? const Color(0xFFFFFFFF) : const Color(0xFF1E1E1E),
+        ? const Color(0xFF2343A1)
+        : const Color(0xFFDCE4FF),
+    secondary: light ? const Color(0xFF586174) : const Color(0xFFB2BCCF),
     secondaryContainer: light
-        ? const Color(0xFFF0F0EE)
-        : const Color(0xFF202020),
+        ? const Color(0xFFEDF0F5)
+        : const Color(0xFF292E39),
     onSecondaryContainer: light
-        ? const Color(0xFF1A1A19)
-        : const Color(0xFFFFFFFF),
-    tertiary: light ? const Color(0xFFA8497B) : const Color(0xFFDE9CC0),
-    onTertiary: light ? const Color(0xFFFFFFFF) : const Color(0xFF3D1F2E),
-    tertiaryContainer: light
-        ? const Color(0xFFF3E4EC)
-        : const Color(0xFF4E3040),
-    onTertiaryContainer: light
-        ? const Color(0xFF5C2743)
-        : const Color(0xFFF6DCE9),
-    error: light ? const Color(0xFFDC2626) : const Color(0xFFEF4444),
-    onError: const Color(0xFFFFFFFF),
-    errorContainer: light ? const Color(0xFFFEE2E2) : const Color(0xFF7F1D1D),
-    onErrorContainer: light ? const Color(0xFF7F1D1D) : const Color(0xFFFECACA),
-    // The page, and the raised card that lifts off it — the only opaque pair.
-    surface: light ? const Color(0xFFF9F9F7) : const Color(0xFF171717),
-    surfaceBright: light ? const Color(0xFFFFFFFF) : const Color(0xFF1E1E1E),
-    onSurface: ink,
-    onSurfaceVariant: wash(0.75),
-    surfaceContainerLowest: wash(0.02),
-    surfaceContainerLow: wash(0.04),
-    surfaceContainer: wash(0.06),
-    surfaceContainerHigh: wash(0.08),
-    surfaceContainerHighest: wash(0.10),
-    outline: wash(light ? 0.14 : 0.20),
-    outlineVariant: wash(0.06),
-    inverseSurface: light ? const Color(0xFF1E1E1E) : const Color(0xFFF9F9F7),
-    onInverseSurface: light ? const Color(0xFFF9F9F7) : const Color(0xFF1A1A19),
-    inversePrimary: light ? const Color(0xFFE071A7) : const Color(0xFF8C3A67),
+        ? const Color(0xFF263044)
+        : const Color(0xFFE6EAF2),
+    surface: light ? const Color(0xFFF7F8FA) : const Color(0xFF111318),
+    surfaceBright: light ? Colors.white : const Color(0xFF1A1D24),
+    onSurface: light ? const Color(0xFF202634) : const Color(0xFFEBEEF5),
+    onSurfaceVariant: light ? const Color(0xFF626C7E) : const Color(0xFFA4AEC1),
+    surfaceContainerLowest: light ? Colors.white : const Color(0xFF14171D),
+    surfaceContainerLow: light
+        ? const Color(0xFFF1F3F7)
+        : const Color(0xFF1B1F28),
+    surfaceContainer: light ? const Color(0xFFEBEEF3) : const Color(0xFF222732),
+    surfaceContainerHigh: light
+        ? const Color(0xFFE4E8F0)
+        : const Color(0xFF2B3140),
+    surfaceContainerHighest: light
+        ? const Color(0xFFDDE3ED)
+        : const Color(0xFF353D4D),
+    outline: light ? const Color(0xFFCBD2DF) : const Color(0xFF465063),
+    outlineVariant: light ? const Color(0xFFE3E7EF) : const Color(0xFF2C3341),
+    error: light ? const Color(0xFFBE3245) : const Color(0xFFFF8B97),
+    errorContainer: light ? const Color(0xFFFFEDEF) : const Color(0xFF48232C),
+    onErrorContainer: light ? const Color(0xFF8D2030) : const Color(0xFFFFD9DE),
   );
 }
 
@@ -129,18 +98,12 @@ final _scrollbarTheme = ScrollbarThemeData(
 /// The window/scaffold background: the page itself, opaque in both themes.
 Color surfaceBackground(ColorScheme scheme) => scheme.surface;
 
-/// A raised content panel (card, sheet, menu, composer) sitting on
-/// [surfaceBackground] — white in light, #1E1E1E in dark. Opaque in both, so a
-/// panel reads as lifting *off* the page rather than tinting it; the translucent
-/// container ladder is for washes drawn on top of either ground.
+/// An opaque raised panel shared by cards, sheets, menus and the composer.
 Color surfacePanel(ColorScheme scheme) => scheme.surfaceBright;
 
 /// The design's type scale, mapped onto Material's roles.
 ///
-/// Two habits of the design carry through: no letter-spacing, and one of two
-/// line heights — 1.5 where text wraps into paragraphs, 1.3 where it sits on a
-/// single line. Display and headline roles are tighter still (1.15 / 1.2)
-/// because they never wrap far.
+/// Paragraphs use generous line height; single-line controls stay compact.
 ///
 /// The `label` roles are deliberately left at Material's defaults. In the design
 /// they are 16/14/12 at w400, but there control text is baked per widget; here
@@ -157,10 +120,10 @@ TextTheme _textTheme(ColorScheme scheme) {
     headlineLarge: t(36, 1.2),
     headlineMedium: t(32, 1.2),
     headlineSmall: t(28, 1.2),
-    titleLarge: t(24, 1.3),
-    titleMedium: t(21, 1.3),
-    titleSmall: t(18, 1.3),
-    bodyLarge: t(16, 1.5),
+    titleLarge: t(22, 1.3),
+    titleMedium: t(18, 1.4),
+    titleSmall: t(14, 1.4),
+    bodyLarge: t(16, 1.6),
     bodyMedium: t(14, 1.5),
     bodySmall: t(12, 1.5),
   ).apply(
@@ -191,6 +154,65 @@ ThemeData _base(ColorScheme scheme) {
     fontFamilyFallback: cjkFontFallback,
     textTheme: _textTheme(scheme),
     scaffoldBackgroundColor: background,
+    dividerTheme: DividerThemeData(
+      color: scheme.outlineVariant,
+      thickness: 1,
+      space: 1,
+    ),
+    filledButtonTheme: FilledButtonThemeData(
+      style: FilledButton.styleFrom(
+        minimumSize: const Size(48, 48),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(kControlRadius),
+        ),
+        textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+      ),
+    ),
+    outlinedButtonTheme: OutlinedButtonThemeData(
+      style: OutlinedButton.styleFrom(
+        minimumSize: const Size(48, 48),
+        side: BorderSide(color: scheme.outline),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(kControlRadius),
+        ),
+      ),
+    ),
+    textButtonTheme: TextButtonThemeData(
+      style: TextButton.styleFrom(
+        minimumSize: const Size(48, 44),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(kControlRadius),
+        ),
+      ),
+    ),
+    iconButtonTheme: IconButtonThemeData(
+      style: IconButton.styleFrom(
+        minimumSize: const Size(44, 44),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(kControlRadius),
+        ),
+      ),
+    ),
+    inputDecorationTheme: InputDecorationTheme(
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(kControlRadius),
+      ),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+      hintStyle: TextStyle(color: scheme.onSurfaceVariant, fontSize: 14),
+    ),
+    dialogTheme: DialogThemeData(
+      backgroundColor: panel,
+      surfaceTintColor: Colors.transparent,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+    ),
+    bottomSheetTheme: BottomSheetThemeData(
+      backgroundColor: panel,
+      surfaceTintColor: Colors.transparent,
+      showDragHandle: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+    ),
     scrollbarTheme: _scrollbarTheme,
     // A flat app bar that blends into the content: same colour as the
     // scaffold, no Material-3 scroll tint, no elevation. With the native title
@@ -245,8 +267,7 @@ ThemeData _base(ColorScheme scheme) {
   );
 }
 
-/// Wrap [base] in the desktop design layer on desktop; leave mobile on stock
-/// Material. See `desktop_theme.dart`.
+/// Add desktop density and pointer feedback to the shared touch-ready theme.
 ThemeData _forPlatform(ThemeData base) => isDesktop ? desktopize(base) : base;
 
 /// Light theme (desktop-tuned on desktop).

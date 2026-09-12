@@ -109,6 +109,8 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "str
 # `rustls-tls-webpki-roots`, and our WS client only uses the stable
 # connect_async / Message API, so this is a drop-in for us.
 tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
+# The patched tokio adapter is 0.28, while its compression-capable core is 0.27.
+tungstenite = { version = "0.27", features = ["deflate"] }
 tokio-socks = "0.5"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 url = "2.5"

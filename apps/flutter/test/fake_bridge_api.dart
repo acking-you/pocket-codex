@@ -614,27 +614,31 @@ class FakeBridgeApi implements BridgeApi {
   /// When true, [appModelList] returns no models, to exercise the
   /// "can't switch collaboration mode without a model" path.
   bool emptyModelList = false;
+  Completer<void>? modelListGate;
+  Completer<void>? configReadGate;
 
   @override
-  Future<List<ModelInfo>> appModelList(String serviceKey) async =>
-      emptyModelList
-      ? const []
-      : const [
-          ModelInfo(
-            id: 'gpt-5.5',
-            displayName: 'GPT-5.5',
-            description: 'default',
-            supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh'],
-            defaultReasoningEffort: 'medium',
-          ),
-          ModelInfo(
-            id: 'gpt-5',
-            displayName: 'GPT-5',
-            description: '',
-            supportedReasoningEfforts: ['minimal', 'low', 'medium', 'high'],
-            defaultReasoningEffort: 'medium',
-          ),
-        ];
+  Future<List<ModelInfo>> appModelList(String serviceKey) async {
+    await modelListGate?.future;
+    return emptyModelList
+        ? const []
+        : const [
+            ModelInfo(
+              id: 'gpt-5.5',
+              displayName: 'GPT-5.5',
+              description: 'default',
+              supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh'],
+              defaultReasoningEffort: 'medium',
+            ),
+            ModelInfo(
+              id: 'gpt-5',
+              displayName: 'GPT-5',
+              description: '',
+              supportedReasoningEfforts: ['minimal', 'low', 'medium', 'high'],
+              defaultReasoningEffort: 'medium',
+            ),
+          ];
+  }
 
   /// Records the params of the last [appThreadStart] for assertions.
   String? lastModel, lastCwd, lastApproval, lastSandbox;
@@ -717,6 +721,28 @@ class FakeBridgeApi implements BridgeApi {
 
   /// Items each turn hands back, keyed by turn id.
   Map<String, List<ThreadItem>> turnItems = {};
+
+  /// Explicit continuation fixtures for independently paged turns.
+  final Map<String, List<TurnItemsPage>> turnPages = {};
+
+  @override
+  Future<TurnItemsPage> appThreadTurnPage(
+    String serviceKey,
+    String threadId,
+    String turnId, {
+    bool loadMore = false,
+  }) async {
+    final pages = turnPages[turnId];
+    if (pages != null && pages.isNotEmpty) {
+      turnItemCalls.add(turnId);
+      return pages.removeAt(0);
+    }
+    return TurnItemsPage(
+      turnId: turnId,
+      items: await appThreadTurnItems(serviceKey, threadId, turnId),
+      hasMore: false,
+    );
+  }
 
   /// Turn ids passed to [appThreadTurnItems], in call order.
   final List<String> turnItemCalls = [];
@@ -937,6 +963,8 @@ class FakeBridgeApi implements BridgeApi {
   /// Number of live session streams opened, for asserting that active-writer
   /// chat uses the subscription instead of periodic transcript requests.
   int metaSessionEventSubscriptions = 0;
+  bool metadataOnlyFollow = false;
+  Future<void>? metaFollowGate;
 
   final Map<String, StreamController<SessionFollowUpdate>> _metaSessionEvents =
       {};
@@ -962,10 +990,14 @@ class FakeBridgeApi implements BridgeApi {
     late final StreamController<SessionFollowUpdate> controller;
     controller = StreamController<SessionFollowUpdate>.broadcast(
       onListen: () => unawaited(() async {
+        if (metaFollowGate != null) await metaFollowGate;
         controller.add(
           SessionFollowUpdate(
             liveness: await appSessionLiveness(threadId),
-            items: transcripts[threadId] ?? const [],
+            items: metadataOnlyFollow
+                ? const []
+                : transcripts[threadId] ?? const [],
+            historyRevision: metadataOnlyFollow ? 'initial' : null,
           ),
         );
       }()),
@@ -1024,6 +1056,7 @@ class FakeBridgeApi implements BridgeApi {
     String threadId,
   ) async {
     lastConfigGetThread = threadId;
+    await configReadGate?.future;
     return threadConfigs[threadId] ?? const ThreadConfig();
   }
 

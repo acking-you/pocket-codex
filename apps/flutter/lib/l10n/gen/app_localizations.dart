@@ -581,8 +581,26 @@ abstract class AppLocalizations {
   /// Leading row of a long conversation whose earlier history hasn't been loaded yet; scrolling to it fetches the previous page.
   ///
   /// In en, this message translates to:
-  /// **'Scroll up to load earlier messages'**
+  /// **'Load earlier messages'**
   String get olderHistoryHint;
+
+  /// No description provided for @historyStart.
+  ///
+  /// In en, this message translates to:
+  /// **'Start of conversation'**
+  String get historyStart;
+
+  /// No description provided for @historyLoading.
+  ///
+  /// In en, this message translates to:
+  /// **'Loading history…'**
+  String get historyLoading;
+
+  /// No description provided for @historyRetry.
+  ///
+  /// In en, this message translates to:
+  /// **'Couldn’t load history. Retry'**
+  String get historyRetry;
 
   /// No description provided for @turnFailed.
   ///
@@ -2929,6 +2947,18 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'credential present'**
   String get codexSetupCredentialExists;
+
+  /// No description provided for @resizeComposer.
+  ///
+  /// In en, this message translates to:
+  /// **'Drag to resize; double-click to reset'**
+  String get resizeComposer;
+
+  /// No description provided for @historyGap.
+  ///
+  /// In en, this message translates to:
+  /// **'Load messages in this gap'**
+  String get historyGap;
 }
 
 class _AppLocalizationsDelegate

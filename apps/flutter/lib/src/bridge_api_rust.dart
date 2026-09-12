@@ -446,6 +446,8 @@ class RustBridgeApi implements BridgeApi {
       sandboxMode: h.sandboxMode,
       configConfirmed: h.configConfirmed,
       hasOlder: h.hasOlder,
+      firstTurnId: h.firstTurnId,
+      turnPages: h.turnPages.map(_turnPage).toList(),
       turns: h.turns
           .map(
             (t) => TurnSummary(
@@ -469,6 +471,27 @@ class RustBridgeApi implements BridgeApi {
     turnCompletedAt: i.turnCompletedAt?.toInt(),
     turnDurationMs: i.turnDurationMs?.toInt(),
     questionsJson: i.questionsJson,
+  );
+
+  static TurnItemsPage _turnPage(frb.TurnItemsPageDto page) => TurnItemsPage(
+    turnId: page.turnId,
+    items: page.items.map(_item).toList(),
+    hasMore: page.hasMore,
+  );
+
+  @override
+  Future<TurnItemsPage> appThreadTurnPage(
+    String serviceKey,
+    String threadId,
+    String turnId, {
+    bool loadMore = false,
+  }) async => _turnPage(
+    await frb.appThreadTurnPage(
+      serviceKey: serviceKey,
+      threadId: threadId,
+      turnId: turnId,
+      loadMore: loadMore,
+    ),
   );
 
   @override
@@ -748,6 +771,7 @@ class RustBridgeApi implements BridgeApi {
       .metaSessionEvents(serviceKey: serviceKey, threadId: threadId)
       .map(
         (update) => SessionFollowUpdate(
+          historyRevision: update.historyRevision,
           liveness: SessionLiveness(
             threadId: update.liveness.threadId,
             turnState: update.liveness.turnState,

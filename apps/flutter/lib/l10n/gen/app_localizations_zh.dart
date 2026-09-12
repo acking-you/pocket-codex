@@ -276,7 +276,16 @@ class AppLocalizationsZh extends AppLocalizations {
   String get emptyConversation => '发送消息开始对话';
 
   @override
-  String get olderHistoryHint => '向上滚动加载更早的消息';
+  String get olderHistoryHint => '加载更早的消息';
+
+  @override
+  String get historyStart => '对话开始';
+
+  @override
+  String get historyLoading => '正在加载历史…';
+
+  @override
+  String get historyRetry => '加载失败，点击重试';
 
   @override
   String get turnFailed =>
@@ -1538,4 +1547,10 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get codexSetupCredentialExists => '凭证已存在';
+
+  @override
+  String get resizeComposer => '拖动调整输入框高度；双击恢复默认';
+
+  @override
+  String get historyGap => '加载此处的历史消息';
 }

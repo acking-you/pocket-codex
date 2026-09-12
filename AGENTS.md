@@ -357,6 +357,56 @@ The order below is our current best guess; it is not a contract.
 When you ship a milestone, update `README.md` (Status table) **and**
 this file's roadmap so the source of truth stays in sync.
 
+### UI and history maintenance (2026-09-13)
+
+- Keep shared colors, typography, and control shapes in `theme.dart` /
+  `desktop_theme.dart`; use the shared `UtilityPage` shell for secondary pages.
+  Compact layouts need reachable touch targets and readable text, not a scaled
+  desktop screenshot. Validate light/dark at phone, tablet, and desktop widths.
+- History cursors and idle snapshots belong to the bridge session. Cache at
+  most eight thread snapshots / approximately 32 MiB, validate metadata before
+  reuse, and invalidate on live changes or reconnect. Never turn a failed
+  request into an authoritative end-of-history result.
+- Timeline jumps create independent ascending turn windows. Show missing
+  history between those windows at its actual position; a tail cursor does not
+  mean there is more history above a fully loaded first turn. Use the exhausted
+  turn-summary cursor to confirm the oldest boundary. Hovering the timeline
+  must not trigger network reads; explicit selection and approaching a gap
+  load one bounded page, with cached pages and in-flight requests reused.
+- Keep the composer compact by default, resizable with mouse/touch and
+  accessibility actions, and persist its height with the UI preferences.
+- Branding uses the same blue/neutral palette as the UI. When changing it,
+  update the brand masters and regenerate launcher, tray, and splash assets
+  for every platform; keep both README posters and logo copies in sync.
+- Transcript rows must remain lazy and keyed. Preserve the visible message
+  when prepending history, and do not rescan the rest of a turn per item when
+  grouping rows. Pagination failures require an explicit retry instead of a
+  scroll-triggered request loop.
+- Render the initial history before optional saved configuration and model
+  discovery finish. Late metadata must not overwrite a user's new selection.
+  Timeline selection jumps directly to the selected turn; only the latest
+  selection may move the viewport, and prepend anchoring must not fight it.
+- Connect to an in-app host through its registered loopback endpoint. Do not
+  relay a device's own traffic or perform relay health probes to resolve that
+  endpoint. Keep remote relay connections as a first-class path.
+- Monitor other writers with `follow?metadata_only=true`: emit liveness and an
+  opaque rollout revision, then coalesce bounded app-server history refreshes.
+  Preserve loaded prefixes and reading position. Keep the legacy full-snapshot
+  endpoint compatible, but never use it for a new client's normal monitoring.
+  Cache lifecycle scan positions for append-only rollouts so polling does not
+  repeatedly scan hundreds of MiB; invalidate on replacement or truncation.
+- Negotiate Zstd/Gzip for host HTTP responses and permessage-deflate for
+  app-server WebSockets. Compression is optional and requires peer support;
+  keep uncompressed peers compatible and never buffer SSE just to compress it.
+  Verify large payload round trips and actual peer negotiation separately.
+- Reproduce long-history issues with the opt-in native integration test:
+  `fvm flutter test integration_test/local_history_performance_test.dart -d macos
+  --dart-define=PCX_LIVE_UI=true --dart-define=PCX_HISTORY_THREAD_IDS=<id1>,<id2>`.
+  It reads existing sessions on the configured host, records open/navigation
+  times and RSS, and switches repeatedly without sending turns or taking over.
+- Reference: T3 Code's [virtualized timeline and scroll anchoring](https://github.com/pingdotgg/t3code/blob/cfeaca41ae27bdf2c203158d378c87c7308fea2a/apps/web/src/components/chat/MessagesTimeline.tsx)
+  and [pagination state tests](https://github.com/pingdotgg/t3code/blob/cfeaca41ae27bdf2c203158d378c87c7308fea2a/packages/client-runtime/src/state/threads-pagination.test.ts).
+
 ## 10. Communication conventions
 
 - Reply in whatever language the person you are talking to is using.

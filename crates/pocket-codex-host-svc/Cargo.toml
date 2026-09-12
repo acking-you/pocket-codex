@@ -25,10 +25,11 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
+tower-http = { workspace = true, features = ["compression-zstd", "compression-gzip"] }
 
 [dev-dependencies]
 tempfile = "3"
 # Drive the real router over a loopback listener in the HTTP integration test —
 # the same rustls-webpki reqwest the bridge's meta client uses, so no new
 # workspace dep and the exact request path is exercised.
-reqwest = { workspace = true }
+reqwest = { workspace = true, features = ["zstd", "gzip"] }

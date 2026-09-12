@@ -110,7 +110,10 @@
   "interrupt": "Interrupt",
   "thinking": "Thinking…",
   "emptyConversation": "Send a message to start the conversation",
-  "olderHistoryHint": "Scroll up to load earlier messages",
+  "olderHistoryHint": "Load earlier messages",
+  "historyStart": "Start of conversation",
+  "historyLoading": "Loading history…",
+  "historyRetry": "Couldn’t load history. Retry",
   "@olderHistoryHint": {
     "description": "Leading row of a long conversation whose earlier history hasn't been loaded yet; scrolling to it fetches the previous page."
   },
@@ -632,5 +635,7 @@
   "codexSetupStatusNeedSetupHint": "codex cannot make a model call yet. Configure either method below.",
   "codexSetupStatusReadyHint": "codex can make model calls.",
   "codexSetupCodexHomeLabel": "Config directory",
-  "codexSetupCredentialExists": "credential present"
+  "codexSetupCredentialExists": "credential present",
+  "resizeComposer": "Drag to resize; double-click to reset",
+  "historyGap": "Load messages in this gap"
 }

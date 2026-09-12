@@ -6,7 +6,7 @@
 import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `holder_dto`, `item_dto`, `meta_follow_update_dto`, `meta_holder_dto`, `meta_liveness_dto`, `meta_thread_item_dto`, `project_config_dto`, `thread_config_dto`, `thread_config_from_dto`, `to_log_dto`
+// These functions are ignored because they are not marked as `pub`: `holder_dto`, `item_dto`, `meta_follow_update_dto`, `meta_holder_dto`, `meta_liveness_dto`, `meta_thread_item_dto`, `project_config_dto`, `thread_config_dto`, `thread_config_from_dto`, `to_log_dto`, `turn_page_dto`
 
 /// Initialise the engine with the platform app-support dir (from Dart's
 /// path_provider). Must be called once after `RustLib.init()`.
@@ -189,6 +189,19 @@ Future<void> appServeStopAll() =>
 /// the UI can prompt the user to point at one.
 Future<String?> codexLocate() =>
     RustLib.instance.api.crateApiBridgeCodexLocate();
+
+/// Read or continue a selected turn, reusing its previously loaded pages.
+Future<TurnItemsPageDto> appThreadTurnPage({
+  required String serviceKey,
+  required String threadId,
+  required String turnId,
+  required bool loadMore,
+}) => RustLib.instance.api.crateApiBridgeAppThreadTurnPage(
+  serviceKey: serviceKey,
+  threadId: threadId,
+  turnId: turnId,
+  loadMore: loadMore,
+);
 
 /// Connect to an app-server service: subscribe on `127.0.0.1:<local_port>`,
 /// open the JSON-RPC websocket and run the `initialize` handshake. Idempotent.
@@ -1770,19 +1783,27 @@ class ServiceIdDto {
           key == other.key;
 }
 
-/// One full read-only transcript + ownership snapshot from the host's live
+/// One read-only history revision + ownership update from the host's live
 /// session follow stream, mirrored for Dart.
 class SessionFollowUpdateDto {
   /// Current ownership and resume-safety state.
   final SessionLivenessDto liveness;
 
-  /// Full materialised transcript at this rollout revision.
+  /// Full transcript for legacy hosts; empty in metadata-only mode.
   final List<ThreadItemDto> items;
 
-  const SessionFollowUpdateDto({required this.liveness, required this.items});
+  /// Opaque revision for a metadata-only stream; read items via app-server.
+  final String? historyRevision;
+
+  const SessionFollowUpdateDto({
+    required this.liveness,
+    required this.items,
+    this.historyRevision,
+  });
 
   @override
-  int get hashCode => liveness.hashCode ^ items.hashCode;
+  int get hashCode =>
+      liveness.hashCode ^ items.hashCode ^ historyRevision.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -1790,7 +1811,8 @@ class SessionFollowUpdateDto {
       other is SessionFollowUpdateDto &&
           runtimeType == other.runtimeType &&
           liveness == other.liveness &&
-          items == other.items;
+          items == other.items &&
+          historyRevision == other.historyRevision;
 }
 
 /// One session's liveness detail, including the would-be takeover targets,
@@ -1981,6 +2003,12 @@ class ThreadHistoryDto {
   /// shape, so it needs every turn even before their bodies are read.
   final List<TurnSummaryDto> turns;
 
+  /// Actual first turn when the server's summary cursor was exhausted.
+  final String? firstTurnId;
+
+  /// Cached pages of independently selected turns.
+  final List<TurnItemsPageDto> turnPages;
+
   const ThreadHistoryDto({
     required this.items,
     required this.running,
@@ -1997,6 +2025,8 @@ class ThreadHistoryDto {
     required this.configConfirmed,
     required this.hasOlder,
     required this.turns,
+    this.firstTurnId,
+    required this.turnPages,
   });
 
   @override
@@ -2015,7 +2045,9 @@ class ThreadHistoryDto {
       sandboxMode.hashCode ^
       configConfirmed.hashCode ^
       hasOlder.hashCode ^
-      turns.hashCode;
+      turns.hashCode ^
+      firstTurnId.hashCode ^
+      turnPages.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -2036,7 +2068,9 @@ class ThreadHistoryDto {
           sandboxMode == other.sandboxMode &&
           configConfirmed == other.configConfirmed &&
           hasOlder == other.hasOlder &&
-          turns == other.turns;
+          turns == other.turns &&
+          firstTurnId == other.firstTurnId &&
+          turnPages == other.turnPages;
 }
 
 /// One materialised conversation item mirrored for Dart.
@@ -2218,6 +2252,36 @@ class ThreadRuntimeConfigDto {
           sandboxMode == other.sandboxMode &&
           collaborationMode == other.collaborationMode &&
           confirmedByUpdate == other.confirmedByUpdate;
+}
+
+/// A selected turn's bounded, ascending history window.
+class TurnItemsPageDto {
+  /// Turn owning the window.
+  final String turnId;
+
+  /// Loaded items in chronological order.
+  final List<ThreadItemDto> items;
+
+  /// Whether this turn still has a continuation page.
+  final bool hasMore;
+
+  const TurnItemsPageDto({
+    required this.turnId,
+    required this.items,
+    required this.hasMore,
+  });
+
+  @override
+  int get hashCode => turnId.hashCode ^ items.hashCode ^ hasMore.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is TurnItemsPageDto &&
+          runtimeType == other.runtimeType &&
+          turnId == other.turnId &&
+          items == other.items &&
+          hasMore == other.hasMore;
 }
 
 /// A turn reduced to what the rail shows.

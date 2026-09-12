@@ -612,6 +612,38 @@ pub struct ThreadHistoryDto {
     /// whose items aren't loaded yet. The turn rail shows a conversation's
     /// shape, so it needs every turn even before their bodies are read.
     pub turns: Vec<TurnSummaryDto>,
+    /// Actual first turn when the server's summary cursor was exhausted.
+    pub first_turn_id: Option<String>,
+    /// Cached pages of independently selected turns.
+    pub turn_pages: Vec<TurnItemsPageDto>,
+}
+
+/// A selected turn's bounded, ascending history window.
+pub struct TurnItemsPageDto {
+    /// Turn owning the window.
+    pub turn_id: String,
+    /// Loaded items in chronological order.
+    pub items: Vec<ThreadItemDto>,
+    /// Whether this turn still has a continuation page.
+    pub has_more: bool,
+}
+
+fn turn_page_dto(page: app_session::TurnItemsPage) -> TurnItemsPageDto {
+    TurnItemsPageDto {
+        turn_id: page.turn_id,
+        items: page.items.into_iter().map(item_dto).collect(),
+        has_more: page.has_more,
+    }
+}
+
+/// Read or continue a selected turn, reusing its previously loaded pages.
+pub fn app_thread_turn_page(
+    service_key: String,
+    thread_id: String,
+    turn_id: String,
+    load_more: bool,
+) -> Result<TurnItemsPageDto> {
+    app_session::thread_turn_page(&service_key, &thread_id, &turn_id, load_more).map(turn_page_dto)
 }
 
 /// A turn reduced to what the rail shows.
@@ -978,6 +1010,8 @@ pub fn app_thread_read(service_key: String, thread_id: String) -> Result<ThreadH
         sandbox_mode: h.sandbox_mode,
         config_confirmed: h.config_confirmed,
         has_older: h.has_older,
+        first_turn_id: h.first_turn_id,
+        turn_pages: h.turn_pages.into_iter().map(turn_page_dto).collect(),
         turns: h
             .turns
             .into_iter()
@@ -1184,13 +1218,15 @@ pub struct SessionLivenessDto {
     pub holders: Vec<HolderDto>,
 }
 
-/// One full read-only transcript + ownership snapshot from the host's live
+/// One read-only history revision + ownership update from the host's live
 /// session follow stream, mirrored for Dart.
 pub struct SessionFollowUpdateDto {
     /// Current ownership and resume-safety state.
     pub liveness: SessionLivenessDto,
-    /// Full materialised transcript at this rollout revision.
+    /// Full transcript for legacy hosts; empty in metadata-only mode.
     pub items: Vec<ThreadItemDto>,
+    /// Opaque revision for a metadata-only stream; read items via app-server.
+    pub history_revision: Option<String>,
 }
 
 /// Outcome of a force-resume, mirrored for Dart.
@@ -1359,6 +1395,7 @@ fn meta_follow_update_dto(
     SessionFollowUpdateDto {
         liveness: meta_liveness_dto(value.liveness),
         items: value.items.into_iter().map(meta_thread_item_dto).collect(),
+        history_revision: value.history_revision,
     }
 }
 

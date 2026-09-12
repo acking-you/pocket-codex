@@ -23,6 +23,7 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 tokio-tungstenite = { workspace = true }
+tungstenite = { workspace = true }
 futures = { workspace = true }
 tracing = { workspace = true }
 which = { workspace = true }

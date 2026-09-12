@@ -118,6 +118,7 @@ pub async fn serve(
             "/uploads/{name}",
             post(upload_file).layer(DefaultBodyLimit::max(UPLOAD_BODY_LIMIT)),
         )
+        .layer(tower_http::compression::CompressionLayer::new())
         .with_state(state);
     axum::serve(listener, app)
         .await
@@ -210,24 +211,44 @@ async fn session_transcript(Path(id): Path<String>) -> Result<Json<TranscriptRes
 }
 
 /// Follow a rollout over one long-lived response. The filesystem is sampled
-/// close to its append cadence on the host, but only changed snapshots cross
-/// the relay; liveness is checked separately so a completed writer is noticed
-/// even when releasing the file does not append another record.
+/// close to its append cadence on the host. Changed snapshots and small
+/// metadata heartbeats cross the relay; liveness is checked separately so a
+/// completed writer is noticed even when releasing the file does not append
+/// another record.
+#[derive(Default, Deserialize)]
+struct FollowQuery {
+    #[serde(default)]
+    metadata_only: bool,
+}
+
 async fn session_follow(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    Query(query): Query<FollowQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
     let protected = resume::protected_pids(state.app_ws_addr);
     let initial_id = id.clone();
     let initial_protected = protected.clone();
-    let initial = tokio::task::spawn_blocking(move || {
-        sessions::follow_update(&initial_id, &initial_protected)
+    let metadata_only = query.metadata_only;
+    let mut initial = tokio::task::spawn_blocking(move || {
+        if metadata_only {
+            Ok(sessions::SessionFollowUpdate {
+                liveness: sessions::liveness(&initial_id, &initial_protected)?,
+                items: Vec::new(),
+                history_revision: None,
+            })
+        } else {
+            sessions::follow_update(&initial_id, &initial_protected)
+        }
     })
     .await
     .context("session-follow seed task panicked")??;
     let rollout_path = sessions::rollout_path(&id)?;
     let initial_metadata = tokio::fs::metadata(&rollout_path).await?;
     let mut revision = (initial_metadata.len(), initial_metadata.modified().ok());
+    if metadata_only {
+        initial.history_revision = Some(format!("{revision:?}"));
+    }
 
     let (tx, rx) = mpsc::channel(4);
     tokio::spawn(async move {
@@ -250,7 +271,10 @@ async fn session_follow(
         interval.tick().await;
         let mut tick = 0_u8;
         loop {
-            interval.tick().await;
+            tokio::select! {
+                _ = tx.closed() => break,
+                _ = interval.tick() => {},
+            }
             tick = tick.wrapping_add(1);
             let metadata = match tokio::fs::metadata(&rollout_path).await {
                 Ok(metadata) => metadata,
@@ -268,7 +292,7 @@ async fn session_follow(
             let next_id = id.clone();
             let next_protected = protected.clone();
             let next = match tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
-                let items = transcript_changed
+                let items = (transcript_changed && !metadata_only)
                     .then(|| sessions::transcript(&next_id))
                     .transpose()?;
                 let liveness = check_liveness
@@ -289,6 +313,9 @@ async fn session_follow(
                 },
             };
             revision = next_revision;
+            if metadata_only {
+                previous.history_revision = Some(format!("{revision:?}"));
+            }
             if let Some(items) = next.0 {
                 previous.items = items;
             }
@@ -302,7 +329,9 @@ async fn session_follow(
                     break;
                 },
             };
-            if encoded == last_sent {
+            // FRB discovers a cancelled Dart sink on the next data event.
+            // A tiny metadata heartbeat also retires quiet subscriptions.
+            if encoded == last_sent && (!metadata_only || tick % 30 != 0) {
                 continue;
             }
             last_sent.clone_from(&encoded);

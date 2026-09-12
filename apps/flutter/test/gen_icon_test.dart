@@ -1,8 +1,8 @@
 // Derives every launcher / splash / tray / in-app logo asset from the two
 // checked-in brand masters:
 //
-//   icon/logo_light.png  white tile, ink cloud->_ glyph, cyan→violet arcs
-//   icon/logo_dark.png   ink tile, white cloud->_ glyph, mint arcs
+//   icon/logo_light.png  white tile, ink cloud->_ glyph, blue arcs
+//   icon/logo_dark.png   ink tile, white cloud->_ glyph, pale blue arcs
 //
 // The masters are AI-generated opaque PNGs (no alpha, black surround, tile
 // inset varies), so this pipeline normalises them: it detects the tile's

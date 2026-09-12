@@ -108,12 +108,25 @@ impl AppClient {
     pub async fn connect(ws_url: &str) -> Result<(Self, mpsc::UnboundedReceiver<Inbound>)> {
         // A JSON-RPC response is one frame. Match the message limit so valid
         // legacy histories between 16 and 64 MiB do not close the connection.
-        let config = WebSocketConfig::default()
+        let mut config = WebSocketConfig::default()
             .max_frame_size(Some(MAX_MESSAGE_BYTES))
             .max_message_size(Some(MAX_MESSAGE_BYTES));
-        let (stream, _resp) = connect_async_with_config(ws_url, Some(config), true)
-            .await
-            .with_context(|| format!("connecting app-server websocket {ws_url}"))?;
+        config.extensions.permessage_deflate = Some(Default::default());
+        let connection = connect_async_with_config(ws_url, Some(config), true).await;
+        let (stream, response) = match connection {
+            Err(error) if compression_offer_rejected(&error) => {
+                tracing::debug!(%error, "retrying websocket handshake without compression");
+                config.extensions.permessage_deflate = None;
+                connect_async_with_config(ws_url, Some(config), true).await
+            },
+            result => result,
+        }
+        .with_context(|| format!("connecting app-server websocket {ws_url}"))?;
+        tracing::debug!(
+            target: "pocket_codex_codex::rpc",
+            compression = ?response.headers().get("sec-websocket-extensions"),
+            "app-server websocket negotiated"
+        );
         let (sink, mut read) = stream.split();
 
         let sink = Arc::new(Mutex::new(sink));
@@ -485,6 +498,18 @@ fn record_close_reason(reason: &StdMutex<Option<String>>, message: String) {
     if reason.is_none() {
         tracing::warn!(reason = %message, "app-server connection closed");
         *reason = Some(message);
+    }
+}
+
+fn compression_offer_rejected(error: &tungstenite::Error) -> bool {
+    match error {
+        tungstenite::Error::Protocol(_) => true,
+        tungstenite::Error::Http(response) => matches!(response.status().as_u16(), 400 | 426),
+        tungstenite::Error::Io(error) => matches!(
+            error.kind(),
+            std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::ConnectionReset
+        ),
+        _ => false,
     }
 }
 

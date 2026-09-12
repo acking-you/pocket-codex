@@ -5,6 +5,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/fonts.dart';
+import 'package:pocket_codex/src/desktop_theme.dart';
+import 'package:pocket_codex/src/widgets/brand_logo.dart';
 import 'package:pocket_codex/src/theme.dart';
 import 'package:pocket_codex/src/ui_prefs.dart';
 import 'package:pocket_codex/src/widgets/window_title_bar.dart';
@@ -53,6 +55,7 @@ class UtilityPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final wide = MediaQuery.sizeOf(context).width >= 1000;
     final scaffold = Scaffold(
       appBar: UtilityPageTitleBar(
         route: route,
@@ -60,11 +63,156 @@ class UtilityPage extends StatelessWidget {
         parent: parent,
         actions: actions,
       ),
-      body: body,
-      bottomNavigationBar: bottomNavigationBar,
+      body: wide
+          ? Row(
+              children: [
+                SizedBox(
+                  width: 208,
+                  child: _WorkspaceNavigation(route: parent?.route ?? route),
+                ),
+                const VerticalDivider(width: 1),
+                Expanded(child: body),
+              ],
+            )
+          : body,
+      bottomNavigationBar:
+          bottomNavigationBar ??
+          (wide
+              ? null
+              : _WorkspaceNavigation(
+                  route: parent?.route ?? route,
+                  compact: true,
+                )),
       floatingActionButton: floatingActionButton,
     );
     return AppPageShortcuts(currentRoute: route, child: scaffold);
+  }
+}
+
+/// Persistent destinations use the same order on touch and wide layouts.
+class _WorkspaceNavigation extends StatelessWidget {
+  const _WorkspaceNavigation({required this.route, this.compact = false});
+  final String route;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    final scheme = Theme.of(context).colorScheme;
+    final entries = [
+      ('/', Icons.chat_bubble_outline_rounded, l10n.utilityChat),
+      ('/manage', Icons.dns_outlined, l10n.manageServices),
+      ('/sessions', Icons.history_rounded, l10n.localSessionsTitle),
+      ('/logs', Icons.article_outlined, l10n.logsTitle),
+      ('/settings', Icons.settings_outlined, l10n.settingsTitle),
+    ];
+    Widget destination((String, IconData, String) entry) {
+      final selected = entry.$1 == route;
+      return Semantics(
+        selected: selected,
+        button: true,
+        child: Tooltip(
+          message: entry.$3,
+          child: Material(
+            color: selected ? scheme.primaryContainer : Colors.transparent,
+            borderRadius: BorderRadius.circular(kControlRadius),
+            child: InkWell(
+              key: Key('workspace-nav-${entry.$1}'),
+              mouseCursor: clickable,
+              borderRadius: BorderRadius.circular(kControlRadius),
+              onTap: selected
+                  ? null
+                  : () => _openUtilityRoute(context, route, entry.$1),
+              child: Padding(
+                padding: EdgeInsets.symmetric(
+                  horizontal: compact ? 8 : 12,
+                  vertical: 13,
+                ),
+                child: Row(
+                  mainAxisAlignment: compact
+                      ? MainAxisAlignment.center
+                      : MainAxisAlignment.start,
+                  children: [
+                    Icon(
+                      entry.$2,
+                      size: 21,
+                      color: selected
+                          ? scheme.onPrimaryContainer
+                          : scheme.onSurfaceVariant,
+                    ),
+                    if (!compact) ...[
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          entry.$3,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: selected
+                                ? FontWeight.w600
+                                : FontWeight.w400,
+                            color: selected
+                                ? scheme.onPrimaryContainer
+                                : scheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Material(
+      color: scheme.surfaceContainerLow,
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: EdgeInsets.all(compact ? 8 : 16),
+          child: compact
+              ? Row(
+                  children: [
+                    for (final entry in entries)
+                      Expanded(child: destination(entry)),
+                  ],
+                )
+              : Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(10, 10, 10, 28),
+                      child: Row(
+                        children: [
+                          const BrandLogo(size: 24),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              l10n.appTitle,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    for (final entry in entries) ...[
+                      destination(entry),
+                      const SizedBox(height: 6),
+                    ],
+                  ],
+                ),
+        ),
+      ),
+    );
   }
 }
 

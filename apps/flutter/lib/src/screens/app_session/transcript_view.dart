@@ -200,7 +200,7 @@ class _MessageViewState extends State<MessageView> {
             children: [
               if (attachments != null) ...[
                 ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 600),
+                  constraints: const BoxConstraints(maxWidth: 640),
                   child: attachments,
                 ),
                 // Only when text follows: a bare attachment shouldn't leave
@@ -211,7 +211,7 @@ class _MessageViewState extends State<MessageView> {
               // empty bubble under them would be a visible artifact.
               if (refs.text.isNotEmpty)
                 Container(
-                  constraints: const BoxConstraints(maxWidth: 600),
+                  constraints: const BoxConstraints(maxWidth: 640),
                   padding: const EdgeInsets.symmetric(
                     horizontal: 16,
                     vertical: 10,
@@ -227,7 +227,7 @@ class _MessageViewState extends State<MessageView> {
                     refs.text,
                     style: Theme.of(
                       context,
-                    ).textTheme.bodyLarge?.copyWith(height: 1.3),
+                    ).textTheme.bodyLarge?.copyWith(height: 1.5),
                   ),
                 ),
             ],

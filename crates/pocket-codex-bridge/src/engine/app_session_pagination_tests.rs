@@ -1,6 +1,10 @@
 use futures::{SinkExt, StreamExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio_tungstenite::{accept_async, tungstenite::Message, WebSocketStream};
+use tokio_tungstenite::{
+    accept_async_with_config,
+    tungstenite::{protocol::WebSocketConfig, Message},
+    WebSocketStream,
+};
 
 use super::*;
 
@@ -22,8 +26,9 @@ fn load_window(next_cursor: Value) -> LoadedHistory {
         ("thread/turns/list", json!({"data": [turn], "nextCursor": null})),
     ];
     let (client, peer) = mock_client(replies.into());
-    let history = load_paginated_window(&client, "pagination-test", "thread-1")
-        .expect("pagination test operation");
+    let session = TestSession::new(client.clone());
+    let history =
+        load_paginated_window(&client, &session.0, "thread-1").expect("pagination test operation");
     runtime::runtime()
         .block_on(peer)
         .expect("pagination test operation");
@@ -39,12 +44,13 @@ fn mock_client(
             .expect("pagination test operation");
         let url = format!("ws://{}", listener.local_addr().expect("pagination test operation"));
         let peer = tokio::spawn(async move {
-            let mut socket = accept_async(
+            let mut socket = accept_async_with_config(
                 listener
                     .accept()
                     .await
                     .expect("pagination test operation")
                     .0,
+                Some(WebSocketConfig::default()),
             )
             .await
             .expect("pagination test operation");
@@ -176,9 +182,12 @@ fn pending_summary_yields_on_a_single_async_worker() {
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let url = format!("ws://{}", listener.local_addr().expect("address"));
         let peer = tokio::spawn(async move {
-            let mut ws = accept_async(listener.accept().await.expect("accept").0)
-                .await
-                .expect("ws");
+            let mut ws = accept_async_with_config(
+                listener.accept().await.expect("accept").0,
+                Some(WebSocketConfig::default()),
+            )
+            .await
+            .expect("ws");
             let first: Value = serde_json::from_str(
                 &ws.next()
                     .await
@@ -288,4 +297,273 @@ fn real_session_switch_soak() {
         times[rounds * 99 / 100],
         times.last().expect("samples")
     );
+}
+
+#[test]
+fn reopening_an_idle_thread_reuses_pages_and_the_exhausted_cursor() {
+    runtime::init(std::env::temp_dir()).expect("init");
+    let metadata = json!({"thread": {"id": "cached", "historyMode": "paginated", "updatedAt": 1}});
+    let turn = json!({"id": "t1", "status": "completed", "items": []});
+    let entry = |id: &str| {
+        json!({"turnId": "t1", "item": {
+            "id": id, "type": "agentMessage", "text": id
+        }})
+    };
+    let (client, peer) = mock_client(vec![
+        ("thread/read", metadata.clone()),
+        ("thread/turns/list", json!({"data": [turn.clone()], "nextCursor": null})),
+        ("thread/items/list", json!({"data": [entry("new")], "nextCursor": "older"})),
+        ("thread/turns/list", json!({"data": [turn], "nextCursor": null})),
+        ("thread/items/list", json!({"data": [entry("old")], "nextCursor": null})),
+        // No turns/items requests follow this metadata check.
+        ("thread/read", metadata),
+    ]);
+    let session = TestSession::new(client);
+    assert!(
+        thread_read(&session.0, "cached")
+            .expect("first read")
+            .has_older
+    );
+    assert!(
+        !thread_older_page(&session.0, "cached")
+            .expect("older")
+            .has_older
+    );
+    let restored = thread_read(&session.0, "cached").expect("cached read");
+    assert!(!restored.has_older);
+    assert_eq!(
+        restored
+            .items
+            .iter()
+            .map(|i| i.id.as_str())
+            .collect::<Vec<_>>(),
+        ["old", "new"]
+    );
+    assert!(thread_older_page(&session.0, "cached")
+        .expect("end")
+        .items
+        .is_empty());
+    runtime::runtime().block_on(peer).expect("peer");
+}
+
+#[test]
+fn empty_older_page_ends_pagination_even_with_a_bogus_cursor() {
+    runtime::init(std::env::temp_dir()).expect("init");
+    let (client, peer) =
+        mock_client(vec![("thread/items/list", json!({"data": [], "nextCursor": "phantom"}))]);
+    let session = TestSession::new(client);
+    set_pagination(&session.0, "empty", ThreadPagination {
+        next_item_cursor: Some("older".into()),
+        ..Default::default()
+    });
+    assert!(
+        !thread_older_page(&session.0, "empty")
+            .expect("empty page")
+            .has_older
+    );
+    assert!(
+        !thread_older_page(&session.0, "empty")
+            .expect("no second request")
+            .has_older
+    );
+    runtime::runtime().block_on(peer).expect("peer");
+}
+
+#[test]
+fn repeated_older_cursor_is_never_requested_twice() {
+    runtime::init(std::env::temp_dir()).expect("init");
+    let (client, peer) = mock_client(vec![(
+        "thread/items/list",
+        json!({"data": [{"turnId": "t1", "item": {
+            "id": "old", "type": "agentMessage", "text": "old"
+        }}], "nextCursor": "older"}),
+    )]);
+    let session = TestSession::new(client);
+    set_pagination(&session.0, "repeat", ThreadPagination {
+        next_item_cursor: Some("older".into()),
+        ..Default::default()
+    });
+    assert!(
+        !thread_older_page(&session.0, "repeat")
+            .expect("page")
+            .has_older
+    );
+    assert!(thread_older_page(&session.0, "repeat")
+        .expect("end")
+        .items
+        .is_empty());
+    runtime::runtime().block_on(peer).expect("peer");
+}
+
+#[test]
+fn new_tail_preserves_the_cached_prefix_and_exhausted_cursor() {
+    runtime::init(std::env::temp_dir()).expect("init");
+    let turn = json!({"id": "t1", "status": "completed", "items": []});
+    let entry =
+        |id: &str| json!({"turnId": "t1", "item": {"id": id, "type": "agentMessage", "text": id}});
+    let (client, peer) = mock_client(vec![
+        (
+            "thread/read",
+            json!({"thread": {"id": "cached", "historyMode": "paginated", "updatedAt": 1}}),
+        ),
+        ("thread/turns/list", json!({"data": [turn.clone()]})),
+        ("thread/items/list", json!({"data": [entry("tail")], "nextCursor": "older"})),
+        ("thread/turns/list", json!({"data": [turn.clone()]})),
+        ("thread/items/list", json!({"data": [entry("prefix")], "nextCursor": null})),
+        (
+            "thread/read",
+            json!({"thread": {"id": "cached", "historyMode": "paginated", "updatedAt": 2}}),
+        ),
+        ("thread/turns/list", json!({"data": [turn.clone()]})),
+        (
+            "thread/items/list",
+            json!({"data": [entry("new"), entry("tail")], "nextCursor": "older-again"}),
+        ),
+        ("thread/turns/list", json!({"data": [turn]})),
+    ]);
+    let session = TestSession::new(client);
+    thread_read(&session.0, "cached").expect("first");
+    thread_older_page(&session.0, "cached").expect("prefix");
+    let refreshed = thread_read(&session.0, "cached").expect("refresh");
+    assert_eq!(
+        refreshed
+            .items
+            .iter()
+            .map(|i| i.id.as_str())
+            .collect::<Vec<_>>(),
+        ["prefix", "tail", "new"]
+    );
+    assert!(!refreshed.has_older);
+    runtime::runtime().block_on(peer).expect("peer");
+}
+
+#[test]
+fn an_inflight_read_cannot_undo_live_cache_invalidation() {
+    runtime::init(std::env::temp_dir()).expect("init");
+    let (client, peer) = mock_client(vec![]);
+    let session = TestSession::new(client);
+    let mut pending = ensure_pagination(&session.0, "thread");
+    pending.metadata = Some(json!({"updatedAt": 1}));
+    let pages = sessions().lock().expect("sessions")[&session.0]
+        .pagination
+        .clone();
+    let event = |method: &str| Inbound {
+        method: method.into(),
+        params: Some(json!({"threadId": "thread"})),
+        request_id: None,
+    };
+    invalidate_history(&pages, &event("item/completed"));
+    assert!(set_pagination(&session.0, "thread", pending.clone()));
+    let current = pagination_of(&session.0, "thread").expect("state");
+    assert!(current.metadata.is_none());
+    assert_eq!(current.source_revision, 1);
+
+    invalidate_history(&pages, &event("thread/compacted"));
+    assert!(!set_pagination(&session.0, "thread", pending));
+    assert_eq!(
+        pagination_of(&session.0, "thread")
+            .expect("state")
+            .generation,
+        1
+    );
+    runtime::runtime().block_on(peer).expect("peer");
+}
+
+#[test]
+fn selected_turn_pages_are_cached_and_continue_past_three_pages() {
+    runtime::init(std::env::temp_dir()).expect("init");
+    let replies = (0..4).map(|i| (
+        "thread/items/list",
+        json!({"data": [{"turnId": "turn", "item": {"id": format!("item-{i}"), "type": "agentMessage", "text": "text"}}],
+               "nextCursor": if i < 3 { Some(format!("cursor-{i}")) } else { None }}),
+    )).collect();
+    let (client, peer) = mock_client(replies);
+    let session = TestSession::new(client);
+    let first = thread_turn_page(&session.0, "thread", "turn", false).expect("first page");
+    assert_eq!(first.items.len(), 1);
+    assert!(first.has_more);
+    assert_eq!(
+        thread_turn_page(&session.0, "thread", "turn", false)
+            .expect("cached")
+            .items
+            .len(),
+        1
+    );
+    for count in 2..=4 {
+        let page = thread_turn_page(&session.0, "thread", "turn", true).expect("next");
+        assert_eq!(page.items.len(), count);
+        assert_eq!(page.has_more, count < 4);
+    }
+    let done = thread_turn_page(&session.0, "thread", "turn", true).expect("no more requests");
+    assert!(!done.has_more);
+    assert_eq!(done.items.len(), 4);
+    runtime::runtime().block_on(peer).expect("peer");
+}
+
+#[test]
+#[ignore = "manual: PCX_HISTORY_WS and PCX_HISTORY_THREAD_ID select an existing long idle thread"]
+fn real_history_gap_smoke() {
+    runtime::init(std::env::temp_dir()).expect("init");
+    let addr = std::env::var("PCX_HISTORY_WS").expect("app-server address");
+    let thread = std::env::var("PCX_HISTORY_THREAD_ID").expect("thread id");
+    let session = TestSession("real-history-gap-smoke".into());
+    establish(session.0.clone(), &addr).expect("connect");
+    let start = Instant::now();
+    let history = thread_read(&session.0, &thread).expect("tail");
+    let cold = start.elapsed();
+    let first = history.first_turn_id.expect("enumerated beginning");
+    let start = Instant::now();
+    let page = thread_turn_page(&session.0, &thread, &first, false).expect("opening turn");
+    let jump = start.elapsed();
+    assert!(!page.items.is_empty());
+    assert!(page
+        .items
+        .iter()
+        .any(|item| item.item_type == "userMessage"));
+    let start = Instant::now();
+    let reopened = thread_read(&session.0, &thread).expect("reopen");
+    let reused = reopened
+        .turn_pages
+        .iter()
+        .find(|page| page.turn_id == first)
+        .expect("cached selected turn");
+    assert_eq!(reused.items.len(), page.items.len());
+    eprintln!(
+        "cold={cold:?}, first turn={jump:?}, reopen={:?}; turns={}, first-turn items={}, more={}",
+        start.elapsed(),
+        reopened.turns.len(),
+        page.items.len(),
+        page.has_more
+    );
+}
+
+#[test]
+fn evicted_turn_continues_without_advertising_a_suffix_as_its_opening() {
+    runtime::init(std::env::temp_dir()).expect("init");
+    let entry = |id: &str, next: Option<&str>| {
+        (
+            "thread/items/list",
+            json!({"data": [{"turnId": "turn", "item": {"id": id, "type": "agentMessage", "text": id}}], "nextCursor": next}),
+        )
+    };
+    let (client, peer) = mock_client(vec![
+        entry("first", Some("next")),
+        entry("second", None),
+        entry("first", Some("next")),
+    ]);
+    let session = TestSession::new(client);
+    thread_turn_page(&session.0, "thread", "turn", false).expect("opening");
+    let mut state = pagination_of(&session.0, "thread").expect("state");
+    let window = state.turn_pages.get_mut("turn").expect("window");
+    window.items = Arc::default();
+    window.evicted = true;
+    set_pagination(&session.0, "thread", state);
+    let suffix = thread_turn_page(&session.0, "thread", "turn", true).expect("continue");
+    assert_eq!(suffix.items[0].id, "second");
+    assert!(!suffix.has_more);
+    assert!(cached_turn_pages(&session.0, "thread").is_empty());
+    let opening = thread_turn_page(&session.0, "thread", "turn", false).expect("reopen");
+    assert_eq!(opening.items[0].id, "first");
+    assert!(opening.has_more);
+    runtime::runtime().block_on(peer).expect("peer");
 }

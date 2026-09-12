@@ -1,8 +1,74 @@
 use serde_json::json;
 use tokio::net::TcpListener;
-use tokio_tungstenite::{accept_async, WebSocketStream};
+use tokio_tungstenite::{accept_async, accept_async_with_config, WebSocketStream};
 
 use super::*;
+
+#[tokio::test]
+#[allow(clippy::result_large_err, reason = "tungstenite fixes the handshake callback error type")]
+async fn compressed_history_response_negotiates_and_decodes() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let url = format!("ws://{}", listener.local_addr().expect("address"));
+    let peer = tokio::spawn(async move {
+        let mut config = WebSocketConfig::default();
+        config.extensions.permessage_deflate = Some(Default::default());
+        let mut socket = tokio_tungstenite::accept_hdr_async_with_config(
+            listener.accept().await.expect("accept").0,
+            |request: &tungstenite::handshake::server::Request, response| {
+                assert!(request.headers()["sec-websocket-extensions"]
+                    .to_str()
+                    .expect("header")
+                    .contains("permessage-deflate"));
+                Ok(response)
+            },
+            Some(config),
+        )
+        .await
+        .expect("handshake");
+        let request: Value = serde_json::from_str(
+            &socket
+                .next()
+                .await
+                .expect("frame")
+                .expect("message")
+                .into_text()
+                .expect("text"),
+        )
+        .expect("json");
+        socket
+            .send(WsMessage::text(
+                json!({"id": request["id"], "result": {"text": "history line\n".repeat(20_000)}})
+                    .to_string(),
+            ))
+            .await
+            .expect("reply");
+    });
+    let (client, _events) = AppClient::connect(&url).await.expect("client");
+    let result = client
+        .request("thread/read", json!({}))
+        .await
+        .expect("history");
+    assert_eq!(result["text"].as_str().expect("text"), "history line\n".repeat(20_000));
+    peer.await.expect("peer");
+}
+
+#[tokio::test]
+async fn peer_rejecting_extensions_is_retried_without_compression() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let url = format!("ws://{}", listener.local_addr().expect("address"));
+    let peer = tokio::spawn(async move {
+        // This older accept API rejects extension offers when config is absent.
+        assert!(accept_async(listener.accept().await.expect("first").0)
+            .await
+            .is_err());
+        accept_async(listener.accept().await.expect("retry").0)
+            .await
+            .expect("plain handshake")
+    });
+    let (client, _events) = AppClient::connect(&url).await.expect("compatible client");
+    let _server = peer.await.expect("peer");
+    assert!(client.is_alive());
+}
 
 async fn connection() -> (AppClient, mpsc::UnboundedReceiver<Inbound>, WebSocketStream<TcpStream>) {
     let listener = TcpListener::bind("127.0.0.1:0")
@@ -10,9 +76,12 @@ async fn connection() -> (AppClient, mpsc::UnboundedReceiver<Inbound>, WebSocket
         .expect("test operation");
     let url = format!("ws://{}", listener.local_addr().expect("test operation"));
     let (client, server) = tokio::join!(AppClient::connect(&url), async {
-        accept_async(listener.accept().await.expect("test operation").0)
-            .await
-            .expect("test operation")
+        accept_async_with_config(
+            listener.accept().await.expect("test operation").0,
+            Some(WebSocketConfig::default()),
+        )
+        .await
+        .expect("test operation")
     });
     let (client, inbound) = client.expect("test operation");
     (client, inbound, server)

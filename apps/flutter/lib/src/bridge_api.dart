@@ -460,6 +460,8 @@ class ThreadHistory {
     this.configConfirmed = false,
     this.hasOlder = false,
     this.turns = const [],
+    this.firstTurnId,
+    this.turnPages = const [],
   });
 
   /// Conversation items, oldest first.
@@ -517,6 +519,31 @@ class ThreadHistory {
   /// whose items aren't loaded yet. The turn rail shows a conversation's shape,
   /// so it needs every turn even before their bodies are read.
   final List<TurnSummary> turns;
+
+  /// Actual oldest turn, confirmed by exhausting the server's summary cursor.
+  final String? firstTurnId;
+
+  /// Cached windows fetched through timeline navigation.
+  final List<TurnItemsPage> turnPages;
+}
+
+/// A bounded ascending window within one selected turn.
+class TurnItemsPage {
+  /// Creates a turn window.
+  const TurnItemsPage({
+    required this.turnId,
+    required this.items,
+    required this.hasMore,
+  });
+
+  /// Owning turn.
+  final String turnId;
+
+  /// Loaded prefix in chronological order.
+  final List<ThreadItem> items;
+
+  /// Whether the same turn has more items after this window.
+  final bool hasMore;
 }
 
 /// A turn reduced to what the rail shows: the question, and how it was answered.
@@ -773,7 +800,14 @@ class SessionLiveness {
 /// session follow stream.
 class SessionFollowUpdate {
   /// Creates a live session snapshot.
-  const SessionFollowUpdate({required this.liveness, required this.items});
+  const SessionFollowUpdate({
+    required this.liveness,
+    required this.items,
+    this.historyRevision,
+  });
+
+  /// Opaque revision when history is read through app-server pagination.
+  final String? historyRevision;
 
   /// Current ownership and resume-safety state.
   final SessionLiveness liveness;
@@ -1277,6 +1311,14 @@ abstract interface class BridgeApi {
   /// One page further back through a paginated thread's history. Returns an
   /// empty page when the thread reads whole or is already at its start.
   Future<OlderPage> appThreadOlderPage(String serviceKey, String threadId);
+
+  /// Read a selected turn's cached prefix or continue its ascending cursor.
+  Future<TurnItemsPage> appThreadTurnPage(
+    String serviceKey,
+    String threadId,
+    String turnId, {
+    bool loadMore = false,
+  });
 
   /// Every item of one turn, oldest first — for jumping to a turn the
   /// transcript hasn't scrolled back to yet.

@@ -2,7 +2,10 @@ use futures::{SinkExt, StreamExt};
 use pocket_codex_core::state::CodexProcessInfo;
 use serde_json::Value;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio_tungstenite::{accept_async, tungstenite::Message};
+use tokio_tungstenite::{
+    accept_async_with_config,
+    tungstenite::{protocol::WebSocketConfig, Message},
+};
 
 use super::*;
 
@@ -20,9 +23,12 @@ async fn adopted_server(answer_list: bool, wildcard: bool) -> Result<(), Startup
             .await
             .expect("readyz response");
         drop(http);
-        let mut ws = accept_async(listener.accept().await.expect("RPC connection").0)
-            .await
-            .expect("websocket handshake");
+        let mut ws = accept_async_with_config(
+            listener.accept().await.expect("RPC connection").0,
+            Some(WebSocketConfig::default()),
+        )
+        .await
+        .expect("websocket handshake");
         for method in ["initialize", "initialized", "thread/list"] {
             let text = ws
                 .next()

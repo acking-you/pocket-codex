@@ -39,6 +39,84 @@ void main() {
   // another that reuses a thread id.
   setUp(AppSessionScreen.debugResetThreadMemory);
 
+  for (final delayed in ['config', 'models']) {
+    testWidgets(
+      'history is readable while optional $delayed is still pending',
+      (t) async {
+        final api = FakeBridgeApi(
+          config: const ConfigInfo(relay: 'relay:7666', hasKey: true),
+        );
+        await api.appConnect('pcx:lb7666:app:default', 28080);
+        final gate = Completer<void>();
+        if (delayed == 'config') api.configReadGate = gate;
+        if (delayed == 'models') api.modelListGate = gate;
+        api.readResult = const ThreadHistory(
+          items: [
+            ThreadItem(
+              id: 'answer',
+              itemType: 'agentMessage',
+              title: '',
+              text: 'History already arrived',
+            ),
+          ],
+          running: false,
+          model: 'gpt-5.5',
+        );
+        await t.pumpWidget(
+          host(
+            const AppSessionScreen(
+              serviceKey: 'pcx:lb7666:app:default',
+              threadId: 'slow-metadata',
+            ),
+            api,
+          ),
+        );
+        await t.pumpAndSettle();
+        expect(gate.isCompleted, isFalse);
+        expect(
+          find.textContaining('History already arrived', findRichText: true),
+          findsOneWidget,
+        );
+        await t.enterText(
+          find.byKey(const Key('composer-input')),
+          'Draft while reading',
+        );
+        gate.complete();
+        await t.pumpAndSettle();
+        expect(find.text('Draft while reading'), findsOneWidget);
+        expect(t.takeException(), isNull);
+      },
+    );
+  }
+
+  testWidgets('composer starts compact and remembers a resized input height', (
+    t,
+  ) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'relay:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    t.view.devicePixelRatio = 1;
+    t.view.physicalSize = const Size(390, 844);
+    addTearDown(t.view.reset);
+    await t.pumpWidget(
+      host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+    );
+    await t.pumpAndSettle();
+    final input = find.byKey(const Key('composer-input-area'));
+    expect(t.getSize(input).height, 32);
+    await t.drag(
+      find.byKey(const Key('composer-resize-handle')),
+      const Offset(0, -90),
+    );
+    await t.pumpAndSettle();
+    final height = t.getSize(input).height;
+    expect(height, greaterThan(90));
+    final container = ProviderScope.containerOf(t.element(input));
+    expect(container.read(uiPrefsProvider).valueOrNull?.composerHeight, height);
+    expect(t.takeException(), isNull);
+  });
+
   testWidgets('App session sends a turn and renders the streamed reply', (
     t,
   ) async {
@@ -5273,6 +5351,176 @@ void main() {
     );
   }
 
+  testWidgets(
+    'metadata-only monitoring pages history and retains it across updates',
+    (t) async {
+      const service = 'pcx:lb7666:app:default';
+      final api =
+          FakeBridgeApi(
+              config: const ConfigInfo(relay: 'relay:7666', hasKey: true),
+            )
+            ..metadataOnlyFollow = true
+            ..appThreadResumeError = StateError(
+              'thread already has an active writer',
+            );
+      await api.appConnect(service, 28080);
+      const live = SessionLiveness(
+        threadId: 'watched',
+        turnState: 'completed',
+        heldOpen: true,
+        safety: 'ownedIdle',
+        allowsResume: false,
+        requiresTakeover: false,
+        holders: [],
+      );
+      api.liveness['watched'] = live;
+      const turns = [
+        TurnSummary(
+          turnId: 'first',
+          userText: 'opening',
+          assistantText: '',
+          loaded: true,
+        ),
+        TurnSummary(
+          turnId: 'last',
+          userText: 'last',
+          assistantText: '',
+          loaded: true,
+        ),
+      ];
+      api.readResult = const ThreadHistory(
+        items: [
+          ThreadItem(
+            id: 'opening',
+            itemType: 'userMessage',
+            title: '',
+            text: 'Opening question',
+            turnId: 'first',
+          ),
+          ThreadItem(
+            id: 'reply',
+            itemType: 'agentMessage',
+            title: '',
+            text: 'Before update',
+            turnId: 'last',
+          ),
+        ],
+        running: false,
+        turns: turns,
+        firstTurnId: 'first',
+      );
+      await t.pumpWidget(
+        host(
+          const AppSessionScreen(serviceKey: service, threadId: 'watched'),
+          api,
+        ),
+      );
+      await t.pumpAndSettle();
+      expect(find.text('Opening question'), findsOneWidget);
+      expect(find.text('Before update'), findsOneWidget);
+      api.readResult = const ThreadHistory(
+        items: [
+          ThreadItem(
+            id: 'reply',
+            itemType: 'agentMessage',
+            title: '',
+            text: 'After update',
+            turnId: 'last',
+          ),
+        ],
+        running: false,
+        turns: turns,
+        firstTurnId: 'first',
+      );
+      api.pushMetaSessionUpdate(
+        'watched',
+        const SessionFollowUpdate(
+          liveness: live,
+          items: [],
+          historyRevision: 'next',
+        ),
+      );
+      await t.pump();
+      await t.pump(const Duration(seconds: 1));
+      await t.pumpAndSettle();
+      expect(find.text('Opening question'), findsOneWidget);
+      expect(find.text('After update'), findsOneWidget);
+      expect(find.text('Before update'), findsNothing);
+      expect(t.takeException(), isNull);
+    },
+  );
+
+  testWidgets('monitor history renders before the ownership probe completes', (
+    t,
+  ) async {
+    const service = 'pcx:lb7666:app:default';
+    final ownership = Completer<void>();
+    final api =
+        FakeBridgeApi(
+            config: const ConfigInfo(relay: 'relay:7666', hasKey: true),
+          )
+          ..metadataOnlyFollow = true
+          ..metaFollowGate = ownership.future
+          ..appThreadResumeError = StateError(
+            'thread already has an active writer',
+          )
+          ..readResult = const ThreadHistory(
+            items: [
+              ThreadItem(
+                id: 'first',
+                itemType: 'userMessage',
+                title: '',
+                text: 'History is ready',
+                turnId: 'turn',
+              ),
+            ],
+            running: false,
+          );
+    await api.appConnect(service, 28080);
+    await t.pumpWidget(
+      host(
+        const AppSessionScreen(serviceKey: service, threadId: 'watched'),
+        api,
+      ),
+    );
+    await t.pumpAndSettle();
+    expect(find.text('History is ready'), findsOneWidget);
+    expect(ownership.isCompleted, isFalse);
+    ownership.complete();
+    await t.pumpAndSettle();
+    expect(t.takeException(), isNull);
+  });
+
+  testWidgets('leaving a monitored session during a history read is safe', (
+    t,
+  ) async {
+    const service = 'pcx:lb7666:app:default';
+    final api =
+        FakeBridgeApi(
+            config: const ConfigInfo(relay: 'relay:7666', hasKey: true),
+          )
+          ..metadataOnlyFollow = true
+          ..appThreadResumeError = StateError(
+            'thread already has an active writer',
+          );
+    await api.appConnect(service, 28080);
+    final pending = Completer<ThreadHistory>();
+    api.pendingReads['watched'] = [pending.future];
+    await t.pumpWidget(
+      host(
+        const AppSessionScreen(serviceKey: service, threadId: 'watched'),
+        api,
+      ),
+    );
+    for (var i = 0; i < 5; i++) {
+      await t.pump(const Duration(milliseconds: 100));
+    }
+    await t.pumpWidget(const SizedBox());
+    pending.complete(const ThreadHistory(items: [], running: false));
+    await t.pump(const Duration(seconds: 2));
+    expect(t.takeException(), isNull);
+  });
+
   testWidgets('Active writer stays in chat read-only, then can be taken over', (
     t,
   ) async {
@@ -5924,6 +6172,7 @@ void main() {
         ],
         running: false,
         hasOlder: true,
+        firstTurnId: 't1',
         // The server enumerated every turn, including the four not loaded.
         // Five of them, so the count clears kTurnMinimapMinItems and the rail
         // is the affordance rather than the corner arrows.
@@ -6005,6 +6254,7 @@ void main() {
         expect(rail.items[0].userText, 'first question');
         expect(rail.items[0].assistantText, 'first answer');
         expect(api.turnItemCalls, isEmpty);
+        expect(rail.onPreview, isNull);
       });
     });
 
@@ -6026,6 +6276,13 @@ void main() {
         expect(find.text('first answer'), findsOneWidget);
         // The newest turn is still there — a jump adds, it doesn't replace.
         expect(find.text('newest answer'), findsOneWidget);
+        expect(find.byKey(const Key('chat-older-history')), findsNothing);
+        expect(find.text('对话开始'), findsOneWidget);
+        expect(find.byKey(const Key('history-gap-t2')), findsOneWidget);
+        final loadedRail = t.widget<TurnMinimap>(find.byType(TurnMinimap));
+        loadedRail.onSelect(loadedRail.items.first);
+        await t.pumpAndSettle();
+        expect(api.turnItemCalls, ['t1']);
       });
     });
 
@@ -6073,7 +6330,7 @@ void main() {
       });
     });
 
-    testWidgets('older pages keep the order after an arbitrary turn fetch', (
+    testWidgets('gaps load in place after jumping to the first turn', (
       t,
     ) async {
       await onDesktop(() async {
@@ -6082,50 +6339,47 @@ void main() {
         final api = await openPaginated(t);
         api.turnItems['t1'] = [user('u1', 'first question', 't1')];
         final rail = t.widget<TurnMinimap>(find.byType(TurnMinimap));
-        rail.onPreview!(rail.items.first);
+        rail.onSelect(rail.items.first);
         await t.pumpAndSettle();
-        api.olderPages = [
-          [
-            user('u2', 'second question', 't2'),
-            user('u3', 'third question', 't3'),
-          ],
-        ];
-        await t.tap(find.byKey(const Key('chat-older-history-load')));
+        api.turnItems['t2'] = [user('u2', 'second question', 't2')];
+        api.turnItems['t3'] = [user('u3', 'third question', 't3')];
+        await t.tap(find.byKey(const Key('history-gap-t2')));
+        await t.pumpAndSettle();
+        await t.tap(find.byKey(const Key('history-gap-t3')));
         await t.pumpAndSettle();
         final rows = t.widget<TurnMinimap>(find.byType(TurnMinimap)).items;
         expect(rows[0].rowIndex, lessThan(rows[1].rowIndex));
         expect(rows[1].rowIndex, lessThan(rows[2].rowIndex));
         expect(rows[2].rowIndex, lessThan(rows[4].rowIndex));
+        expect(api.olderPageCalls, 0);
+        expect(api.turnItemCalls, ['t1', 't2', 't3']);
       });
     });
 
-    testWidgets(
-      'select waits for an in-flight hover and scrolls when it arrives',
-      (t) async {
-        await onDesktop(() async {
-          await t.binding.setSurfaceSize(const Size(1600, 900));
-          addTearDown(() => t.binding.setSurfaceSize(null));
-          final api = await openPaginated(t, longTail: true);
-          final response = Completer<List<ThreadItem>>();
-          api.pendingTurnItems['t1'] = response.future;
-          final rail = t.widget<TurnMinimap>(find.byType(TurnMinimap));
-          final controller = t
-              .widget<MiddleClickScroll>(find.byType(MiddleClickScroll))
-              .controller;
-          expect(controller.offset, greaterThan(500));
-          rail.onPreview!(rail.items.first);
-          await t.pump();
-          rail.onSelect(rail.items.first);
-          await t.pump();
-          expect(api.turnItemCalls, ['t1']);
-          response.complete([user('u1', 'first question', 't1')]);
-          await t.pumpAndSettle();
-          expect(api.turnItemCalls, ['t1']);
-          expect(controller.offset, lessThan(100));
-          expect(find.text('first question'), findsOneWidget);
-        });
-      },
-    );
+    testWidgets('repeated selection shares the in-flight request', (t) async {
+      await onDesktop(() async {
+        await t.binding.setSurfaceSize(const Size(1600, 900));
+        addTearDown(() => t.binding.setSurfaceSize(null));
+        final api = await openPaginated(t, longTail: true);
+        final response = Completer<List<ThreadItem>>();
+        api.pendingTurnItems['t1'] = response.future;
+        final rail = t.widget<TurnMinimap>(find.byType(TurnMinimap));
+        final controller = t
+            .widget<MiddleClickScroll>(find.byType(MiddleClickScroll))
+            .controller;
+        expect(controller.offset, greaterThan(500));
+        rail.onSelect(rail.items.first);
+        await t.pump();
+        rail.onSelect(rail.items.first);
+        await t.pump();
+        expect(api.turnItemCalls, ['t1']);
+        response.complete([user('u1', 'first question', 't1')]);
+        await t.pumpAndSettle();
+        expect(api.turnItemCalls, ['t1']);
+        expect(controller.offset, lessThan(100));
+        expect(find.text('first question'), findsOneWidget);
+      });
+    });
 
     testWidgets('new live turns join the paginated rail', (t) async {
       await onDesktop(() async {
@@ -6167,6 +6421,55 @@ void main() {
       await t.pumpAndSettle();
       expect(t.takeException(), isNull);
     });
+
+    testWidgets('prepending history preserves the visible message position', (
+      t,
+    ) async {
+      await t.binding.setSurfaceSize(const Size(1000, 800));
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      final api = await openPaginated(t, longTail: true);
+      final scroll = t
+          .widget<MiddleClickScroll>(find.byType(MiddleClickScroll))
+          .controller;
+      scroll.jumpTo(0);
+      await t.pumpAndSettle();
+      final anchor = find.byKey(const ValueKey('a5'));
+      final before = t.getTopLeft(anchor).dy;
+      api.olderPages = [
+        [
+          for (var i = 0; i < 4; i++) ...[
+            user('u$i', 'Earlier question $i', 't$i'),
+            agent('a$i', 'Earlier answer $i\n\n' * 15, 't$i'),
+          ],
+        ],
+      ];
+      await t.tap(find.byKey(const Key('chat-older-history-load')));
+      await t.pumpAndSettle();
+      expect(t.getTopLeft(anchor).dy, closeTo(before, 2));
+      expect(api.olderPageCalls, 1);
+    });
+
+    testWidgets(
+      'failed history pauses automatic requests until explicit retry',
+      (t) async {
+        final api = await openPaginated(t);
+        final pending = Completer<OlderPage>();
+        api.pendingOlderPages['thread-long'] = pending.future;
+        await t.tap(find.byKey(const Key('chat-older-history-load')));
+        await t.pump();
+        pending.completeError(StateError('temporary failure'));
+        await t.pumpAndSettle();
+        expect(find.text('加载失败，点击重试'), findsOneWidget);
+        await t.drag(find.byType(MiddleClickScroll), const Offset(0, 100));
+        await t.pumpAndSettle();
+        expect(api.olderPageCalls, 1);
+        api.pendingOlderPages.clear();
+        await t.tap(find.byKey(const Key('chat-older-history-load')));
+        await t.pumpAndSettle();
+        expect(api.olderPageCalls, 2);
+        expect(find.byKey(const Key('chat-older-history')), findsNothing);
+      },
+    );
 
     testWidgets('a thread that arrives whole pages nothing', (t) async {
       final api = FakeBridgeApi(

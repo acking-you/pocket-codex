@@ -71,11 +71,11 @@ mod tests {
     async fn explicit_relay_forces_self_host_even_when_signed_in() {
         let mut config = Config::default();
         config.set_account_session("tok", "ref", "octocat", None);
-        std::env::set_var(relay::CREDENTIAL_ENV, "0".repeat(32));
+        config.set_relay("relay.example:7666");
+        config.set_relay_key("0".repeat(32));
         let transport = resolve_transport(Some("relay.example:7666"), None, &config)
             .await
             .expect("resolve");
-        std::env::remove_var(relay::CREDENTIAL_ENV);
         assert_eq!(transport.session.relay_addr, "relay.example:7666");
         assert!(!transport.is_account(), "an explicit --relay is self-host");
     }

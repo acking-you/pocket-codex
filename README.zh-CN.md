@@ -9,10 +9,10 @@
 </p>
 
 <p align="center">
-  <a href="#状态"><img alt="status: work in progress" src="https://img.shields.io/badge/status-WIP-orange"></a>
-  <a href="https://www.rust-lang.org"><img alt="rust" src="https://img.shields.io/badge/built%20with-Rust-dea584.svg"></a>
-  <a href="https://flutter.dev"><img alt="flutter" src="https://img.shields.io/badge/UI-Flutter-02569B.svg"></a>
-  <a href="LICENSE"><img alt="license" src="https://img.shields.io/badge/license-Apache--2.0-blue.svg"></a>
+  <a href="#状态"><img alt="status: work in progress" src="https://img.shields.io/badge/status-WIP-626C7E"></a>
+  <a href="https://www.rust-lang.org"><img alt="rust" src="https://img.shields.io/badge/built%20with-Rust-355ACF.svg"></a>
+  <a href="https://flutter.dev"><img alt="flutter" src="https://img.shields.io/badge/UI-Flutter-355ACF.svg"></a>
+  <a href="LICENSE"><img alt="license" src="https://img.shields.io/badge/license-Apache--2.0-355ACF.svg"></a>
 </p>
 
 <p align="center">
@@ -59,12 +59,15 @@ CLI，或任意 OpenAI 兼容工具——都通过中转访问它**，要么用�
 | ------------------------------ | -------------------------------------- |
 | 工作区 / lints / CI            | 已搭好                                  |
 | `pocket-codex` CLI             | `login`、`logout`、`account`、`init`、`serve`、`connect`、`api {serve,connect}`、`services {list,default set}`、顶层 `status`/`stop`、`codex {start,stop,status}`、`pb {register,subscribe,status}`、`remote-hint`、`version` |
-| `pb-mapper` 注册/订阅          | 经 `deps/pb-mapper` 接通               |
+| `pb-mapper` 注册/订阅          | Git SDK 来自 `pocket-codex` 分支，由 `Cargo.lock` 固定版本 |
 | `codex app-server` 进程管理    | 通过 PID + state.toml 启动/停止/查状态 |
 | 外置 Codex 托管                | 所有桌面端均启动已安装的外置 `codex`，只直接依赖上游协议 crate；「内置引擎」暂未实现，按钮置灰。旧内嵌托管配置恢复为外置模式，需安装 Codex 或指定其路径。 |
+| 对话历史分页 | 会话内有界缓存、明确的分页终点；跳转时间线后在真实缺口加载中间记录，复用已读页；失败手动重试、前插消息保持阅读位置，时间线分组改为线性计算 |
+| 历史加载与监看 | 历史先展示，配置与模型列表后台补齐；应用内托管走本机直连；其他进程的会话通过小体积版本通知触发有界刷新，缓存日志状态扫描结果 |
+| 传输压缩 | 主机 HTTP 协商 Zstd/Gzip；app-server WebSocket 请求 permessage-deflate，需要外置服务端支持；兼容未压缩连接，SSE 保持流式传输 |
 | 直连 Responses API 代理        | 经 pb-mapper 注册的本地 HTTP/WS 代理   |
 | 托管账号（GitHub）             | 可选的 `pocket-codex-backend`：GitHub 设备流登录，按用户隔离的 `pcxu:<user>:…` 经中转打洞（主密钥不离开服务器）；`--relay` 仍保留自建模式。见 [`deploy/`](deploy/README.md) |
-| Flutter 界面（`apps/flutter`） | 聊天优先主屏（打开即进入最近会话；侧栏可选所有会话；自动连接上次使用/本机托管/首个可达的主机，桌面端自动恢复托管）；账号引导（「Sign in with GitHub」）+ 自建引导（中转+密钥、`pcx1:` 导入/导出）；管理页含服务发现、app-server 会话、API 服务订阅、托管；设置；自适应 Material 3（明/暗） |
+| Flutter 界面（`apps/flutter`） | 聊天优先主屏（打开即进入最近会话；侧栏可选所有会话；自动连接上次使用/本机托管/首个可达的主机，桌面端自动恢复托管）；账号引导（「Sign in with GitHub」）+ 自建引导（中转+密钥、`pcx1:` 导入/导出）；管理页含服务发现、app-server 会话、API 服务订阅、托管；设置；统一中性色与蓝色强调色、固定辅助导航，适配桌面、平板和手机（明/暗）；输入框默认更紧凑，支持拖动调节并记住高度，图标与介绍图同步配色 |
 
 两种模式下，多设备 CLI 流程均已可用：
 

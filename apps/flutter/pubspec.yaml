@@ -174,7 +174,7 @@ flutter_launcher_icons:
     generate: true
     image_path: "icon/icon_glyph.png"
     background_color: "#FFFFFF"
-    theme_color: "#E071A7"
+    theme_color: "#355ACF"
   # Windows: NOT generated here. This tool writes a single-frame .ico (one size,
   # whatever `icon_size` says), and Windows then downscales that one raster for
   # the taskbar at 32 px and the title bar at 16 px — a detailed mark reduced 8:1
@@ -199,9 +199,9 @@ flutter_native_splash:
   image: assets/logo/mark_light.png
   image_dark: assets/logo/mark_dark.png
   color: "#FDFDFD"
-  color_dark: "#1E1E1E"
+  color_dark: "#1A1D24"
   android_12:
     image: assets/logo/mark_light.png
     image_dark: assets/logo/mark_dark.png
     color: "#FDFDFD"
-    color_dark: "#1E1E1E"
+    color_dark: "#1A1D24"

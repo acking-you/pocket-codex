@@ -34,6 +34,7 @@ import 'package:pocket_codex/src/screens/app_session/activity_cards.dart';
 import 'package:pocket_codex/src/screens/app_session/composer_cards.dart';
 import 'package:pocket_codex/src/screens/app_session/transcript_model.dart';
 import 'package:pocket_codex/src/screens/app_session/history_merge.dart';
+import 'package:pocket_codex/src/screens/app_session/history_rows.dart';
 import 'package:pocket_codex/src/screens/app_session/transcript_view.dart';
 import 'package:pocket_codex/src/theme.dart';
 import 'package:pocket_codex/src/ui_prefs.dart';
@@ -321,7 +322,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   // the chat stays centered regardless. _threads backs the left pane.
   bool _leftOpen = true;
   bool _reviewOpen = false; // the right-hand review split is showing
-  double _leftWidth = 280;
+  double _leftWidth = 304;
+  double? _composerHeight;
+  int _settingsRevision = 0;
   double _reviewWidth = 760; // width of the whole review split (diff + tree)
   double _treeWidth = 250; // the tree sub-pane inside the review
   String? _reviewFile; // path selected in the review, null = first changed
@@ -400,6 +403,11 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   SessionLiveness? _externalWriterLiveness;
   StreamSubscription<SessionFollowUpdate>? _externalWriterSub;
   Timer? _externalWriterReconnect;
+  Timer? _externalHistoryTimer;
+  String? _externalHistoryRevision;
+  bool _externalHistoryLoading = false;
+  bool _externalHistoryDirty = false;
+  bool _externalWriterLegacy = false;
   int _externalWriterEpoch = 0;
   bool _takingOver = false;
   bool _sending = false;
@@ -411,11 +419,20 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   List<TurnSummary> _turnSummaries = const [];
   // Whether older items remain on the server for the open thread.
   bool _hasOlder = false;
+  bool _historyError = false;
+  final Set<String> _fetchedTurns = {};
+  final Map<String, TurnItemsPage> _turnWindows = {};
+  final Set<String> _sequentialHistoryIds = {};
+  String? _firstTurnId;
+  final Map<Key, GlobalKey> _rowAnchors = {};
+  List<Object>? _cachedRows;
+  List<(TranscriptItem, String, String)> _rowSources = const [];
   // True while an older page (or a single turn's items) is in flight, so a
   // scroll frame can't queue the same fetch twice.
   bool _loadingOlder = false;
   Future<void>? _historyLoad;
   int _historyGeneration = 0;
+  int _turnNavigation = 0;
   // True while `_scrollToEnd(force: true)` is re-jumping to the bottom. Those
   // jumps fire scroll events from positions that can look like the top of the
   // list, which would fetch older history nobody asked for.
@@ -538,71 +555,29 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   ///
   /// User messages and standalone notices are never folded.
   List<Object> get _rows {
-    final out = <Object>[];
-    var i = 0;
-    while (i < _items.length) {
-      final it = _items[i];
-      // Agent prose that answers the turn: the last run of `agentMessage` items
-      // in it. Earlier prose is the agent narrating what it is about to do, which
-      // belongs with the work rather than above it.
-      bool isFinalReplyAt(int at) {
-        if (!_items[at].isAgent) return false;
-        for (var k = at + 1; k < _items.length; k++) {
-          if (_items[k].isUser) break;
-          // Another activity item after this prose means more work followed, so
-          // this was a preamble and not the answer.
-          if (!_items[k].isAgent && !_items[k].standsAlone) return false;
+    if (_cachedRows != null && _rowSources.length == _items.length) {
+      var unchanged = true;
+      for (var i = 0; i < _items.length; i++) {
+        final (item, type, turn) = _rowSources[i];
+        if (!identical(item, _items[i]) ||
+            type != item.type ||
+            turn != item.turnId) {
+          unchanged = false;
+          break;
         }
-        return true;
       }
-
-      // One reply, one block. A turn's prose arrives as several `agentMessage`
-      // items (the server gives each its own id — a preamble before a tool
-      // batch, then the final answer), and rendering one block per item chopped
-      // a single answer into pieces that each carried their own hover actions.
-      //
-      // The run is bounded by the server's own `turnId` where it is known, so
-      // this is the real turn boundary rather than "consecutive agent prose".
-      // Items whose turn is unknown (empty id — a rollout file read from disk,
-      // or a live item that arrived before `turn/started`) fall back to
-      // adjacency, which is what the sequence can tell us.
-      if (it.isAgent && isFinalReplyAt(i)) {
-        var j = i + 1;
-        while (j < _items.length &&
-            _items[j].isAgent &&
-            _items[j].turnId == it.turnId) {
-          j++;
-        }
-        out.add(j - i >= 2 ? AgentTurn(_items.sublist(i, j)) : it);
-        i = j;
-        continue;
-      }
-      // A user message or a turn footnote always stands alone.
-      if (it.isUser || it.standsAlone) {
-        out.add(it);
-        i++;
-        continue;
-      }
-      // Everything up to the next user message or turn footnote is this turn's
-      // work — including compaction notices and the agent's own intermediate
-      // prose, which are things it did on the way to the answer.
-      //
-      // Deliberately spans them rather than stopping at them. Stopping produced
-      // one 已处理 row per stretch of tool calls, so a turn that thought out loud
-      // between batches rendered as three or four rows carrying the SAME duration
-      // — visibly one turn, presented as several. The final reply is the run's
-      // boundary, so it stays where it is, beneath the fold.
-      var j = i + 1;
-      while (j < _items.length &&
-          !_items[j].isUser &&
-          !_items[j].standsAlone &&
-          !isFinalReplyAt(j)) {
-        j++;
-      }
-      out.add(TurnWork(_items.sublist(i, j)));
-      i = j;
+      if (unchanged) return _cachedRows!;
     }
-    return out;
+    _rowSources = [for (final item in _items) (item, item.type, item.turnId)];
+    final rows = buildHistoryRows(
+      _items,
+      turns: _turnSummaries,
+      windows: _turnWindows,
+      sequentialIds: _sequentialHistoryIds,
+    );
+    final keys = rows.map(_rowKey).toSet();
+    _rowAnchors.removeWhere((key, _) => !keys.contains(key));
+    return _cachedRows = rows;
   }
 
   @override
@@ -805,6 +780,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// conversations on this service inherit. Called after each explicit pick
   /// (model / mode / plan / effort) — not on server-driven restoration.
   void _rememberDefaults() {
+    _settingsRevision++;
     ref
         .read(sessionDefaultsProvider(widget.serviceKey).notifier)
         .state = SessionDefaults(
@@ -980,9 +956,16 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       _editingTitle = false;
       _items.clear();
       _itemIndex.clear();
+      _rowAnchors.clear();
       // The previous thread's turns and pagination say nothing about this one.
       _turnSummaries = const [];
       _hasOlder = false;
+      _historyError = false;
+      _fetchedTurns.clear();
+      _turnWindows.clear();
+      _sequentialHistoryIds.clear();
+      _firstTurnId = null;
+      _cachedRows = null;
       _loadingOlder = false;
       _historyLoad = null;
       _historyGeneration++;
@@ -1068,6 +1051,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   @override
   void dispose() {
     _healthTimer?.cancel();
+    _externalHistoryTimer?.cancel();
     _externalWriterReconnect?.cancel();
     final externalWriterSub = _externalWriterSub;
     if (externalWriterSub != null) unawaited(externalWriterSub.cancel());
@@ -1109,10 +1093,27 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     // the older-page header halfway through its animation and shift the target.
     if (!_settlingToEnd &&
         _scroll.position.userScrollDirection != ScrollDirection.idle &&
-        _hasOlder &&
         !_loadingOlder &&
-        _scroll.position.pixels <= _scroll.position.minScrollExtent + 200) {
-      _loadOlder();
+        !_historyError) {
+      final range = _visibleRowRange();
+      final rows = _rows;
+      if (range != null) {
+        for (
+          var i = range.$1;
+          i <= math.min(range.$2 + 1, rows.length - 1);
+          i++
+        ) {
+          if (rows[i] case final HistoryGap gap) {
+            _loadGap(gap);
+            return;
+          }
+        }
+      }
+      if (!_startsAtBeginning &&
+          _scroll.position.userScrollDirection == ScrollDirection.forward &&
+          _scroll.position.pixels <= _scroll.position.minScrollExtent + 200) {
+        _loadAtTop();
+      }
     }
   }
 
@@ -1303,47 +1304,136 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     await _startHistoryLoad();
   }
 
+  bool get _startsAtBeginning {
+    if (!_hasOlder) return true;
+    if (_firstTurnId == null ||
+        _items.isEmpty ||
+        _turnSummaries.firstOrNull?.turnId != _firstTurnId) {
+      return false;
+    }
+    final first = _turnSummaries.indexWhere(
+      (turn) => turn.turnId == _items.first.turnId,
+    );
+    if (first < 0) return false;
+    for (var i = 0; i < first; i++) {
+      if (!_isEmptyLoadedTurn(_turnSummaries[i].turnId)) return false;
+    }
+    final id = _items.first.turnId;
+    return _turnWindows.containsKey(id) ||
+        _items.any((item) => item.turnId == id && item.isUser);
+  }
+
+  bool _isEmptyLoadedTurn(String turnId) {
+    final window = _turnWindows[turnId];
+    return window != null && window.items.isEmpty && !window.hasMore;
+  }
+
+  Future<void> _loadAtTop() async {
+    if (_loadingOlder || _startsAtBeginning) return;
+    if (_turnWindows.isNotEmpty && _items.isNotEmpty) {
+      final first = _turnSummaries.indexWhere(
+        (turn) => turn.turnId == _items.first.turnId,
+      );
+      var previous = first - 1;
+      while (previous >= 0 &&
+          _isEmptyLoadedTurn(_turnSummaries[previous].turnId)) {
+        previous--;
+      }
+      if (previous >= 0) {
+        await _loadTurn(_turnSummaries[previous].turnId);
+        return;
+      }
+    }
+    await _loadOlder();
+  }
+
+  Future<void> _loadGap(HistoryGap gap) async {
+    if (_loadingOlder || _threadId == null) return;
+    await _startHistoryLoad(turnId: gap.turnId, loadMore: gap.continuation);
+  }
+
   /// Fetch one turn's items, for jumping to a turn not yet scrolled back to.
-  Future<void> _loadTurn(String turnId) async {
+  Future<void> _loadTurn(String turnId, {bool preserveAnchor = true}) async {
     final generation = _historyGeneration;
     while (_historyLoad != null) {
       await _historyLoad;
       if (!mounted || _historyGeneration != generation) return;
     }
-    if (turnId.isEmpty || _threadId == null) return;
+    if (turnId.isEmpty || _threadId == null || _fetchedTurns.contains(turnId)) {
+      return;
+    }
     // A tail-only page may have marked the turn loaded without its user row.
     if (_items.any((item) => item.turnId == turnId && item.isUser)) return;
-    await _startHistoryLoad(turnId: turnId);
+    await _startHistoryLoad(turnId: turnId, preserveAnchor: preserveAnchor);
   }
 
-  Future<void> _startHistoryLoad({String? turnId}) {
+  Future<void> _startHistoryLoad({
+    String? turnId,
+    bool loadMore = false,
+    bool preserveAnchor = true,
+  }) {
     final tid = _threadId!;
-    setState(() => _loadingOlder = true);
-    return _historyLoad = _fetchHistory(tid, _historyGeneration, turnId);
+    setState(() {
+      _loadingOlder = true;
+      _historyError = false;
+    });
+    return _historyLoad = _fetchHistory(
+      tid,
+      _historyGeneration,
+      turnId,
+      loadMore,
+      preserveAnchor,
+    );
   }
 
-  Future<void> _fetchHistory(String tid, int generation, String? turnId) async {
+  Future<void> _fetchHistory(
+    String tid,
+    int generation,
+    String? turnId,
+    bool loadMore,
+    bool preserveAnchor,
+  ) async {
     bool current() => mounted && _historyGeneration == generation;
     try {
       final api = ref.read(bridgeApiProvider);
-      final page = turnId == null
+      final older = turnId == null
           ? await api.appThreadOlderPage(widget.serviceKey, tid)
-          : OlderPage(
-              items: await api.appThreadTurnItems(
-                widget.serviceKey,
-                tid,
-                turnId,
-              ),
-              hasOlder: _hasOlder,
+          : null;
+      var turn = turnId == null
+          ? null
+          : await api.appThreadTurnPage(
+              widget.serviceKey,
+              tid,
+              turnId,
+              loadMore: loadMore,
             );
       if (!current()) return;
+      if (turn != null && loadMore) {
+        final prefix = _turnWindows[turnId]?.items ?? const <ThreadItem>[];
+        final known = prefix.map((item) => item.id).toSet();
+        turn = TurnItemsPage(
+          turnId: turn.turnId,
+          items: [...prefix, ...turn.items.where((item) => known.add(item.id))],
+          hasMore: turn.hasMore,
+        );
+      }
+      final items = older?.items ?? turn!.items;
+      final anchor = preserveAnchor ? _captureHistoryAnchor() : null;
       setState(() {
-        _spliceTranscriptItems(page.items, atStart: turnId == null);
-        if (turnId == null) _hasOlder = page.hasOlder;
+        _spliceTranscriptItems(items, atStart: true);
+        if (turnId == null) {
+          _hasOlder = older!.hasOlder;
+          _sequentialHistoryIds.addAll(items.map((item) => item.id));
+        } else {
+          _fetchedTurns.add(turnId);
+          _turnWindows[turnId] = turn!;
+        }
+        _cachedRows = null;
         _markTurnsLoaded();
       });
+      if (anchor != null) _restoreHistoryAnchor(anchor, generation);
     } catch (_) {
-      // Keep the existing transcript and let a later navigation retry.
+      if (current()) setState(() => _historyError = true);
     } finally {
       if (current()) {
         setState(() {
@@ -1353,6 +1443,74 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       }
     }
   }
+
+  /// Capture at response time so scrolling during a slow request is respected.
+  (Key, double)? _captureHistoryAnchor() {
+    if (!_listCtl.isAttached || !_scroll.hasClients) return null;
+    final visible = _listCtl.visibleRange;
+    final rows = _rows;
+    if (visible == null || rows.isEmpty) return null;
+    var index = (visible.$1 - 1).clamp(0, rows.length - 1);
+    while (index < rows.length - 1 && rows[index] is HistoryGap) {
+      index++;
+    }
+    final key = _rowKey(rows[index]);
+    final box = _rowAnchors[key]?.currentContext?.findRenderObject();
+    if (box is! RenderBox || !box.hasSize) return null;
+    return (key, box.localToGlobal(Offset.zero).dy);
+  }
+
+  void _restoreHistoryAnchor((Key, double) anchor, int generation) {
+    final navigation = _turnNavigation;
+    _settlingToEnd = true;
+    void restore(int remaining) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted ||
+            generation != _historyGeneration ||
+            navigation != _turnNavigation) {
+          return;
+        }
+        if (!_scroll.hasClients || !_listCtl.isAttached) {
+          _settlingToEnd = false;
+          return;
+        }
+        final index = _rows.indexWhere((row) => _rowKey(row) == anchor.$1);
+        if (index < 0) {
+          _settlingToEnd = false;
+          return;
+        }
+        final box = _rowAnchors[anchor.$1]?.currentContext?.findRenderObject();
+        if (box is RenderBox && box.hasSize) {
+          final delta = box.localToGlobal(Offset.zero).dy - anchor.$2;
+          if (delta.abs() > 0.5) {
+            _scroll.jumpTo(
+              (_scroll.offset + delta).clamp(
+                _scroll.position.minScrollExtent,
+                _scroll.position.maxScrollExtent,
+              ),
+            );
+          }
+        } else {
+          _listCtl.jumpToItem(
+            index: index + 1,
+            scrollController: _scroll,
+            alignment: 0,
+          );
+        }
+        if (remaining > 0) {
+          restore(remaining - 1);
+          WidgetsBinding.instance.scheduleFrame();
+        } else {
+          _settlingToEnd = false;
+        }
+      });
+    }
+
+    restore(2);
+  }
+
+  GlobalKey _anchorKey(Object row) =>
+      _rowAnchors.putIfAbsent(_rowKey(row), GlobalKey.new);
 
   /// A turn is navigable once its opening user row is present.
   void _markTurnsLoaded() {
@@ -1398,31 +1556,24 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       final persistedFuture = _loadPersistedConfig(startTid);
       final history = await historyFuture;
       if (!current()) return;
-      final persisted = await persistedFuture;
-      if (!current()) return;
-      // Restore the model from the server's own report first (the resume
-      // response says what the thread actually runs with); fall back to the
-      // persisted pick for older servers that don't report one. Resolve the id
-      // against this service's model list.
-      final restoredModelId = history.model ?? persisted.model;
-      ModelInfo? restoredModel;
-      if (restoredModelId != null) {
-        try {
-          final models = await _ensureModels();
-          restoredModel = models
-              .where((m) => m.id == restoredModelId)
-              .firstOrNull;
-        } catch (_) {
-          // Model list unavailable — leave the model unchanged.
-        }
-      }
-      // The user may have switched threads during the awaits above.
-      if (!current()) return;
       setState(() {
         _loading = false;
         _replaceTranscriptItems(history.items);
         _turnSummaries = history.turns;
         _hasOlder = history.hasOlder;
+        _historyError = false;
+        _fetchedTurns.clear();
+        _turnWindows.clear();
+        _sequentialHistoryIds
+          ..clear()
+          ..addAll(history.items.map((item) => item.id));
+        _firstTurnId = history.firstTurnId;
+        for (final page in history.turnPages) {
+          _turnWindows[page.turnId] = page;
+          _fetchedTurns.add(page.turnId);
+          _spliceTranscriptItems(page.items, atStart: true);
+        }
+        _cachedRows = null;
         _loadingOlder = false;
         _historyLoad = null;
         _historyGeneration++;
@@ -1444,80 +1595,6 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           _elapsedSecs = 0;
           _startElapsedTicker();
         }
-        // Restore the thread's plan mode authoritatively: prefer the server's
-        // collaborationMode if it ever exposes it, else our per-thread memory.
-        // (The old "last item is plan" guess was wrong — the model's reply
-        // usually isn't a plan item — which left plan mode stuck on.) Don't
-        // clobber a pending toggle the user set before a drop/reload.
-        final tid = _threadId;
-        // The server-reported runtime config (model / effort / permissions the
-        // thread actually runs with) — ground truth for the status-bar model
-        // indicator. Absent on older servers that don't report it.
-        if (history.model != null ||
-            history.approvalPolicy != null ||
-            history.sandboxMode != null ||
-            history.reasoningEffort != null) {
-          _runtime = ThreadRuntimeConfig(
-            model: history.model,
-            modelProvider: history.modelProvider,
-            reasoningEffort: history.reasoningEffort,
-            approvalPolicy: history.approvalPolicy,
-            sandboxMode: history.sandboxMode,
-            collaborationMode: history.collaborationMode,
-            confirmedByUpdate: history.configConfirmed,
-          );
-          _runtimeAt = DateTime.now();
-        }
-        // Permission mode: the server's reported approval+sandbox pair wins
-        // when it maps onto one of our presets; else the persisted pick (an
-        // unmapped server combo still shows raw in the runtime sheet).
-        final serverPreset = (history.approvalPolicy == null)
-            ? null
-            : PermissionMode.values
-                  .where(
-                    (m) =>
-                        m.approval == history.approvalPolicy &&
-                        m.sandbox == history.sandboxMode,
-                  )
-                  .firstOrNull;
-        final persistedMode = persisted.permissionMode == null
-            ? null
-            : PermissionMode.values
-                  .where((m) => m.name == persisted.permissionMode)
-                  .firstOrNull;
-        final restoredMode = serverPreset ?? persistedMode;
-        if (restoredMode != null) _mode = restoredMode;
-        if (restoredModel != null) _model = restoredModel;
-        final serverCollab = history.collaborationMode;
-        final restored = serverCollab != null
-            ? serverCollab == 'plan'
-            : (persisted.planMode ??
-                  (tid != null && (_planByThread[_threadKey(tid)] ?? false)));
-        final hadPendingToggle = _plan != _planActive;
-        _planActive = restored;
-        if (!hadPendingToggle) _plan = _planActive;
-        // A reported runtime model makes even a null effort authoritative.
-        // Only older servers without runtime metadata need the persisted value.
-        // A pending pick (_effort) is left untouched — the chip shows
-        // `_effort ?? _effortActive`, so it survives a drop/reload unclobbered.
-        final serverEffort = ReasoningEffort.fromWire(history.reasoningEffort);
-        _effortActive = history.model != null || history.configConfirmed
-            ? serverEffort
-            : serverEffort ??
-                  ReasoningEffort.fromWire(persisted.reasoningEffort) ??
-                  (tid != null ? _effortByThread[_threadKey(tid)] : null);
-        // Drop a restored effort the restored model can't run (mirrors the guard
-        // in _pickModel/_seedDefaults) so a stale persisted pairing never asserts
-        // an unsupported level on the next turn.
-        final guardModel = _model;
-        final guardEffort = _effortActive;
-        if (guardModel != null &&
-            guardEffort != null &&
-            !guardModel.supportedReasoningEfforts.contains(guardEffort.wire)) {
-          _effortActive = ReasoningEffort.fromWire(
-            guardModel.defaultReasoningEffort,
-          );
-        }
         // Seed the status gauge + branch chip + cwd from the thread metadata.
         // _cwd may be null if the thread was opened without it (e.g. a default
         // folder that codex resolved to a real path) — adopt the resolved cwd
@@ -1529,6 +1606,11 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           _ctx = ContextStatus(tokensUsed: tu, contextWindow: cw);
         }
       });
+      _restoreHistorySettings(
+        history,
+        const ThreadConfig(),
+        _models.where((model) => model.id == history.model).firstOrNull,
+      );
       _loadGit();
       // The subscribe-time quota fetch races the connection coming up (and
       // loses, on a cold open). A successful read proves the service is
@@ -1538,6 +1620,30 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       // A turn may have completed while we were disconnected: if the reload
       // landed idle with messages still queued, drain the backlog now (turn-end
       // events that would normally flush it were missed during the drop).
+      final settingsRevision = _settingsRevision;
+      final runtimeAt = _runtimeAt;
+      final persisted = await persistedFuture;
+      if (!current()) return;
+      // Restore the model from the server's own report first (the resume
+      // response says what the thread actually runs with); fall back to the
+      // persisted pick for older servers that don't report one. Resolve the id
+      // against this service's model list.
+      final restoredModelId = history.model ?? persisted.model;
+      ModelInfo? restoredModel;
+      if (restoredModelId != null) {
+        try {
+          final models = await _ensureModels();
+          restoredModel = models
+              .where((m) => m.id == restoredModelId)
+              .firstOrNull;
+        } catch (_) {
+          // Model list unavailable — leave the model unchanged.
+        }
+      }
+      if (!current()) return;
+      if (_settingsRevision == settingsRevision && _runtimeAt == runtimeAt) {
+        _restoreHistorySettings(history, persisted, restoredModel);
+      }
       _maybeFlushQueue();
     } catch (e) {
       if (!current()) return;
@@ -1553,10 +1659,99 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     }
   }
 
+  void _restoreHistorySettings(
+    ThreadHistory history,
+    ThreadConfig persisted,
+    ModelInfo? restoredModel,
+  ) {
+    setState(() {
+      // Restore the thread's plan mode authoritatively: prefer the server's
+      // collaborationMode if it ever exposes it, else our per-thread memory.
+      // (The old "last item is plan" guess was wrong — the model's reply
+      // usually isn't a plan item — which left plan mode stuck on.) Don't
+      // clobber a pending toggle the user set before a drop/reload.
+      final tid = _threadId;
+      // The server-reported runtime config (model / effort / permissions the
+      // thread actually runs with) — ground truth for the status-bar model
+      // indicator. Absent on older servers that don't report it.
+      if (history.model != null ||
+          history.approvalPolicy != null ||
+          history.sandboxMode != null ||
+          history.reasoningEffort != null) {
+        _runtime = ThreadRuntimeConfig(
+          model: history.model,
+          modelProvider: history.modelProvider,
+          reasoningEffort: history.reasoningEffort,
+          approvalPolicy: history.approvalPolicy,
+          sandboxMode: history.sandboxMode,
+          collaborationMode: history.collaborationMode,
+          confirmedByUpdate: history.configConfirmed,
+        );
+        _runtimeAt = DateTime.now();
+      }
+      // Permission mode: the server's reported approval+sandbox pair wins
+      // when it maps onto one of our presets; else the persisted pick (an
+      // unmapped server combo still shows raw in the runtime sheet).
+      final serverPreset = (history.approvalPolicy == null)
+          ? null
+          : PermissionMode.values
+                .where(
+                  (m) =>
+                      m.approval == history.approvalPolicy &&
+                      m.sandbox == history.sandboxMode,
+                )
+                .firstOrNull;
+      final persistedMode = persisted.permissionMode == null
+          ? null
+          : PermissionMode.values
+                .where((m) => m.name == persisted.permissionMode)
+                .firstOrNull;
+      final restoredMode = serverPreset ?? persistedMode;
+      if (restoredMode != null) _mode = restoredMode;
+      if (restoredModel != null) _model = restoredModel;
+      final serverCollab = history.collaborationMode;
+      final restored = serverCollab != null
+          ? serverCollab == 'plan'
+          : (persisted.planMode ??
+                (tid != null && (_planByThread[_threadKey(tid)] ?? false)));
+      final hadPendingToggle = _plan != _planActive;
+      _planActive = restored;
+      if (!hadPendingToggle) _plan = _planActive;
+      // A reported runtime model makes even a null effort authoritative.
+      // Only older servers without runtime metadata need the persisted value.
+      // A pending pick (_effort) is left untouched — the chip shows
+      // `_effort ?? _effortActive`, so it survives a drop/reload unclobbered.
+      final serverEffort = ReasoningEffort.fromWire(history.reasoningEffort);
+      _effortActive = history.model != null || history.configConfirmed
+          ? serverEffort
+          : serverEffort ??
+                ReasoningEffort.fromWire(persisted.reasoningEffort) ??
+                (tid != null ? _effortByThread[_threadKey(tid)] : null);
+      // Drop a restored effort the restored model can't run (mirrors the guard
+      // in _pickModel/_seedDefaults) so a stale persisted pairing never asserts
+      // an unsupported level on the next turn.
+      final guardModel = _model;
+      final guardEffort = _effortActive;
+      if (guardModel != null &&
+          guardEffort != null &&
+          !guardModel.supportedReasoningEfforts.contains(guardEffort.wire)) {
+        _effortActive = ReasoningEffort.fromWire(
+          guardModel.defaultReasoningEffort,
+        );
+      }
+    });
+  }
+
   bool _isActiveWriterError(Object error) =>
       error.toString().toLowerCase().contains('active writer');
 
   void _cancelExternalWriterSubscription() {
+    _externalHistoryTimer?.cancel();
+    _externalHistoryTimer = null;
+    _externalHistoryRevision = null;
+    _externalHistoryLoading = false;
+    _externalHistoryDirty = false;
+    _externalWriterLegacy = false;
     _externalWriterReconnect?.cancel();
     _externalWriterReconnect = null;
     final sub = _externalWriterSub;
@@ -1590,6 +1785,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     });
     _loadGit();
     _subscribeExternalWriter(threadId, epoch);
+    // Read-only history does not need to wait for the slower ownership probe.
+    _scheduleExternalHistory(threadId, epoch);
   }
 
   void _subscribeExternalWriter(String threadId, int epoch) {
@@ -1626,23 +1823,26 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         epoch != _externalWriterEpoch) {
       return;
     }
+    final paginated = update.historyRevision != null;
+    _externalWriterLegacy = !paginated;
     final followTail = _loading || _atBottom;
     final wasRunning = _externalWriterRunning;
     final willRun = update.liveness.turnState == 'incomplete';
     final refreshDiff =
+        !paginated &&
         _items
-            .where((item) => item.type == 'fileChange')
-            .map((item) => '${item.id}\u0000${item.text}')
-            .join('\u0001') !=
-        update.items
-            .where((item) => item.itemType == 'fileChange')
-            .map((item) => '${item.id}\u0000${item.text}')
-            .join('\u0001');
+                .where((item) => item.type == 'fileChange')
+                .map((item) => '${item.id}\u0000${item.text}')
+                .join('\u0001') !=
+            update.items
+                .where((item) => item.itemType == 'fileChange')
+                .map((item) => '${item.id}\u0000${item.text}')
+                .join('\u0001');
     setState(() {
       _externalWriterLiveness = update.liveness;
-      _replaceTranscriptItems(update.items);
+      if (!paginated) _replaceTranscriptItems(update.items);
       if (willRun && !wasRunning) _elapsedSecs = 0;
-      _loading = false;
+      if (!paginated || _items.isNotEmpty) _loading = false;
       _error = null;
       _retry = null;
     });
@@ -1654,7 +1854,102 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       _turnStartedAt = null;
     }
     if (refreshDiff) _loadGit();
-    if (followTail) _scrollToEnd(force: true);
+    if (paginated) {
+      if (_externalHistoryRevision != update.historyRevision) {
+        _externalHistoryRevision = update.historyRevision;
+        _externalHistoryDirty = true;
+        _scheduleExternalHistory(threadId, epoch);
+      }
+    } else if (followTail) {
+      _scrollToEnd(force: true);
+    }
+  }
+
+  void _scheduleExternalHistory(String threadId, int epoch) {
+    if (_externalWriterLegacy ||
+        _externalHistoryLoading ||
+        _externalHistoryTimer != null) {
+      return;
+    }
+    _externalHistoryTimer = Timer(
+      _items.isEmpty ? Duration.zero : const Duration(milliseconds: 750),
+      () {
+        _externalHistoryTimer = null;
+        _refreshExternalHistory(threadId, epoch);
+      },
+    );
+  }
+
+  Future<void> _refreshExternalHistory(String threadId, int epoch) async {
+    bool current() =>
+        mounted &&
+        _externalWriterMode &&
+        _threadId == threadId &&
+        _externalWriterEpoch == epoch;
+    if (!current() || _externalWriterLegacy || _externalHistoryLoading) return;
+    _externalHistoryLoading = true;
+    _externalHistoryDirty = false;
+    try {
+      // Keep a user-requested prepend ahead of the background tail refresh.
+      if (_historyLoad != null) await _historyLoad;
+      if (!current()) return;
+      final history = await ref
+          .read(bridgeApiProvider)
+          .appThreadRead(widget.serviceKey, threadId);
+      if (!current() || _externalWriterLegacy) return;
+      final followTail = _loading || _atBottom;
+      final anchor = followTail ? null : _captureHistoryAnchor();
+      setState(() {
+        _turnSummaries = history.turns;
+        _firstTurnId = history.firstTurnId;
+        _hasOlder = history.hasOlder;
+        _sequentialHistoryIds.addAll(history.items.map((item) => item.id));
+        for (final item in history.items) {
+          final index = _itemIndex[item.id];
+          if (index == null) continue;
+          final existing = _items[index];
+          existing
+            ..text = item.text
+            ..title = item.title
+            ..type = item.itemType
+            ..turnId = item.turnId
+            ..turnCompletedAt = item.turnCompletedAt
+            ..turnDurationMs = item.turnDurationMs;
+        }
+        _spliceTranscriptItems(history.items, atStart: false);
+        for (final page in history.turnPages) {
+          // An older read completed while this background refresh was queued.
+          _turnWindows.putIfAbsent(page.turnId, () => page);
+          _fetchedTurns.add(page.turnId);
+          _spliceTranscriptItems(page.items, atStart: true);
+        }
+        _cachedRows = null;
+        _markTurnsLoaded();
+        _loading = false;
+        _branch = history.branch;
+        _cwd ??= history.cwd;
+        _error = null;
+        _retry = null;
+      });
+      if (followTail) {
+        _scrollToEnd(force: true);
+      } else if (anchor != null) {
+        _restoreHistoryAnchor(anchor, _historyGeneration);
+      }
+    } catch (error) {
+      if (current()) {
+        setState(() {
+          _loading = false;
+          _error = friendlyError(error);
+          _retry = () => _refreshExternalHistory(threadId, epoch);
+        });
+      }
+    } finally {
+      if (current()) {
+        _externalHistoryLoading = false;
+        if (_externalHistoryDirty) _scheduleExternalHistory(threadId, epoch);
+      }
+    }
   }
 
   void _externalWriterStreamLost(String threadId, int epoch, Object? error) {
@@ -2084,6 +2379,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     }
     // Take the send lock up front, before the retry probe's await below, so the
     // composer can't start a second send during that round-trip (re-entrancy).
+    _settingsRevision++;
     setState(() => _sending = true);
     // Retry safety: a send can commit server-side just before the socket drops
     // (we reconnect with reload:false to keep the optimistic bubble for a
@@ -2999,7 +3295,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     ];
     if (turnRows.isEmpty) return;
     // Topmost row currently in view (fallback to 0 before the first layout).
-    final anchor = _listCtl.visibleRange?.$1 ?? 0;
+    final anchor = _visibleRowRange()?.$1 ?? 0;
     int? target;
     if (next) {
       for (final t in turnRows) {
@@ -3076,7 +3372,6 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   (int, int)? _visibleRowRange() {
     final range = _listCtl.visibleRange;
     if (range == null) return null;
-    if (!_hasOlder) return range;
     final (first, last) = range;
     return ((first - 1).clamp(0, 1 << 30), (last - 1).clamp(0, 1 << 30));
   }
@@ -3087,49 +3382,72 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// Tappable as well as scroll-triggered: when the loaded page is shorter than
   /// the viewport there is nothing to scroll, so reaching the top by scrolling
   /// is impossible and this row is the only way back.
-  Widget _olderHistoryHeader(AppLocalizations l10n) => Padding(
-    key: const Key('chat-older-history'),
-    padding: const EdgeInsets.symmetric(vertical: 12),
+  Widget _olderHistoryHeader(AppLocalizations l10n) => SizedBox(
+    key: const ValueKey('history-header'),
+    height: isDesktop ? 36 : 44,
     child: Center(
-      child: _loadingOlder
-          ? const SizedBox(
-              width: 16,
-              height: 16,
-              child: CircularProgressIndicator(strokeWidth: 2),
+      child: _startsAtBeginning
+          ? Text(
+              l10n.historyStart,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
             )
-          : InkWell(
-              key: const Key('chat-older-history-load'),
-              onTap: _loadOlder,
-              mouseCursor: clickable,
-              borderRadius: BorderRadius.circular(6),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 4,
+          : SizedBox(
+              key: const Key('chat-older-history'),
+              child: TextButton.icon(
+                style: TextButton.styleFrom(
+                  foregroundColor: Theme.of(
+                    context,
+                  ).colorScheme.onSurfaceVariant,
+                  textStyle: Theme.of(context).textTheme.labelSmall,
                 ),
-                child: Text(
-                  l10n.olderHistoryHint,
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  ),
+                key: _loadingOlder
+                    ? null
+                    : const Key('chat-older-history-load'),
+                onPressed: _loadingOlder ? null : _loadAtTop,
+                icon: Icon(
+                  _historyError ? Icons.refresh_rounded : Icons.history_rounded,
+                  size: 16,
+                ),
+                label: Text(
+                  _loadingOlder
+                      ? l10n.historyLoading
+                      : _historyError
+                      ? l10n.historyRetry
+                      : l10n.olderHistoryHint,
                 ),
               ),
             ),
     ),
   );
 
+  Key _rowKey(Object row) => ValueKey(switch (row) {
+    TurnWork() => 'w:${row.items.first.id}',
+    ActivityGroup() => 'g:${row.items.first.id}',
+    AgentTurn() => 't:${row.items.first.id}',
+    TranscriptItem() => row.id,
+    HistoryGap() => 'gap:${row.turnId}:${row.continuation}',
+    _ => throw StateError('Unknown transcript row'),
+  });
+
   /// Jump to a turn the rail selected, fetching it first when the transcript
   /// hasn't loaded it yet.
   Future<void> _selectTurn(TurnMinimapItem item) async {
+    final navigation = ++_turnNavigation;
     final generation = _historyGeneration;
     if (item.rowIndex >= 0) {
       _scrollToRow(item.rowIndex);
       return;
     }
-    await _loadTurn(item.turnId);
+    await _loadTurn(item.turnId, preserveAnchor: false);
     // Let the virtual list lay out inserted rows before navigating by index.
     await WidgetsBinding.instance.endOfFrame;
-    if (!mounted || _historyGeneration != generation) return;
+    if (!mounted ||
+        _historyGeneration != generation ||
+        navigation != _turnNavigation) {
+      return;
+    }
     // Its row exists now that its items are in; re-derive to find where.
     final row = _turnMinimapItems(
       _rows,
@@ -3201,7 +3519,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// Flatten a message to one line, so a preview shows its opening words rather
   /// than the first line of a code block.
   String _collapseWhitespace(String text) =>
-      text.replaceAll(RegExp(r'\s+'), ' ').trim();
+      (text.length > 600 ? text.substring(0, 600) : text)
+          .replaceAll(RegExp(r'\s+'), ' ')
+          .trim();
 
   /// Max width of the centred conversation column. The transcript computes its
   /// own side padding from this; the turn rail lives in what's left over, so both
@@ -3258,11 +3578,6 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                 visibleRange: _visibleRows,
                 gutterWidth: _gutterWidth(width),
                 onSelect: _selectTurn,
-                // Hovering a turn the transcript hasn't loaded starts fetching
-                // it, so the jump lands on content rather than a wait.
-                onPreview: (item) {
-                  if (item.rowIndex < 0) _loadTurn(item.turnId);
-                },
               ),
             ),
           // Where the rail has taken the turn jumps, jump-to-latest is all that
@@ -3295,15 +3610,20 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// minimap and the compact prev/next buttons so both land identically.
   void _scrollToRow(int index) {
     if (!_listCtl.isAttached || !_scroll.hasClients) return;
-    _listCtl.animateToItem(
+    _settlingToEnd = true;
+    _listCtl.jumpToItem(
       // Callers speak in row indices; the list puts the "older history" row
       // ahead of them, so translate once here rather than at each call site.
-      index: index + (_hasOlder ? 1 : 0),
+      index: index == 0 && _startsAtBeginning ? 0 : index + 1,
       scrollController: _scroll,
       alignment: 0,
-      duration: (est) => Duration(milliseconds: est.abs() > 2400 ? 420 : 260),
-      curve: (_) => Curves.easeOutCubic,
     );
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _settlingToEnd = false;
+        if (_listCtl.isAttached) _visibleRows.value = _visibleRowRange();
+      }
+    });
   }
 
   /// The bottom-right navigation cluster: prev/next-turn jumps (shown once
@@ -3750,7 +4070,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
 
     // Phones: classic Scaffold — the sessions list is a slide-in drawer, the
     // bar is a plain AppBar naming the conversation.
-    if (width < 600) {
+    if (width < 720) {
       return Scaffold(
         drawer: Drawer(
           // The scheme's container colours are translucent washes. A drawer
@@ -3880,7 +4200,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     final scheme = Theme.of(context).colorScheme;
     final isMac = defaultTargetPlatform == TargetPlatform.macOS;
     final strip = SizedBox(
-      height: 48,
+      height: 56,
       child: Stack(
         children: [
           if (isFramelessDesktop)
@@ -3917,7 +4237,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     return Material(
       // A wash over the page rather than the page itself, so the rail reads as
       // a distinct column; the splitter's hairline carries the actual edge.
-      color: Color.alphaBlend(scheme.surfaceContainer, scheme.surface),
+      color: scheme.surfaceContainerLow,
       child: Column(
         children: [
           strip,
@@ -3935,7 +4255,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   Widget _contentTopBar(AppLocalizations l10n, double width) {
     final isMac = defaultTargetPlatform == TargetPlatform.macOS;
     return SizedBox(
-      height: 48,
+      height: 56,
       child: Stack(
         children: [
           if (isFramelessDesktop)
@@ -3967,7 +4287,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                 child: Align(
                   alignment: Alignment.centerLeft,
                   child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 280),
+                    constraints: const BoxConstraints(maxWidth: 480),
                     child: _barTitleWidget(l10n),
                   ),
                 ),
@@ -4031,7 +4351,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// focus commits too — a click elsewhere reads as "done", not "undo".
   Widget _barTitleWidget(AppLocalizations l10n) {
     final scheme = Theme.of(context).colorScheme;
-    const style = TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600);
+    const style = TextStyle(fontSize: 14, fontWeight: FontWeight.w600);
     if (_editingTitle) {
       return Shortcuts(
         shortcuts: const {
@@ -4457,6 +4777,67 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     );
   }
 
+  Widget _transcriptRow(Object row) {
+    if (row is HistoryGap) {
+      final l10n = AppLocalizations.of(context);
+      return SizedBox(
+        height: 44,
+        child: Center(
+          child: TextButton.icon(
+            style: TextButton.styleFrom(
+              foregroundColor: Theme.of(context).colorScheme.onSurfaceVariant,
+              textStyle: Theme.of(context).textTheme.labelSmall,
+            ),
+            key: Key('history-gap-${row.turnId}'),
+            onPressed: _loadingOlder ? null : () => _loadGap(row),
+            icon: Icon(
+              _historyError ? Icons.refresh_rounded : Icons.more_horiz_rounded,
+              size: 18,
+            ),
+            label: Text(
+              _loadingOlder
+                  ? l10n.historyLoading
+                  : _historyError
+                  ? l10n.historyRetry
+                  : l10n.historyGap,
+            ),
+          ),
+        ),
+      );
+    }
+    // Group identity stays stable as streaming appends items, preserving the
+    // measured row and its expanded state.
+    if (row is TurnWork) {
+      return TurnWorkCard(key: _rowKey(row), work: row);
+    }
+    if (row is ActivityGroup) {
+      return GroupedActivityCard(key: _rowKey(row), group: row);
+    }
+    // A merged reply renders through the
+    // same view as a single one, so the two
+    // can't drift apart: it is presented as
+    // one item whose text is the whole turn.
+    if (row is AgentTurn) {
+      return MessageView(
+        key: _rowKey(row),
+        item: TranscriptItem(
+          id: row.items.first.id,
+          type: 'agentMessage',
+          text: row.text,
+          streaming: row.streaming,
+          turnId: row.items.first.turnId,
+          turnCompletedAt: row.completedAt,
+        ),
+        hostImageLoader: _loadHostImage,
+      );
+    }
+    return MessageView(
+      key: _rowKey(row),
+      item: row as TranscriptItem,
+      hostImageLoader: _loadHostImage,
+    );
+  }
+
   /// The center column: conversation (kept centered with a max width) +
   /// approvals + implement bar + error + composer.
   Widget _chatPane(AppLocalizations l10n) {
@@ -4521,13 +4902,19 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                                               constraints.maxWidth,
                                             );
                                             final pad = side < 16 ? 16.0 : side;
-                                            // Materialize the collapsed timeline ONCE per
-                                            // build: `_rows` is a getter that re-scans
-                                            // `_items` on every access, so reading it for
-                                            // itemCount and again per itemBuilder was
-                                            // O(n²) per frame. Hoisting it here keeps each
-                                            // build O(n).
+                                            // Reuse the memoized row topology across
+                                            // builders and scroll notifications.
                                             final rows = _rows;
+                                            final indices = <Key, int>{
+                                              const ValueKey('history-header'):
+                                                  0,
+                                              for (
+                                                var i = 0;
+                                                i < rows.length;
+                                                i++
+                                              )
+                                                _anchorKey(rows[i]): i + 1,
+                                            };
                                             // SuperListView (super_sliver_list) replaces
                                             // ListView.builder to stabilize the scrollbar:
                                             // it derives scroll extent from per-item
@@ -4541,6 +4928,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                                             return SuperListView.builder(
                                               controller: _scroll,
                                               listController: _listCtl,
+                                              findChildIndexCallback: (key) =>
+                                                  indices[key],
+                                              delayPopulatingCacheArea: true,
                                               padding: EdgeInsets.fromLTRB(
                                                 pad,
                                                 12,
@@ -4553,17 +4943,15 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                                               // looking like it starts there.
                                               itemCount:
                                                   rows.length +
-                                                  (_hasOlder ? 1 : 0) +
+                                                  1 +
                                                   (_showTyping ? 1 : 0),
                                               itemBuilder: (c, i) {
-                                                if (_hasOlder) {
-                                                  if (i == 0) {
-                                                    return _olderHistoryHeader(
-                                                      l10n,
-                                                    );
-                                                  }
-                                                  i -= 1;
+                                                if (i == 0) {
+                                                  return _olderHistoryHeader(
+                                                    l10n,
+                                                  );
                                                 }
+                                                i -= 1;
                                                 if (i >= rows.length) {
                                                   return TypingIndicator(
                                                     key: _externalWriterRunning
@@ -4577,72 +4965,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                                                   );
                                                 }
                                                 final row = rows[i];
-                                                // Stable keys let the sliver's
-                                                // extent-reconciliation track each row
-                                                // across rebuilds (streaming upserts,
-                                                // collapse-into-group transitions) instead
-                                                // of recycling element/state by position —
-                                                // which otherwise churns measured heights.
-                                                // A group keys off its first item's stable
-                                                // id plus length so expand/collapse and
-                                                // run-growth produce a fresh measurement.
-                                                if (row is TurnWork) {
-                                                  // Keyed on the first item alone,
-                                                  // NOT the length: a running turn
-                                                  // grows an item at a time, and
-                                                  // re-keying on each would discard
-                                                  // the fold's expanded state mid-
-                                                  // turn — exactly while the user is
-                                                  // watching it work.
-                                                  return TurnWorkCard(
-                                                    key: ValueKey(
-                                                      'w:${row.items.first.id}',
-                                                    ),
-                                                    work: row,
-                                                  );
-                                                }
-                                                if (row is ActivityGroup) {
-                                                  return GroupedActivityCard(
-                                                    key: ValueKey(
-                                                      'g:${row.items.first.id}:'
-                                                      '${row.items.length}',
-                                                    ),
-                                                    group: row,
-                                                  );
-                                                }
-                                                // A merged reply renders through the
-                                                // same view as a single one, so the two
-                                                // can't drift apart: it is presented as
-                                                // one item whose text is the whole turn.
-                                                if (row is AgentTurn) {
-                                                  return MessageView(
-                                                    key: ValueKey(
-                                                      't:${row.items.first.id}:'
-                                                      '${row.items.length}',
-                                                    ),
-                                                    item: TranscriptItem(
-                                                      id: row.items.first.id,
-                                                      type: 'agentMessage',
-                                                      text: row.text,
-                                                      streaming: row.streaming,
-                                                      turnId: row
-                                                          .items
-                                                          .first
-                                                          .turnId,
-                                                      turnCompletedAt:
-                                                          row.completedAt,
-                                                    ),
-                                                    hostImageLoader:
-                                                        _loadHostImage,
-                                                  );
-                                                }
-                                                return MessageView(
-                                                  key: ValueKey(
-                                                    (row as TranscriptItem).id,
-                                                  ),
-                                                  item: row,
-                                                  hostImageLoader:
-                                                      _loadHostImage,
+                                                return KeyedSubtree(
+                                                  key: _anchorKey(row),
+                                                  child: _transcriptRow(row),
                                                 );
                                               },
                                             );
@@ -4718,7 +5043,13 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         if (_externalWriterMode)
           _externalWriterAction(l10n)
         else
-          _composer(l10n),
+          Align(
+            alignment: Alignment.bottomCenter,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: _kColumnWidth + 48),
+              child: _composer(l10n),
+            ),
+          ),
       ],
     );
   }
@@ -5970,10 +6301,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     String? project,
   }) {
     final scheme = Theme.of(context).colorScheme;
-    final fg = selected ? scheme.onPrimaryContainer : scheme.onSurface;
-    final muted = selected
-        ? scheme.onPrimaryContainer.withValues(alpha: 0.75)
-        : scheme.onSurfaceVariant;
+    final fg = scheme.onSurface;
+    final muted = scheme.onSurfaceVariant;
     final when = running
         ? l10n.running
         : _relativeTime(thread.updatedAt, now, l10n);
@@ -6000,11 +6329,11 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       padding: EdgeInsets.only(
         top: 1,
         bottom: 1,
-        left: project == null && widget.home ? 14 : 0,
+        left: project == null && widget.home ? 8 : 0,
       ),
       child: Material(
         key: Key('conv-tile-${thread.id}'),
-        color: selected ? scheme.primaryContainer : Colors.transparent,
+        color: selected ? scheme.surfaceBright : Colors.transparent,
         borderRadius: BorderRadius.circular(kControlRadius),
         child: InkWell(
           mouseCursor: clickable,
@@ -6026,8 +6355,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w500,
+                          fontSize: 13.5,
+                          fontWeight: selected
+                              ? FontWeight.w600
+                              : FontWeight.w400,
                           color: fg,
                         ),
                       ),
@@ -7088,6 +7419,23 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
 
   Widget _composer(AppLocalizations l10n) {
     final scheme = Theme.of(context).colorScheme;
+    final prefs = ref.watch(uiPrefsProvider).valueOrNull;
+    final media = MediaQuery.of(context);
+    final maxHeight = math.max(
+      28.0,
+      math.min(280.0, (media.size.height - media.viewInsets.bottom) * 0.35),
+    );
+    final inputHeight = (_composerHeight ?? prefs?.composerHeight ?? 32).clamp(
+      28.0,
+      maxHeight,
+    );
+    void resize(double value, {bool save = false}) {
+      setState(() => _composerHeight = value.clamp(28.0, maxHeight));
+      if (save) {
+        ref.read(uiPrefsProvider.notifier).setComposerHeight(_composerHeight!);
+      }
+    }
+
     // A 24 px pill is a phone control. On desktop the composer is a field in a
     // window, so it squares up and sits tighter against the transcript.
     final doc = MediaQuery.sizeOf(context).width >= docLayoutWidth;
@@ -7116,11 +7464,51 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                 border: Border.all(color: scheme.outline),
                 boxShadow: panelShadow(scheme),
               ),
-              padding: const EdgeInsets.fromLTRB(14, 10, 10, 10),
+              padding: const EdgeInsets.fromLTRB(16, 0, 12, 8),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  Semantics(
+                    label: l10n.resizeComposer,
+                    value: '${inputHeight.round()}',
+                    increasedValue:
+                        '${(inputHeight + 24).clamp(28, maxHeight).round()}',
+                    decreasedValue:
+                        '${(inputHeight - 24).clamp(28, maxHeight).round()}',
+                    onIncrease: () => resize(inputHeight + 24, save: true),
+                    onDecrease: () => resize(inputHeight - 24, save: true),
+                    child: MouseRegion(
+                      cursor: SystemMouseCursors.resizeUpDown,
+                      child: GestureDetector(
+                        key: const Key('composer-resize-handle'),
+                        behavior: HitTestBehavior.opaque,
+                        onVerticalDragUpdate: (details) =>
+                            resize(inputHeight - details.delta.dy),
+                        onVerticalDragEnd: (_) => ref
+                            .read(uiPrefsProvider.notifier)
+                            .setComposerHeight(_composerHeight ?? inputHeight),
+                        onDoubleTap: () => resize(32, save: true),
+                        child: Tooltip(
+                          message: l10n.resizeComposer,
+                          child: SizedBox(
+                            height: isDesktop ? 18 : 24,
+                            width: double.infinity,
+                            child: Center(
+                              child: Container(
+                                width: 28,
+                                height: 3,
+                                decoration: BoxDecoration(
+                                  color: scheme.outline,
+                                  borderRadius: BorderRadius.circular(2),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
                   if (_queue.isNotEmpty) ...[
                     _queuedStrip(l10n),
                     const SizedBox(height: 8),
@@ -7136,19 +7524,25 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                     _composerContext(l10n),
                     const SizedBox(height: 8),
                   ],
-                  TextField(
-                    key: const Key('composer-input'),
-                    controller: _input,
-                    focusNode: _inputFocus,
-                    minLines: 1,
-                    maxLines: 6,
-                    textInputAction: TextInputAction.send,
-                    onSubmitted: (_) => _submit(),
-                    style: Theme.of(context).textTheme.bodyLarge,
-                    decoration: InputDecoration(
-                      hintText: l10n.messageHint,
-                      border: InputBorder.none,
-                      isCollapsed: true,
+                  SizedBox(
+                    key: const Key('composer-input-area'),
+                    height: inputHeight,
+                    child: TextField(
+                      key: const Key('composer-input'),
+                      controller: _input,
+                      focusNode: _inputFocus,
+                      minLines: null,
+                      maxLines: null,
+                      expands: true,
+                      textInputAction: TextInputAction.send,
+                      onSubmitted: (_) => _submit(),
+                      style: Theme.of(context).textTheme.bodyLarge,
+                      decoration: InputDecoration(
+                        filled: false,
+                        hintText: l10n.messageHint,
+                        border: InputBorder.none,
+                        isCollapsed: true,
+                      ),
                     ),
                   ),
                   const SizedBox(height: 8),
@@ -7156,27 +7550,32 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                   // menu and the five wrapping config pills collapse into two
                   // chips, so a 360 px phone lays out exactly like the desktop —
                   // no wrapping, no expand/collapse mode to get stuck in.
-                  Row(
-                    children: [
-                      _attachMenu(l10n),
-                      const SizedBox(width: 2),
-                      // Flexible, not a plain child: a non-flex child takes its
-                      // intrinsic width whatever the row can afford, so a long
-                      // localised permission label would overflow a narrow phone
-                      // instead of ellipsizing.
-                      Flexible(child: _permissionChip(l10n)),
-                      const SizedBox(width: 6),
-                      // Right-aligned next to send, and Flexible so a long model
-                      // name ellipsizes instead of pushing the row into overflow.
-                      Expanded(
-                        child: Align(
-                          alignment: Alignment.centerRight,
-                          child: _modelChip(l10n),
+                  LayoutBuilder(
+                    builder: (context, constraints) => Row(
+                      children: [
+                        _attachMenu(l10n),
+                        const SizedBox(width: 2),
+                        // Bound long permission labels while leaving the model
+                        // control the remaining space up to the send button.
+                        ConstrainedBox(
+                          constraints: BoxConstraints(
+                            maxWidth: constraints.maxWidth * 0.34,
+                          ),
+                          child: _permissionChip(l10n),
                         ),
-                      ),
-                      const SizedBox(width: 6),
-                      _sendButton(),
-                    ],
+                        const SizedBox(width: 6),
+                        // Right-aligned next to send, and Flexible so a long model
+                        // name ellipsizes instead of pushing the row into overflow.
+                        Expanded(
+                          child: Align(
+                            alignment: Alignment.centerRight,
+                            child: _modelChip(l10n),
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        _sendButton(),
+                      ],
+                    ),
                   ),
                 ],
               ),

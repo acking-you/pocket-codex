@@ -1130,40 +1130,14 @@ fn strip_ansi(input: &str) -> String {
 /// lifecycle markers yet the file is larger than the window (a long turn
 /// whose `task_started` predates the tail), it falls back to a full
 /// scan so a long-running turn is never misread as [`TurnState::Empty`].
+/// A bounded cache reuses unchanged results and scans only appended bytes
+/// after a complete line boundary; replacement and truncation restart it.
 pub fn classify_turn_state(path: &Path) -> Result<TurnState> {
-    let (text, truncated) = read_tail(path, MAX_TAIL_BYTES)?;
-    let skip = usize::from(truncated);
-    let state = classify_lines(text.lines().skip(skip));
-    if matches!(state, TurnState::Empty) && truncated {
-        // The tail held no lifecycle markers but the file is larger than the
-        // window, so a `task_started` predates it. Stream the whole file line
-        // by line (one line in memory at a time) rather than reading it into a
-        // single String, which a pathologically large rollout could OOM.
-        return scan_full_turn_state(path);
-    }
-    Ok(state)
+    state_cache::classify(path)
 }
 
-/// Stream a rollout line by line to classify its most recent turn, keeping
-/// memory bounded to one line at a time. The [`classify_turn_state`] fallback
-/// for files larger than the tail window.
-fn scan_full_turn_state(path: &Path) -> Result<TurnState> {
-    use std::io::BufRead;
-    let file = std::fs::File::open(path)?;
-    let mut reader = std::io::BufReader::new(file);
-    let mut state = TurnState::Empty;
-    let mut line = Vec::new();
-    loop {
-        line.clear();
-        if reader.read_until(b'\n', &mut line)? == 0 {
-            break;
-        }
-        if let Some(s) = turn_state_of_line(&String::from_utf8_lossy(&line)) {
-            state = s;
-        }
-    }
-    Ok(state)
-}
+#[path = "rollout_state_cache.rs"]
+mod state_cache;
 
 /// Classify turn state from an ordered iterator of rollout lines.
 ///

@@ -91,17 +91,17 @@ void main() {
         await tester.pumpAndSettle();
 
         expect(find.byKey(const Key('utility-chat-origin')), findsOneWidget);
-        expect(find.text('对话'), findsOneWidget);
+        expect(find.text('对话'), findsWidgets);
         expect(find.text('/'), findsOneWidget);
-        expect(find.text('服务管理'), findsOneWidget);
+        expect(find.text('服务管理'), findsWidgets);
         expect(find.byKey(const Key('utility-page-menu')), findsOneWidget);
         expect(find.byType(BackButton), findsNothing);
 
         await tester.tap(find.byKey(const Key('utility-page-menu')));
         await tester.pumpAndSettle();
         expect(find.text('页面'), findsOneWidget);
-        expect(find.text('本地会话'), findsOneWidget);
-        expect(find.text('运行日志'), findsOneWidget);
+        expect(find.text('本地会话'), findsWidgets);
+        expect(find.text('运行日志'), findsWidgets);
 
         await tester.sendKeyEvent(LogicalKeyboardKey.escape);
         await tester.pumpAndSettle();
@@ -250,7 +250,7 @@ void main() {
         expect(find.text('manage-body'), findsOneWidget);
         await tester.tap(find.byKey(const Key('utility-page-menu')));
         await tester.pumpAndSettle();
-        await tester.tap(find.text('运行日志'));
+        await tester.tap(find.widgetWithText(PopupMenuItem<String>, '运行日志'));
         await tester.pumpAndSettle();
         expect(find.text('logs-body'), findsOneWidget);
 

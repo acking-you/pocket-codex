@@ -55,114 +55,124 @@ class _SettingsState extends ConsumerState<SettingsScreen> {
     List<SubInfo> subs,
     String? themeMode,
   ) => ListView(
+    padding: const EdgeInsets.all(16),
     children: [
-      ListTile(
-        key: const Key('language-btn'),
-        title: Text(l10n.language),
-        subtitle: Text(_languageLabel(l10n, locale)),
-        trailing: const Icon(Icons.language),
-        onTap: () => _pickLanguage(api),
-      ),
-      ListTile(
-        key: const Key('appearance-btn'),
-        title: Text(l10n.appearance),
-        subtitle: Text(_appearanceLabel(l10n, themeMode)),
-        trailing: const Icon(Icons.brightness_6_outlined),
-        onTap: _pickAppearance,
-      ),
-      ListTile(
-        key: const Key('codex-setup-btn'),
-        leading: const Icon(Icons.tune),
-        title: Text(l10n.codexSetup),
-        trailing: const Icon(Icons.chevron_right),
-        onTap: () => context.push('/setup/codex'),
-      ),
-      const Divider(),
-      if (config?.mode == 'account') ...[
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-          child: Text(l10n.accountSection),
-        ),
-        ListTile(
-          leading: GitHubAvatar(
-            accountId: config?.accountId,
-            fallbackIcon: Icons.person_outline,
-            size: 32,
-          ),
-          title: Text('@${config?.accountLogin ?? ''}'),
-        ),
-        ListTile(
-          key: const Key('sign-out-btn'),
-          title: Text(l10n.accountSignOut),
-          trailing: const Icon(Icons.logout),
-          onTap: () => _signOut(api),
-        ),
-        const Divider(),
-      ],
-      ListTile(
-        title: Text(
-          config?.mode == 'account'
-              ? l10n.settingsSelfHostedRelay
-              : l10n.relayRow,
-        ),
-        subtitle: Text(_relayLabel(l10n, config)),
-        trailing: const Icon(Icons.edit),
-        onTap: () => _editRelay(api),
-      ),
-      ListTile(
-        title: Text(
-          config?.mode == 'account' ? l10n.settingsSelfHostedKey : l10n.keyRow,
-        ),
-        subtitle: Text(_keyLabel(l10n, config)),
-        trailing: const Icon(Icons.edit),
-        onTap: () => _editKey(api),
-      ),
-      const Divider(),
-      Padding(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-        child: Text(l10n.activeSubscriptions),
-      ),
-      if (subs.isEmpty)
-        ListTile(dense: true, title: Text(l10n.none))
-      else
-        ...subs.map(
-          (s) => ListTile(
-            dense: true,
-            leading: Icon(
-              Icons.circle,
-              size: 12,
-              color: s.alive ? Colors.green : Colors.red,
+      Card(
+        clipBehavior: Clip.antiAlias,
+        child: Column(
+          children: [
+            ListTile(
+              key: const Key('language-btn'),
+              title: Text(l10n.language),
+              subtitle: Text(_languageLabel(l10n, locale)),
+              trailing: const Icon(Icons.language),
+              onTap: () => _pickLanguage(api),
             ),
-            title: Text(s.key),
-            subtitle: Text(s.localAddr),
-          ),
+            ListTile(
+              key: const Key('appearance-btn'),
+              title: Text(l10n.appearance),
+              subtitle: Text(_appearanceLabel(l10n, themeMode)),
+              trailing: const Icon(Icons.brightness_6_outlined),
+              onTap: _pickAppearance,
+            ),
+            ListTile(
+              key: const Key('codex-setup-btn'),
+              leading: const Icon(Icons.tune),
+              title: Text(l10n.codexSetup),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => context.push('/setup/codex'),
+            ),
+            const Divider(),
+            if (config?.mode == 'account') ...[
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+                child: Text(l10n.accountSection),
+              ),
+              ListTile(
+                leading: GitHubAvatar(
+                  accountId: config?.accountId,
+                  fallbackIcon: Icons.person_outline,
+                  size: 32,
+                ),
+                title: Text('@${config?.accountLogin ?? ''}'),
+              ),
+              ListTile(
+                key: const Key('sign-out-btn'),
+                title: Text(l10n.accountSignOut),
+                trailing: const Icon(Icons.logout),
+                onTap: () => _signOut(api),
+              ),
+              const Divider(),
+            ],
+            ListTile(
+              title: Text(
+                config?.mode == 'account'
+                    ? l10n.settingsSelfHostedRelay
+                    : l10n.relayRow,
+              ),
+              subtitle: Text(_relayLabel(l10n, config)),
+              trailing: const Icon(Icons.edit),
+              onTap: () => _editRelay(api),
+            ),
+            ListTile(
+              title: Text(
+                config?.mode == 'account'
+                    ? l10n.settingsSelfHostedKey
+                    : l10n.keyRow,
+              ),
+              subtitle: Text(_keyLabel(l10n, config)),
+              trailing: const Icon(Icons.edit),
+              onTap: () => _editKey(api),
+            ),
+            const Divider(),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+              child: Text(l10n.activeSubscriptions),
+            ),
+            if (subs.isEmpty)
+              ListTile(dense: true, title: Text(l10n.none))
+            else
+              ...subs.map(
+                (s) => ListTile(
+                  dense: true,
+                  leading: Icon(
+                    Icons.circle,
+                    size: 12,
+                    color: s.alive ? Colors.green : Colors.red,
+                  ),
+                  title: Text(s.key),
+                  subtitle: Text(s.localAddr),
+                ),
+              ),
+            const Divider(),
+            ListTile(
+              key: const Key('export-btn'),
+              title: Text(l10n.exportShareString),
+              subtitle: _canExport(config)
+                  ? null
+                  : Text(l10n.settingsExportUnavailable),
+              trailing: const Icon(Icons.copy),
+              onTap: _canExport(config) ? () => _export(api) : null,
+            ),
+            // Compact needs this as much as desktop and had no route to it. The page
+            // menu that carries Logs on desktop is desktop-only, and the one other
+            // compact shortcut lives in the chat drawer — which is exactly what a user
+            // whose host is unreachable cannot open. That left the logs explaining the
+            // failure reachable only after the failure had been fixed.
+            ListTile(
+              key: const Key('diagnostics-btn'),
+              title: Text(l10n.settingsDiagnostics),
+              trailing: const Icon(Icons.article_outlined),
+              onTap: () => context.push('/logs'),
+            ),
+            if (_msg != null)
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: Text(_msg!, key: const Key('settings-msg')),
+              ),
+          ],
         ),
-      const Divider(),
-      ListTile(
-        key: const Key('export-btn'),
-        title: Text(l10n.exportShareString),
-        subtitle: _canExport(config)
-            ? null
-            : Text(l10n.settingsExportUnavailable),
-        trailing: const Icon(Icons.copy),
-        onTap: _canExport(config) ? () => _export(api) : null,
       ),
-      // Compact needs this as much as desktop and had no route to it. The page
-      // menu that carries Logs on desktop is desktop-only, and the one other
-      // compact shortcut lives in the chat drawer — which is exactly what a user
-      // whose host is unreachable cannot open. That left the logs explaining the
-      // failure reachable only after the failure had been fixed.
-      ListTile(
-        key: const Key('diagnostics-btn'),
-        title: Text(l10n.settingsDiagnostics),
-        trailing: const Icon(Icons.article_outlined),
-        onTap: () => context.push('/logs'),
-      ),
-      if (_msg != null)
-        Padding(
-          padding: const EdgeInsets.all(16),
-          child: Text(_msg!, key: const Key('settings-msg')),
-        ),
     ],
   );
 

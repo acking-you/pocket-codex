@@ -47,6 +47,82 @@ async fn spawn() -> (String, String, tempfile::TempDir) {
 }
 
 #[tokio::test]
+async fn large_json_negotiates_compression_and_legacy_identity_still_works() {
+    let (base, _root, _guard) = spawn().await;
+    let text = "long-model-configuration-".repeat(1000);
+    let url = format!("{base}/threads/compression/config");
+    let client = reqwest::Client::new();
+    client
+        .put(&url)
+        .json(&serde_json::json!({"model": text}))
+        .send()
+        .await
+        .expect("store")
+        .error_for_status()
+        .expect("stored");
+    let wire = reqwest::Client::builder()
+        .no_zstd()
+        .no_gzip()
+        .build()
+        .expect("raw client");
+    for encoding in ["zstd", "gzip", "identity"] {
+        let response = wire
+            .get(&url)
+            .header("accept-encoding", encoding)
+            .send()
+            .await
+            .expect("response");
+        if encoding == "identity" {
+            assert!(!response.headers().contains_key("content-encoding"));
+            assert_eq!(response.json::<serde_json::Value>().await.expect("json")["model"], text);
+        } else {
+            assert_eq!(response.headers()["content-encoding"], encoding);
+            assert!(response.bytes().await.expect("compressed body").len() < text.len() / 5);
+            let decoded: serde_json::Value = client
+                .get(&url)
+                .header("accept-encoding", encoding)
+                .send()
+                .await
+                .expect("auto decode")
+                .json()
+                .await
+                .expect("json");
+            assert_eq!(decoded["model"], text);
+        }
+    }
+}
+
+#[tokio::test]
+#[ignore = "manual: PCX_HISTORY_THREAD_ID selects an existing local long session"]
+async fn real_monitor_first_event_omits_the_full_rollout() {
+    let thread = std::env::var("PCX_HISTORY_THREAD_ID").expect("thread id");
+    let (base, _, _guard) = spawn().await;
+    let started = std::time::Instant::now();
+    let mut response = reqwest::Client::new()
+        .get(format!("{base}/sessions/{thread}/follow?metadata_only=true"))
+        .send()
+        .await
+        .expect("follow")
+        .error_for_status()
+        .expect("success");
+    let chunk = response
+        .chunk()
+        .await
+        .expect("read event")
+        .expect("first event");
+    let text = std::str::from_utf8(&chunk).expect("utf8");
+    let data = text
+        .lines()
+        .find_map(|line| line.strip_prefix("data: "))
+        .expect("data");
+    let update: serde_json::Value = serde_json::from_str(data).expect("update");
+    assert_eq!(update["items"], serde_json::json!([]));
+    assert!(update["history_revision"].is_string());
+    assert!(chunk.len() < 4096);
+    eprintln!("metadata-only first event: {} bytes in {:?}", chunk.len(), started.elapsed());
+}
+
+#[tokio::test]
 async fn projects_round_trip_and_confined_listing() {
     let (base, root, _guard) = spawn().await;
     let client = reqwest::Client::new();

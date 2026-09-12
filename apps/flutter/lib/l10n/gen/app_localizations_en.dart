@@ -280,7 +280,16 @@ class AppLocalizationsEn extends AppLocalizations {
   String get emptyConversation => 'Send a message to start the conversation';
 
   @override
-  String get olderHistoryHint => 'Scroll up to load earlier messages';
+  String get olderHistoryHint => 'Load earlier messages';
+
+  @override
+  String get historyStart => 'Start of conversation';
+
+  @override
+  String get historyLoading => 'Loading history…';
+
+  @override
+  String get historyRetry => 'Couldn’t load history. Retry';
 
   @override
   String get turnFailed =>
@@ -1582,4 +1591,10 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get codexSetupCredentialExists => 'credential present';
+
+  @override
+  String get resizeComposer => 'Drag to resize; double-click to reset';
+
+  @override
+  String get historyGap => 'Load messages in this gap';
 }

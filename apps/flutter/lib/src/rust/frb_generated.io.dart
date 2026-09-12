@@ -158,6 +158,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<ThreadMetaDto> dco_decode_list_thread_meta_dto(dynamic raw);
 
   @protected
+  List<TurnItemsPageDto> dco_decode_list_turn_items_page_dto(dynamic raw);
+
+  @protected
   List<TurnSummaryDto> dco_decode_list_turn_summary_dto(dynamic raw);
 
   @protected
@@ -224,6 +227,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   ThreadRuntimeConfigDto dco_decode_thread_runtime_config_dto(dynamic raw);
+
+  @protected
+  TurnItemsPageDto dco_decode_turn_items_page_dto(dynamic raw);
 
   @protected
   TurnSummaryDto dco_decode_turn_summary_dto(dynamic raw);
@@ -421,6 +427,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  List<TurnItemsPageDto> sse_decode_list_turn_items_page_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   List<TurnSummaryDto> sse_decode_list_turn_summary_dto(
     SseDeserializer deserializer,
   );
@@ -497,6 +508,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ThreadRuntimeConfigDto sse_decode_thread_runtime_config_dto(
     SseDeserializer deserializer,
   );
+
+  @protected
+  TurnItemsPageDto sse_decode_turn_items_page_dto(SseDeserializer deserializer);
 
   @protected
   TurnSummaryDto sse_decode_turn_summary_dto(SseDeserializer deserializer);
@@ -739,6 +753,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_turn_items_page_dto(
+    List<TurnItemsPageDto> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_list_turn_summary_dto(
     List<TurnSummaryDto> self,
     SseSerializer serializer,
@@ -837,6 +857,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_thread_runtime_config_dto(
     ThreadRuntimeConfigDto self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_turn_items_page_dto(
+    TurnItemsPageDto self,
     SseSerializer serializer,
   );
 

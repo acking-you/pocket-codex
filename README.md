@@ -9,10 +9,10 @@
 </p>
 
 <p align="center">
-  <a href="#status"><img alt="status: work in progress" src="https://img.shields.io/badge/status-WIP-orange"></a>
-  <a href="https://www.rust-lang.org"><img alt="rust" src="https://img.shields.io/badge/built%20with-Rust-dea584.svg"></a>
-  <a href="https://flutter.dev"><img alt="flutter" src="https://img.shields.io/badge/UI-Flutter-02569B.svg"></a>
-  <a href="LICENSE"><img alt="license" src="https://img.shields.io/badge/license-Apache--2.0-blue.svg"></a>
+  <a href="#status"><img alt="status: work in progress" src="https://img.shields.io/badge/status-WIP-626C7E"></a>
+  <a href="https://www.rust-lang.org"><img alt="rust" src="https://img.shields.io/badge/built%20with-Rust-355ACF.svg"></a>
+  <a href="https://flutter.dev"><img alt="flutter" src="https://img.shields.io/badge/UI-Flutter-355ACF.svg"></a>
+  <a href="LICENSE"><img alt="license" src="https://img.shields.io/badge/license-Apache--2.0-355ACF.svg"></a>
 </p>
 
 <p align="center">
@@ -72,9 +72,12 @@ or a per-account GitHub login (hosted).
 | `codex app-server` supervision | spawn/stop/status via PID + state.toml |
 | App-server protocol | synced to upstream main `db0568dbb` (2026-09-07); acknowledged initialization, v2 account reads, current thread model/effort, and asynchronous question replies |
 | External Codex hosting        | all desktop hosts spawn an installed `codex`; only upstream protocol crates are direct dependencies. **Built-in engine** is disabled and not implemented. Existing embedded auto-host settings restore using external Codex, which must be installed or selected by path. |
+| Conversation history | bounded session cache, authoritative pagination end, and gaps at their actual position after timeline jumps; cached turn pages, explicit retry, stable reading position, and linear timeline grouping |
+| History loading and monitoring | show history before optional settings/model discovery; connect in-app hosts over loopback; other writers emit small revision updates with bounded history refreshes and cached rollout state scans |
+| Transport compression | host HTTP negotiates Zstd/Gzip; app-server WebSocket offers permessage-deflate when the external server supports it; uncompressed peers and streaming SSE remain compatible |
 | Direct Responses API proxy     | local HTTP/WS proxy registered through pb-mapper |
 | Hosted account (GitHub)        | optional `pocket-codex-backend`: GitHub login, then a short-lived per-account relay credential (`/v1/relay`) scoped to a `pcxu:<user>:…` namespace — clients register/connect against the relay **directly** and the administrator key never leaves the server; self-host preserved behind `--relay`. See [`deploy/`](deploy/README.md) |
-| Flutter UI (`apps/flutter`)    | chat-first home (opens straight into the latest session; all sessions in the sidebar; auto-connects to the explicit default / last-used / locally hosted / first reachable host, desktop auto-restores hosting); account onboarding ("Sign in with GitHub") + self-host onboarding (relay+key, `pcx1:` import/export); device-first service management, settings, sessions, and logs with shared secondary-page navigation; responsive Material 3 (light/dark) |
+| Flutter UI (`apps/flutter`)    | chat-first home (opens straight into the latest session; all sessions in the sidebar; auto-connects to the explicit default / last-used / locally hosted / first reachable host, desktop auto-restores hosting); account onboarding ("Sign in with GitHub") + self-host onboarding (relay+key, `pcx1:` import/export); device-first service management, settings, sessions, and logs with shared secondary-page navigation; shared neutral/blue design system, persistent utility navigation, adaptive desktop/tablet/phone layouts (light/dark), a compact resizable composer with remembered height, and matching icons/artwork |
 
 Multi-device CLI flows are usable in both modes:
 
