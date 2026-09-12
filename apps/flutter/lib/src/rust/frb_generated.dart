@@ -383,6 +383,7 @@ abstract class RustLibApi extends BaseApi {
 
   Future<List<LocalSessionDto>> crateApiBridgeMetaSessions({
     required String serviceKey,
+    bool? runningOnly,
   });
 
   Future<ProjectConfigDto> crateApiBridgeMetaSetProjectConfig({
@@ -2957,12 +2958,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @override
   Future<List<LocalSessionDto>> crateApiBridgeMetaSessions({
     required String serviceKey,
+    bool? runningOnly,
   }) {
     return handler.executeNormal(
       NormalTask(
         callFfi: (port_) {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_String(serviceKey, serializer);
+          sse_encode_opt_box_autoadd_bool(runningOnly, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -2975,14 +2978,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: sse_decode_AnyhowException,
         ),
         constMeta: kCrateApiBridgeMetaSessionsConstMeta,
-        argValues: [serviceKey],
+        argValues: [serviceKey, runningOnly],
         apiImpl: this,
       ),
     );
   }
 
-  TaskConstMeta get kCrateApiBridgeMetaSessionsConstMeta =>
-      const TaskConstMeta(debugName: "meta_sessions", argNames: ["serviceKey"]);
+  TaskConstMeta get kCrateApiBridgeMetaSessionsConstMeta => const TaskConstMeta(
+    debugName: "meta_sessions",
+    argNames: ["serviceKey", "runningOnly"],
+  );
 
   @override
   Future<ProjectConfigDto> crateApiBridgeMetaSetProjectConfig({

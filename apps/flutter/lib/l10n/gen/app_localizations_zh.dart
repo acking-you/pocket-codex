@@ -522,6 +522,11 @@ class AppLocalizationsZh extends AppLocalizations {
   }
 
   @override
+  String turnActivityCount(int count) {
+    return '$count 步操作';
+  }
+
+  @override
   String completedAt(String time) {
     return '完成于 $time';
   }

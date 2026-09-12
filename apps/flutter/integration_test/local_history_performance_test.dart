@@ -12,6 +12,7 @@ import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/bridge_api_rust.dart';
 import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/screens/app_session_screen.dart';
+import 'package:pocket_codex/src/screens/app_session/activity_cards.dart';
 import 'package:pocket_codex/src/theme.dart';
 import 'package:pocket_codex/src/ui_prefs.dart';
 import 'package:pocket_codex/src/widgets/loading.dart';
@@ -47,6 +48,7 @@ void main() {
     (tester) async {
       const enabled = bool.fromEnvironment('PCX_LIVE_UI');
       const ids = String.fromEnvironment('PCX_HISTORY_THREAD_IDS');
+      const gapTurn = String.fromEnvironment('PCX_HISTORY_GAP_TURN_ID');
       if (!enabled || ids.isEmpty) {
         markTestSkipped('existing local-host sessions not configured');
         return;
@@ -76,7 +78,7 @@ void main() {
               locale: const Locale('zh'),
               localizationsDelegates: AppLocalizations.localizationsDelegates,
               supportedLocales: AppLocalizations.supportedLocales,
-              theme: lightTheme(),
+              theme: round.isEven ? lightTheme() : darkTheme(),
               home: AppSessionScreen(
                 serviceKey: service,
                 threadId: thread,
@@ -107,6 +109,41 @@ void main() {
               find.byKey(const Key('chat-older-history-load')),
               findsNothing,
             );
+          }
+          final target = tester
+              .widget<TurnMinimap>(minimap)
+              .items
+              .where((item) => item.turnId == gapTurn)
+              .firstOrNull;
+          if (target != null) {
+            tester.widget<TurnMinimap>(minimap).onSelect(target);
+            await _until(
+              () => tester
+                  .widget<TurnMinimap>(minimap)
+                  .items
+                  .any((item) => item.turnId == gapTurn && item.rowIndex >= 0),
+            );
+            await Future<void>.delayed(const Duration(milliseconds: 500));
+            final gap = find.byKey(Key('history-gap-$gapTurn'));
+            if (gap.evaluate().isNotEmpty) {
+              final button = tester.widget<TextButton>(gap);
+              button.onPressed?.call();
+              await _until(
+                () =>
+                    gap.evaluate().isEmpty ||
+                    tester.widget<TextButton>(gap).onPressed != null,
+              );
+            }
+            await Future<void>.delayed(const Duration(seconds: 2));
+            expect(
+              tester
+                  .widgetList<TurnWorkCard>(find.byType(TurnWorkCard))
+                  .where((work) => work.active)
+                  .length,
+              lessThanOrEqualTo(1),
+            );
+            expect(tester.takeException(), isNull);
+            debugPrint('Native jump + continuation + monitor refresh passed');
           }
         }
         final handle = find.byKey(const Key('composer-resize-handle'));

@@ -1435,8 +1435,11 @@ fn thread_config_from_dto(c: ThreadConfigDto) -> pocket_codex_host_svc::store::T
 /// behind `service_key` via its meta tunnel (loopback when this app is the
 /// host, a relay subscription when remote). Lets a phone see a desktop host's
 /// sessions — including those owned by another codex client.
-pub fn meta_sessions(service_key: String) -> Result<Vec<LocalSessionDto>> {
-    Ok(meta::sessions(&service_key)?
+pub fn meta_sessions(
+    service_key: String,
+    running_only: Option<bool>,
+) -> Result<Vec<LocalSessionDto>> {
+    Ok(meta::sessions(&service_key, running_only.unwrap_or(false))?
         .into_iter()
         .map(|s| LocalSessionDto {
             thread_id: s.thread_id,

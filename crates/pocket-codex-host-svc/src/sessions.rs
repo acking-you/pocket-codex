@@ -160,6 +160,41 @@ pub fn list() -> Result<Vec<LocalSession>> {
     Ok(out)
 }
 
+/// Discover running sessions without replaying inactive transcript files.
+/// Ownership is checked in one batch; only held files need lifecycle scans.
+pub fn running() -> Result<Vec<LocalSession>> {
+    let paths = rollout::session_paths()?;
+    Ok(running_at(&paths))
+}
+
+fn running_at(paths: &[PathBuf]) -> Vec<LocalSession> {
+    let held = held_open_paths(paths);
+    let mut out = Vec::new();
+    for path in held {
+        if !matches!(rollout::classify_turn_state(&path), Ok(rollout::TurnState::Incomplete)) {
+            continue;
+        }
+        let Ok(info) = rollout::read_session_info(&path) else { continue };
+        if info.turn_state != rollout::TurnState::Incomplete {
+            continue;
+        }
+        out.push(LocalSession {
+            thread_id: info.thread_id,
+            cwd: info.cwd,
+            preview: info.preview,
+            source: info.source,
+            updated_at: info.updated_at,
+            turn_state: "incomplete".into(),
+            held_open: true,
+            safety: "ownedRunning".into(),
+            allows_resume: false,
+            requires_takeover: false,
+        });
+    }
+    out.sort_by_key(|session| std::cmp::Reverse(session.updated_at));
+    out
+}
+
 /// Inspect one session's liveness in detail, excluding `protected` pids (the
 /// server we resume into + this process) from the listed takeover targets.
 pub fn liveness(thread_id: &str, protected: &[u32]) -> Result<SessionLiveness> {
@@ -204,4 +239,41 @@ pub fn follow_update(thread_id: &str, protected: &[u32]) -> Result<SessionFollow
         items: transcript(thread_id)?,
         history_revision: None,
     })
+}
+
+#[cfg(test)]
+mod running_tests {
+    use std::io::Write;
+
+    use super::*;
+
+    #[test]
+    fn inventory_observes_start_and_completion_without_resuming() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("rollout-running.jsonl");
+        let orphan = dir.path().join("rollout-orphan.jsonl");
+        let started = "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\"}}\n";
+        let completed = "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\"}}\n";
+        std::fs::write(&orphan, started).expect("orphaned incomplete rollout");
+        let mut writer = std::fs::File::create(&path).expect("open writer");
+        writeln!(
+            writer,
+            "{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"running\",\"cwd\":\"/project\"}}}}"
+        )
+        .expect("metadata");
+        let paths = [path, orphan];
+        assert!(running_at(&paths).is_empty(), "ownership alone is not running");
+        writer.write_all(started.as_bytes()).expect("start");
+        let active = running_at(&paths);
+        assert_eq!(active.len(), 1, "unowned incomplete sessions are not active");
+        assert_eq!(active[0].thread_id, "running");
+        assert_eq!(active[0].safety, "ownedRunning");
+        assert!(!active[0].allows_resume);
+        writer.write_all(completed.as_bytes()).expect("complete");
+        assert!(running_at(&paths).is_empty(), "completion is visible with the file still open");
+        writer.write_all(started.as_bytes()).expect("restart");
+        assert_eq!(running_at(&paths).len(), 1);
+        drop(writer);
+        assert!(running_at(&paths).is_empty(), "exiting a writer clears the badge");
+    }
 }

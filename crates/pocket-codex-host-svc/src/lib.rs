@@ -171,10 +171,24 @@ struct SessionsResponse {
     sessions: Vec<sessions::LocalSession>,
 }
 
-async fn list_sessions() -> Result<Json<SessionsResponse>, ApiError> {
-    let sessions = tokio::task::spawn_blocking(sessions::list)
-        .await
-        .context("session-scan task panicked")??;
+#[derive(Default, Deserialize)]
+struct SessionListQuery {
+    #[serde(default)]
+    running_only: bool,
+}
+
+async fn list_sessions(
+    Query(query): Query<SessionListQuery>,
+) -> Result<Json<SessionsResponse>, ApiError> {
+    let sessions = tokio::task::spawn_blocking(move || {
+        if query.running_only {
+            sessions::running()
+        } else {
+            sessions::list()
+        }
+    })
+    .await
+    .context("session-scan task panicked")??;
     Ok(Json(SessionsResponse {
         sessions,
     }))

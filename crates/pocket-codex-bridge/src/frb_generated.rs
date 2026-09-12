@@ -2907,11 +2907,13 @@ fn wire__crate__api__bridge__meta_sessions_impl(
             let mut deserializer =
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
             let api_service_key = <String>::sse_decode(&mut deserializer);
+            let api_running_only = <Option<bool>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
                     (move || {
-                        let output_ok = crate::api::bridge::meta_sessions(api_service_key)?;
+                        let output_ok =
+                            crate::api::bridge::meta_sessions(api_service_key, api_running_only)?;
                         Ok(output_ok)
                     })(),
                 )

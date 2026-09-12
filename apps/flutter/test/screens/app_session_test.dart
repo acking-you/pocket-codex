@@ -2844,6 +2844,8 @@ void main() {
       // than to invent a time, which would read as fact.
       await openThread(t, work: alternating, durationMs: null);
       expect(find.textContaining('已处理'), findsNothing);
+      expect(find.textContaining('正在处理'), findsNothing);
+      expect(find.text('4 步操作'), findsOneWidget);
       expect(find.textContaining('4'), findsWidgets);
     });
 

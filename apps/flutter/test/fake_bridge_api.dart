@@ -970,8 +970,12 @@ class FakeBridgeApi implements BridgeApi {
       {};
 
   @override
-  Future<List<LocalSession>> metaSessions(String serviceKey) async =>
-      remoteSessions[serviceKey] ?? localSessions;
+  Future<List<LocalSession>> metaSessions(
+    String serviceKey, {
+    bool runningOnly = false,
+  }) async => (remoteSessions[serviceKey] ?? localSessions)
+      .where((session) => !runningOnly || session.safety == 'ownedRunning')
+      .toList();
 
   @override
   Future<SessionLiveness> metaSessionLiveness(

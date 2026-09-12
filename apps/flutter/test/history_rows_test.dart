@@ -2,8 +2,93 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
 import 'package:pocket_codex/src/screens/app_session/history_rows.dart';
 import 'package:pocket_codex/src/screens/app_session/transcript_model.dart';
+import 'package:pocket_codex/src/screens/app_session/activity_cards.dart';
 
 void main() {
+  test('a turn continuation and following unread turns form one gap', () {
+    final prefix = TranscriptItem(
+      id: 'prefix',
+      type: 'commandExecution',
+      turnId: 'first',
+      turnDurationMs: 12987579,
+    );
+    List<Object> rows(bool hasMore) => buildHistoryRows(
+      [prefix, TranscriptItem(id: 'tail', type: 'userMessage', turnId: 'last')],
+      turns: const [
+        TurnSummary(
+          turnId: 'first',
+          userText: '',
+          assistantText: '',
+          loaded: true,
+        ),
+        TurnSummary(
+          turnId: 'middle',
+          userText: '',
+          assistantText: '',
+          loaded: false,
+        ),
+        TurnSummary(
+          turnId: 'last',
+          userText: '',
+          assistantText: '',
+          loaded: true,
+        ),
+      ],
+      windows: {
+        'first': TurnItemsPage(
+          turnId: 'first',
+          items: const [
+            ThreadItem(
+              id: 'prefix',
+              itemType: 'commandExecution',
+              title: '',
+              text: '',
+            ),
+          ],
+          hasMore: hasMore,
+        ),
+      },
+      sequentialIds: {'tail'},
+    );
+    final partial = rows(true);
+    expect(partial.whereType<HistoryGap>(), hasLength(1));
+    expect(partial.whereType<HistoryGap>().single.turnId, 'first');
+    expect(partial.whereType<HistoryGap>().single.continuation, isTrue);
+    expect(partial.whereType<TurnWork>().single.durationMs, isNull);
+    final complete = rows(false);
+    expect(complete.whereType<HistoryGap>(), hasLength(1));
+    expect(complete.whereType<HistoryGap>().single.turnId, 'middle');
+    expect(complete.whereType<TurnWork>().single.durationMs, 12987579);
+  });
+
+  test('steering within a turn does not repeat its total duration', () {
+    final rows = buildHistoryRows(
+      [
+        TranscriptItem(id: 'u1', type: 'userMessage', turnId: 'turn'),
+        TranscriptItem(
+          id: 'c1',
+          type: 'commandExecution',
+          turnId: 'turn',
+          turnDurationMs: 12987579,
+        ),
+        TranscriptItem(id: 'u2', type: 'userMessage', turnId: 'turn'),
+        TranscriptItem(
+          id: 'c2',
+          type: 'commandExecution',
+          turnId: 'turn',
+          turnDurationMs: 12987579,
+        ),
+      ],
+      turns: const [],
+      windows: const {},
+      sequentialIds: const {},
+    );
+    expect(rows.whereType<TurnWork>().map((work) => work.durationMs), [
+      null,
+      12987579,
+    ]);
+  });
+
   const turns = [
     TurnSummary(turnId: 'first', userText: '', assistantText: '', loaded: true),
     TurnSummary(

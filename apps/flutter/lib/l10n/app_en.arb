@@ -207,6 +207,10 @@
     "placeholders": { "duration": { "type": "String" } }
   },
   "turnProcessing": "Working, {count} steps so far",
+  "turnActivityCount": "{count} steps",
+  "@turnActivityCount": {
+    "placeholders": { "count": { "type": "int" } }
+  },
   "@turnProcessing": {
     "description": "Same header while the turn is still running, when no duration exists yet.",
     "placeholders": { "count": { "type": "int" } }

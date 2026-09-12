@@ -1046,6 +1046,12 @@ abstract class AppLocalizations {
   /// **'Working, {count} steps so far'**
   String turnProcessing(int count);
 
+  /// No description provided for @turnActivityCount.
+  ///
+  /// In en, this message translates to:
+  /// **'{count} steps'**
+  String turnActivityCount(int count);
+
   /// No description provided for @completedAt.
   ///
   /// In en, this message translates to:

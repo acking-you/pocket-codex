@@ -157,9 +157,7 @@ pub fn sessions_dir() -> Result<PathBuf> {
 /// are skipped (logged at debug) so one corrupt rollout cannot hide the
 /// rest.
 pub fn scan_sessions() -> Result<Vec<SessionInfo>> {
-    let dir = sessions_dir()?;
-    let mut files = Vec::new();
-    collect_jsonl(&dir, &mut files)?;
+    let files = session_paths()?;
     let mut out = Vec::with_capacity(files.len());
     for path in files {
         match read_session_info(&path) {
@@ -169,6 +167,13 @@ pub fn scan_sessions() -> Result<Vec<SessionInfo>> {
     }
     out.sort_by_key(|info| std::cmp::Reverse(info.updated_at));
     Ok(out)
+}
+
+/// Enumerate rollout paths without reading any transcript contents.
+pub fn session_paths() -> Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    collect_jsonl(&sessions_dir()?, &mut files)?;
+    Ok(files)
 }
 
 /// Locate the rollout file for a given `thread_id`.

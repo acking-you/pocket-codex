@@ -471,7 +471,10 @@ class _PlanCardState extends State<PlanCard> {
 /// "思考 ×2" rather than four loose rows.
 class TurnWork {
   /// Groups [items], the activity between two messages, in transcript order.
-  TurnWork(this.items);
+  TurnWork(this.items, {this.showDuration = true});
+
+  /// Whether this segment reaches the turn's end and may show its full duration.
+  final bool showDuration;
 
   /// The activity rows, in transcript order.
   final List<TranscriptItem> items;
@@ -518,9 +521,11 @@ class TurnWork {
   /// The turn's duration in milliseconds, per the server, or null when it did
   /// not say — a turn still in flight, or an item read from a rollout with no
   /// turn stamp. Never inferred: a made-up number here would read as fact.
-  int? get durationMs => items
-      .map((i) => i.turnDurationMs)
-      .firstWhere((d) => d != null, orElse: () => null);
+  int? get durationMs => !showDuration
+      ? null
+      : items
+            .map((i) => i.turnDurationMs)
+            .firstWhere((d) => d != null, orElse: () => null);
 }
 
 /// A run of ≥2 consecutive same-type activity items, collapsed into one row.
@@ -663,7 +668,10 @@ class AgentTurn {
 /// individual call's output.
 class TurnWorkCard extends StatefulWidget {
   /// Creates the fold for one turn's work.
-  const TurnWorkCard({super.key, required this.work});
+  const TurnWorkCard({super.key, required this.work, this.active = false});
+
+  /// Whether this is the current segment of the running turn.
+  final bool active;
 
   /// The activity to fold away.
   final TurnWork work;
@@ -704,11 +712,12 @@ class _TurnWorkCardState extends State<TurnWorkCard> {
     final scheme = Theme.of(context).colorScheme;
     final muted = scheme.onSurfaceVariant;
     final duration = _duration(l10n);
-    // While the turn runs there is no duration yet, and a count is what there is
-    // to say. Afterwards the time is the useful summary: how long you waited.
+    // Missing timing is common for interrupted/imported turns. It is not
+    // evidence that historical work is still running.
     final label = switch (duration) {
+      _ when widget.active => l10n.turnProcessing(widget.work.items.length),
       final d? => l10n.turnProcessed(d),
-      _ => l10n.turnProcessing(widget.work.items.length),
+      _ => l10n.turnActivityCount(widget.work.items.length),
     };
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -729,7 +738,7 @@ class _TurnWorkCardState extends State<TurnWorkCard> {
                   ).textTheme.bodySmall?.copyWith(color: muted),
                 ),
                 const SizedBox(width: 4),
-                if (widget.work.streaming)
+                if (widget.active && widget.work.streaming)
                   SizedBox(
                     width: 11,
                     height: 11,

@@ -173,6 +173,10 @@
     "placeholders": { "duration": { "type": "String" } }
   },
   "turnProcessing": "正在处理 {count} 步",
+  "turnActivityCount": "{count} 步操作",
+  "@turnActivityCount": {
+    "placeholders": { "count": { "type": "int" } }
+  },
   "@turnProcessing": {
     "placeholders": { "count": { "type": "int" } }
   },

@@ -1429,7 +1429,11 @@ abstract interface class BridgeApi {
   // persists per-thread config on the host (shared across devices).
 
   /// Remote analogue of [appLocalSessions] for the host behind [serviceKey].
-  Future<List<LocalSession>> metaSessions(String serviceKey);
+  /// [runningOnly] requests a lightweight inventory of active writers.
+  Future<List<LocalSession>> metaSessions(
+    String serviceKey, {
+    bool runningOnly = false,
+  });
 
   /// Remote analogue of [appSessionLiveness].
   Future<SessionLiveness> metaSessionLiveness(

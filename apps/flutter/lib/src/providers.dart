@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:pocket_codex/src/app_modes.dart';
@@ -255,63 +256,158 @@ final metaRetryProvider = StreamProvider<RetryProgress?>((ref) {
   return out.stream;
 });
 
-/// Threads with a turn currently running on [serviceKey], as a live set,
-/// derived purely from the live event stream: `turn/started` adds a thread,
-/// `turn/completed` / `turn/failed` removes it. Lets the session lists show a
-/// running indicator BEFORE a session is opened, and animate when several run
-/// at once. Subscribing here is safe alongside the session screen's own
-/// listener — each `appEvents` call gets an independent broadcast receiver.
-/// Errors (e.g. not connected yet) surface as an AsyncError; consumers treat a
-/// missing value as the empty set.
-///
-/// Deliberately NOT autoDispose: the running set is accumulated across events,
-/// and tearing the provider down between rebuilds (e.g. while navigating
-/// picker↔session) would reset it and drop the badge.
-///
-/// Self-healing: `appEvents` errors if the service isn't connected yet (the
-/// picker watches this while it's still connecting), and the stream closes on
-/// disconnect. Either way we wait briefly and re-subscribe, so the badge
-/// recovers once the connection is up rather than getting stuck empty.
-final runningThreadsProvider = StreamProvider.family<Set<String>, String>((
-  ref,
-  serviceKey,
-) async* {
-  final api = ref.watch(bridgeApiProvider);
-  final running = <String>{};
-  // Cancellable re-subscribe backoff. A plain `Future.delayed` would leave a
-  // pending timer when the provider is torn down (container disposal in tests,
-  // or invalidation), so gate the wait on a Timer we cancel in onDispose.
-  var disposed = false;
-  Timer? backoff;
-  ref.onDispose(() {
-    disposed = true;
-    backoff?.cancel();
-  });
-  yield const <String>{};
-  while (!disposed) {
-    try {
-      await for (final e in api.appEvents(serviceKey)) {
-        final tid = e.threadId;
-        if (tid == null || tid.isEmpty) continue;
-        if (e.kind == 'turn/started') {
-          running.add(tid);
-          yield Set<String>.unmodifiable(running);
-        } else if (e.kind == 'turn/completed' || e.kind == 'turn/failed') {
-          running.remove(tid);
-          yield Set<String>.unmodifiable(running);
+/// A host inventory together with the start of its ownership probe.
+/// Events newer than this point must take precedence over the result.
+typedef RunningSessionSnapshot = ({
+  List<LocalSession> sessions,
+  DateTime requestedAt,
+});
+
+/// Discovers external writers without opening their threads. Probes never
+/// overlap, and the host reads lifecycle records only for held rollout files.
+final runningSessionInventoryProvider = StreamProvider.autoDispose
+    .family<RunningSessionSnapshot, String>((ref, serviceKey) {
+      final api = ref.watch(bridgeApiProvider);
+      final out = StreamController<RunningSessionSnapshot>();
+      Timer? timer;
+      var disposed = false;
+      var paused = false;
+      var inFlight = false;
+      Future<void> poll() async {
+        if (disposed || paused || inFlight) return;
+        inFlight = true;
+        final requestedAt = DateTime.now();
+        try {
+          final sessions = await api.metaSessions(
+            serviceKey,
+            runningOnly: true,
+          );
+          if (!disposed) {
+            out.add((sessions: sessions, requestedAt: requestedAt));
+          }
+        } catch (_) {
+          // A transient failure does not mean the running sessions stopped.
+        } finally {
+          inFlight = false;
+          if (!disposed && !paused) {
+            timer = Timer(const Duration(seconds: 5), poll);
+          }
         }
       }
-    } catch (_) {
-      // Not connected yet / transient drop — fall through to re-subscribe.
-    }
-    if (disposed) break;
-    final gate = Completer<void>();
-    backoff = Timer(const Duration(seconds: 1), () {
-      if (!gate.isCompleted) gate.complete();
+
+      ref.onCancel(() {
+        paused = true;
+        timer?.cancel();
+      });
+      ref.onResume(() {
+        paused = false;
+        unawaited(poll());
+      });
+      ref.onDispose(() {
+        disposed = true;
+        timer?.cancel();
+        out.close();
+      });
+      unawaited(poll());
+      return out.stream;
     });
-    await gate.future;
-  }
-});
+
+/// Combines host ownership snapshots with immediate app-server turn events.
+/// A late snapshot cannot resurrect a turn completed while its probe ran.
+final runningThreadsProvider = StreamProvider.autoDispose
+    .family<Set<String>, String>((ref, serviceKey) {
+      final api = ref.watch(bridgeApiProvider);
+      final out = StreamController<Set<String>>();
+      var host = <String>{};
+      final events = <String, ({bool running, DateTime at})>{};
+      Set<String>? previous;
+      var disposed = false;
+      Timer? retry;
+      StreamSubscription<AppEvent>? subscription;
+      void emit() {
+        final running = {...host};
+        for (final entry in events.entries) {
+          if (entry.value.running) {
+            running.add(entry.key);
+          } else {
+            running.remove(entry.key);
+          }
+        }
+        if (!disposed && !setEquals(previous, running)) {
+          previous = running;
+          out.add(Set.unmodifiable(running));
+        }
+      }
+
+      ProviderSubscription<AsyncValue<RunningSessionSnapshot>>? inventory;
+      void observeInventory() {
+        inventory = ref.listen(runningSessionInventoryProvider(serviceKey), (
+          _,
+          next,
+        ) {
+          final snapshot = next.valueOrNull;
+          if (snapshot == null) return;
+          host = {for (final session in snapshot.sessions) session.threadId};
+          events.removeWhere(
+            (_, event) => !event.at.isAfter(snapshot.requestedAt),
+          );
+          emit();
+        }, fireImmediately: true);
+      }
+
+      void connect() {
+        if (disposed) return;
+        subscription = api
+            .appEvents(serviceKey)
+            .listen(
+              (event) {
+                final tid = event.threadId;
+                if (tid == null || tid.isEmpty) return;
+                final running = switch (event.kind) {
+                  'turn/started' => true,
+                  'turn/completed' || 'turn/failed' => false,
+                  _ => null,
+                };
+                if (running == null) return;
+                events[tid] = (running: running, at: DateTime.now());
+                emit();
+              },
+              onError: (_) {
+                retry?.cancel();
+                if (!disposed) {
+                  retry = Timer(const Duration(seconds: 1), connect);
+                }
+              },
+              onDone: () {
+                retry?.cancel();
+                if (!disposed) {
+                  retry = Timer(const Duration(seconds: 1), connect);
+                }
+              },
+              cancelOnError: true,
+            );
+      }
+
+      ref.onDispose(() {
+        disposed = true;
+        retry?.cancel();
+        subscription?.cancel();
+        out.close();
+      });
+      ref.onCancel(() {
+        inventory?.close();
+        retry?.cancel();
+        subscription?.cancel();
+      });
+      ref.onResume(() {
+        observeInventory();
+        connect();
+      });
+      observeInventory();
+      emit();
+      connect();
+      return out.stream;
+    });
 
 /// Active UI locale (`null` = follow system). Seeded at boot from the
 /// persisted config via a ProviderScope override, then changed by the

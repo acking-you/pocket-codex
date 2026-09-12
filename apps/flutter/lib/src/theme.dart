@@ -101,6 +101,21 @@ Color surfaceBackground(ColorScheme scheme) => scheme.surface;
 /// An opaque raised panel shared by cards, sheets, menus and the composer.
 Color surfacePanel(ColorScheme scheme) => scheme.surfaceBright;
 
+/// Opaque selection tint, shared by both sidebar views without dimming text.
+Color surfaceSelection(ColorScheme scheme) => scheme.primaryContainer;
+
+/// A stable outline separates selection from transient hover highlights.
+Color selectionBorder(ColorScheme scheme) => Color.alphaBlend(
+  scheme.primary.withValues(alpha: 0.26),
+  surfaceSelection(scheme),
+);
+
+/// Floating previews need a stronger elevation step over the transcript.
+Color surfacePreview(ColorScheme scheme) =>
+    scheme.brightness == Brightness.light
+    ? scheme.surfaceBright
+    : scheme.surfaceContainer;
+
 /// The design's type scale, mapped onto Material's roles.
 ///
 /// Paragraphs use generous line height; single-line controls stay compact.

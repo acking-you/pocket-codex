@@ -5,8 +5,13 @@ import 'activity_cards.dart' show AgentTurn, TurnWork;
 List<Object> buildTranscriptRows(List<TranscriptItem> items) {
   final finalReply = List<bool>.filled(items.length, false);
   var activityAfter = false;
+  String? nextTurn;
   for (var i = items.length - 1; i >= 0; i--) {
     final item = items[i];
+    if (item.turnId.isNotEmpty && nextTurn != item.turnId) {
+      activityAfter = false;
+    }
+    nextTurn = item.turnId;
     if (item.isUser) {
       activityAfter = false;
     } else if (item.isAgent) {
@@ -57,6 +62,9 @@ List<Object> buildTranscriptRows(List<TranscriptItem> items) {
     // boundary, so it stays where it is, beneath the fold.
     var j = i + 1;
     while (j < items.length &&
+        (it.turnId.isEmpty ||
+            items[j].turnId.isEmpty ||
+            items[j].turnId == it.turnId) &&
         !items[j].isUser &&
         !items[j].standsAlone &&
         !finalReply[j]) {

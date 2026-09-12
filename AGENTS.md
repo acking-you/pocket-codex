@@ -373,6 +373,8 @@ this file's roadmap so the source of truth stays in sync.
   turn-summary cursor to confirm the oldest boundary. Hovering the timeline
   must not trigger network reads; explicit selection and approaching a gap
   load one bounded page, with cached pages and in-flight requests reused.
+  Coalesce adjacent missing ranges into one action without losing the next
+  cursor. A monitoring refresh must not resurrect an exhausted window.
 - Keep the composer compact by default, resizable with mouse/touch and
   accessibility actions, and persist its height with the UI preferences.
 - Branding uses the same blue/neutral palette as the UI. When changing it,
@@ -382,6 +384,9 @@ this file's roadmap so the source of truth stays in sync.
   when prepending history, and do not rescan the rest of a turn per item when
   grouping rows. Pagination failures require an explicit retry instead of a
   scroll-triggered request loop.
+  Steering messages can split one physical turn into several work groups:
+  show its total duration once, and animate only its current active group.
+  Missing duration is not evidence of a running turn.
 - Render the initial history before optional saved configuration and model
   discovery finish. Late metadata must not overwrite a user's new selection.
   Timeline selection jumps directly to the selected turn; only the latest
@@ -395,6 +400,11 @@ this file's roadmap so the source of truth stays in sync.
   endpoint compatible, but never use it for a new client's normal monitoring.
   Cache lifecycle scan positions for append-only rollouts so polling does not
   repeatedly scan hundreds of MiB; invalidate on replacement or truncation.
+- Discover running sessions in the background via `/sessions?running_only=true`.
+  Probe ownership in a batch and read lifecycle data only for held files.
+  Polls must not overlap; preserve status across transient failures and give
+  newer app-server events precedence over an older snapshot. Unopened sessions
+  must enter and leave the Active section automatically on desktop and mobile.
 - Negotiate Zstd/Gzip for host HTTP responses and permessage-deflate for
   app-server WebSockets. Compression is optional and requires peer support;
   keep uncompressed peers compatible and never buffer SSE just to compress it.

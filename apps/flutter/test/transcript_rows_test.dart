@@ -4,6 +4,23 @@ import 'package:pocket_codex/src/screens/app_session/transcript_model.dart';
 import 'package:pocket_codex/src/screens/app_session/transcript_rows.dart';
 
 void main() {
+  test('a partial next turn cannot swallow the previous final answer', () {
+    final reply = TranscriptItem(
+      id: 'reply',
+      type: 'agentMessage',
+      turnId: 'old',
+    );
+    final rows = buildTranscriptRows([
+      TranscriptItem(id: 'old-tool', type: 'commandExecution', turnId: 'old'),
+      reply,
+      TranscriptItem(id: 'new-tool', type: 'commandExecution', turnId: 'new'),
+    ]);
+    expect(rows, hasLength(3));
+    expect(rows[1], same(reply));
+    expect((rows.first as TurnWork).items.single.id, 'old-tool');
+    expect((rows.last as TurnWork).items.single.id, 'new-tool');
+  });
+
   test('a long preamble is grouped in one linear pass', () {
     final items = [
       TranscriptItem(id: 'user', type: 'userMessage'),

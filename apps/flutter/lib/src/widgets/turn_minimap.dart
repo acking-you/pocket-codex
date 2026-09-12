@@ -457,7 +457,7 @@ class _TurnMinimapState extends State<TurnMinimap> {
                 : _kTickWidth,
             decoration: BoxDecoration(
               color: i == highlighted
-                  ? scheme.onSurface
+                  ? scheme.primary
                   : scheme.onSurface.withValues(
                       alpha: scheme.brightness == Brightness.dark ? 0.15 : 0.25,
                     ),
@@ -545,11 +545,11 @@ class _TurnPreviewCard extends StatelessWidget {
       width: width,
       padding: const EdgeInsets.fromLTRB(12, 10, 12, 11),
       decoration: BoxDecoration(
-        color: surfacePanel(scheme),
+        color: surfacePreview(scheme),
         borderRadius: BorderRadius.circular(kPanelRadius),
         // A hairline as well as a shadow: this floats over prose, where a
         // shadow alone leaves a light card on a light page with no edge.
-        border: Border.all(color: scheme.outlineVariant),
+        border: Border.all(color: scheme.outline),
         boxShadow: panelShadow(scheme, blur: 18),
       ),
       child: Column(

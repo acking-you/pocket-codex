@@ -278,10 +278,17 @@ struct TranscriptResponse {
 }
 
 /// List the remote host's local sessions over its meta tunnel.
-pub fn sessions(service_key: &str) -> Result<Vec<LocalSession>> {
-    let url = endpoint(service_key, &["sessions"])?;
+pub fn sessions(service_key: &str, running_only: bool) -> Result<Vec<LocalSession>> {
+    let mut url = endpoint(service_key, &["sessions"])?;
+    if running_only {
+        url.query_pairs_mut().append_pair("running_only", "true");
+    }
     let resp: SessionsResponse = runtime::runtime().block_on(get_json(url))?;
-    Ok(resp.sessions)
+    Ok(resp
+        .sessions
+        .into_iter()
+        .filter(|session| !running_only || session.safety == "ownedRunning")
+        .collect())
 }
 
 /// Inspect one remote session's liveness + would-be takeover targets.

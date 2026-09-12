@@ -335,6 +335,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// Anchors the environment-info popover to the app-bar button.
   final MenuController _envMenu = MenuController();
   List<ThreadMeta> _threads = const [];
+  final Map<String, ThreadMeta> _discoveredThreads = {};
 
   /// Cold-open loads still waiting to succeed → attempts spent so far, plus
   /// each one's pending timer. A key present means "not settled yet"; the
@@ -426,10 +427,12 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   String? _firstTurnId;
   final Map<Key, GlobalKey> _rowAnchors = {};
   List<Object>? _cachedRows;
+  TurnWork? _lastWork;
   List<(TranscriptItem, String, String)> _rowSources = const [];
   // True while an older page (or a single turn's items) is in flight, so a
   // scroll frame can't queue the same fetch twice.
   bool _loadingOlder = false;
+  (String?, bool)? _historyTarget;
   Future<void>? _historyLoad;
   int _historyGeneration = 0;
   int _turnNavigation = 0;
@@ -576,6 +579,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       sequentialIds: _sequentialHistoryIds,
     );
     final keys = rows.map(_rowKey).toSet();
+    _lastWork = rows.whereType<TurnWork>().lastOrNull;
     _rowAnchors.removeWhere((key, _) => !keys.contains(key));
     return _cachedRows = rows;
   }
@@ -619,6 +623,23 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     // (text paste still works — the handler never consumes the event).
     if (_isDesktop) HardwareKeyboard.instance.addHandler(_onHardwareKey);
     _subscribe();
+    ref.listenManual(runningSessionInventoryProvider(widget.serviceKey), (
+      _,
+      next,
+    ) {
+      final sessions = next.valueOrNull?.sessions;
+      if (!mounted || sessions == null || sessions.isEmpty) return;
+      setState(() {
+        for (final session in sessions) {
+          _discoveredThreads[session.threadId] = ThreadMeta(
+            id: session.threadId,
+            preview: session.preview,
+            cwd: session.cwd ?? '',
+            updatedAt: session.updatedAt,
+          );
+        }
+      });
+    }, fireImmediately: true);
     if (_threadId != null) _resumeAndLoad();
     _loadThreads();
     // Periodically verify the connection is alive and auto-reconnect if not, so
@@ -1376,6 +1397,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     setState(() {
       _loadingOlder = true;
       _historyError = false;
+      _historyTarget = (turnId, loadMore);
     });
     return _historyLoad = _fetchHistory(
       tid,
@@ -4780,6 +4802,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   Widget _transcriptRow(Object row) {
     if (row is HistoryGap) {
       final l10n = AppLocalizations.of(context);
+      final targeted = _historyTarget == (row.turnId, row.continuation);
+      final loading = _loadingOlder && targeted;
+      final failed = _historyError && targeted;
       return SizedBox(
         height: 44,
         child: Center(
@@ -4791,13 +4816,13 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
             key: Key('history-gap-${row.turnId}'),
             onPressed: _loadingOlder ? null : () => _loadGap(row),
             icon: Icon(
-              _historyError ? Icons.refresh_rounded : Icons.more_horiz_rounded,
+              failed ? Icons.refresh_rounded : Icons.unfold_more_rounded,
               size: 18,
             ),
             label: Text(
-              _loadingOlder
+              loading
                   ? l10n.historyLoading
-                  : _historyError
+                  : failed
                   ? l10n.historyRetry
                   : l10n.historyGap,
             ),
@@ -4808,7 +4833,19 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     // Group identity stays stable as streaming appends items, preserving the
     // measured row and its expanded state.
     if (row is TurnWork) {
-      return TurnWorkCard(key: _rowKey(row), work: row);
+      final activeTurn =
+          _turnId ??
+          _turnSummaries.lastOrNull?.turnId ??
+          _items.lastOrNull?.turnId;
+      return TurnWorkCard(
+        key: _rowKey(row),
+        work: row,
+        active:
+            (_streaming || _externalWriterRunning) &&
+            identical(row, _lastWork) &&
+            row.items.last.turnId == activeTurn &&
+            _items.lastOrNull?.isUser == false,
+      );
     }
     if (row is ActivityGroup) {
       return GroupedActivityCard(key: _rowKey(row), group: row);
@@ -5479,9 +5516,17 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     // Filter by the search query, then bucket by recency: running threads go to
     // "Active", today's to "Today", and the rest to "Earlier".
     final q = _convQuery.trim().toLowerCase();
+    final known = {for (final thread in _threads) thread.id: thread};
+    for (final thread in _discoveredThreads.values) {
+      if (widget.home || _cwd == null || _cwd!.isEmpty || thread.cwd == _cwd) {
+        known.putIfAbsent(thread.id, () => thread);
+      }
+    }
+    final conversations = known.values.toList()
+      ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
     final filtered = q.isEmpty
-        ? _threads
-        : _threads
+        ? conversations
+        : conversations
               .where(
                 (t) =>
                     // A renamed conversation must be findable by the name the
@@ -6333,8 +6378,13 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       ),
       child: Material(
         key: Key('conv-tile-${thread.id}'),
-        color: selected ? scheme.surfaceBright : Colors.transparent,
-        borderRadius: BorderRadius.circular(kControlRadius),
+        color: selected ? surfaceSelection(scheme) : Colors.transparent,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(kControlRadius),
+          side: BorderSide(
+            color: selected ? selectionBorder(scheme) : Colors.transparent,
+          ),
+        ),
         child: InkWell(
           mouseCursor: clickable,
           borderRadius: BorderRadius.circular(kControlRadius),
@@ -6407,10 +6457,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     required VoidCallback onTap,
   }) {
     final scheme = Theme.of(context).colorScheme;
-    final fg = selected ? scheme.onPrimaryContainer : scheme.onSurface;
-    final muted = selected
-        ? scheme.onPrimaryContainer.withValues(alpha: 0.75)
-        : scheme.onSurfaceVariant;
+    final fg = scheme.onSurface;
+    final muted = scheme.onSurfaceVariant;
     final cleaned = previewWithoutFileRefs(
       thread.preview,
       l10n.fileOnlyMessage,
@@ -6441,8 +6489,13 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       padding: const EdgeInsets.symmetric(vertical: 1),
       child: Material(
         key: Key('activity-tile-${thread.id}'),
-        color: selected ? scheme.primaryContainer : Colors.transparent,
-        borderRadius: BorderRadius.circular(kControlRadius),
+        color: selected ? surfaceSelection(scheme) : Colors.transparent,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(kControlRadius),
+          side: BorderSide(
+            color: selected ? selectionBorder(scheme) : Colors.transparent,
+          ),
+        ),
         child: InkWell(
           mouseCursor: clickable,
           borderRadius: BorderRadius.circular(kControlRadius),

@@ -528,6 +528,11 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
+  String turnActivityCount(int count) {
+    return '$count steps';
+  }
+
+  @override
   String completedAt(String time) {
     return 'Completed at $time';
   }

@@ -565,8 +565,13 @@ Future<ForceResumeReportDto> appForceResume({
 /// behind `service_key` via its meta tunnel (loopback when this app is the
 /// host, a relay subscription when remote). Lets a phone see a desktop host's
 /// sessions — including those owned by another codex client.
-Future<List<LocalSessionDto>> metaSessions({required String serviceKey}) =>
-    RustLib.instance.api.crateApiBridgeMetaSessions(serviceKey: serviceKey);
+Future<List<LocalSessionDto>> metaSessions({
+  required String serviceKey,
+  bool? runningOnly,
+}) => RustLib.instance.api.crateApiBridgeMetaSessions(
+  serviceKey: serviceKey,
+  runningOnly: runningOnly,
+);
 
 /// Remote analogue of [`app_session_liveness`].
 Future<SessionLivenessDto> metaSessionLiveness({

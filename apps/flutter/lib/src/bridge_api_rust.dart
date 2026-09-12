@@ -721,8 +721,14 @@ class RustBridgeApi implements BridgeApi {
   // --- Remote (meta service) sessions + per-thread config ---
 
   @override
-  Future<List<LocalSession>> metaSessions(String serviceKey) async {
-    final list = await frb.metaSessions(serviceKey: serviceKey);
+  Future<List<LocalSession>> metaSessions(
+    String serviceKey, {
+    bool runningOnly = false,
+  }) async {
+    final list = await frb.metaSessions(
+      serviceKey: serviceKey,
+      runningOnly: runningOnly,
+    );
     return list
         .map(
           (s) => LocalSession(
