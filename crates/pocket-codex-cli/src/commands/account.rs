@@ -26,6 +26,15 @@ use pocket_codex_core::{
 
 use crate::commands::ui;
 
+// Upstream protocol dependencies also enable reqwest's native TLS backend.
+// Select Rustls explicitly so mobile clients retain bundled public trust roots.
+fn http_client() -> Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .use_rustls_tls()
+        .build()
+        .context("building account HTTP client")
+}
+
 /// Compile-time default backend host, overridable at build time via the
 /// `POCKET_CODEX_BACKEND_HOST` env var (the release pipeline injects the repo's
 /// configured server). An empty/unset value falls back to the bundled default.
@@ -77,7 +86,7 @@ pub(crate) async fn login(backend_flag: Option<&str>, web: bool) -> Result<()> {
 async fn login_device(backend_flag: Option<&str>) -> Result<()> {
     let mut config = Config::load()?;
     let base = backend_base(backend_flag, &config);
-    let client = reqwest::Client::new();
+    let client = http_client()?;
 
     let start: DeviceStartResponse = client
         .post(format!("{base}/auth/device/start"))
@@ -196,7 +205,7 @@ fn next_poll_interval_after_slow_down(
 async fn login_web(backend_flag: Option<&str>) -> Result<()> {
     let mut config = Config::load()?;
     let base = backend_base(backend_flag, &config);
-    let client = reqwest::Client::new();
+    let client = http_client()?;
 
     // A loopback listener on an ephemeral port catches the final redirect. GitHub
     // never sees this URL — only the backend's callback is registered there; the
@@ -378,13 +387,15 @@ pub(crate) async fn logout() -> Result<()> {
     let mut config = Config::load()?;
     let base = backend_base(None, &config);
     if let Some(refresh_token) = config.account_refresh_token() {
-        let _ = reqwest::Client::new()
-            .post(format!("{base}/auth/logout"))
-            .json(&LogoutRequest {
-                refresh_token: refresh_token.to_string(),
-            })
-            .send()
-            .await;
+        if let Ok(client) = http_client() {
+            let _ = client
+                .post(format!("{base}/auth/logout"))
+                .json(&LogoutRequest {
+                    refresh_token: refresh_token.to_string(),
+                })
+                .send()
+                .await;
+        }
     }
     config.clear_account();
     config.save()?;
@@ -400,7 +411,7 @@ pub(crate) async fn status() -> Result<()> {
         Mode::Account => {
             let base = backend_base(None, &config);
             let token = valid_token(&mut config, &base).await?;
-            let me: MeResponse = reqwest::Client::new()
+            let me: MeResponse = http_client()?
                 .get(format!("{base}/v1/me"))
                 .bearer_auth(&token)
                 .send()
@@ -476,7 +487,7 @@ async fn refresh_session(config: &mut Config, base: &str) -> Result<String> {
         .account_refresh_token()
         .ok_or_else(|| anyhow!("not signed in; run `pocket-codex login`"))?
         .to_string();
-    let resp = reqwest::Client::new()
+    let resp = http_client()?
         .post(format!("{base}/auth/refresh"))
         .json(&RefreshRequest {
             refresh_token,
@@ -519,7 +530,7 @@ pub(crate) async fn fetch_relay_credential(
     base: &str,
 ) -> Result<RelayCredentialResponse> {
     let token = valid_token(config, base).await?;
-    let resp = reqwest::Client::new()
+    let resp = http_client()?
         .get(format!("{base}/v1/relay"))
         .bearer_auth(&token)
         .send()

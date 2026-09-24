@@ -99,6 +99,7 @@ impl Auth {
         github: impl FnOnce(reqwest::Client, String) -> GitHub,
     ) -> Result<Self> {
         let http = reqwest::Client::builder()
+            .use_rustls_tls()
             .user_agent("pocket-codex")
             // Bound every GitHub call so a slow/black-holing upstream can't pin a
             // backend request (and its connection) indefinitely.

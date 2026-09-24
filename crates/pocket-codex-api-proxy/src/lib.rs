@@ -121,7 +121,7 @@ pub async fn serve(listener: TcpListener, proxy: Option<String>) -> Result<()> {
         },
     };
 
-    let mut client_builder = Client::builder();
+    let mut client_builder = Client::builder().use_rustls_tls();
     if let Some(raw) = proxy_url.as_deref() {
         let proxy = reqwest::Proxy::all(raw)
             .with_context(|| format!("building reqwest proxy from `{raw}`"))?;
