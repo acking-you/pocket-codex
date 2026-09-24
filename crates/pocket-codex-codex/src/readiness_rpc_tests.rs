@@ -39,6 +39,16 @@ async fn adopted_server(answer_list: bool, wildcard: bool) -> Result<(), Startup
                 .expect("text frame");
             let request: Value = serde_json::from_str(&text).expect("JSON request");
             assert_eq!(request["method"], method);
+            if method == "initialize" {
+                let params: codex_app_server_protocol::InitializeParams =
+                    serde_json::from_value(request["params"].clone()).expect("upstream initialize");
+                assert!(
+                    !params
+                        .capabilities
+                        .expect("capabilities")
+                        .explicit_gateway_oauth
+                );
+            }
             if method == "initialized" {
                 assert!(request.get("id").is_none());
                 continue;

@@ -147,7 +147,8 @@ fn paginated_items_keep_timing_beyond_status_shells_and_on_later_reads() {
         })
         .collect();
     let entry = |id| {
-        json!({"turnId": format!("t{id}"), "item": {
+        json!({"turnId": format!("t{id}"),
+            "startedAtMs": 500_000, "completedAtMs": 500_010, "item": {
             "id": format!("a{id}"), "type": "agentMessage", "text": "answer"
         }})
     };
@@ -262,6 +263,30 @@ fn resume_requests_metadata_and_retains_the_runtime_configuration() {
             .as_deref(),
         Some("test-model")
     );
+    runtime::runtime().block_on(peer).expect("peer");
+}
+
+#[test]
+fn resume_refreshes_modes_but_legacy_omission_keeps_the_last_mode() {
+    runtime::init(std::env::temp_dir()).expect("init runtime");
+    let responses = vec![
+        ("thread/resume", json!({"collaborationMode": {"mode": "plan"}})),
+        ("thread/resume", json!({"collaborationMode": {"mode": "default"}})),
+        ("thread/resume", json!({"thread": {"id": "thread"}})),
+        ("thread/resume", json!({"collaborationMode": null})),
+    ];
+    let (client, peer) = mock_client(responses);
+    let session = TestSession::new(client);
+    for expected in [Some("plan"), Some("default"), Some("default"), None] {
+        thread_resume(&session.0, "thread").expect("resume");
+        assert_eq!(
+            thread_runtime_config(&session.0, "thread")
+                .expect("config")
+                .collaboration_mode
+                .as_deref(),
+            expected
+        );
+    }
     runtime::runtime().block_on(peer).expect("peer");
 }
 

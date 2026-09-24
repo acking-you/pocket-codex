@@ -44,11 +44,15 @@ class ResolvedImage {
 /// Resolve wire URLs into renderable attachments, decoding each base64
 /// payload exactly once (decoding per rebuild would jank the list).
 /// An undecodable data URL becomes a `broken` placeholder (kept, not dropped);
-/// non-data URLs become host-path chips.
+/// Opaque `codex-file:` references cannot be downloaded through app-server;
+/// keep a placeholder without attempting a host filesystem read.
+/// Other non-data URLs become host-path chips.
 List<ResolvedImage> resolveImageUrls(List<String> urls) {
   final out = <ResolvedImage>[];
   for (final url in urls) {
-    if (url.startsWith('data:')) {
+    if (url.startsWith('codex-file:')) {
+      out.add(ResolvedImage._(broken: true));
+    } else if (url.startsWith('data:')) {
       final bytes = decodeImageDataUrl(url);
       out.add(
         bytes != null
