@@ -1654,7 +1654,6 @@ void main() {
     // The host restarts and now HAS history — exactly the case that left the
     // pane empty: the app listed once at startup against a host with no data
     // (or no connection), and nothing re-listed afterwards.
-    await api.appDisconnect('pcx:lb7666:app:default');
     api.appThreads.add(
       ThreadMeta(
         id: 'a1',
@@ -1664,11 +1663,39 @@ void main() {
       ),
     );
 
-    // The health timer notices the dead socket and reconnects.
+    await api.appDisconnect('pcx:lb7666:app:default');
+    // The event stream or health timer notices the dead socket and reconnects.
     await t.pump(const Duration(seconds: 13));
     await t.pumpAndSettle();
     expect(find.byKey(const Key('conv-tile-a1')), findsOneWidget);
   });
+
+  testWidgets(
+    'A slow sidebar does not hold a restored conversation reconnecting',
+    (t) async {
+      const service = 'pcx:lb7666:app:default';
+      final api = FakeBridgeApi(
+        config: const ConfigInfo(relay: 'relay:7666', hasKey: true),
+      );
+      await api.appConnect(service, 28080);
+      await t.pumpWidget(
+        host(const AppSessionScreen(serviceKey: service), api),
+      );
+      await t.pumpAndSettle();
+      final list = Completer<void>();
+      api.threadListGate = list.future;
+      await api.appDisconnect(service);
+      await t.pump();
+      await t.pump(const Duration(seconds: 13));
+      await t.pumpAndSettle();
+      expect(api.appIsConnected(service), isTrue);
+      expect(find.text('就绪'), findsOneWidget);
+      expect(list.isCompleted, isFalse);
+      list.complete();
+      await t.pumpAndSettle();
+      await t.pumpWidget(const SizedBox());
+    },
+  );
 
   testWidgets('A reconnect stays disconnected when the first RPC times out', (
     t,
@@ -1713,7 +1740,7 @@ void main() {
         id: 'a1',
         preview: 'alpha one',
         cwd: '/work/alpha',
-        updatedAt: at(const Duration(minutes: 5)),
+        updatedAt: at(Duration.zero),
       ),
       // Comfortably inside yesterday whatever time the test runs at.
       ThreadMeta(
@@ -5451,6 +5478,65 @@ void main() {
       expect(t.takeException(), isNull);
     },
   );
+
+  for (final recovery in ['heartbeat', 'reconnect']) {
+    testWidgets('monitor retries missed history after $recovery', (t) async {
+      const service = 'pcx:lb7666:app:default';
+      const thread = 'watched';
+      final api =
+          FakeBridgeApi(
+              config: const ConfigInfo(relay: 'relay:7666', hasKey: true),
+            )
+            ..metadataOnlyFollow = true
+            ..appThreadResumeError = StateError(
+              'thread already has an active writer',
+            );
+      await api.appConnect(service, 28080);
+      await t.pumpWidget(
+        host(
+          const AppSessionScreen(serviceKey: service, threadId: thread),
+          api,
+        ),
+      );
+      await t.pumpAndSettle();
+      final pending = Completer<ThreadHistory>();
+      api.pendingReads[thread] = [pending.future];
+      final update = SessionFollowUpdate(
+        liveness: await api.appSessionLiveness(thread),
+        items: const [],
+        historyRevision: 'missed',
+      );
+      api.pushMetaSessionUpdate(thread, update);
+      await t.pump();
+      await t.pump(const Duration(seconds: 1));
+      pending.completeError(StateError('app-server connection closed'));
+      await t.pumpAndSettle();
+      api.readResult = const ThreadHistory(
+        items: [
+          ThreadItem(
+            id: 'recovered',
+            itemType: 'agentMessage',
+            title: '',
+            text: 'Recovered monitor content',
+            turnId: 'turn',
+          ),
+        ],
+        running: false,
+      );
+      if (recovery == 'heartbeat') {
+        // A retry must not depend on the rollout changing again.
+        api.pushMetaSessionUpdate(thread, update);
+      } else {
+        await api.appDisconnect(service);
+      }
+      await t.pump();
+      await t.pump(const Duration(seconds: 13));
+      await t.pumpAndSettle();
+      expect(find.text('Recovered monitor content'), findsOneWidget);
+      expect(find.text('连接已断开'), findsNothing);
+      await t.pumpWidget(const SizedBox());
+    });
+  }
 
   testWidgets('monitor history renders before the ownership probe completes', (
     t,

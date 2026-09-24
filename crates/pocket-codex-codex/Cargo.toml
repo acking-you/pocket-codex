@@ -32,13 +32,5 @@ nix = { workspace = true }
 chrono = { workspace = true }
 directories = { workspace = true }
 
-# Upstream wire types only. The app-server always runs as an external process.
-codex-app-server-protocol = { path = "../../deps/codex/codex-rs/app-server-protocol" }
-
-[target.'cfg(any(target_env = "musl", target_os = "android"))'.dependencies]
-# Protocol support crates require native-tls. Cross targets have no system
-# OpenSSL, so compile and statically link it with the target C toolchain.
-native-tls = { version = "0.2", features = ["vendored"] }
-
 [dev-dependencies]
 tempfile = "3"

@@ -66,3 +66,30 @@ class AsyncQuestionPrompt {
         '${questions[index].title}\n${answer.join('\n')}',
   ].join('\n\n');
 }
+
+/// Display a historical question answer without exposing its transport envelope.
+/// Unknown or malformed messages retain their original text.
+String displayAsyncQuestionReply(String raw) {
+  const start = '<send_user_message_question_reply>';
+  const end = '</send_user_message_question_reply>';
+  final text = raw.trim();
+  if (!text.startsWith(start) || !text.endsWith(end)) return raw;
+  try {
+    final data = jsonDecode(
+      text.substring(start.length, text.length - end.length),
+    );
+    if (data is! List || data.isEmpty) return raw;
+    final answers = <String>[];
+    for (final item in data) {
+      if (item is! Map ||
+          item['question'] is! String ||
+          item['answer'] is! String) {
+        return raw;
+      }
+      answers.add('${item['question']}\n${item['answer']}');
+    }
+    return answers.join('\n\n');
+  } catch (_) {
+    return raw;
+  }
+}

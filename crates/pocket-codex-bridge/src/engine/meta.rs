@@ -313,7 +313,14 @@ pub async fn follow_session<F>(service_key: &str, thread_id: &str, mut on_update
 where
     F: FnMut(SessionFollowUpdate) -> bool,
 {
-    let mut url = endpoint(service_key, &["sessions", thread_id, "follow"])?;
+    // Transport resolution and tunnel readiness use the synchronous FRB path.
+    // Keep their block_on calls off the async worker that consumes the SSE body.
+    let key = service_key.to_owned();
+    let thread = thread_id.to_owned();
+    let mut url =
+        tokio::task::spawn_blocking(move || endpoint(&key, &["sessions", &thread, "follow"]))
+            .await
+            .context("resolving session follow endpoint")??;
     url.query_pairs_mut().append_pair("metadata_only", "true");
     let response = tokio::time::timeout(META_TIMEOUT, stream_client().get(url.clone()).send())
         .await
@@ -595,6 +602,50 @@ mod tests {
         assert_eq!(meta_key_of("pcx:dev:meta:y").unwrap(), "pcx:dev:meta:y");
         // A non-pocket-codex key is rejected rather than silently mis-derived.
         assert!(meta_key_of("not-a-key").is_err());
+    }
+
+    #[test]
+    fn remote_follow_setup_returns_errors_without_panicking_the_stream_task() {
+        super::super::runtime::init(std::env::temp_dir()).expect("test runtime");
+        runtime::runtime().block_on(async {
+            let task = tokio::spawn(async {
+                follow_session("pcx:unconfigured:app:test", "test", |_| false).await
+            });
+            // Even an unconfigured remote must report an error through the stream,
+            // instead of panicking while recursively entering the Tokio runtime.
+            let outcome = tokio::time::timeout(Duration::from_secs(3), task)
+                .await
+                .expect("unconfigured transport should fail locally");
+            assert!(outcome.is_ok(), "remote follow initialization panicked: {outcome:?}");
+        });
+    }
+
+    #[test]
+    #[ignore = "manual: PCX_SUPPORT_DIR, PCX_FOLLOW_SERVICE and PCX_FOLLOW_THREAD select a live \
+                host"]
+    fn real_remote_follow_remains_open_and_receives_updates() {
+        let support = std::env::var("PCX_SUPPORT_DIR").expect("support dir");
+        let service = std::env::var("PCX_FOLLOW_SERVICE").expect("service");
+        let thread = std::env::var("PCX_FOLLOW_THREAD").expect("thread");
+        runtime::init(support.into()).expect("init");
+        runtime::runtime().block_on(async {
+            let start = std::time::Instant::now();
+            let mut updates = 0;
+            tokio::time::timeout(
+                Duration::from_secs(90),
+                follow_session(&service, &thread, |event| {
+                    assert!(event.history_revision.is_some());
+                    assert!(event.items.is_empty());
+                    updates += 1;
+                    eprintln!("follow update={updates} elapsed_ms={}", start.elapsed().as_millis());
+                    start.elapsed() < Duration::from_secs(45)
+                }),
+            )
+            .await
+            .expect("follow kept delivering")
+            .expect("follow completed without a disconnect");
+            assert!(updates >= 4);
+        });
     }
 
     #[test]

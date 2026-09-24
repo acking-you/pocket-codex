@@ -68,8 +68,8 @@ from its dedicated `pocket-codex` Git branch; `Cargo.lock` pins the exact commit
 and its registry dependencies. No pb-mapper, kanal, or uni-stream submodules
 or local dependency patches are needed.
 
-`vendor/pagable` is an excluded third-party crate patched through Cargo to fix
-the registry release's ARMv7 size assertion. Keep its runtime source unchanged;
+`vendor/pagable` retains the former ARMv7 patch for provenance. It is excluded
+and is no longer a dependency or Cargo patch. Keep its runtime source unchanged;
 the provenance and patch scope are recorded in its `README.pocket-codex.md`.
 Changes under `vendor/` require the full Rust CI gate and must stay outside
 first-party formatting and lint rewrites.
@@ -81,7 +81,7 @@ Shared / host side:
 | Crate                       | Owns                                                                                           |
 | --------------------------- | ---------------------------------------------------------------------------------------------- |
 | `pocket-codex-core`         | configuration schema, on-disk `state.toml`, well-known paths, error types, `service::{ServiceId, ServiceKind, sanitize_component, default_device_id}` for `pcx:<device>:<kind>:<name>` relay keys — small, dependency-light |
-| `pocket-codex-codex`        | spawning / supervising / inspecting the external `codex app-server` child process, upstream protocol types and compatible JSON-RPC envelopes |
+| `pocket-codex-codex`        | spawning / supervising / inspecting the external `codex app-server` child process, compatible JSON-RPC wire envelopes |
 | `pocket-codex-pb`           | async wrappers around the Git-pinned `pb-mapper` client SDK: `RelaySession` (address + credential), register / subscribe / status, `publish` (and the one name-conflict failure a caller must not retry), admin credential issuance, and credential keep-alive |
 | `pocket-codex-api-proxy`    | local Responses API proxy: forwards `/v1/responses` (HTTP + WS) to ChatGPT's Codex backend, reusing the host's `codex login`; shared by the CLI worker and the in-app host |
 | `pocket-codex-host-svc`     | host-side meta service — remote-viewable codex sessions, per-thread config, attachment upload — published on the relay as a third `meta:<name>` service |
@@ -340,7 +340,8 @@ The order below is our current best guess; it is not a contract.
 7. **External Codex only (2026-09-13).** All desktop hosts use an installed
    external `codex`. The former embedded runtime is removed from builds and
    packaging; **Built-in engine** is a disabled, unimplemented placeholder.
-   Only upstream protocol crates may be direct Codex dependencies (see §8.1).
+   The bridge uses local wire envelopes: upstream protocol crates also pull in
+   runtime support and are not linked into application artifacts (see §8.1).
 8. **App-server protocol sync (2026-09-24).** Codex fork merged upstream main
    `c098f97e5` at `c08819510`; CLI and UI share the acknowledged initialization handshake.
    Resume responses restore collaboration mode, opaque `fileId` image references
@@ -350,9 +351,14 @@ The order below is our current best guess; it is not a contract.
    asynchronous questions with `turn/steer` while running or `turn/start` when idle.
    **Strongly-typed JSON-RPC client (next).** Replace the
    `serde_json::Value` surface in `pocket-codex-codex::protocol` with
-   the upstream `codex-app-server-protocol` types so the Flutter UI
-   gets compile-time-checked methods.
-9. **Flutter UI evolution.** `apps/flutter` consumes the bridge via
+   local types verified against the upstream wire schema, without importing
+   its runtime dependency graph.
+9. **Mobile footprint and connection recovery (2026-09-25).** Keep protocol
+   envelopes local to avoid importing the upstream protocol crate's interpreter,
+   database, and TLS dependencies. Resolve remote follow tunnels off the async
+   worker; preserve failed monitoring refreshes for heartbeat/reconnect recovery.
+   Open bounded 20-item tails, with older history available through normal pages.
+10. **Flutter UI evolution.** `apps/flutter` consumes the bridge via
    `flutter_rust_bridge`. P1 shipped: onboarding (relay+key, `pcx1:`
    import/export, persisted to `config.toml` 0600), service discovery,
    API-service subscribe (local OpenAI-compatible endpoint), settings,

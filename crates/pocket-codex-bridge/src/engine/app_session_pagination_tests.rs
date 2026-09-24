@@ -86,6 +86,73 @@ fn mock_client(
 }
 
 #[test]
+fn initial_tail_is_small_and_continuation_keeps_every_item() {
+    runtime::init(std::env::temp_dir()).expect("runtime");
+    let (client, peer) = runtime::runtime().block_on(async {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let url = format!("ws://{}", listener.local_addr().expect("addr"));
+        let peer = tokio::spawn(async move {
+            let mut ws = accept_async_with_config(
+                listener.accept().await.expect("accept").0,
+                Some(WebSocketConfig::default()),
+            )
+            .await
+            .expect("ws");
+            for _ in 0..4 {
+                let request: Value = serde_json::from_str(
+                    &ws.next()
+                        .await
+                        .expect("request")
+                        .expect("frame")
+                        .into_text()
+                        .expect("text"),
+                )
+                .expect("json");
+                let result = if request["method"] == "thread/items/list" {
+                    let offset = request["params"]["cursor"]
+                        .as_str()
+                        .and_then(|value| value.parse::<usize>().ok())
+                        .unwrap_or(0);
+                    let limit = request["params"]["limit"].as_u64().expect("limit") as usize;
+                    let end = (offset + limit).min(21);
+                    let items: Vec<_> = (offset..end)
+                        .map(|index| {
+                            json!({
+                                "turnId": "turn", "item": {"id": format!("item-{}", 20-index),
+                                "type": "agentMessage", "text": "payload".repeat(512)}
+                            })
+                        })
+                        .collect();
+                    json!({"data": items, "nextCursor": (end < 21).then(|| end.to_string())})
+                } else {
+                    json!({"data": [{"id": "turn", "status": "completed", "items": []}]})
+                };
+                ws.send(Message::text(json!({"id": request["id"], "result": result}).to_string()))
+                    .await
+                    .expect("reply");
+            }
+            ws
+        });
+        (Arc::new(AppClient::connect(&url).await.expect("client").0), peer)
+    });
+    let session = TestSession::new(client.clone());
+    let tail = load_paginated_window(&client, &session.0, "thread").expect("tail");
+    assert_eq!(tail.items.len(), 20);
+    assert!(tail.has_older);
+    let older = thread_older_page(&session.0, "thread").expect("older");
+    assert_eq!(older.items.len(), 1);
+    assert!(!older.has_older);
+    let ids: HashSet<_> = older
+        .items
+        .iter()
+        .chain(&tail.items)
+        .map(|item| &item.id)
+        .collect();
+    assert_eq!(ids.len(), 21);
+    runtime::runtime().block_on(peer).expect("peer");
+}
+
+#[test]
 fn a_single_long_turn_keeps_its_older_item_pages_reachable() {
     let history = load_window(json!("older-items"));
     assert_eq!(history.skeletons.len(), 1);

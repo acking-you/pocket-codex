@@ -215,6 +215,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
 
   final List<AppEvent> _approvals = []; // pending command-approval prompts
   StreamSubscription<AppEvent>? _sub;
+  int _subscriptionEpoch = 0;
 
   String? _threadId;
   String? _cwd;
@@ -1212,6 +1213,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   }
 
   void _subscribe() {
+    final epoch = ++_subscriptionEpoch;
     _sub?.cancel();
     // Warm the quota with the subscription rather than on the first tap: the
     // sidebar shows it inline, and a popover that spins for a round-trip every
@@ -1227,8 +1229,12 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         // periodic health check.
         .listen(
           _onEvent,
-          onError: (_) => _onStreamClosed(),
-          onDone: _onStreamClosed,
+          onError: (_) {
+            if (epoch == _subscriptionEpoch) _onStreamClosed();
+          },
+          onDone: () {
+            if (epoch == _subscriptionEpoch) _onStreamClosed();
+          },
         );
   }
 
@@ -1914,8 +1920,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       if (_externalHistoryRevision != update.historyRevision) {
         _externalHistoryRevision = update.historyRevision;
         _externalHistoryDirty = true;
-        _scheduleExternalHistory(threadId, epoch);
       }
+      if (_externalHistoryDirty) _scheduleExternalHistory(threadId, epoch);
     } else if (followTail) {
       _scrollToEnd(force: true);
     }
@@ -1945,6 +1951,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     if (!current() || _externalWriterLegacy || _externalHistoryLoading) return;
     _externalHistoryLoading = true;
     _externalHistoryDirty = false;
+    var succeeded = false;
     try {
       // Keep a user-requested prepend ahead of the background tail refresh.
       if (_historyLoad != null) await _historyLoad;
@@ -1987,6 +1994,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         _error = null;
         _retry = null;
       });
+      succeeded = true;
       if (followTail) {
         _scrollToEnd(force: true);
       } else if (anchor != null) {
@@ -1994,6 +2002,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       }
     } catch (error) {
       if (current()) {
+        // Retry on the next heartbeat or reconnect, even if the revision is unchanged.
+        _externalHistoryDirty = true;
         setState(() {
           _loading = false;
           _error = friendlyError(error);
@@ -2003,7 +2013,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     } finally {
       if (current()) {
         _externalHistoryLoading = false;
-        if (_externalHistoryDirty) _scheduleExternalHistory(threadId, epoch);
+        if (succeeded && _externalHistoryDirty) {
+          _scheduleExternalHistory(threadId, epoch);
+        }
       }
     }
   }
@@ -3152,24 +3164,39 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     for (var attempt = 0; attempt < 4; attempt++) {
       if (!mounted) return;
       try {
-        // appConnect reuses a live session but reconnects a dead one; drop
-        // first to force a clean re-handshake regardless.
-        await api.appDisconnect(widget.serviceKey);
+        // Let the bridge retain a live socket if only its event subscription ended.
         await api.appConnect(widget.serviceKey, appLocalPort);
         _subscribe();
-        if (reload && _threadId != null) await _resumeAndLoad();
+        if (reload && _threadId != null) {
+          if (_externalWriterMode) {
+            _externalHistoryDirty = true;
+            await _refreshExternalHistory(_threadId!, _externalWriterEpoch);
+          } else {
+            await _resumeAndLoad();
+          }
+        }
         // Re-list too, not just the open transcript. `_loadThreads` runs once at
         // initState and is best-effort: if the host wasn't reachable then (it
         // restarted, or the app opened first), the failure was swallowed and
         // the pane stayed empty FOREVER — nothing else re-lists except sending
         // a message. A reconnect is exactly the moment the data became
         // available, so this is where it has to be retried.
-        await _loadThreads();
+        unawaited(
+          _loadThreads().then((_) {
+            if (mounted &&
+                !_reconnecting &&
+                !api.appIsConnected(widget.serviceKey)) {
+              _onStreamClosed();
+            }
+          }),
+        );
         // Same reasoning for the other cold-open loads: a reconnect is the
         // moment their data became reachable. Both are no-ops once settled —
         // the cwd seed won't override a folder the user picked, and the quota
         // just refreshes.
-        if (_openLoadRetries.containsKey(_kCwdSeed)) await _seedDefaultCwd();
+        if (_openLoadRetries.containsKey(_kCwdSeed)) {
+          unawaited(_seedDefaultCwd());
+        }
         if (_rate == null) unawaited(_loadQuota());
         _loadGit(); // the working tree may have moved on while we were away
         // Content loaders retain old data on failure. A timed-out RPC can
@@ -7664,19 +7691,35 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   }
 
   Widget _composer(AppLocalizations l10n) {
-    final scheme = Theme.of(context).colorScheme;
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
     final prefs = ref.watch(uiPrefsProvider).valueOrNull;
     final media = MediaQuery.of(context);
-    final maxHeight = math.max(
+    final inputStyle = theme.textTheme.bodyLarge!;
+    final line = TextPainter(
+      text: TextSpan(text: ' ', style: inputStyle),
+      textDirection: Directionality.of(context),
+      textScaler: media.textScaler,
+      locale: Localizations.localeOf(context),
+    );
+    // Keep one complete line and its caret visible at any system text scale.
+    final minHeight = math.max(
       28.0,
+      line.preferredLineHeight.ceilToDouble() + 2,
+    );
+    line.dispose();
+    final defaultHeight = math.max(32.0, minHeight);
+    final maxHeight = math.max(
+      minHeight,
       math.min(280.0, (media.size.height - media.viewInsets.bottom) * 0.35),
     );
-    final inputHeight = (_composerHeight ?? prefs?.composerHeight ?? 32).clamp(
-      28.0,
-      maxHeight,
-    );
+    final inputHeight =
+        (_composerHeight ?? prefs?.composerHeight ?? defaultHeight).clamp(
+          minHeight,
+          maxHeight,
+        );
     void resize(double value, {bool save = false}) {
-      setState(() => _composerHeight = value.clamp(28.0, maxHeight));
+      setState(() => _composerHeight = value.clamp(minHeight, maxHeight));
       if (save) {
         ref.read(uiPrefsProvider.notifier).setComposerHeight(_composerHeight!);
       }
@@ -7719,9 +7762,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                     label: l10n.resizeComposer,
                     value: '${inputHeight.round()}',
                     increasedValue:
-                        '${(inputHeight + 24).clamp(28, maxHeight).round()}',
+                        '${(inputHeight + 24).clamp(minHeight, maxHeight).round()}',
                     decreasedValue:
-                        '${(inputHeight - 24).clamp(28, maxHeight).round()}',
+                        '${(inputHeight - 24).clamp(minHeight, maxHeight).round()}',
                     onIncrease: () => resize(inputHeight + 24, save: true),
                     onDecrease: () => resize(inputHeight - 24, save: true),
                     child: MouseRegion(
@@ -7734,7 +7777,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                         onVerticalDragEnd: (_) => ref
                             .read(uiPrefsProvider.notifier)
                             .setComposerHeight(_composerHeight ?? inputHeight),
-                        onDoubleTap: () => resize(32, save: true),
+                        onDoubleTap: () => resize(defaultHeight, save: true),
                         child: Tooltip(
                           message: l10n.resizeComposer,
                           child: SizedBox(
@@ -7782,12 +7825,14 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                       expands: true,
                       textInputAction: TextInputAction.send,
                       onSubmitted: (_) => _submit(),
-                      style: Theme.of(context).textTheme.bodyLarge,
+                      style: inputStyle,
                       decoration: InputDecoration(
                         filled: false,
                         hintText: l10n.messageHint,
                         border: InputBorder.none,
                         isCollapsed: true,
+                        // Override the shared form-field padding inside this compact card.
+                        contentPadding: EdgeInsets.zero,
                       ),
                     ),
                   ),

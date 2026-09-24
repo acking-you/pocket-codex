@@ -1368,6 +1368,10 @@ const INITIAL_TURN_LIMIT: u32 = 5;
 /// 100, so asking for more would just be silently clamped.
 const ITEM_PAGE_LIMIT: u32 = 100;
 
+/// A small tail keeps first paint and live monitoring responsive on a relay.
+/// Older pages remain available at the normal page size.
+const INITIAL_ITEM_LIMIT: u32 = 20;
+
 /// Turns per page when fetching the rail's skeleton. Same server cap as items.
 const TURN_PAGE_LIMIT: u32 = 100;
 
@@ -1639,7 +1643,7 @@ fn load_paginated_window(
 
     // The newest items, bounded. This is what the view opens on.
     let phase = std::time::Instant::now();
-    let items_page = fetch_item_page(client, thread_id, None, None, ITEM_PAGE_LIMIT)?;
+    let items_page = fetch_item_page(client, thread_id, None, None, INITIAL_ITEM_LIMIT)?;
     tracing::debug!(
         target: "pocket_codex_bridge::history",
         "  newest items in {:?}", phase.elapsed()

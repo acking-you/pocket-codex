@@ -129,6 +129,9 @@ jobs:
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
 
+      - name: Check Android dependency boundary
+        run: python3 scripts/check_mobile_dependencies.py
+
       - name: Run tests for affected crates
         # subset -> the changed crates + their dependents; all -> the full
         # workspace. See scripts/ci_affected.py.

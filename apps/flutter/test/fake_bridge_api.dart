@@ -510,9 +510,11 @@ class FakeBridgeApi implements BridgeApi {
 
   /// Simulate a backend whose handshake works but whose first RPC kills the link.
   bool disconnectOnThreadList = false;
+  Future<void>? threadListGate;
 
   @override
   Future<List<ThreadMeta>> appThreadList(String serviceKey) async {
+    if (threadListGate != null) await threadListGate;
     if (disconnectOnThreadList) {
       _appConnected.remove(serviceKey);
       throw StateError(

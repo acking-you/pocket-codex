@@ -78,7 +78,7 @@ jobs:
             echo
             echo "**CLI** — \`pocket-codex-cli-*\`: statically linked **musl** Linux binaries (x86_64 / aarch64 / armv7 — run on any distro, no glibc dependency), plus macOS (x64 / arm64) and Windows x64."
             echo
-            echo "> Android APKs and the iOS IPA are debug-signed / unsigned (no release signing configured yet) — install for sideloading/development."
+            echo "> Android APKs use a persistent release signature from v0.2.4 onward. Older debug-signed builds cannot be upgraded in place; save your settings before uninstalling an old build. iOS remains unsigned for sideloading/development."
             if [ -n "${changelog}" ]; then
               echo
               echo "${changelog}"
@@ -544,10 +544,21 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: app-android
+      - name: Restore Android release signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE }}
+        run: |
+          test -n "$KEYSTORE_BASE64" || { echo "Android release signing key is missing"; exit 1; }
+          umask 077
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/pocket-codex-release.jks"
       - name: Build Android APKs (split per ABI)
+        env:
+          PCX_ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/pocket-codex-release.jks
+          PCX_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD }}
         working-directory: apps/flutter
         run: |
           flutter pub get
+          test -n "$PCX_ANDROID_KEYSTORE_PASSWORD" || { echo "Android signing password is missing"; exit 1; }
           flutter build apk --release --split-per-abi
       - name: Package
         shell: bash
@@ -557,9 +568,13 @@ jobs:
           tag="${GITHUB_REF_NAME//\//-}"
           mkdir -p dist
           src="build/app/outputs/flutter-apk"
+          for abi in arm64-v8a armeabi-v7a x86_64; do
+            python3 ../../scripts/verify_android_apk.py --abi "$abi" "$src/app-$abi-release.apk"
+          done
           cp "$src/app-arm64-v8a-release.apk"   "dist/pocket-codex-app-${tag}-android-arm64-v8a.apk"
           cp "$src/app-armeabi-v7a-release.apk" "dist/pocket-codex-app-${tag}-android-armeabi-v7a.apk"
           cp "$src/app-x86_64-release.apk"      "dist/pocket-codex-app-${tag}-android-x86_64.apk"
+          (cd dist && sha256sum *.apk > "pocket-codex-${tag}-android-SHA256SUMS.txt")
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}

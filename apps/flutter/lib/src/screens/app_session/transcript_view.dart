@@ -8,6 +8,7 @@ library;
 
 import 'package:flutter/material.dart';
 import 'approval_review.dart';
+import 'async_questions.dart';
 import 'approval_review_card.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart' show DateFormat;
@@ -165,7 +166,7 @@ class _MessageViewState extends State<MessageView> {
     // and we surface the files it named as attachments. Display-only — the
     // stored text, and the copy action, keep the message verbatim.
     final ide = isUser
-        ? splitIdeContext(item.text)
+        ? splitIdeContext(displayAsyncQuestionReply(item.text))
         : (text: item.text, files: const <IdeMentionedFile>[]);
     final refs = isUser
         ? splitFileRefs(ide.text)

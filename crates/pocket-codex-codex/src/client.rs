@@ -309,10 +309,10 @@ impl AppClient {
             .request(
                 "initialize",
                 serde_json::json!({
-                    "clientInfo": codex_app_server_protocol::ClientInfo {
-                        name: name.to_string(),
-                        title: Some("Pocket-Codex".to_string()),
-                        version: env!("CARGO_PKG_VERSION").to_string(),
+                    "clientInfo": {
+                        "name": name,
+                        "title": "Pocket-Codex",
+                        "version": env!("CARGO_PKG_VERSION"),
                     },
                     "capabilities": { "experimentalApi": experimental_api },
                 }),

@@ -6,8 +6,9 @@
 //! required on the wire — Codex omits it — but we tolerate either.
 //!
 //! Method payloads remain open-ended [`serde_json::Value`]s. The error
-//! payload comes from `codex-app-server-protocol`; local envelopes preserve
-//! the optional `jsonrpc` marker and the existing request-id API.
+//! envelope stays local so protocol-only clients do not link the upstream
+//! crate's transitive runtime dependencies. Its fields follow the pinned
+//! `deps/codex` schema, including optional `jsonrpc` and error data.
 
 use serde::{Deserialize, Serialize};
 
@@ -107,12 +108,32 @@ pub struct ErrorResponse {
     pub error: ErrorPayload,
 }
 
-/// JSON-RPC error object from the upstream app-server protocol.
-pub use codex_app_server_protocol::JSONRPCErrorError as ErrorPayload;
+/// JSON-RPC error object matching the upstream app-server wire schema.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ErrorPayload {
+    /// Machine-readable JSON-RPC error code.
+    pub code: i64,
+    /// Human-readable failure message.
+    pub message: String,
+    /// Optional upstream details, preserved without interpreting them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<serde_json::Value>,
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn upstream_error_envelope_preserves_optional_details() {
+        for raw in [
+            serde_json::json!({"code": -32602, "message": "invalid request"}),
+            serde_json::json!({"code": -32002, "message": "busy", "data": {"retryAfter": 3}}),
+        ] {
+            let error: ErrorPayload = serde_json::from_value(raw.clone()).expect("wire error");
+            assert_eq!(serde_json::to_value(error).expect("wire error"), raw);
+        }
+    }
 
     #[test]
     fn parse_initialize_request() {
