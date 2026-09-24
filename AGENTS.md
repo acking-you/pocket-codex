@@ -57,6 +57,7 @@ deps/
                            # our adaptations; see §8
 docs/                      # design notes, protocol references, CLI verification
 scripts/                   # install scripts, local CI, CI affected-surface gate
+vendor/pagable/             # registry source with a 32-bit size-assertion fix
 ```
 
 `Cargo.toml` is a workspace root; every crate under `crates/` is a
@@ -66,6 +67,12 @@ The Codex submodule under `deps/` is kept **out** of the workspace via the
 from its dedicated `pocket-codex` Git branch; `Cargo.lock` pins the exact commit
 and its registry dependencies. No pb-mapper, kanal, or uni-stream submodules
 or local dependency patches are needed.
+
+`vendor/pagable` is an excluded third-party crate patched through Cargo to fix
+the registry release's ARMv7 size assertion. Keep its runtime source unchanged;
+the provenance and patch scope are recorded in its `README.pocket-codex.md`.
+Changes under `vendor/` require the full Rust CI gate and must stay outside
+first-party formatting and lint rewrites.
 
 ## 3. Crate responsibilities
 

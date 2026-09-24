@@ -39,10 +39,9 @@ REPO = Path(__file__).resolve().parent.parent
 # Root files / trees whose change can affect every crate's build or lint, so
 # they force a full Rust run rather than a per-crate subset: the root manifest
 # and lockfile, rustfmt config, the cargo config, the toolchain pin, and the
-# vendored submodule trees first-party crates compile through path deps /
-# [patch] (deps/{codex,pb-mapper,kanal,uni-stream}).
+# upstream trees first-party crates compile through path deps / [patch].
 RUST_CROSS_EXACT = {"Cargo.toml", "Cargo.lock", "rustfmt.toml"}
-RUST_CROSS_PREFIX = (".cargo/", "deps/")
+RUST_CROSS_PREFIX = (".cargo/", "deps/", "vendor/")
 
 # CI infrastructure: a change here is validated end to end (full Rust + the
 # Flutter job) so a broken pipeline definition can't slip through on a narrow
@@ -235,5 +234,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-
 

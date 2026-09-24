@@ -6101,8 +6101,6 @@ checksum = "d211803b9b6b570f68772237e415a029d5a50c65d382910b879fb19d3271f94d"
 [[package]]
 name = "pagable"
 version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3658968938a4d1eaa1987e69dcd84b01fb067c5b3416dccc8d71373b6ded6821"
 dependencies = [
  "allocative",
  "anyhow",
@@ -6425,7 +6423,7 @@ dependencies = [
 
 [[package]]
 name = "pocket-codex-account-proto"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "base64 0.22.1",
  "pocket-codex-core",
@@ -6438,7 +6436,7 @@ dependencies = [
 
 [[package]]
 name = "pocket-codex-api-proxy"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "axum",
@@ -6459,7 +6457,7 @@ dependencies = [
 
 [[package]]
 name = "pocket-codex-auth"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "base64 0.22.1",
  "jsonwebtoken",
@@ -6479,7 +6477,7 @@ dependencies = [
 
 [[package]]
 name = "pocket-codex-backend"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6509,7 +6507,7 @@ dependencies = [
 
 [[package]]
 name = "pocket-codex-cli"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6539,7 +6537,7 @@ dependencies = [
 
 [[package]]
 name = "pocket-codex-codex"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "chrono",
@@ -6566,7 +6564,7 @@ dependencies = [
 
 [[package]]
 name = "pocket-codex-core"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "chrono",
@@ -6584,7 +6582,7 @@ dependencies = [
 
 [[package]]
 name = "pocket-codex-host-svc"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "axum",
@@ -6602,7 +6600,7 @@ dependencies = [
 
 [[package]]
 name = "pocket-codex-pb"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "pb-mapper",
@@ -6619,7 +6617,7 @@ dependencies = [
 
 [[package]]
 name = "pocket-codex-store"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "sqlx",
  "thiserror 2.0.18",
@@ -6630,7 +6628,7 @@ dependencies = [
 
 [[package]]
 name = "pocket_codex_bridge"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "async-trait",
