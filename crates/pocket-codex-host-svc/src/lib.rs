@@ -299,7 +299,7 @@ async fn session_follow(
             };
             let next_revision = (metadata.len(), metadata.modified().ok());
             let transcript_changed = next_revision != revision;
-            let check_liveness = tick % 3 == 0;
+            let check_liveness = tick.is_multiple_of(3);
             if !transcript_changed && !check_liveness {
                 continue;
             }
@@ -345,7 +345,7 @@ async fn session_follow(
             };
             // FRB discovers a cancelled Dart sink on the next data event.
             // A tiny metadata heartbeat also retires quiet subscriptions.
-            if encoded == last_sent && (!metadata_only || tick % 30 != 0) {
+            if encoded == last_sent && (!metadata_only || !tick.is_multiple_of(30)) {
                 continue;
             }
             last_sent.clone_from(&encoded);
