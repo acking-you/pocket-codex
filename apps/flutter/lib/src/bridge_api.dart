@@ -447,6 +447,7 @@ class ThreadHistory {
   const ThreadHistory({
     required this.items,
     required this.running,
+    this.historyEpoch,
     this.branch,
     this.cwd,
     this.tokensUsed,
@@ -469,6 +470,9 @@ class ThreadHistory {
 
   /// Whether the most recent turn is still in progress.
   final bool running;
+
+  /// Source history generation; replacement invalidates retained windows.
+  final String? historyEpoch;
 
   /// Current git branch of the thread's cwd, if it's a repo.
   final String? branch;
@@ -1031,7 +1035,22 @@ class CodexAuthStatus {
 
 /// The whole engine surface the UI is allowed to touch. One real impl wraps
 /// flutter_rust_bridge; a fake backs widget tests.
+/// Controller-wide disposable disk-cache usage.
+class HistoryCacheStatus {
+  const HistoryCacheStatus({required this.limitMb, required this.usedBytes});
+  final int limitMb;
+  final int usedBytes;
+}
+
 abstract interface class BridgeApi {
+  /// Read only local disk; cached history is display-only until synchronized.
+  Future<ThreadHistory?> appHistoryCached(String serviceKey, String threadId);
+  Future<bool> appHistorySyncPrepare(String serviceKey);
+  Future<void> appHistoryPrefetch(String serviceKey, String threadId);
+  Future<void> appHistoryFocus(String serviceKey, String? threadId);
+  Future<HistoryCacheStatus> historyCacheStatus();
+  Future<void> historyCacheSetLimit(int limitMb);
+
   /// Current persisted config.
   Future<ConfigInfo> getConfig();
 

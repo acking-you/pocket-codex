@@ -607,5 +607,21 @@
         "type": "int"
       }
     }
+  },
+  "historySyncing": "正在同步历史…",
+  "historyCachedOffline": "本地缓存 · 等待同步",
+  "historyCacheTitle": "会话缓存",
+  "historyCacheDescription": "所有主机共用的磁盘上限，单位 MB；0 表示关闭缓存。",
+  "historyCacheUsage": "已用 {used} MB · 上限 {limit} MB",
+  "historyCacheInvalid": "请输入 0 到 64000 之间的整数。",
+  "@historyCacheUsage": {
+    "placeholders": {
+      "used": {
+        "type": "String"
+      },
+      "limit": {
+        "type": "int"
+      }
+    }
   }
 }

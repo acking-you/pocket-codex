@@ -60,6 +60,27 @@ pub struct Config {
     /// load as the default (self-host / unconfigured).
     #[serde(default)]
     pub account: AccountConfig,
+
+    /// Controller-side persistent history cache, shared across remote hosts.
+    #[serde(default)]
+    pub history_cache: HistoryCacheConfig,
+}
+
+/// Capacity of the controller's disposable disk cache, separate from RAM.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct HistoryCacheConfig {
+    /// Decimal megabytes shared by transcript windows, previews and metadata.
+    /// Zero disables persistence. User-saved downloads are outside this cache.
+    pub disk_limit_mb: u32,
+}
+
+impl Default for HistoryCacheConfig {
+    fn default() -> Self {
+        Self {
+            disk_limit_mb: 512,
+        }
+    }
 }
 
 /// Which transport the client uses to reach Pocket-Codex services.

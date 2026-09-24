@@ -2362,6 +2362,7 @@ dependencies = [
  "nix",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "sysinfo",
  "thiserror 2.0.18",
  "tokio",
@@ -2375,6 +2376,7 @@ name = "pocket-codex-host-svc"
 version = "0.2.4"
 dependencies = [
  "anyhow",
+ "async-trait",
  "axum",
  "pocket-codex-codex",
  "pocket-codex-core",
@@ -2436,6 +2438,7 @@ dependencies = [
  "rustls",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tokio-rustls",
  "tokio-tungstenite 0.28.0",

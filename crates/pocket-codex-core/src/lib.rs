@@ -28,4 +28,7 @@ pub mod state;
 /// Pocket-Codex service identifiers and relay key helpers.
 pub mod service;
 
+/// Provider-independent, restart-safe history window synchronization.
+pub mod history_sync;
+
 pub use error::{Error, Result};

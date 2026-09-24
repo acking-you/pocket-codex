@@ -572,6 +572,8 @@ pub struct ThreadItemDto {
 /// A thread's recovered history + whether a turn is still running, plus the
 /// metadata the status bar / git chip seed from on open.
 pub struct ThreadHistoryDto {
+    /// Source generation used to invalidate replaced historical UI windows.
+    pub history_epoch: Option<String>,
     /// Conversation items, oldest first.
     pub items: Vec<ThreadItemDto>,
     /// Whether the most recent turn is still in progress.
@@ -1014,7 +1016,12 @@ pub fn app_thread_read(
     } else {
         app_session::thread_read_with_pages(&service_key, &thread_id, false)?
     };
-    Ok(ThreadHistoryDto {
+    Ok(history_dto(h))
+}
+
+fn history_dto(h: app_session::ThreadHistory) -> ThreadHistoryDto {
+    ThreadHistoryDto {
+        history_epoch: h.history_epoch,
         items: h.items.into_iter().map(item_dto).collect(),
         running: h.running,
         branch: h.branch,
@@ -1041,7 +1048,7 @@ pub fn app_thread_read(
                 loaded: t.loaded,
             })
             .collect(),
-    })
+    }
 }
 
 /// One page further back through a paginated thread's history.
@@ -1886,4 +1893,55 @@ pub fn account_services() -> Result<Vec<AccountServiceDto>> {
 pub fn account_deregister_service(device: String, kind: String, name: String) -> Result<()> {
     let dir = runtime::support_dir()?;
     runtime::runtime().block_on(account::deregister_service(&dir, &device, &kind, &name))
+}
+
+/// Load a display-only persisted history without contacting a host.
+pub fn app_history_cached(
+    service_key: String,
+    thread_id: String,
+) -> Result<Option<ThreadHistoryDto>> {
+    Ok(crate::engine::session_sync::cached_history(&service_key, &thread_id)?.map(history_dto))
+}
+
+/// Negotiate the independent meta history protocol before remote reads.
+pub fn app_history_sync_prepare(service_key: String) -> Result<bool> {
+    crate::engine::session_sync::prepare(&service_key)
+}
+
+/// Prefetch only a bounded running-session tail without resuming it.
+pub fn app_history_prefetch(service_key: String, thread_id: String) -> Result<()> {
+    crate::engine::session_sync::prefetch(&service_key, &thread_id)
+}
+
+/// Prioritize the current reader over background prefetch in the disk cache.
+pub fn app_history_focus(service_key: String, thread_id: Option<String>) -> Result<()> {
+    crate::engine::session_cache::set_focus(&service_key, thread_id.as_deref())
+}
+
+/// Controller-wide persistent cache capacity and actual disk usage.
+pub struct HistoryCacheStatusDto {
+    /// Shared capacity in decimal MB; zero disables persistence.
+    pub limit_mb: u32,
+    /// Bytes currently allocated to cache entries, including metadata.
+    pub used_bytes: u64,
+}
+
+/// Inspect and enforce the shared disk quota without contacting any host.
+pub fn history_cache_status() -> Result<HistoryCacheStatusDto> {
+    let cfg = config::load_config(&runtime::support_dir()?)?;
+    Ok(HistoryCacheStatusDto {
+        limit_mb: cfg.history_cache.disk_limit_mb,
+        used_bytes: crate::engine::session_cache::application_cache()?.usage()?,
+    })
+}
+
+/// Set the shared cache quota, immediately evicting cold disposable windows.
+pub fn history_cache_set_limit(limit_mb: u32) -> Result<()> {
+    anyhow::ensure!(limit_mb <= 64_000, "cache limit must be between 0 and 64000 MB");
+    let directory = runtime::support_dir()?;
+    let mut cfg = config::load_config(&directory)?;
+    cfg.history_cache.disk_limit_mb = limit_mb;
+    config::save_config(&directory, &cfg)?;
+    crate::engine::session_cache::application_cache()?.usage()?;
+    Ok(())
 }

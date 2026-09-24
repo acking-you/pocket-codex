@@ -8,5 +8,7 @@ pub mod logging;
 pub mod meta;
 pub mod runtime;
 pub mod serve;
+pub mod session_cache;
+pub mod session_sync;
 pub mod sessions;
 pub mod transport;

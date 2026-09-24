@@ -80,6 +80,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ThreadConfigDto dco_decode_box_autoadd_thread_config_dto(dynamic raw);
 
   @protected
+  ThreadHistoryDto dco_decode_box_autoadd_thread_history_dto(dynamic raw);
+
+  @protected
   ThreadRuntimeConfigDto dco_decode_box_autoadd_thread_runtime_config_dto(
     dynamic raw,
   );
@@ -110,6 +113,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   ForceResumeReportDto dco_decode_force_resume_report_dto(dynamic raw);
+
+  @protected
+  HistoryCacheStatusDto dco_decode_history_cache_status_dto(dynamic raw);
 
   @protected
   HolderDto dco_decode_holder_dto(dynamic raw);
@@ -188,6 +194,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   PlatformInt64? dco_decode_opt_box_autoadd_i_64(dynamic raw);
+
+  @protected
+  ThreadHistoryDto? dco_decode_opt_box_autoadd_thread_history_dto(dynamic raw);
 
   @protected
   ThreadRuntimeConfigDto? dco_decode_opt_box_autoadd_thread_runtime_config_dto(
@@ -323,6 +332,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  ThreadHistoryDto sse_decode_box_autoadd_thread_history_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   ThreadRuntimeConfigDto sse_decode_box_autoadd_thread_runtime_config_dto(
     SseDeserializer deserializer,
   );
@@ -359,6 +373,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   ForceResumeReportDto sse_decode_force_resume_report_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  HistoryCacheStatusDto sse_decode_history_cache_status_dto(
     SseDeserializer deserializer,
   );
 
@@ -463,6 +482,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   PlatformInt64? sse_decode_opt_box_autoadd_i_64(SseDeserializer deserializer);
+
+  @protected
+  ThreadHistoryDto? sse_decode_opt_box_autoadd_thread_history_dto(
+    SseDeserializer deserializer,
+  );
 
   @protected
   ThreadRuntimeConfigDto? sse_decode_opt_box_autoadd_thread_runtime_config_dto(
@@ -626,6 +650,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_box_autoadd_thread_history_dto(
+    ThreadHistoryDto self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_box_autoadd_thread_runtime_config_dto(
     ThreadRuntimeConfigDto self,
     SseSerializer serializer,
@@ -667,6 +697,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_force_resume_report_dto(
     ForceResumeReportDto self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_history_cache_status_dto(
+    HistoryCacheStatusDto self,
     SseSerializer serializer,
   );
 
@@ -796,6 +832,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_opt_box_autoadd_i_64(
     PlatformInt64? self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_opt_box_autoadd_thread_history_dto(
+    ThreadHistoryDto? self,
     SseSerializer serializer,
   );
 

@@ -1681,4 +1681,25 @@ class AppLocalizationsEn extends AppLocalizations {
   String loadingTurn(int number) {
     return 'Opening turn $number…';
   }
+
+  @override
+  String get historySyncing => 'Syncing history…';
+
+  @override
+  String get historyCachedOffline => 'Cached history · waiting to sync';
+
+  @override
+  String get historyCacheTitle => 'Conversation cache';
+
+  @override
+  String get historyCacheDescription =>
+      'Shared disk limit in MB. 0 disables caching.';
+
+  @override
+  String historyCacheUsage(String used, int limit) {
+    return '$used MB used · $limit MB limit';
+  }
+
+  @override
+  String get historyCacheInvalid => 'Enter a whole number from 0 to 64000.';
 }

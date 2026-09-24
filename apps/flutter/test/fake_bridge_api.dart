@@ -28,6 +28,24 @@ class FakeBridgeApi implements BridgeApi {
   /// (or vanish) after construction — e.g. the home screen's auto-retry.
   List<ServiceEntry> get services => _services;
 
+  final Map<String, ThreadHistory> cachedHistories = {};
+  @override
+  Future<ThreadHistory?> appHistoryCached(
+    String serviceKey,
+    String threadId,
+  ) async => cachedHistories[threadId];
+  @override
+  Future<bool> appHistorySyncPrepare(String serviceKey) async => false;
+  @override
+  Future<void> appHistoryPrefetch(String serviceKey, String threadId) async {}
+  @override
+  Future<void> appHistoryFocus(String serviceKey, String? threadId) async {}
+  @override
+  Future<HistoryCacheStatus> historyCacheStatus() async =>
+      const HistoryCacheStatus(limitMb: 512, usedBytes: 0);
+  @override
+  Future<void> historyCacheSetLimit(int limitMb) async {}
+
   @override
   Future<ConfigInfo> getConfig() async => _config;
 

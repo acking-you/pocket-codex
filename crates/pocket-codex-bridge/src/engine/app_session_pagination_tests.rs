@@ -558,6 +558,10 @@ fn an_inflight_read_cannot_undo_live_cache_invalidation() {
             .generation,
         1
     );
+    let pending = ensure_pagination(&session.0, "thread");
+    reset_synced_history(&session.0, "thread");
+    assert!(!set_pagination(&session.0, "thread", pending));
+    assert_eq!(ensure_pagination(&session.0, "thread").generation, 2);
     runtime::runtime().block_on(peer).expect("peer");
 }
 

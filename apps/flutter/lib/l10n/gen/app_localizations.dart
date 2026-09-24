@@ -3103,6 +3103,42 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Opening turn {number}…'**
   String loadingTurn(int number);
+
+  /// No description provided for @historySyncing.
+  ///
+  /// In en, this message translates to:
+  /// **'Syncing history…'**
+  String get historySyncing;
+
+  /// No description provided for @historyCachedOffline.
+  ///
+  /// In en, this message translates to:
+  /// **'Cached history · waiting to sync'**
+  String get historyCachedOffline;
+
+  /// No description provided for @historyCacheTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Conversation cache'**
+  String get historyCacheTitle;
+
+  /// No description provided for @historyCacheDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Shared disk limit in MB. 0 disables caching.'**
+  String get historyCacheDescription;
+
+  /// No description provided for @historyCacheUsage.
+  ///
+  /// In en, this message translates to:
+  /// **'{used} MB used · {limit} MB limit'**
+  String historyCacheUsage(String used, int limit);
+
+  /// No description provided for @historyCacheInvalid.
+  ///
+  /// In en, this message translates to:
+  /// **'Enter a whole number from 0 to 64000.'**
+  String get historyCacheInvalid;
 }
 
 class _AppLocalizationsDelegate

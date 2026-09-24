@@ -371,6 +371,13 @@ The order below is our current best guess; it is not a contract.
    boot (`ui_state.json`). P4 adds structured Guardian review history,
    a searchable turn directory, bounded long-step browsing, and coordinated
    initial-load / continuation / navigation / monitoring feedback.
+11. **Persistent controller history (2026-09-25).** The App owns a configurable
+    512 MB disk cache shared across hosts, reusable after restart. Independent
+    meta `/history/v1` routes reconcile bounded windows and UTF-8 text prefixes
+    through the user-requested `SessionHistorySource` trait; Codex is the first
+    production adapter. Show cached history before connection, keep stale state
+    visibly read-only, and prefetch running tails only in the foreground. See
+    [`docs/session-cache-sync.md`](docs/session-cache-sync.md) for scope and limits.
 
 When you ship a milestone, update `README.md` (Status table) **and**
 this file's roadmap so the source of truth stays in sync.
@@ -383,8 +390,11 @@ this file's roadmap so the source of truth stays in sync.
   desktop screenshot. Validate light/dark at phone, tablet, and desktop widths.
 - History cursors and idle snapshots belong to the bridge session. Cache at
   most eight thread snapshots / approximately 32 MiB, validate metadata before
-  reuse, and invalidate on live changes or reconnect. Never turn a failed
-  request into an authoritative end-of-history result.
+  reuse, and invalidate in-memory snapshots on live changes or reconnect.
+  Persistent controller windows use the separate configurable disk quota and
+  survive reconnect; send manifests only for bytes still retained. Source
+  replacement invalidates disk windows and queued checkpoints. Never turn a
+  failed request into an authoritative end-of-history result.
 - Timeline jumps create independent ascending turn windows. Show missing
   history between those windows at its actual position; a tail cursor does not
   mean there is more history above a fully loaded first turn. Use the exhausted

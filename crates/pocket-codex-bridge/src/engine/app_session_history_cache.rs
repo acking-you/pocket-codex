@@ -99,8 +99,8 @@ pub(super) fn cache_history(
     set_pagination(service_key, thread_id, state);
 }
 
-pub(super) fn invalidate_history(pages: &Mutex<Pages>, inbound: &Inbound) {
-    let replaces_history = matches!(
+pub(super) fn replaces_history(inbound: &Inbound) -> bool {
+    matches!(
         inbound.method.as_str(),
         "thread/compacted" | "thread/reverted" | "thread/archived" | "thread/deleted"
     ) || (inbound.method == "item/completed"
@@ -110,7 +110,11 @@ pub(super) fn invalidate_history(pages: &Mutex<Pages>, inbound: &Inbound) {
             .and_then(|params| params.get("item"))
             .and_then(|item| item.get("type"))
             .and_then(Value::as_str)
-            == Some("contextCompaction"));
+            == Some("contextCompaction"))
+}
+
+pub(super) fn invalidate_history(pages: &Mutex<Pages>, inbound: &Inbound) {
+    let replaces_history = replaces_history(inbound);
     if !replaces_history
         && !matches!(
             inbound.method.as_str(),
@@ -152,6 +156,19 @@ pub(super) fn invalidate_history(pages: &Mutex<Pages>, inbound: &Inbound) {
             };
         }
     }
+}
+
+/// Reject any in-flight read that started before a source generation change.
+pub(super) fn replace_history(service: &str, thread: &str) {
+    let Some(pages) = pages_for(service) else { return };
+    let Ok(mut pages) = pages.lock() else { return };
+    let state = pages.entry(thread.to_owned()).or_default();
+    *state = ThreadPagination {
+        request_gate: Arc::clone(&state.request_gate),
+        generation: state.generation.wrapping_add(1),
+        source_revision: state.source_revision.wrapping_add(1),
+        ..Default::default()
+    };
 }
 
 fn items_bytes(items: &[ThreadItem]) -> usize {

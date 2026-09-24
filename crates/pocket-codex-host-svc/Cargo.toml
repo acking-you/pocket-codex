@@ -24,6 +24,7 @@ tokio-stream = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
+async-trait = { workspace = true }
 tracing = { workspace = true }
 tower-http = { workspace = true, features = ["compression-zstd", "compression-gzip"] }
 

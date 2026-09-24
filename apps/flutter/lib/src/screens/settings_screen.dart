@@ -27,6 +27,85 @@ class SettingsScreen extends ConsumerStatefulWidget {
 
 class _SettingsState extends ConsumerState<SettingsScreen> {
   String? _msg;
+  late Future<HistoryCacheStatus> _cacheStatus;
+
+  @override
+  void initState() {
+    super.initState();
+    _cacheStatus = ref.read(bridgeApiProvider).historyCacheStatus();
+  }
+
+  Widget _cacheTile(AppLocalizations l10n) => FutureBuilder<HistoryCacheStatus>(
+    future: _cacheStatus,
+    builder: (context, snapshot) => ListTile(
+      key: const Key('history-cache-settings'),
+      leading: const Icon(Icons.storage_outlined),
+      title: Text(l10n.historyCacheTitle),
+      subtitle: Text(
+        snapshot.hasData
+            ? l10n.historyCacheUsage(
+                (snapshot.data!.usedBytes / 1000000).toStringAsFixed(1),
+                snapshot.data!.limitMb,
+              )
+            : l10n.historyCacheDescription,
+      ),
+      trailing: const Icon(Icons.edit_outlined),
+      onTap: () => _editCache(snapshot.data?.limitMb ?? 512),
+    ),
+  );
+
+  Future<void> _editCache(int current) async {
+    final l10n = AppLocalizations.of(context);
+    final controller = TextEditingController(text: '$current');
+    final form = GlobalKey<FormState>();
+    final limit = await showDialog<int>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(l10n.historyCacheTitle),
+        content: Form(
+          key: form,
+          child: TextFormField(
+            controller: controller,
+            keyboardType: TextInputType.number,
+            decoration: InputDecoration(
+              helperText: l10n.historyCacheDescription,
+              helperMaxLines: 3,
+            ),
+            validator: (value) {
+              final limit = int.tryParse(value ?? '');
+              return limit == null || limit < 0 || limit > 64000
+                  ? l10n.historyCacheInvalid
+                  : null;
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text(l10n.cancel),
+          ),
+          TextButton(
+            onPressed: () {
+              if (form.currentState!.validate()) {
+                Navigator.pop(context, int.parse(controller.text));
+              }
+            },
+            child: Text(l10n.save),
+          ),
+        ],
+      ),
+    );
+    // Dialog exit animations can still refer to its controller for this frame.
+    WidgetsBinding.instance.addPostFrameCallback((_) => controller.dispose());
+    if (limit == null || !mounted) return;
+    try {
+      final api = ref.read(bridgeApiProvider);
+      await api.historyCacheSetLimit(limit);
+      if (mounted) setState(() => _cacheStatus = api.historyCacheStatus());
+    } catch (error) {
+      if (mounted) setState(() => _msg = friendlyError(error));
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -57,6 +136,7 @@ class _SettingsState extends ConsumerState<SettingsScreen> {
   ) => ListView(
     padding: const EdgeInsets.all(16),
     children: [
+      Card(child: _cacheTile(l10n)),
       Card(
         clipBehavior: Clip.antiAlias,
         child: Column(
@@ -196,6 +276,8 @@ class _SettingsState extends ConsumerState<SettingsScreen> {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
+                  Card(child: _cacheTile(l10n)),
+                  const SizedBox(height: 10),
                   GroupCard(
                     title: l10n.settingsGeneral,
                     children: [
