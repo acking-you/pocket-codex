@@ -28,9 +28,9 @@ exclude = [
 ]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
-rust-version = "1.83"
+rust-version = "1.95"
 authors = ["Pocket-Codex Contributors"]
 license = "Apache-2.0"
 repository = "https://github.com/acking-you/pocket-codex"
@@ -79,9 +79,8 @@ thiserror = "2.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 # Terminal output presentation. `comfy-table` is tilde-pinned to the 7.1
-# line: 7.2 bumped its MSRV to 1.85 while this workspace declares
-# `rust-version = "1.83"`, and a bare "7.1" is caret (<8.0.0) which would
-# still resolve to 7.2. owo-colors stays feature-light (no
+# line to preserve the existing terminal layout across protocol upgrades.
+# owo-colors stays feature-light (no
 # `supports-colors`) so inline styling shares one `use_color()` gate with
 # the table path.
 comfy-table = "~7.1"

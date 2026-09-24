@@ -809,8 +809,8 @@ pub struct ThreadRuntimeConfig {
     /// already speaks (`read-only`/`workspace-write`/`danger-full-access`/
     /// `external-sandbox`).
     pub sandbox_mode: Option<String>,
-    /// Effective collaboration mode (`plan`/`default`). Only ever reported by
-    /// `thread/settings/updated` — start/resume responses don't carry it.
+    /// Effective collaboration mode (`plan`/`default`) from a resume response
+    /// or a `thread/settings/updated` notification.
     pub collaboration_mode: Option<String>,
     /// True once a live `thread/settings/updated` notification has been seen
     /// for this thread — the strongest confirmation the server applied a
@@ -829,7 +829,7 @@ fn runtime_config_from_response(res: &Value) -> ThreadRuntimeConfig {
         reasoning_effort: nonempty_str(res.get("reasoningEffort")),
         approval_policy: parse_approval_policy(res.get("approvalPolicy")),
         sandbox_mode: parse_sandbox_mode(res.get("sandbox")),
-        collaboration_mode: None,
+        collaboration_mode: parse_collaboration_mode(res.get("collaborationMode")),
         confirmed_by_update: false,
     }
 }
@@ -935,11 +935,9 @@ fn track_runtime_config(configs: &Mutex<HashMap<String, ThreadRuntimeConfig>>, i
 }
 
 /// Record the runtime config a `thread/start` / `thread/resume` response
-/// reported for `thread_id` (no-op if the session is gone). The response
-/// doesn't carry the collaboration mode, so a previously learned one (from a
-/// live settings update) is preserved rather than wiped; every field the
-/// response *does* speak to is taken verbatim — including nulls, so an effort
-/// cleared on the thread (e.g. by another client) isn't served stale.
+/// reported for `thread_id` (no-op if the session is gone). Preserve the last
+/// collaboration mode only when a legacy response omits it. Explicit nulls
+/// clear cached values so changes made by another client aren't served stale.
 fn record_runtime_config(service_key: &str, thread_id: &str, res: &Value) {
     if let Some(s) = sessions()
         .lock()
@@ -949,7 +947,9 @@ fn record_runtime_config(service_key: &str, thread_id: &str, res: &Value) {
         let mut cfg = runtime_config_from_response(res);
         let mut map = s.runtime_config.lock().expect("runtime_config poisoned");
         if let Some(prev) = map.get(thread_id) {
-            cfg.collaboration_mode = prev.collaboration_mode.clone();
+            if res.get("collaborationMode").is_none() {
+                cfg.collaboration_mode = prev.collaboration_mode.clone();
+            }
             cfg.confirmed_by_update = prev.confirmed_by_update;
         }
         map.insert(thread_id.to_string(), cfg);
@@ -1904,10 +1904,8 @@ fn thread_read_inner(
     // comes from the cached start/resume response and live settings updates.
     // The Thread fields below refresh model and effort on current servers.
     let runtime = thread_runtime_config(service_key, thread_id).unwrap_or_default();
-    // Collaboration mode: the cache only ever learns it from a live settings
-    // update; keep the forward-compatible read of the response in case a future
-    // server version surfaces it here. The UI falls back to its own per-thread
-    // plan memory when both are absent.
+    // Current servers report collaboration mode in resume/settings responses.
+    // Retain support for peers that also expose it in thread metadata.
     let collaboration_mode = runtime.collaboration_mode.clone().or_else(|| {
         thread
             .and_then(|t| {
@@ -1915,9 +1913,7 @@ fn thread_read_inner(
                     .or_else(|| t.get("status").and_then(|s| s.get("collaborationMode")))
                     .or_else(|| t.get("settings").and_then(|s| s.get("collaborationMode")))
             })
-            .and_then(Value::as_str)
-            .filter(|s| !s.is_empty())
-            .map(str::to_string)
+            .and_then(|mode| parse_collaboration_mode(Some(mode)))
     });
     let runtime = runtime_config_with_thread(runtime, thread);
     let reasoning_effort = runtime.reasoning_effort.clone();
@@ -3038,8 +3034,10 @@ fn format_content_diff(path: &str, content: &str, added: bool) -> String {
 /// `{"type":"image"}` input carries the renderable `url` (a `data:image/...`
 /// base64 URL for anything sent by this app); a `{"type":"localImage"}` input
 /// (a host-side codex client attached a file) carries only the HOST filesystem
-/// `path`, which the UI renders as a filename chip rather than pixels. Every
-/// other item kind has no images.
+/// `path`, which the UI can resolve through the host's file service.
+/// `fileId` references have no downloadable URL in this protocol. Preserve
+/// them as `codex-file:` references so the UI can show an unavailable preview
+/// without treating an opaque cloud ID as a host filesystem path.
 fn item_images(item: &Value) -> Vec<String> {
     if item.get("type").and_then(Value::as_str) != Some("userMessage") {
         return Vec::new();
@@ -3049,7 +3047,15 @@ fn item_images(item: &Value) -> Vec<String> {
         .map(|c| {
             c.iter()
                 .filter_map(|p| match p.get("type").and_then(Value::as_str) {
-                    Some("image") => p.get("url").and_then(Value::as_str).map(str::to_string),
+                    Some("image") => p
+                        .get("url")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                        .or_else(|| {
+                            p.get("fileId")
+                                .and_then(Value::as_str)
+                                .map(|id| format!("codex-file:{id}"))
+                        }),
                     Some("localImage") => p.get("path").and_then(Value::as_str).map(str::to_string),
                     _ => None,
                 })

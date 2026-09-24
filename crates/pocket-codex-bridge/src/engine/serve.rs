@@ -256,7 +256,9 @@ fn register_service(
         runtime::runtime().block_on(publish_pending(&transport.session, RegisterOptions {
             key: key.clone(),
             local_addr: local.to_string(),
-            codec: false,
+            // Plain HTTP/WebSocket traffic can trigger resets on the relay path.
+            // Subscribers negotiate the publisher's codec through pb-mapper.
+            codec: true,
         }));
     match outcome {
         Ok((published, ready)) => {

@@ -35,6 +35,28 @@ Future<void> _openViewer(WidgetTester tester, Uint8List bytes) async {
 }
 
 void main() {
+  testWidgets('opaque image references stay visible without host reads', (
+    tester,
+  ) async {
+    final reads = <String>[];
+    final images = resolveImageUrls(['codex-file:file-123']);
+    await tester.pumpWidget(
+      _wrap(
+        MessageImagesView(
+          images: images,
+          hostImageLoader: (path) async {
+            reads.add(path);
+            return null;
+          },
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.byIcon(Icons.broken_image_outlined), findsOneWidget);
+    expect(images.single.hostPath, isNull);
+    expect(reads, isEmpty);
+  });
+
   test(
     'resolveImageUrls keeps a placeholder for an undecodable data image',
     () {

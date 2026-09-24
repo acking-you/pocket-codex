@@ -1,6 +1,37 @@
 use super::*;
 
 #[test]
+fn resume_reads_collaboration_mode_and_tolerates_legacy_responses() {
+    for (mode, expected) in [
+        (json!({"mode": "plan", "settings": {"model": "current-model"}}), Some("plan")),
+        (json!({"mode": "default", "settings": {}}), Some("default")),
+        (json!("plan"), Some("plan")),
+        (Value::Null, None),
+    ] {
+        let parsed = runtime_config_from_response(&json!({"collaborationMode": mode}));
+        assert_eq!(parsed.collaboration_mode.as_deref(), expected);
+    }
+    assert_eq!(runtime_config_from_response(&json!({})).collaboration_mode, None);
+}
+
+#[test]
+fn image_references_preserve_inline_local_and_opaque_attachments() {
+    let item = json!({"id": "user-1", "type": "userMessage", "content": [
+        {"type": "text", "text": "Compare these images"},
+        {"type": "image", "url": "data:image/png;base64,AA=="},
+        {"type": "image", "fileId": "file-123", "detail": "original"},
+        {"type": "localImage", "path": "/host/image.png"}
+    ]});
+    let parsed = parse_item(&item).expect("user message");
+    assert_eq!(parsed.text, "Compare these images");
+    assert_eq!(parsed.images, [
+        "data:image/png;base64,AA==",
+        "codex-file:file-123",
+        "/host/image.png"
+    ]);
+}
+
+#[test]
 fn account_read_distinguishes_signed_out_and_supported_auth_methods() {
     for (response, expected) in [
         (json!({"account": null, "requiresOpenaiAuth": true}), (false, None)),

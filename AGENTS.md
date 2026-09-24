@@ -334,8 +334,11 @@ The order below is our current best guess; it is not a contract.
    external `codex`. The former embedded runtime is removed from builds and
    packaging; **Built-in engine** is a disabled, unimplemented placeholder.
    Only upstream protocol crates may be direct Codex dependencies (see §8.1).
-8. **App-server protocol sync (2026-09-07).** Codex fork merged upstream main
-   `db0568dbb`; CLI and UI share the acknowledged initialization handshake.
+8. **App-server protocol sync (2026-09-24).** Codex fork merged upstream main
+   `c098f97e5` at `c08819510`; CLI and UI share the acknowledged initialization handshake.
+   Resume responses restore collaboration mode, opaque `fileId` image references
+   keep a visible unavailable preview without host file reads, and paginated
+   item timestamps remain distinct from whole-turn duration. Rust requires 1.95+.
    Flutter reads v2 accounts and current thread model/effort, and answers
    asynchronous questions with `turn/steer` while running or `turn/start` when idle.
    **Strongly-typed JSON-RPC client (next).** Replace the
