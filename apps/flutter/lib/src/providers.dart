@@ -27,9 +27,10 @@ class SessionDefaults {
   /// Creates the defaults (all optional; sensible fallbacks).
   const SessionDefaults({
     this.model,
-    this.mode = PermissionMode.auto,
+    this.mode = PermissionMode.autoReview,
     this.plan = false,
     this.effort,
+    this.serviceTier,
   });
 
   /// Last-chosen model (null = the server default).
@@ -43,6 +44,9 @@ class SessionDefaults {
 
   /// Last-chosen reasoning effort (null = model default).
   final ReasoningEffort? effort;
+
+  /// Requested speed inherited by new conversations on this service.
+  final String? serviceTier;
 }
 
 /// Holds the [SessionDefaults] a new conversation inherits, keyed by app

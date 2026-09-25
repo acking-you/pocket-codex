@@ -123,6 +123,9 @@ pub struct ThreadConfig {
     /// Permission / approval mode tag, when set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permission_mode: Option<String>,
+    /// Requested service tier (`priority` for Fast, `default` for standard).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_tier: Option<String>,
     /// Whether plan mode is on for this thread, when set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan_mode: Option<bool>,
@@ -225,7 +228,8 @@ mod tests {
         let cfg = ThreadConfig {
             model: Some("gpt-5.5".to_string()),
             reasoning_effort: Some("high".to_string()),
-            permission_mode: Some("auto".to_string()),
+            permission_mode: Some("autoReview".to_string()),
+            service_tier: Some("priority".to_string()),
             plan_mode: Some(true),
         };
         store.put("t1", cfg.clone()).await.expect("put");

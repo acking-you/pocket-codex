@@ -310,12 +310,16 @@ Future<String> appThreadStart({
   String? model,
   String? cwd,
   String? approvalPolicy,
+  String? approvalsReviewer,
+  String? serviceTier,
   String? sandbox,
 }) => RustLib.instance.api.crateApiBridgeAppThreadStart(
   serviceKey: serviceKey,
   model: model,
   cwd: cwd,
   approvalPolicy: approvalPolicy,
+  approvalsReviewer: approvalsReviewer,
+  serviceTier: serviceTier,
   sandbox: sandbox,
 );
 
@@ -325,11 +329,13 @@ Future<void> appTurnSteer({
   required String threadId,
   String? turnId,
   required String text,
+  List<String>? images,
 }) => RustLib.instance.api.crateApiBridgeAppTurnSteer(
   serviceKey: serviceKey,
   threadId: threadId,
   turnId: turnId,
   text: text,
+  images: images,
 );
 
 /// Answer a server approval request. `decision` is the wire value the session
@@ -495,6 +501,8 @@ Future<void> appTurnStart({
   required List<String> images,
   String? model,
   String? approvalPolicy,
+  String? approvalsReviewer,
+  String? serviceTier,
   String? sandbox,
   String? collaborationMode,
   String? reasoningEffort,
@@ -505,6 +513,8 @@ Future<void> appTurnStart({
   images: images,
   model: model,
   approvalPolicy: approvalPolicy,
+  approvalsReviewer: approvalsReviewer,
+  serviceTier: serviceTier,
   sandbox: sandbox,
   collaborationMode: collaborationMode,
   reasoningEffort: reasoningEffort,
@@ -1726,12 +1736,24 @@ class ModelInfoDto {
   /// The model's default reasoning effort, if any.
   final String? defaultReasoningEffort;
 
+  /// Service tier ids advertised by the model catalog.
+  final List<String> supportedServiceTiers;
+
+  /// Catalog default service tier.
+  final String? defaultServiceTier;
+
+  /// Whether this is the server default model.
+  final bool isDefault;
+
   const ModelInfoDto({
     required this.id,
     required this.displayName,
     required this.description,
     required this.supportedReasoningEfforts,
     this.defaultReasoningEffort,
+    required this.supportedServiceTiers,
+    this.defaultServiceTier,
+    required this.isDefault,
   });
 
   @override
@@ -1740,7 +1762,10 @@ class ModelInfoDto {
       displayName.hashCode ^
       description.hashCode ^
       supportedReasoningEfforts.hashCode ^
-      defaultReasoningEffort.hashCode;
+      defaultReasoningEffort.hashCode ^
+      supportedServiceTiers.hashCode ^
+      defaultServiceTier.hashCode ^
+      isDefault.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -1751,7 +1776,10 @@ class ModelInfoDto {
           displayName == other.displayName &&
           description == other.description &&
           supportedReasoningEfforts == other.supportedReasoningEfforts &&
-          defaultReasoningEffort == other.defaultReasoningEffort;
+          defaultReasoningEffort == other.defaultReasoningEffort &&
+          supportedServiceTiers == other.supportedServiceTiers &&
+          defaultServiceTier == other.defaultServiceTier &&
+          isDefault == other.isDefault;
 }
 
 /// One page of older items, and whether history continues before them.
@@ -1992,6 +2020,9 @@ class ThreadConfigDto {
   /// Permission / approval mode tag, when set.
   final String? permissionMode;
 
+  /// Requested service tier (`priority` for Fast, `default` for standard).
+  final String? serviceTier;
+
   /// Whether plan mode is on for this thread, when set.
   final bool? planMode;
 
@@ -1999,6 +2030,7 @@ class ThreadConfigDto {
     this.model,
     this.reasoningEffort,
     this.permissionMode,
+    this.serviceTier,
     this.planMode,
   });
 
@@ -2007,6 +2039,7 @@ class ThreadConfigDto {
       model.hashCode ^
       reasoningEffort.hashCode ^
       permissionMode.hashCode ^
+      serviceTier.hashCode ^
       planMode.hashCode;
 
   @override
@@ -2017,6 +2050,7 @@ class ThreadConfigDto {
           model == other.model &&
           reasoningEffort == other.reasoningEffort &&
           permissionMode == other.permissionMode &&
+          serviceTier == other.serviceTier &&
           planMode == other.planMode;
 }
 
@@ -2064,6 +2098,12 @@ class ThreadHistoryDto {
   /// `never`/`granular`), when reported.
   final String? approvalPolicy;
 
+  /// Approval reviewer (`user` or `auto_review`), when reported.
+  final String? approvalsReviewer;
+
+  /// Effective service tier, when reported.
+  final String? serviceTier;
+
   /// The effective sandbox mode (`read-only`/`workspace-write`/
   /// `danger-full-access`/`external-sandbox`), when reported.
   final String? sandboxMode;
@@ -2100,6 +2140,8 @@ class ThreadHistoryDto {
     this.model,
     this.modelProvider,
     this.approvalPolicy,
+    this.approvalsReviewer,
+    this.serviceTier,
     this.sandboxMode,
     required this.configConfirmed,
     required this.hasOlder,
@@ -2122,6 +2164,8 @@ class ThreadHistoryDto {
       model.hashCode ^
       modelProvider.hashCode ^
       approvalPolicy.hashCode ^
+      approvalsReviewer.hashCode ^
+      serviceTier.hashCode ^
       sandboxMode.hashCode ^
       configConfirmed.hashCode ^
       hasOlder.hashCode ^
@@ -2146,6 +2190,8 @@ class ThreadHistoryDto {
           model == other.model &&
           modelProvider == other.modelProvider &&
           approvalPolicy == other.approvalPolicy &&
+          approvalsReviewer == other.approvalsReviewer &&
+          serviceTier == other.serviceTier &&
           sandboxMode == other.sandboxMode &&
           configConfirmed == other.configConfirmed &&
           hasOlder == other.hasOlder &&
@@ -2292,6 +2338,12 @@ class ThreadRuntimeConfigDto {
   /// Effective approval policy.
   final String? approvalPolicy;
 
+  /// Approval reviewer (`user` or `auto_review`), when reported.
+  final String? approvalsReviewer;
+
+  /// Effective service tier, when reported.
+  final String? serviceTier;
+
   /// Effective sandbox mode (kebab wire string).
   final String? sandboxMode;
 
@@ -2306,6 +2358,8 @@ class ThreadRuntimeConfigDto {
     this.modelProvider,
     this.reasoningEffort,
     this.approvalPolicy,
+    this.approvalsReviewer,
+    this.serviceTier,
     this.sandboxMode,
     this.collaborationMode,
     required this.confirmedByUpdate,
@@ -2317,6 +2371,8 @@ class ThreadRuntimeConfigDto {
       modelProvider.hashCode ^
       reasoningEffort.hashCode ^
       approvalPolicy.hashCode ^
+      approvalsReviewer.hashCode ^
+      serviceTier.hashCode ^
       sandboxMode.hashCode ^
       collaborationMode.hashCode ^
       confirmedByUpdate.hashCode;
@@ -2330,6 +2386,8 @@ class ThreadRuntimeConfigDto {
           modelProvider == other.modelProvider &&
           reasoningEffort == other.reasoningEffort &&
           approvalPolicy == other.approvalPolicy &&
+          approvalsReviewer == other.approvalsReviewer &&
+          serviceTier == other.serviceTier &&
           sandboxMode == other.sandboxMode &&
           collaborationMode == other.collaborationMode &&
           confirmedByUpdate == other.confirmedByUpdate;

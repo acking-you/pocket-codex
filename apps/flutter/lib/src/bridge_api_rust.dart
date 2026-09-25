@@ -435,6 +435,9 @@ class RustBridgeApi implements BridgeApi {
             description: m.description,
             supportedReasoningEfforts: m.supportedReasoningEfforts,
             defaultReasoningEffort: m.defaultReasoningEffort,
+            supportedServiceTiers: m.supportedServiceTiers,
+            defaultServiceTier: m.defaultServiceTier,
+            isDefault: m.isDefault,
           ),
         )
         .toList();
@@ -446,12 +449,16 @@ class RustBridgeApi implements BridgeApi {
     String? model,
     String? cwd,
     String? approvalPolicy,
+    String? approvalsReviewer,
+    String? serviceTier,
     String? sandbox,
   }) => frb.appThreadStart(
     serviceKey: serviceKey,
     model: model,
     cwd: cwd,
     approvalPolicy: approvalPolicy,
+    approvalsReviewer: approvalsReviewer,
+    serviceTier: serviceTier,
     sandbox: sandbox,
   );
 
@@ -486,6 +493,8 @@ class RustBridgeApi implements BridgeApi {
     model: h.model,
     modelProvider: h.modelProvider,
     approvalPolicy: h.approvalPolicy,
+    approvalsReviewer: h.approvalsReviewer,
+    serviceTier: h.serviceTier,
     sandboxMode: h.sandboxMode,
     configConfirmed: h.configConfirmed,
     hasOlder: h.hasOlder,
@@ -581,6 +590,8 @@ class RustBridgeApi implements BridgeApi {
       modelProvider: c.modelProvider,
       reasoningEffort: c.reasoningEffort,
       approvalPolicy: c.approvalPolicy,
+      approvalsReviewer: c.approvalsReviewer,
+      serviceTier: c.serviceTier,
       sandboxMode: c.sandboxMode,
       collaborationMode: c.collaborationMode,
       confirmedByUpdate: c.confirmedByUpdate,
@@ -622,6 +633,8 @@ class RustBridgeApi implements BridgeApi {
     List<String> images = const [],
     String? model,
     String? approvalPolicy,
+    String? approvalsReviewer,
+    String? serviceTier,
     String? sandbox,
     String? collaborationMode,
     String? reasoningEffort,
@@ -632,6 +645,8 @@ class RustBridgeApi implements BridgeApi {
     images: images,
     model: model,
     approvalPolicy: approvalPolicy,
+    approvalsReviewer: approvalsReviewer,
+    serviceTier: serviceTier,
     sandbox: sandbox,
     collaborationMode: collaborationMode,
     reasoningEffort: reasoningEffort,
@@ -642,12 +657,14 @@ class RustBridgeApi implements BridgeApi {
     String serviceKey,
     String threadId,
     String? turnId,
-    String text,
-  ) => frb.appTurnSteer(
+    String text, {
+    List<String> images = const [],
+  }) => frb.appTurnSteer(
     serviceKey: serviceKey,
     threadId: threadId,
     turnId: turnId,
     text: text,
+    images: images,
   );
 
   @override
@@ -933,6 +950,7 @@ class RustBridgeApi implements BridgeApi {
         model: config.model,
         reasoningEffort: config.reasoningEffort,
         permissionMode: config.permissionMode,
+        serviceTier: config.serviceTier,
         planMode: config.planMode,
       ),
     );
@@ -943,6 +961,7 @@ class RustBridgeApi implements BridgeApi {
     model: c.model,
     reasoningEffort: c.reasoningEffort,
     permissionMode: c.permissionMode,
+    serviceTier: c.serviceTier,
     planMode: c.planMode,
   );
 

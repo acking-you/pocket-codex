@@ -662,6 +662,7 @@ class FakeBridgeApi implements BridgeApi {
 
   /// Records the params of the last [appThreadStart] for assertions.
   String? lastModel, lastCwd, lastApproval, lastSandbox;
+  String? lastApprovalsReviewer, lastServiceTier;
 
   @override
   Future<String> appThreadStart(
@@ -669,11 +670,15 @@ class FakeBridgeApi implements BridgeApi {
     String? model,
     String? cwd,
     String? approvalPolicy,
+    String? approvalsReviewer,
+    String? serviceTier,
     String? sandbox,
   }) async {
     lastModel = model;
     lastCwd = cwd;
     lastApproval = approvalPolicy;
+    lastApprovalsReviewer = approvalsReviewer;
+    lastServiceTier = serviceTier;
     lastSandbox = sandbox;
     final id = 'thread-${_threadSeq++}';
     appThreads.insert(
@@ -832,6 +837,8 @@ class FakeBridgeApi implements BridgeApi {
     List<String> images = const [],
     String? model,
     String? approvalPolicy,
+    String? approvalsReviewer,
+    String? serviceTier,
     String? sandbox,
     String? collaborationMode,
     String? reasoningEffort,
@@ -841,6 +848,8 @@ class FakeBridgeApi implements BridgeApi {
     lastTurnText = text;
     lastTurnImages = images;
     lastApproval = approvalPolicy;
+    lastApprovalsReviewer = approvalsReviewer;
+    lastServiceTier = serviceTier;
     lastSandbox = sandbox;
     lastCollaborationMode = collaborationMode;
     lastReasoningEffort = reasoningEffort;
@@ -865,6 +874,8 @@ class FakeBridgeApi implements BridgeApi {
   }
 
   String? lastSteerText;
+  List<String> lastSteerImages = [];
+  Completer<void>? steerGate;
   String? lastSteerTurnId;
   String? steerError;
 
@@ -873,11 +884,14 @@ class FakeBridgeApi implements BridgeApi {
     String serviceKey,
     String threadId,
     String? turnId,
-    String text,
-  ) async {
+    String text, {
+    List<String> images = const [],
+  }) async {
     if (steerError != null) throw StateError(steerError!);
     lastSteerText = text;
+    lastSteerImages = images;
     lastSteerTurnId = turnId;
+    if (steerGate != null) await steerGate!.future;
   }
 
   /// Records the last turn id passed to [appTurnInterrupt].

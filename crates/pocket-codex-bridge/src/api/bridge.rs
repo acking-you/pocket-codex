@@ -539,6 +539,12 @@ pub struct ModelInfoDto {
     pub supported_reasoning_efforts: Vec<String>,
     /// The model's default reasoning effort, if any.
     pub default_reasoning_effort: Option<String>,
+    /// Service tier ids advertised by the model catalog.
+    pub supported_service_tiers: Vec<String>,
+    /// Catalog default service tier.
+    pub default_service_tier: Option<String>,
+    /// Whether this is the server default model.
+    pub is_default: bool,
 }
 
 /// One materialised conversation item mirrored for Dart.
@@ -601,6 +607,10 @@ pub struct ThreadHistoryDto {
     /// The effective approval policy (`untrusted`/`on-failure`/`on-request`/
     /// `never`/`granular`), when reported.
     pub approval_policy: Option<String>,
+    /// Approval reviewer (`user` or `auto_review`), when reported.
+    pub approvals_reviewer: Option<String>,
+    /// Effective service tier, when reported.
+    pub service_tier: Option<String>,
     /// The effective sandbox mode (`read-only`/`workspace-write`/
     /// `danger-full-access`/`external-sandbox`), when reported.
     pub sandbox_mode: Option<String>,
@@ -690,6 +700,10 @@ pub struct ThreadRuntimeConfigDto {
     pub reasoning_effort: Option<String>,
     /// Effective approval policy.
     pub approval_policy: Option<String>,
+    /// Approval reviewer (`user` or `auto_review`), when reported.
+    pub approvals_reviewer: Option<String>,
+    /// Effective service tier, when reported.
+    pub service_tier: Option<String>,
     /// Effective sandbox mode (kebab wire string).
     pub sandbox_mode: Option<String>,
     /// Effective collaboration mode (`plan`/`default`), when reported.
@@ -926,6 +940,9 @@ pub fn app_model_list(service_key: String) -> Result<Vec<ModelInfoDto>> {
             description: m.description,
             supported_reasoning_efforts: m.supported_reasoning_efforts,
             default_reasoning_effort: m.default_reasoning_effort,
+            supported_service_tiers: m.supported_service_tiers,
+            default_service_tier: m.default_service_tier,
+            is_default: m.is_default,
         })
         .collect())
 }
@@ -938,9 +955,19 @@ pub fn app_thread_start(
     model: Option<String>,
     cwd: Option<String>,
     approval_policy: Option<String>,
+    approvals_reviewer: Option<String>,
+    service_tier: Option<String>,
     sandbox: Option<String>,
 ) -> Result<String> {
-    app_session::thread_start(&service_key, model, cwd, approval_policy, sandbox)
+    app_session::thread_start(
+        &service_key,
+        model,
+        cwd,
+        approval_policy,
+        approvals_reviewer,
+        service_tier,
+        sandbox,
+    )
 }
 
 /// Append an asynchronous answer to the expected active turn.
@@ -949,8 +976,15 @@ pub fn app_turn_steer(
     thread_id: String,
     turn_id: Option<String>,
     text: String,
+    images: Option<Vec<String>>,
 ) -> Result<()> {
-    app_session::turn_steer(&service_key, &thread_id, turn_id.as_deref(), &text)
+    app_session::turn_steer(
+        &service_key,
+        &thread_id,
+        turn_id.as_deref(),
+        &text,
+        &images.unwrap_or_default(),
+    )
 }
 
 /// Answer a server approval request. `decision` is the wire value the session
@@ -1033,6 +1067,8 @@ fn history_dto(h: app_session::ThreadHistory) -> ThreadHistoryDto {
         model: h.model,
         model_provider: h.model_provider,
         approval_policy: h.approval_policy,
+        approvals_reviewer: h.approvals_reviewer,
+        service_tier: h.service_tier,
         sandbox_mode: h.sandbox_mode,
         config_confirmed: h.config_confirmed,
         has_older: h.has_older,
@@ -1090,6 +1126,8 @@ pub fn app_thread_runtime_config(
         model_provider: c.model_provider,
         reasoning_effort: c.reasoning_effort,
         approval_policy: c.approval_policy,
+        approvals_reviewer: c.approvals_reviewer,
+        service_tier: c.service_tier,
         sandbox_mode: c.sandbox_mode,
         collaboration_mode: c.collaboration_mode,
         confirmed_by_update: c.confirmed_by_update,
@@ -1156,6 +1194,8 @@ pub fn app_turn_start(
     images: Vec<String>,
     model: Option<String>,
     approval_policy: Option<String>,
+    approvals_reviewer: Option<String>,
+    service_tier: Option<String>,
     sandbox: Option<String>,
     collaboration_mode: Option<String>,
     reasoning_effort: Option<String>,
@@ -1167,6 +1207,8 @@ pub fn app_turn_start(
         images,
         model,
         approval_policy,
+        approvals_reviewer,
+        service_tier,
         sandbox,
         collaboration_mode,
         reasoning_effort,
@@ -1435,6 +1477,8 @@ pub struct ThreadConfigDto {
     pub reasoning_effort: Option<String>,
     /// Permission / approval mode tag, when set.
     pub permission_mode: Option<String>,
+    /// Requested service tier (`priority` for Fast, `default` for standard).
+    pub service_tier: Option<String>,
     /// Whether plan mode is on for this thread, when set.
     pub plan_mode: Option<bool>,
 }
@@ -1444,6 +1488,7 @@ fn thread_config_dto(c: pocket_codex_host_svc::store::ThreadConfig) -> ThreadCon
         model: c.model,
         reasoning_effort: c.reasoning_effort,
         permission_mode: c.permission_mode,
+        service_tier: c.service_tier,
         plan_mode: c.plan_mode,
     }
 }
@@ -1453,6 +1498,7 @@ fn thread_config_from_dto(c: ThreadConfigDto) -> pocket_codex_host_svc::store::T
         model: c.model,
         reasoning_effort: c.reasoning_effort,
         permission_mode: c.permission_mode,
+        service_tier: c.service_tier,
         plan_mode: c.plan_mode,
     }
 }

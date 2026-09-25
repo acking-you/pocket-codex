@@ -771,3 +771,76 @@ fn monitoring_omits_selected_windows_without_losing_reopen_cache() {
     assert_eq!(reopen.turn_pages[0].items[0].id, "selected");
     runtime::runtime().block_on(peer).expect("peer");
 }
+
+#[test]
+fn execution_options_and_supplement_attachments_reach_the_wire() {
+    runtime::init(std::env::temp_dir()).expect("runtime");
+    let (client, peer) = mock_client_with_hook(
+        vec![
+            (
+                "thread/start",
+                json!({"thread": {"id": "thread"}, "approvalsReviewer": "auto_review", "serviceTier": "priority"}),
+            ),
+            ("turn/start", json!({"turn": {"id": "turn"}})),
+            ("turn/steer", json!({"turnId": "turn"})),
+        ],
+        |index, request| {
+            let p = &request["params"];
+            match index {
+                0 => {
+                    assert_eq!(p["approvalPolicy"], "on-request");
+                    assert_eq!(p["approvalsReviewer"], "auto_review");
+                    assert_eq!(p["sandbox"], "workspace-write");
+                    assert_eq!(p["serviceTier"], "priority");
+                },
+                1 => {
+                    assert_eq!(p["approvalsReviewer"], "user");
+                    assert_eq!(p["serviceTier"], "default");
+                    assert_eq!(p["sandboxPolicy"]["type"], "workspaceWrite");
+                },
+                _ => {
+                    assert_eq!(p["expectedTurnId"], "turn");
+                    assert_eq!(p["input"][0]["text"], "Keep the original goal");
+                    assert_eq!(p["input"][1]["url"], "data:image/png;base64,AA==");
+                },
+            }
+        },
+    );
+    let session = TestSession::new(client);
+    let tid = thread_start(
+        &session.0,
+        None,
+        None,
+        Some("on-request".into()),
+        Some("auto_review".into()),
+        Some("priority".into()),
+        Some("workspace-write".into()),
+    )
+    .expect("start thread");
+    assert_eq!(
+        thread_runtime_config(&session.0, &tid)
+            .expect("runtime config")
+            .approvals_reviewer
+            .as_deref(),
+        Some("auto_review")
+    );
+    turn_start(
+        &session.0,
+        &tid,
+        "First goal".into(),
+        vec![],
+        None,
+        Some("on-request".into()),
+        Some("user".into()),
+        Some("default".into()),
+        Some("workspace-write".into()),
+        None,
+        None,
+    )
+    .expect("start turn");
+    turn_steer(&session.0, &tid, Some("turn"), "Keep the original goal", &["data:image/png;\
+                                                                            base64,AA=="
+        .into()])
+    .expect("supplement");
+    runtime::runtime().block_on(peer).expect("peer");
+}

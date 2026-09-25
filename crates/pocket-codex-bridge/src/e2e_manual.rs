@@ -124,6 +124,8 @@ fn run_file_turn(key: &str, sandbox: &str, expect_settings_update: bool) {
         None,
         Some(cwd.to_string_lossy().into_owned()),
         Some("never".into()),
+        None,
+        None,
         Some(sandbox.to_string()),
     )
     .expect("app_thread_start");
@@ -163,6 +165,8 @@ fn run_file_turn(key: &str, sandbox: &str, expect_settings_update: bool) {
         tid.clone(),
         text,
         Vec::new(),
+        None,
+        None,
         None,
         None,
         None,
@@ -246,6 +250,8 @@ fn run_image_turn(key: &str) {
         None,
         Some(cwd.to_string_lossy().into_owned()),
         Some("never".into()),
+        None,
+        None,
         Some("read-only".into()),
     )
     .expect("app_thread_start");
@@ -258,6 +264,8 @@ fn run_image_turn(key: &str) {
         tid.clone(),
         prompt.to_string(),
         vec![image.clone()],
+        None,
+        None,
         None,
         None,
         None,

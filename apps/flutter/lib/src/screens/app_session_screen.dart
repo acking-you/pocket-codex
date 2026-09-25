@@ -223,7 +223,12 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   // True while the user holds a model pick that hasn't been sent yet, so a
   // server-confirmed model (thread/settings/updated) doesn't clobber it.
   bool _modelPickPending = false;
-  PermissionMode _mode = PermissionMode.auto;
+  PermissionMode _mode = PermissionMode.autoReview;
+  String? _serviceTier;
+  bool _serviceTierPickPending = false;
+  bool _modePickPending = false;
+  bool _supplement = false;
+  Object? _supplementRequest;
   bool _plan = false; // plan mode: the agent plans before implementing
   // Whether the thread is currently in plan mode server-side. Collaboration
   // mode is sticky on the thread, so we must send "default" to leave it — this
@@ -639,6 +644,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     // (text paste still works — the handler never consumes the event).
     if (_isDesktop) HardwareKeyboard.instance.addHandler(_onHardwareKey);
     _subscribe();
+    unawaited(_ensureModels());
     ref.listenManual(runningSessionInventoryProvider(widget.serviceKey), (
       _,
       next,
@@ -795,6 +801,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     _model = d.model;
     _modelPickPending = false;
     _mode = d.mode;
+    _serviceTier = d.serviceTier;
     _plan = d.plan;
     _planActive = false; // a new thread hasn't been told a mode yet
     // A fresh conversation hasn't toggled plan; clear any stale pending toggle
@@ -825,6 +832,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       mode: _mode,
       plan: _plan,
       effort: _effectiveEffort,
+      serviceTier: _serviceTier,
     );
   }
 
@@ -833,6 +841,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     model: _model?.id,
     reasoningEffort: _effectiveEffort?.wire,
     permissionMode: _mode.name,
+    serviceTier: _serviceTier,
     planMode: _plan,
   );
 
@@ -891,6 +900,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         modelProvider: str(s['modelProvider']),
         reasoningEffort: str(s['effort']),
         approvalPolicy: approval,
+        approvalsReviewer: s['approvalsReviewer'] == 'guardian_subagent'
+            ? 'auto_review'
+            : str(s['approvalsReviewer']),
+        serviceTier: str(s['serviceTier']),
         sandboxMode: sandbox,
         collaborationMode: collab,
         confirmedByUpdate: true,
@@ -913,6 +926,19 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       _runtime = cfg;
       _runtimeAt = DateTime.now();
       if (!cfg.confirmedByUpdate) return;
+      if (!_modePickPending && cfg.approvalsReviewer != null) {
+        final preset = PermissionMode.values
+            .where(
+              (mode) =>
+                  mode.approval == cfg.approvalPolicy &&
+                  mode.sandbox == cfg.sandboxMode &&
+                  mode.reviewer == cfg.approvalsReviewer,
+            )
+            .firstOrNull;
+        if (preset != null) _mode = preset;
+      }
+      if (!_serviceTierPickPending) _serviceTier = cfg.serviceTier;
+
       _effortActive = ReasoningEffort.fromWire(cfg.reasoningEffort);
       final collab = cfg.collaborationMode;
       if (collab != null) {
@@ -1044,7 +1070,13 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       // model + permission mode (which the server never restores).
       _model = null;
       _modelPickPending = false;
-      _mode = PermissionMode.auto;
+      _mode = PermissionMode.autoReview;
+      _serviceTier = null;
+      _serviceTierPickPending = false;
+      _modePickPending = false;
+      _supplement = false;
+      _supplementRequest = null;
+      _sending = false;
       _plan = false;
       _planToggledByUser = false;
       // Drop the previous thread's effort (pending pick + active) so an unsent
@@ -1809,6 +1841,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           modelProvider: history.modelProvider,
           reasoningEffort: history.reasoningEffort,
           approvalPolicy: history.approvalPolicy,
+          approvalsReviewer: history.approvalsReviewer,
+          serviceTier: history.serviceTier,
           sandboxMode: history.sandboxMode,
           collaborationMode: history.collaborationMode,
           confirmedByUpdate: history.configConfirmed,
@@ -1824,7 +1858,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                 .where(
                   (m) =>
                       m.approval == history.approvalPolicy &&
-                      m.sandbox == history.sandboxMode,
+                      m.sandbox == history.sandboxMode &&
+                      m.reviewer == (history.approvalsReviewer ?? 'user'),
                 )
                 .firstOrNull;
       final persistedMode = persisted.permissionMode == null
@@ -1834,6 +1869,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                 .firstOrNull;
       final restoredMode = serverPreset ?? persistedMode;
       if (restoredMode != null) _mode = restoredMode;
+      _serviceTier ??= history.serviceTier ?? persisted.serviceTier;
       if (restoredModel != null) _model = restoredModel;
       final serverCollab = history.collaborationMode;
       final restored = serverCollab != null
@@ -2340,6 +2376,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         final failure = _turnFailureText(e.raw);
         setState(() {
           _streaming = false;
+          _supplement = false;
           _turnId = null;
           for (final it in _items) {
             it.streaming = false;
@@ -2364,6 +2401,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       case 'turn/failed':
         setState(() {
           _streaming = false;
+          _supplement = false;
           _turnId = null;
           for (final it in _items) {
             it.streaming = false;
@@ -2485,20 +2523,25 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     _scrollToEnd();
   }
 
-  Future<void> _send({bool retry = false, String? overrideText}) async {
+  Future<void> _send({
+    bool retry = false,
+    String? overrideText,
+    _Queued? queued,
+  }) async {
     final typed = retry
         ? (_lastUserText ?? '')
-        : (overrideText ?? _input.text.trim());
+        : (queued?.text.trim() ?? overrideText ?? _input.text.trim());
     // Attachments ride an ordinary composer send only: a programmatic send
     // (e.g. "implement the plan") must not consume them, and a retry re-sends
     // the snapshot taken at the original send.
     final ordinary = !retry && overrideText == null;
+    final sendAttachments = queued?.attachments ?? _attachments;
     final images = retry
         ? _lastUserImages
         : !ordinary
         ? const <String>[]
         : [
-            for (final a in _attachments)
+            for (final a in sendAttachments)
               if (!a.isFile) ?a.processed?.dataUrl,
           ];
     // File attachments were already uploaded to the host at pick time; they
@@ -2507,7 +2550,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     // re-upload and no double-append.
     final filePaths = ordinary
         ? [
-            for (final a in _attachments)
+            for (final a in sendAttachments)
               if (a.isFile) ?a.hostPath,
           ]
         : const <String>[];
@@ -2531,12 +2574,14 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     // Never send while an attachment is still processing/uploading — the
     // message would silently ship without it. (The send button is disabled
     // too; this also guards the Enter-to-send path.)
-    if (ordinary && _attachments.any((a) => !a.ready)) {
+    if (ordinary && sendAttachments.any((a) => !a.ready)) {
       return;
     }
     // Take the send lock up front, before the retry probe's await below, so the
     // composer can't start a second send during that round-trip (re-entrancy).
     _settingsRevision++;
+    final mode = _mode;
+    final tier = _requestedServiceTier;
     setState(() => _sending = true);
     // Retry safety: a send can commit server-side just before the socket drops
     // (we reconnect with reload:false to keep the optimistic bubble for a
@@ -2574,7 +2619,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         _undoableText = overrideText == null ? typed : null;
         // Don't clear the composer for a programmatic send (e.g. "implement
         // the plan") — the user may have text in progress there.
-        if (overrideText == null) {
+        if (overrideText == null && queued == null) {
           _input.clear();
           _attachments.clear();
         }
@@ -2623,8 +2668,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         widget.serviceKey,
         model: modelId,
         cwd: _cwd,
-        approvalPolicy: _mode.approval,
-        sandbox: _mode.sandbox,
+        approvalPolicy: mode.approval,
+        approvalsReviewer: mode.reviewer,
+        serviceTier: tier,
+        sandbox: mode.sandbox,
       );
       if (isNewThread) {
         // The fresh conversation is now the one to restore on next launch.
@@ -2674,8 +2721,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         text,
         images: images,
         model: modelId,
-        approvalPolicy: _mode.approval,
-        sandbox: _mode.sandbox,
+        approvalPolicy: mode.approval,
+        approvalsReviewer: mode.reviewer,
+        serviceTier: tier,
+        sandbox: mode.sandbox,
         collaborationMode: collab,
         // Re-assert the effective effort every turn. The bridge puts it on the
         // top-level `effort` field AND (when a collaborationMode is sent) into
@@ -2690,6 +2739,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           // The user's model pick (if any) is now on the wire; server
           // confirmations may sync the pill again.
           _modelPickPending = false;
+          if (_mode == mode) _modePickPending = false;
+          if (_serviceTier == tier) _serviceTierPickPending = false;
           // The effort this turn ran with is now the thread's active effort.
           _effortActive = effort;
           // Clear the pending pick ONLY if the user hasn't chosen a NEWER effort
@@ -2721,7 +2772,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       }
       if (_looksDisconnected(msg)) dropped = true;
     } finally {
-      if (mounted) setState(() => _sending = false);
+      if (mounted) {
+        setState(() => _sending = false);
+        if (_error == null && !dropped) _maybeFlushQueue();
+      }
     }
     // The connection dropped mid-send: recover it in the background so a retry
     // (or the next message) succeeds. We do NOT auto-resend — the turn may have
@@ -2818,7 +2872,16 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// Composer send: queue while a turn is in flight (or a backlog is still
   /// draining), otherwise send now.
   void _submit() {
-    if (_historySyncing || _showingCachedHistory) return;
+    if (_historySyncing ||
+        _showingCachedHistory ||
+        _reconnecting ||
+        _connectionLost) {
+      return;
+    }
+    if (_supplement && _streaming) {
+      unawaited(_sendSupplement());
+      return;
+    }
     if (_streaming || _sending || _queue.isNotEmpty) {
       _enqueue();
       // Idle with a residual backlog (e.g. a flush skipped during a reconnect):
@@ -2826,6 +2889,82 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       if (!_streaming && !_sending) _maybeFlushQueue();
     } else {
       _send();
+    }
+  }
+
+  Future<void> _sendSupplement() async {
+    final tid = _threadId;
+    if (tid == null ||
+        !_streaming ||
+        _sending ||
+        _attachments.any((a) => !a.ready)) {
+      return;
+    }
+    final draft = _input.text;
+    final attachments = List<_Attachment>.of(_attachments);
+    if (draft.trim().isEmpty && attachments.isEmpty) return;
+    final text = appendFileRefs(draft.trim(), [
+      for (final attachment in attachments)
+        if (attachment.isFile) ?attachment.hostPath,
+    ]);
+    final images = <String>[
+      for (final attachment in attachments)
+        if (!attachment.isFile) ?attachment.processed?.dataUrl,
+    ];
+    final turnId = _turnId;
+    final generation = _threadLoadGeneration;
+    final request = Object();
+    _supplementRequest = request;
+    bool current() =>
+        mounted && _threadId == tid && identical(_supplementRequest, request);
+    setState(() => _sending = true);
+    try {
+      await ref
+          .read(bridgeApiProvider)
+          .appTurnSteer(widget.serviceKey, tid, turnId, text, images: images);
+      if (!current()) return;
+      setState(() {
+        final item = TranscriptItem(
+          id: 'local-user-${_localSeq++}',
+          type: 'userMessage',
+          text: text,
+          images: resolveImageUrls(images),
+          imageUrls: images,
+          turnId: turnId ?? '',
+        );
+        if (generation == _threadLoadGeneration) {
+          _itemIndex[item.id] = _items.length;
+          _items.add(item);
+        }
+        if (_input.text == draft) _input.clear();
+        _attachments.removeWhere(
+          (a) => attachments.any((sent) => sent.id == a.id),
+        );
+        _supplement = false;
+        _error = null;
+        _retry = null;
+      });
+      if (generation != _threadLoadGeneration) {
+        unawaited(_resumeAndLoad());
+      } else {
+        _scrollToEnd(force: true);
+      }
+    } catch (error) {
+      if (!current()) return;
+      setState(() {
+        _error = !_streaming || _turnId != turnId
+            ? AppLocalizations.of(context).steerTurnEnded
+            : friendlyError(error);
+        _retry = null;
+      });
+    } finally {
+      if (current()) {
+        setState(() {
+          _sending = false;
+          _supplementRequest = null;
+        });
+        _maybeFlushQueue();
+      }
     }
   }
 
@@ -2846,19 +2985,20 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   }
 
   /// Send the head of the queue as a new turn, if the session is idle. Called on
-  /// every turn end (and after a reconnect). Restores the queued draft into the
-  /// composer and reuses the ordinary send path, so attachments / file refs /
-  /// retry-on-drop all behave exactly like a hand-typed send.
+  /// every turn end (and after a reconnect). Send its captured attachments and
+  /// text without replacing a newer draft still in the composer.
   void _maybeFlushQueue() {
-    if (_queue.isEmpty || _streaming || _sending || _reconnecting) return;
-    final q = _queue.removeAt(0); // FIFO
-    _input.text = q.text;
-    _attachments
-      ..clear()
-      ..addAll(q.attachments);
-    // _send reads _input + _attachments synchronously (before its first await)
-    // and clears them; no intermediate frame renders, so nothing flickers.
-    unawaited(_send());
+    if (_queue.isEmpty ||
+        _streaming ||
+        _sending ||
+        _reconnecting ||
+        _connectionLost ||
+        _historySyncing ||
+        _showingCachedHistory) {
+      return;
+    }
+    final q = _queue.removeAt(0);
+    unawaited(_send(queued: q));
   }
 
   /// Esc handling. Returns true when it acted (so the key is consumed).
@@ -7935,6 +8075,56 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                       ),
                     ),
                   ),
+                  if (_effectiveModel?.supportsFast == true || _streaming) ...[
+                    const SizedBox(height: 4),
+                    Wrap(
+                      spacing: 8,
+                      children: [
+                        if (_effectiveModel?.supportsFast == true)
+                          Tooltip(
+                            message: l10n.fastModeHint,
+                            child: FilterChip(
+                              key: const Key('fast-mode-btn'),
+                              avatar: const Icon(Icons.bolt, size: 18),
+                              label: Text(l10n.fastMode),
+                              selected: _effectiveServiceTier == 'priority',
+                              onSelected: _sending
+                                  ? null
+                                  : (enabled) {
+                                      setState(() {
+                                        _serviceTier = enabled
+                                            ? 'priority'
+                                            : 'default';
+                                        _serviceTierPickPending = true;
+                                      });
+                                      _rememberDefaults();
+                                      _persistThreadConfig();
+                                    },
+                            ),
+                          ),
+                        if (_streaming)
+                          Tooltip(
+                            message: l10n.steerMessageHint,
+                            child: FilterChip(
+                              key: const Key('supplement-toggle'),
+                              label: Text(l10n.steerMessage),
+                              selected: _supplement,
+                              onSelected: _sending
+                                  ? null
+                                  : (selected) =>
+                                        setState(() => _supplement = selected),
+                            ),
+                          ),
+                        if (_streaming)
+                          IconButton.filled(
+                            key: const Key('stop-btn'),
+                            onPressed: _interrupt,
+                            tooltip: l10n.stop,
+                            icon: const Icon(Icons.stop_rounded, size: 20),
+                          ),
+                      ],
+                    ),
+                  ],
                   const SizedBox(height: 8),
                   // One row at every width. Attachments collapse into a single `+`
                   // menu and the five wrapping config pills collapse into two
@@ -8417,6 +8607,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   void _applyModel(ModelInfo m) {
     setState(() {
       _model = m;
+      if (!m.supportsFast) {
+        _serviceTier = 'default';
+        _serviceTierPickPending = true;
+      }
       _modelPickPending = true;
       final eff = _effectiveEffort;
       if (eff != null && !m.supportedReasoningEfforts.contains(eff.wire)) {
@@ -8502,41 +8696,57 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   IconData _modeIconFor(PermissionMode m) => switch (m) {
     PermissionMode.full => Icons.lock_open,
     PermissionMode.readOnly => Icons.lock_outline,
-    PermissionMode.auto => Icons.shield_outlined,
+    PermissionMode.auto => Icons.person_outline,
+    PermissionMode.autoReview => Icons.verified_user_outlined,
   };
 
-  Widget _sendButton() {
-    // While a turn is running the send button becomes a stop button (it
-    // interrupts the turn), mirroring Gemini / ChatGPT.
-    if (_streaming) {
-      return IconButton.filled(
-        key: const Key('stop-btn'),
-        onPressed: _interrupt,
-        tooltip: AppLocalizations.of(context).stop,
-        icon: const Icon(Icons.stop_rounded, size: 20),
-      );
+  ModelInfo? get _effectiveModel {
+    if (_model != null) return _model;
+    final activeId = _modelPickPending ? null : _runtime?.model;
+    if (activeId != null) {
+      return _models.where((model) => model.id == activeId).firstOrNull;
     }
-    return ValueListenableBuilder<TextEditingValue>(
-      valueListenable: _input,
-      builder: (context, value, _) {
-        // Sendable with text and/or attachments — but never while an
-        // attachment is still processing/uploading (the message would ship
-        // without it).
-        final processing = _attachments.any((a) => !a.ready);
-        final canSend =
-            !_sending &&
-            !_historySyncing &&
-            !_showingCachedHistory &&
-            !processing &&
-            (value.text.trim().isNotEmpty || _attachments.isNotEmpty);
-        return IconButton.filled(
-          key: const Key('send-btn'),
-          onPressed: canSend ? () => _submit() : null,
-          icon: const Icon(Icons.arrow_upward, size: 20),
-        );
-      },
-    );
+    return _models.where((model) => model.isDefault).firstOrNull;
   }
+
+  String? get _effectiveServiceTier =>
+      _serviceTier ??
+      _runtime?.serviceTier ??
+      _effectiveModel?.defaultServiceTier;
+
+  String? get _requestedServiceTier =>
+      _effectiveServiceTier == 'priority' &&
+          _effectiveModel?.supportsFast == false
+      ? 'default'
+      : _serviceTier;
+
+  Widget _sendButton() => ValueListenableBuilder<TextEditingValue>(
+    valueListenable: _input,
+    builder: (context, value, _) {
+      final l10n = AppLocalizations.of(context);
+      final hasDraft = value.text.trim().isNotEmpty || _attachments.isNotEmpty;
+      if (_streaming && !hasDraft) return const SizedBox.shrink();
+      final canSend =
+          !_sending &&
+          !_reconnecting &&
+          !_connectionLost &&
+          !_historySyncing &&
+          !_showingCachedHistory &&
+          !_attachments.any((a) => !a.ready) &&
+          hasDraft;
+      return IconButton.filled(
+        key: const Key('send-btn'),
+        onPressed: canSend ? _submit : null,
+        tooltip: _streaming
+            ? (_supplement ? l10n.steerMessage : l10n.queueNextTurn)
+            : null,
+        icon: Icon(
+          _streaming && !_supplement ? Icons.playlist_add : Icons.arrow_upward,
+          size: 20,
+        ),
+      );
+    },
+  );
 
   /// A compact, low-chrome setting pill (permission / model). [active]
   /// highlights a toggled-on pill; [warn] flags a risky setting (no-sandbox
@@ -8588,6 +8798,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                 Flexible(
                   child: Text(
                     label,
+                    textWidthBasis: TextWidthBasis.longestLine,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     softWrap: false,
@@ -8609,13 +8820,27 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   // Cached model list (carries each model's supportedReasoningEfforts), fetched
   // lazily and shared by the model + effort pickers.
   List<ModelInfo> _models = const [];
+  Future<List<ModelInfo>>? _modelsLoading;
 
   Future<List<ModelInfo>> _ensureModels() async {
     if (_models.isNotEmpty) return _models;
+    final pending = _modelsLoading;
+    if (pending != null) return pending;
+    final request = _fetchModels();
+    _modelsLoading = request;
     try {
-      _models = await ref
+      return await request;
+    } finally {
+      _modelsLoading = null;
+    }
+  }
+
+  Future<List<ModelInfo>> _fetchModels() async {
+    try {
+      final models = await ref
           .read(bridgeApiProvider)
           .appModelList(widget.serviceKey);
+      if (mounted) setState(() => _models = models);
     } catch (_) {
       // Leave empty; pickers fall back to defaults.
     }
@@ -8782,6 +9007,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     if (chosen != null || models.isNotEmpty) {
       setState(() {
         _model = chosen;
+        if (_effectiveModel?.supportsFast != true) {
+          _serviceTier = 'default';
+          _serviceTierPickPending = true;
+        }
         // Hold this pick against server-confirmed syncs until it's sent.
         _modelPickPending = true;
         // If the new model doesn't support the current effort, fall back to its
@@ -8817,7 +9046,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     );
     if (!mounted || _threadId != startTid) return;
     if (chosen != null) {
-      setState(() => _mode = chosen);
+      setState(() {
+        _mode = chosen;
+        _modePickPending = true;
+      });
       _rememberDefaults();
       _persistThreadConfig();
     }
@@ -8903,7 +9135,12 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     final sandbox = rt?.sandboxMode;
     if (approval != null || sandbox != null) {
       final preset = PermissionMode.values
-          .where((m) => m.approval == approval && m.sandbox == sandbox)
+          .where(
+            (m) =>
+                m.approval == approval &&
+                m.sandbox == sandbox &&
+                m.reviewer == (rt?.approvalsReviewer ?? 'user'),
+          )
           .firstOrNull;
       permText =
           preset?.label(l10n) ?? '${approval ?? '—'} · ${sandbox ?? '—'}';

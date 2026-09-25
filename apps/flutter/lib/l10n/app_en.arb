@@ -146,7 +146,7 @@
   "modeReadOnly": "Read-only",
   "modeReadOnlyDesc": "Ask before running; no file writes",
   "modeAuto": "Auto",
-  "modeAutoDesc": "Write in workspace; ask only on failure",
+  "modeAutoDesc": "Let Codex review approval requests for you, within the workspace sandbox.",
   "modeFull": "Full access",
   "modeFullDesc": "No sandbox, never ask (use with care)",
   "approvalPrompt": "The agent wants to run a command",
@@ -724,5 +724,13 @@
         "type": "int"
       }
     }
-  }
+  },
+  "modeAsk": "Ask for approval",
+  "modeAskDesc": "Work in the workspace; ask you before actions that require approval.",
+  "fastMode": "Fast",
+  "fastModeHint": "Use the model’s Fast service tier for subsequent turns.",
+  "steerMessage": "Supplement",
+  "steerMessageHint": "Add to the current turn at its next step. Otherwise, queue for the next turn.",
+  "queueNextTurn": "Queue for next turn",
+  "steerTurnEnded": "The turn changed or ended. Your draft is kept; send it as a new turn."
 }

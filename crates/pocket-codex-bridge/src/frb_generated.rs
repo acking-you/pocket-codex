@@ -1719,6 +1719,8 @@ fn wire__crate__api__bridge__app_thread_start_impl(
             let api_model = <Option<String>>::sse_decode(&mut deserializer);
             let api_cwd = <Option<String>>::sse_decode(&mut deserializer);
             let api_approval_policy = <Option<String>>::sse_decode(&mut deserializer);
+            let api_approvals_reviewer = <Option<String>>::sse_decode(&mut deserializer);
+            let api_service_tier = <Option<String>>::sse_decode(&mut deserializer);
             let api_sandbox = <Option<String>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
@@ -1729,6 +1731,8 @@ fn wire__crate__api__bridge__app_thread_start_impl(
                             api_model,
                             api_cwd,
                             api_approval_policy,
+                            api_approvals_reviewer,
+                            api_service_tier,
                             api_sandbox,
                         )?;
                         Ok(output_ok)
@@ -1932,6 +1936,8 @@ fn wire__crate__api__bridge__app_turn_start_impl(
             let api_images = <Vec<String>>::sse_decode(&mut deserializer);
             let api_model = <Option<String>>::sse_decode(&mut deserializer);
             let api_approval_policy = <Option<String>>::sse_decode(&mut deserializer);
+            let api_approvals_reviewer = <Option<String>>::sse_decode(&mut deserializer);
+            let api_service_tier = <Option<String>>::sse_decode(&mut deserializer);
             let api_sandbox = <Option<String>>::sse_decode(&mut deserializer);
             let api_collaboration_mode = <Option<String>>::sse_decode(&mut deserializer);
             let api_reasoning_effort = <Option<String>>::sse_decode(&mut deserializer);
@@ -1946,6 +1952,8 @@ fn wire__crate__api__bridge__app_turn_start_impl(
                             api_images,
                             api_model,
                             api_approval_policy,
+                            api_approvals_reviewer,
+                            api_service_tier,
                             api_sandbox,
                             api_collaboration_mode,
                             api_reasoning_effort,
@@ -1983,6 +1991,7 @@ fn wire__crate__api__bridge__app_turn_steer_impl(
             let api_thread_id = <String>::sse_decode(&mut deserializer);
             let api_turn_id = <Option<String>>::sse_decode(&mut deserializer);
             let api_text = <String>::sse_decode(&mut deserializer);
+            let api_images = <Option<Vec<String>>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
@@ -1992,6 +2001,7 @@ fn wire__crate__api__bridge__app_turn_steer_impl(
                             api_thread_id,
                             api_turn_id,
                             api_text,
+                            api_images,
                         )?;
                         Ok(output_ok)
                     })(),
@@ -4099,12 +4109,18 @@ impl SseDecode for crate::api::bridge::ModelInfoDto {
         let mut var_description = <String>::sse_decode(deserializer);
         let mut var_supportedReasoningEfforts = <Vec<String>>::sse_decode(deserializer);
         let mut var_defaultReasoningEffort = <Option<String>>::sse_decode(deserializer);
+        let mut var_supportedServiceTiers = <Vec<String>>::sse_decode(deserializer);
+        let mut var_defaultServiceTier = <Option<String>>::sse_decode(deserializer);
+        let mut var_isDefault = <bool>::sse_decode(deserializer);
         return crate::api::bridge::ModelInfoDto {
             id: var_id,
             display_name: var_displayName,
             description: var_description,
             supported_reasoning_efforts: var_supportedReasoningEfforts,
             default_reasoning_effort: var_defaultReasoningEffort,
+            supported_service_tiers: var_supportedServiceTiers,
+            default_service_tier: var_defaultServiceTier,
+            is_default: var_isDefault,
         };
     }
 }
@@ -4192,6 +4208,17 @@ impl SseDecode for Option<u32> {
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         if (<bool>::sse_decode(deserializer)) {
             return Some(<u32>::sse_decode(deserializer));
+        } else {
+            return None;
+        }
+    }
+}
+
+impl SseDecode for Option<Vec<String>> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        if (<bool>::sse_decode(deserializer)) {
+            return Some(<Vec<String>>::sse_decode(deserializer));
         } else {
             return None;
         }
@@ -4294,11 +4321,13 @@ impl SseDecode for crate::api::bridge::ThreadConfigDto {
         let mut var_model = <Option<String>>::sse_decode(deserializer);
         let mut var_reasoningEffort = <Option<String>>::sse_decode(deserializer);
         let mut var_permissionMode = <Option<String>>::sse_decode(deserializer);
+        let mut var_serviceTier = <Option<String>>::sse_decode(deserializer);
         let mut var_planMode = <Option<bool>>::sse_decode(deserializer);
         return crate::api::bridge::ThreadConfigDto {
             model: var_model,
             reasoning_effort: var_reasoningEffort,
             permission_mode: var_permissionMode,
+            service_tier: var_serviceTier,
             plan_mode: var_planMode,
         };
     }
@@ -4319,6 +4348,8 @@ impl SseDecode for crate::api::bridge::ThreadHistoryDto {
         let mut var_model = <Option<String>>::sse_decode(deserializer);
         let mut var_modelProvider = <Option<String>>::sse_decode(deserializer);
         let mut var_approvalPolicy = <Option<String>>::sse_decode(deserializer);
+        let mut var_approvalsReviewer = <Option<String>>::sse_decode(deserializer);
+        let mut var_serviceTier = <Option<String>>::sse_decode(deserializer);
         let mut var_sandboxMode = <Option<String>>::sse_decode(deserializer);
         let mut var_configConfirmed = <bool>::sse_decode(deserializer);
         let mut var_hasOlder = <bool>::sse_decode(deserializer);
@@ -4339,6 +4370,8 @@ impl SseDecode for crate::api::bridge::ThreadHistoryDto {
             model: var_model,
             model_provider: var_modelProvider,
             approval_policy: var_approvalPolicy,
+            approvals_reviewer: var_approvalsReviewer,
+            service_tier: var_serviceTier,
             sandbox_mode: var_sandboxMode,
             config_confirmed: var_configConfirmed,
             has_older: var_hasOlder,
@@ -4400,6 +4433,8 @@ impl SseDecode for crate::api::bridge::ThreadRuntimeConfigDto {
         let mut var_modelProvider = <Option<String>>::sse_decode(deserializer);
         let mut var_reasoningEffort = <Option<String>>::sse_decode(deserializer);
         let mut var_approvalPolicy = <Option<String>>::sse_decode(deserializer);
+        let mut var_approvalsReviewer = <Option<String>>::sse_decode(deserializer);
+        let mut var_serviceTier = <Option<String>>::sse_decode(deserializer);
         let mut var_sandboxMode = <Option<String>>::sse_decode(deserializer);
         let mut var_collaborationMode = <Option<String>>::sse_decode(deserializer);
         let mut var_confirmedByUpdate = <bool>::sse_decode(deserializer);
@@ -4408,6 +4443,8 @@ impl SseDecode for crate::api::bridge::ThreadRuntimeConfigDto {
             model_provider: var_modelProvider,
             reasoning_effort: var_reasoningEffort,
             approval_policy: var_approvalPolicy,
+            approvals_reviewer: var_approvalsReviewer,
+            service_tier: var_serviceTier,
             sandbox_mode: var_sandboxMode,
             collaboration_mode: var_collaborationMode,
             confirmed_by_update: var_confirmedByUpdate,
@@ -5143,6 +5180,9 @@ impl flutter_rust_bridge::IntoDart for crate::api::bridge::ModelInfoDto {
                 .into_into_dart()
                 .into_dart(),
             self.default_reasoning_effort.into_into_dart().into_dart(),
+            self.supported_service_tiers.into_into_dart().into_dart(),
+            self.default_service_tier.into_into_dart().into_dart(),
+            self.is_default.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -5315,6 +5355,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::bridge::ThreadConfigDto {
             self.model.into_into_dart().into_dart(),
             self.reasoning_effort.into_into_dart().into_dart(),
             self.permission_mode.into_into_dart().into_dart(),
+            self.service_tier.into_into_dart().into_dart(),
             self.plan_mode.into_into_dart().into_dart(),
         ]
         .into_dart()
@@ -5347,6 +5388,8 @@ impl flutter_rust_bridge::IntoDart for crate::api::bridge::ThreadHistoryDto {
             self.model.into_into_dart().into_dart(),
             self.model_provider.into_into_dart().into_dart(),
             self.approval_policy.into_into_dart().into_dart(),
+            self.approvals_reviewer.into_into_dart().into_dart(),
+            self.service_tier.into_into_dart().into_dart(),
             self.sandbox_mode.into_into_dart().into_dart(),
             self.config_confirmed.into_into_dart().into_dart(),
             self.has_older.into_into_dart().into_dart(),
@@ -5428,6 +5471,8 @@ impl flutter_rust_bridge::IntoDart for crate::api::bridge::ThreadRuntimeConfigDt
             self.model_provider.into_into_dart().into_dart(),
             self.reasoning_effort.into_into_dart().into_dart(),
             self.approval_policy.into_into_dart().into_dart(),
+            self.approvals_reviewer.into_into_dart().into_dart(),
+            self.service_tier.into_into_dart().into_dart(),
             self.sandbox_mode.into_into_dart().into_dart(),
             self.collaboration_mode.into_into_dart().into_dart(),
             self.confirmed_by_update.into_into_dart().into_dart(),
@@ -5951,6 +5996,9 @@ impl SseEncode for crate::api::bridge::ModelInfoDto {
         <String>::sse_encode(self.description, serializer);
         <Vec<String>>::sse_encode(self.supported_reasoning_efforts, serializer);
         <Option<String>>::sse_encode(self.default_reasoning_effort, serializer);
+        <Vec<String>>::sse_encode(self.supported_service_tiers, serializer);
+        <Option<String>>::sse_encode(self.default_service_tier, serializer);
+        <bool>::sse_encode(self.is_default, serializer);
     }
 }
 
@@ -6032,6 +6080,16 @@ impl SseEncode for Option<u32> {
     }
 }
 
+impl SseEncode for Option<Vec<String>> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <bool>::sse_encode(self.is_some(), serializer);
+        if let Some(value) = self {
+            <Vec<String>>::sse_encode(value, serializer);
+        }
+    }
+}
+
 impl SseEncode for crate::api::bridge::ProjectConfigDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -6095,6 +6153,7 @@ impl SseEncode for crate::api::bridge::ThreadConfigDto {
         <Option<String>>::sse_encode(self.model, serializer);
         <Option<String>>::sse_encode(self.reasoning_effort, serializer);
         <Option<String>>::sse_encode(self.permission_mode, serializer);
+        <Option<String>>::sse_encode(self.service_tier, serializer);
         <Option<bool>>::sse_encode(self.plan_mode, serializer);
     }
 }
@@ -6114,6 +6173,8 @@ impl SseEncode for crate::api::bridge::ThreadHistoryDto {
         <Option<String>>::sse_encode(self.model, serializer);
         <Option<String>>::sse_encode(self.model_provider, serializer);
         <Option<String>>::sse_encode(self.approval_policy, serializer);
+        <Option<String>>::sse_encode(self.approvals_reviewer, serializer);
+        <Option<String>>::sse_encode(self.service_tier, serializer);
         <Option<String>>::sse_encode(self.sandbox_mode, serializer);
         <bool>::sse_encode(self.config_confirmed, serializer);
         <bool>::sse_encode(self.has_older, serializer);
@@ -6156,6 +6217,8 @@ impl SseEncode for crate::api::bridge::ThreadRuntimeConfigDto {
         <Option<String>>::sse_encode(self.model_provider, serializer);
         <Option<String>>::sse_encode(self.reasoning_effort, serializer);
         <Option<String>>::sse_encode(self.approval_policy, serializer);
+        <Option<String>>::sse_encode(self.approvals_reviewer, serializer);
+        <Option<String>>::sse_encode(self.service_tier, serializer);
         <Option<String>>::sse_encode(self.sandbox_mode, serializer);
         <Option<String>>::sse_encode(self.collaboration_mode, serializer);
         <bool>::sse_encode(self.confirmed_by_update, serializer);

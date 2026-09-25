@@ -259,6 +259,8 @@ abstract class RustLibApi extends BaseApi {
     String? model,
     String? cwd,
     String? approvalPolicy,
+    String? approvalsReviewer,
+    String? serviceTier,
     String? sandbox,
   });
 
@@ -294,6 +296,8 @@ abstract class RustLibApi extends BaseApi {
     required List<String> images,
     String? model,
     String? approvalPolicy,
+    String? approvalsReviewer,
+    String? serviceTier,
     String? sandbox,
     String? collaborationMode,
     String? reasoningEffort,
@@ -304,6 +308,7 @@ abstract class RustLibApi extends BaseApi {
     required String threadId,
     String? turnId,
     required String text,
+    List<String>? images,
   });
 
   String crateApiSimpleBridgeVersion();
@@ -1932,6 +1937,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     String? model,
     String? cwd,
     String? approvalPolicy,
+    String? approvalsReviewer,
+    String? serviceTier,
     String? sandbox,
   }) {
     return handler.executeNormal(
@@ -1942,6 +1949,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_opt_String(model, serializer);
           sse_encode_opt_String(cwd, serializer);
           sse_encode_opt_String(approvalPolicy, serializer);
+          sse_encode_opt_String(approvalsReviewer, serializer);
+          sse_encode_opt_String(serviceTier, serializer);
           sse_encode_opt_String(sandbox, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
@@ -1955,7 +1964,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: sse_decode_AnyhowException,
         ),
         constMeta: kCrateApiBridgeAppThreadStartConstMeta,
-        argValues: [serviceKey, model, cwd, approvalPolicy, sandbox],
+        argValues: [
+          serviceKey,
+          model,
+          cwd,
+          approvalPolicy,
+          approvalsReviewer,
+          serviceTier,
+          sandbox,
+        ],
         apiImpl: this,
       ),
     );
@@ -1964,7 +1981,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiBridgeAppThreadStartConstMeta =>
       const TaskConstMeta(
         debugName: "app_thread_start",
-        argNames: ["serviceKey", "model", "cwd", "approvalPolicy", "sandbox"],
+        argNames: [
+          "serviceKey",
+          "model",
+          "cwd",
+          "approvalPolicy",
+          "approvalsReviewer",
+          "serviceTier",
+          "sandbox",
+        ],
       );
 
   @override
@@ -2125,6 +2150,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     required List<String> images,
     String? model,
     String? approvalPolicy,
+    String? approvalsReviewer,
+    String? serviceTier,
     String? sandbox,
     String? collaborationMode,
     String? reasoningEffort,
@@ -2139,6 +2166,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_list_String(images, serializer);
           sse_encode_opt_String(model, serializer);
           sse_encode_opt_String(approvalPolicy, serializer);
+          sse_encode_opt_String(approvalsReviewer, serializer);
+          sse_encode_opt_String(serviceTier, serializer);
           sse_encode_opt_String(sandbox, serializer);
           sse_encode_opt_String(collaborationMode, serializer);
           sse_encode_opt_String(reasoningEffort, serializer);
@@ -2161,6 +2190,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           images,
           model,
           approvalPolicy,
+          approvalsReviewer,
+          serviceTier,
           sandbox,
           collaborationMode,
           reasoningEffort,
@@ -2179,6 +2210,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       "images",
       "model",
       "approvalPolicy",
+      "approvalsReviewer",
+      "serviceTier",
       "sandbox",
       "collaborationMode",
       "reasoningEffort",
@@ -2191,6 +2224,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     required String threadId,
     String? turnId,
     required String text,
+    List<String>? images,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -2200,6 +2234,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_String(threadId, serializer);
           sse_encode_opt_String(turnId, serializer);
           sse_encode_String(text, serializer);
+          sse_encode_opt_list_String(images, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -2212,7 +2247,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: sse_decode_AnyhowException,
         ),
         constMeta: kCrateApiBridgeAppTurnSteerConstMeta,
-        argValues: [serviceKey, threadId, turnId, text],
+        argValues: [serviceKey, threadId, turnId, text, images],
         apiImpl: this,
       ),
     );
@@ -2220,7 +2255,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateApiBridgeAppTurnSteerConstMeta => const TaskConstMeta(
     debugName: "app_turn_steer",
-    argNames: ["serviceKey", "threadId", "turnId", "text"],
+    argNames: ["serviceKey", "threadId", "turnId", "text", "images"],
   );
 
   @override
@@ -3989,14 +4024,17 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ModelInfoDto dco_decode_model_info_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 5)
-      throw Exception('unexpected arr length: expect 5 but see ${arr.length}');
+    if (arr.length != 8)
+      throw Exception('unexpected arr length: expect 8 but see ${arr.length}');
     return ModelInfoDto(
       id: dco_decode_String(arr[0]),
       displayName: dco_decode_String(arr[1]),
       description: dco_decode_String(arr[2]),
       supportedReasoningEfforts: dco_decode_list_String(arr[3]),
       defaultReasoningEffort: dco_decode_opt_String(arr[4]),
+      supportedServiceTiers: dco_decode_list_String(arr[5]),
+      defaultServiceTier: dco_decode_opt_String(arr[6]),
+      isDefault: dco_decode_bool(arr[7]),
     );
   }
 
@@ -4056,6 +4094,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   int? dco_decode_opt_box_autoadd_u_32(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw == null ? null : dco_decode_box_autoadd_u_32(raw);
+  }
+
+  @protected
+  List<String>? dco_decode_opt_list_String(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw == null ? null : dco_decode_list_String(raw);
   }
 
   @protected
@@ -4143,13 +4187,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ThreadConfigDto dco_decode_thread_config_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 4)
-      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
+    if (arr.length != 5)
+      throw Exception('unexpected arr length: expect 5 but see ${arr.length}');
     return ThreadConfigDto(
       model: dco_decode_opt_String(arr[0]),
       reasoningEffort: dco_decode_opt_String(arr[1]),
       permissionMode: dco_decode_opt_String(arr[2]),
-      planMode: dco_decode_opt_box_autoadd_bool(arr[3]),
+      serviceTier: dco_decode_opt_String(arr[3]),
+      planMode: dco_decode_opt_box_autoadd_bool(arr[4]),
     );
   }
 
@@ -4157,8 +4202,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ThreadHistoryDto dco_decode_thread_history_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 18)
-      throw Exception('unexpected arr length: expect 18 but see ${arr.length}');
+    if (arr.length != 20)
+      throw Exception('unexpected arr length: expect 20 but see ${arr.length}');
     return ThreadHistoryDto(
       historyEpoch: dco_decode_opt_String(arr[0]),
       items: dco_decode_list_thread_item_dto(arr[1]),
@@ -4172,12 +4217,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       model: dco_decode_opt_String(arr[9]),
       modelProvider: dco_decode_opt_String(arr[10]),
       approvalPolicy: dco_decode_opt_String(arr[11]),
-      sandboxMode: dco_decode_opt_String(arr[12]),
-      configConfirmed: dco_decode_bool(arr[13]),
-      hasOlder: dco_decode_bool(arr[14]),
-      turns: dco_decode_list_turn_summary_dto(arr[15]),
-      firstTurnId: dco_decode_opt_String(arr[16]),
-      turnPages: dco_decode_list_turn_items_page_dto(arr[17]),
+      approvalsReviewer: dco_decode_opt_String(arr[12]),
+      serviceTier: dco_decode_opt_String(arr[13]),
+      sandboxMode: dco_decode_opt_String(arr[14]),
+      configConfirmed: dco_decode_bool(arr[15]),
+      hasOlder: dco_decode_bool(arr[16]),
+      turns: dco_decode_list_turn_summary_dto(arr[17]),
+      firstTurnId: dco_decode_opt_String(arr[18]),
+      turnPages: dco_decode_list_turn_items_page_dto(arr[19]),
     );
   }
 
@@ -4219,16 +4266,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ThreadRuntimeConfigDto dco_decode_thread_runtime_config_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 7)
-      throw Exception('unexpected arr length: expect 7 but see ${arr.length}');
+    if (arr.length != 9)
+      throw Exception('unexpected arr length: expect 9 but see ${arr.length}');
     return ThreadRuntimeConfigDto(
       model: dco_decode_opt_String(arr[0]),
       modelProvider: dco_decode_opt_String(arr[1]),
       reasoningEffort: dco_decode_opt_String(arr[2]),
       approvalPolicy: dco_decode_opt_String(arr[3]),
-      sandboxMode: dco_decode_opt_String(arr[4]),
-      collaborationMode: dco_decode_opt_String(arr[5]),
-      confirmedByUpdate: dco_decode_bool(arr[6]),
+      approvalsReviewer: dco_decode_opt_String(arr[4]),
+      serviceTier: dco_decode_opt_String(arr[5]),
+      sandboxMode: dco_decode_opt_String(arr[6]),
+      collaborationMode: dco_decode_opt_String(arr[7]),
+      confirmedByUpdate: dco_decode_bool(arr[8]),
     );
   }
 
@@ -4960,12 +5009,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_description = sse_decode_String(deserializer);
     var var_supportedReasoningEfforts = sse_decode_list_String(deserializer);
     var var_defaultReasoningEffort = sse_decode_opt_String(deserializer);
+    var var_supportedServiceTiers = sse_decode_list_String(deserializer);
+    var var_defaultServiceTier = sse_decode_opt_String(deserializer);
+    var var_isDefault = sse_decode_bool(deserializer);
     return ModelInfoDto(
       id: var_id,
       displayName: var_displayName,
       description: var_description,
       supportedReasoningEfforts: var_supportedReasoningEfforts,
       defaultReasoningEffort: var_defaultReasoningEffort,
+      supportedServiceTiers: var_supportedServiceTiers,
+      defaultServiceTier: var_defaultServiceTier,
+      isDefault: var_isDefault,
     );
   }
 
@@ -5055,6 +5110,17 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
     if (sse_decode_bool(deserializer)) {
       return (sse_decode_box_autoadd_u_32(deserializer));
+    } else {
+      return null;
+    }
+  }
+
+  @protected
+  List<String>? sse_decode_opt_list_String(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    if (sse_decode_bool(deserializer)) {
+      return (sse_decode_list_String(deserializer));
     } else {
       return null;
     }
@@ -5151,11 +5217,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_model = sse_decode_opt_String(deserializer);
     var var_reasoningEffort = sse_decode_opt_String(deserializer);
     var var_permissionMode = sse_decode_opt_String(deserializer);
+    var var_serviceTier = sse_decode_opt_String(deserializer);
     var var_planMode = sse_decode_opt_box_autoadd_bool(deserializer);
     return ThreadConfigDto(
       model: var_model,
       reasoningEffort: var_reasoningEffort,
       permissionMode: var_permissionMode,
+      serviceTier: var_serviceTier,
       planMode: var_planMode,
     );
   }
@@ -5175,6 +5243,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_model = sse_decode_opt_String(deserializer);
     var var_modelProvider = sse_decode_opt_String(deserializer);
     var var_approvalPolicy = sse_decode_opt_String(deserializer);
+    var var_approvalsReviewer = sse_decode_opt_String(deserializer);
+    var var_serviceTier = sse_decode_opt_String(deserializer);
     var var_sandboxMode = sse_decode_opt_String(deserializer);
     var var_configConfirmed = sse_decode_bool(deserializer);
     var var_hasOlder = sse_decode_bool(deserializer);
@@ -5194,6 +5264,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       model: var_model,
       modelProvider: var_modelProvider,
       approvalPolicy: var_approvalPolicy,
+      approvalsReviewer: var_approvalsReviewer,
+      serviceTier: var_serviceTier,
       sandboxMode: var_sandboxMode,
       configConfirmed: var_configConfirmed,
       hasOlder: var_hasOlder,
@@ -5254,6 +5326,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_modelProvider = sse_decode_opt_String(deserializer);
     var var_reasoningEffort = sse_decode_opt_String(deserializer);
     var var_approvalPolicy = sse_decode_opt_String(deserializer);
+    var var_approvalsReviewer = sse_decode_opt_String(deserializer);
+    var var_serviceTier = sse_decode_opt_String(deserializer);
     var var_sandboxMode = sse_decode_opt_String(deserializer);
     var var_collaborationMode = sse_decode_opt_String(deserializer);
     var var_confirmedByUpdate = sse_decode_bool(deserializer);
@@ -5262,6 +5336,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       modelProvider: var_modelProvider,
       reasoningEffort: var_reasoningEffort,
       approvalPolicy: var_approvalPolicy,
+      approvalsReviewer: var_approvalsReviewer,
+      serviceTier: var_serviceTier,
       sandboxMode: var_sandboxMode,
       collaborationMode: var_collaborationMode,
       confirmedByUpdate: var_confirmedByUpdate,
@@ -5920,6 +5996,9 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_String(self.description, serializer);
     sse_encode_list_String(self.supportedReasoningEfforts, serializer);
     sse_encode_opt_String(self.defaultReasoningEffort, serializer);
+    sse_encode_list_String(self.supportedServiceTiers, serializer);
+    sse_encode_opt_String(self.defaultServiceTier, serializer);
+    sse_encode_bool(self.isDefault, serializer);
   }
 
   @protected
@@ -6012,6 +6091,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_opt_list_String(
+    List<String>? self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    sse_encode_bool(self != null, serializer);
+    if (self != null) {
+      sse_encode_list_String(self, serializer);
+    }
+  }
+
+  @protected
   void sse_encode_project_config_dto(
     ProjectConfigDto self,
     SseSerializer serializer,
@@ -6083,6 +6175,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_opt_String(self.model, serializer);
     sse_encode_opt_String(self.reasoningEffort, serializer);
     sse_encode_opt_String(self.permissionMode, serializer);
+    sse_encode_opt_String(self.serviceTier, serializer);
     sse_encode_opt_box_autoadd_bool(self.planMode, serializer);
   }
 
@@ -6104,6 +6197,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_opt_String(self.model, serializer);
     sse_encode_opt_String(self.modelProvider, serializer);
     sse_encode_opt_String(self.approvalPolicy, serializer);
+    sse_encode_opt_String(self.approvalsReviewer, serializer);
+    sse_encode_opt_String(self.serviceTier, serializer);
     sse_encode_opt_String(self.sandboxMode, serializer);
     sse_encode_bool(self.configConfirmed, serializer);
     sse_encode_bool(self.hasOlder, serializer);
@@ -6152,6 +6247,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_opt_String(self.modelProvider, serializer);
     sse_encode_opt_String(self.reasoningEffort, serializer);
     sse_encode_opt_String(self.approvalPolicy, serializer);
+    sse_encode_opt_String(self.approvalsReviewer, serializer);
+    sse_encode_opt_String(self.serviceTier, serializer);
     sse_encode_opt_String(self.sandboxMode, serializer);
     sse_encode_opt_String(self.collaborationMode, serializer);
     sse_encode_bool(self.confirmedByUpdate, serializer);
