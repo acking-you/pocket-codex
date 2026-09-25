@@ -6,7 +6,7 @@
 import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `holder_dto`, `item_dto`, `meta_follow_update_dto`, `meta_holder_dto`, `meta_liveness_dto`, `meta_thread_item_dto`, `project_config_dto`, `thread_config_dto`, `thread_config_from_dto`, `to_log_dto`, `turn_page_dto`
+// These functions are ignored because they are not marked as `pub`: `history_dto`, `holder_dto`, `item_dto`, `meta_follow_update_dto`, `meta_holder_dto`, `meta_liveness_dto`, `meta_thread_item_dto`, `project_config_dto`, `thread_config_dto`, `thread_config_from_dto`, `to_log_dto`, `turn_page_dto`
 
 /// Initialise the engine with the platform app-support dir (from Dart's
 /// path_provider). Must be called once after `RustLib.init()`.
@@ -191,6 +191,9 @@ Future<String?> codexLocate() =>
     RustLib.instance.api.crateApiBridgeCodexLocate();
 
 /// Read or continue a selected turn, reusing its previously loaded pages.
+/// `delta_only` opts into new items only on continuation; omission preserves
+/// cumulative windows for older callers. Opening always returns the cached
+/// prefix.
 Future<TurnItemsPageDto> appThreadTurnPage({
   required String serviceKey,
   required String threadId,
@@ -374,6 +377,8 @@ Future<void> appThreadResume({
 ///
 /// A paginated thread returns only its newest turns' items — walk further back
 /// with [`app_thread_older_page`] — plus a summary of every turn in `turns`.
+/// Monitoring clients set `include_turn_pages` to false to omit cached windows
+/// they already hold. Omission retains the full reopening response.
 Future<ThreadHistoryDto> appThreadRead({
   required String serviceKey,
   required String threadId,
@@ -803,6 +808,45 @@ Future<void> accountDeregisterService({
   kind: kind,
   name: name,
 );
+
+/// Load a display-only persisted history without contacting a host.
+Future<ThreadHistoryDto?> appHistoryCached({
+  required String serviceKey,
+  required String threadId,
+}) => RustLib.instance.api.crateApiBridgeAppHistoryCached(
+  serviceKey: serviceKey,
+  threadId: threadId,
+);
+
+/// Negotiate the independent meta history protocol before remote reads.
+Future<bool> appHistorySyncPrepare({required String serviceKey}) => RustLib
+    .instance
+    .api
+    .crateApiBridgeAppHistorySyncPrepare(serviceKey: serviceKey);
+
+/// Prefetch only a bounded running-session tail without resuming it.
+Future<void> appHistoryPrefetch({
+  required String serviceKey,
+  required String threadId,
+}) => RustLib.instance.api.crateApiBridgeAppHistoryPrefetch(
+  serviceKey: serviceKey,
+  threadId: threadId,
+);
+
+/// Prioritize the current reader over background prefetch in the disk cache.
+Future<void> appHistoryFocus({required String serviceKey, String? threadId}) =>
+    RustLib.instance.api.crateApiBridgeAppHistoryFocus(
+      serviceKey: serviceKey,
+      threadId: threadId,
+    );
+
+/// Inspect and enforce the shared disk quota without contacting any host.
+Future<HistoryCacheStatusDto> historyCacheStatus() =>
+    RustLib.instance.api.crateApiBridgeHistoryCacheStatus();
+
+/// Set the shared cache quota, immediately evicting cold disposable windows.
+Future<void> historyCacheSetLimit({required int limitMb}) =>
+    RustLib.instance.api.crateApiBridgeHistoryCacheSetLimit(limitMb: limitMb);
 
 /// Outcome of one device-flow poll, mirrored for Dart. `status` is one of
 /// `pending` / `slow_down` / `authorized` / `expired` / `denied`; `login` is
@@ -1501,6 +1545,28 @@ class ForceResumeReportDto {
           resumeError == other.resumeError;
 }
 
+/// Controller-wide persistent cache capacity and actual disk usage.
+class HistoryCacheStatusDto {
+  /// Shared capacity in decimal MB; zero disables persistence.
+  final int limitMb;
+
+  /// Bytes currently allocated to cache entries, including metadata.
+  final BigInt usedBytes;
+
+  const HistoryCacheStatusDto({required this.limitMb, required this.usedBytes});
+
+  @override
+  int get hashCode => limitMb.hashCode ^ usedBytes.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is HistoryCacheStatusDto &&
+          runtimeType == other.runtimeType &&
+          limitMb == other.limitMb &&
+          usedBytes == other.usedBytes;
+}
+
 /// A process holding a session's rollout open (a would-be takeover
 /// target), mirrored for Dart.
 class HolderDto {
@@ -1957,6 +2023,9 @@ class ThreadConfigDto {
 /// A thread's recovered history + whether a turn is still running, plus the
 /// metadata the status bar / git chip seed from on open.
 class ThreadHistoryDto {
+  /// Source generation used to invalidate replaced historical UI windows.
+  final String? historyEpoch;
+
   /// Conversation items, oldest first.
   final List<ThreadItemDto> items;
 
@@ -2019,6 +2088,7 @@ class ThreadHistoryDto {
   final List<TurnItemsPageDto> turnPages;
 
   const ThreadHistoryDto({
+    this.historyEpoch,
     required this.items,
     required this.running,
     this.branch,
@@ -2040,6 +2110,7 @@ class ThreadHistoryDto {
 
   @override
   int get hashCode =>
+      historyEpoch.hashCode ^
       items.hashCode ^
       running.hashCode ^
       branch.hashCode ^
@@ -2063,6 +2134,7 @@ class ThreadHistoryDto {
       identical(this, other) ||
       other is ThreadHistoryDto &&
           runtimeType == other.runtimeType &&
+          historyEpoch == other.historyEpoch &&
           items == other.items &&
           running == other.running &&
           branch == other.branch &&

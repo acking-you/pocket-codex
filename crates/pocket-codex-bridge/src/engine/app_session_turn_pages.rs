@@ -11,7 +11,7 @@ pub(super) struct TurnWindow {
 }
 
 /// A selected turn's items and whether more follow them in that turn.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TurnItemsPage {
     /// Turn owning this page.
     pub turn_id: String,
@@ -96,7 +96,8 @@ fn thread_turn_page_inner(
     if let Some(cursor) = &window.next_cursor {
         params["cursor"] = json!(cursor);
     }
-    let response = runtime::runtime().block_on(client.request("thread/items/list", params))?;
+    let response =
+        super::super::session_sync::request(service_key, &client, "thread/items/list", params)?;
     let entries = response
         .get("data")
         .and_then(Value::as_array)

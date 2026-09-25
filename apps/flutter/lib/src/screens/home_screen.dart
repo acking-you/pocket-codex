@@ -104,7 +104,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     // discovery on mount matters after onboarding/sign-in: the provider may
     // cache a pre-login fetch (or its error), and first impressions shouldn't
     // wait for the 15s self-heal tick.
-    Future.microtask(() {
+    Future.microtask(() async {
       if (!mounted) return;
       ref.invalidate(servicesProvider);
       // The manage page's "open" hands a service over here rather than pushing
@@ -114,9 +114,33 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       if (requested != null) {
         ref.read(requestedServiceProvider.notifier).state = null;
       }
-      _resolve(forceKey: requested);
+      final cached = await _openCachedLastSession(requested);
+      if (mounted) _resolve(forceKey: requested, background: cached);
     });
     _retryTimer = Timer.periodic(_retryInterval, (_) => _selfHeal());
+  }
+
+  Future<bool> _openCachedLastSession(String? requested) async {
+    try {
+      final prefs = await _prefs();
+      if (!mounted) return false;
+      final service = requested ?? prefs.lastServiceKey;
+      final thread = prefs.lastThreadByService[service];
+      if (service == null || thread == null) return false;
+      final history = await ref
+          .read(bridgeApiProvider)
+          .appHistoryCached(service, thread);
+      if (!mounted || history == null) return false;
+      setState(() {
+        _serviceKey = service;
+        _threadId = thread;
+        _cwd = history.cwd;
+        _phase = _Phase.ready;
+      });
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   /// Re-check a failure state in place (no splash flash), and rescue a
@@ -187,7 +211,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
           return;
         }
         setState(() {
-          _phase = _Phase.discoverFailed;
+          _phase = _serviceKey == null ? _Phase.discoverFailed : _Phase.ready;
           _error = message;
         });
         return;
@@ -247,7 +271,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       if (!mounted || gen != _generation) return;
       if (apps.isEmpty) {
         setState(() {
-          _phase = _Phase.noService;
+          _phase = _serviceKey == null ? _Phase.noService : _Phase.ready;
           _candidates = const [];
           if (background) _error = null;
         });
@@ -306,7 +330,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       if (!mounted || gen != _generation) return;
       if (target == null) {
         setState(() {
-          _phase = _Phase.noService;
+          _phase = _serviceKey == null ? _Phase.noService : _Phase.ready;
           _candidates = ranked;
           _error = lastError ?? AppLocalizations.of(context).unreachableReason;
         });
@@ -325,7 +349,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
           } catch (e) {
             if (!mounted || gen != _generation) return;
             setState(() {
-              _phase = _Phase.noService;
+              _phase = _serviceKey == null ? _Phase.noService : _Phase.ready;
               _candidates = ranked;
               _error = friendlyError(e);
             });

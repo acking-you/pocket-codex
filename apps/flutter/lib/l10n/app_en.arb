@@ -708,5 +708,21 @@
         "type": "int"
       }
     }
+  },
+  "historySyncing": "Syncing history…",
+  "historyCachedOffline": "Cached history · waiting to sync",
+  "historyCacheTitle": "Conversation cache",
+  "historyCacheDescription": "Shared disk limit in MB. 0 disables caching.",
+  "historyCacheUsage": "{used} MB used · {limit} MB limit",
+  "historyCacheInvalid": "Enter a whole number from 0 to 64000.",
+  "@historyCacheUsage": {
+    "placeholders": {
+      "used": {
+        "type": "String"
+      },
+      "limit": {
+        "type": "int"
+      }
+    }
   }
 }

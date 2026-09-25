@@ -1637,4 +1637,24 @@ class AppLocalizationsZh extends AppLocalizations {
   String loadingTurn(int number) {
     return '正在定位第 $number 轮…';
   }
+
+  @override
+  String get historySyncing => '正在同步历史…';
+
+  @override
+  String get historyCachedOffline => '本地缓存 · 等待同步';
+
+  @override
+  String get historyCacheTitle => '会话缓存';
+
+  @override
+  String get historyCacheDescription => '所有主机共用的磁盘上限，单位 MB；0 表示关闭缓存。';
+
+  @override
+  String historyCacheUsage(String used, int limit) {
+    return '已用 $used MB · 上限 $limit MB';
+  }
+
+  @override
+  String get historyCacheInvalid => '请输入 0 到 64000 之间的整数。';
 }

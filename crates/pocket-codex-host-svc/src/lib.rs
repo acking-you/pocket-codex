@@ -15,6 +15,8 @@
 #![forbid(unsafe_code)]
 
 pub mod fs;
+pub mod history_sync;
+mod history_sync_revision;
 pub mod resume;
 pub mod sessions;
 pub mod store;
@@ -119,7 +121,10 @@ pub async fn serve(
             post(upload_file).layer(DefaultBodyLimit::max(UPLOAD_BODY_LIMIT)),
         )
         .layer(tower_http::compression::CompressionLayer::new())
-        .with_state(state);
+        .with_state(state)
+        .merge(history_sync::router(Arc::new(
+            history_sync::CodexHistorySource::new(app_ws_addr),
+        )));
     axum::serve(listener, app)
         .await
         .context("running meta service")

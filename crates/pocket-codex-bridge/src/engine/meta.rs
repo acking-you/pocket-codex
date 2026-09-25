@@ -79,7 +79,7 @@ fn emit_retry(attempt: u32, max_attempts: u32) {
 /// exception list doesn't cover 127.0.0.1 swallows the request. The symptom is
 /// indistinguishable from a dead host ("connection closed before message
 /// completed"), so it would retry the full budget and still fail.
-fn client() -> &'static Client {
+pub(super) fn client() -> &'static Client {
     static CLIENT: OnceCell<Client> = OnceCell::new();
     CLIENT.get_or_init(|| {
         Client::builder()
@@ -131,7 +131,7 @@ fn base_url(service_key: &str) -> Result<Url> {
 }
 
 /// Build an endpoint URL under the meta base, percent-encoding each segment.
-fn endpoint(service_key: &str, segments: &[&str]) -> Result<Url> {
+pub(super) fn endpoint(service_key: &str, segments: &[&str]) -> Result<Url> {
     let mut url = base_url(service_key)?;
     url.path_segments_mut()
         .map_err(|_| anyhow!("meta base url cannot be a base"))?
@@ -526,11 +526,14 @@ pub fn read_file(service_key: &str, path: &str) -> Result<Vec<u8>> {
 /// `/fs/thread-image`), which is what lets a pasted screenshot in the OS temp
 /// directory render on a remote controller.
 pub fn read_thread_image(service_key: &str, thread_id: &str, path: &str) -> Result<Vec<u8>> {
+    if let Ok(Some(bytes)) = super::session_sync::preview(service_key, thread_id, path) {
+        return Ok(bytes);
+    }
     let mut url = endpoint(service_key, &["fs", "thread-image"])?;
     url.query_pairs_mut()
         .append_pair("thread", thread_id)
         .append_pair("path", path);
-    runtime::runtime().block_on(async move {
+    let bytes = runtime::runtime().block_on(async move {
         let resp = client()
             .get(url)
             .timeout(UPLOAD_TIMEOUT)
@@ -538,8 +541,10 @@ pub fn read_thread_image(service_key: &str, thread_id: &str, path: &str) -> Resu
             .await
             .context("meta GET thread-image")?;
         let resp = ensure_ok(resp).await?;
-        Ok(resp.bytes().await.context("reading image bytes")?.to_vec())
-    })
+        Ok::<_, anyhow::Error>(resp.bytes().await.context("reading image bytes")?.to_vec())
+    })?;
+    super::session_sync::save_preview(service_key, thread_id, path, &bytes);
+    Ok(bytes)
 }
 
 /// Upload local `bytes` as `file_name` into host directory `dir`

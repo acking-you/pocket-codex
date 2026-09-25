@@ -9,6 +9,43 @@ class RustBridgeApi implements BridgeApi {
   const RustBridgeApi();
 
   @override
+  Future<ThreadHistory?> appHistoryCached(
+    String serviceKey,
+    String threadId,
+  ) async {
+    final h = await frb.appHistoryCached(
+      serviceKey: serviceKey,
+      threadId: threadId,
+    );
+    return h == null ? null : _history(h);
+  }
+
+  @override
+  Future<bool> appHistorySyncPrepare(String serviceKey) =>
+      frb.appHistorySyncPrepare(serviceKey: serviceKey);
+
+  @override
+  Future<void> appHistoryPrefetch(String serviceKey, String threadId) =>
+      frb.appHistoryPrefetch(serviceKey: serviceKey, threadId: threadId);
+
+  @override
+  Future<void> appHistoryFocus(String serviceKey, String? threadId) =>
+      frb.appHistoryFocus(serviceKey: serviceKey, threadId: threadId);
+
+  @override
+  Future<HistoryCacheStatus> historyCacheStatus() async {
+    final status = await frb.historyCacheStatus();
+    return HistoryCacheStatus(
+      limitMb: status.limitMb,
+      usedBytes: status.usedBytes.toInt(),
+    );
+  }
+
+  @override
+  Future<void> historyCacheSetLimit(int limitMb) =>
+      frb.historyCacheSetLimit(limitMb: limitMb);
+
+  @override
   Future<ConfigInfo> getConfig() async {
     final c = await frb.getConfig();
     return ConfigInfo(
@@ -433,35 +470,38 @@ class RustBridgeApi implements BridgeApi {
       threadId: threadId,
       includeTurnPages: includeTurnPages,
     );
-    return ThreadHistory(
-      items: h.items.map(_item).toList(),
-      running: h.running,
-      branch: h.branch,
-      cwd: h.cwd,
-      tokensUsed: h.tokensUsed?.toInt(),
-      contextWindow: h.contextWindow?.toInt(),
-      collaborationMode: h.collaborationMode,
-      reasoningEffort: h.reasoningEffort,
-      model: h.model,
-      modelProvider: h.modelProvider,
-      approvalPolicy: h.approvalPolicy,
-      sandboxMode: h.sandboxMode,
-      configConfirmed: h.configConfirmed,
-      hasOlder: h.hasOlder,
-      firstTurnId: h.firstTurnId,
-      turnPages: h.turnPages.map(_turnPage).toList(),
-      turns: h.turns
-          .map(
-            (t) => TurnSummary(
-              turnId: t.turnId,
-              userText: t.userText,
-              assistantText: t.assistantText,
-              loaded: t.loaded,
-            ),
-          )
-          .toList(),
-    );
+    return _history(h);
   }
+
+  static ThreadHistory _history(frb.ThreadHistoryDto h) => ThreadHistory(
+    items: h.items.map(_item).toList(),
+    running: h.running,
+    historyEpoch: h.historyEpoch,
+    branch: h.branch,
+    cwd: h.cwd,
+    tokensUsed: h.tokensUsed?.toInt(),
+    contextWindow: h.contextWindow?.toInt(),
+    collaborationMode: h.collaborationMode,
+    reasoningEffort: h.reasoningEffort,
+    model: h.model,
+    modelProvider: h.modelProvider,
+    approvalPolicy: h.approvalPolicy,
+    sandboxMode: h.sandboxMode,
+    configConfirmed: h.configConfirmed,
+    hasOlder: h.hasOlder,
+    firstTurnId: h.firstTurnId,
+    turnPages: h.turnPages.map(_turnPage).toList(),
+    turns: h.turns
+        .map(
+          (t) => TurnSummary(
+            turnId: t.turnId,
+            userText: t.userText,
+            assistantText: t.assistantText,
+            loaded: t.loaded,
+          ),
+        )
+        .toList(),
+  );
 
   static ThreadItem _item(frb.ThreadItemDto i) => ThreadItem(
     id: i.id,

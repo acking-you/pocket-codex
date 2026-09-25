@@ -16,6 +16,7 @@ use std::{
 use anyhow::{anyhow, bail, Context, Result};
 use once_cell::sync::OnceCell;
 use pocket_codex_codex::client::{AppClient, Inbound};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::{sync::broadcast, task::JoinHandle};
 
@@ -55,7 +56,7 @@ pub struct AppEvent {
 }
 
 /// One thread's summary metadata.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ThreadMeta {
     /// Thread id.
     pub id: String,
@@ -87,7 +88,7 @@ pub struct ModelInfo {
 }
 
 /// One materialised conversation item (from `thread/read`).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ThreadItem {
     /// Item id.
     pub id: String,
@@ -326,7 +327,11 @@ fn establish(service_key: String, local_addr: &str) -> Result<()> {
     let config_for_forwarder = Arc::clone(&runtime_config);
     let pagination = Arc::new(Mutex::new(HashMap::new()));
     let pagination_for_forwarder = Arc::clone(&pagination);
+    let checkpoint_service = service_key.clone();
+    let checkpoint_owner = super::session_cache::namespace(&service_key).ok();
     let forwarder = runtime::runtime().spawn(async move {
+        let mut checkpoints: HashMap<String, Instant> = HashMap::new();
+        let checkpoint_slots = Arc::new(tokio::sync::Semaphore::new(2));
         while let Some(inbound) = notify_rx.recv().await {
             // Learn the active turnId per thread before mapping, so interrupt
             // works even when the UI never saw the turn/started event.
@@ -341,8 +346,64 @@ fn establish(service_key: String, local_addr: &str) -> Result<()> {
             // Buffer item snapshots so a re-opened conversation can restore an
             // in-progress turn's items even though the broadcast below is
             // dropped while no UI is attached.
-            buffer_item(&transcript_for_forwarder, &inbound);
+            let replaces_history = history_cache::replaces_history(&inbound);
+            if replaces_history {
+                if let Some(thread) = inbound.params.as_ref().and_then(|p| p["threadId"].as_str()) {
+                    if let Ok(mut transcript) = transcript_for_forwarder.lock() {
+                        transcript.remove(thread);
+                    }
+                }
+            } else {
+                buffer_item(&transcript_for_forwarder, &inbound);
+            }
             invalidate_history(&pagination_for_forwarder, &inbound);
+            if let Some(thread) = inbound
+                .params
+                .as_ref()
+                .and_then(|p| p.get("threadId"))
+                .and_then(Value::as_str)
+            {
+                let due = checkpoints
+                    .get(thread)
+                    .is_none_or(|at| at.elapsed() >= Duration::from_secs(1));
+                if due
+                    || replaces_history
+                    || matches!(inbound.method.as_str(), "turn/completed" | "turn/failed")
+                {
+                    if checkpoints.len() >= 128 {
+                        checkpoints.clear();
+                    }
+                    checkpoints.insert(thread.to_owned(), Instant::now());
+                    let items = transcript_for_forwarder.lock().ok().and_then(|t| {
+                        t.get(thread)
+                            .map(|items| items.iter().rev().take(20).cloned().collect::<Vec<_>>())
+                    });
+                    let permit = Arc::clone(&checkpoint_slots).try_acquire_owned().ok();
+                    if let Some(owner) = &checkpoint_owner {
+                        if (permit.is_some() && items.is_some()) || replaces_history {
+                            let token = super::session_sync::live_checkpoint(
+                                owner,
+                                thread,
+                                replaces_history,
+                            );
+                            let mut items = items.unwrap_or_default();
+                            items.reverse();
+                            let service = checkpoint_service.clone();
+                            let thread = thread.to_owned();
+                            let running = turns_for_forwarder
+                                .lock()
+                                .is_ok_and(|t| t.contains_key(&thread));
+                            tokio::task::spawn_blocking(move || {
+                                let _permit = permit;
+                                super::session_sync::checkpoint_live(
+                                    &service, &thread, token, items, running,
+                                )
+                            });
+                        }
+                    }
+                }
+            }
+
             // Ignore send errors: no current subscribers is fine, the event
             // is simply dropped (the UI re-reads thread state on attach).
             let _ = forward_tx.send(map_event(inbound));
@@ -374,11 +435,9 @@ fn plan_item_id(params: &Value) -> String {
     format!("plan-{turn_id}")
 }
 
-/// Buffer a full item snapshot from an `item/*` notification into the
-/// per-thread transcript, upserted by id in stream order. Deltas (no
-/// `params.item`) are skipped — they are transient and re-derived from the
-/// eventual completed item. The `turn/plan/updated` notification is
-/// special-cased (it has no `params.item`) so the plan card survives resume.
+/// Retain streamed text and full item snapshots by id for resume and durable
+/// checkpoints. A completed snapshot replaces its preceding deltas. The plan
+/// notification has no item envelope and uses a stable per-turn identity.
 fn buffer_item(transcript: &Mutex<HashMap<String, Vec<ThreadItem>>>, inbound: &Inbound) {
     let Some(params) = inbound.params.as_ref() else {
         return;
@@ -410,6 +469,43 @@ fn buffer_item(transcript: &Mutex<HashMap<String, Vec<ThreadItem>>>, inbound: &I
             .map(|ms| ms / 1000),
         duration_ms: None,
     };
+    if matches!(
+        inbound.method.as_str(),
+        "item/agentMessage/delta"
+            | "item/commandExecution/outputDelta"
+            | "item/reasoning/textDelta"
+            | "item/reasoning/summaryTextDelta"
+    ) {
+        let Some(id) = params
+            .get("itemId")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+        else {
+            return;
+        };
+        let Some((item_type, title, text)) = summarize_item_notification(&inbound.method, params)
+        else {
+            return;
+        };
+        let Ok(mut map) = transcript.lock() else { return };
+        let items = map.entry(thread_id.to_owned()).or_default();
+        if let Some(item) = items.iter_mut().find(|item| item.id == id) {
+            item.text.push_str(&text);
+        } else {
+            items.push(ThreadItem {
+                id: id.into(),
+                item_type,
+                title,
+                text,
+                questions_json: None,
+                images: Vec::new(),
+                turn_id: live_turn.id,
+                turn_completed_at: None,
+                turn_duration_ms: None,
+            });
+        }
+        return;
+    }
     let mut parsed = if inbound.method == "turn/plan/updated" {
         ThreadItem {
             id: plan_item_id(params),
@@ -490,7 +586,14 @@ pub fn thread_older_page(service_key: &str, thread_id: &str) -> Result<OlderPage
     let Some(cursor) = state.next_item_cursor.clone() else {
         return Ok(empty());
     };
-    let page = fetch_item_page(&client, thread_id, None, Some(cursor.as_str()), ITEM_PAGE_LIMIT)?;
+    let page = fetch_item_page(
+        service_key,
+        &client,
+        thread_id,
+        None,
+        Some(cursor.as_str()),
+        ITEM_PAGE_LIMIT,
+    )?;
     let entries = page
         .get("data")
         .and_then(Value::as_array)
@@ -558,19 +661,23 @@ pub fn thread_turn_items(
     let _request = gate
         .lock()
         .map_err(|_| anyhow!("history request lock poisoned"))?;
+    let mut state = ensure_pagination(service_key, thread_id);
     let mut newest_first = Vec::new();
     let mut cursor: Option<String> = None;
     let mut seen = HashSet::new();
-    let stamps = pagination_of(service_key, thread_id)
-        .map(|state| state.turn_stamps)
-        .unwrap_or_default();
-    let stamp = turn_stamp(&stamps, turn_id);
+    let stamp = turn_stamp(&state.turn_stamps, turn_id);
     // Bounded: a single turn can hold hundreds of items, and draining all of
     // them serially is what made opening the longest threads time out. Enough
     // pages to fill a screen; scrolling covers the rest.
     for _ in 0..MAX_TURN_ITEM_PAGES {
-        let page =
-            fetch_item_page(&client, thread_id, Some(turn_id), cursor.as_deref(), ITEM_PAGE_LIMIT)?;
+        let page = fetch_item_page(
+            service_key,
+            &client,
+            thread_id,
+            Some(turn_id),
+            cursor.as_deref(),
+            ITEM_PAGE_LIMIT,
+        )?;
         let entries = page
             .get("data")
             .and_then(Value::as_array)
@@ -594,11 +701,11 @@ pub fn thread_turn_items(
         }
     }
     newest_first.reverse();
-    if let Some(mut state) = pagination_of(service_key, thread_id) {
-        if !state.loaded_turns.iter().any(|id| id == turn_id) {
-            state.loaded_turns.push(turn_id.to_string());
-            set_pagination(service_key, thread_id, state);
-        }
+    if !state.loaded_turns.iter().any(|id| id == turn_id) {
+        state.loaded_turns.push(turn_id.to_string());
+    }
+    if !set_pagination(service_key, thread_id, state) {
+        bail!("history changed while loading; retry the turn");
     }
     Ok(newest_first)
 }
@@ -996,6 +1103,26 @@ fn client_for(service_key: &str) -> Result<Arc<AppClient>> {
 /// and follow `nextCursor`. The page count and total are capped so a very large
 /// history can't loop unboundedly.
 pub fn thread_list(service_key: &str) -> Result<Vec<ThreadMeta>> {
+    let result = thread_list_remote(service_key);
+    let cached = || -> Result<Vec<ThreadMeta>> {
+        let cache = super::session_cache::application_cache()?;
+        let owner = super::session_cache::namespace(service_key)?;
+        if let Ok(items) = &result {
+            cache.write_json(&owner, "$inventory", "threads", items, false)?;
+            Ok(items.clone())
+        } else {
+            cache
+                .read_json(&owner, "$inventory", "threads")?
+                .context("no cached session inventory")
+        }
+    };
+    match (&result, cached()) {
+        (Err(_), Ok(items)) => Ok(items),
+        _ => result,
+    }
+}
+
+fn thread_list_remote(service_key: &str) -> Result<Vec<ThreadMeta>> {
     const PAGE_LIMIT: u64 = 100;
     const MAX_THREADS: usize = 500;
     let client = client_for(service_key)?;
@@ -1298,8 +1425,12 @@ pub(super) fn external_history_changed(service_key: &str, thread_id: &str) {
 /// A thread's recovered history plus whether a turn is still running, so the
 /// UI can restore the "thinking" state when re-opening an in-flight thread.
 /// Also carries the thread metadata the status bar / git chip seed from.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ThreadHistory {
+    /// Source replacement generation; changed values invalidate retained UI
+    /// gaps.
+    #[serde(default)]
+    pub history_epoch: Option<String>,
     /// Conversation items, oldest first.
     pub items: Vec<ThreadItem>,
     /// Whether the most recent turn is still in progress.
@@ -1349,7 +1480,7 @@ pub struct ThreadHistory {
 
 /// A turn reduced to what the rail shows: the question, and how it was
 /// answered.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TurnSummary {
     pub turn_id: String,
     /// The user's message that opened the turn, empty when it had none.
@@ -1521,6 +1652,7 @@ fn flatten_turns(turns: &[Value]) -> Vec<ThreadItem> {
 /// back: `"notLoaded"` for bare metadata, `"summary"` for the opening question
 /// and final answer, `"full"` for every item.
 fn fetch_turn_page(
+    service_key: &str,
     client: &Arc<AppClient>,
     thread_id: &str,
     cursor: Option<&str>,
@@ -1536,12 +1668,13 @@ fn fetch_turn_page(
     if let Some(cursor) = cursor {
         params["cursor"] = json!(cursor);
     }
-    runtime::runtime().block_on(client.request("thread/turns/list", params))
+    super::session_sync::request(service_key, client, "thread/turns/list", params)
 }
 
 /// Fetch one page of items, newest first. `turn_id` narrows it to a single
 /// turn.
 fn fetch_item_page(
+    service_key: &str,
     client: &Arc<AppClient>,
     thread_id: &str,
     turn_id: Option<&str>,
@@ -1559,7 +1692,7 @@ fn fetch_item_page(
     if let Some(cursor) = cursor {
         params["cursor"] = json!(cursor);
     }
-    runtime::runtime().block_on(client.request("thread/items/list", params))
+    super::session_sync::request(service_key, client, "thread/items/list", params)
 }
 
 /// Every turn in the thread, oldest first, as rail summaries.
@@ -1568,6 +1701,7 @@ fn fetch_item_page(
 /// answers from indexed columns rather than by replaying items — cheap enough
 /// to do for the whole thread so the rail can show its true length immediately.
 fn fetch_all_turn_summaries(
+    service_key: &str,
     client: &Arc<AppClient>,
     thread_id: &str,
     stamps: &mut HashMap<String, TurnStamp>,
@@ -1577,8 +1711,14 @@ fn fetch_all_turn_summaries(
     let mut cursor: Option<String> = None;
     let mut seen = HashSet::new();
     for _ in 0..MAX_TURN_PAGES {
-        let page =
-            fetch_turn_page(client, thread_id, cursor.as_deref(), TURN_PAGE_LIMIT, "summary")?;
+        let page = fetch_turn_page(
+            service_key,
+            client,
+            thread_id,
+            cursor.as_deref(),
+            TURN_PAGE_LIMIT,
+            "summary",
+        )?;
         let turns = page
             .get("data")
             .and_then(Value::as_array)
@@ -1628,7 +1768,8 @@ fn load_paginated_window(
     let phase = std::time::Instant::now();
     // Turn shells for timing and status. `notLoaded` keeps this a single indexed
     // query per page regardless of how much the turns contain.
-    let page = fetch_turn_page(client, thread_id, None, INITIAL_TURN_LIMIT, "notLoaded")?;
+    let page =
+        fetch_turn_page(service_key, client, thread_id, None, INITIAL_TURN_LIMIT, "notLoaded")?;
     tracing::debug!(
         target: "pocket_codex_bridge::history",
         "  turn shells in {:?}", phase.elapsed()
@@ -1643,7 +1784,8 @@ fn load_paginated_window(
 
     // The newest items, bounded. This is what the view opens on.
     let phase = std::time::Instant::now();
-    let items_page = fetch_item_page(client, thread_id, None, None, INITIAL_ITEM_LIMIT)?;
+    let items_page =
+        fetch_item_page(service_key, client, thread_id, None, None, INITIAL_ITEM_LIMIT)?;
     tracing::debug!(
         target: "pocket_codex_bridge::history",
         "  newest items in {:?}", phase.elapsed()
@@ -1688,7 +1830,7 @@ fn load_paginated_window(
     let phase = std::time::Instant::now();
     let mut first_turn_id = None;
     let mut skeletons =
-        fetch_all_turn_summaries(client, thread_id, &mut stamps, &mut first_turn_id)
+        fetch_all_turn_summaries(service_key, client, thread_id, &mut stamps, &mut first_turn_id)
             .unwrap_or_else(|_| Vec::new());
     tracing::debug!(
         target: "pocket_codex_bridge::history",
@@ -1785,7 +1927,16 @@ pub fn thread_read_with_pages(
         target: "pocket_codex_bridge::history",
         "thread_read START thread={thread_id} in_flight={depth}"
     );
-    let result = thread_read_inner(service_key, thread_id, include_turn_pages);
+    let mut result = thread_read_inner(service_key, thread_id, include_turn_pages);
+    if result
+        .as_ref()
+        .is_err_and(|e| e.to_string().contains("history changed"))
+    {
+        result = thread_read_inner(service_key, thread_id, include_turn_pages);
+    }
+    if let Ok(history) = &result {
+        super::session_sync::save_history(service_key, thread_id, history);
+    }
     match &result {
         Ok(history) => tracing::info!(
             target: "pocket_codex_bridge::history",
@@ -1816,14 +1967,18 @@ fn thread_read_inner(
     let before = ensure_pagination(service_key, thread_id);
     // Metadata only. Asking for turns here would fail outright on a paginated
     // thread, and the response carries `historyMode`, which decides the path.
-    let res = runtime::runtime().block_on(
-        client.request("thread/read", json!({ "threadId": thread_id, "includeTurns": false })),
+    let res = super::session_sync::request(
+        service_key,
+        &client,
+        "thread/read",
+        json!({ "threadId": thread_id, "includeTurns": false }),
     )?;
     let paginated = res
         .get("thread")
         .and_then(|t| t.get("historyMode"))
         .and_then(Value::as_str)
-        .is_some_and(|mode| mode == "paginated");
+        .is_some_and(|mode| mode == "paginated")
+        || super::session_sync::enabled(service_key);
     let metadata = res.get("thread").cloned();
     let cached = pagination_of(service_key, thread_id)
         .filter(|state| {
@@ -1839,7 +1994,7 @@ fn thread_read_inner(
         match load_paginated_window(&client, service_key, thread_id) {
             Ok(loaded) => loaded,
             // A server too old to page can still answer the whole-history read.
-            Err(err) if is_unknown_method(&err) => {
+            Err(err) if !super::session_sync::enabled(service_key) && is_unknown_method(&err) => {
                 reset_pagination(service_key, thread_id);
                 load_whole_history(&client, thread_id)?
             },
@@ -1922,6 +2077,7 @@ fn thread_read_inner(
     let runtime = runtime_config_with_thread(runtime, thread);
     let reasoning_effort = runtime.reasoning_effort.clone();
     Ok(ThreadHistory {
+        history_epoch: super::session_sync::source_generation(service_key, thread_id),
         items,
         running,
         branch,
@@ -1991,31 +2147,33 @@ pub fn thread_summary(service_key: &str, thread_id: &str) -> Result<Option<Strin
     // which is exactly the sentence wanted — no need to read the transcript.
     // Several turns, not one, because the newest may be a tool-only turn that
     // produced no prose.
-    let turns = match fetch_turn_page(&client, thread_id, None, INITIAL_TURN_LIMIT, "summary") {
-        Ok(page) => {
-            let mut turns = page
-                .get("data")
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default();
-            // The walk below reads oldest first and steps backwards.
-            turns.reverse();
-            turns
-        },
-        // Older servers have no paging methods; their history reads whole.
-        Err(err) if is_unknown_method(&err) => {
-            let res = runtime::runtime().block_on(
-                client
-                    .request("thread/read", json!({ "threadId": thread_id, "includeTurns": true })),
-            )?;
-            res.get("thread")
-                .and_then(|t| t.get("turns"))
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default()
-        },
-        Err(err) => return Err(err),
-    };
+    let turns =
+        match fetch_turn_page(service_key, &client, thread_id, None, INITIAL_TURN_LIMIT, "summary")
+        {
+            Ok(page) => {
+                let mut turns = page
+                    .get("data")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                // The walk below reads oldest first and steps backwards.
+                turns.reverse();
+                turns
+            },
+            // Older servers have no paging methods; their history reads whole.
+            Err(err) if is_unknown_method(&err) => {
+                let res = runtime::runtime().block_on(client.request(
+                    "thread/read",
+                    json!({ "threadId": thread_id, "includeTurns": true }),
+                ))?;
+                res.get("thread")
+                    .and_then(|t| t.get("turns"))
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default()
+            },
+            Err(err) => return Err(err),
+        };
     // Walk backwards: the newest agent message is the interesting one, and
     // stopping at the first hit avoids parsing a long history twice over.
     for turn in turns.iter().rev() {
@@ -3186,6 +3344,42 @@ mod tests {
     }
 
     #[test]
+    fn live_checkpoints_retain_text_before_item_completion() {
+        let transcript = Mutex::new(HashMap::new());
+        for (method, id) in [
+            ("item/agentMessage/delta", "message"),
+            ("item/commandExecution/outputDelta", "command"),
+        ] {
+            for text in ["partial ", "中文"] {
+                buffer_item(&transcript, &Inbound {
+                    method: method.into(),
+                    params: Some(
+                        json!({"threadId": "thread", "turnId": "turn", "itemId": id, "delta": text}),
+                    ),
+                    request_id: None,
+                });
+            }
+        }
+        {
+            let items = transcript.lock().expect("test transcript");
+            assert_eq!(items["thread"].len(), 2);
+            assert!(items["thread"]
+                .iter()
+                .all(|item| item.text == "partial 中文" && item.turn_id == "turn"));
+        }
+        buffer_item(&transcript, &Inbound {
+            method: "item/completed".into(),
+            params: Some(json!({"threadId": "thread", "turnId": "turn", "item": {
+                "id": "message", "type": "agentMessage", "text": "partial 中文 completed"
+            }})),
+            request_id: None,
+        });
+        let items = transcript.lock().expect("test transcript");
+        assert_eq!(items["thread"][0].text, "partial 中文 completed");
+        assert_eq!(items["thread"].len(), 2);
+    }
+
+    #[test]
     fn buffers_synthesized_plan_item_for_resume() {
         // A `turn/plan/updated` notification (params.plan, no params.item) must be
         // buffered as a `plan` item so a resumed thread restores the plan card at
@@ -3745,3 +3939,37 @@ mod tests {
 #[cfg(test)]
 #[path = "app_session_protocol_tests.rs"]
 mod protocol_tests;
+
+/// Discard session-local windows when the source reports replacement.
+pub(super) fn reset_synced_history(service: &str, thread: &str) {
+    history_cache::replace_history(service, thread);
+    if let Ok(sessions) = sessions().lock() {
+        if let Some(session) = sessions.get(service) {
+            if let Ok(mut transcript) = session.transcript.lock() {
+                transcript.remove(thread);
+            }
+        }
+    }
+}
+
+/// Project a synchronized read-only tail without attaching a controller.
+pub(super) fn parse_prefetched_items(response: &Value) -> Vec<ThreadItem> {
+    let stamps = HashMap::new();
+    response
+        .get("data")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .rev()
+        .filter_map(|entry| {
+            let stamp = turn_stamp(
+                &stamps,
+                entry
+                    .get("turnId")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+            );
+            parse_turn_item(entry.get("item")?, &stamp)
+        })
+        .collect()
+}

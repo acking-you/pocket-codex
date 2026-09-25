@@ -273,8 +273,12 @@ final runningSessionInventoryProvider = StreamProvider.autoDispose
       var disposed = false;
       var paused = false;
       var inFlight = false;
+      var foreground =
+          WidgetsBinding.instance.lifecycleState == null ||
+          WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
+      var prefetchOffset = 0;
       Future<void> poll() async {
-        if (disposed || paused || inFlight) return;
+        if (disposed || paused || !foreground || inFlight) return;
         inFlight = true;
         final requestedAt = DateTime.now();
         try {
@@ -285,16 +289,32 @@ final runningSessionInventoryProvider = StreamProvider.autoDispose
           if (!disposed) {
             out.add((sessions: sessions, requestedAt: requestedAt));
           }
+          for (var i = 0; i < sessions.length && i < 2; i++) {
+            if (disposed || paused || !foreground) break;
+            final session = sessions[prefetchOffset++ % sessions.length];
+            try {
+              await api.appHistoryPrefetch(serviceKey, session.threadId);
+            } catch (_) {
+              // Prefetch failure must not hide inventory or claim fresh history.
+            }
+          }
         } catch (_) {
           // A transient failure does not mean the running sessions stopped.
         } finally {
           inFlight = false;
-          if (!disposed && !paused) {
+          if (!disposed && !paused && foreground) {
             timer = Timer(const Duration(seconds: 5), poll);
           }
         }
       }
 
+      final lifecycle = AppLifecycleListener(
+        onStateChange: (state) {
+          foreground = state == AppLifecycleState.resumed;
+          timer?.cancel();
+          if (foreground) unawaited(poll());
+        },
+      );
       ref.onCancel(() {
         paused = true;
         timer?.cancel();
@@ -305,6 +325,7 @@ final runningSessionInventoryProvider = StreamProvider.autoDispose
       });
       ref.onDispose(() {
         disposed = true;
+        lifecycle.dispose();
         timer?.cancel();
         out.close();
       });

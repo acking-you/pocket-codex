@@ -184,13 +184,18 @@ pub fn session_paths() -> Result<Vec<PathBuf>> {
 /// timestamp) merely contains it, resolving the wrong session. Returns `None`
 /// when no rollout exists for the id.
 pub fn rollout_path_for_thread(thread_id: &str) -> Result<Option<PathBuf>> {
+    rollout_path_in(&sessions_dir()?, thread_id)
+}
+
+/// Locate a thread under an explicit sessions directory without changing the
+/// process environment, for isolated hosts and read-only fixtures.
+pub fn rollout_path_in(dir: &Path, thread_id: &str) -> Result<Option<PathBuf>> {
     if thread_id.is_empty() {
         return Ok(None);
     }
     let suffix = format!("-{thread_id}.jsonl");
-    let dir = sessions_dir()?;
     let mut files = Vec::new();
-    collect_jsonl(&dir, &mut files)?;
+    collect_jsonl(dir, &mut files)?;
     Ok(files.into_iter().find(|p| {
         p.file_name()
             .and_then(|n| n.to_str())

@@ -460,6 +460,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   // True while an automatic reconnect is in progress (drives the status bar's
   // "reconnecting" state). Auto-reconnect is attempted on stream close, on a
   // periodic health check, and after a send fails on a dropped connection.
+  String? _historyEpoch;
+  bool _historySyncing = false;
+  bool _showingCachedHistory = false;
   bool _reconnecting = false;
   DateTime? _lastReconnectAt; // debounce rapid retriggers (flapping socket)
   Timer? _healthTimer;
@@ -971,6 +974,12 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// Switch the screen to another conversation (or a new one when [tid] is
   /// null) in place, resetting per-thread state. Used by the left sessions pane.
   void _openThread(String? tid, String? cwd) {
+    unawaited(
+      ref
+          .read(bridgeApiProvider)
+          .appHistoryFocus(widget.serviceKey, tid)
+          .catchError((_) {}),
+    );
     // Keep the "last conversation" record fresh for the chat-first home. A
     // new (id-less) conversation records nothing until its first send — an
     // abandoned draft shouldn't cost the user their restore target.
@@ -981,6 +990,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     _threadLoadGeneration++;
     setState(() {
       _threadId = tid;
+      _historySyncing = false;
+      _showingCachedHistory = false;
+      _historyEpoch = null;
       _cwd = cwd;
       _externalWriterMode = false;
       _externalWriterLiveness = null;
@@ -1070,7 +1082,24 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   }
 
   @override
+  void activate() {
+    super.activate();
+    unawaited(
+      ref
+          .read(bridgeApiProvider)
+          .appHistoryFocus(widget.serviceKey, _threadId)
+          .catchError((_) {}),
+    );
+  }
+
+  @override
   void deactivate() {
+    unawaited(
+      ref
+          .read(bridgeApiProvider)
+          .appHistoryFocus(widget.serviceKey, null)
+          .catchError((_) {}),
+    );
     // Stop claiming this link is down once nobody is watching it: the flag is an
     // OBSERVATION by an open conversation, and leaving it set would keep the
     // service red on the strength of a screen that no longer exists.
@@ -1598,7 +1627,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     // through a null here.
     if (_threadId == null || _externalWriterMode) return;
     setState(() {
-      _loading = true;
+      _loading = _items.isEmpty;
+      _historySyncing = true;
       _error = null;
       _retry = null;
     });
@@ -1608,6 +1638,29 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         mounted && _threadId == startTid && generation == _threadLoadGeneration;
     try {
       final api = ref.read(bridgeApiProvider);
+      unawaited(
+        api.appHistoryFocus(widget.serviceKey, startTid).catchError((_) {}),
+      );
+      if (_items.isEmpty) {
+        final cached = await api.appHistoryCached(widget.serviceKey, startTid);
+        if (!current()) return;
+        if (cached != null) {
+          setState(() {
+            _replaceTranscriptItems(cached.items);
+            _turnSummaries = cached.turns;
+            _hasOlder = cached.hasOlder;
+            _firstTurnId = cached.firstTurnId;
+            _sequentialHistoryIds.addAll(cached.items.map((item) => item.id));
+            _cwd ??= cached.cwd;
+            _loading = false;
+            _showingCachedHistory = true;
+            _historyEpoch = cached.historyEpoch;
+          });
+          _scrollToEnd(force: true);
+        }
+      }
+      await api.appHistorySyncPrepare(widget.serviceKey);
+      if (!current()) return;
       await api.appThreadResume(widget.serviceKey, startTid);
       // An obsolete resume must not fan out into more history/config requests.
       if (!current()) return;
@@ -1618,7 +1671,13 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       final persistedFuture = _loadPersistedConfig(startTid);
       final history = await historyFuture;
       if (!current()) return;
+      final anchor = _items.isNotEmpty && !_atBottom
+          ? _captureHistoryAnchor()
+          : null;
       setState(() {
+        _historySyncing = false;
+        _showingCachedHistory = false;
+        _historyEpoch = history.historyEpoch;
         _loading = false;
         _replaceTranscriptItems(history.items);
         _turnSummaries = history.turns;
@@ -1678,7 +1737,11 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       // loses, on a cold open). A successful read proves the service is
       // reachable, so this is the attempt that actually lands.
       if (_rate == null) _loadQuota();
-      _scrollToEnd(force: true);
+      if (anchor != null) {
+        _restoreHistoryAnchor(anchor, _historyGeneration);
+      } else {
+        _scrollToEnd(force: true);
+      }
       // A turn may have completed while we were disconnected: if the reload
       // landed idle with messages still queued, drain the backlog now (turn-end
       // events that would normally flush it were missed during the drop).
@@ -1709,6 +1772,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       _maybeFlushQueue();
     } catch (e) {
       if (!current()) return;
+      _historySyncing = false;
       if (_isActiveWriterError(e)) {
         _enterExternalWriterMode(startTid);
         return;
@@ -1837,7 +1901,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       _externalWriterMode = true;
       _externalWriterLiveness = null;
       _takingOver = false;
-      _loading = true;
+      _loading = _items.isEmpty;
+      _historySyncing = true;
       _streaming = false;
       _elapsedSecs = 0;
       _error = null;
@@ -1902,7 +1967,12 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                 .join('\u0001');
     setState(() {
       _externalWriterLiveness = update.liveness;
-      if (!paginated) _replaceTranscriptItems(update.items);
+      if (!paginated) {
+        _replaceTranscriptItems(update.items);
+        _historySyncing = false;
+        _showingCachedHistory = false;
+        _historyEpoch = null;
+      }
       if (willRun && !wasRunning) _elapsedSecs = 0;
       if (!paginated || _items.isNotEmpty) _loading = false;
       _error = null;
@@ -1963,6 +2033,18 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       final followTail = _loading || _atBottom;
       final anchor = followTail ? null : _captureHistoryAnchor();
       setState(() {
+        if (_historyEpoch != null &&
+            history.historyEpoch != null &&
+            _historyEpoch != history.historyEpoch) {
+          _replaceTranscriptItems(const []);
+          _turnWindows.clear();
+          _fetchedTurns.clear();
+          _sequentialHistoryIds.clear();
+          _historyGeneration++;
+        }
+        _historyEpoch = history.historyEpoch;
+        _showingCachedHistory = false;
+        _historySyncing = false;
         _turnSummaries = history.turns;
         _firstTurnId = history.firstTurnId;
         _hasOlder = history.hasOlder;
@@ -2006,6 +2088,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         _externalHistoryDirty = true;
         setState(() {
           _loading = false;
+          _historySyncing = false;
           _error = friendlyError(error);
           _retry = () => _refreshExternalHistory(threadId, epoch);
         });
@@ -2431,7 +2514,13 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     final text = appendFileRefs(typed, filePaths);
     // Block sends while reconnecting — a reconnect reloads history and would
     // wipe an optimistic message added mid-flight.
-    if ((text.isEmpty && images.isEmpty) || _sending || _reconnecting) return;
+    if ((text.isEmpty && images.isEmpty) ||
+        _sending ||
+        _reconnecting ||
+        _historySyncing ||
+        _showingCachedHistory) {
+      return;
+    }
     // If this host is THIS machine's codex and it can't make model calls yet
     // (no login AND no custom provider), a turn would silently fail. Steer the
     // user to the setup wizard instead of starting an invalid conversation.
@@ -2729,6 +2818,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// Composer send: queue while a turn is in flight (or a backlog is still
   /// draining), otherwise send now.
   void _submit() {
+    if (_historySyncing || _showingCachedHistory) return;
     if (_streaming || _sending || _queue.isNotEmpty) {
       _enqueue();
       // Idle with a residual backlog (e.g. a flush skipped during a reconnect):
@@ -5031,6 +5121,15 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     return Column(
       children: [
         _statusBar(l10n),
+        if (_historySyncing || _showingCachedHistory)
+          Padding(
+            key: const Key('history-sync-status'),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+            child: Text(
+              _historySyncing ? l10n.historySyncing : l10n.historyCachedOffline,
+              style: Theme.of(context).textTheme.labelSmall,
+            ),
+          ),
         Expanded(
           child: NotificationListener<UserScrollNotification>(
             onNotification: (event) {
@@ -8426,6 +8525,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         final processing = _attachments.any((a) => !a.ready);
         final canSend =
             !_sending &&
+            !_historySyncing &&
+            !_showingCachedHistory &&
             !processing &&
             (value.text.trim().isNotEmpty || _attachments.isNotEmpty);
         return IconButton.filled(

@@ -52,5 +52,6 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
+tempfile = "3"
 futures = { workspace = true }
 tokio-tungstenite = { workspace = true }
