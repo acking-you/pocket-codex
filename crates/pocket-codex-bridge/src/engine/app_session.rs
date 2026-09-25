@@ -2695,7 +2695,7 @@ pub fn turn_steer(
     turn_id: Option<&str>,
     text: &str,
     images: &[String],
-) -> Result<()> {
+) -> Result<String> {
     let (client, expected_turn) = {
         let map = sessions().lock().unwrap_or_else(|e| e.into_inner());
         let session = map
@@ -2709,8 +2709,9 @@ pub fn turn_steer(
             .cloned();
         (Arc::clone(&session.client), turn_id.map(Value::from).or(tracked))
     };
-    let expected_turn =
-        expected_turn.context("the active turn is not available; reload the thread")?;
+    let expected_turn = expected_turn
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .context("the active turn is not available; reload the thread")?;
     runtime::runtime().block_on(client.request(
         "turn/steer",
         json!({
@@ -2719,7 +2720,7 @@ pub fn turn_steer(
             "input": build_turn_input(text, images)?,
         }),
     ))?;
-    Ok(())
+    Ok(expected_turn)
 }
 
 /// Map a kebab sandbox mode to a `turn/start` `sandboxPolicy` tagged object.

@@ -844,3 +844,21 @@ fn execution_options_and_supplement_attachments_reach_the_wire() {
     .expect("supplement");
     runtime::runtime().block_on(peer).expect("peer");
 }
+
+#[test]
+fn resumed_supplement_returns_the_resolved_turn_id() {
+    runtime::init(std::env::temp_dir()).expect("runtime");
+    let (client, peer) = mock_client_with_hook(
+        vec![("turn/steer", json!({"turnId": "resumed-turn"}))],
+        |_, request| {
+            assert_eq!(request["params"]["expectedTurnId"], "resumed-turn");
+        },
+    );
+    let session = TestSession::new(client);
+    record_active_turn(&session.0, "thread", json!("resumed-turn"));
+    assert_eq!(
+        turn_steer(&session.0, "thread", None, "Supplement", &[]).expect("steer"),
+        "resumed-turn"
+    );
+    runtime::runtime().block_on(peer).expect("peer");
+}

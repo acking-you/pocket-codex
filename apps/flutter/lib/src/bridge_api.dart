@@ -1424,8 +1424,8 @@ abstract interface class BridgeApi {
     String? reasoningEffort,
   });
 
-  /// Send an asynchronous answer to the expected active turn.
-  Future<void> appTurnSteer(
+  /// Send an asynchronous answer and return the accepted active turn ID.
+  Future<String> appTurnSteer(
     String serviceKey,
     String threadId,
     String? turnId,

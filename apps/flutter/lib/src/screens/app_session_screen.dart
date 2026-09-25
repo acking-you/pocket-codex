@@ -68,6 +68,7 @@ const appLocalPort = 0;
 // the race against the connection. See `_retryOpenLoad`.
 const String _kThreadsLoad = 'threads';
 const String _kCwdSeed = 'cwd';
+const String _kModelsLoad = 'models';
 
 /// Attempts each cold-open load gets before giving up (1/2/4/8/16s apart).
 /// Reaches ~31s of coverage, which is what a desktop auto-host restore needs:
@@ -494,10 +495,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   // the send and restores the text — from "output started", where Esc simply
   // interrupts. Reset on each turn/started; set on the first agent-side item.
   bool _outputStarted = false;
-  // The raw text of the just-sent message, kept so an Esc "undo" (before any
-  // output) can drop it back into the composer. Set at optimistic-send time for
-  // ordinary sends only (a programmatic/retry send has no draft to restore).
-  String? _undoableText;
+  // Snapshot the whole draft so undo can restore attachments as well as text.
+  ({String text, List<_Attachment> attachments})? _undoableDraft;
   // Set when an interrupt is really an Esc "undo": the turn's end must NOT add a
   // "stopped" marker (the send is being taken back, not shown as stopped).
   bool _suppressStopMarker = false;
@@ -783,6 +782,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           _loadThreads();
         case _kCwdSeed:
           _seedDefaultCwd();
+        case _kModelsLoad:
+          unawaited(_ensureModels());
       }
     });
   }
@@ -1102,7 +1103,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       // The queue + undo state belong to the previous conversation.
       _queue.clear();
       _outputStarted = false;
-      _undoableText = null;
+      _undoableDraft = null;
       _suppressStopMarker = false;
       _lastUserText = null;
       _lastUserImages = const [];
@@ -2345,6 +2346,15 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         setState(() {
           _streaming = true;
           _turnId = _parseTurnId(e.raw);
+          final prompt = _items.lastOrNull;
+          if (_turnId != null &&
+              prompt != null &&
+              prompt.isUser &&
+              prompt.id.startsWith('local-user-') &&
+              prompt.turnId.isEmpty) {
+            prompt.turnId = _turnId!;
+            _cachedRows = null;
+          }
           _implementDismissed = false;
           _pendingInterrupt = false;
           // A fresh turn hasn't produced output yet, so Esc undoes the send
@@ -2582,7 +2592,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     _settingsRevision++;
     final mode = _mode;
     final tier = _requestedServiceTier;
-    setState(() => _sending = true);
+    setState(() {
+      _sending = true;
+      if (queued != null) _queue.remove(queued);
+    });
     // Retry safety: a send can commit server-side just before the socket drops
     // (we reconnect with reload:false to keep the optimistic bubble for a
     // one-tap retry). Re-sending a committed turn records the prompt twice —
@@ -2616,7 +2629,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         // can restore it to the composer. Only for an ordinary send — a
         // programmatic prompt (e.g. "implement the plan") has no user draft to
         // hand back.
-        _undoableText = overrideText == null ? typed : null;
+        _undoableDraft = overrideText == null
+            ? (text: typed, attachments: List<_Attachment>.of(sendAttachments))
+            : null;
         // Don't clear the composer for a programmatic send (e.g. "implement
         // the plan") — the user may have text in progress there.
         if (overrideText == null && queued == null) {
@@ -2919,7 +2934,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         mounted && _threadId == tid && identical(_supplementRequest, request);
     setState(() => _sending = true);
     try {
-      await ref
+      final acceptedTurnId = await ref
           .read(bridgeApiProvider)
           .appTurnSteer(widget.serviceKey, tid, turnId, text, images: images);
       if (!current()) return;
@@ -2930,9 +2945,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           text: text,
           images: resolveImageUrls(images),
           imageUrls: images,
-          turnId: turnId ?? '',
+          turnId: acceptedTurnId,
         );
         if (generation == _threadLoadGeneration) {
+          if (_streaming && _turnId == turnId) _turnId = acceptedTurnId;
           _itemIndex[item.id] = _items.length;
           _items.add(item);
         }
@@ -2997,8 +3013,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         _showingCachedHistory) {
       return;
     }
-    final q = _queue.removeAt(0);
-    unawaited(_send(queued: q));
+    unawaited(_send(queued: _queue.first));
   }
 
   /// Esc handling. Returns true when it acted (so the key is consumed).
@@ -3028,16 +3043,26 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   }
 
   /// Take a queued message out of the queue and back into the composer so the
-  /// user can edit/resend it (Esc, or tapping its chip). Replaces the current
-  /// draft — in the normal flow the box is empty after queueing.
+  /// user can edit/resend it (Esc, or tapping its chip), preserving newer input.
   void _restoreQueued(_Queued q) {
+    setState(() => _queue.removeWhere((e) => e.id == q.id));
+    _restoreDraft(q.text, q.attachments);
+  }
+
+  void _restoreDraft(String text, List<_Attachment> attachments) {
+    final current = _input.text;
+    _input.text = text.isEmpty
+        ? current
+        : current.isEmpty
+        ? text
+        : '$text\n\n$current';
     setState(() {
-      _queue.removeWhere((e) => e.id == q.id);
-      _attachments
-        ..clear()
-        ..addAll(q.attachments);
+      final ids = _attachments.map((a) => a.id).toSet();
+      _attachments.insertAll(
+        0,
+        attachments.where((a) => ids.add(a.id)).toList(),
+      );
     });
-    _input.text = q.text;
     _input.selection = TextSelection.collapsed(offset: _input.text.length);
     _inputFocus.requestFocus();
   }
@@ -3053,18 +3078,16 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// server may still record an aborted turn (accepted — it surfaces on reload),
   /// but live the optimistic bubble is removed so it reads as un-sent.
   void _undoSend() {
-    final restore = _undoableText;
+    final restore = _undoableDraft;
     setState(() {
+      _undoableDraft = null;
       _removeLastLocalUserBubble();
       // This interrupt is an undo: suppress the "stopped" marker its turn-end
       // would otherwise add.
       _suppressStopMarker = true;
     });
     unawaited(_interrupt());
-    if (restore != null && restore.isNotEmpty) {
-      _input.text = restore;
-      _input.selection = TextSelection.collapsed(offset: restore.length);
-    }
+    if (restore != null) _restoreDraft(restore.text, restore.attachments);
     _inputFocus.requestFocus();
   }
 
@@ -3428,6 +3451,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           unawaited(_seedDefaultCwd());
         }
         if (_rate == null) unawaited(_loadQuota());
+        unawaited(_ensureModels());
         _loadGit(); // the working tree may have moved on while we were away
         // Content loaders retain old data on failure. A timed-out RPC can
         // therefore close this new connection without throwing out of them.
@@ -3848,9 +3872,11 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// whose history arrived whole, so the rows already cover every turn.
   List<TurnMinimapItem> _turnMinimapItemsFromRows(List<Object> rows) {
     final out = <TurnMinimapItem>[];
+    final seen = <String>{};
     for (var i = 0; i < rows.length; i++) {
       final row = rows[i];
       if (row is! TranscriptItem || !row.isUser) continue;
+      if (row.turnId.isNotEmpty && !seen.add(row.turnId)) continue;
       // The raw text can be wire machinery (an attachment block, an IDE context
       // fragment); the same cleaner the sidebar and title bar use resolves it,
       // so all three agree on what a turn is called.
@@ -3929,10 +3955,16 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// has been scrolled back into memory. Falls back to the loaded user messages
   /// for a thread that arrived whole.
   int get _turnCount {
-    if (_turnSummaries.isEmpty) return _items.where((i) => i.isUser).length;
-    final snapshotIds = _turnSummaries.map((turn) => turn.turnId).toSet();
-    return snapshotIds.length +
-        _items.where((i) => i.isUser && !snapshotIds.contains(i.turnId)).length;
+    final ids = _turnSummaries.map((turn) => turn.turnId).toSet();
+    var unknown = 0;
+    for (final item in _items.where((item) => item.isUser)) {
+      if (item.turnId.isEmpty) {
+        unknown++;
+      } else {
+        ids.add(item.turnId);
+      }
+    }
+    return ids.length + unknown;
   }
 
   /// Whether the gutter rail can take turn navigation over at [available] width,
@@ -8840,9 +8872,12 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       final models = await ref
           .read(bridgeApiProvider)
           .appModelList(widget.serviceKey);
-      if (mounted) setState(() => _models = models);
+      if (mounted) {
+        setState(() => _models = models);
+        _openLoadDone(_kModelsLoad);
+      }
     } catch (_) {
-      // Leave empty; pickers fall back to defaults.
+      if (mounted) _retryOpenLoad(_kModelsLoad);
     }
     return _models;
   }
@@ -9007,12 +9042,12 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     if (chosen != null || models.isNotEmpty) {
       setState(() {
         _model = chosen;
+        // Capability must resolve the new default, not the old runtime model.
+        _modelPickPending = true;
         if (_effectiveModel?.supportsFast != true) {
           _serviceTier = 'default';
           _serviceTierPickPending = true;
         }
-        // Hold this pick against server-confirmed syncs until it's sent.
-        _modelPickPending = true;
         // If the new model doesn't support the current effort, fall back to its
         // default (or unset) so we never send a level the model rejects.
         final eff = _effectiveEffort;

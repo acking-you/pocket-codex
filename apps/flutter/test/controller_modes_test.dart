@@ -1,6 +1,11 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
+import 'package:pocket_codex/src/providers.dart';
+import 'package:pocket_codex/src/widgets/turn_minimap.dart';
 import 'package:flutter/foundation.dart';
 import 'package:image_picker_platform_interface/image_picker_platform_interface.dart';
 import 'package:pocket_codex/src/image_attachments.dart';
@@ -29,8 +34,14 @@ Future<void> frames(WidgetTester t) async {
 
 class ModesApi extends FakeBridgeApi {
   List<ModelInfo> catalog = [fastModel];
+  int modelFailures = 0;
+  int modelCalls = 0;
   @override
-  Future<List<ModelInfo>> appModelList(String serviceKey) async => catalog;
+  Future<List<ModelInfo>> appModelList(String serviceKey) async {
+    modelCalls++;
+    if (modelFailures-- > 0) throw StateError('connection not ready');
+    return catalog;
+  }
 }
 
 Future<void> open(WidgetTester t, ModesApi api, {String? thread}) async {
@@ -67,6 +78,31 @@ String draft(WidgetTester t) => t
     .widget<TextField>(find.byKey(const Key('composer-input')))
     .controller!
     .text;
+
+FakeImagePicker imagePicker() {
+  final original = ImagePickerPlatform.instance;
+  final picker = FakeImagePicker();
+  ImagePickerPlatform.instance = picker;
+  processImageImpl = (bytes) async => processImageBytes(bytes);
+  addTearDown(() {
+    ImagePickerPlatform.instance = original;
+    processImageImpl = (bytes) => compute(processImageBytes, bytes);
+  });
+  return picker;
+}
+
+Future<void> attach(WidgetTester t, FakeImagePicker picker, String name) async {
+  picker.files = [MemXFile(tinyPng(), name)];
+  await t.tap(find.byKey(const Key('attach-menu-btn')));
+  await frames(t);
+  await t.tap(find.byKey(const Key('attach-btn')));
+  await frames(t);
+}
+
+void complete(ModesApi api) => api.pushEvent(
+  service,
+  const AppEvent(kind: 'turn/completed', threadId: 'thread-0', raw: '{}'),
+);
 
 void main() {
   setUp(AppSessionScreen.debugResetThreadMemory);
@@ -333,5 +369,245 @@ void main() {
     await send(t, 'Next queued goal');
     expect(draft(t), isEmpty);
     expect(api.turnStartCount, 1);
+  });
+  testWidgets(
+    'send preflight retains queued text and attachments during setup',
+    (t) async {
+      final picker = imagePicker();
+      final api = ModesApi()
+        ..autoCompleteTurn = false
+        ..codexStatus = const CodexSetupStatus(
+          codexHome: '/fake',
+          hasConfig: true,
+          hasAuth: true,
+          hasCustomProvider: false,
+          needsSetup: false,
+          promptVariant: 'default',
+        );
+      api.serveHosts.add(
+        const AppServeStatus(
+          name: 'local',
+          device: 'test',
+          alive: true,
+          appServiceKey: service,
+        ),
+      );
+      await api.appConnect(service, 28080);
+      await t.pumpWidget(
+        routerHost(
+          api,
+          initial: '/',
+          routes: [
+            GoRoute(
+              path: '/',
+              builder: (_, _) => const AppSessionScreen(serviceKey: service),
+            ),
+            GoRoute(
+              path: '/setup/codex',
+              builder: (context, _) => Scaffold(
+                body: TextButton(
+                  onPressed: () => context.pop(),
+                  child: const Text('Return to chat'),
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+      await frames(t);
+      await send(t, 'Original goal');
+      await attach(t, picker, 'queued.png');
+      await send(t, 'Queued goal');
+      expect(find.byKey(const Key('queued-0')), findsOneWidget);
+      api.codexStatus = const CodexSetupStatus(
+        codexHome: '/fake',
+        hasConfig: true,
+        hasAuth: false,
+        hasCustomProvider: false,
+        needsSetup: true,
+        promptVariant: 'default',
+      );
+      ProviderScope.containerOf(
+        t.element(find.byType(AppSessionScreen)),
+      ).invalidate(codexSetupStatusProvider);
+      await frames(t);
+      complete(api);
+      await frames(t);
+      expect(find.text('Return to chat'), findsOneWidget);
+      expect(api.turnStartCount, 1);
+      api.codexStatus = const CodexSetupStatus(
+        codexHome: '/fake',
+        hasConfig: true,
+        hasAuth: true,
+        hasCustomProvider: false,
+        needsSetup: false,
+        promptVariant: 'default',
+      );
+      await t.tap(find.text('Return to chat'));
+      await t.pumpAndSettle();
+      expect(find.byKey(const Key('queued-0')), findsOneWidget);
+      await t.tap(find.byKey(const Key('queued-0')));
+      await frames(t);
+      expect(draft(t), 'Queued goal');
+      await send(t, draft(t));
+      expect(api.turnStartCount, 2);
+      expect(api.lastTurnText, 'Queued goal');
+      expect(api.lastTurnImages, hasLength(1));
+    },
+  );
+
+  testWidgets(
+    'undo of a drained turn preserves both drafts and both attachments',
+    (t) async {
+      final picker = imagePicker();
+      final api = ModesApi();
+      await running(t, api);
+      await attach(t, picker, 'queued.png');
+      await send(t, 'Queued goal');
+      await attach(t, picker, 'new-draft.png');
+      await t.enterText(find.byKey(const Key('composer-input')), 'New draft');
+      complete(api);
+      await frames(t);
+      expect(api.turnStartCount, 2);
+      expect(draft(t), 'New draft');
+      await t.tap(find.byKey(const Key('composer-input')));
+      await t.sendKeyEvent(LogicalKeyboardKey.escape);
+      await frames(t);
+      expect(api.interrupted, isTrue);
+      expect(draft(t), 'Queued goal\n\nNew draft');
+      complete(api);
+      await frames(t);
+      expect(api.turnStartCount, 2);
+      await send(t, draft(t));
+      expect(api.lastTurnText, 'Queued goal\n\nNew draft');
+      expect(api.lastTurnImages, hasLength(2));
+    },
+    variant: TargetPlatformVariant.only(TargetPlatform.linux),
+  );
+
+  for (final summaries in [true, false]) {
+    testWidgets(
+      'resumed supplements keep one entry per physical turn (summaries: $summaries)',
+      (t) async {
+        t.view.devicePixelRatio = 1;
+        t.view.physicalSize = const Size(1600, 1000);
+        addTearDown(t.view.reset);
+        final api = ModesApi()
+          ..resolvedSteerTurnId = 'turn-5'
+          ..readResult = ThreadHistory(
+            items: [
+              for (var i = 1; i <= 5; i++)
+                ThreadItem(
+                  id: 'user-$i',
+                  itemType: 'userMessage',
+                  title: '',
+                  text: 'Goal $i',
+                  turnId: 'turn-$i',
+                ),
+            ],
+            turns: summaries
+                ? [
+                    for (var i = 1; i <= 5; i++)
+                      TurnSummary(
+                        turnId: 'turn-$i',
+                        userText: 'Goal $i',
+                        loaded: true,
+                      ),
+                  ]
+                : [],
+            running: true,
+          );
+        await open(t, api, thread: 'resumed');
+        expect(
+          t.widget<TurnMinimap>(find.byType(TurnMinimap)).items,
+          hasLength(5),
+        );
+        await t.tap(find.byKey(const Key('supplement-toggle')));
+        await send(t, 'More detail');
+        expect(api.lastSteerTurnId, isNull);
+        expect(api.lastSteerText, 'More detail');
+        expect(api.turnStartCount, 0);
+        final rail = t.widget<TurnMinimap>(find.byType(TurnMinimap));
+        expect(rail.items, hasLength(5));
+        expect(rail.items.last.turnId, 'turn-5');
+        await t.tap(find.byKey(const Key('stop-btn')));
+        await frames(t);
+        expect(api.lastInterruptTurnId, 'turn-5');
+      },
+      variant: TargetPlatformVariant.only(TargetPlatform.linux),
+    );
+  }
+
+  testWidgets(
+    'mobile default model clears a previously active Fast tier',
+    (t) async {
+      final api = ModesApi()
+        ..catalog = [
+          const ModelInfo(
+            id: 'ordinary',
+            displayName: 'Ordinary',
+            description: '',
+            isDefault: true,
+          ),
+          const ModelInfo(
+            id: 'fast-capable',
+            displayName: 'Fast capable',
+            description: '',
+            supportedServiceTiers: ['priority'],
+          ),
+        ]
+        ..readResult = const ThreadHistory(
+          items: [],
+          running: false,
+          model: 'fast-capable',
+          serviceTier: 'priority',
+        );
+      await open(t, api, thread: 'resumed');
+      expect(
+        t.widget<FilterChip>(find.byKey(const Key('fast-mode-btn'))).selected,
+        isTrue,
+      );
+      await turnSetting(t, 'model');
+      await t.tap(find.text('默认模型'));
+      await frames(t);
+      expect(find.byKey(const Key('fast-mode-btn')), findsNothing);
+      expect(api.threadConfigs['resumed']?.serviceTier, 'default');
+      await turnSetting(t, 'model');
+      await t.tap(find.byKey(const ValueKey('opt-Fast capable')));
+      await frames(t);
+      expect(
+        t.widget<FilterChip>(find.byKey(const Key('fast-mode-btn'))).selected,
+        isFalse,
+      );
+    },
+    variant: TargetPlatformVariant.only(TargetPlatform.android),
+  );
+
+  testWidgets('Fast appears after a failed cold-open catalog request retries', (
+    t,
+  ) async {
+    final api = ModesApi()..modelFailures = 1;
+    await open(t, api);
+    expect(api.modelCalls, 1);
+    expect(find.byKey(const Key('fast-mode-btn')), findsNothing);
+    await t.pump(const Duration(seconds: 1));
+    await frames(t);
+    expect(api.modelCalls, 2);
+    expect(find.byKey(const Key('fast-mode-btn')), findsOneWidget);
+    await t.pump(const Duration(seconds: 32));
+    expect(api.modelCalls, 2);
+  });
+
+  testWidgets('cold-open catalog retries are bounded', (t) async {
+    final api = ModesApi()..modelFailures = 100;
+    await open(t, api);
+    for (final seconds in [1, 2, 4, 8, 16]) {
+      await t.pump(Duration(seconds: seconds));
+      await frames(t);
+    }
+    expect(api.modelCalls, 6);
+    await t.pump(const Duration(seconds: 60));
+    await frames(t);
+    expect(api.modelCalls, 6);
   });
 }

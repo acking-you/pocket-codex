@@ -878,9 +878,10 @@ class FakeBridgeApi implements BridgeApi {
   Completer<void>? steerGate;
   String? lastSteerTurnId;
   String? steerError;
+  String resolvedSteerTurnId = 'turn-1';
 
   @override
-  Future<void> appTurnSteer(
+  Future<String> appTurnSteer(
     String serviceKey,
     String threadId,
     String? turnId,
@@ -892,6 +893,7 @@ class FakeBridgeApi implements BridgeApi {
     lastSteerImages = images;
     lastSteerTurnId = turnId;
     if (steerGate != null) await steerGate!.future;
+    return turnId ?? resolvedSteerTurnId;
   }
 
   /// Records the last turn id passed to [appTurnInterrupt].

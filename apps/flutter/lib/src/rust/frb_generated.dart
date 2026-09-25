@@ -303,7 +303,7 @@ abstract class RustLibApi extends BaseApi {
     String? reasoningEffort,
   });
 
-  Future<void> crateApiBridgeAppTurnSteer({
+  Future<String> crateApiBridgeAppTurnSteer({
     required String serviceKey,
     required String threadId,
     String? turnId,
@@ -2219,7 +2219,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   );
 
   @override
-  Future<void> crateApiBridgeAppTurnSteer({
+  Future<String> crateApiBridgeAppTurnSteer({
     required String serviceKey,
     required String threadId,
     String? turnId,
@@ -2243,7 +2243,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           );
         },
         codec: SseCodec(
-          decodeSuccessData: sse_decode_unit,
+          decodeSuccessData: sse_decode_String,
           decodeErrorData: sse_decode_AnyhowException,
         ),
         constMeta: kCrateApiBridgeAppTurnSteerConstMeta,

@@ -970,14 +970,14 @@ pub fn app_thread_start(
     )
 }
 
-/// Append an asynchronous answer to the expected active turn.
+/// Append an asynchronous answer and return the accepted active turn ID.
 pub fn app_turn_steer(
     service_key: String,
     thread_id: String,
     turn_id: Option<String>,
     text: String,
     images: Option<Vec<String>>,
-) -> Result<()> {
+) -> Result<String> {
     app_session::turn_steer(
         &service_key,
         &thread_id,

@@ -323,8 +323,8 @@ Future<String> appThreadStart({
   sandbox: sandbox,
 );
 
-/// Append an asynchronous answer to the expected active turn.
-Future<void> appTurnSteer({
+/// Append an asynchronous answer and return the accepted active turn ID.
+Future<String> appTurnSteer({
   required String serviceKey,
   required String threadId,
   String? turnId,

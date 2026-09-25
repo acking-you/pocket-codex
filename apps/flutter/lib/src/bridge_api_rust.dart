@@ -653,7 +653,7 @@ class RustBridgeApi implements BridgeApi {
   );
 
   @override
-  Future<void> appTurnSteer(
+  Future<String> appTurnSteer(
     String serviceKey,
     String threadId,
     String? turnId,
