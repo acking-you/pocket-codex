@@ -21,7 +21,7 @@ jobs:
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.pull_request.user.login != 'dependabot[bot]'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 20
 
     steps:
       - name: Check Claude gateway configuration
@@ -61,8 +61,6 @@ jobs:
             Review this pull request. Read AGENTS.md, CLAUDE.md, and other
             repository guidance first when present. Review only the PR changes
             and directly affected code. Do not modify files or push commits.
-            Batch related file reads and use existing CI results for validation.
-            Reserve enough turns to publish findings and the final summary.
 
             Prioritize actionable findings over summaries or style preferences:
             - correctness bugs and behavioral regressions
@@ -80,5 +78,5 @@ jobs:
             comments.
           claude_args: |
             --model "${{ vars.CLAUDE_MODEL || 'claude-sonnet-4-6' }}"
-            --max-turns 60
+            --max-turns 20
             --allowedTools "Read,Glob,Grep,mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)"
