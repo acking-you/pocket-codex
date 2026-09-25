@@ -65,6 +65,8 @@ other history loads only when requested. An invalid provider cursor returns HTTP
 410 and requires reopening the session for a fresh bounded window. A failed read
 never means end of history. During a replacement that races a multi-page read,
 the normal history loader retries once rather than merging old and new pages.
+The cumulative turn API also rejects its entire result if the generation changes
+between pages, including when the provider still accepts the old cursor.
 
 Only a 404 from the capability endpoint selects legacy behavior. Negotiation,
 version, timeout or synchronization failures stay visible and do not silently
@@ -92,6 +94,11 @@ file lengths. Filesystem allocation-unit overhead and directory metadata are not
 included. In-memory snapshots retain their separate eight-thread / approximately
 32 MiB budget.
 
+Capacity changes and writes share the cache file lock. Writers read the current
+configuration under that lock, so an outstanding network request cannot restore
+files after persistence is disabled. Access-time updates use a write-capable file
+handle on Windows; failure to update LRU metadata never deletes verified content.
+
 Eviction removes individual windows or previews: current-session entries have
 highest priority, recently refreshed running tails come next, then other entries
 ordered by last access. Running priority has a 30-second lease, refreshed by
@@ -110,6 +117,8 @@ On startup or session opening, a disk snapshot appears with a cache/sync label.
 Failure leaves it readable with explicit retry. Cached approvals cannot become
 actionable; sending remains disabled until fresh state is loaded. Refresh preserves
 the reading anchor when possible and drops windows from a superseded generation.
+A legacy full follow snapshot completes synchronization just like a successful
+paginated refresh, even while a previously issued paginated read is still pending.
 Live snapshots are coalesced to roughly one second and final turn events, with at
 most two ordinary checkpoint jobs per connection; app death can lose the latest
 uncommitted snapshot, which the next delta repairs.
@@ -125,7 +134,10 @@ uncommitted snapshot, which the next delta repairs.
   capped at 64 MiB; requests are capped at 512 KiB.
 - Source indexes retain at most 256 rollouts and scan only appended records after
   initialization. Compaction records are streamed without retaining their large
-  replacement text. An evicted index may require rescanning its rollout.
+  replacement text. Each scan stops at its initial file length and persists the
+  complete-record prefix even if the writer appends concurrently. Later scans
+  continue from that checkpoint; raced replacement or truncation is rejected.
+  An evicted index may require rescanning its rollout.
 - No migration of the existing in-memory cache or replacement of a running host
   is required. Old clients keep using the existing endpoints.
 
@@ -136,10 +148,10 @@ Verification in the isolated development worktree on 2026-09-25:
 | Check | Result |
 | --- | --- |
 | First-party Rust formatting and workspace Clippy (`-D warnings`) | Passed |
-| `cargo test --workspace --locked` | 338 passed, 8 opt-in tests ignored |
+| `cargo test --workspace --locked` | 345 passed, 8 opt-in tests ignored |
 | Real Codex history test, explicitly enabled | 1 passed; included among the 8 normally ignored tests above |
 | Flutter dependency resolution, formatting and analysis | Passed |
-| `flutter test` | 522 passed, 3 skipped |
+| `flutter test` | 523 passed, 3 skipped |
 
 Protocol tests cover unchanged windows, UTF-8 suffixes, rewrites, removals,
 generation replacement, missing/corrupt bases and duplicate response application.
@@ -147,6 +159,13 @@ Disk tests cover restart reuse, namespaces, eviction, torn writes, orphan stagin
 files and quota reduction. Pagination tests reject pre-replacement work. Widget
 tests exercise cached first paint at phone, tablet and desktop widths in light and
 dark themes, stale-state send blocking, and foreground prefetch scheduling.
+Review regressions cover concurrent append during initial indexing, partial records,
+replacement during scanning, quota changes observed by outstanding cache handles,
+nonfatal access-time failures, cumulative reads crossing a generation change, and
+legacy follow snapshots completing synchronization. Validation ran on Linux;
+Windows timestamp access was checked against Rust's Windows implementation and
+the [SetFileTime access requirement](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-setfiletime),
+without a native Windows test run.
 
 The opt-in test creates a separate external app-server with temporary Codex home,
 working directory, source index, controller cache and random loopback ports. It

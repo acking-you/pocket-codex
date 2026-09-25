@@ -661,13 +661,11 @@ pub fn thread_turn_items(
     let _request = gate
         .lock()
         .map_err(|_| anyhow!("history request lock poisoned"))?;
+    let mut state = ensure_pagination(service_key, thread_id);
     let mut newest_first = Vec::new();
     let mut cursor: Option<String> = None;
     let mut seen = HashSet::new();
-    let stamps = pagination_of(service_key, thread_id)
-        .map(|state| state.turn_stamps)
-        .unwrap_or_default();
-    let stamp = turn_stamp(&stamps, turn_id);
+    let stamp = turn_stamp(&state.turn_stamps, turn_id);
     // Bounded: a single turn can hold hundreds of items, and draining all of
     // them serially is what made opening the longest threads time out. Enough
     // pages to fill a screen; scrolling covers the rest.
@@ -703,11 +701,11 @@ pub fn thread_turn_items(
         }
     }
     newest_first.reverse();
-    if let Some(mut state) = pagination_of(service_key, thread_id) {
-        if !state.loaded_turns.iter().any(|id| id == turn_id) {
-            state.loaded_turns.push(turn_id.to_string());
-            set_pagination(service_key, thread_id, state);
-        }
+    if !state.loaded_turns.iter().any(|id| id == turn_id) {
+        state.loaded_turns.push(turn_id.to_string());
+    }
+    if !set_pagination(service_key, thread_id, state) {
+        bail!("history changed while loading; retry the turn");
     }
     Ok(newest_first)
 }

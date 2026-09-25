@@ -1967,7 +1967,12 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                 .join('\u0001');
     setState(() {
       _externalWriterLiveness = update.liveness;
-      if (!paginated) _replaceTranscriptItems(update.items);
+      if (!paginated) {
+        _replaceTranscriptItems(update.items);
+        _historySyncing = false;
+        _showingCachedHistory = false;
+        _historyEpoch = null;
+      }
       if (willRun && !wasRunning) _elapsedSecs = 0;
       if (!paginated || _items.isNotEmpty) _loading = false;
       _error = null;

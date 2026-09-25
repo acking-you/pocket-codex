@@ -1937,11 +1937,5 @@ pub fn history_cache_status() -> Result<HistoryCacheStatusDto> {
 
 /// Set the shared cache quota, immediately evicting cold disposable windows.
 pub fn history_cache_set_limit(limit_mb: u32) -> Result<()> {
-    anyhow::ensure!(limit_mb <= 64_000, "cache limit must be between 0 and 64000 MB");
-    let directory = runtime::support_dir()?;
-    let mut cfg = config::load_config(&directory)?;
-    cfg.history_cache.disk_limit_mb = limit_mb;
-    config::save_config(&directory, &cfg)?;
-    crate::engine::session_cache::application_cache()?.usage()?;
-    Ok(())
+    crate::engine::session_cache::set_limit(&runtime::support_dir()?, limit_mb)
 }

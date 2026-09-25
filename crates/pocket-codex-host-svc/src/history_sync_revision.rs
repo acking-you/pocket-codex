@@ -1,12 +1,12 @@
 //! Persist small append-scan checkpoints, never a second transcript copy.
 
 use std::{
-    fs::{self, File, OpenOptions},
+    fs::{self, File, Metadata, OpenOptions},
     io::{BufRead, BufReader, Read, Seek, SeekFrom, Write},
     path::Path,
 };
 
-use anyhow::Result;
+use anyhow::{ensure, Result};
 use pocket_codex_core::history_sync::digest_bytes;
 use serde::{Deserialize, Serialize};
 
@@ -29,24 +29,22 @@ pub(super) fn scan(path: &Path, directory: &Path) -> Result<String> {
     fs::create_dir_all(directory)?;
     let lock = private_file(&directory.join("index.lock"), false)?;
     lock.lock()?;
+    let file = File::open(path)?;
+    let stat = file.metadata()?;
+    scan_snapshot(path, directory, file, stat)
+}
+
+// The caller holds index.lock. Stat and the file handle describe the prefix
+// this scan may consume, even if the writer appends before parsing begins.
+fn scan_snapshot(path: &Path, directory: &Path, file: File, stat: Metadata) -> Result<String> {
     let key = digest_bytes(path.as_os_str().as_encoded_bytes());
     let index_path = directory.join(format!("{key}.json"));
     let mut index: Index = fs::read(&index_path)
         .ok()
         .and_then(|b| serde_json::from_slice(&b).ok())
         .unwrap_or_default();
-    let mut reader = BufReader::new(File::open(path)?);
-    let stat = reader.get_ref().metadata()?;
-    let mut header = Vec::new();
-    reader.by_ref().take(8192).read_until(b'\n', &mut header)?;
-    #[cfg(unix)]
-    let identity = {
-        use std::os::unix::fs::MetadataExt;
-        digest_bytes(format!("{}:{}:{}", stat.dev(), stat.ino(), digest_bytes(&header)).as_bytes())
-    };
-    #[cfg(not(unix))]
-    let identity =
-        digest_bytes(format!("{:?}:{}", stat.created().ok(), digest_bytes(&header)).as_bytes());
+    let mut reader = BufReader::new(file);
+    let identity = source_identity(&mut reader, &stat)?;
     let modified = format!("{:?}", stat.modified().ok());
     if index.identity == identity && index.length == stat.len() && index.modified == modified {
         return Ok(index.generation);
@@ -56,8 +54,8 @@ pub(super) fn scan(path: &Path, directory: &Path) -> Result<String> {
         || (stat.len() == index.length && index.modified != modified)
     {
         index = Index {
-            identity,
-            generation: digest_bytes(format!("{}:{modified}", digest_bytes(&header)).as_bytes()),
+            identity: identity.clone(),
+            generation: digest_bytes(format!("{identity}:{modified}").as_bytes()),
             ..Index::default()
         };
     }
@@ -66,8 +64,10 @@ pub(super) fn scan(path: &Path, directory: &Path) -> Result<String> {
     // streamed past, so even a multi-megabyte compaction record is recognized
     // without retaining its replacement transcript in memory.
     let start = index.offset;
-    let mut records =
-        serde_json::Deserializer::from_reader(&mut reader).into_iter::<RevisionMarker>();
+    let mut records = serde_json::Deserializer::from_reader(
+        reader.by_ref().take(stat.len().saturating_sub(start)),
+    )
+    .into_iter::<RevisionMarker>();
     while let Some(record) = records.next() {
         let marker = match record {
             Ok(marker) => marker,
@@ -81,28 +81,54 @@ pub(super) fn scan(path: &Path, directory: &Path) -> Result<String> {
             );
         }
     }
-    let after = reader.get_ref().metadata()?;
-    // A raced scan is safe to return but cannot become an authoritative checkpoint.
-    if after.len() == stat.len() && after.modified().ok() == stat.modified().ok() {
-        index.length = stat.len();
-        index.modified = modified;
-        let temporary = directory.join(format!("{key}.tmp"));
-        let mut file = private_file(&temporary, true)?;
-        file.write_all(&serde_json::to_vec(&index)?)?;
-        file.sync_all()?;
-        fs::rename(temporary, &index_path)?;
-        let mut entries = fs::read_dir(directory)?
-            .filter_map(Result::ok)
-            .filter(|e| e.path().extension().is_some_and(|s| s == "json"))
-            .collect::<Vec<_>>();
-        if entries.len() > 256 {
-            entries.sort_by_key(|e| e.metadata().and_then(|m| m.modified()).ok());
-            for entry in entries.iter().take(entries.len() - 256) {
-                let _ = fs::remove_file(entry.path());
-            }
+    // Reopen the path to catch replacement of the file behind our old handle.
+    // Ordinary appends preserve the verified prefix; truncation, replacement,
+    // or an in-place rewrite at the same length must never publish it.
+    let mut current = BufReader::new(File::open(path)?);
+    let after = current.get_ref().metadata()?;
+    ensure!(
+        after.len() >= stat.len()
+            && (after.len() > stat.len() || after.modified().ok() == stat.modified().ok())
+            && source_identity(&mut current, &after)? == identity,
+        "history changed while scanning; retry the window"
+    );
+    index.length = stat.len();
+    index.modified = modified;
+    let temporary = directory.join(format!("{key}.tmp"));
+    let mut file = private_file(&temporary, true)?;
+    file.write_all(&serde_json::to_vec(&index)?)?;
+    file.sync_all()?;
+    fs::rename(temporary, &index_path)?;
+    let mut entries = fs::read_dir(directory)?
+        .filter_map(Result::ok)
+        .filter(|e| e.path().extension().is_some_and(|s| s == "json"))
+        .collect::<Vec<_>>();
+    if entries.len() > 256 {
+        entries.sort_by_key(|e| e.metadata().and_then(|m| m.modified()).ok());
+        for entry in entries.iter().take(entries.len() - 256) {
+            let _ = fs::remove_file(entry.path());
         }
     }
     Ok(index.generation)
+}
+
+fn source_identity(reader: &mut BufReader<File>, stat: &Metadata) -> Result<String> {
+    let mut header = Vec::new();
+    reader
+        .by_ref()
+        .take(stat.len().min(8192))
+        .read_until(b'\n', &mut header)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Ok(digest_bytes(
+            format!("{}:{}:{}", stat.dev(), stat.ino(), digest_bytes(&header)).as_bytes(),
+        ))
+    }
+    #[cfg(not(unix))]
+    {
+        Ok(digest_bytes(format!("{:?}:{}", stat.created().ok(), digest_bytes(&header)).as_bytes()))
+    }
 }
 
 #[derive(Default, Deserialize)]
@@ -147,6 +173,112 @@ fn private_file(path: &Path, truncate: bool) -> Result<File> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn scan_after_change(
+        path: &Path,
+        directory: &Path,
+        change: impl FnOnce() -> Result<()>,
+    ) -> Result<String> {
+        fs::create_dir_all(directory)?;
+        let lock = private_file(&directory.join("index.lock"), false)?;
+        lock.lock()?;
+        let file = File::open(path)?;
+        let stat = file.metadata()?;
+        change()?;
+        scan_snapshot(path, directory, file, stat)
+    }
+
+    fn saved_index(path: &Path, directory: &Path) -> Result<Index> {
+        let key = digest_bytes(path.as_os_str().as_encoded_bytes());
+        Ok(serde_json::from_slice(&fs::read(directory.join(format!("{key}.json")))?)?)
+    }
+
+    #[test]
+    fn initial_scan_persists_its_prefix_while_the_writer_keeps_appending() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let path = temp.path().join("rollout.jsonl");
+        let directory = temp.path().join("index");
+        fs::write(&path, b"{\"type\":\"session_meta\",\"payload\":{\"id\":\"session\"}}\n")?;
+        let append = || -> Result<()> {
+            writeln!(
+                OpenOptions::new().append(true).open(&path)?,
+                "{}",
+                serde_json::json!({
+                    "type": "response_item", "payload": {"type": "message", "text": "x".repeat(1_000_000)}
+                })
+            )?;
+            Ok(())
+        };
+        let mut generation = None;
+        let mut offset = 0;
+        for _ in 0..3 {
+            let bound = fs::metadata(&path)?.len();
+            let current = scan_after_change(&path, &directory, append)?;
+            let index = saved_index(&path, &directory)?;
+            assert_eq!(index.length, bound);
+            assert!(index.offset > offset && index.offset <= bound);
+            if let Some(previous) = &generation {
+                assert_eq!(&current, previous);
+            }
+            generation = Some(current);
+            offset = index.offset;
+        }
+        assert_eq!(Some(scan(&path, &directory)?), generation);
+        Ok(())
+    }
+
+    #[test]
+    fn partial_record_and_new_rollback_wait_for_the_next_bounded_scan() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let path = temp.path().join("rollout.jsonl");
+        let directory = temp.path().join("index");
+        fs::write(&path, b"{\"type\":\"session_meta\",\"payload\":{\"id\":\"session\"}}\n")?;
+        let complete = fs::metadata(&path)?.len();
+        OpenOptions::new()
+            .append(true)
+            .open(&path)?
+            .write_all(b"{\"type\":\"event_msg\",\"payload\":{\"type\":\"thread_rolled_back\"")?;
+        let first = scan_after_change(&path, &directory, || {
+            OpenOptions::new()
+                .append(true)
+                .open(&path)?
+                .write_all(b"}}\n")?;
+            Ok(())
+        })?;
+        let index = saved_index(&path, &directory)?;
+        assert!(index.offset <= complete);
+        assert!(index.offset < index.length);
+        let next = scan(&path, &directory)?;
+        assert_ne!(first, next);
+        assert_eq!(scan(&path, &directory)?, next);
+        Ok(())
+    }
+
+    #[test]
+    fn changed_source_cannot_publish_an_old_snapshot() -> Result<()> {
+        for truncate in [false, true] {
+            let temp = tempfile::tempdir()?;
+            let path = temp.path().join("rollout.jsonl");
+            let directory = temp.path().join("index");
+            fs::write(&path, b"{\"type\":\"session_meta\",\"payload\":{\"id\":\"original\"}}\n")?;
+            let error = scan_after_change(&path, &directory, || {
+                if truncate {
+                    fs::write(&path, b"{}\n")?;
+                } else {
+                    fs::rename(&path, temp.path().join("old.jsonl"))?;
+                    fs::write(
+                        &path,
+                        b"{\"type\":\"session_meta\",\"payload\":{\"id\":\"replaced\"}}\n",
+                    )?;
+                }
+                Ok(())
+            })
+            .expect_err("replacement must reject the snapshot");
+            assert!(error.to_string().contains("history changed"));
+            assert!(saved_index(&path, &directory).is_err());
+        }
+        Ok(())
+    }
 
     #[test]
     fn append_restart_rollback_and_replacement_have_correct_generations() -> Result<()> {

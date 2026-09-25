@@ -38,6 +38,13 @@ fn load_window(next_cursor: Value) -> LoadedHistory {
 fn mock_client(
     replies: Vec<(&'static str, Value)>,
 ) -> (Arc<AppClient>, tokio::task::JoinHandle<WebSocketStream<TcpStream>>) {
+    mock_client_with_hook(replies, |_, _| {})
+}
+
+fn mock_client_with_hook(
+    replies: Vec<(&'static str, Value)>,
+    mut before_reply: impl FnMut(usize, &Value) + Send + 'static,
+) -> (Arc<AppClient>, tokio::task::JoinHandle<WebSocketStream<TcpStream>>) {
     runtime::runtime().block_on(async {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
@@ -54,7 +61,7 @@ fn mock_client(
             )
             .await
             .expect("pagination test operation");
-            for (method, result) in replies {
+            for (index, (method, result)) in replies.into_iter().enumerate() {
                 let frame = socket
                     .next()
                     .await
@@ -65,6 +72,7 @@ fn mock_client(
                 let request: Value =
                     serde_json::from_str(&frame).expect("pagination test operation");
                 assert_eq!(request["method"], method);
+                before_reply(index, &request);
                 if method == "thread/resume" {
                     assert_eq!(
                         request["params"]["excludeTurns"], true,
@@ -83,6 +91,50 @@ fn mock_client(
             .expect("pagination test operation");
         (Arc::new(client), peer)
     })
+}
+
+#[test]
+fn cumulative_turn_read_rejects_source_replacement_between_pages() {
+    runtime::init(std::env::temp_dir()).expect("runtime");
+    let service = Arc::new(Mutex::new(String::new()));
+    let peer_service = Arc::clone(&service);
+    let entry = |id: &str| {
+        json!({"turnId": "turn", "item": {
+            "id": id, "type": "agentMessage", "text": id
+        }})
+    };
+    let (client, peer) = mock_client_with_hook(
+        vec![
+            ("thread/items/list", json!({"data": [entry("old")], "nextCursor": "still-accepted"})),
+            ("thread/items/list", json!({"data": [entry("new")], "nextCursor": null})),
+            ("thread/items/list", json!({"data": [entry("fresh")], "nextCursor": null})),
+        ],
+        move |index, request| {
+            if index == 1 {
+                assert_eq!(request["params"]["cursor"], "still-accepted");
+                reset_synced_history(&peer_service.lock().expect("service"), "thread");
+            } else if index == 2 {
+                assert!(request["params"]["cursor"].is_null());
+            }
+        },
+    );
+    let session = TestSession::new(client);
+    *service.lock().expect("service") = session.0.clone();
+    let result = thread_turn_items(&session.0, "thread", "turn");
+    // Finish the peer even on regression, so a failed assertion cannot strand it.
+    let retry = thread_turn_items(&session.0, "thread", "turn").expect("fresh retry");
+    runtime::runtime().block_on(peer).expect("peer");
+    assert!(result
+        .expect_err("mixed generations must fail")
+        .to_string()
+        .contains("history changed"));
+    assert_eq!(
+        retry
+            .iter()
+            .map(|item| item.id.as_str())
+            .collect::<Vec<_>>(),
+        ["fresh"]
+    );
 }
 
 #[test]

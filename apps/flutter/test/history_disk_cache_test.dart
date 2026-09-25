@@ -146,6 +146,47 @@ void main() {
     },
   );
 
+  testWidgets('legacy follow snapshot finishes cached synchronization', (
+    tester,
+  ) async {
+    final follow = Completer<void>();
+    final historyRead = Completer<ThreadHistory>();
+    final api = FakeBridgeApi()
+      ..cachedHistories[thread] = history('Cached before following')
+      ..appThreadResumeError = StateError('thread already has an active writer')
+      ..metaFollowGate = follow.future
+      ..pendingReads[thread] = [historyRead.future];
+    api.transcripts[thread] = history('Fresh legacy snapshot').items;
+    api.liveness[thread] = const SessionLiveness(
+      threadId: thread,
+      turnState: 'incomplete',
+      heldOpen: true,
+      safety: 'ownedRunning',
+      allowsResume: false,
+      requiresTakeover: false,
+      holders: [],
+    );
+    await api.appConnect(service, 0);
+    await tester.pumpWidget(
+      host(const AppSessionScreen(serviceKey: service, threadId: thread), api),
+    );
+    await frames(tester);
+    expect(find.text('Cached before following'), findsOneWidget);
+    expect(find.byKey(const Key('history-sync-status')), findsOneWidget);
+    follow.complete();
+    await frames(tester);
+    expect(find.text('Fresh legacy snapshot'), findsOneWidget);
+    expect(find.text('Cached before following'), findsNothing);
+    expect(find.byKey(const Key('history-sync-status')), findsNothing);
+    historyRead.complete(history('Late paginated read'));
+    await frames(tester);
+    expect(find.text('Fresh legacy snapshot'), findsOneWidget);
+    expect(find.text('Late paginated read'), findsNothing);
+    expect(find.byKey(const Key('history-sync-status')), findsNothing);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   testWidgets(
     'prefetch is serialized, stops in background, and resumes fairly',
     (tester) async {

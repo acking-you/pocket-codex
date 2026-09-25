@@ -79,26 +79,57 @@ pub fn namespace(service: &str) -> Result<String> {
 
 /// Open the application-wide disk budget without making a network request.
 pub fn application_cache() -> Result<DiskCache> {
-    let dir = runtime::support_dir()?;
-    let cfg = config::load_config(&dir)?;
-    Ok(DiskCache::new(
-        dir.join("session-cache-v1"),
-        u64::from(cfg.history_cache.disk_limit_mb) * 1_000_000,
-    ))
+    Ok(DiskCache::for_app(runtime::support_dir()?))
+}
+
+/// Change capacity under the same lock used by cache writers, then evict before
+/// returning. Handles retained by in-flight requests read this updated setting.
+pub fn set_limit(support_dir: &Path, limit_mb: u32) -> Result<()> {
+    ensure!(limit_mb <= 64_000, "cache limit must be between 0 and 64000 MB");
+    let cache = DiskCache::for_app(support_dir.into());
+    let _lock = cache.lock()?;
+    let mut cfg = config::load_config(support_dir)?;
+    cfg.history_cache.disk_limit_mb = limit_mb;
+    config::save_config(support_dir, &cfg)?;
+    cache.trim_locked(u64::from(limit_mb) * 1_000_000, 0)
+}
+
+enum CacheLimit {
+    #[cfg(test)]
+    Fixed(u64),
+    AppConfig(PathBuf),
 }
 
 /// One cache directory shared by all controller hosts and sessions.
 pub struct DiskCache {
     root: PathBuf,
-    limit: u64,
+    limit: CacheLimit,
 }
 
 impl DiskCache {
     /// Construct a cache with an exact byte budget; no filesystem side effects.
-    pub fn new(root: PathBuf, limit: u64) -> Self {
+    #[cfg(test)]
+    fn new(root: PathBuf, limit: u64) -> Self {
         Self {
             root,
-            limit,
+            limit: CacheLimit::Fixed(limit),
+        }
+    }
+
+    fn for_app(support_dir: PathBuf) -> Self {
+        Self {
+            root: support_dir.join("session-cache-v1"),
+            limit: CacheLimit::AppConfig(support_dir),
+        }
+    }
+
+    fn limit_locked(&self) -> Result<u64> {
+        match &self.limit {
+            #[cfg(test)]
+            CacheLimit::Fixed(limit) => Ok(*limit),
+            CacheLimit::AppConfig(dir) => {
+                Ok(u64::from(config::load_config(dir)?.history_cache.disk_limit_mb) * 1_000_000)
+            },
         }
     }
 
@@ -124,17 +155,18 @@ impl DiskCache {
     /// Read a verified entry and update its access time. Corrupt or oversized
     /// cache entries are misses; source data is never modified.
     pub fn read(&self, owner: &str, session: &str, key: &str) -> Result<Option<Vec<u8>>> {
-        if self.limit == 0 || !self.root.exists() {
+        if !self.root.exists() {
             return Ok(None);
         }
         let _lock = self.lock()?;
+        let limit = self.limit_locked()?;
+        if limit == 0 {
+            return Ok(None);
+        }
         let path = self.path(owner, session, key);
         let read = || -> Result<Vec<u8>> {
             let file = File::open(&path)?;
-            ensure!(
-                file.metadata()?.len() <= MAX_ENTRY_BYTES.min(self.limit),
-                "cache entry too large"
-            );
+            ensure!(file.metadata()?.len() <= MAX_ENTRY_BYTES.min(limit), "cache entry too large");
             let mut reader = BufReader::new(file);
             let header = read_header(&mut reader)?;
             ensure!(
@@ -144,11 +176,21 @@ impl DiskCache {
             let mut data = Vec::new();
             reader.read_to_end(&mut data)?;
             ensure!(digest_bytes(&data) == header.digest, "cache digest mismatch");
-            reader.get_ref().set_modified(SystemTime::now())?;
             Ok(data)
         };
         match read() {
-            Ok(data) => Ok(Some(data)),
+            Ok(data) => {
+                // Windows needs write-attributes access for set_modified.
+                // LRU maintenance failure does not invalidate verified content.
+                if let Err(error) = OpenOptions::new()
+                    .write(true)
+                    .open(&path)
+                    .and_then(|file| file.set_modified(SystemTime::now()))
+                {
+                    tracing::debug!(%error, "cache access timestamp unavailable");
+                }
+                Ok(Some(data))
+            },
             Err(_) => {
                 let _ = fs::remove_file(path);
                 Ok(None)
@@ -178,10 +220,14 @@ impl DiskCache {
         data: &[u8],
         running: bool,
     ) -> Result<bool> {
-        if self.limit == 0 || data.len() as u64 > MAX_ENTRY_BYTES {
+        if data.len() as u64 > MAX_ENTRY_BYTES {
             return Ok(false);
         }
         let _lock = self.lock()?;
+        let limit = self.limit_locked()?;
+        if limit == 0 {
+            return Ok(false);
+        }
         let header = Header {
             owner: owner.into(),
             session: digest_bytes(session.as_bytes()),
@@ -192,13 +238,13 @@ impl DiskCache {
         let mut encoded = serde_json::to_vec(&header)?;
         encoded.push(b'\n');
         let bytes = (encoded.len() + data.len()) as u64;
-        if bytes > self.limit || bytes > MAX_ENTRY_BYTES {
+        if bytes > limit || bytes > MAX_ENTRY_BYTES {
             return Ok(false);
         }
         let path = self.path(owner, session, key);
         // Reserve for both old and staged versions before writing: temporary
         // file lengths count toward the same quota, including crash leftovers.
-        self.trim_locked(bytes)?;
+        self.trim_locked(limit, bytes)?;
         let temporary = path.with_extension("tmp");
         let mut file = private_file(&temporary, true)?;
         file.write_all(&encoded)?;
@@ -251,7 +297,7 @@ impl DiskCache {
             return Ok(0);
         }
         let _lock = self.lock()?;
-        self.trim_locked(0)?;
+        self.trim_locked(self.limit_locked()?, 0)?;
         Ok(fs::read_dir(&self.root)?
             .filter_map(Result::ok)
             .filter_map(|e| e.metadata().ok())
@@ -259,7 +305,7 @@ impl DiskCache {
             .sum())
     }
 
-    fn trim_locked(&self, reserve: u64) -> Result<()> {
+    fn trim_locked(&self, limit: u64, reserve: u64) -> Result<()> {
         let focused = focus().lock().ok().and_then(|f| f.clone());
         let mut entries = Vec::new();
         let mut used = 0;
@@ -293,7 +339,7 @@ impl DiskCache {
         }
         entries.sort_by_key(|a| (a.0, a.1));
         for (_, _, size, path) in entries {
-            if used.saturating_add(reserve) <= self.limit {
+            if used.saturating_add(reserve) <= limit {
                 break;
             }
             fs::remove_file(path)?;
@@ -334,6 +380,59 @@ fn private_file(path: &Path, truncate: bool) -> Result<File> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hits_refresh_timestamps_without_rewriting_the_entry() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let cache = DiskCache::new(dir.path().into(), 4000);
+        cache.write("host", "thread", "tail", b"cached text", false)?;
+        let path = cache.path("host", "thread", "tail");
+        let before = fs::read(&path)?;
+        let old = UNIX_EPOCH + std::time::Duration::from_secs(1_000_000);
+        OpenOptions::new()
+            .write(true)
+            .open(&path)?
+            .set_modified(old)?;
+        assert_eq!(
+            cache.read("host", "thread", "tail")?.as_deref(),
+            Some(b"cached text".as_slice())
+        );
+        assert!(fs::metadata(&path)?.modified()? > old);
+        assert_eq!(fs::read(&path)?, before);
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_timestamp_updates_keep_verified_content() -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir()?;
+        let cache = DiskCache::new(dir.path().into(), 4000);
+        cache.write("host", "thread", "tail", b"readable", false)?;
+        let path = cache.path("host", "thread", "tail");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o400))?;
+        assert_eq!(cache.read("host", "thread", "tail")?.as_deref(), Some(b"readable".as_slice()));
+        assert!(path.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn retained_handles_observe_disabled_and_reduced_app_quotas() -> Result<()> {
+        let support = tempfile::tempdir()?;
+        set_limit(support.path(), 4)?;
+        let in_flight = DiskCache::for_app(support.path().into());
+        in_flight.write("host", "thread", "old", &vec![0; 2_000_000], false)?;
+        set_limit(support.path(), 0)?;
+        assert!(!in_flight.write("host", "thread", "late", b"late reply", true)?);
+        assert_eq!(in_flight.usage()?, 0);
+        set_limit(support.path(), 1)?;
+        assert!(!in_flight.write("host", "thread", "large", &vec![0; 2_000_000], true)?);
+        assert!(in_flight.write("host", "thread", "one", &vec![1; 600_000], false)?);
+        assert!(in_flight.write("host", "thread", "two", &vec![2; 600_000], true)?);
+        assert!(in_flight.usage()? <= 1_000_000);
+        assert!(in_flight.read("host", "thread", "one")?.is_none());
+        Ok(())
+    }
 
     #[test]
     fn restart_eviction_namespaces_and_corruption_are_cache_misses() -> Result<()> {
