@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
@@ -35,6 +36,73 @@ Future<void> _openViewer(WidgetTester tester, Uint8List bytes) async {
 }
 
 void main() {
+  testWidgets('host image loading, failure and retry use explicit states', (
+    t,
+  ) async {
+    var request = Completer<Uint8List?>();
+    var calls = 0;
+    Future<Uint8List?> load(String path) {
+      calls++;
+      return request.future;
+    }
+
+    await t.pumpWidget(
+      _wrap(
+        MessageImagesView(
+          images: resolveImageUrls(['/tmp/generated.png']),
+          hostImageLoader: load,
+        ),
+      ),
+    );
+    expect(find.byType(ImageLoadingPlaceholder), findsOneWidget);
+    request.complete(null);
+    await t.pumpAndSettle();
+    expect(find.byType(ImageLoadingPlaceholder), findsNothing);
+    expect(find.text('Retry'), findsOneWidget);
+    await t.pump(const Duration(seconds: 2));
+    expect(
+      calls,
+      1,
+      reason: 'failures must not trigger an automatic read loop',
+    );
+    request = Completer<Uint8List?>();
+    await t.tap(find.text('Retry'));
+    await t.pump();
+    expect(calls, 2);
+    expect(find.byType(ImageLoadingPlaceholder), findsOneWidget);
+    request.complete(_png());
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('msg-image-0')), findsOneWidget);
+  });
+
+  testWidgets(
+    'same paths on different hosts do not share bytes or pending reads',
+    (t) async {
+      final old = Completer<Uint8List?>();
+      final current = Completer<Uint8List?>();
+      var calls = 0;
+      Future<Uint8List?> load(String path) =>
+          calls++ == 0 ? old.future : current.future;
+      Widget strip(String scope) => _wrap(
+        MessageImagesView(
+          images: resolveImageUrls(['/tmp/same.png']),
+          hostImageLoader: load,
+          cacheScope: scope,
+        ),
+      );
+      await t.pumpWidget(strip('host-a:thread-a'));
+      await t.pumpWidget(strip('host-b:thread-b'));
+      expect(calls, 2);
+      old.complete(_png());
+      await t.pump();
+      expect(find.byKey(const Key('msg-image-0')), findsNothing);
+      expect(find.byType(ImageLoadingPlaceholder), findsOneWidget);
+      current.complete(_png(w: 12));
+      await t.pumpAndSettle();
+      expect(find.byKey(const Key('msg-image-0')), findsOneWidget);
+    },
+  );
+
   testWidgets('opaque image references stay visible without host reads', (
     tester,
   ) async {

@@ -56,7 +56,7 @@ class TranscriptItem {
   /// The row's body. Appended to in place while [streaming].
   String text;
 
-  /// Image attachments of a user message, resolved once (data URLs decoded to
+  /// User attachments or generated images, resolved once (data URLs decoded to
   /// bytes; host-only paths kept as chips) so rebuilds never re-decode base64.
   List<ResolvedImage> images;
 
@@ -112,6 +112,7 @@ class TranscriptItem {
   /// * `plan` — the agent's stated intent. A checklist the user is tracking is
   ///   the opposite of intermediate noise, and the live progress tracker above
   ///   the composer reads the same item.
+  /// * `imageGeneration` — the generated artifact is an output to preview/save.
   /// * `interrupted` — the turn was cut short, which is why there is no answer
   ///   below. Folding it would leave the transcript silently ending.
   ///
@@ -119,7 +120,10 @@ class TranscriptItem {
   /// turn, so leaving it out split one turn's work into several folds that each
   /// reported the same duration.
   bool get standsAlone =>
-      type == 'turnDuration' || type == 'plan' || type == 'interrupted';
+      type == 'turnDuration' ||
+      type == 'plan' ||
+      type == 'interrupted' ||
+      type == 'imageGeneration';
 }
 
 /// Stopwatch-format an elapsed-second count: `m:ss`, or `h:mm:ss` past an hour

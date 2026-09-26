@@ -500,9 +500,7 @@ pub struct AppEventDto {
     pub title: Option<String>,
     /// Text payload (a streaming delta or an item's body/detail).
     pub text: Option<String>,
-    /// Image URLs attached to a `userMessage` item: `data:image/...` URLs
-    /// render inline; a host-local path (from a `localImage` input) renders as
-    /// a filename chip. Empty for every other event.
+    /// User attachments or generated artifacts, as data URLs or host paths.
     pub images: Vec<String>,
     /// Token to answer a server approval request via [`app_respond_approval`];
     /// `None` for ordinary notifications.
@@ -560,9 +558,7 @@ pub struct ThreadItemDto {
     pub text: String,
     /// Structured asynchronous questions on an agent message, as JSON.
     pub questions_json: Option<String>,
-    /// Image URLs attached to a `userMessage`: `data:image/...` URLs render
-    /// inline; a host-local path (from a `localImage` input) renders as a
-    /// filename chip. Empty for every other item kind.
+    /// User attachments or generated artifacts, as data URLs or host paths.
     pub images: Vec<String>,
     /// Id of the turn this item belongs to — the server's own turn boundary
     /// (`thread/read` nests items under their turn), so the UI can render one
@@ -1707,7 +1703,7 @@ pub fn meta_read_file(service_key: String, path: String) -> Result<Vec<u8>> {
 
 /// Read an image that `thread_id`'s transcript already references, so the UI
 /// can render it inline instead of naming it. NOT root-confined: the host
-/// authorises the read against that thread's own user messages, which is what
+/// authorises user attachments and typed generated artifacts, which is what
 /// makes a pasted screenshot in the OS temp directory visible to a remote
 /// controller without granting it a general file read. Errors (with a
 /// `403`-carrying message) for a path the transcript never mentioned.

@@ -120,6 +120,31 @@ pub struct ErrorPayload {
     pub data: Option<serde_json::Value>,
 }
 
+/// Image references from a native image-generation item (wire or rollout).
+/// Prefer the saved artifact so materialized transcripts do not duplicate
+/// base64 payloads. Hosts authorize this exact path against the typed rollout
+/// item. If saving failed, the inline result still makes the image available
+/// remotely.
+pub fn image_generation_images(item: &serde_json::Value) -> Vec<String> {
+    for field in ["savedPath", "saved_path"] {
+        if let Some(path) = item.get(field).and_then(serde_json::Value::as_str) {
+            if !path.is_empty() {
+                return vec![path.to_string()];
+            }
+        }
+    }
+    let Some(result) = item.get("result").and_then(serde_json::Value::as_str) else {
+        return Vec::new();
+    };
+    if result.is_empty() {
+        return Vec::new();
+    }
+    if result.starts_with("data:image/") {
+        return vec![result.to_string()];
+    }
+    vec![format!("data:image/png;base64,{result}")]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

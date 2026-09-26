@@ -1731,4 +1731,29 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get steerTurnEnded =>
       'The turn changed or ended. Your draft is kept; send it as a new turn.';
+
+  @override
+  String get advancedSettings => 'Advanced settings';
+
+  @override
+  String get planModeDescription =>
+      'Plan first without implementing. Normal mode is recommended for most tasks.';
+
+  @override
+  String get imageGenerating => 'Generating image…';
+
+  @override
+  String get imageLoading => 'Loading image…';
+
+  @override
+  String get imageGenerationFailed => 'Image generation failed';
+
+  @override
+  String get imageGenerationIncomplete => 'Image generation incomplete';
+
+  @override
+  String get imageGenerationUnavailable => 'No image was returned';
+
+  @override
+  String get imageGenerationLimit => 'Image generation usage limit reached';
 }

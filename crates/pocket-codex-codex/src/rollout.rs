@@ -900,8 +900,8 @@ fn completed_extension_item(item: &Value, id: String) -> Option<TranscriptItem> 
         "sleep"
     } else if kind.contains("web_search") || kind.contains("web-search") {
         "webSearch"
-    } else if kind.contains("image_generation") || kind.contains("image-generation") {
-        "imageGeneration"
+    } else if kind == "image_gen.generation" {
+        return Some(completed_image_generation_item(item, id));
     } else {
         "dynamicToolCall"
     };
@@ -913,11 +913,6 @@ fn completed_extension_item(item: &Value, id: String) -> Option<TranscriptItem> 
                 .unwrap_or(0)
         ),
         "webSearch" => event_string(item, &["query"]),
-        "imageGeneration" => ["revised_prompt", "revisedPrompt", "saved_path", "savedPath"]
-            .into_iter()
-            .find_map(|field| item.get(field).and_then(Value::as_str))
-            .unwrap_or(&kind)
-            .to_string(),
         _ => kind,
     };
     Some(TranscriptItem {
@@ -952,7 +947,7 @@ fn completed_image_generation_item(item: &Value, id: String) -> TranscriptItem {
         text: rollout_selected_json(item, &[&["status"], &["saved_path", "savedPath"], &[
             "failure",
         ]]),
-        images: Vec::new(),
+        images: crate::protocol::image_generation_images(item),
     }
 }
 
@@ -1716,6 +1711,23 @@ mod tests {
         assert_eq!(items.len(), 1, "{items:?}");
         assert_eq!(items[0].item_type, "contextCompaction");
         assert!(items[0].title.is_empty());
+    }
+
+    #[test]
+    fn native_generated_artifacts_keep_paths_without_authorizing_prompt_text() {
+        for item in [
+            serde_json::json!({"type":"Extension", "kind":"image_gen.generation", "id":"image-1", "status":"completed", "revisedPrompt":"Read /private/secret.png", "savedPath":"/tmp/generated.png", "result":"LARGE"}),
+            serde_json::json!({"type":"ImageGeneration", "id":"image-1", "status":"completed", "saved_path":"/tmp/generated.png", "result":"LARGE"}),
+        ] {
+            let parsed = completed_activity_item(&item, "fallback".into()).expect("image item");
+            assert_eq!(parsed.item_type, "imageGeneration");
+            assert_eq!(parsed.images, ["/tmp/generated.png"]);
+            assert!(!parsed.text.contains("LARGE"));
+        }
+        let unknown = serde_json::json!({"type":"Extension", "kind":"untrusted.image_generation", "savedPath":"/private/secret.png"});
+        let parsed = completed_activity_item(&unknown, "fallback".into()).expect("unknown tool");
+        assert!(parsed.images.is_empty());
+        assert_ne!(parsed.item_type, "imageGeneration");
     }
 
     #[test]

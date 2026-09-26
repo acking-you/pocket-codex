@@ -98,7 +98,8 @@ pub struct TranscriptItem {
     pub title: String,
     /// Body text: message markdown, reasoning summary, or command output.
     pub text: String,
-    /// Image data URLs attached to a user message. `#[serde(default)]` so a
+    /// User attachments or generated artifacts (data URLs / host paths).
+    /// `#[serde(default)]` so a
     /// response from an older host (no field) still deserializes.
     #[serde(default)]
     pub images: Vec<String>,

@@ -273,3 +273,34 @@ async fn file_transfer_list_download_upload_confined() {
         .expect("write outside");
     assert_eq!(out.status(), reqwest::StatusCode::FORBIDDEN);
 }
+
+/// Run against an isolated CODEX_HOME containing an actual completed native
+/// generation; no model call, credentials, relay registration or live-host
+/// edits.
+#[tokio::test]
+#[ignore = "requires PCX_IMAGE_THREAD_ID, PCX_IMAGE_OUTPUT and isolated CODEX_HOME"]
+async fn native_generated_image_round_trips_over_meta_http() {
+    let thread = std::env::var("PCX_IMAGE_THREAD_ID").expect("isolated generated thread");
+    let path = std::env::var("PCX_IMAGE_OUTPUT").expect("native generated image path");
+    let expected = std::fs::read(&path).expect("native image");
+    let (base, _root, _guard) = spawn().await;
+    let client = reqwest::Client::new();
+    let response = client
+        .get(format!("{base}/fs/thread-image"))
+        .query(&[("thread", &thread), ("path", &path)])
+        .send()
+        .await
+        .expect("image response")
+        .error_for_status()
+        .expect("authorized artifact");
+    let downloaded = response.bytes().await.expect("remote image bytes");
+    assert_eq!(downloaded.as_ref(), expected);
+    let denied = client
+        .get(format!("{base}/fs/thread-image"))
+        .query(&[("thread", &thread), ("path", &format!("{path}.other.png"))])
+        .send()
+        .await
+        .expect("unreferenced image response");
+    assert!(!denied.status().is_success());
+    println!("verified native generated artifact: {} bytes over meta HTTP", downloaded.len());
+}

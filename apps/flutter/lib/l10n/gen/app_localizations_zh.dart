@@ -1681,4 +1681,28 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get steerTurnEnded => '当前轮次已变更或结束。草稿已保留，可作为新轮次发送。';
+
+  @override
+  String get advancedSettings => '高级设置';
+
+  @override
+  String get planModeDescription => '先规划，不执行。大多数任务建议使用普通模式。';
+
+  @override
+  String get imageGenerating => '正在生成图片…';
+
+  @override
+  String get imageLoading => '正在加载图片…';
+
+  @override
+  String get imageGenerationFailed => '图片生成失败';
+
+  @override
+  String get imageGenerationIncomplete => '图片生成未完成';
+
+  @override
+  String get imageGenerationUnavailable => '未返回图片';
+
+  @override
+  String get imageGenerationLimit => '已达到生图用量上限';
 }

@@ -3187,6 +3187,54 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'The turn changed or ended. Your draft is kept; send it as a new turn.'**
   String get steerTurnEnded;
+
+  /// No description provided for @advancedSettings.
+  ///
+  /// In en, this message translates to:
+  /// **'Advanced settings'**
+  String get advancedSettings;
+
+  /// No description provided for @planModeDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Plan first without implementing. Normal mode is recommended for most tasks.'**
+  String get planModeDescription;
+
+  /// No description provided for @imageGenerating.
+  ///
+  /// In en, this message translates to:
+  /// **'Generating image…'**
+  String get imageGenerating;
+
+  /// No description provided for @imageLoading.
+  ///
+  /// In en, this message translates to:
+  /// **'Loading image…'**
+  String get imageLoading;
+
+  /// No description provided for @imageGenerationFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Image generation failed'**
+  String get imageGenerationFailed;
+
+  /// No description provided for @imageGenerationIncomplete.
+  ///
+  /// In en, this message translates to:
+  /// **'Image generation incomplete'**
+  String get imageGenerationIncomplete;
+
+  /// No description provided for @imageGenerationUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'No image was returned'**
+  String get imageGenerationUnavailable;
+
+  /// No description provided for @imageGenerationLimit.
+  ///
+  /// In en, this message translates to:
+  /// **'Image generation usage limit reached'**
+  String get imageGenerationLimit;
 }
 
 class _AppLocalizationsDelegate

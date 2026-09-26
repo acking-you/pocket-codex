@@ -1578,7 +1578,7 @@ abstract interface class BridgeApi {
 
   /// Read an image that [threadId]'s transcript already references, so it can
   /// render inline. Unlike [metaReadFile] this is not root-confined — the host
-  /// authorises it against that thread's own user messages, which is what
+  /// authorises user attachments and typed generated artifacts, which is what
   /// makes a pasted screenshot in the OS temp directory visible to a remote
   /// controller without granting it a general file read. Throws for a path the
   /// transcript never mentioned, and on a host too old to serve the route.

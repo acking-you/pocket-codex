@@ -631,5 +631,13 @@
   "steerMessage": "补充说明",
   "steerMessageHint": "在当前轮次的下一个步骤带上；不选则排队到下个轮次。",
   "queueNextTurn": "排队到下个轮次",
-  "steerTurnEnded": "当前轮次已变更或结束。草稿已保留，可作为新轮次发送。"
+  "steerTurnEnded": "当前轮次已变更或结束。草稿已保留，可作为新轮次发送。",
+  "advancedSettings": "高级设置",
+  "planModeDescription": "先规划，不执行。大多数任务建议使用普通模式。",
+  "imageGenerating": "正在生成图片…",
+  "imageLoading": "正在加载图片…",
+  "imageGenerationFailed": "图片生成失败",
+  "imageGenerationIncomplete": "图片生成未完成",
+  "imageGenerationUnavailable": "未返回图片",
+  "imageGenerationLimit": "已达到生图用量上限"
 }

@@ -44,9 +44,7 @@ pub struct AppEvent {
     pub title: Option<String>,
     /// Text payload: a streaming delta or an item's body/detail.
     pub text: Option<String>,
-    /// Image URLs attached to a `userMessage` item: `data:image/...` URLs
-    /// render inline; anything else (a host-local path from a `localImage`
-    /// input) renders as a filename chip. Empty for every other item kind.
+    /// User attachments or generated artifacts, as data URLs or host paths.
     pub images: Vec<String>,
     /// Opaque token to answer a server request (e.g. an approval prompt) via
     /// [`respond_approval`]; `None` for ordinary notifications.
@@ -108,9 +106,7 @@ pub struct ThreadItem {
     /// Live asynchronous questions retained for reconnects, as JSON.
     /// Historical items alone must not introduce pending questions.
     pub questions_json: Option<String>,
-    /// Image URLs attached to a `userMessage`: `data:image/...` URLs render
-    /// inline; a host-local path (from a `localImage` input) renders as a
-    /// filename chip. Empty for every other item kind.
+    /// User attachments or generated images: data URLs or host artifact paths.
     pub images: Vec<String>,
     /// Id of the turn this item belongs to.
     ///
@@ -3281,6 +3277,9 @@ fn format_content_diff(path: &str, content: &str, added: bool) -> String {
 /// them as `codex-file:` references so the UI can show an unavailable preview
 /// without treating an opaque cloud ID as a host filesystem path.
 fn item_images(item: &Value) -> Vec<String> {
+    if item.get("type").and_then(Value::as_str) == Some("imageGeneration") {
+        return pocket_codex_codex::protocol::image_generation_images(item);
+    }
     if item.get("type").and_then(Value::as_str) != Some("userMessage") {
         return Vec::new();
     }

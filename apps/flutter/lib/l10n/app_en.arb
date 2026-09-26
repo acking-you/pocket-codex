@@ -732,5 +732,13 @@
   "steerMessage": "Supplement",
   "steerMessageHint": "Add to the current turn at its next step. Otherwise, queue for the next turn.",
   "queueNextTurn": "Queue for next turn",
-  "steerTurnEnded": "The turn changed or ended. Your draft is kept; send it as a new turn."
+  "steerTurnEnded": "The turn changed or ended. Your draft is kept; send it as a new turn.",
+  "advancedSettings": "Advanced settings",
+  "planModeDescription": "Plan first without implementing. Normal mode is recommended for most tasks.",
+  "imageGenerating": "Generating image…",
+  "imageLoading": "Loading image…",
+  "imageGenerationFailed": "Image generation failed",
+  "imageGenerationIncomplete": "Image generation incomplete",
+  "imageGenerationUnavailable": "No image was returned",
+  "imageGenerationLimit": "Image generation usage limit reached"
 }

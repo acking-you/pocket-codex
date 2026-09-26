@@ -118,3 +118,69 @@ fn runtime_restores_reviewer_and_service_tier_without_conflating_approval_policy
         Some("auto_review")
     );
 }
+
+#[test]
+fn generated_images_survive_live_events_and_history_without_inlining_saved_files() {
+    for (fields, expected) in [
+        (json!({"status": "in_progress", "result": ""}), Vec::<String>::new()),
+        (
+            json!({"status": "completed", "savedPath": "/tmp/generated.png", "result": "LARGE"}),
+            vec!["/tmp/generated.png".into()],
+        ),
+        (json!({"status": "completed", "result": "aW1hZ2U="}), vec!["data:image/png;base64,\
+                                                                     aW1hZ2U="
+            .into()]),
+        (
+            json!({"status": "failed", "result": "", "failure": {"type": "usageLimitExceeded", "limitId": "image"}}),
+            vec![],
+        ),
+    ] {
+        let mut item = fields;
+        item["type"] = json!("imageGeneration");
+        item["id"] = json!("generated-1");
+        let history = parse_item(&item).expect("generated image");
+        let event = map_event(Inbound {
+            method: "item/completed".into(),
+            params: Some(json!({"threadId": "thread", "turnId": "turn", "item": item})),
+            request_id: None,
+        });
+        assert_eq!(history.images, expected);
+        assert_eq!(event.images, expected);
+        assert!(!history.text.contains("LARGE"));
+        assert_eq!(event.item_type.as_deref(), Some("imageGeneration"));
+    }
+}
+
+#[test]
+#[ignore = "requires PCX_IMAGE_CAPTURE pointing to isolated native app-server events.jsonl"]
+fn native_image_capture_maps_live_and_restored_artifacts() {
+    let path = std::env::var("PCX_IMAGE_CAPTURE").expect("native capture");
+    let capture = std::fs::read_to_string(path).expect("capture contents");
+    let mut started = false;
+    let mut completed = false;
+    for line in capture.lines() {
+        let value: Value = serde_json::from_str(line).expect("native event JSON");
+        let item = &value["params"]["item"];
+        if item["type"] != "imageGeneration" {
+            continue;
+        }
+        let method = value["method"].as_str().expect("method");
+        let event = map_event(Inbound {
+            method: method.into(),
+            params: Some(value["params"].clone()),
+            request_id: None,
+        });
+        started |= method == "item/started";
+        if method == "item/completed" {
+            completed = true;
+            let history = parse_item(item).expect("history item");
+            assert_eq!(event.images, history.images);
+            assert_eq!(event.images.len(), 1);
+            assert!(std::path::Path::new(&event.images[0]).is_file());
+            assert!(!history
+                .text
+                .contains(item["result"].as_str().expect("native result")));
+        }
+    }
+    assert!(started && completed, "both native lifecycle edges must be captured");
+}

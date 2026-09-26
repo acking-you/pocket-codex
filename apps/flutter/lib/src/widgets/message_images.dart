@@ -10,11 +10,8 @@ import 'package:pocket_codex/src/image_attachments.dart';
 import 'package:pocket_codex/src/widgets/app_toast.dart';
 import 'package:pocket_codex/src/widgets/window_title_bar.dart';
 
-/// One message attachment resolved from its wire URL: either renderable
-/// pixels (a `data:image/...` URL, decoded once here) or a host-side file we
-/// can only name (a `localImage` path sent by a codex client on the host —
-/// its pixels never crossed the wire, so an honest filename chip is all a
-/// remote controller can show).
+/// A user attachment or generated image: decoded inline pixels, a host path
+/// loaded on demand, or a visible unavailable reference.
 class ResolvedImage {
   ResolvedImage._({this.bytes, this.hostPath, this.broken = false});
 
@@ -46,16 +43,18 @@ class ResolvedImage {
 /// An undecodable data URL becomes a `broken` placeholder (kept, not dropped);
 /// Opaque `codex-file:` references cannot be downloaded through app-server;
 /// keep a placeholder without attempting a host filesystem read.
-/// Other non-data URLs become host-path chips.
+/// Other references are host paths, fetched only by the supplied loader.
 List<ResolvedImage> resolveImageUrls(List<String> urls) {
   final out = <ResolvedImage>[];
   for (final url in urls) {
     if (url.startsWith('codex-file:')) {
       out.add(ResolvedImage._(broken: true));
     } else if (url.startsWith('data:')) {
-      final bytes = decodeImageDataUrl(url);
+      final bytes = url.length <= (kMaxInlineImageBytes * 4 ~/ 3) + 256
+          ? decodeImageDataUrl(url)
+          : null;
       out.add(
-        bytes != null
+        bytes != null && bytes.length <= kMaxInlineImageBytes
             ? ResolvedImage._(bytes: bytes)
             : ResolvedImage._(broken: true),
       );
@@ -276,6 +275,8 @@ class MessageImagesView extends StatefulWidget {
     super.key,
     required this.images,
     this.hostImageLoader,
+    this.cacheScope,
+    this.previewSide = 180,
   });
 
   /// The message's resolved attachments, in send order.
@@ -284,21 +285,22 @@ class MessageImagesView extends StatefulWidget {
   /// How to read a host path's bytes; null leaves host images as chips.
   final HostImageLoader? hostImageLoader;
 
+  /// Host and thread identity; changing it discards pending/cached reads.
+  final Object? cacheScope;
+
+  /// Preferred side of a single-image preview, bounded by available width.
+  final double previewSide;
+
   @override
   State<MessageImagesView> createState() => _MessageImagesViewState();
 }
 
-// Host images already fetched, newest last. Bounded because the entries are
-// whole decoded files and a long transcript would otherwise pin every picture
-// it ever scrolled past; the list virtualises, so re-fetching an evicted one
-// is cheap next to holding them all.
-final Map<String, Uint8List?> _hostImageCache = {};
-const _hostImageCacheMax = 24;
-
 class _MessageImagesViewState extends State<MessageImagesView> {
-  // Paths whose fetch is in flight, so a rebuild mid-load doesn't start it
-  // again.
+  // Each visible strip owns its bytes. No global path cache: different hosts
+  // and threads can use the same filename, and refusals must remain retryable.
+  final Map<String, Uint8List?> _loaded = {};
   final Set<String> _loading = {};
+  int _generation = 0;
 
   @override
   void initState() {
@@ -309,6 +311,14 @@ class _MessageImagesViewState extends State<MessageImagesView> {
   @override
   void didUpdateWidget(MessageImagesView old) {
     super.didUpdateWidget(old);
+    if (old.cacheScope != widget.cacheScope ||
+        old.hostImageLoader != widget.hostImageLoader) {
+      _generation++;
+      _loaded.clear();
+      _loading.clear();
+    }
+    final paths = widget.images.map((image) => image.hostPath).toSet();
+    _loaded.removeWhere((path, _) => !paths.contains(path));
     _fetchHostImages();
   }
 
@@ -317,61 +327,96 @@ class _MessageImagesViewState extends State<MessageImagesView> {
     if (load == null) return;
     for (final image in widget.images) {
       final path = image.hostPath;
-      if (path == null) continue;
-      if (_hostImageCache.containsKey(path) || !_loading.add(path)) continue;
-      load(path)
-          .then((bytes) {
-            _hostImageCache[path] = bytes;
-            if (_hostImageCache.length > _hostImageCacheMax) {
-              _hostImageCache.remove(_hostImageCache.keys.first);
-            }
-          })
-          .catchError((_) => _hostImageCache[path] = null)
-          .whenComplete(() {
+      if (path == null || _loaded.containsKey(path) || !_loading.add(path)) {
+        continue;
+      }
+      final generation = _generation;
+      Future.sync(() => load(path)).then(
+        (bytes) {
+          if (!mounted || generation != _generation) return;
+          setState(() {
             _loading.remove(path);
-            if (mounted) setState(() {});
+            _loaded[path] =
+                bytes != null &&
+                    bytes.isNotEmpty &&
+                    bytes.length <= kMaxInlineImageBytes
+                ? bytes
+                : null;
           });
+        },
+        onError: (Object error, StackTrace stack) {
+          if (!mounted || generation != _generation) return;
+          setState(() {
+            _loading.remove(path);
+            _loaded[path] = null;
+          });
+        },
+      );
     }
   }
 
   /// Bytes to draw for [image]: its own (a data URL) or the host file's, once
   /// fetched.
   Uint8List? _bytesFor(ResolvedImage image) =>
-      image.bytes ??
-      (image.hostPath == null ? null : _hostImageCache[image.hostPath]);
+      image.bytes ?? (image.hostPath == null ? null : _loaded[image.hostPath]);
 
   @override
   Widget build(BuildContext context) {
-    // Also here, not just on init/update: the cache is bounded, so scrolling a
-    // long transcript can evict an image that is still on screen. Without a
-    // re-request it would silently drop back to a filename chip forever. The
-    // call is idempotent — it starts work only for paths that are neither
-    // cached (null counts) nor already in flight.
-    _fetchHostImages();
     final images = widget.images;
     final renderable = [
       for (final i in images)
         if (_bytesFor(i) != null) _bytesFor(i)!,
     ];
     // A single image gets a larger preview; several tile as uniform squares.
-    final side = renderable.length == 1 ? 180.0 : 96.0;
-    var bytesIndex = 0;
-    return Wrap(
-      spacing: 6,
-      runSpacing: 6,
-      children: [
-        for (final image in images)
-          if (_bytesFor(image) != null)
-            _ImageThumb(images: renderable, index: bytesIndex++, side: side)
-          else if (image.broken)
-            _brokenThumb(context, side)
-          else
-            _hostChip(context, image),
-      ],
+    final side = images.length == 1 ? widget.previewSide : 96.0;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        var bytesIndex = 0;
+        final boundedSide = side.clamp(0.0, constraints.maxWidth);
+        return Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          children: [
+            for (final image in images)
+              if (_bytesFor(image) != null)
+                _ImageThumb(
+                  images: renderable,
+                  index: bytesIndex++,
+                  side: boundedSide,
+                )
+              else if (image.broken)
+                _brokenThumb(context, boundedSide)
+              else if (_loading.contains(image.hostPath))
+                ImageLoadingPlaceholder(
+                  label: AppLocalizations.of(context).imageLoading,
+                  side: boundedSide,
+                )
+              else if (_loaded.containsKey(image.hostPath))
+                _brokenThumb(
+                  context,
+                  boundedSide,
+                  name: image.hostName,
+                  retry: () {
+                    setState(() {
+                      _loaded.remove(image.hostPath);
+                      _fetchHostImages();
+                    });
+                  },
+                )
+              else
+                _hostChip(context, image),
+          ],
+        );
+      },
     );
   }
 
-  Widget _brokenThumb(BuildContext context, double side) {
+  Widget _brokenThumb(
+    BuildContext context,
+    double side, {
+    VoidCallback? retry,
+    String? name,
+  }) {
     final scheme = Theme.of(context).colorScheme;
     return Tooltip(
       message: AppLocalizations.of(context).imageLoadFailed,
@@ -383,7 +428,19 @@ class _MessageImagesViewState extends State<MessageImagesView> {
           borderRadius: BorderRadius.circular(10),
           border: Border.all(color: scheme.outlineVariant),
         ),
-        child: Icon(Icons.broken_image_outlined, color: scheme.outline),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.broken_image_outlined, color: scheme.outline),
+            if (name != null)
+              Text(name, maxLines: 2, overflow: TextOverflow.ellipsis),
+            if (retry != null)
+              TextButton(
+                onPressed: retry,
+                child: Text(AppLocalizations.of(context).retry),
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -416,6 +473,54 @@ class _MessageImagesViewState extends State<MessageImagesView> {
                 overflow: TextOverflow.ellipsis,
                 style: Theme.of(context).textTheme.bodySmall,
               ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Stable image-sized loading feedback, also used while Codex is generating.
+class ImageLoadingPlaceholder extends StatelessWidget {
+  const ImageLoadingPlaceholder({
+    super.key,
+    required this.label,
+    this.side = 180,
+  });
+  final String label;
+  final double side;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Semantics(
+      label: label,
+      liveRegion: true,
+      child: Container(
+        width: side,
+        height: side,
+        decoration: BoxDecoration(
+          color: scheme.surfaceContainerLow,
+          borderRadius: BorderRadius.circular(kAttachmentTileRadius),
+          border: Border.all(color: scheme.outlineVariant),
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.image_outlined, size: 32, color: scheme.primary),
+            const SizedBox(height: 16),
+            if (!MediaQuery.disableAnimationsOf(context))
+              const SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            const SizedBox(height: 12),
+            Text(
+              label,
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodySmall,
             ),
           ],
         ),
