@@ -16,7 +16,7 @@ import 'package:pocket_codex/src/widgets/message_images.dart';
 import 'fake_bridge_api.dart';
 
 final _png = base64Decode(
-  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=',
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgaPj/HwAEggJ/59habAAAAABJRU5ErkJggg==',
 );
 
 class ImageApi extends FakeBridgeApi {
@@ -133,7 +133,21 @@ void main() {
       await t.tap(find.byKey(const Key('local-view-refresh')));
       await t.pumpAndSettle();
       expect(api.reads.last, endsWith('/host/final.png'));
-      await t.tap(find.byKey(const Key('msg-image-0')));
+      final thumbnail = find.byKey(const Key('msg-image-0'));
+      Object? decodeError;
+      await t.runAsync(
+        () => precacheImage(
+          t.widget<Image>(thumbnail).image,
+          t.element(thumbnail),
+          onError: (error, _) => decodeError = error,
+        ),
+      );
+      await t.pump();
+      expect(decodeError, isNull);
+      expect(find.byIcon(Icons.broken_image_outlined), findsNothing);
+      await t.tap(
+        find.ancestor(of: thumbnail, matching: find.byType(AttachmentTile)),
+      );
       await t.pumpAndSettle();
       expect(find.byType(ImageViewerPage), findsOneWidget);
       expect(t.takeException(), isNull);
