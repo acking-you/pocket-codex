@@ -9,10 +9,16 @@ breaking change goes.
 
 ## Unreleased
 
+- Open session file links and attachment chips with Preview / Download actions.
+  Text, code, Markdown source and images can be previewed; other formats can be
+  saved for another application. Remote file reads require the updated host.
+- Stream remote downloads to temporary files and provide native mobile Save As
+  dialogs for files and images. Verify same-device hosts before direct local
+  reads; explain pb-mapper mapping for remote localhost web links.
 - Move Plan mode into Advanced settings on desktop and mobile, while preserving
   explicitly saved Plan sessions and their active-mode indicator.
 - Display native Codex image generation as a visible result with generation and
-  download feedback, preview/desktop saving, failure states and explicit retry.
+  download feedback, preview and native file saving, failure states and explicit retry.
 - Restore generated images from history and refresh them while monitoring another
   writer. Recognize the native image extension's artifact paths on updated hosts.
 - Isolate downloaded images by host/thread and discard stale pending reads when

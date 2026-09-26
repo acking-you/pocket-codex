@@ -1,3 +1,4 @@
+import 'package:pocket_codex/src/file_links.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -352,7 +353,7 @@ List<InlineSpan> _linkLabel(
 /// headings — none of which have a site to represent).
 String? _faviconHost(String? href) {
   final uri = Uri.tryParse(href?.trim() ?? '');
-  if (uri == null || !uri.hasAuthority) return null;
+  if (uri == null || !uri.hasAuthority || isHostLocalWebUrl(uri)) return null;
   if (uri.scheme != 'http' && uri.scheme != 'https') return null;
   return uri.host.isEmpty ? null : uri.host;
 }

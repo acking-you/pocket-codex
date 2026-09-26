@@ -3235,6 +3235,66 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Image generation usage limit reached'**
   String get imageGenerationLimit;
+
+  /// No description provided for @fileLinkPreview.
+  ///
+  /// In en, this message translates to:
+  /// **'Preview'**
+  String get fileLinkPreview;
+
+  /// No description provided for @fileLinkDownload.
+  ///
+  /// In en, this message translates to:
+  /// **'Download'**
+  String get fileLinkDownload;
+
+  /// No description provided for @fileLinkUnsupported.
+  ///
+  /// In en, this message translates to:
+  /// **'This file cannot be previewed. Download it to open with an app on your device.'**
+  String get fileLinkUnsupported;
+
+  /// No description provided for @fileLinkTruncated.
+  ///
+  /// In en, this message translates to:
+  /// **'Showing a limited preview. Download for the complete file.'**
+  String get fileLinkTruncated;
+
+  /// No description provided for @fileLinkLoading.
+  ///
+  /// In en, this message translates to:
+  /// **'Loading file…'**
+  String get fileLinkLoading;
+
+  /// No description provided for @fileLinkRemoteWebTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Website on the host'**
+  String get fileLinkRemoteWebTitle;
+
+  /// No description provided for @fileLinkRemoteWeb.
+  ///
+  /// In en, this message translates to:
+  /// **'This address points to the controlled device, not this device. Use pb-mapper to register the web service port on the host and subscribe to it on this device, then open the mapped local address. Keep the URL path and query unchanged.'**
+  String get fileLinkRemoteWeb;
+
+  /// No description provided for @fileLinkCheckingHost.
+  ///
+  /// In en, this message translates to:
+  /// **'Checking host location…'**
+  String get fileLinkCheckingHost;
+
+  /// No description provided for @fileLinkFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Unable to read the file. Check that it still exists and the host is running a version that supports file links.'**
+  String get fileLinkFailed;
+
+  /// No description provided for @fileLinkClose.
+  ///
+  /// In en, this message translates to:
+  /// **'Close'**
+  String get fileLinkClose;
 }
 
 class _AppLocalizationsDelegate

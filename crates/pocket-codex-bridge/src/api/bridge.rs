@@ -1701,6 +1701,42 @@ pub fn meta_read_file(service_key: String, path: String) -> Result<Vec<u8>> {
     meta::read_file(&service_key, &path)
 }
 
+/// Bounded file preview returned after an explicit user action.
+pub struct FilePreviewDto {
+    /// Preview bytes, capped at 8 MiB.
+    pub bytes: Vec<u8>,
+    /// Total file size, including bytes omitted from the preview.
+    pub total_size: u64,
+}
+
+/// Determine whether the selected host shares this app's filesystem.
+pub fn meta_host_is_local(service_key: String) -> Result<bool> {
+    meta::host_is_local(&service_key)
+}
+
+/// Read a bounded preview of a selected session file link.
+pub fn meta_file_preview(
+    service_key: String,
+    thread_id: Option<String>,
+    href: String,
+) -> Result<FilePreviewDto> {
+    let preview = meta::file_preview(&service_key, thread_id.as_deref(), &href)?;
+    Ok(FilePreviewDto {
+        bytes: preview.bytes,
+        total_size: preview.total_size,
+    })
+}
+
+/// Stream a selected file into a new controller-side staging file.
+pub fn meta_file_download(
+    service_key: String,
+    thread_id: Option<String>,
+    href: String,
+    destination: String,
+) -> Result<()> {
+    meta::file_download(&service_key, thread_id.as_deref(), &href, &destination)
+}
+
 /// Read an image that `thread_id`'s transcript already references, so the UI
 /// can render it inline instead of naming it. NOT root-confined: the host
 /// authorises user attachments and typed generated artifacts, which is what

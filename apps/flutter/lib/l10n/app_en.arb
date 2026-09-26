@@ -740,5 +740,15 @@
   "imageGenerationFailed": "Image generation failed",
   "imageGenerationIncomplete": "Image generation incomplete",
   "imageGenerationUnavailable": "No image was returned",
-  "imageGenerationLimit": "Image generation usage limit reached"
+  "imageGenerationLimit": "Image generation usage limit reached",
+  "fileLinkPreview": "Preview",
+  "fileLinkDownload": "Download",
+  "fileLinkUnsupported": "This file cannot be previewed. Download it to open with an app on your device.",
+  "fileLinkTruncated": "Showing a limited preview. Download for the complete file.",
+  "fileLinkLoading": "Loading file…",
+  "fileLinkRemoteWebTitle": "Website on the host",
+  "fileLinkRemoteWeb": "This address points to the controlled device, not this device. Use pb-mapper to register the web service port on the host and subscribe to it on this device, then open the mapped local address. Keep the URL path and query unchanged.",
+  "fileLinkCheckingHost": "Checking host location…",
+  "fileLinkFailed": "Unable to read the file. Check that it still exists and the host is running a version that supports file links.",
+  "fileLinkClose": "Close"
 }

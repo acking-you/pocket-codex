@@ -1756,4 +1756,38 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get imageGenerationLimit => 'Image generation usage limit reached';
+
+  @override
+  String get fileLinkPreview => 'Preview';
+
+  @override
+  String get fileLinkDownload => 'Download';
+
+  @override
+  String get fileLinkUnsupported =>
+      'This file cannot be previewed. Download it to open with an app on your device.';
+
+  @override
+  String get fileLinkTruncated =>
+      'Showing a limited preview. Download for the complete file.';
+
+  @override
+  String get fileLinkLoading => 'Loading file…';
+
+  @override
+  String get fileLinkRemoteWebTitle => 'Website on the host';
+
+  @override
+  String get fileLinkRemoteWeb =>
+      'This address points to the controlled device, not this device. Use pb-mapper to register the web service port on the host and subscribe to it on this device, then open the mapped local address. Keep the URL path and query unchanged.';
+
+  @override
+  String get fileLinkCheckingHost => 'Checking host location…';
+
+  @override
+  String get fileLinkFailed =>
+      'Unable to read the file. Check that it still exists and the host is running a version that supports file links.';
+
+  @override
+  String get fileLinkClose => 'Close';
 }

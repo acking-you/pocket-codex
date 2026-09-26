@@ -720,6 +720,34 @@ Future<Uint8List> metaReadFile({
   path: path,
 );
 
+/// Determine whether the selected host shares this app's filesystem.
+Future<bool> metaHostIsLocal({required String serviceKey}) =>
+    RustLib.instance.api.crateApiBridgeMetaHostIsLocal(serviceKey: serviceKey);
+
+/// Read a bounded preview of a selected session file link.
+Future<FilePreviewDto> metaFilePreview({
+  required String serviceKey,
+  String? threadId,
+  required String href,
+}) => RustLib.instance.api.crateApiBridgeMetaFilePreview(
+  serviceKey: serviceKey,
+  threadId: threadId,
+  href: href,
+);
+
+/// Stream a selected file into a new controller-side staging file.
+Future<void> metaFileDownload({
+  required String serviceKey,
+  String? threadId,
+  required String href,
+  required String destination,
+}) => RustLib.instance.api.crateApiBridgeMetaFileDownload(
+  serviceKey: serviceKey,
+  threadId: threadId,
+  href: href,
+  destination: destination,
+);
+
 /// Read an image that `thread_id`'s transcript already references, so the UI
 /// can render it inline instead of naming it. NOT root-confined: the host
 /// authorises user attachments and typed generated artifacts, which is what
@@ -1505,6 +1533,28 @@ class FileEntryDto {
           path == other.path &&
           size == other.size &&
           mtime == other.mtime;
+}
+
+/// Bounded file preview returned after an explicit user action.
+class FilePreviewDto {
+  /// Preview bytes, capped at 8 MiB.
+  final Uint8List bytes;
+
+  /// Total file size, including bytes omitted from the preview.
+  final BigInt totalSize;
+
+  const FilePreviewDto({required this.bytes, required this.totalSize});
+
+  @override
+  int get hashCode => bytes.hashCode ^ totalSize.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is FilePreviewDto &&
+          runtimeType == other.runtimeType &&
+          bytes == other.bytes &&
+          totalSize == other.totalSize;
 }
 
 /// Outcome of a force-resume, mirrored for Dart.

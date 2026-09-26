@@ -14,6 +14,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod file_links;
 pub mod fs;
 pub mod history_sync;
 mod history_sync_revision;
@@ -107,6 +108,8 @@ pub async fn serve(
         // file's bytes, upload a local file into a chosen dir — root-confined.
         .route("/fs/files", get(list_files_in))
         .route("/fs/read", get(read_file))
+        .route("/fs/thread-file", get(file_links::read))
+        .route("/host/local-probe", get(file_links::local_probe))
         // Inline image previews: not root-confined, but authorised by the
         // thread's own transcript — see `read_thread_image`.
         .route("/fs/thread-image", get(read_thread_image))

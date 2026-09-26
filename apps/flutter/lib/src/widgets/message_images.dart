@@ -1,6 +1,7 @@
 import 'dart:io';
 
-import 'package:file_selector/file_selector.dart';
+import 'package:pocket_codex/src/file_exports.dart';
+import 'package:pocket_codex/src/widgets/links.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
@@ -65,18 +66,12 @@ List<ResolvedImage> resolveImageUrls(List<String> urls) {
   return out;
 }
 
-/// Whether the save-to-file dialog is available. Desktop-only: `file_selector`
-/// has no mobile save implementation (mobile saving would need a gallery
-/// plugin).
-bool get canSaveImages =>
-    !kIsWeb &&
-    (defaultTargetPlatform == TargetPlatform.windows ||
-        defaultTargetPlatform == TargetPlatform.macOS ||
-        defaultTargetPlatform == TargetPlatform.linux);
+/// Whether native file exporting is supported.
+bool get canSaveImages => !kIsWeb;
 
 /// Save [bytes] to a user-chosen file, reporting the outcome via a snackbar.
 /// [suggestedName] seeds the dialog filename; a cancelled dialog is a no-op.
-/// Guard call sites with [canSaveImages] (desktop-only).
+/// Guard call sites with [canSaveImages].
 Future<void> saveImageBytes(
   BuildContext context,
   Uint8List bytes, {
@@ -84,11 +79,9 @@ Future<void> saveImageBytes(
 }) async {
   final l10n = AppLocalizations.of(context);
   final messenger = ToastMessenger.of(context);
-  final location = await getSaveLocation(suggestedName: suggestedName);
-  if (location == null) return;
   try {
-    await File(location.path).writeAsBytes(bytes);
-    messenger.ok(l10n.imageSaved(location.path));
+    final saved = await exportBytes(bytes, suggestedName);
+    if (saved != null) messenger.ok(l10n.imageSaved(saved));
   } catch (e) {
     messenger.error(l10n.imageSaveFailed('$e'));
   }
@@ -550,32 +543,39 @@ class FileRefChips extends StatelessWidget {
         for (final path in paths)
           Tooltip(
             message: path,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                color: scheme.surfaceContainerHighest,
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: scheme.outlineVariant),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    Icons.description_outlined,
-                    size: 16,
-                    color: scheme.onSurfaceVariant,
-                  ),
-                  const SizedBox(width: 6),
-                  ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 200),
-                    child: Text(
-                      hostPathBasename(path),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.bodySmall,
+            child: InkWell(
+              onTap: () => openUrl(context, path),
+              borderRadius: BorderRadius.circular(10),
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 6,
+                ),
+                decoration: BoxDecoration(
+                  color: scheme.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: scheme.outlineVariant),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.description_outlined,
+                      size: 16,
+                      color: scheme.onSurfaceVariant,
                     ),
-                  ),
-                ],
+                    const SizedBox(width: 6),
+                    ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 200),
+                      child: Text(
+                        hostPathBasename(path),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           ),
@@ -585,7 +585,7 @@ class FileRefChips extends StatelessWidget {
 }
 
 /// One tappable thumbnail. Stateful so a desktop hover can reveal a quick
-/// save button (`file_selector` is desktop-only) without a viewer round-trip.
+/// save button without a viewer round-trip.
 class _ImageThumb extends StatefulWidget {
   const _ImageThumb({
     required this.images,

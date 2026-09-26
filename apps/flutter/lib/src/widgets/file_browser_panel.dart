@@ -1,5 +1,7 @@
 import 'dart:io';
 
+import 'package:pocket_codex/src/file_exports.dart';
+
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
@@ -143,17 +145,25 @@ class _FileBrowserState extends ConsumerState<_FileBrowser> {
     final l10n = AppLocalizations.of(context);
     final messenger = ToastMessenger.of(context);
     setState(() => _busy = true);
+    Directory? staging;
     try {
-      final bytes = await ref
+      staging = await Directory.systemTemp.createTemp('pcx-download-');
+      final destination = '${staging.path}/content';
+      if (!mounted) return;
+      await ref
           .read(bridgeApiProvider)
-          .metaReadFile(widget.serviceKey, file.path);
-      final location = await getSaveLocation(suggestedName: file.name);
-      if (location == null) return;
-      await File(location.path).writeAsBytes(bytes);
-      messenger.ok(l10n.fileDownloaded(location.path));
+          .metaFileDownload(widget.serviceKey, null, file.path, destination);
+      if (!mounted) return;
+      final saved = await exportFile(destination, file.name);
+      if (saved != null) messenger.ok(l10n.fileDownloaded(saved));
     } catch (e) {
       messenger.error(l10n.fileDownloadFailed(friendlyError(e)));
     } finally {
+      try {
+        await staging?.delete(recursive: true);
+      } catch (_) {
+        /* Temporary files may already be gone. */
+      }
       if (mounted) setState(() => _busy = false);
     }
   }

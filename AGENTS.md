@@ -397,6 +397,15 @@ The order below is our current best guess; it is not a contract.
     state bounded by confirmed activity, and scope image bytes to host/thread.
     See [`docs/native-image-generation.md`](docs/native-image-generation.md).
 
+14. **Session file links (2026-09-26).** Explicit Preview / Download actions
+    resolve files against the selected host and session. Read local paths only
+    after the host passes a shared-filesystem challenge or is owned in-process.
+    Remote previews are bounded; downloads stream to disposable controller
+    files before native desktop/mobile saving. Keep automatic image authorization
+    separate from explicit conversation-link reads. Remote localhost web links
+    explain pb-mapper mapping and never open the controller's loopback address.
+    See [`docs/session-file-links.md`](docs/session-file-links.md).
+
 When you ship a milestone, update `README.md` (Status table) **and**
 this file's roadmap so the source of truth stays in sync.
 

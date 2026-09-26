@@ -1080,6 +1080,14 @@ class HistoryCacheStatus {
   final int usedBytes;
 }
 
+/// Bounded file bytes and the original file size.
+class FilePreviewData {
+  const FilePreviewData({required this.bytes, required this.totalSize});
+  final Uint8List bytes;
+  final int totalSize;
+  bool get truncated => totalSize > bytes.length;
+}
+
 abstract interface class BridgeApi {
   /// Read only local disk; cached history is display-only until synchronized.
   Future<ThreadHistory?> appHistoryCached(String serviceKey, String threadId);
@@ -1575,6 +1583,24 @@ abstract interface class BridgeApi {
   /// [serviceKey], for saving to local disk. Throws if [path] is outside the
   /// configured roots.
   Future<Uint8List> metaReadFile(String serviceKey, String path);
+
+  /// Verify that the selected host shares this device's filesystem.
+  Future<bool> metaHostIsLocal(String serviceKey);
+
+  /// Read up to 8 MiB after an explicit Preview action.
+  Future<FilePreviewData> metaFilePreview(
+    String serviceKey,
+    String? threadId,
+    String href,
+  );
+
+  /// Stream into a new staging file on this device after a Download action.
+  Future<void> metaFileDownload(
+    String serviceKey,
+    String? threadId,
+    String href,
+    String destination,
+  );
 
   /// Read an image that [threadId]'s transcript already references, so it can
   /// render inline. Unlike [metaReadFile] this is not root-confined — the host

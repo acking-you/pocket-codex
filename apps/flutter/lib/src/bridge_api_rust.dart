@@ -1016,6 +1016,40 @@ class RustBridgeApi implements BridgeApi {
       frb.metaReadFile(serviceKey: serviceKey, path: path);
 
   @override
+  Future<bool> metaHostIsLocal(String serviceKey) =>
+      frb.metaHostIsLocal(serviceKey: serviceKey);
+
+  @override
+  Future<FilePreviewData> metaFilePreview(
+    String serviceKey,
+    String? threadId,
+    String href,
+  ) async {
+    final result = await frb.metaFilePreview(
+      serviceKey: serviceKey,
+      threadId: threadId,
+      href: href,
+    );
+    return FilePreviewData(
+      bytes: result.bytes,
+      totalSize: result.totalSize.toInt(),
+    );
+  }
+
+  @override
+  Future<void> metaFileDownload(
+    String serviceKey,
+    String? threadId,
+    String href,
+    String destination,
+  ) => frb.metaFileDownload(
+    serviceKey: serviceKey,
+    threadId: threadId,
+    href: href,
+    destination: destination,
+  );
+
+  @override
   Future<Uint8List> metaReadThreadImage(
     String serviceKey,
     String threadId,

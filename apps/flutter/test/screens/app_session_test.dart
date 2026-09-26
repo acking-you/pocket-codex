@@ -315,9 +315,8 @@ void main() {
     await t.pumpAndSettle();
     expect(find.byKey(const Key('attach-btn')), findsOneWidget);
     expect(find.byKey(const Key('attach-file-btn')), findsOneWidget);
-    // Host files is desktop-only (it uses the save/open dialogs); the test
-    // platform is android, so it is absent.
-    expect(find.byKey(const Key('host-files-btn')), findsNothing);
+    // Mobile now has a native Save As dialog too.
+    expect(find.byKey(const Key('host-files-btn')), findsOneWidget);
   });
 
   testWidgets('a message from an IDE client shows the request, not the wire '

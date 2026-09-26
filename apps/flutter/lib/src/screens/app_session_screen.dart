@@ -1,3 +1,4 @@
+import 'package:pocket_codex/src/widgets/session_file_links.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
@@ -4538,7 +4539,15 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => SessionFileLinks(
+    api: ref.read(bridgeApiProvider),
+    serviceKey: widget.serviceKey,
+    threadId: _threadId,
+    cwd: _cwd,
+    child: _buildSession(context),
+  );
+
+  Widget _buildSession(BuildContext context) {
     final l10n = AppLocalizations.of(context);
     final scheme = Theme.of(context).colorScheme;
     final width = MediaQuery.of(context).size.width;

@@ -639,5 +639,15 @@
   "imageGenerationFailed": "图片生成失败",
   "imageGenerationIncomplete": "图片生成未完成",
   "imageGenerationUnavailable": "未返回图片",
-  "imageGenerationLimit": "已达到生图用量上限"
+  "imageGenerationLimit": "已达到生图用量上限",
+  "fileLinkPreview": "预览",
+  "fileLinkDownload": "下载",
+  "fileLinkUnsupported": "此文件暂不支持预览，请下载后使用设备上的应用打开。",
+  "fileLinkTruncated": "当前仅显示部分预览，下载可获取完整文件。",
+  "fileLinkLoading": "正在加载文件…",
+  "fileLinkRemoteWebTitle": "宿主上的网页",
+  "fileLinkRemoteWeb": "此地址指向被控制的设备。请通过 pb-mapper 在宿主上注册网页服务端口，再在当前设备订阅映射端口，然后打开映射后的本地地址。保留原网址的路径和查询参数。",
+  "fileLinkCheckingHost": "正在确认宿主位置…",
+  "fileLinkFailed": "无法读取文件。请确认文件仍然存在，且宿主已更新到支持文件链接的版本。",
+  "fileLinkClose": "关闭"
 }
