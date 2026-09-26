@@ -136,7 +136,30 @@ pub fn image_generation_images(item: &serde_json::Value) -> Vec<String> {
     let Some(result) = item.get("result").and_then(serde_json::Value::as_str) else {
         return Vec::new();
     };
-    if result.is_empty() {
+    // Match the client's 8 MiB decoded-image budget before copying into a DTO.
+    const MAX_BASE64_BYTES: usize = (8 * 1024 * 1024_usize).div_ceil(3) * 4;
+    let payload = if result.starts_with("data:image/") {
+        let Some((header, payload)) = result.split_once(',') else {
+            return Vec::new();
+        };
+        if header.len() > 128 || !header.ends_with(";base64") {
+            return Vec::new();
+        }
+        payload
+    } else {
+        result
+    };
+    if payload.is_empty() || payload.len() > MAX_BASE64_BYTES {
+        return Vec::new();
+    }
+    let padding = payload
+        .as_bytes()
+        .iter()
+        .rev()
+        .take(2)
+        .take_while(|&&b| b == b'=')
+        .count();
+    if (payload.len() * 3 / 4).saturating_sub(padding) > 8 * 1024 * 1024 {
         return Vec::new();
     }
     if result.starts_with("data:image/") {
@@ -148,6 +171,25 @@ pub fn image_generation_images(item: &serde_json::Value) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn generated_images_are_bounded_before_materialization() {
+        let limit = (8 * 1024 * 1024_usize).div_ceil(3) * 4;
+        for prefix in ["", "data:image/png;base64,"] {
+            let mut item =
+                serde_json::json!({"result": format!("{prefix}{}=", "A".repeat(limit - 1))});
+            assert_eq!(image_generation_images(&item).len(), 1);
+            item["result"] = serde_json::json!(format!("{prefix}{}", "A".repeat(limit)));
+            assert!(image_generation_images(&item).is_empty());
+            item["result"] = serde_json::json!(format!("{prefix}{}", "A".repeat(limit + 4)));
+            assert!(image_generation_images(&item).is_empty());
+            item["savedPath"] = serde_json::json!("/host/artifact.png");
+            assert_eq!(image_generation_images(&item), ["/host/artifact.png"]);
+        }
+        for result in ["", "data:image/png", "data:image/png,not-base64"] {
+            assert!(image_generation_images(&serde_json::json!({"result": result})).is_empty());
+        }
+    }
 
     #[test]
     fn upstream_error_envelope_preserves_optional_details() {

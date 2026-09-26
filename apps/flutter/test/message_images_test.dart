@@ -36,6 +36,53 @@ Future<void> _openViewer(WidgetTester tester, Uint8List bytes) async {
 }
 
 void main() {
+  for (final scale in [1.0, 2.0, 3.0]) {
+    testWidgets(
+      'multiple image loading and retry tiles fit at text scale $scale',
+      (t) async {
+        var request = Completer<Uint8List?>();
+        var reads = 0;
+        Future<Uint8List?> load(String path) {
+          reads++;
+          return request.future;
+        }
+
+        await t.pumpWidget(
+          _wrap(
+            MediaQuery(
+              data: MediaQueryData(textScaler: TextScaler.linear(scale)),
+              child: SizedBox(
+                width: 230,
+                child: MessageImagesView(
+                  images: resolveImageUrls([
+                    '/host/very-long-generated-image-name.png',
+                    '/host/second-image.png',
+                  ]),
+                  hostImageLoader: load,
+                ),
+              ),
+            ),
+          ),
+        );
+        await t.pump(const Duration(milliseconds: 100));
+        expect(find.byType(ImageLoadingPlaceholder), findsNWidgets(2));
+        expect(t.takeException(), isNull);
+        request.complete(null);
+        await t.pumpAndSettle();
+        expect(find.text('Retry'), findsNWidgets(2));
+        expect(t.takeException(), isNull);
+        request = Completer<Uint8List?>();
+        await t.tap(find.text('Retry').first);
+        await t.pump();
+        expect(reads, 3);
+        request.complete(_png());
+        await t.pumpAndSettle();
+        expect(find.byKey(const Key('msg-image-0')), findsOneWidget);
+        expect(t.takeException(), isNull);
+      },
+    );
+  }
+
   testWidgets('host image loading, failure and retry use explicit states', (
     t,
   ) async {

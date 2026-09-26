@@ -140,12 +140,39 @@ pub(super) fn endpoint(service_key: &str, segments: &[&str]) -> Result<Url> {
 }
 
 async fn ensure_ok(resp: reqwest::Response) -> Result<reqwest::Response> {
+    ensure_ok_with_timeout(resp, META_TIMEOUT).await
+}
+
+async fn ensure_ok_with_timeout(
+    mut resp: reqwest::Response,
+    timeout: Duration,
+) -> Result<reqwest::Response> {
     let status = resp.status();
     if status.is_success() {
         return Ok(resp);
     }
-    let body = resp.text().await.unwrap_or_default();
-    Err(anyhow!("meta service returned {status}: {body}"))
+    // The streaming client has no overall timeout. Error responses must still
+    // finish within a bounded time and cannot consume unbounded memory.
+    const ERROR_LIMIT: usize = 64 * 1024;
+    let mut body = Vec::new();
+    let read = tokio::time::timeout(timeout, async {
+        while let Some(chunk) = resp.chunk().await? {
+            let take = chunk.len().min(ERROR_LIMIT - body.len());
+            body.extend_from_slice(&chunk[..take]);
+            if body.len() == ERROR_LIMIT {
+                break;
+            }
+        }
+        Ok::<_, reqwest::Error>(())
+    })
+    .await;
+    let detail = match read {
+        Err(_) => " (error body timed out)",
+        Ok(Err(_)) => " (error body incomplete)",
+        Ok(Ok(())) if body.len() == ERROR_LIMIT => " (error body truncated)",
+        Ok(Ok(())) => "",
+    };
+    Err(anyhow!("meta service returned {status}: {}{detail}", String::from_utf8_lossy(&body)))
 }
 
 /// Whether a failed send is worth another attempt.
@@ -582,6 +609,7 @@ impl Drop for RemoveFile {
 async fn download_response(
     mut response: reqwest::Response,
     destination: &std::path::Path,
+    legacy: bool,
 ) -> Result<()> {
     use tokio::io::AsyncWriteExt;
     // Declare cleanup first so the open handle is dropped before removal on
@@ -594,12 +622,20 @@ async fn download_response(
         .await?;
     cleanup.0 = Some(destination.to_path_buf());
     let result = async {
-        let expected = response
-            .headers()
-            .get("x-file-size")
-            .context("host omitted file size")?
-            .to_str()?
-            .parse::<u64>()?;
+        let expected = if legacy {
+            // Reqwest removes Content-Length after transparent decompression;
+            // a chunked legacy response may also have no declared size.
+            response.content_length()
+        } else {
+            Some(
+                response
+                    .headers()
+                    .get("x-file-size")
+                    .context("host omitted file size")?
+                    .to_str()?
+                    .parse::<u64>()?,
+            )
+        };
         let mut received = 0_u64;
         while let Some(chunk) = tokio::time::timeout(META_TIMEOUT, response.chunk())
             .await
@@ -607,12 +643,15 @@ async fn download_response(
         {
             received += chunk.len() as u64;
             anyhow::ensure!(
-                received <= expected,
+                expected.is_none_or(|expected| received <= expected),
                 "host sent more bytes than the declared file size"
             );
             file.write_all(&chunk).await?;
         }
-        anyhow::ensure!(received == expected, "file download was incomplete");
+        anyhow::ensure!(
+            expected.is_none_or(|expected| received == expected),
+            "file download was incomplete"
+        );
         file.flush().await?;
         Ok::<_, anyhow::Error>(())
     }
@@ -633,12 +672,37 @@ pub fn file_download(
     destination: &str,
 ) -> Result<()> {
     let url = file_link_url(service, thread, href, false)?;
-    runtime::runtime().block_on(async {
-        let response = tokio::time::timeout(META_TIMEOUT, stream_client().get(url).send())
-            .await
-            .context("connecting for file download")??;
-        download_response(ensure_ok(response).await?, std::path::Path::new(destination)).await
-    })
+    let legacy_url = if thread.is_none() {
+        let mut url = endpoint(service, &["fs", "read"])?;
+        url.query_pairs_mut().append_pair("path", href);
+        Some(url)
+    } else {
+        None
+    };
+    runtime::runtime().block_on(download_file(url, legacy_url, std::path::Path::new(destination)))
+}
+
+async fn download_file(
+    url: Url,
+    legacy_url: Option<Url>,
+    destination: &std::path::Path,
+) -> Result<()> {
+    let mut response = tokio::time::timeout(META_TIMEOUT, stream_client().get(url).send())
+        .await
+        .context("connecting for file download")??;
+    let mut legacy = false;
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        if let Some(url) = legacy_url {
+            // Only the existing root-confined file browser can use this path.
+            // Session links retain their selected-thread authorization.
+            drop(response);
+            response = tokio::time::timeout(META_TIMEOUT, stream_client().get(url).send())
+                .await
+                .context("connecting for legacy file download")??;
+            legacy = true;
+        }
+    }
+    download_response(ensure_ok(response).await?, destination, legacy).await
 }
 
 /// Verify shared filesystem access; a loopback tunnel is not evidence of
@@ -759,6 +823,105 @@ pub fn config_put(
 mod tests {
     use super::*;
 
+    async fn file_server(responses: Vec<String>) -> (Url, tokio::task::JoinHandle<Vec<String>>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listen");
+        let url = Url::parse(&format!(
+            "http://{}/fs/thread-file",
+            listener.local_addr().expect("address")
+        ))
+        .expect("url");
+        let server = tokio::spawn(async move {
+            let mut requests = Vec::new();
+            for response in responses {
+                let (mut socket, _) = listener.accept().await.expect("accept");
+                let mut bytes = [0; 4096];
+                let count = socket.read(&mut bytes).await.expect("request");
+                requests.push(String::from_utf8_lossy(&bytes[..count]).into_owned());
+                socket
+                    .write_all(response.as_bytes())
+                    .await
+                    .expect("response");
+            }
+            requests
+        });
+        (url, server)
+    }
+
+    #[tokio::test]
+    async fn file_browser_falls_back_only_on_missing_route() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        for (status, fallback) in [(404, true), (403, true), (500, true), (404, false)] {
+            let legacy = status == 404 && fallback;
+            let mut responses = vec![format!(
+                "HTTP/1.1 {status} Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            )];
+            if legacy {
+                responses.push(
+                    "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: \
+                     close\r\n\r\n5\r\nhello\r\n0\r\n\r\n"
+                        .into(),
+                );
+            }
+            let (url, server) = file_server(responses).await;
+            let legacy_url =
+                fallback.then(|| url.join("/fs/read?path=%2Froot%2Freport.txt").expect("url"));
+            let destination = dir.path().join(format!("{status}-{fallback}"));
+            let result = download_file(url, legacy_url, &destination).await;
+            let requests = server.await.expect("server");
+            assert_eq!(result.is_ok(), legacy);
+            assert_eq!(destination.exists(), legacy);
+            assert_eq!(requests.len(), if legacy { 2 } else { 1 });
+            if legacy {
+                assert!(requests[1].starts_with("GET /fs/read?path=%2Froot%2Freport.txt "));
+                assert_eq!(std::fs::read(destination).expect("download"), b"hello");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn error_bodies_have_size_and_time_limits() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let (url, server) = file_server(vec![format!(
+            "HTTP/1.1 500 Error\r\nContent-Length: 70000\r\nConnection: close\r\n\r\n{}",
+            "x".repeat(70000)
+        )])
+        .await;
+        let response = stream_client().get(url).send().await.expect("response");
+        let error = ensure_ok(response).await.expect_err("500").to_string();
+        assert!(error.contains("truncated"));
+        assert!(error.len() < 66000);
+        server.await.expect("server");
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listen");
+        let url = format!("http://{}", listener.local_addr().expect("address"));
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept");
+            let mut bytes = [0; 4096];
+            assert!(socket.read(&mut bytes).await.expect("request") > 0);
+            socket
+                .write_all(b"HTTP/1.1 500 Error\r\nContent-Length: 5\r\n\r\n")
+                .await
+                .expect("headers");
+            std::future::pending::<()>().await;
+        });
+        let response = stream_client().get(url).send().await.expect("headers");
+        let error = tokio::time::timeout(
+            Duration::from_secs(2),
+            ensure_ok_with_timeout(response, Duration::from_millis(20)),
+        )
+        .await
+        .expect("bounded error read")
+        .expect_err("500")
+        .to_string();
+        assert!(error.contains("500") && error.contains("timed out"));
+        server.abort();
+    }
+
     #[tokio::test]
     async fn download_streams_exact_bytes_and_removes_partial_files() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -792,7 +955,7 @@ mod tests {
                 .await
                 .expect("response");
             let destination = dir.path().join(name);
-            let result = download_response(response, &destination).await;
+            let result = download_response(response, &destination, false).await;
             server.await.expect("server");
             if name == "complete" {
                 result.expect("download");

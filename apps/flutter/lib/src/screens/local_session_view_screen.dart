@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
@@ -15,11 +16,14 @@ import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/realtime_delegation.dart';
 import 'package:pocket_codex/src/screens/local_sessions_screen.dart'
     show SessionSource, resumeLocalSession;
+import 'package:pocket_codex/src/screens/app_session/generated_image_card.dart';
+import 'package:pocket_codex/src/screens/app_session/transcript_model.dart';
 import 'package:pocket_codex/src/theme.dart';
 import 'package:pocket_codex/src/widgets/loading.dart';
 import 'package:pocket_codex/src/widgets/markdown_view.dart';
 import 'package:pocket_codex/src/widgets/message_images.dart';
 import 'package:pocket_codex/src/widgets/realtime_handoff_card.dart';
+import 'package:pocket_codex/src/widgets/session_file_links.dart';
 import 'package:pocket_codex/src/widgets/utility_page.dart';
 import 'package:super_sliver_list/super_sliver_list.dart';
 
@@ -73,12 +77,15 @@ class _LocalSessionViewState extends ConsumerState<LocalSessionViewScreen> {
   String? _error;
   Timer? _poll;
   final _scroll = ScrollController();
+  late HostImageLoader _imageLoader;
+  int _loadEpoch = 0;
+  bool _reading = false;
 
   // Resolved (base64-decoded) attachments cached by item id: rows rebuild on
   // every 3s poll, and re-decoding each image every tick would churn CPU and
-  // memory. Ids are stable rollout line indexes; re-resolve only if an item's
-  // image count changes (a live writer appending to the same message id).
-  final Map<String, ({int count, List<ResolvedImage> images})> _imageCache = {};
+  // memory. Completion can replace a reference without changing its count.
+  final Map<String, ({List<String> urls, List<ResolvedImage> images})>
+  _imageCache = {};
 
   @override
   void didUpdateWidget(LocalSessionViewScreen oldWidget) {
@@ -86,19 +93,24 @@ class _LocalSessionViewState extends ConsumerState<LocalSessionViewScreen> {
     // Ids are line indexes (`t0`, `t1`, …) — they collide ACROSS threads, so a
     // reused State showing a different thread must drop the previous thread's
     // cache or its images would render under the new thread's ids.
-    if (oldWidget.threadId != widget.threadId) {
+    if (oldWidget.threadId != widget.threadId ||
+        oldWidget.serviceKey != widget.serviceKey) {
       _imageCache.clear();
+      _items = const [];
+      _live = null;
+      _setImageLoader();
+      _load(initial: true);
     }
   }
 
   List<ResolvedImage> _imagesFor(ThreadItem item) {
     if (item.images.isEmpty) return const [];
     final cached = _imageCache[item.id];
-    if (cached != null && cached.count == item.images.length) {
+    if (cached != null && listEquals(cached.urls, item.images)) {
       return cached.images;
     }
     final resolved = resolveImageUrls(item.images);
-    _imageCache[item.id] = (count: item.images.length, images: resolved);
+    _imageCache[item.id] = (urls: List.of(item.images), images: resolved);
     return resolved;
   }
 
@@ -107,9 +119,33 @@ class _LocalSessionViewState extends ConsumerState<LocalSessionViewScreen> {
       ? const SessionSource.local()
       : SessionSource.remote(widget.serviceKey!);
 
+  void _setImageLoader() {
+    final service = widget.serviceKey;
+    final thread = widget.threadId;
+    final api = ref.read(bridgeApiProvider);
+    _imageLoader = service == null
+        ? readLocalImage
+        : (path) async {
+            Uint8List bytes;
+            try {
+              bytes = await api.metaReadThreadImage(service, thread, path);
+            } catch (_) {
+              try {
+                bytes = await api.metaReadFile(service, path);
+              } catch (_) {
+                return null;
+              }
+            }
+            return bytes.isEmpty || bytes.length > kMaxInlineImageBytes
+                ? null
+                : bytes;
+          };
+  }
+
   @override
   void initState() {
     super.initState();
+    _setImageLoader();
     _load(initial: true);
     _poll = Timer.periodic(_pollInterval, (_) => _load());
   }
@@ -122,6 +158,12 @@ class _LocalSessionViewState extends ConsumerState<LocalSessionViewScreen> {
   }
 
   Future<void> _load({bool initial = false}) async {
+    if (_reading && !initial) return;
+    _reading = true;
+    final epoch = ++_loadEpoch;
+    final source = _source;
+    final thread = widget.threadId;
+    bool current() => mounted && epoch == _loadEpoch;
     if (initial) {
       setState(() {
         _loading = true;
@@ -137,14 +179,15 @@ class _LocalSessionViewState extends ConsumerState<LocalSessionViewScreen> {
       // session's rollout is immutable, and re-shipping megabytes of images
       // over the relay every 3s for an unchanged transcript would burn a
       // phone's metered data for nothing.
-      final live = await _source.liveness(bridge, widget.threadId);
+      final live = await source.liveness(bridge, thread);
+      if (!current()) return;
       final wasHeld = _live?.heldOpen ?? false;
       final fetchTranscript =
           initial || _items.isEmpty || live.heldOpen || wasHeld;
       final items = fetchTranscript
-          ? await _source.transcript(bridge, widget.threadId)
+          ? await source.transcript(bridge, thread)
           : _items;
-      if (!mounted) return;
+      if (!current()) return;
       // Auto-follow the tail if the reader is already near the bottom, so a
       // session being driven elsewhere streams in like a live conversation.
       final atBottom =
@@ -158,18 +201,20 @@ class _LocalSessionViewState extends ConsumerState<LocalSessionViewScreen> {
       });
       if (fetchTranscript && atBottom) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (_scroll.hasClients) {
+          if (current() && _scroll.hasClients) {
             _scroll.jumpTo(_scroll.position.maxScrollExtent);
           }
         });
       }
     } catch (e) {
-      if (!mounted) return;
+      if (!current()) return;
       // A transient poll failure shouldn't blow away a transcript already shown.
       setState(() {
         _loading = false;
         if (initial || _items.isEmpty) _error = friendlyError(e);
       });
+    } finally {
+      if (epoch == _loadEpoch) _reading = false;
     }
   }
 
@@ -208,25 +253,34 @@ class _LocalSessionViewState extends ConsumerState<LocalSessionViewScreen> {
             l10n.fileOnlyMessage,
           ).trim();
     final title = cleaned.isEmpty ? widget.threadId : cleaned;
-    return UtilityPage(
-      route: '/sessions',
-      title: title,
-      parent: UtilityParent(title: l10n.localSessionsTitle, route: '/sessions'),
-      actions: [
-        IconButton(
-          key: const Key('local-view-refresh'),
-          icon: const Icon(Icons.refresh),
-          tooltip: l10n.refreshStatus,
-          onPressed: _loading ? null : () => _load(initial: true),
+    return SessionFileLinks(
+      api: ref.read(bridgeApiProvider),
+      serviceKey: widget.serviceKey,
+      threadId: widget.threadId,
+      cwd: widget.cwd,
+      child: UtilityPage(
+        route: '/sessions',
+        title: title,
+        parent: UtilityParent(
+          title: l10n.localSessionsTitle,
+          route: '/sessions',
         ),
-      ],
-      body: Column(
-        children: [
-          _banner(l10n),
-          Expanded(child: _body(l10n)),
+        actions: [
+          IconButton(
+            key: const Key('local-view-refresh'),
+            icon: const Icon(Icons.refresh),
+            tooltip: l10n.refreshStatus,
+            onPressed: _loading ? null : () => _load(initial: true),
+          ),
         ],
+        body: Column(
+          children: [
+            _banner(l10n),
+            Expanded(child: _body(l10n)),
+          ],
+        ),
+        bottomNavigationBar: _actionBar(l10n),
       ),
-      bottomNavigationBar: _actionBar(l10n),
     );
   }
 
@@ -311,6 +365,8 @@ class _LocalSessionViewState extends ConsumerState<LocalSessionViewScreen> {
               key: ValueKey(_items[i].id),
               item: _items[i],
               images: _imagesFor(_items[i]),
+              hostImageLoader: _imageLoader,
+              imageCacheScope: (widget.serviceKey, widget.threadId),
             ),
           );
         },
@@ -368,13 +424,21 @@ class _LocalSessionViewState extends ConsumerState<LocalSessionViewScreen> {
 /// One read-only transcript row: user bubble, agent markdown, a reasoning note,
 /// or a command + output block.
 class _TranscriptRow extends StatelessWidget {
-  const _TranscriptRow({super.key, required this.item, this.images = const []});
+  const _TranscriptRow({
+    super.key,
+    required this.item,
+    this.images = const [],
+    required this.hostImageLoader,
+    required this.imageCacheScope,
+  });
 
   final ThreadItem item;
 
   /// The item's attachments, resolved once by the screen (cached across the
   /// 3s transcript polls).
   final List<ResolvedImage> images;
+  final HostImageLoader hostImageLoader;
+  final Object imageCacheScope;
 
   @override
   Widget build(BuildContext context) {
@@ -426,9 +490,8 @@ class _TranscriptRow extends StatelessWidget {
                   if (shown.isNotEmpty)
                     MessageImagesView(
                       images: shown,
-                      // This screen reads a rollout off THIS machine's disk,
-                      // so a host path in it is a local path.
-                      hostImageLoader: readLocalImage,
+                      hostImageLoader: hostImageLoader,
+                      cacheScope: imageCacheScope,
                     ),
                   if (shown.isNotEmpty &&
                       (refs.text.isNotEmpty || paths.isNotEmpty))
@@ -457,6 +520,19 @@ class _TranscriptRow extends StatelessWidget {
         );
       case 'turnContext':
         return _TurnContextCaption(item: item);
+      case 'imageGeneration':
+        return GeneratedImageCard(
+          item: TranscriptItem(
+            id: item.id,
+            type: item.itemType,
+            title: item.title,
+            text: item.text,
+            images: images,
+            imageUrls: item.images,
+          ),
+          hostImageLoader: hostImageLoader,
+          imageCacheScope: imageCacheScope,
+        );
       default: // commandExecution / tool activity
         return _CommandBlock(title: item.title, output: item.text);
     }

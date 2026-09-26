@@ -4336,29 +4336,30 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ThreadHistoryDto dco_decode_thread_history_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 20)
-      throw Exception('unexpected arr length: expect 20 but see ${arr.length}');
+    if (arr.length != 21)
+      throw Exception('unexpected arr length: expect 21 but see ${arr.length}');
     return ThreadHistoryDto(
       historyEpoch: dco_decode_opt_String(arr[0]),
       items: dco_decode_list_thread_item_dto(arr[1]),
       running: dco_decode_bool(arr[2]),
-      branch: dco_decode_opt_String(arr[3]),
-      cwd: dco_decode_opt_String(arr[4]),
-      tokensUsed: dco_decode_opt_box_autoadd_i_64(arr[5]),
-      contextWindow: dco_decode_opt_box_autoadd_i_64(arr[6]),
-      collaborationMode: dco_decode_opt_String(arr[7]),
-      reasoningEffort: dco_decode_opt_String(arr[8]),
-      model: dco_decode_opt_String(arr[9]),
-      modelProvider: dco_decode_opt_String(arr[10]),
-      approvalPolicy: dco_decode_opt_String(arr[11]),
-      approvalsReviewer: dco_decode_opt_String(arr[12]),
-      serviceTier: dco_decode_opt_String(arr[13]),
-      sandboxMode: dco_decode_opt_String(arr[14]),
-      configConfirmed: dco_decode_bool(arr[15]),
-      hasOlder: dco_decode_bool(arr[16]),
-      turns: dco_decode_list_turn_summary_dto(arr[17]),
-      firstTurnId: dco_decode_opt_String(arr[18]),
-      turnPages: dco_decode_list_turn_items_page_dto(arr[19]),
+      activeTurnId: dco_decode_opt_String(arr[3]),
+      branch: dco_decode_opt_String(arr[4]),
+      cwd: dco_decode_opt_String(arr[5]),
+      tokensUsed: dco_decode_opt_box_autoadd_i_64(arr[6]),
+      contextWindow: dco_decode_opt_box_autoadd_i_64(arr[7]),
+      collaborationMode: dco_decode_opt_String(arr[8]),
+      reasoningEffort: dco_decode_opt_String(arr[9]),
+      model: dco_decode_opt_String(arr[10]),
+      modelProvider: dco_decode_opt_String(arr[11]),
+      approvalPolicy: dco_decode_opt_String(arr[12]),
+      approvalsReviewer: dco_decode_opt_String(arr[13]),
+      serviceTier: dco_decode_opt_String(arr[14]),
+      sandboxMode: dco_decode_opt_String(arr[15]),
+      configConfirmed: dco_decode_bool(arr[16]),
+      hasOlder: dco_decode_bool(arr[17]),
+      turns: dco_decode_list_turn_summary_dto(arr[18]),
+      firstTurnId: dco_decode_opt_String(arr[19]),
+      turnPages: dco_decode_list_turn_items_page_dto(arr[20]),
     );
   }
 
@@ -5376,6 +5377,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_historyEpoch = sse_decode_opt_String(deserializer);
     var var_items = sse_decode_list_thread_item_dto(deserializer);
     var var_running = sse_decode_bool(deserializer);
+    var var_activeTurnId = sse_decode_opt_String(deserializer);
     var var_branch = sse_decode_opt_String(deserializer);
     var var_cwd = sse_decode_opt_String(deserializer);
     var var_tokensUsed = sse_decode_opt_box_autoadd_i_64(deserializer);
@@ -5397,6 +5399,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       historyEpoch: var_historyEpoch,
       items: var_items,
       running: var_running,
+      activeTurnId: var_activeTurnId,
       branch: var_branch,
       cwd: var_cwd,
       tokensUsed: var_tokensUsed,
@@ -6340,6 +6343,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_opt_String(self.historyEpoch, serializer);
     sse_encode_list_thread_item_dto(self.items, serializer);
     sse_encode_bool(self.running, serializer);
+    sse_encode_opt_String(self.activeTurnId, serializer);
     sse_encode_opt_String(self.branch, serializer);
     sse_encode_opt_String(self.cwd, serializer);
     sse_encode_opt_box_autoadd_i_64(self.tokensUsed, serializer);

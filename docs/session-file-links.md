@@ -59,5 +59,9 @@ links never trigger an automatic favicon request.
   files. No persistent machine identifier is transmitted.
 
 Existing endpoints and app-server protocol fields remain unchanged. Remote file
-links and streamed file-browser downloads require an updated host. Older hosts
-show a retryable error; they do not fall back to reading the controller's disk.
+links require an updated host. Existing Host Files downloads fall back to the
+root-confined `/fs/read` endpoint only when the new route returns 404, still
+streaming into a temporary file. Session links on older hosts show a retryable
+error; they do not fall back to reading the controller's disk. Both the live
+controller and read-only session viewer route file and localhost links using
+the selected host. Browser-valid numeric IPv4 loopback forms are recognized.

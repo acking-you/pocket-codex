@@ -73,6 +73,8 @@ bool isHostLocalWebUrl(Uri uri) {
       .replaceAll(RegExp(r'^\[|\]$'), '')
       .replaceFirst(RegExp(r'\.$'), '');
   if (host == 'localhost' || host.endsWith('.localhost')) return true;
+  final ipv4 = _browserIpv4(host);
+  if (ipv4 != null) return ipv4 == 0 || ipv4 >> 24 == 127;
   final address = InternetAddress.tryParse(host);
   if (address == null) return false;
   final bytes = address.rawAddress;
@@ -84,4 +86,34 @@ bool isHostLocalWebUrl(Uri uri) {
       bytes[10] == 255 &&
       bytes[11] == 255 &&
       (bytes[12] == 127 || bytes.skip(12).every((b) => b == 0));
+}
+
+// URL parsers in browsers accept shortened, hexadecimal and octal IPv4.
+// Match that numeric grammar without resolving DNS on the controller.
+int? _browserIpv4(String host) {
+  final parts = host.split('.');
+  if (parts.length > 4) return null;
+  final numbers = <int>[];
+  for (var part in parts) {
+    if (part.isEmpty) return null;
+    var radix = 10;
+    if (part.startsWith('0x')) {
+      radix = 16;
+      part = part.substring(2);
+    } else if (part.length > 1 && part.startsWith('0')) {
+      radix = 8;
+      part = part.substring(1);
+    }
+    if (part.isNotEmpty && !RegExp(r'^[0-9a-f]+$').hasMatch(part)) return null;
+    final number = part.isEmpty ? 0 : int.tryParse(part, radix: radix);
+    if (number == null || number < 0) return null;
+    numbers.add(number);
+  }
+  if (numbers.take(numbers.length - 1).any((n) => n > 255)) return null;
+  if (numbers.last >= 1 << (8 * (5 - numbers.length))) return null;
+  var address = numbers.last;
+  for (var i = 0; i < numbers.length - 1; i++) {
+    address += numbers[i] << (8 * (3 - i));
+  }
+  return address;
 }

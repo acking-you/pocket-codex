@@ -483,6 +483,7 @@ class RustBridgeApi implements BridgeApi {
   static ThreadHistory _history(frb.ThreadHistoryDto h) => ThreadHistory(
     items: h.items.map(_item).toList(),
     running: h.running,
+    activeTurnId: h.activeTurnId,
     historyEpoch: h.historyEpoch,
     branch: h.branch,
     cwd: h.cwd,

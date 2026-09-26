@@ -11,7 +11,9 @@ breaking change goes.
 
 - Open session file links and attachment chips with Preview / Download actions.
   Text, code, Markdown source and images can be previewed; other formats can be
-  saved for another application. Remote file reads require the updated host.
+  saved for another application in live and read-only sessions. Remote session
+  links require an updated host; existing Host Files downloads still support
+  older hosts through their root-confined file endpoint.
 - Stream remote downloads to temporary files and provide native mobile Save As
   dialogs for files and images. Verify same-device hosts before direct local
   reads; explain pb-mapper mapping for remote localhost web links.
@@ -21,6 +23,9 @@ breaking change goes.
   download feedback, preview and native file saving, failure states and explicit retry.
 - Restore generated images from history and refresh them while monitoring another
   writer. Recognize the native image extension's artifact paths on updated hosts.
+- Bound generated inline images before bridge transport, prevent historical
+  images from showing unrelated turn activity, and fit loading/retry tiles at
+  enlarged text sizes. Bound error-body reads without timing out healthy downloads.
 - Isolate downloaded images by host/thread and discard stale pending reads when
   switching, avoiding filename collisions between remote devices.
 

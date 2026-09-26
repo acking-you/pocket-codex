@@ -2114,6 +2114,9 @@ class ThreadHistoryDto {
   /// Whether the most recent turn is still in progress.
   final bool running;
 
+  /// Identity from the same turn snapshot that established `running`.
+  final String? activeTurnId;
+
   /// Current git branch of the thread's cwd, if it's a repo.
   final String? branch;
 
@@ -2179,6 +2182,7 @@ class ThreadHistoryDto {
     this.historyEpoch,
     required this.items,
     required this.running,
+    this.activeTurnId,
     this.branch,
     this.cwd,
     this.tokensUsed,
@@ -2203,6 +2207,7 @@ class ThreadHistoryDto {
       historyEpoch.hashCode ^
       items.hashCode ^
       running.hashCode ^
+      activeTurnId.hashCode ^
       branch.hashCode ^
       cwd.hashCode ^
       tokensUsed.hashCode ^
@@ -2229,6 +2234,7 @@ class ThreadHistoryDto {
           historyEpoch == other.historyEpoch &&
           items == other.items &&
           running == other.running &&
+          activeTurnId == other.activeTurnId &&
           branch == other.branch &&
           cwd == other.cwd &&
           tokensUsed == other.tokensUsed &&

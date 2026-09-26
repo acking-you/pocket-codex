@@ -411,8 +411,13 @@ class _MessageImagesViewState extends State<MessageImagesView> {
     String? name,
   }) {
     final scheme = Theme.of(context).colorScheme;
+    final retryLabel = AppLocalizations.of(context).retry;
     return Tooltip(
-      message: AppLocalizations.of(context).imageLoadFailed,
+      message: [
+        AppLocalizations.of(context).imageLoadFailed,
+        ?name,
+        if (retry != null) retryLabel,
+      ].join('\n'),
       child: Container(
         width: side,
         height: side,
@@ -421,18 +426,35 @@ class _MessageImagesViewState extends State<MessageImagesView> {
           borderRadius: BorderRadius.circular(10),
           border: Border.all(color: scheme.outlineVariant),
         ),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.broken_image_outlined, color: scheme.outline),
-            if (name != null)
-              Text(name, maxLines: 2, overflow: TextOverflow.ellipsis),
-            if (retry != null)
-              TextButton(
-                onPressed: retry,
-                child: Text(AppLocalizations.of(context).retry),
-              ),
-          ],
+        child: InkWell(
+          onTap: retry,
+          borderRadius: BorderRadius.circular(10),
+          child: Padding(
+            padding: const EdgeInsets.all(6),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.broken_image_outlined, color: scheme.outline),
+                if (name != null)
+                  Flexible(
+                    child: Text(
+                      name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                if (retry != null)
+                  Flexible(
+                    child: Text(
+                      retryLabel,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(color: scheme.primary),
+                    ),
+                  ),
+              ],
+            ),
+          ),
         ),
       ),
     );
@@ -487,6 +509,7 @@ class ImageLoadingPlaceholder extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final compact = side < 140;
     return Semantics(
       label: label,
       liveRegion: true,
@@ -501,19 +524,27 @@ class ImageLoadingPlaceholder extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.image_outlined, size: 32, color: scheme.primary),
-            const SizedBox(height: 16),
+            if (!compact)
+              Icon(Icons.image_outlined, size: 32, color: scheme.primary),
+            SizedBox(height: compact ? 6 : 16),
             if (!MediaQuery.disableAnimationsOf(context))
               const SizedBox(
                 width: 20,
                 height: 20,
                 child: CircularProgressIndicator(strokeWidth: 2),
               ),
-            const SizedBox(height: 12),
-            Text(
-              label,
-              textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.bodySmall,
+            SizedBox(height: compact ? 6 : 12),
+            Flexible(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 6),
+                child: Text(
+                  label,
+                  maxLines: compact ? 2 : 3,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
             ),
           ],
         ),

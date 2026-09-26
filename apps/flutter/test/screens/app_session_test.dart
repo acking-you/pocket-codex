@@ -22,6 +22,7 @@ import 'package:pocket_codex/src/bridge_api.dart';
 import 'package:pocket_codex/src/image_attachments.dart';
 import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/screens/app_session/activity_cards.dart';
+import 'package:pocket_codex/src/screens/app_session/generated_image_card.dart';
 import 'package:pocket_codex/src/screens/app_session_screen.dart';
 import 'package:pocket_codex/src/ui_prefs.dart';
 import 'package:pocket_codex/src/widgets/message_images.dart';
@@ -155,6 +156,78 @@ void main() {
     );
     expect(find.byKey(const Key('msg-image-0')), findsOneWidget);
   });
+
+  for (final knownTurn in [true, false]) {
+    testWidgets(
+      'history only animates images in the known active turn ($knownTurn)',
+      (t) async {
+        await t.binding.setSurfaceSize(const Size(800, 1200));
+        addTearDown(() => t.binding.setSurfaceSize(null));
+        const service = 'pcx:lb7666:app:default';
+        final api = FakeBridgeApi(
+          config: const ConfigInfo(relay: 'relay:7666', hasKey: true),
+        );
+        await api.appConnect(service, 28080);
+        api.readResult = ThreadHistory(
+          items: const [
+            ThreadItem(
+              id: 'current-image',
+              itemType: 'imageGeneration',
+              title: '',
+              text: '{"status":"in_progress"}',
+              turnId: 'current',
+            ),
+          ],
+          running: true,
+          activeTurnId: knownTurn ? 'current' : null,
+          turns: knownTurn
+              ? const [
+                  TurnSummary(turnId: 'old'),
+                  TurnSummary(turnId: 'current'),
+                ]
+              : const [],
+          turnPages: const [
+            TurnItemsPage(
+              turnId: 'old',
+              items: [
+                ThreadItem(
+                  id: 'old-image',
+                  itemType: 'imageGeneration',
+                  title: '',
+                  text: '{"status":"in_progress"}',
+                  turnId: 'old',
+                ),
+              ],
+              hasMore: false,
+            ),
+          ],
+        );
+        await t.pumpWidget(
+          host(
+            const AppSessionScreen(serviceKey: service, threadId: 't1'),
+            api,
+          ),
+        );
+        for (var i = 0; i < 5; i++) {
+          await t.pump(const Duration(milliseconds: 200));
+        }
+        final current = t.widget<GeneratedImageCard>(
+          find.byWidgetPredicate(
+            (w) => w is GeneratedImageCard && w.item.id == 'current-image',
+          ),
+        );
+        final old = t.widget<GeneratedImageCard>(
+          find.byWidgetPredicate(
+            (w) => w is GeneratedImageCard && w.item.id == 'old-image',
+          ),
+        );
+        expect(current.item.streaming, knownTurn);
+        expect(old.item.streaming, isFalse);
+        expect(t.takeException(), isNull);
+        await t.pumpWidget(const SizedBox());
+      },
+    );
+  }
 
   for (final delayed in ['config', 'models']) {
     testWidgets(
@@ -5539,6 +5612,8 @@ void main() {
           ),
         ],
         running: true,
+        activeTurnId: 'turn',
+        turns: [TurnSummary(turnId: 'turn')],
       );
       await t.pumpWidget(
         host(

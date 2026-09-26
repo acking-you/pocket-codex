@@ -580,6 +580,8 @@ pub struct ThreadHistoryDto {
     pub items: Vec<ThreadItemDto>,
     /// Whether the most recent turn is still in progress.
     pub running: bool,
+    /// Identity from the same turn snapshot that established `running`.
+    pub active_turn_id: Option<String>,
     /// Current git branch of the thread's cwd, if it's a repo.
     pub branch: Option<String>,
     /// The thread's resolved working directory (for git diff / status).
@@ -1054,6 +1056,7 @@ fn history_dto(h: app_session::ThreadHistory) -> ThreadHistoryDto {
         history_epoch: h.history_epoch,
         items: h.items.into_iter().map(item_dto).collect(),
         running: h.running,
+        active_turn_id: h.active_turn_id,
         branch: h.branch,
         cwd: h.cwd,
         tokens_used: h.tokens_used,

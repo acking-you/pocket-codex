@@ -1317,7 +1317,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     _autoReconnect();
   }
 
-  void _replaceTranscriptItems(List<ThreadItem> items, {bool running = false}) {
+  void _replaceTranscriptItems(List<ThreadItem> items, {String? activeTurnId}) {
     _items.clear();
     _itemIndex.clear();
     _asyncQuestions.clear();
@@ -1351,7 +1351,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           streaming:
               (item.itemType == 'contextCompaction' &&
                   item.title == 'inProgress') ||
-              (running &&
+              (item.turnId.isNotEmpty &&
+                  item.turnId == activeTurnId &&
                   item.itemType == 'imageGeneration' &&
                   item.turnCompletedAt == null &&
                   imageGenerationInProgress(item.text)),
@@ -1370,7 +1371,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   void _spliceTranscriptItems(
     List<ThreadItem> items, {
     required bool atStart,
-    bool running = false,
+    String? activeTurnId,
   }) {
     final known = _items.map((i) => i.id).toSet();
     final fresh = <TranscriptItem>[];
@@ -1392,7 +1393,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           images: resolveImageUrls(item.images),
           imageUrls: item.images,
           streaming:
-              running &&
+              item.turnId.isNotEmpty &&
+              item.turnId == activeTurnId &&
               item.itemType == 'imageGeneration' &&
               item.turnCompletedAt == null &&
               imageGenerationInProgress(item.text),
@@ -1730,7 +1732,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         _showingCachedHistory = false;
         _historyEpoch = history.historyEpoch;
         _loading = false;
-        _replaceTranscriptItems(history.items, running: history.running);
+        _replaceTranscriptItems(
+          history.items,
+          activeTurnId: history.activeTurnId,
+        );
         _turnSummaries = history.turns;
         _hasOlder = history.hasOlder;
         _historyError = false;
@@ -1746,7 +1751,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           _spliceTranscriptItems(
             page.items,
             atStart: true,
-            running: history.running,
+            activeTurnId: history.activeTurnId,
           );
         }
         _cachedRows = null;
@@ -2027,7 +2032,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     setState(() {
       _externalWriterLiveness = update.liveness;
       if (!paginated) {
-        _replaceTranscriptItems(update.items, running: willRun);
+        _replaceTranscriptItems(update.items);
         _historySyncing = false;
         _showingCachedHistory = false;
         _historyEpoch = null;
@@ -2118,7 +2123,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           }
           if (item.itemType == 'imageGeneration') {
             existing.streaming =
-                history.running &&
+                item.turnId.isNotEmpty &&
+                item.turnId == history.activeTurnId &&
                 item.turnCompletedAt == null &&
                 imageGenerationInProgress(item.text);
           }
@@ -2133,7 +2139,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         _spliceTranscriptItems(
           history.items,
           atStart: false,
-          running: history.running,
+          activeTurnId: history.activeTurnId,
         );
         for (final page in history.turnPages) {
           // An older read completed while this background refresh was queued.
@@ -2142,8 +2148,14 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           _spliceTranscriptItems(
             page.items,
             atStart: true,
-            running: history.running,
+            activeTurnId: history.activeTurnId,
           );
+        }
+        for (final item in _items) {
+          if (item.type == 'imageGeneration' &&
+              item.turnId != history.activeTurnId) {
+            item.streaming = false;
+          }
         }
         _cachedRows = null;
         _markTurnsLoaded();

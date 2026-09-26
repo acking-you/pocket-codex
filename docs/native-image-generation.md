@@ -10,8 +10,12 @@ Generated images stay visible outside the folded tool activity. While the native
 item is running, the controller shows an animated image placeholder without an
 invented percentage. Downloading its artifact has a separate loading state.
 Reduced-motion settings disable the animation. A failed generation or an
-unconfirmed/incomplete historical item does not spin indefinitely. Usage-limit
-failures have a distinct message.
+unconfirmed/incomplete historical item does not spin indefinitely. History uses
+the active turn ID from the same server snapshot as the running status; an
+unrelated new turn cannot restart an old image's spinner. Usage-limit failures
+have a distinct message. Read-only session views display completed native images
+through the selected host too; their legacy rollouts lack active turn identity,
+so incomplete results stay inactive until authoritative progress is available.
 
 Tap a completed thumbnail for the existing zoomable viewer. Desktop users can
 save from that viewer or the thumbnail. Mobile viewing is supported; saving to a
@@ -22,8 +26,9 @@ filename and an explicit Retry action, without an automatic request loop.
 
 - `item/started` and `item/completed` carry `imageGeneration` snapshots. The
   bridge maps `savedPath` into the existing image-reference field. When no path
-  exists, it uses the inline base64 `result` instead. Result bytes never become
-  transcript text.
+  exists, it uses the inline base64 `result` instead, bounded to 8 MiB decoded
+  size before DTO construction. Result bytes never become transcript text or
+  duplicate the image field through the raw event payload.
 - The same mapping applies to reopened and paginated history. Metadata-only
   monitoring updates the image references of existing rows, so a generation
   started by another writer can finish without changing its row identity.

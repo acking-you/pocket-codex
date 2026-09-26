@@ -25,7 +25,9 @@ class SessionFileLinks extends StatelessWidget {
     required this.child,
   });
   final BridgeApi api;
-  final String serviceKey;
+
+  /// Null for a viewer explicitly reading this device's local sessions.
+  final String? serviceKey;
   final String? threadId;
   final String? cwd;
   final Widget child;
@@ -66,7 +68,7 @@ class _HostWebLink extends StatefulWidget {
     required this.url,
   });
   final BridgeApi api;
-  final String serviceKey;
+  final String? serviceKey;
   final String url;
   @override
   State<_HostWebLink> createState() => _HostWebLinkState();
@@ -83,7 +85,8 @@ class _HostWebLinkState extends State<_HostWebLink> {
   Future<void> _check() async {
     var local = false;
     try {
-      local = await widget.api.metaHostIsLocal(widget.serviceKey);
+      final key = widget.serviceKey;
+      local = key == null || await widget.api.metaHostIsLocal(key);
     } catch (_) {
       /* Unverified hosts stay remote. */
     }
@@ -139,7 +142,7 @@ class _FileLinkDialog extends StatefulWidget {
     required this.link,
   });
   final BridgeApi api;
-  final String serviceKey;
+  final String? serviceKey;
   final String? threadId;
   final FileLink link;
   @override
@@ -152,9 +155,9 @@ class _FileLinkDialogState extends State<_FileLinkDialog> {
   FilePreviewData? _preview;
   Future<bool>? _local;
   bool _retryDownload = false;
-  Future<bool> _isLocal() => _local ??= widget.api
-      .metaHostIsLocal(widget.serviceKey)
-      .catchError((_) => false);
+  Future<bool> _isLocal() => _local ??= widget.serviceKey == null
+      ? Future.value(true)
+      : widget.api.metaHostIsLocal(widget.serviceKey!).catchError((_) => false);
 
   Future<void> _run(bool download) async {
     if (_busy) return;
@@ -177,7 +180,7 @@ class _FileLinkDialogState extends State<_FileLinkDialog> {
           staging = await Directory.systemTemp.createTemp('pcx-download-');
           source = '${staging.path}/content';
           await widget.api.metaFileDownload(
-            widget.serviceKey,
+            widget.serviceKey!,
             widget.threadId,
             widget.link.href,
             source,
@@ -201,7 +204,7 @@ class _FileLinkDialogState extends State<_FileLinkDialog> {
           }
         } else {
           preview = await widget.api.metaFilePreview(
-            widget.serviceKey,
+            widget.serviceKey!,
             widget.threadId,
             widget.link.href,
           );

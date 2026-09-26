@@ -447,6 +447,7 @@ class ThreadHistory {
   const ThreadHistory({
     required this.items,
     required this.running,
+    this.activeTurnId,
     this.historyEpoch,
     this.branch,
     this.cwd,
@@ -472,6 +473,9 @@ class ThreadHistory {
 
   /// Whether the most recent turn is still in progress.
   final bool running;
+
+  /// Identity from the same server snapshot that established [running].
+  final String? activeTurnId;
 
   /// Source history generation; replacement invalidates retained windows.
   final String? historyEpoch;

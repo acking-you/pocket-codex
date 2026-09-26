@@ -4470,6 +4470,7 @@ impl SseDecode for crate::api::bridge::ThreadHistoryDto {
         let mut var_historyEpoch = <Option<String>>::sse_decode(deserializer);
         let mut var_items = <Vec<crate::api::bridge::ThreadItemDto>>::sse_decode(deserializer);
         let mut var_running = <bool>::sse_decode(deserializer);
+        let mut var_activeTurnId = <Option<String>>::sse_decode(deserializer);
         let mut var_branch = <Option<String>>::sse_decode(deserializer);
         let mut var_cwd = <Option<String>>::sse_decode(deserializer);
         let mut var_tokensUsed = <Option<i64>>::sse_decode(deserializer);
@@ -4492,6 +4493,7 @@ impl SseDecode for crate::api::bridge::ThreadHistoryDto {
             history_epoch: var_historyEpoch,
             items: var_items,
             running: var_running,
+            active_turn_id: var_activeTurnId,
             branch: var_branch,
             cwd: var_cwd,
             tokens_used: var_tokensUsed,
@@ -5531,6 +5533,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::bridge::ThreadHistoryDto {
             self.history_epoch.into_into_dart().into_dart(),
             self.items.into_into_dart().into_dart(),
             self.running.into_into_dart().into_dart(),
+            self.active_turn_id.into_into_dart().into_dart(),
             self.branch.into_into_dart().into_dart(),
             self.cwd.into_into_dart().into_dart(),
             self.tokens_used.into_into_dart().into_dart(),
@@ -6324,6 +6327,7 @@ impl SseEncode for crate::api::bridge::ThreadHistoryDto {
         <Option<String>>::sse_encode(self.history_epoch, serializer);
         <Vec<crate::api::bridge::ThreadItemDto>>::sse_encode(self.items, serializer);
         <bool>::sse_encode(self.running, serializer);
+        <Option<String>>::sse_encode(self.active_turn_id, serializer);
         <Option<String>>::sse_encode(self.branch, serializer);
         <Option<String>>::sse_encode(self.cwd, serializer);
         <Option<i64>>::sse_encode(self.tokens_used, serializer);
