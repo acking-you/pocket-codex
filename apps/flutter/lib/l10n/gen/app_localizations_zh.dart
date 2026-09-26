@@ -358,10 +358,10 @@ class AppLocalizationsZh extends AppLocalizations {
   String get modeReadOnlyDesc => '执行前询问；不写文件';
 
   @override
-  String get modeAuto => '自动';
+  String get modeAuto => '替我审批';
 
   @override
-  String get modeAutoDesc => '工作区内可写；仅失败时询问';
+  String get modeAutoDesc => '由 Codex 自动评估审批请求，保留工作区沙箱限制。';
 
   @override
   String get modeFull => '完全放行';
@@ -1657,4 +1657,28 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get historyCacheInvalid => '请输入 0 到 64000 之间的整数。';
+
+  @override
+  String get modeAsk => '向我询问';
+
+  @override
+  String get modeAskDesc => '在工作区内执行；需要审批的操作由你确认。';
+
+  @override
+  String get fastMode => 'Fast';
+
+  @override
+  String get fastModeHint => '后续轮次使用模型支持的 Fast 服务档位。';
+
+  @override
+  String get steerMessage => '补充说明';
+
+  @override
+  String get steerMessageHint => '在当前轮次的下一个步骤带上；不选则排队到下个轮次。';
+
+  @override
+  String get queueNextTurn => '排队到下个轮次';
+
+  @override
+  String get steerTurnEnded => '当前轮次已变更或结束。草稿已保留，可作为新轮次发送。';
 }

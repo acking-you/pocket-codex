@@ -743,7 +743,7 @@ abstract class AppLocalizations {
   /// No description provided for @modeAutoDesc.
   ///
   /// In en, this message translates to:
-  /// **'Write in workspace; ask only on failure'**
+  /// **'Let Codex review approval requests for you, within the workspace sandbox.'**
   String get modeAutoDesc;
 
   /// No description provided for @modeFull.
@@ -3139,6 +3139,54 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Enter a whole number from 0 to 64000.'**
   String get historyCacheInvalid;
+
+  /// No description provided for @modeAsk.
+  ///
+  /// In en, this message translates to:
+  /// **'Ask for approval'**
+  String get modeAsk;
+
+  /// No description provided for @modeAskDesc.
+  ///
+  /// In en, this message translates to:
+  /// **'Work in the workspace; ask you before actions that require approval.'**
+  String get modeAskDesc;
+
+  /// No description provided for @fastMode.
+  ///
+  /// In en, this message translates to:
+  /// **'Fast'**
+  String get fastMode;
+
+  /// No description provided for @fastModeHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Use the model’s Fast service tier for subsequent turns.'**
+  String get fastModeHint;
+
+  /// No description provided for @steerMessage.
+  ///
+  /// In en, this message translates to:
+  /// **'Supplement'**
+  String get steerMessage;
+
+  /// No description provided for @steerMessageHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Add to the current turn at its next step. Otherwise, queue for the next turn.'**
+  String get steerMessageHint;
+
+  /// No description provided for @queueNextTurn.
+  ///
+  /// In en, this message translates to:
+  /// **'Queue for next turn'**
+  String get queueNextTurn;
+
+  /// No description provided for @steerTurnEnded.
+  ///
+  /// In en, this message translates to:
+  /// **'The turn changed or ended. Your draft is kept; send it as a new turn.'**
+  String get steerTurnEnded;
 }
 
 class _AppLocalizationsDelegate

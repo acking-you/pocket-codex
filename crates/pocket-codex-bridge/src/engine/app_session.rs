@@ -85,6 +85,12 @@ pub struct ModelInfo {
     pub supported_reasoning_efforts: Vec<String>,
     /// The model's default reasoning effort, if any.
     pub default_reasoning_effort: Option<String>,
+    /// Service tier ids advertised by the model catalog.
+    pub supported_service_tiers: Vec<String>,
+    /// Catalog default service tier.
+    pub default_service_tier: Option<String>,
+    /// Whether this is the server default model.
+    pub is_default: bool,
 }
 
 /// One materialised conversation item (from `thread/read`).
@@ -912,6 +918,10 @@ pub struct ThreadRuntimeConfig {
     /// Effective approval policy (`untrusted`/`on-failure`/`on-request`/
     /// `never`/`granular`).
     pub approval_policy: Option<String>,
+    /// Approval reviewer (`user` or `auto_review`), when reported.
+    pub approvals_reviewer: Option<String>,
+    /// Effective service tier, when reported.
+    pub service_tier: Option<String>,
     /// Effective sandbox mode, normalized to the kebab wire strings the UI
     /// already speaks (`read-only`/`workspace-write`/`danger-full-access`/
     /// `external-sandbox`).
@@ -935,6 +945,8 @@ fn runtime_config_from_response(res: &Value) -> ThreadRuntimeConfig {
         model_provider: nonempty_str(res.get("modelProvider")),
         reasoning_effort: nonempty_str(res.get("reasoningEffort")),
         approval_policy: parse_approval_policy(res.get("approvalPolicy")),
+        approvals_reviewer: parse_reviewer(res.get("approvalsReviewer")),
+        service_tier: nonempty_str(res.get("serviceTier")),
         sandbox_mode: parse_sandbox_mode(res.get("sandbox")),
         collaboration_mode: parse_collaboration_mode(res.get("collaborationMode")),
         confirmed_by_update: false,
@@ -950,10 +962,19 @@ fn runtime_config_from_settings(settings: &Value) -> ThreadRuntimeConfig {
         model_provider: nonempty_str(settings.get("modelProvider")),
         reasoning_effort: nonempty_str(settings.get("effort")),
         approval_policy: parse_approval_policy(settings.get("approvalPolicy")),
+        approvals_reviewer: parse_reviewer(settings.get("approvalsReviewer")),
+        service_tier: nonempty_str(settings.get("serviceTier")),
         sandbox_mode: parse_sandbox_mode(settings.get("sandboxPolicy")),
         collaboration_mode: parse_collaboration_mode(settings.get("collaborationMode")),
         confirmed_by_update: true,
     }
+}
+
+fn parse_reviewer(value: Option<&Value>) -> Option<String> {
+    nonempty_str(value).map(|reviewer| match reviewer.as_str() {
+        "guardian_subagent" => "auto_review".into(),
+        _ => reviewer,
+    })
 }
 
 /// A non-empty string field, else `None`.
@@ -1215,10 +1236,35 @@ pub fn model_list(service_key: &str) -> Result<Vec<ModelInfo>> {
                     .to_string(),
                 supported_reasoning_efforts,
                 default_reasoning_effort,
+                supported_service_tiers: parse_service_tiers(m),
+                default_service_tier: nonempty_str(m.get("defaultServiceTier")),
+                is_default: m.get("isDefault").and_then(Value::as_bool).unwrap_or(false),
                 id,
             })
         })
         .collect())
+}
+
+fn parse_service_tiers(model: &Value) -> Vec<String> {
+    let mut tiers: Vec<String> = model
+        .get("serviceTiers")
+        .and_then(Value::as_array)
+        .map(|tiers| {
+            tiers
+                .iter()
+                .filter_map(|tier| nonempty_str(tier.get("id")))
+                .collect()
+        })
+        .unwrap_or_default();
+    // Match ModelPreset::supports_fast_mode for older catalogs too.
+    let legacy_fast = model
+        .get("additionalSpeedTiers")
+        .and_then(Value::as_array)
+        .is_some_and(|tiers| tiers.iter().any(|tier| tier.as_str() == Some("fast")));
+    if legacy_fast && !tiers.iter().any(|tier| tier == "priority") {
+        tiers.push("priority".into());
+    }
+    tiers
 }
 
 /// Pull a model's supported reasoning-effort ids out of
@@ -1245,6 +1291,24 @@ fn parse_supported_efforts(model: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
+fn insert_execution_options(
+    params: &mut serde_json::Map<String, Value>,
+    reviewer: Option<String>,
+    tier: Option<String>,
+) -> Result<()> {
+    if let Some(reviewer) = reviewer {
+        anyhow::ensure!(
+            matches!(reviewer.as_str(), "user" | "auto_review"),
+            "unsupported approvals reviewer"
+        );
+        params.insert("approvalsReviewer".into(), json!(reviewer));
+    }
+    if let Some(tier) = tier {
+        params.insert("serviceTier".into(), json!(tier));
+    }
+    Ok(())
+}
+
 /// Start a new thread with optional model / working dir / approval policy /
 /// sandbox mode. `approval_policy` and `sandbox` are the wire strings
 /// (`untrusted`/`on-failure`/`on-request`/`never` and
@@ -1254,10 +1318,13 @@ pub fn thread_start(
     model: Option<String>,
     cwd: Option<String>,
     approval_policy: Option<String>,
+    approvals_reviewer: Option<String>,
+    service_tier: Option<String>,
     sandbox: Option<String>,
 ) -> Result<String> {
     let client = client_for(service_key)?;
     let mut params = serde_json::Map::new();
+    insert_execution_options(&mut params, approvals_reviewer, service_tier)?;
     if let Some(m) = model {
         params.insert("model".into(), json!(m));
     }
@@ -1460,6 +1527,12 @@ pub struct ThreadHistory {
     pub model_provider: Option<String>,
     /// The effective approval policy, when reported.
     pub approval_policy: Option<String>,
+    /// Approval reviewer (`user` or `auto_review`), when reported.
+    #[serde(default)]
+    pub approvals_reviewer: Option<String>,
+    /// Effective service tier, when reported.
+    #[serde(default)]
+    pub service_tier: Option<String>,
     /// The effective sandbox mode (kebab wire string), when reported.
     pub sandbox_mode: Option<String>,
     /// Whether a live `thread/settings/updated` has confirmed this config (vs
@@ -2089,6 +2162,8 @@ fn thread_read_inner(
         model: runtime.model,
         model_provider: runtime.model_provider,
         approval_policy: runtime.approval_policy,
+        approvals_reviewer: runtime.approvals_reviewer,
+        service_tier: runtime.service_tier,
         sandbox_mode: runtime.sandbox_mode,
         config_confirmed: runtime.confirmed_by_update,
         has_older,
@@ -2555,12 +2630,15 @@ pub fn turn_start(
     images: Vec<String>,
     model: Option<String>,
     approval_policy: Option<String>,
+    approvals_reviewer: Option<String>,
+    service_tier: Option<String>,
     sandbox: Option<String>,
     collaboration_mode: Option<String>,
     reasoning_effort: Option<String>,
 ) -> Result<()> {
     let client = client_for(service_key)?;
     let mut params = serde_json::Map::new();
+    insert_execution_options(&mut params, approvals_reviewer, service_tier)?;
     params.insert("threadId".into(), json!(thread_id));
     params.insert("input".into(), build_turn_input(&text, &images)?);
     if let Some(m) = &model {
@@ -2616,7 +2694,8 @@ pub fn turn_steer(
     thread_id: &str,
     turn_id: Option<&str>,
     text: &str,
-) -> Result<()> {
+    images: &[String],
+) -> Result<String> {
     let (client, expected_turn) = {
         let map = sessions().lock().unwrap_or_else(|e| e.into_inner());
         let session = map
@@ -2630,17 +2709,18 @@ pub fn turn_steer(
             .cloned();
         (Arc::clone(&session.client), turn_id.map(Value::from).or(tracked))
     };
-    let expected_turn =
-        expected_turn.context("the active turn is not available; reload the thread")?;
+    let expected_turn = expected_turn
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .context("the active turn is not available; reload the thread")?;
     runtime::runtime().block_on(client.request(
         "turn/steer",
         json!({
             "threadId": thread_id,
             "expectedTurnId": expected_turn,
-            "input": build_turn_input(text, &[])?,
+            "input": build_turn_input(text, images)?,
         }),
     ))?;
-    Ok(())
+    Ok(expected_turn)
 }
 
 /// Map a kebab sandbox mode to a `turn/start` `sandboxPolicy` tagged object.

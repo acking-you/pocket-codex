@@ -379,6 +379,15 @@ The order below is our current best guess; it is not a contract.
     visibly read-only, and prefetch running tails only in the foreground. See
     [`docs/session-cache-sync.md`](docs/session-cache-sync.md) for scope and limits.
 
+12. **Controller turn modes (2026-09-25).** New conversations default to
+    `approvalsReviewer: auto_review` with on-request approval and the workspace
+    sandbox. Retain manual, read-only and full-access presets; the existing
+    persisted `auto` tag keeps its manual-review meaning. Offer Fast only when
+    the model catalog advertises support and explicitly send `default` when
+    switching it off. Running composer sends queue for a new turn by default;
+    the optional Supplement control uses `turn/steer` with an expected turn id
+    and retains the draft on rejection. Queue draining preserves newer drafts.
+
 When you ship a milestone, update `README.md` (Status table) **and**
 this file's roadmap so the source of truth stays in sync.
 

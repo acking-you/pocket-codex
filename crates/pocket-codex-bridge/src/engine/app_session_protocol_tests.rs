@@ -86,3 +86,35 @@ fn async_questions_survive_live_buffering_but_history_does_not_reopen_them() {
     assert_eq!(history[0].questions_json, None);
     assert_eq!(buffered["thread-1"][0].questions_json, Some(questions.to_string()));
 }
+
+#[test]
+fn model_speed_capabilities_match_current_and_legacy_catalogs() {
+    assert_eq!(
+        parse_service_tiers(&json!({"serviceTiers": [{"id": "priority", "name": "Fast"}]})),
+        ["priority"]
+    );
+    assert_eq!(parse_service_tiers(&json!({"additionalSpeedTiers": ["fast"]})), ["priority"]);
+    assert!(parse_service_tiers(&json!({"id": "model-without-speed-metadata"})).is_empty());
+    assert_eq!(parse_service_tiers(&json!({"serviceTiers": [{"id": "flex"}]})), ["flex"]);
+}
+
+#[test]
+fn runtime_restores_reviewer_and_service_tier_without_conflating_approval_policy() {
+    let resumed = runtime_config_from_response(&json!({
+        "approvalPolicy": "on-request", "approvalsReviewer": "auto_review", "serviceTier": "priority"
+    }));
+    assert_eq!(resumed.approval_policy.as_deref(), Some("on-request"));
+    assert_eq!(resumed.approvals_reviewer.as_deref(), Some("auto_review"));
+    assert_eq!(resumed.service_tier.as_deref(), Some("priority"));
+    let updated = runtime_config_from_settings(&json!({
+        "approvalPolicy": "on-request", "approvalsReviewer": "user", "serviceTier": null
+    }));
+    assert_eq!(updated.approvals_reviewer.as_deref(), Some("user"));
+    assert_eq!(updated.service_tier, None);
+    assert_eq!(
+        runtime_config_from_response(&json!({"approvalsReviewer": "guardian_subagent"}))
+            .approvals_reviewer
+            .as_deref(),
+        Some("auto_review")
+    );
+}

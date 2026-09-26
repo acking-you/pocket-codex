@@ -366,7 +366,8 @@ class AppLocalizationsEn extends AppLocalizations {
   String get modeAuto => 'Auto';
 
   @override
-  String get modeAutoDesc => 'Write in workspace; ask only on failure';
+  String get modeAutoDesc =>
+      'Let Codex review approval requests for you, within the workspace sandbox.';
 
   @override
   String get modeFull => 'Full access';
@@ -1702,4 +1703,32 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get historyCacheInvalid => 'Enter a whole number from 0 to 64000.';
+
+  @override
+  String get modeAsk => 'Ask for approval';
+
+  @override
+  String get modeAskDesc =>
+      'Work in the workspace; ask you before actions that require approval.';
+
+  @override
+  String get fastMode => 'Fast';
+
+  @override
+  String get fastModeHint =>
+      'Use the model’s Fast service tier for subsequent turns.';
+
+  @override
+  String get steerMessage => 'Supplement';
+
+  @override
+  String get steerMessageHint =>
+      'Add to the current turn at its next step. Otherwise, queue for the next turn.';
+
+  @override
+  String get queueNextTurn => 'Queue for next turn';
+
+  @override
+  String get steerTurnEnded =>
+      'The turn changed or ended. Your draft is kept; send it as a new turn.';
 }

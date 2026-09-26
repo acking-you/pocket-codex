@@ -7,15 +7,24 @@ enum PermissionMode {
   /// Ask before running; read-only sandbox.
   readOnly(approval: 'on-request', sandbox: 'read-only'),
 
-  /// Write within the workspace; the model asks for approval when it needs to.
-  /// The default. (codex dropped the old `on-failure` policy — it now aliases to
-  /// `on-request`, and the app-server's v2 enum rejects the bare `on-failure`.)
+  /// Let the harness review approval requests within the workspace sandbox.
+  autoReview(
+    approval: 'on-request',
+    sandbox: 'workspace-write',
+    reviewer: 'auto_review',
+  ),
+
+  /// Ask the user for approval. Keep the stored `auto` tag for existing choices.
   auto(approval: 'on-request', sandbox: 'workspace-write'),
 
   /// No sandbox, never ask. The "bypass permissions" preset.
   full(approval: 'never', sandbox: 'danger-full-access');
 
-  const PermissionMode({required this.approval, required this.sandbox});
+  const PermissionMode({
+    required this.approval,
+    required this.sandbox,
+    this.reviewer = 'user',
+  });
 
   /// codex `approvalPolicy` wire value.
   final String approval;
@@ -23,17 +32,22 @@ enum PermissionMode {
   /// codex `sandbox` wire value.
   final String sandbox;
 
+  /// codex `approvalsReviewer` wire value.
+  final String reviewer;
+
   /// Localized short label.
   String label(AppLocalizations l) => switch (this) {
     PermissionMode.readOnly => l.modeReadOnly,
-    PermissionMode.auto => l.modeAuto,
+    PermissionMode.autoReview => l.modeAuto,
+    PermissionMode.auto => l.modeAsk,
     PermissionMode.full => l.modeFull,
   };
 
   /// Localized one-line description.
   String describe(AppLocalizations l) => switch (this) {
     PermissionMode.readOnly => l.modeReadOnlyDesc,
-    PermissionMode.auto => l.modeAutoDesc,
+    PermissionMode.autoReview => l.modeAutoDesc,
+    PermissionMode.auto => l.modeAskDesc,
     PermissionMode.full => l.modeFullDesc,
   };
 }

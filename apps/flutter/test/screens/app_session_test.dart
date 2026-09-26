@@ -1232,19 +1232,19 @@ void main() {
     );
     await t.pumpAndSettle();
 
-    // The default permission mode is "自动" (auto). Switch it to "只读".
-    await t.tap(find.text('自动'));
+    // The default permission mode is "替我审批" (auto review). Switch it to "只读".
+    await t.tap(find.byKey(const Key('permission-chip')));
     await t.pumpAndSettle();
     await t.tap(find.text('只读'));
     await t.pumpAndSettle();
     expect(find.text('只读'), findsOneWidget); // the pill now reads read-only
 
     // Start a brand-new conversation: it inherits the read-only mode the user
-    // last chose instead of resetting to the "自动" default.
+    // last chose instead of resetting to the auto-review default.
     await t.tap(find.byKey(const Key('new-conversation-btn')));
     await t.pumpAndSettle();
     expect(find.text('只读'), findsOneWidget);
-    expect(find.text('自动'), findsNothing);
+    expect(find.text('替我审批'), findsNothing);
   });
 
   testWidgets('A new session appears in the sessions pane after first send', (

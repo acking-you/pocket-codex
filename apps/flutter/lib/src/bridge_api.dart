@@ -457,6 +457,8 @@ class ThreadHistory {
     this.model,
     this.modelProvider,
     this.approvalPolicy,
+    this.approvalsReviewer,
+    this.serviceTier,
     this.sandboxMode,
     this.configConfirmed = false,
     this.hasOlder = false,
@@ -506,6 +508,12 @@ class ThreadHistory {
   /// The effective approval policy (`untrusted`/`on-failure`/`on-request`/
   /// `never`/`granular`), when reported.
   final String? approvalPolicy;
+
+  /// Effective reviewer (`user` or `auto_review`).
+  final String? approvalsReviewer;
+
+  /// Effective service tier.
+  final String? serviceTier;
 
   /// The effective sandbox mode (`read-only`/`workspace-write`/
   /// `danger-full-access`/`external-sandbox`), when reported.
@@ -595,6 +603,8 @@ class ThreadRuntimeConfig {
     this.modelProvider,
     this.reasoningEffort,
     this.approvalPolicy,
+    this.approvalsReviewer,
+    this.serviceTier,
     this.sandboxMode,
     this.collaborationMode,
     this.confirmedByUpdate = false,
@@ -611,6 +621,12 @@ class ThreadRuntimeConfig {
 
   /// Effective approval policy.
   final String? approvalPolicy;
+
+  /// Effective reviewer (`user` or `auto_review`).
+  final String? approvalsReviewer;
+
+  /// Effective service tier.
+  final String? serviceTier;
 
   /// Effective sandbox mode (kebab wire string).
   final String? sandboxMode;
@@ -631,6 +647,9 @@ class ModelInfo {
     required this.description,
     this.supportedReasoningEfforts = const [],
     this.defaultReasoningEffort,
+    this.supportedServiceTiers = const [],
+    this.defaultServiceTier,
+    this.isDefault = false,
   });
 
   /// Model id (used as the `model` param).
@@ -648,6 +667,18 @@ class ModelInfo {
 
   /// The model's default reasoning effort, if any.
   final String? defaultReasoningEffort;
+
+  /// Service tier ids advertised by the model catalog.
+  final List<String> supportedServiceTiers;
+
+  /// Catalog default service tier.
+  final String? defaultServiceTier;
+
+  /// Whether this is the server default model.
+  final bool isDefault;
+
+  /// Whether this model advertises the Fast service tier.
+  bool get supportsFast => supportedServiceTiers.contains('priority');
 }
 
 /// One materialised conversation item from `thread/read`.
@@ -858,6 +889,7 @@ class ThreadConfig {
     this.model,
     this.reasoningEffort,
     this.permissionMode,
+    this.serviceTier,
     this.planMode,
   });
 
@@ -870,6 +902,9 @@ class ThreadConfig {
   /// Permission / approval mode tag, when set.
   final String? permissionMode;
 
+  /// Requested service tier (`priority` or explicit `default`).
+  final String? serviceTier;
+
   /// Whether plan mode is on for this thread, when set.
   final bool? planMode;
 
@@ -878,6 +913,7 @@ class ThreadConfig {
       model == null &&
       reasoningEffort == null &&
       permissionMode == null &&
+      serviceTier == null &&
       planMode == null;
 
   /// A copy with the given fields overridden.
@@ -885,11 +921,13 @@ class ThreadConfig {
     String? model,
     String? reasoningEffort,
     String? permissionMode,
+    String? serviceTier,
     bool? planMode,
   }) => ThreadConfig(
     model: model ?? this.model,
     reasoningEffort: reasoningEffort ?? this.reasoningEffort,
     permissionMode: permissionMode ?? this.permissionMode,
+    serviceTier: serviceTier ?? this.serviceTier,
     planMode: planMode ?? this.planMode,
   );
 }
@@ -1313,6 +1351,8 @@ abstract interface class BridgeApi {
     String? model,
     String? cwd,
     String? approvalPolicy,
+    String? approvalsReviewer,
+    String? serviceTier,
     String? sandbox,
   });
 
@@ -1377,18 +1417,21 @@ abstract interface class BridgeApi {
     List<String> images = const [],
     String? model,
     String? approvalPolicy,
+    String? approvalsReviewer,
+    String? serviceTier,
     String? sandbox,
     String? collaborationMode,
     String? reasoningEffort,
   });
 
-  /// Send an asynchronous answer to the expected active turn.
-  Future<void> appTurnSteer(
+  /// Send an asynchronous answer and return the accepted active turn ID.
+  Future<String> appTurnSteer(
     String serviceKey,
     String threadId,
     String? turnId,
-    String text,
-  );
+    String text, {
+    List<String> images = const [],
+  });
 
   /// Interrupt the running turn. [turnId] (from the latest `turn/started`) is
   /// required by the server to identify which turn to abort.
