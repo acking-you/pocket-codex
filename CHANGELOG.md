@@ -9,6 +9,8 @@ breaking change goes.
 
 ## Unreleased
 
+- Wait for host file writes to complete before acknowledging uploads, preventing
+  immediate reads from seeing empty or incomplete files.
 - Open session file links and attachment chips with Preview / Download actions.
   Text, code, Markdown source and images can be previewed; other formats can be
   saved for another application in live and read-only sessions. Remote session

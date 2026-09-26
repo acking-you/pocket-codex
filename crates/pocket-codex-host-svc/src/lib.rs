@@ -639,10 +639,16 @@ async fn write_file(
         .open(&path)
         .await
     {
-        Ok(mut f) => f
-            .write_all(&body)
-            .await
-            .with_context(|| format!("writing {}", path.display()))?,
+        Ok(mut f) => {
+            f.write_all(&body)
+                .await
+                .with_context(|| format!("writing {}", path.display()))?;
+            // Tokio can finish write_all before its background write completes.
+            // Wait for those bytes (and any error) before acknowledging upload.
+            f.flush()
+                .await
+                .with_context(|| format!("flushing {}", path.display()))?;
+        },
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
             return Err(ApiError(anyhow!("a file named `{safe}` already exists here")));
         },
@@ -764,6 +770,87 @@ fn sanitize_file_name(name: &str) -> Result<String, anyhow::Error> {
 #[cfg(test)]
 mod upload_tests {
     use super::*;
+
+    #[test]
+    fn file_upload_waits_for_background_write_before_success() {
+        use std::{
+            future::Future,
+            task::{Context as TaskContext, Waker},
+        };
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .max_blocking_threads(1)
+            .build()
+            .expect("runtime");
+        runtime.block_on(async {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let root = dir.path().display().to_string();
+            let host = HostStore::open(dir.path().join("host.json"))
+                .await
+                .expect("host store");
+            host.put(HostConfig {
+                project_roots: vec![root.clone()],
+                default_project: None,
+            })
+            .await
+            .expect("project root");
+            let state = Arc::new(AppState {
+                app_ws_addr: "127.0.0.1:1".parse().expect("unused address"),
+                store: Arc::new(
+                    ConfigStore::open(dir.path().join("threads.json"))
+                        .await
+                        .expect("config store"),
+                ),
+                host: Arc::new(host),
+            });
+
+            let block_worker = || {
+                let (release, wait) = std::sync::mpsc::channel::<()>();
+                let (started, ready) = tokio::sync::oneshot::channel();
+                let task = tokio::task::spawn_blocking(move || {
+                    let _ = started.send(());
+                    let _ = wait.recv();
+                });
+                (release, ready, task)
+            };
+
+            // Queue the file open behind a blocked worker so its completion
+            // cannot race the first poll of the handler.
+            let (open_release, open_started, open_task) = block_worker();
+            open_started.await.expect("worker started");
+            let mut upload = std::pin::pin!(write_file(
+                State(state),
+                Query(WriteFileQuery {
+                    dir: root,
+                    name: "note.txt".into()
+                }),
+                axum::body::Bytes::from_static(b"uploaded"),
+            ));
+            let mut cx = TaskContext::from_waker(Waker::noop());
+            assert!(upload.as_mut().poll(&mut cx).is_pending());
+
+            // The second blocker runs after open, but before the handler can
+            // queue its write. A successful response here would expose an
+            // empty file to an immediate HTTP download or filesystem reader.
+            let (write_release, write_started, write_task) = block_worker();
+            drop(open_release);
+            open_task.await.expect("open blocker");
+            write_started.await.expect("write blocker started");
+            let completed_early = upload.as_mut().poll(&mut cx).is_ready();
+            let before = std::fs::read(dir.path().join("note.txt")).expect("created file");
+            drop(write_release);
+            write_task.await.expect("write blocker");
+            assert!(before.is_empty(), "the write must still be queued");
+            assert!(!completed_early, "upload acknowledged before the file write completed");
+            let response = upload
+                .await
+                .map_err(|error| error.0)
+                .expect("upload response");
+            assert_eq!(response.size, 8);
+            assert_eq!(std::fs::read(&response.path).expect("read acknowledged file"), b"uploaded");
+        });
+    }
 
     #[test]
     fn sanitize_strips_traversal_and_separators() {
