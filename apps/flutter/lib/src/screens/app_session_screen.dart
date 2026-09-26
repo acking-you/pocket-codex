@@ -1,3 +1,4 @@
+import 'package:pocket_codex/src/widgets/session_file_links.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
@@ -33,6 +34,7 @@ import 'package:pocket_codex/src/screens/app_session/async_questions.dart';
 import 'package:pocket_codex/src/screens/app_session/activity_cards.dart';
 import 'package:pocket_codex/src/screens/app_session/composer_cards.dart';
 import 'package:pocket_codex/src/screens/app_session/transcript_model.dart';
+import 'package:pocket_codex/src/screens/app_session/generated_image_card.dart';
 import 'package:pocket_codex/src/screens/app_session/history_merge.dart';
 import 'package:pocket_codex/src/screens/app_session/history_rows.dart';
 import 'package:pocket_codex/src/screens/app_session/transcript_view.dart';
@@ -1221,7 +1223,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   ///  * the host IS this machine (locally hosted service) — read the file off
   ///    disk, no tunnel involved;
   ///  * a remote host — ask for it as a transcript-referenced image, which the
-  ///    host authorises against this thread's own user messages, so a pasted
+  ///    host authorises against user attachments and generated artifacts, so a pasted
   ///    screenshot in its temp directory is reachable without granting a
   ///    general file read;
   ///  * a host too old to serve that route — fall back to the root-confined
@@ -1307,12 +1309,15 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     setState(() {
       _streaming = false;
       _connectionLost = true;
+      for (final item in _items) {
+        if (item.type == 'imageGeneration') item.streaming = false;
+      }
     });
     _publishLinkState(down: true);
     _autoReconnect();
   }
 
-  void _replaceTranscriptItems(List<ThreadItem> items) {
+  void _replaceTranscriptItems(List<ThreadItem> items, {String? activeTurnId}) {
     _items.clear();
     _itemIndex.clear();
     _asyncQuestions.clear();
@@ -1344,8 +1349,13 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           images: resolveImageUrls(item.images),
           imageUrls: item.images,
           streaming:
-              item.itemType == 'contextCompaction' &&
-              item.title == 'inProgress',
+              (item.itemType == 'contextCompaction' &&
+                  item.title == 'inProgress') ||
+              (item.turnId.isNotEmpty &&
+                  item.turnId == activeTurnId &&
+                  item.itemType == 'imageGeneration' &&
+                  item.turnCompletedAt == null &&
+                  imageGenerationInProgress(item.text)),
           turnId: item.turnId,
           turnCompletedAt: item.turnCompletedAt,
           turnDurationMs: item.turnDurationMs,
@@ -1358,7 +1368,11 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// present, and rebuild the id→index map.
   ///
   /// Both sequential pages and jumped-to turns use the skeleton's order.
-  void _spliceTranscriptItems(List<ThreadItem> items, {required bool atStart}) {
+  void _spliceTranscriptItems(
+    List<ThreadItem> items, {
+    required bool atStart,
+    String? activeTurnId,
+  }) {
     final known = _items.map((i) => i.id).toSet();
     final fresh = <TranscriptItem>[];
     for (final item in items) {
@@ -1378,6 +1392,12 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           text: item.text,
           images: resolveImageUrls(item.images),
           imageUrls: item.images,
+          streaming:
+              item.turnId.isNotEmpty &&
+              item.turnId == activeTurnId &&
+              item.itemType == 'imageGeneration' &&
+              item.turnCompletedAt == null &&
+              imageGenerationInProgress(item.text),
           turnId: item.turnId,
           turnCompletedAt: item.turnCompletedAt,
           turnDurationMs: item.turnDurationMs,
@@ -1712,7 +1732,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         _showingCachedHistory = false;
         _historyEpoch = history.historyEpoch;
         _loading = false;
-        _replaceTranscriptItems(history.items);
+        _replaceTranscriptItems(
+          history.items,
+          activeTurnId: history.activeTurnId,
+        );
         _turnSummaries = history.turns;
         _hasOlder = history.hasOlder;
         _historyError = false;
@@ -1725,7 +1748,11 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         for (final page in history.turnPages) {
           _turnWindows[page.turnId] = page;
           _fetchedTurns.add(page.turnId);
-          _spliceTranscriptItems(page.items, atStart: true);
+          _spliceTranscriptItems(
+            page.items,
+            atStart: true,
+            activeTurnId: history.activeTurnId,
+          );
         }
         _cachedRows = null;
         _loadingOlder = false;
@@ -2090,6 +2117,17 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           final index = _itemIndex[item.id];
           if (index == null) continue;
           final existing = _items[index];
+          if (!listEquals(existing.imageUrls, item.images)) {
+            existing.imageUrls = item.images;
+            existing.images = resolveImageUrls(item.images);
+          }
+          if (item.itemType == 'imageGeneration') {
+            existing.streaming =
+                item.turnId.isNotEmpty &&
+                item.turnId == history.activeTurnId &&
+                item.turnCompletedAt == null &&
+                imageGenerationInProgress(item.text);
+          }
           existing
             ..text = item.text
             ..title = item.title
@@ -2098,12 +2136,26 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
             ..turnCompletedAt = item.turnCompletedAt
             ..turnDurationMs = item.turnDurationMs;
         }
-        _spliceTranscriptItems(history.items, atStart: false);
+        _spliceTranscriptItems(
+          history.items,
+          atStart: false,
+          activeTurnId: history.activeTurnId,
+        );
         for (final page in history.turnPages) {
           // An older read completed while this background refresh was queued.
           _turnWindows.putIfAbsent(page.turnId, () => page);
           _fetchedTurns.add(page.turnId);
-          _spliceTranscriptItems(page.items, atStart: true);
+          _spliceTranscriptItems(
+            page.items,
+            atStart: true,
+            activeTurnId: history.activeTurnId,
+          );
+        }
+        for (final item in _items) {
+          if (item.type == 'imageGeneration' &&
+              item.turnId != history.activeTurnId) {
+            item.streaming = false;
+          }
         }
         _cachedRows = null;
         _markTurnsLoaded();
@@ -2511,6 +2563,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
             type: type,
             title: e.title ?? '',
             text: e.text ?? '',
+            images: resolveImageUrls(e.images),
+            imageUrls: e.images,
             streaming: type == 'agentMessage' ? true : running,
             // The live turn this item belongs to, so a reply that streams in as
             // several items groups the same way it will after a reload.
@@ -2526,6 +2580,11 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           it.text += e.text ?? '';
         } else if ((e.text ?? '').isNotEmpty || !it.isAgent) {
           it.text = e.text ?? '';
+        }
+        if (!listEquals(it.imageUrls, e.images) &&
+            (!isDelta || e.images.isNotEmpty)) {
+          it.imageUrls = e.images;
+          it.images = resolveImageUrls(e.images);
         }
         if (!it.isAgent) it.streaming = running;
       }
@@ -4492,7 +4551,15 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => SessionFileLinks(
+    api: ref.read(bridgeApiProvider),
+    serviceKey: widget.serviceKey,
+    threadId: _threadId,
+    cwd: _cwd,
+    child: _buildSession(context),
+  );
+
+  Widget _buildSession(BuildContext context) {
     final l10n = AppLocalizations.of(context);
     final scheme = Theme.of(context).colorScheme;
     final width = MediaQuery.of(context).size.width;
@@ -5283,6 +5350,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       key: _rowKey(row),
       item: row as TranscriptItem,
       hostImageLoader: _loadHostImage,
+      imageCacheScope: '${widget.serviceKey}:$_threadId',
     );
   }
 
@@ -8439,8 +8507,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     );
   }
 
-  /// The desktop turn-settings popover: model, reasoning effort, plan mode —
-  /// all visible at once rather than three levels down a sheet.
+  /// The desktop model/effort picker, with uncommon modes in a secondary sheet.
   Widget _turnSettingsPanel(AppLocalizations l10n) {
     final scheme = Theme.of(context).colorScheme;
     final selectedId = _model?.id ?? _runtime?.model ?? _sentModel;
@@ -8523,28 +8590,16 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           const Divider(height: 9),
           _effortSlider(l10n),
           const Divider(height: 9),
-          // Plan mode changes what a turn DOES, so it is a switch on the face
-          // of the panel rather than another row to drill into.
-          InkWell(
-            mouseCursor: clickable,
-            key: const Key('plan-toggle-row'),
-            onTap: _togglePlan,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(14, 2, 8, 2),
-              child: Row(
-                children: [
-                  Icon(Icons.checklist_rtl, size: 16, color: scheme.primary),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      l10n.planMode,
-                      style: const TextStyle(fontSize: 13),
-                    ),
-                  ),
-                  Switch(value: _plan, onChanged: (_) => _togglePlan()),
-                ],
-              ),
-            ),
+          ListTile(
+            key: const Key('advanced-turn-settings'),
+            dense: true,
+            leading: const Icon(Icons.tune, size: 16),
+            title: Text(l10n.advancedSettings),
+            trailing: const Icon(Icons.chevron_right, size: 16),
+            onTap: () {
+              _modelMenu.close();
+              _showAdvancedSettings(l10n);
+            },
           ),
         ],
       ),
@@ -8670,7 +8725,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     _persistThreadConfig();
   }
 
-  /// The settings the model chip fronts: model, effort, plan, project. A sheet
+  /// The settings the model chip fronts: model, effort, project, advanced. A sheet
   /// rather than a popover because every picker it opens is already a sheet,
   /// and a popover anchored to a chip near the keyboard is awkward on a phone.
   Future<void> _showConfigSheet(AppLocalizations l10n) async {
@@ -8680,7 +8735,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         l10n.modelDefault;
     final choice = await _optionSheet<String>(
       title: l10n.turnSettings,
-      isSelected: (v) => v == 'plan' && _plan,
+      isSelected: (_) => false,
       options: [
         _PickerOption(
           value: 'model',
@@ -8695,9 +8750,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           description: _effectiveEffort?.label(l10n),
         ),
         _PickerOption(
-          value: 'plan',
-          icon: Icons.checklist_rtl,
-          label: l10n.planMode,
+          value: 'advanced',
+          icon: Icons.tune,
+          label: l10n.advancedSettings,
         ),
         // The working directory is fixed once the thread exists, so offer it
         // only before the first turn.
@@ -8718,9 +8773,25 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         await _pickEffort();
       case 'project':
         await _pickProject();
-      case 'plan':
-        _togglePlan();
+      case 'advanced':
+        await _showAdvancedSettings(l10n);
     }
+  }
+
+  Future<void> _showAdvancedSettings(AppLocalizations l10n) async {
+    final choice = await _optionSheet<String>(
+      title: l10n.advancedSettings,
+      isSelected: (value) => value == 'plan' && _plan,
+      options: [
+        _PickerOption(
+          value: 'plan',
+          icon: Icons.checklist_rtl,
+          label: l10n.planMode,
+          description: l10n.planModeDescription,
+        ),
+      ],
+    );
+    if (mounted && choice == 'plan') _togglePlan();
   }
 
   IconData _modeIcon() => _modeIconFor(_mode);

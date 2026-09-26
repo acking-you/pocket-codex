@@ -500,9 +500,7 @@ pub struct AppEventDto {
     pub title: Option<String>,
     /// Text payload (a streaming delta or an item's body/detail).
     pub text: Option<String>,
-    /// Image URLs attached to a `userMessage` item: `data:image/...` URLs
-    /// render inline; a host-local path (from a `localImage` input) renders as
-    /// a filename chip. Empty for every other event.
+    /// User attachments or generated artifacts, as data URLs or host paths.
     pub images: Vec<String>,
     /// Token to answer a server approval request via [`app_respond_approval`];
     /// `None` for ordinary notifications.
@@ -560,9 +558,7 @@ pub struct ThreadItemDto {
     pub text: String,
     /// Structured asynchronous questions on an agent message, as JSON.
     pub questions_json: Option<String>,
-    /// Image URLs attached to a `userMessage`: `data:image/...` URLs render
-    /// inline; a host-local path (from a `localImage` input) renders as a
-    /// filename chip. Empty for every other item kind.
+    /// User attachments or generated artifacts, as data URLs or host paths.
     pub images: Vec<String>,
     /// Id of the turn this item belongs to — the server's own turn boundary
     /// (`thread/read` nests items under their turn), so the UI can render one
@@ -584,6 +580,8 @@ pub struct ThreadHistoryDto {
     pub items: Vec<ThreadItemDto>,
     /// Whether the most recent turn is still in progress.
     pub running: bool,
+    /// Identity from the same turn snapshot that established `running`.
+    pub active_turn_id: Option<String>,
     /// Current git branch of the thread's cwd, if it's a repo.
     pub branch: Option<String>,
     /// The thread's resolved working directory (for git diff / status).
@@ -1058,6 +1056,7 @@ fn history_dto(h: app_session::ThreadHistory) -> ThreadHistoryDto {
         history_epoch: h.history_epoch,
         items: h.items.into_iter().map(item_dto).collect(),
         running: h.running,
+        active_turn_id: h.active_turn_id,
         branch: h.branch,
         cwd: h.cwd,
         tokens_used: h.tokens_used,
@@ -1705,9 +1704,45 @@ pub fn meta_read_file(service_key: String, path: String) -> Result<Vec<u8>> {
     meta::read_file(&service_key, &path)
 }
 
+/// Bounded file preview returned after an explicit user action.
+pub struct FilePreviewDto {
+    /// Preview bytes, capped at 8 MiB.
+    pub bytes: Vec<u8>,
+    /// Total file size, including bytes omitted from the preview.
+    pub total_size: u64,
+}
+
+/// Determine whether the selected host shares this app's filesystem.
+pub fn meta_host_is_local(service_key: String) -> Result<bool> {
+    meta::host_is_local(&service_key)
+}
+
+/// Read a bounded preview of a selected session file link.
+pub fn meta_file_preview(
+    service_key: String,
+    thread_id: Option<String>,
+    href: String,
+) -> Result<FilePreviewDto> {
+    let preview = meta::file_preview(&service_key, thread_id.as_deref(), &href)?;
+    Ok(FilePreviewDto {
+        bytes: preview.bytes,
+        total_size: preview.total_size,
+    })
+}
+
+/// Stream a selected file into a new controller-side staging file.
+pub fn meta_file_download(
+    service_key: String,
+    thread_id: Option<String>,
+    href: String,
+    destination: String,
+) -> Result<()> {
+    meta::file_download(&service_key, thread_id.as_deref(), &href, &destination)
+}
+
 /// Read an image that `thread_id`'s transcript already references, so the UI
 /// can render it inline instead of naming it. NOT root-confined: the host
-/// authorises the read against that thread's own user messages, which is what
+/// authorises user attachments and typed generated artifacts, which is what
 /// makes a pasted screenshot in the OS temp directory visible to a remote
 /// controller without granting it a general file read. Errors (with a
 /// `403`-carrying message) for a path the transcript never mentioned.

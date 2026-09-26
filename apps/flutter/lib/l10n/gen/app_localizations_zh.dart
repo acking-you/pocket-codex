@@ -1681,4 +1681,59 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get steerTurnEnded => '当前轮次已变更或结束。草稿已保留，可作为新轮次发送。';
+
+  @override
+  String get advancedSettings => '高级设置';
+
+  @override
+  String get planModeDescription => '先规划，不执行。大多数任务建议使用普通模式。';
+
+  @override
+  String get imageGenerating => '正在生成图片…';
+
+  @override
+  String get imageLoading => '正在加载图片…';
+
+  @override
+  String get imageGenerationFailed => '图片生成失败';
+
+  @override
+  String get imageGenerationIncomplete => '图片生成未完成';
+
+  @override
+  String get imageGenerationUnavailable => '未返回图片';
+
+  @override
+  String get imageGenerationLimit => '已达到生图用量上限';
+
+  @override
+  String get fileLinkPreview => '预览';
+
+  @override
+  String get fileLinkDownload => '下载';
+
+  @override
+  String get fileLinkUnsupported => '此文件暂不支持预览，请下载后使用设备上的应用打开。';
+
+  @override
+  String get fileLinkTruncated => '当前仅显示部分预览，下载可获取完整文件。';
+
+  @override
+  String get fileLinkLoading => '正在加载文件…';
+
+  @override
+  String get fileLinkRemoteWebTitle => '宿主上的网页';
+
+  @override
+  String get fileLinkRemoteWeb =>
+      '此地址指向被控制的设备。请通过 pb-mapper 在宿主上注册网页服务端口，再在当前设备订阅映射端口，然后打开映射后的本地地址。保留原网址的路径和查询参数。';
+
+  @override
+  String get fileLinkCheckingHost => '正在确认宿主位置…';
+
+  @override
+  String get fileLinkFailed => '无法读取文件。请确认文件仍然存在，且宿主已更新到支持文件链接的版本。';
+
+  @override
+  String get fileLinkClose => '关闭';
 }

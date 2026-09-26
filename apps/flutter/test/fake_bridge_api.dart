@@ -1182,6 +1182,35 @@ class FakeBridgeApi implements BridgeApi {
   Future<Uint8List> metaReadFile(String serviceKey, String path) async =>
       fileBytes[path] ?? Uint8List(0);
 
+  bool hostIsLocal = false;
+  final List<String> filePreviewRequests = [];
+  @override
+  Future<bool> metaHostIsLocal(String serviceKey) async => hostIsLocal;
+
+  @override
+  Future<FilePreviewData> metaFilePreview(
+    String serviceKey,
+    String? threadId,
+    String href,
+  ) async {
+    filePreviewRequests.add('$serviceKey/$threadId/$href');
+    final bytes = fileBytes[href];
+    if (bytes == null) throw StateError('File unavailable');
+    return FilePreviewData(bytes: bytes, totalSize: bytes.length);
+  }
+
+  @override
+  Future<void> metaFileDownload(
+    String serviceKey,
+    String? threadId,
+    String href,
+    String destination,
+  ) async {
+    throw UnimplementedError(
+      'Seed a file download implementation in this test',
+    );
+  }
+
   /// Paths the fake host will serve to [metaReadThreadImage] — i.e. the ones
   /// its transcript references. Anything else throws, like a real host's 403.
   final Map<String, Uint8List> threadImageBytes = {};

@@ -388,6 +388,29 @@ The order below is our current best guess; it is not a contract.
     the optional Supplement control uses `turn/steer` with an expected turn id
     and retains the draft on rejection. Queue draining preserves newer drafts.
 
+13. **Native image results (2026-09-26).** Plan mode lives under Advanced settings
+    on desktop and mobile; explicit saved Plan sessions remain supported. Render
+    native `imageGeneration` items as visible outputs with generation/loading,
+    failure, preview and retry states. Recognize the exact rollout extension kind
+    `image_gen.generation`; only its artifact path authorizes a generated-image
+    read. Refresh image references when monitoring another writer, keep loading
+    state bounded by the confirmed active turn ID, and scope image bytes to
+    host/thread. Bound inline results before FRB transport and render native
+    images in the read-only viewer too.
+    See [`docs/native-image-generation.md`](docs/native-image-generation.md).
+
+14. **Session file links (2026-09-26).** Explicit Preview / Download actions
+    resolve files against the selected host and session in live and read-only
+    views. Local session viewers read this device directly; service-backed views
+    require a shared-filesystem challenge or an in-process host before local reads.
+    Remote previews are bounded; downloads stream to disposable controller
+    files before native desktop/mobile saving. Preserve legacy Host Files
+    downloads through root-confined `/fs/read` only on a missing new route.
+    Keep automatic image authorization
+    separate from explicit conversation-link reads. Remote localhost web links
+    explain pb-mapper mapping and never open the controller's loopback address.
+    See [`docs/session-file-links.md`](docs/session-file-links.md).
+
 When you ship a milestone, update `README.md` (Status table) **and**
 this file's roadmap so the source of truth stays in sync.
 

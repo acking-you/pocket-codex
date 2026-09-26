@@ -720,9 +720,37 @@ Future<Uint8List> metaReadFile({
   path: path,
 );
 
+/// Determine whether the selected host shares this app's filesystem.
+Future<bool> metaHostIsLocal({required String serviceKey}) =>
+    RustLib.instance.api.crateApiBridgeMetaHostIsLocal(serviceKey: serviceKey);
+
+/// Read a bounded preview of a selected session file link.
+Future<FilePreviewDto> metaFilePreview({
+  required String serviceKey,
+  String? threadId,
+  required String href,
+}) => RustLib.instance.api.crateApiBridgeMetaFilePreview(
+  serviceKey: serviceKey,
+  threadId: threadId,
+  href: href,
+);
+
+/// Stream a selected file into a new controller-side staging file.
+Future<void> metaFileDownload({
+  required String serviceKey,
+  String? threadId,
+  required String href,
+  required String destination,
+}) => RustLib.instance.api.crateApiBridgeMetaFileDownload(
+  serviceKey: serviceKey,
+  threadId: threadId,
+  href: href,
+  destination: destination,
+);
+
 /// Read an image that `thread_id`'s transcript already references, so the UI
 /// can render it inline instead of naming it. NOT root-confined: the host
-/// authorises the read against that thread's own user messages, which is what
+/// authorises user attachments and typed generated artifacts, which is what
 /// makes a pasted screenshot in the OS temp directory visible to a remote
 /// controller without granting it a general file read. Errors (with a
 /// `403`-carrying message) for a path the transcript never mentioned.
@@ -961,9 +989,7 @@ class AppEventDto {
   /// Text payload (a streaming delta or an item's body/detail).
   final String? text;
 
-  /// Image URLs attached to a `userMessage` item: `data:image/...` URLs
-  /// render inline; a host-local path (from a `localImage` input) renders as
-  /// a filename chip. Empty for every other event.
+  /// User attachments or generated artifacts, as data URLs or host paths.
   final List<String> images;
 
   /// Token to answer a server approval request via [`app_respond_approval`];
@@ -1507,6 +1533,28 @@ class FileEntryDto {
           path == other.path &&
           size == other.size &&
           mtime == other.mtime;
+}
+
+/// Bounded file preview returned after an explicit user action.
+class FilePreviewDto {
+  /// Preview bytes, capped at 8 MiB.
+  final Uint8List bytes;
+
+  /// Total file size, including bytes omitted from the preview.
+  final BigInt totalSize;
+
+  const FilePreviewDto({required this.bytes, required this.totalSize});
+
+  @override
+  int get hashCode => bytes.hashCode ^ totalSize.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is FilePreviewDto &&
+          runtimeType == other.runtimeType &&
+          bytes == other.bytes &&
+          totalSize == other.totalSize;
 }
 
 /// Outcome of a force-resume, mirrored for Dart.
@@ -2066,6 +2114,9 @@ class ThreadHistoryDto {
   /// Whether the most recent turn is still in progress.
   final bool running;
 
+  /// Identity from the same turn snapshot that established `running`.
+  final String? activeTurnId;
+
   /// Current git branch of the thread's cwd, if it's a repo.
   final String? branch;
 
@@ -2131,6 +2182,7 @@ class ThreadHistoryDto {
     this.historyEpoch,
     required this.items,
     required this.running,
+    this.activeTurnId,
     this.branch,
     this.cwd,
     this.tokensUsed,
@@ -2155,6 +2207,7 @@ class ThreadHistoryDto {
       historyEpoch.hashCode ^
       items.hashCode ^
       running.hashCode ^
+      activeTurnId.hashCode ^
       branch.hashCode ^
       cwd.hashCode ^
       tokensUsed.hashCode ^
@@ -2181,6 +2234,7 @@ class ThreadHistoryDto {
           historyEpoch == other.historyEpoch &&
           items == other.items &&
           running == other.running &&
+          activeTurnId == other.activeTurnId &&
           branch == other.branch &&
           cwd == other.cwd &&
           tokensUsed == other.tokensUsed &&
@@ -2218,9 +2272,7 @@ class ThreadItemDto {
   /// Structured asynchronous questions on an agent message, as JSON.
   final String? questionsJson;
 
-  /// Image URLs attached to a `userMessage`: `data:image/...` URLs render
-  /// inline; a host-local path (from a `localImage` input) renders as a
-  /// filename chip. Empty for every other item kind.
+  /// User attachments or generated artifacts, as data URLs or host paths.
   final List<String> images;
 
   /// Id of the turn this item belongs to — the server's own turn boundary

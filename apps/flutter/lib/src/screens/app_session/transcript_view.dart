@@ -9,6 +9,7 @@ library;
 import 'package:flutter/material.dart';
 import 'approval_review.dart';
 import 'async_questions.dart';
+import 'generated_image_card.dart';
 import 'approval_review_card.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart' show DateFormat;
@@ -49,11 +50,17 @@ Widget _planBadge(BuildContext context, ColorScheme scheme) => Row(
 /// collapsible [ActivityCard]. Message copy fades in on hover (desktop);
 /// touch uses the enclosing [SelectionArea]'s long-press.
 class MessageView extends StatefulWidget {
-  const MessageView({super.key, required this.item, this.hostImageLoader});
+  const MessageView({
+    super.key,
+    required this.item,
+    this.hostImageLoader,
+    this.imageCacheScope,
+  });
   final TranscriptItem item;
 
   /// Reads a host-side image so a mentioned file renders as a picture.
   final HostImageLoader? hostImageLoader;
+  final Object? imageCacheScope;
 
   @override
   State<MessageView> createState() => _MessageViewState();
@@ -106,6 +113,13 @@ class _MessageViewState extends State<MessageView> {
   @override
   Widget build(BuildContext context) {
     final item = widget.item;
+    if (item.type == 'imageGeneration') {
+      return GeneratedImageCard(
+        item: item,
+        hostImageLoader: widget.hostImageLoader,
+        imageCacheScope: widget.imageCacheScope,
+      );
+    }
     // Tool / activity items get specialised rendering: plans → checklist, file
     // changes → reviewable diff, compaction → a system notice; everything else →
     // a subtle single-line activity row. Dispatched through [activityRow], which
@@ -205,6 +219,7 @@ class _MessageViewState extends State<MessageView> {
                 MessageImagesView(
                   images: images,
                   hostImageLoader: widget.hostImageLoader,
+                  cacheScope: widget.imageCacheScope,
                 ),
               if (images.isNotEmpty && paths.isNotEmpty)
                 const SizedBox(height: 6),

@@ -22,6 +22,7 @@ import 'package:pocket_codex/src/bridge_api.dart';
 import 'package:pocket_codex/src/image_attachments.dart';
 import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/screens/app_session/activity_cards.dart';
+import 'package:pocket_codex/src/screens/app_session/generated_image_card.dart';
 import 'package:pocket_codex/src/screens/app_session_screen.dart';
 import 'package:pocket_codex/src/ui_prefs.dart';
 import 'package:pocket_codex/src/widgets/message_images.dart';
@@ -38,6 +39,195 @@ void main() {
   // lands). Reset it between tests so memory from one test can't leak into
   // another that reuses a thread id.
   setUp(AppSessionScreen.debugResetThreadMemory);
+
+  testWidgets('Plan is only offered under advanced settings on mobile', (
+    t,
+  ) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'relay:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    await t.pumpWidget(
+      host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
+    );
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('model-chip')));
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('opt-plan')), findsNothing);
+    await t.tap(find.byKey(const Key('opt-advanced')));
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('opt-plan')), findsOneWidget);
+  });
+
+  testWidgets(
+    'live native generation stays visible and loads its remote artifact',
+    (t) async {
+      const service = 'pcx:lb7666:app:default';
+      final api = FakeBridgeApi(
+        config: const ConfigInfo(relay: 'relay:7666', hasKey: true),
+      );
+      await api.appConnect(service, 28080);
+      api.threadImageBytes['/host/generated.png'] = onePixelPng;
+      await t.pumpWidget(
+        host(const AppSessionScreen(serviceKey: service, threadId: 't1'), api),
+      );
+      await t.pumpAndSettle();
+      api.pushEvent(
+        service,
+        const AppEvent(
+          kind: 'turn/started',
+          threadId: 't1',
+          raw: '{"turn":{"id":"turn1"}}',
+        ),
+      );
+      api.pushEvent(
+        service,
+        const AppEvent(
+          kind: 'item/started',
+          threadId: 't1',
+          itemId: 'image1',
+          itemType: 'imageGeneration',
+          text: '{"status":"in_progress"}',
+          raw: '{}',
+        ),
+      );
+      await t.pump();
+      await t.pump(const Duration(milliseconds: 100));
+      expect(find.byType(ImageLoadingPlaceholder), findsOneWidget);
+      api.pushEvent(
+        service,
+        const AppEvent(
+          kind: 'item/completed',
+          threadId: 't1',
+          itemId: 'image1',
+          itemType: 'imageGeneration',
+          title: 'A blue circle',
+          text: '{"status":"completed"}',
+          images: ['/host/generated.png'],
+          raw: '{}',
+        ),
+      );
+      api.pushEvent(
+        service,
+        const AppEvent(kind: 'turn/completed', threadId: 't1', raw: '{}'),
+      );
+      await t.pumpAndSettle();
+      expect(find.byKey(const Key('generated-image-image1')), findsOneWidget);
+      expect(find.byKey(const Key('msg-image-0')), findsOneWidget);
+      expect(find.byType(ImageLoadingPlaceholder), findsNothing);
+      await t.tap(find.byKey(const Key('msg-image-0')));
+      await t.pumpAndSettle();
+      expect(find.byType(ImageViewerPage), findsOneWidget);
+    },
+  );
+
+  testWidgets('reopened generated images render without expanding work', (
+    t,
+  ) async {
+    final api = FakeBridgeApi(
+      config: const ConfigInfo(relay: 'relay:7666', hasKey: true),
+    );
+    await api.appConnect('pcx:lb7666:app:default', 28080);
+    api.readResult = ThreadHistory(
+      items: [
+        ThreadItem(
+          id: 'restored-image',
+          itemType: 'imageGeneration',
+          title: 'Blue circle',
+          text: '{"status":"completed"}',
+          images: ['data:image/png;base64,${base64Encode(onePixelPng)}'],
+        ),
+      ],
+      running: false,
+    );
+    await t.pumpWidget(
+      host(
+        const AppSessionScreen(
+          serviceKey: 'pcx:lb7666:app:default',
+          threadId: 't1',
+        ),
+        api,
+      ),
+    );
+    await t.pumpAndSettle();
+    expect(
+      find.byKey(const Key('generated-image-restored-image')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const Key('msg-image-0')), findsOneWidget);
+  });
+
+  for (final knownTurn in [true, false]) {
+    testWidgets(
+      'history only animates images in the known active turn ($knownTurn)',
+      (t) async {
+        await t.binding.setSurfaceSize(const Size(800, 1200));
+        addTearDown(() => t.binding.setSurfaceSize(null));
+        const service = 'pcx:lb7666:app:default';
+        final api = FakeBridgeApi(
+          config: const ConfigInfo(relay: 'relay:7666', hasKey: true),
+        );
+        await api.appConnect(service, 28080);
+        api.readResult = ThreadHistory(
+          items: const [
+            ThreadItem(
+              id: 'current-image',
+              itemType: 'imageGeneration',
+              title: '',
+              text: '{"status":"in_progress"}',
+              turnId: 'current',
+            ),
+          ],
+          running: true,
+          activeTurnId: knownTurn ? 'current' : null,
+          turns: knownTurn
+              ? const [
+                  TurnSummary(turnId: 'old'),
+                  TurnSummary(turnId: 'current'),
+                ]
+              : const [],
+          turnPages: const [
+            TurnItemsPage(
+              turnId: 'old',
+              items: [
+                ThreadItem(
+                  id: 'old-image',
+                  itemType: 'imageGeneration',
+                  title: '',
+                  text: '{"status":"in_progress"}',
+                  turnId: 'old',
+                ),
+              ],
+              hasMore: false,
+            ),
+          ],
+        );
+        await t.pumpWidget(
+          host(
+            const AppSessionScreen(serviceKey: service, threadId: 't1'),
+            api,
+          ),
+        );
+        for (var i = 0; i < 5; i++) {
+          await t.pump(const Duration(milliseconds: 200));
+        }
+        final current = t.widget<GeneratedImageCard>(
+          find.byWidgetPredicate(
+            (w) => w is GeneratedImageCard && w.item.id == 'current-image',
+          ),
+        );
+        final old = t.widget<GeneratedImageCard>(
+          find.byWidgetPredicate(
+            (w) => w is GeneratedImageCard && w.item.id == 'old-image',
+          ),
+        );
+        expect(current.item.streaming, knownTurn);
+        expect(old.item.streaming, isFalse);
+        expect(t.takeException(), isNull);
+        await t.pumpWidget(const SizedBox());
+      },
+    );
+  }
 
   for (final delayed in ['config', 'models']) {
     testWidgets(
@@ -198,9 +388,8 @@ void main() {
     await t.pumpAndSettle();
     expect(find.byKey(const Key('attach-btn')), findsOneWidget);
     expect(find.byKey(const Key('attach-file-btn')), findsOneWidget);
-    // Host files is desktop-only (it uses the save/open dialogs); the test
-    // platform is android, so it is absent.
-    expect(find.byKey(const Key('host-files-btn')), findsNothing);
+    // Mobile now has a native Save As dialog too.
+    expect(find.byKey(const Key('host-files-btn')), findsOneWidget);
   });
 
   testWidgets('a message from an IDE client shows the request, not the wire '
@@ -1346,12 +1535,20 @@ void main() {
 
     await t.tap(find.byKey(const Key('model-chip')));
     await t.pumpAndSettle();
-    // Everything on one surface: models, the effort scale, and plan mode —
-    // rather than three levels of sheet.
+    // Common controls stay on the first level; Plan requires an explicit
+    // visit to advanced settings.
     expect(find.byKey(const Key('model-menu-item-gpt-5.5')), findsOneWidget);
     expect(find.byKey(const Key('model-menu-item-gpt-5')), findsOneWidget);
     expect(find.byKey(const Key('effort-steps')), findsOneWidget);
-    expect(find.byKey(const Key('plan-toggle-row')), findsOneWidget);
+    expect(find.byKey(const Key('plan-toggle-row')), findsNothing);
+    expect(find.byKey(const Key('advanced-turn-settings')), findsOneWidget);
+    await t.tap(find.byKey(const Key('advanced-turn-settings')));
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('opt-plan')), findsOneWidget);
+    await t.tap(find.byKey(const Key('opt-plan')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('model-chip')));
+    await t.pumpAndSettle();
 
     // Tapping the right end of the stepped selector sets the top level (gpt-5.5
     // advertises low/medium/high/xhigh → xhigh). The label reflects it.
@@ -3294,12 +3491,13 @@ void main() {
     );
     expect(t.takeException(), isNull);
 
-    // Every setting the old pill row held is still reachable, one tap in.
+    // Common settings stay one tap away; Plan remains in advanced settings.
     await t.tap(find.byKey(const Key('model-chip')));
     await t.pumpAndSettle();
     expect(find.byKey(const ValueKey('opt-model')), findsOneWidget);
     expect(find.byKey(const ValueKey('opt-effort')), findsOneWidget);
-    expect(find.byKey(const ValueKey('opt-plan')), findsOneWidget);
+    expect(find.byKey(const ValueKey('opt-plan')), findsNothing);
+    expect(find.byKey(const ValueKey('opt-advanced')), findsOneWidget);
   });
 
   testWidgets('Opening an existing thread resumes it before reading', (
@@ -5379,6 +5577,96 @@ void main() {
       },
     );
   }
+
+  testWidgets(
+    'remote monitoring updates a running image in place on completion',
+    (t) async {
+      const service = 'pcx:lb7666:app:default';
+      final api =
+          FakeBridgeApi(
+              config: const ConfigInfo(relay: 'relay:7666', hasKey: true),
+            )
+            ..metadataOnlyFollow = true
+            ..appThreadResumeError = StateError(
+              'thread already has an active writer',
+            );
+      await api.appConnect(service, 28080);
+      const running = SessionLiveness(
+        threadId: 'watched',
+        turnState: 'incomplete',
+        heldOpen: true,
+        safety: 'ownedRunning',
+        allowsResume: false,
+        requiresTakeover: false,
+        holders: [],
+      );
+      api.liveness['watched'] = running;
+      api.readResult = const ThreadHistory(
+        items: [
+          ThreadItem(
+            id: 'remote-image',
+            itemType: 'imageGeneration',
+            title: 'Blue circle',
+            text: '{"status":"in_progress"}',
+            turnId: 'turn',
+          ),
+        ],
+        running: true,
+        activeTurnId: 'turn',
+        turns: [TurnSummary(turnId: 'turn')],
+      );
+      await t.pumpWidget(
+        host(
+          const AppSessionScreen(serviceKey: service, threadId: 'watched'),
+          api,
+        ),
+      );
+      for (var i = 0; i < 5; i++) {
+        await t.pump(const Duration(milliseconds: 300));
+      }
+      expect(find.byType(ImageLoadingPlaceholder), findsOneWidget);
+      api.threadImageBytes['/remote/circle.png'] = onePixelPng;
+      api.readResult = const ThreadHistory(
+        items: [
+          ThreadItem(
+            id: 'remote-image',
+            itemType: 'imageGeneration',
+            title: 'Blue circle',
+            text: '{"status":"completed"}',
+            images: ['/remote/circle.png'],
+            turnId: 'turn',
+          ),
+        ],
+        running: false,
+      );
+      const completed = SessionLiveness(
+        threadId: 'watched',
+        turnState: 'completed',
+        heldOpen: true,
+        safety: 'ownedIdle',
+        allowsResume: false,
+        requiresTakeover: false,
+        holders: [],
+      );
+      api.pushMetaSessionUpdate(
+        'watched',
+        const SessionFollowUpdate(
+          liveness: completed,
+          items: [],
+          historyRevision: 'image-completed',
+        ),
+      );
+      await t.pump();
+      await t.pump(const Duration(seconds: 1));
+      await t.pumpAndSettle();
+      expect(
+        find.byKey(const Key('generated-image-remote-image')),
+        findsOneWidget,
+      );
+      expect(find.byKey(const Key('msg-image-0')), findsOneWidget);
+      expect(find.byType(ImageLoadingPlaceholder), findsNothing);
+    },
+  );
 
   testWidgets(
     'metadata-only monitoring pages history and retains it across updates',

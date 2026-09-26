@@ -14,6 +14,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod file_links;
 pub mod fs;
 pub mod history_sync;
 mod history_sync_revision;
@@ -107,6 +108,8 @@ pub async fn serve(
         // file's bytes, upload a local file into a chosen dir — root-confined.
         .route("/fs/files", get(list_files_in))
         .route("/fs/read", get(read_file))
+        .route("/fs/thread-file", get(file_links::read))
+        .route("/host/local-probe", get(file_links::local_probe))
         // Inline image previews: not root-confined, but authorised by the
         // thread's own transcript — see `read_thread_image`.
         .route("/fs/thread-image", get(read_thread_image))
@@ -528,13 +531,13 @@ const MAX_INLINE_IMAGE_BYTES: u64 = 8 * 1024 * 1024;
 /// Deliberately NOT root-confined, because the images worth showing are
 /// exactly the ones that are not project files: a pasted screenshot lands in
 /// the OS temp directory. The authorisation is narrower instead — the path
-/// must already appear in a USER message of the named thread's transcript.
-/// A remote controller therefore sees only what this conversation itself put
-/// in front of the model, and never gains a general file read:
+/// must appear in a user message or a typed generated-image artifact of the
+/// thread. A remote controller therefore sees only what this conversation
+/// itself put in front of the model, and never gains a general file read:
 ///
-///  * only `userMessage` items count, so a path the model merely *wrote* in a
-///    reply is not readable — otherwise a prompt-injected reply could name
-///    `~/.ssh/id_rsa` and have the controller fetch it;
+///  * only user references and native generated artifacts count; a path
+///    *written* in a reply is not readable — otherwise a prompt-injected reply
+///    could name `~/.ssh/id_rsa` and have the controller fetch it;
 ///  * only image suffixes are served;
 ///  * `403` for anything unreferenced, `400` for a non-file.
 async fn read_thread_image(Query(q): Query<ThreadImageQuery>) -> Result<Vec<u8>, ApiError> {
@@ -572,15 +575,21 @@ async fn read_thread_image(Query(q): Query<ThreadImageQuery>) -> Result<Vec<u8>,
     Ok(bytes)
 }
 
-/// Whether `item` is a user message that named `path` — as an attachment or in
-/// its text (where a client's IDE-context block lists mentioned files).
-/// Separators are normalised because a client may write either style on
-/// Windows; nothing else is loosened, since the match IS the authorisation.
+/// Whether `item` explicitly generated `path` or a user named it — as an
+/// attachment or in its text (where a client's IDE-context block lists
+/// mentioned files). Separators are normalised because a client may write
+/// either style on Windows; nothing else is loosened, since the match IS the
+/// authorisation.
 fn references_path(item: &sessions::TranscriptItem, path: &str) -> bool {
+    let want = path.replace('\\', "/");
+    if item.item_type == "imageGeneration" {
+        // Only typed generated artifact references authorize a read, never
+        // prompt/revised-prompt text or arbitrary tool output.
+        return item.images.iter().any(|i| i.replace('\\', "/") == want);
+    }
     if item.item_type != "userMessage" {
         return false;
     }
-    let want = path.replace('\\', "/");
     item.images.iter().any(|i| i.replace('\\', "/") == want)
         || mentions_whole_path(&item.text.replace('\\', "/"), &want)
 }
@@ -823,6 +832,19 @@ mod upload_tests {
         assert!(references_path(
             &item("userMessage", "", &[r"C:\Temp\shot.png"]),
             "C:/Temp/shot.png"
+        ));
+    }
+
+    #[test]
+    fn thread_image_authorizes_only_the_generated_artifact() {
+        let generated =
+            item("imageGeneration", "Create /private/secret.png", &["/tmp/generated.png"]);
+        assert!(references_path(&generated, "/tmp/generated.png"));
+        assert!(!references_path(&generated, "/private/secret.png"));
+        assert!(!references_path(&generated, "/tmp/generated.png.bak"));
+        assert!(!references_path(
+            &item("dynamicToolCall", "", &["/private/secret.png"]),
+            "/private/secret.png"
         ));
     }
 

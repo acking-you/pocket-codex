@@ -44,9 +44,7 @@ pub struct AppEvent {
     pub title: Option<String>,
     /// Text payload: a streaming delta or an item's body/detail.
     pub text: Option<String>,
-    /// Image URLs attached to a `userMessage` item: `data:image/...` URLs
-    /// render inline; anything else (a host-local path from a `localImage`
-    /// input) renders as a filename chip. Empty for every other item kind.
+    /// User attachments or generated artifacts, as data URLs or host paths.
     pub images: Vec<String>,
     /// Opaque token to answer a server request (e.g. an approval prompt) via
     /// [`respond_approval`]; `None` for ordinary notifications.
@@ -108,9 +106,7 @@ pub struct ThreadItem {
     /// Live asynchronous questions retained for reconnects, as JSON.
     /// Historical items alone must not introduce pending questions.
     pub questions_json: Option<String>,
-    /// Image URLs attached to a `userMessage`: `data:image/...` URLs render
-    /// inline; a host-local path (from a `localImage` input) renders as a
-    /// filename chip. Empty for every other item kind.
+    /// User attachments or generated images: data URLs or host artifact paths.
     pub images: Vec<String>,
     /// Id of the turn this item belongs to.
     ///
@@ -1502,6 +1498,9 @@ pub struct ThreadHistory {
     pub items: Vec<ThreadItem>,
     /// Whether the most recent turn is still in progress.
     pub running: bool,
+    /// Identity from the same turn snapshot that established `running`.
+    #[serde(default)]
+    pub active_turn_id: Option<String>,
     /// Current git branch of the thread's cwd, if it's a repo.
     pub branch: Option<String>,
     /// The thread's resolved working directory (for git diff / status).
@@ -2153,6 +2152,14 @@ fn thread_read_inner(
         history_epoch: super::session_sync::source_generation(service_key, thread_id),
         items,
         running,
+        active_turn_id: if running {
+            turns
+                .last()
+                .and_then(extract_turn_id)
+                .and_then(|id| id.as_str().map(str::to_string))
+        } else {
+            None
+        },
         branch,
         cwd,
         tokens_used,
@@ -2811,7 +2818,7 @@ pub fn turn_interrupt(service_key: &str, thread_id: &str, turn_id: Option<String
 
 /// Map an inbound server message to a flattened [`AppEvent`].
 fn map_event(inbound: Inbound) -> AppEvent {
-    let params = inbound.params.unwrap_or(Value::Null);
+    let mut params = inbound.params.unwrap_or(Value::Null);
     // v2 streams the evolving plan via a top-level notification (`params.plan`),
     // not as a thread item, so the generic item path below never sees it.
     // Synthesize a per-turn singleton `plan` item (stable id keyed on the turn)
@@ -2861,7 +2868,7 @@ fn map_event(inbound: Inbound) -> AppEvent {
                     .map(str::to_string)
             })
     };
-    AppEvent {
+    let mut event = AppEvent {
         kind: inbound.method.clone(),
         thread_id: params
             .get("threadId")
@@ -2877,8 +2884,17 @@ fn map_event(inbound: Inbound) -> AppEvent {
         text,
         images: item.map(item_images).unwrap_or_default(),
         request_id: inbound.request_id,
-        raw: params.to_string(),
+        raw: String::new(),
+    };
+    if event.item_type.as_deref() == Some("imageGeneration") {
+        if let Some(item) = params.get_mut("item").and_then(Value::as_object_mut) {
+            // Images already have a bounded DTO field; never duplicate the
+            // upstream base64 payload through the raw notification channel.
+            item.remove("result");
+        }
     }
+    event.raw = params.to_string();
+    event
 }
 
 /// Summarize an item-scoped notification that does not include `params.item`.
@@ -3281,6 +3297,9 @@ fn format_content_diff(path: &str, content: &str, added: bool) -> String {
 /// them as `codex-file:` references so the UI can show an unavailable preview
 /// without treating an opaque cloud ID as a host filesystem path.
 fn item_images(item: &Value) -> Vec<String> {
+    if item.get("type").and_then(Value::as_str) == Some("imageGeneration") {
+        return pocket_codex_codex::protocol::image_generation_images(item);
+    }
     if item.get("type").and_then(Value::as_str) != Some("userMessage") {
         return Vec::new();
     }
@@ -3681,6 +3700,14 @@ mod tests {
         assert_eq!(title, "A blue square");
         assert!(detail.contains("blue.png"));
         assert!(!detail.contains("VERY-LARGE-BASE64"));
+        let event = map_event(Inbound {
+            method: "item/completed".into(),
+            params: Some(json!({"threadId": "t1", "turnId": "turn1", "item": image})),
+            request_id: None,
+        });
+        assert_eq!(event.images, ["/tmp/blue.png"]);
+        assert!(!event.raw.contains("VERY-LARGE-BASE64"));
+        assert!(event.raw.contains("turn1"));
 
         let hook = json!({
             "type": "hookPrompt",

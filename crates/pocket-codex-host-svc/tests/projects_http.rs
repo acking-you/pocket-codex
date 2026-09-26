@@ -273,3 +273,127 @@ async fn file_transfer_list_download_upload_confined() {
         .expect("write outside");
     assert_eq!(out.status(), reqwest::StatusCode::FORBIDDEN);
 }
+
+/// Run against an isolated CODEX_HOME containing an actual completed native
+/// generation; no model call, credentials, relay registration or live-host
+/// edits.
+#[tokio::test]
+#[ignore = "requires PCX_IMAGE_THREAD_ID, PCX_IMAGE_OUTPUT and isolated CODEX_HOME"]
+async fn native_generated_image_round_trips_over_meta_http() {
+    let thread = std::env::var("PCX_IMAGE_THREAD_ID").expect("isolated generated thread");
+    let path = std::env::var("PCX_IMAGE_OUTPUT").expect("native generated image path");
+    let expected = std::fs::read(&path).expect("native image");
+    let (base, _root, _guard) = spawn().await;
+    let client = reqwest::Client::new();
+    let response = client
+        .get(format!("{base}/fs/thread-image"))
+        .query(&[("thread", &thread), ("path", &path)])
+        .send()
+        .await
+        .expect("image response")
+        .error_for_status()
+        .expect("authorized artifact");
+    let downloaded = response.bytes().await.expect("remote image bytes");
+    assert_eq!(downloaded.as_ref(), expected);
+    let denied = client
+        .get(format!("{base}/fs/thread-image"))
+        .query(&[("thread", &thread), ("path", &format!("{path}.other.png"))])
+        .send()
+        .await
+        .expect("unreferenced image response");
+    assert!(!denied.status().is_success());
+    println!("verified native generated artifact: {} bytes over meta HTTP", downloaded.len());
+}
+
+#[tokio::test]
+async fn file_links_stream_full_files_and_bound_previews() {
+    use pocket_codex_host_svc::file_links::PREVIEW_LIMIT;
+    let (base, root, guard) = spawn().await;
+    let client = reqwest::Client::new();
+    client
+        .put(format!("{base}/projects"))
+        .json(&serde_json::json!({"project_roots":[root]}))
+        .send()
+        .await
+        .expect("configure")
+        .error_for_status()
+        .expect("roots");
+    let path = std::path::Path::new(&root).join("large file.bin");
+    let bytes: Vec<u8> = (0..PREVIEW_LIMIT as usize + 1024)
+        .map(|n| (n % 251) as u8)
+        .collect();
+    std::fs::write(&path, &bytes).expect("file");
+    let href = url::Url::from_file_path(&path).expect("url").to_string();
+    for preview in [true, false] {
+        let response = client
+            .get(format!("{base}/fs/thread-file"))
+            .query(&[("href", href.as_str()), ("preview", if preview { "true" } else { "false" })])
+            .send()
+            .await
+            .expect("read")
+            .error_for_status()
+            .expect("file response");
+        assert_eq!(response.headers()["x-file-size"], bytes.len().to_string());
+        assert_eq!(response.headers()["cache-control"], "no-store");
+        let actual = response.bytes().await.expect("body");
+        let length = if preview { PREVIEW_LIMIT as usize } else { bytes.len() };
+        assert_eq!(actual.as_ref(), &bytes[..length]);
+    }
+    let outside = guard.path().join("secret");
+    std::fs::write(&outside, b"unrelated").expect("secret");
+    let denied = client
+        .get(format!("{base}/fs/thread-file"))
+        .query(&[("href", outside.to_string_lossy().as_ref())])
+        .send()
+        .await
+        .expect("denied");
+    assert_eq!(denied.status(), reqwest::StatusCode::FORBIDDEN);
+    let missing_thread = client
+        .get(format!("{base}/fs/thread-file"))
+        .query(&[("href", href.as_str()), ("thread", "not-a-real-thread")])
+        .send()
+        .await
+        .expect("missing thread");
+    assert_eq!(missing_thread.status(), reqwest::StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn local_probe_requires_a_secret_shared_through_the_filesystem() {
+    let (base, _, _guard) = spawn().await;
+    let client = reqwest::Client::new();
+    let id = uuid::Uuid::new_v4().to_string();
+    let secret = uuid::Uuid::new_v4().to_string();
+    let dir = pocket_codex_host_svc::file_links::probe_dir().expect("probe dir");
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    let path = dir.join(&id);
+    let url = format!("{base}/host/local-probe");
+    let absent: serde_json::Value = client
+        .get(&url)
+        .query(&[("id", &id)])
+        .send()
+        .await
+        .expect("probe")
+        .json()
+        .await
+        .expect("json");
+    assert!(absent["token"].is_null());
+    std::fs::write(&path, &secret).expect("challenge");
+    let present: serde_json::Value = client
+        .get(&url)
+        .query(&[("id", &id)])
+        .send()
+        .await
+        .expect("probe")
+        .json()
+        .await
+        .expect("json");
+    std::fs::remove_file(path).expect("cleanup");
+    assert_eq!(present["token"], secret);
+    let invalid = client
+        .get(&url)
+        .query(&[("id", "../../config.toml")])
+        .send()
+        .await
+        .expect("invalid");
+    assert!(!invalid.status().is_success());
+}

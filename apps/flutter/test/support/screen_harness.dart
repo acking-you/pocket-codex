@@ -199,10 +199,14 @@ final Uint8List onePixelPng = base64Decode(
 
 /// Open the composer's turn-settings sheet (fronted by the model chip) and tap
 /// the row for [value] — 'model', 'effort', 'plan' or 'project'. Plan toggles
-/// on the spot; the others open their own picker sheet.
+/// from Advanced settings; the others open their own picker sheet.
 Future<void> turnSetting(WidgetTester t, String value) async {
   await t.tap(find.byKey(const Key('model-chip')));
   await t.pumpAndSettle();
+  if (value == 'plan') {
+    await t.tap(find.byKey(const ValueKey('opt-advanced')));
+    await t.pumpAndSettle();
+  }
   await t.tap(find.byKey(ValueKey('opt-$value')));
   await t.pumpAndSettle();
 }

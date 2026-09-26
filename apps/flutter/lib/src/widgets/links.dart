@@ -5,12 +5,25 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/widgets/app_toast.dart';
 
-/// Open [url] in the system browser. Only `http`/`https` are followed — any
-/// other scheme (a stray `file:` / `javascript:` / `mailto:` in model or tool
-/// output) is ignored so a tapped link can't do anything but browse. Shows a
-/// snackbar if the launch fails.
+/// Session-specific routing for explicit file and host-local web links.
+class SessionLinkScope extends InheritedWidget {
+  const SessionLinkScope({super.key, required this.open, required super.child});
+  final Future<bool> Function(BuildContext context, String url) open;
+
+  @override
+  bool updateShouldNotify(SessionLinkScope oldWidget) => open != oldWidget.open;
+}
+
+/// Route session links before falling back to the system browser.
 Future<void> openUrl(BuildContext context, String? url) async {
   if (url == null) return;
+  final scope = context.getInheritedWidgetOfExactType<SessionLinkScope>();
+  if (scope != null && await scope.open(context, url)) return;
+  if (context.mounted) await openWebUrl(context, url);
+}
+
+/// Open only HTTP(S) URLs in the system browser.
+Future<void> openWebUrl(BuildContext context, String url) async {
   final uri = Uri.tryParse(url.trim());
   if (uri == null || (uri.scheme != 'http' && uri.scheme != 'https')) return;
   // Capture context-derived values before the await (context may unmount).

@@ -2378,6 +2378,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "axum",
+ "percent-encoding",
  "pocket-codex-codex",
  "pocket-codex-core",
  "reqwest",
@@ -2386,8 +2387,11 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-stream",
+ "tokio-util",
  "tower-http",
  "tracing",
+ "url",
+ "uuid",
 ]
 
 [[package]]
@@ -2445,6 +2449,7 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
+ "uuid",
  "webpki-roots 0.26.11",
 ]
 

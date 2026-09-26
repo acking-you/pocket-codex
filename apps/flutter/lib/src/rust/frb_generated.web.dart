@@ -112,6 +112,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   FileEntryDto dco_decode_file_entry_dto(dynamic raw);
 
   @protected
+  FilePreviewDto dco_decode_file_preview_dto(dynamic raw);
+
+  @protected
   ForceResumeReportDto dco_decode_force_resume_report_dto(dynamic raw);
 
   @protected
@@ -373,6 +376,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   FileEntryDto sse_decode_file_entry_dto(SseDeserializer deserializer);
+
+  @protected
+  FilePreviewDto sse_decode_file_preview_dto(SseDeserializer deserializer);
 
   @protected
   ForceResumeReportDto sse_decode_force_resume_report_dto(
@@ -699,6 +705,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_file_entry_dto(FileEntryDto self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_file_preview_dto(
+    FilePreviewDto self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_force_resume_report_dto(
