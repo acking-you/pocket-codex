@@ -6,7 +6,7 @@
 import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `history_dto`, `holder_dto`, `item_dto`, `meta_follow_update_dto`, `meta_holder_dto`, `meta_liveness_dto`, `meta_thread_item_dto`, `project_config_dto`, `thread_config_dto`, `thread_config_from_dto`, `to_log_dto`, `turn_page_dto`
+// These functions are ignored because they are not marked as `pub`: `emit_opencode_snapshot`, `history_dto`, `holder_dto`, `item_dto`, `meta_follow_update_dto`, `meta_holder_dto`, `meta_liveness_dto`, `meta_thread_item_dto`, `opencode_connection_error`, `opencode_snapshot_dto`, `project_config_dto`, `thread_config_dto`, `thread_config_from_dto`, `to_log_dto`, `turn_page_dto`
 
 /// Initialise the engine with the platform app-support dir (from Dart's
 /// path_provider). Must be called once after `RustLib.init()`.
@@ -262,6 +262,138 @@ Future<bool> apiProbe({required String serviceKey}) =>
 /// `false` instead of a false "running". Fast because it stays on loopback.
 Future<bool> appProbeLocal({required String localAddr}) =>
     RustLib.instance.api.crateApiBridgeAppProbeLocal(localAddr: localAddr);
+
+/// Connect directly to an existing OpenCode HTTP service or to an OpenCode
+/// relay service. Password material is accepted only in memory and is never
+/// persisted or returned through this API.
+Future<String> opencodeConnect({
+  String? baseUrl,
+  String? serviceKey,
+  required String directory,
+  required String username,
+  String? password,
+}) => RustLib.instance.api.crateApiBridgeOpencodeConnect(
+  baseUrl: baseUrl,
+  serviceKey: serviceKey,
+  directory: directory,
+  username: username,
+  password: password,
+);
+
+/// List sessions for an OpenCode connection.
+Future<List<OpenCodeSessionDto>> opencodeSessions({
+  required String connectionId,
+  String? search,
+}) => RustLib.instance.api.crateApiBridgeOpencodeSessions(
+  connectionId: connectionId,
+  search: search,
+);
+
+/// Open one OpenCode session and return its bounded tail plus live
+/// interactions.
+Future<OpenCodeSnapshotDto> opencodeOpenSession({
+  required String connectionId,
+  required String sessionId,
+}) => RustLib.instance.api.crateApiBridgeOpencodeOpenSession(
+  connectionId: connectionId,
+  sessionId: sessionId,
+);
+
+/// Read one older OpenCode history page.
+Future<OpenCodeSnapshotDto> opencodeOlder({
+  required String connectionId,
+  required String sessionId,
+}) => RustLib.instance.api.crateApiBridgeOpencodeOlder(
+  connectionId: connectionId,
+  sessionId: sessionId,
+);
+
+/// Create and select an empty OpenCode session.
+Future<OpenCodeSnapshotDto> opencodeCreate({
+  required String connectionId,
+  String? title,
+}) => RustLib.instance.api.crateApiBridgeOpencodeCreate(
+  connectionId: connectionId,
+  title: title,
+);
+
+/// Submit a text continuation. Unknown transport outcomes are explicit.
+Future<OpenCodeSubmissionDto> opencodeSend({
+  required String connectionId,
+  required String sessionId,
+  required String text,
+}) => RustLib.instance.api.crateApiBridgeOpencodeSend(
+  connectionId: connectionId,
+  sessionId: sessionId,
+  text: text,
+);
+
+/// Answer a pending permission request.
+Future<OpenCodeSnapshotDto> opencodePermissionReply({
+  required String connectionId,
+  required String requestId,
+  required String reply,
+  String? message,
+}) => RustLib.instance.api.crateApiBridgeOpencodePermissionReply(
+  connectionId: connectionId,
+  requestId: requestId,
+  reply: reply,
+  message: message,
+);
+
+/// Answer a pending question request using upstream ordered answer arrays.
+Future<OpenCodeSnapshotDto> opencodeQuestionReply({
+  required String connectionId,
+  required String requestId,
+  required String answersJson,
+}) => RustLib.instance.api.crateApiBridgeOpencodeQuestionReply(
+  connectionId: connectionId,
+  requestId: requestId,
+  answersJson: answersJson,
+);
+
+/// Answer a current OpenCode v2 form with its native keyed, typed answer
+/// object.
+Future<OpenCodeSnapshotDto> opencodeReplyForm({
+  required String connectionId,
+  required String requestId,
+  required String answersJson,
+}) => RustLib.instance.api.crateApiBridgeOpencodeReplyForm(
+  connectionId: connectionId,
+  requestId: requestId,
+  answersJson: answersJson,
+);
+
+/// Reject a pending OpenCode question request.
+Future<OpenCodeSnapshotDto> opencodeQuestionReject({
+  required String connectionId,
+  required String requestId,
+}) => RustLib.instance.api.crateApiBridgeOpencodeQuestionReject(
+  connectionId: connectionId,
+  requestId: requestId,
+);
+
+/// Abort only the selected OpenCode session; the external service remains up.
+Future<void> opencodeAbort({
+  required String connectionId,
+  required String sessionId,
+}) => RustLib.instance.api.crateApiBridgeOpencodeAbort(
+  connectionId: connectionId,
+  sessionId: sessionId,
+);
+
+/// Disconnect a Pocket-Codex OpenCode connection and any relay subscription it
+/// owns. This never calls an OpenCode process or instance disposal endpoint.
+Future<void> opencodeDisconnect({required String connectionId}) => RustLib
+    .instance
+    .api
+    .crateApiBridgeOpencodeDisconnect(connectionId: connectionId);
+
+/// Stream authoritative OpenCode snapshots after scoped SSE events.
+Stream<OpenCodeSnapshotDto> opencodeEvents({required String connectionId}) =>
+    RustLib.instance.api.crateApiBridgeOpencodeEvents(
+      connectionId: connectionId,
+    );
 
 /// Health-check an API proxy THIS machine hosts itself, by its loopback
 /// api-listen address — a direct minimal HTTP request, no relay hop. Lets a
@@ -1850,6 +1982,114 @@ class OlderPageDto {
           runtimeType == other.runtimeType &&
           items == other.items &&
           hasOlder == other.hasOlder;
+}
+
+/// An OpenCode session summary, retaining the upstream identifier.
+class OpenCodeSessionDto {
+  /// Upstream session ID.
+  final String id;
+
+  /// User-visible title.
+  final String title;
+
+  const OpenCodeSessionDto({required this.id, required this.title});
+
+  @override
+  int get hashCode => id.hashCode ^ title.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is OpenCodeSessionDto &&
+          runtimeType == other.runtimeType &&
+          id == other.id &&
+          title == other.title;
+}
+
+/// A bounded OpenCode snapshot. JSON fields are native upstream DTOs so the
+/// bridge does not reinterpret unknown message parts or tool metadata.
+class OpenCodeSnapshotDto {
+  /// Selected upstream session ID.
+  final String sessionId;
+
+  /// JSON array of native messages.
+  final String messagesJson;
+
+  /// `idle`, `busy`, or `retry` as reported by OpenCode.
+  final String status;
+
+  /// JSON array of currently pending permission requests.
+  final String permissionsJson;
+
+  /// JSON array of currently pending question requests.
+  final String questionsJson;
+
+  /// Opaque cursor for the next older page.
+  final String? nextCursor;
+
+  /// Local controller revision.
+  final BigInt revision;
+
+  /// `ready` for a live snapshot; transport state is managed by the caller.
+  final String state;
+
+  const OpenCodeSnapshotDto({
+    required this.sessionId,
+    required this.messagesJson,
+    required this.status,
+    required this.permissionsJson,
+    required this.questionsJson,
+    this.nextCursor,
+    required this.revision,
+    required this.state,
+  });
+
+  @override
+  int get hashCode =>
+      sessionId.hashCode ^
+      messagesJson.hashCode ^
+      status.hashCode ^
+      permissionsJson.hashCode ^
+      questionsJson.hashCode ^
+      nextCursor.hashCode ^
+      revision.hashCode ^
+      state.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is OpenCodeSnapshotDto &&
+          runtimeType == other.runtimeType &&
+          sessionId == other.sessionId &&
+          messagesJson == other.messagesJson &&
+          status == other.status &&
+          permissionsJson == other.permissionsJson &&
+          questionsJson == other.questionsJson &&
+          nextCursor == other.nextCursor &&
+          revision == other.revision &&
+          state == other.state;
+}
+
+/// Whether an OpenCode prompt was accepted or has an unknown submission result.
+class OpenCodeSubmissionDto {
+  /// True only when the upstream returned a definite success response.
+  final bool accepted;
+
+  /// True when the request may have been accepted but the response was lost.
+  final bool unknown;
+
+  const OpenCodeSubmissionDto({required this.accepted, required this.unknown});
+
+  @override
+  int get hashCode => accepted.hashCode ^ unknown.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is OpenCodeSubmissionDto &&
+          runtimeType == other.runtimeType &&
+          accepted == other.accepted &&
+          unknown == other.unknown;
 }
 
 /// The host's project-folder config (mirrored for Dart): the roots a remote

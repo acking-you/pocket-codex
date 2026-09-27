@@ -6,6 +6,7 @@ pub mod config;
 pub mod discovery;
 pub mod logging;
 pub mod meta;
+pub mod opencode;
 pub mod runtime;
 pub mod serve;
 pub mod session_cache;

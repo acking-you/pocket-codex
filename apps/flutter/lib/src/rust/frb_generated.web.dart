@@ -35,6 +35,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  RustStreamSink<OpenCodeSnapshotDto>
+  dco_decode_StreamSink_open_code_snapshot_dto_Sse(dynamic raw);
+
+  @protected
   RustStreamSink<RetryProgressDto> dco_decode_StreamSink_retry_progress_dto_Sse(
     dynamic raw,
   );
@@ -151,6 +155,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<ModelInfoDto> dco_decode_list_model_info_dto(dynamic raw);
 
   @protected
+  List<OpenCodeSessionDto> dco_decode_list_open_code_session_dto(dynamic raw);
+
+  @protected
   List<int> dco_decode_list_prim_u_8_loose(dynamic raw);
 
   @protected
@@ -185,6 +192,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   OlderPageDto dco_decode_older_page_dto(dynamic raw);
+
+  @protected
+  OpenCodeSessionDto dco_decode_open_code_session_dto(dynamic raw);
+
+  @protected
+  OpenCodeSnapshotDto dco_decode_open_code_snapshot_dto(dynamic raw);
+
+  @protected
+  OpenCodeSubmissionDto dco_decode_open_code_submission_dto(dynamic raw);
 
   @protected
   String? dco_decode_opt_String(dynamic raw);
@@ -279,6 +295,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   RustStreamSink<LogLineDto> sse_decode_StreamSink_log_line_dto_Sse(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  RustStreamSink<OpenCodeSnapshotDto>
+  sse_decode_StreamSink_open_code_snapshot_dto_Sse(
     SseDeserializer deserializer,
   );
 
@@ -431,6 +453,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  List<OpenCodeSessionDto> sse_decode_list_open_code_session_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   List<int> sse_decode_list_prim_u_8_loose(SseDeserializer deserializer);
 
   @protected
@@ -477,6 +504,21 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   OlderPageDto sse_decode_older_page_dto(SseDeserializer deserializer);
+
+  @protected
+  OpenCodeSessionDto sse_decode_open_code_session_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  OpenCodeSnapshotDto sse_decode_open_code_snapshot_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  OpenCodeSubmissionDto sse_decode_open_code_submission_dto(
+    SseDeserializer deserializer,
+  );
 
   @protected
   String? sse_decode_opt_String(SseDeserializer deserializer);
@@ -589,6 +631,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_StreamSink_log_line_dto_Sse(
     RustStreamSink<LogLineDto> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_StreamSink_open_code_snapshot_dto_Sse(
+    RustStreamSink<OpenCodeSnapshotDto> self,
     SseSerializer serializer,
   );
 
@@ -776,6 +824,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_open_code_session_dto(
+    List<OpenCodeSessionDto> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_list_prim_u_8_loose(List<int> self, SseSerializer serializer);
 
   @protected
@@ -834,6 +888,24 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_older_page_dto(OlderPageDto self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_open_code_session_dto(
+    OpenCodeSessionDto self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_open_code_snapshot_dto(
+    OpenCodeSnapshotDto self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_open_code_submission_dto(
+    OpenCodeSubmissionDto self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_opt_String(String? self, SseSerializer serializer);

@@ -411,6 +411,21 @@ The order below is our current best guess; it is not a contract.
     explain pb-mapper mapping and never open the controller's loopback address.
     See [`docs/session-file-links.md`](docs/session-file-links.md).
 
+15. **OpenCode attached hosting (2026-09-27).** Pocket-Codex can attach to an
+    already-running OpenCode HTTP service, list sessions and bounded history,
+    continue conversations with SSE, answer permission/question requests, and
+    abort execution. `pocket-codex opencode serve|connect|status|stop` exposes
+    the same capability directly or through a restricted loopback/relay
+    gateway. The Flutter UI uses the real RustBridgeApi through an independent
+    `/opencode` route; the existing home route is unchanged. Pocket-Codex never
+    owns or stops the external OpenCode process. Native 2.0.18 uses its own
+    messages, permissions and typed Forms; legacy v1 remains supported.
+    Local discovery validates the private official service registration and
+    live process identity; credentials stay on the host for the connection.
+    For OpenCode acceptance or packaging, read
+    [`docs/opencode-v2-runtime-verification.md`](docs/opencode-v2-runtime-verification.md)
+    for real-service results, packaged-bridge checks and remaining limits.
+
 When you ship a milestone, update `README.md` (Status table) **and**
 this file's roadmap so the source of truth stays in sync.
 

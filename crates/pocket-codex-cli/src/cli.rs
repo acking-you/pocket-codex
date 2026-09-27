@@ -51,6 +51,11 @@ pub enum Command {
     #[command(subcommand)]
     Api(ApiCmd),
 
+    /// Publish or connect to an existing OpenCode service; never owns its
+    /// process.
+    #[command(subcommand)]
+    Opencode(OpenCodeCmd),
+
     /// Discover and configure relay-exposed Pocket-Codex services.
     #[command(subcommand)]
     Services(ServicesCmd),
@@ -199,6 +204,80 @@ pub enum ApiCmd {
     Connect(ApiConnectArgs),
 }
 
+/// Commands for attached OpenCode hosting.
+#[derive(Debug, Subcommand)]
+pub enum OpenCodeCmd {
+    /// Publish an existing server in the foreground; Ctrl-C only unpublishes
+    /// it.
+    Serve(OpenCodeServeArgs),
+    /// Hold a local relay connection in the foreground; Ctrl-C disconnects it.
+    Connect(OpenCodeConnectArgs),
+    /// Show only Pocket OpenCode hosting/connection records, without
+    /// credentials.
+    Status,
+    /// Stop Pocket hosting/connections; the existing OpenCode server stays
+    /// running.
+    Stop(OpenCodeStopArgs),
+}
+
+/// Arguments for connecting to an OpenCode relay service.
+#[derive(Debug, Args)]
+pub struct OpenCodeConnectArgs {
+    /// Exact OpenCode service key; resolved within the selected transport.
+    #[arg(long)]
+    pub key: Option<String>,
+    /// Host device identifier.
+    #[arg(long)]
+    pub device: Option<String>,
+    /// Service name; otherwise uses the independent OpenCode default.
+    #[arg(long)]
+    pub name: Option<String>,
+    /// Loopback listener address for the local HTTP endpoint.
+    #[arg(long, default_value = "127.0.0.1:28280")]
+    pub local_addr: String,
+    #[command(flatten)]
+    pub relay: PbRelayArgs,
+}
+
+/// Filters for stopping Pocket OpenCode resources.
+#[derive(Debug, Args)]
+pub struct OpenCodeStopArgs {
+    /// Restrict stopping to this service instance name.
+    #[arg(long)]
+    pub name: Option<String>,
+}
+
+/// Arguments for publishing an existing OpenCode server.
+#[derive(Debug, Args)]
+pub struct OpenCodeServeArgs {
+    /// Existing OpenCode HTTP(S) origin, without credentials or a query.
+    #[arg(long)]
+    pub url: String,
+    /// Explicit project directory on the OpenCode host.
+    #[arg(long)]
+    pub directory: String,
+    /// Loopback listener address for the Pocket-Codex gateway.
+    #[arg(long, default_value = "127.0.0.1:28279")]
+    pub local_addr: String,
+    /// Device identifier used in the relay service key.
+    #[arg(long)]
+    pub device: Option<String>,
+    /// Service instance name.
+    #[arg(long, default_value = "default")]
+    pub name: String,
+    /// HTTP Basic username; used only when a password source is selected.
+    #[arg(long, default_value = "opencode")]
+    pub username: String,
+    /// Name of the environment variable containing the upstream password.
+    #[arg(long)]
+    pub password_env: Option<String>,
+    /// Enable encrypted forwarding through the relay.
+    #[arg(long)]
+    pub codec: bool,
+    #[command(flatten)]
+    pub relay: PbRelayArgs,
+}
+
 /// Args for `pocket-codex api serve`.
 #[derive(Debug, Args)]
 pub struct ApiServeArgs {
@@ -314,6 +393,8 @@ pub enum ServiceKindArg {
     App,
     /// Responses API proxy service.
     Api,
+    /// OpenCode HTTP/SSE session gateway.
+    Opencode,
 }
 
 impl From<ServiceKindArg> for ServiceKind {
@@ -321,6 +402,7 @@ impl From<ServiceKindArg> for ServiceKind {
         match value {
             ServiceKindArg::App => Self::App,
             ServiceKindArg::Api => Self::Api,
+            ServiceKindArg::Opencode => Self::OpenCode,
         }
     }
 }
@@ -519,6 +601,56 @@ mod tests {
     use pocket_codex_core::state::PbRole;
 
     use super::*;
+
+    #[test]
+    fn opencode_attached_hosting_accepts_env_reference_but_not_password_argument() {
+        assert!(Cli::try_parse_from([
+            "pocket-codex",
+            "opencode",
+            "serve",
+            "--url",
+            "http://127.0.0.1:4096",
+            "--directory",
+            "/project",
+            "--password-env",
+            "TEST_OPENCODE_PASSWORD",
+        ])
+        .is_ok());
+        assert!(Cli::try_parse_from([
+            "pocket-codex",
+            "opencode",
+            "serve",
+            "--url",
+            "http://127.0.0.1:4096",
+            "--directory",
+            "/project",
+            "--password",
+            "secret",
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn opencode_lifecycle_and_service_selection_are_available() {
+        for args in [
+            vec!["pocket-codex", "opencode", "connect", "--device", "studio"],
+            vec!["pocket-codex", "opencode", "status"],
+            vec!["pocket-codex", "opencode", "stop", "--name", "work"],
+            vec!["pocket-codex", "services", "list", "--kind", "opencode"],
+            vec![
+                "pocket-codex",
+                "services",
+                "default",
+                "set",
+                "--kind",
+                "opencode",
+                "--device",
+                "studio",
+            ],
+        ] {
+            assert!(Cli::try_parse_from(args).is_ok());
+        }
+    }
 
     #[test]
     fn serve_parses_high_level_host_flow_defaults() {

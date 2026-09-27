@@ -95,6 +95,11 @@ pub fn config_file() -> Result<PathBuf> {
     Ok(config_dir()?.join("config.toml"))
 }
 
+/// Independent, credential-free OpenCode profile file.
+pub fn opencode_profiles_file() -> Result<PathBuf> {
+    Ok(config_dir()?.join("opencode-v1.json"))
+}
+
 fn safe_file_component(raw: &str) -> String {
     let sanitized: String = raw
         .chars()

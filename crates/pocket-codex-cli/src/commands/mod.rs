@@ -16,6 +16,7 @@ mod connect;
 mod init;
 mod managed_api;
 mod managed_pb;
+mod opencode;
 mod pb;
 mod relay;
 mod remote_hint;
@@ -39,6 +40,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
         Command::Serve(args) => serve::run(args).await,
         Command::Connect(args) => connect::run(args).await,
         Command::Api(cmd) => api::run(cmd).await,
+        Command::Opencode(command) => opencode::run(command).await,
         Command::Services(cmd) => services::run(cmd).await,
         Command::Status => status::run(),
         Command::Stop(args) => stop::run(args),

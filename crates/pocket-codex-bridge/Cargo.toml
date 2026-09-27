@@ -45,6 +45,7 @@ uuid = { workspace = true }
 base64 = { workspace = true }
 reqwest = { workspace = true, features = ["zstd", "gzip"] }
 async-trait = { workspace = true }
+futures = { workspace = true }
 rustls = { workspace = true }
 tokio-rustls = { workspace = true }
 webpki-roots = "0.26"
@@ -53,6 +54,6 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
+axum = { workspace = true, features = ["json"] }
 tempfile = "3"
-futures = { workspace = true }
 tokio-tungstenite = { workspace = true }

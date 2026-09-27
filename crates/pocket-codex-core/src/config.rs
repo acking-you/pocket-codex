@@ -248,9 +248,9 @@ impl Config {
         match kind {
             ServiceKind::App => self.services.app.default.as_ref(),
             ServiceKind::Api => self.services.api.default.as_ref(),
-            // The colocated/derived meta service (and any unrecognised kind) has
+            // OpenCode uses its independent versioned store; meta/unknown have
             // no standalone default target.
-            ServiceKind::Meta | ServiceKind::Unknown => None,
+            ServiceKind::OpenCode | ServiceKind::Meta | ServiceKind::Unknown => None,
         }
     }
 
@@ -268,9 +268,9 @@ impl Config {
         match kind {
             ServiceKind::App => self.services.app.default = Some(target),
             ServiceKind::Api => self.services.api.default = Some(target),
-            // No standalone default for the colocated/derived meta service or an
-            // unrecognised kind.
-            ServiceKind::Meta | ServiceKind::Unknown => {},
+            // Keep OpenCode defaults out of this legacy configuration schema.
+            // Meta/unknown have no standalone default.
+            ServiceKind::OpenCode | ServiceKind::Meta | ServiceKind::Unknown => {},
         }
     }
 

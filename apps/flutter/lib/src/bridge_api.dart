@@ -17,7 +17,7 @@ class ServiceEntry {
   /// Device id segment.
   final String device;
 
-  /// `app` or `api`.
+  /// `app`, `api`, or `opencode`.
   final String kind;
 
   /// Instance name segment.

@@ -67,7 +67,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.12.0';
 
   @override
-  int get rustContentHash => -101957185;
+  int get rustContentHash => 1473588950;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -459,6 +459,75 @@ abstract class RustLibApi extends BaseApi {
     required String dir,
     required String fileName,
     required List<int> bytes,
+  });
+
+  Future<void> crateApiBridgeOpencodeAbort({
+    required String connectionId,
+    required String sessionId,
+  });
+
+  Future<String> crateApiBridgeOpencodeConnect({
+    String? baseUrl,
+    String? serviceKey,
+    required String directory,
+    required String username,
+    String? password,
+  });
+
+  Future<OpenCodeSnapshotDto> crateApiBridgeOpencodeCreate({
+    required String connectionId,
+    String? title,
+  });
+
+  Future<void> crateApiBridgeOpencodeDisconnect({required String connectionId});
+
+  Stream<OpenCodeSnapshotDto> crateApiBridgeOpencodeEvents({
+    required String connectionId,
+  });
+
+  Future<OpenCodeSnapshotDto> crateApiBridgeOpencodeOlder({
+    required String connectionId,
+    required String sessionId,
+  });
+
+  Future<OpenCodeSnapshotDto> crateApiBridgeOpencodeOpenSession({
+    required String connectionId,
+    required String sessionId,
+  });
+
+  Future<OpenCodeSnapshotDto> crateApiBridgeOpencodePermissionReply({
+    required String connectionId,
+    required String requestId,
+    required String reply,
+    String? message,
+  });
+
+  Future<OpenCodeSnapshotDto> crateApiBridgeOpencodeQuestionReject({
+    required String connectionId,
+    required String requestId,
+  });
+
+  Future<OpenCodeSnapshotDto> crateApiBridgeOpencodeQuestionReply({
+    required String connectionId,
+    required String requestId,
+    required String answersJson,
+  });
+
+  Future<OpenCodeSnapshotDto> crateApiBridgeOpencodeReplyForm({
+    required String connectionId,
+    required String requestId,
+    required String answersJson,
+  });
+
+  Future<OpenCodeSubmissionDto> crateApiBridgeOpencodeSend({
+    required String connectionId,
+    required String sessionId,
+    required String text,
+  });
+
+  Future<List<OpenCodeSessionDto>> crateApiBridgeOpencodeSessions({
+    required String connectionId,
+    String? search,
   });
 
   Future<void> crateApiBridgeSetKey({required String key});
@@ -3557,6 +3626,483 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<void> crateApiBridgeOpencodeAbort({
+    required String connectionId,
+    required String sessionId,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(connectionId, serializer);
+          sse_encode_String(sessionId, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 93,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiBridgeOpencodeAbortConstMeta,
+        argValues: [connectionId, sessionId],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiBridgeOpencodeAbortConstMeta =>
+      const TaskConstMeta(
+        debugName: "opencode_abort",
+        argNames: ["connectionId", "sessionId"],
+      );
+
+  @override
+  Future<String> crateApiBridgeOpencodeConnect({
+    String? baseUrl,
+    String? serviceKey,
+    required String directory,
+    required String username,
+    String? password,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_opt_String(baseUrl, serializer);
+          sse_encode_opt_String(serviceKey, serializer);
+          sse_encode_String(directory, serializer);
+          sse_encode_String(username, serializer);
+          sse_encode_opt_String(password, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 94,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiBridgeOpencodeConnectConstMeta,
+        argValues: [baseUrl, serviceKey, directory, username, password],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiBridgeOpencodeConnectConstMeta =>
+      const TaskConstMeta(
+        debugName: "opencode_connect",
+        argNames: [
+          "baseUrl",
+          "serviceKey",
+          "directory",
+          "username",
+          "password",
+        ],
+      );
+
+  @override
+  Future<OpenCodeSnapshotDto> crateApiBridgeOpencodeCreate({
+    required String connectionId,
+    String? title,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(connectionId, serializer);
+          sse_encode_opt_String(title, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 95,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_open_code_snapshot_dto,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiBridgeOpencodeCreateConstMeta,
+        argValues: [connectionId, title],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiBridgeOpencodeCreateConstMeta =>
+      const TaskConstMeta(
+        debugName: "opencode_create",
+        argNames: ["connectionId", "title"],
+      );
+
+  @override
+  Future<void> crateApiBridgeOpencodeDisconnect({
+    required String connectionId,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(connectionId, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 96,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiBridgeOpencodeDisconnectConstMeta,
+        argValues: [connectionId],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiBridgeOpencodeDisconnectConstMeta =>
+      const TaskConstMeta(
+        debugName: "opencode_disconnect",
+        argNames: ["connectionId"],
+      );
+
+  @override
+  Stream<OpenCodeSnapshotDto> crateApiBridgeOpencodeEvents({
+    required String connectionId,
+  }) {
+    final sink = RustStreamSink<OpenCodeSnapshotDto>();
+    unawaited(
+      handler.executeNormal(
+        NormalTask(
+          callFfi: (port_) {
+            final serializer = SseSerializer(generalizedFrbRustBinding);
+            sse_encode_String(connectionId, serializer);
+            sse_encode_StreamSink_open_code_snapshot_dto_Sse(sink, serializer);
+            pdeCallFfi(
+              generalizedFrbRustBinding,
+              serializer,
+              funcId: 97,
+              port: port_,
+            );
+          },
+          codec: SseCodec(
+            decodeSuccessData: sse_decode_unit,
+            decodeErrorData: sse_decode_AnyhowException,
+          ),
+          constMeta: kCrateApiBridgeOpencodeEventsConstMeta,
+          argValues: [connectionId, sink],
+          apiImpl: this,
+        ),
+      ),
+    );
+    return sink.stream;
+  }
+
+  TaskConstMeta get kCrateApiBridgeOpencodeEventsConstMeta =>
+      const TaskConstMeta(
+        debugName: "opencode_events",
+        argNames: ["connectionId", "sink"],
+      );
+
+  @override
+  Future<OpenCodeSnapshotDto> crateApiBridgeOpencodeOlder({
+    required String connectionId,
+    required String sessionId,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(connectionId, serializer);
+          sse_encode_String(sessionId, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 98,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_open_code_snapshot_dto,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiBridgeOpencodeOlderConstMeta,
+        argValues: [connectionId, sessionId],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiBridgeOpencodeOlderConstMeta =>
+      const TaskConstMeta(
+        debugName: "opencode_older",
+        argNames: ["connectionId", "sessionId"],
+      );
+
+  @override
+  Future<OpenCodeSnapshotDto> crateApiBridgeOpencodeOpenSession({
+    required String connectionId,
+    required String sessionId,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(connectionId, serializer);
+          sse_encode_String(sessionId, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 99,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_open_code_snapshot_dto,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiBridgeOpencodeOpenSessionConstMeta,
+        argValues: [connectionId, sessionId],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiBridgeOpencodeOpenSessionConstMeta =>
+      const TaskConstMeta(
+        debugName: "opencode_open_session",
+        argNames: ["connectionId", "sessionId"],
+      );
+
+  @override
+  Future<OpenCodeSnapshotDto> crateApiBridgeOpencodePermissionReply({
+    required String connectionId,
+    required String requestId,
+    required String reply,
+    String? message,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(connectionId, serializer);
+          sse_encode_String(requestId, serializer);
+          sse_encode_String(reply, serializer);
+          sse_encode_opt_String(message, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 100,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_open_code_snapshot_dto,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiBridgeOpencodePermissionReplyConstMeta,
+        argValues: [connectionId, requestId, reply, message],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiBridgeOpencodePermissionReplyConstMeta =>
+      const TaskConstMeta(
+        debugName: "opencode_permission_reply",
+        argNames: ["connectionId", "requestId", "reply", "message"],
+      );
+
+  @override
+  Future<OpenCodeSnapshotDto> crateApiBridgeOpencodeQuestionReject({
+    required String connectionId,
+    required String requestId,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(connectionId, serializer);
+          sse_encode_String(requestId, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 101,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_open_code_snapshot_dto,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiBridgeOpencodeQuestionRejectConstMeta,
+        argValues: [connectionId, requestId],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiBridgeOpencodeQuestionRejectConstMeta =>
+      const TaskConstMeta(
+        debugName: "opencode_question_reject",
+        argNames: ["connectionId", "requestId"],
+      );
+
+  @override
+  Future<OpenCodeSnapshotDto> crateApiBridgeOpencodeQuestionReply({
+    required String connectionId,
+    required String requestId,
+    required String answersJson,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(connectionId, serializer);
+          sse_encode_String(requestId, serializer);
+          sse_encode_String(answersJson, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 102,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_open_code_snapshot_dto,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiBridgeOpencodeQuestionReplyConstMeta,
+        argValues: [connectionId, requestId, answersJson],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiBridgeOpencodeQuestionReplyConstMeta =>
+      const TaskConstMeta(
+        debugName: "opencode_question_reply",
+        argNames: ["connectionId", "requestId", "answersJson"],
+      );
+
+  @override
+  Future<OpenCodeSnapshotDto> crateApiBridgeOpencodeReplyForm({
+    required String connectionId,
+    required String requestId,
+    required String answersJson,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(connectionId, serializer);
+          sse_encode_String(requestId, serializer);
+          sse_encode_String(answersJson, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 103,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_open_code_snapshot_dto,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiBridgeOpencodeReplyFormConstMeta,
+        argValues: [connectionId, requestId, answersJson],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiBridgeOpencodeReplyFormConstMeta =>
+      const TaskConstMeta(
+        debugName: "opencode_reply_form",
+        argNames: ["connectionId", "requestId", "answersJson"],
+      );
+
+  @override
+  Future<OpenCodeSubmissionDto> crateApiBridgeOpencodeSend({
+    required String connectionId,
+    required String sessionId,
+    required String text,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(connectionId, serializer);
+          sse_encode_String(sessionId, serializer);
+          sse_encode_String(text, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 104,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_open_code_submission_dto,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiBridgeOpencodeSendConstMeta,
+        argValues: [connectionId, sessionId, text],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiBridgeOpencodeSendConstMeta => const TaskConstMeta(
+    debugName: "opencode_send",
+    argNames: ["connectionId", "sessionId", "text"],
+  );
+
+  @override
+  Future<List<OpenCodeSessionDto>> crateApiBridgeOpencodeSessions({
+    required String connectionId,
+    String? search,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(connectionId, serializer);
+          sse_encode_opt_String(search, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 105,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_open_code_session_dto,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiBridgeOpencodeSessionsConstMeta,
+        argValues: [connectionId, search],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiBridgeOpencodeSessionsConstMeta =>
+      const TaskConstMeta(
+        debugName: "opencode_sessions",
+        argNames: ["connectionId", "search"],
+      );
+
+  @override
   Future<void> crateApiBridgeSetKey({required String key}) {
     return handler.executeNormal(
       NormalTask(
@@ -3566,7 +4112,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 93,
+            funcId: 106,
             port: port_,
           );
         },
@@ -3594,7 +4140,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 94,
+            funcId: 107,
             port: port_,
           );
         },
@@ -3622,7 +4168,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 95,
+            funcId: 108,
             port: port_,
           );
         },
@@ -3649,7 +4195,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 96,
+            funcId: 109,
             port: port_,
           );
         },
@@ -3685,6 +4231,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   RustStreamSink<LogLineDto> dco_decode_StreamSink_log_line_dto_Sse(
     dynamic raw,
   ) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    throw UnimplementedError();
+  }
+
+  @protected
+  RustStreamSink<OpenCodeSnapshotDto>
+  dco_decode_StreamSink_open_code_snapshot_dto_Sse(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     throw UnimplementedError();
   }
@@ -4073,6 +4626,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  List<OpenCodeSessionDto> dco_decode_list_open_code_session_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>)
+        .map(dco_decode_open_code_session_dto)
+        .toList();
+  }
+
+  @protected
   List<int> dco_decode_list_prim_u_8_loose(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as List<int>;
@@ -4181,6 +4742,48 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     return OlderPageDto(
       items: dco_decode_list_thread_item_dto(arr[0]),
       hasOlder: dco_decode_bool(arr[1]),
+    );
+  }
+
+  @protected
+  OpenCodeSessionDto dco_decode_open_code_session_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 2)
+      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    return OpenCodeSessionDto(
+      id: dco_decode_String(arr[0]),
+      title: dco_decode_String(arr[1]),
+    );
+  }
+
+  @protected
+  OpenCodeSnapshotDto dco_decode_open_code_snapshot_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 8)
+      throw Exception('unexpected arr length: expect 8 but see ${arr.length}');
+    return OpenCodeSnapshotDto(
+      sessionId: dco_decode_String(arr[0]),
+      messagesJson: dco_decode_String(arr[1]),
+      status: dco_decode_String(arr[2]),
+      permissionsJson: dco_decode_String(arr[3]),
+      questionsJson: dco_decode_String(arr[4]),
+      nextCursor: dco_decode_opt_String(arr[5]),
+      revision: dco_decode_u_64(arr[6]),
+      state: dco_decode_String(arr[7]),
+    );
+  }
+
+  @protected
+  OpenCodeSubmissionDto dco_decode_open_code_submission_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 2)
+      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    return OpenCodeSubmissionDto(
+      accepted: dco_decode_bool(arr[0]),
+      unknown: dco_decode_bool(arr[1]),
     );
   }
 
@@ -4504,6 +5107,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   RustStreamSink<LogLineDto> sse_decode_StreamSink_log_line_dto_Sse(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    throw UnimplementedError('Unreachable ()');
+  }
+
+  @protected
+  RustStreamSink<OpenCodeSnapshotDto>
+  sse_decode_StreamSink_open_code_snapshot_dto_Sse(
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
@@ -5005,6 +5617,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  List<OpenCodeSessionDto> sse_decode_list_open_code_session_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <OpenCodeSessionDto>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_open_code_session_dto(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
   List<int> sse_decode_list_prim_u_8_loose(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var len_ = sse_decode_i_32(deserializer);
@@ -5173,6 +5799,51 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_items = sse_decode_list_thread_item_dto(deserializer);
     var var_hasOlder = sse_decode_bool(deserializer);
     return OlderPageDto(items: var_items, hasOlder: var_hasOlder);
+  }
+
+  @protected
+  OpenCodeSessionDto sse_decode_open_code_session_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_id = sse_decode_String(deserializer);
+    var var_title = sse_decode_String(deserializer);
+    return OpenCodeSessionDto(id: var_id, title: var_title);
+  }
+
+  @protected
+  OpenCodeSnapshotDto sse_decode_open_code_snapshot_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_sessionId = sse_decode_String(deserializer);
+    var var_messagesJson = sse_decode_String(deserializer);
+    var var_status = sse_decode_String(deserializer);
+    var var_permissionsJson = sse_decode_String(deserializer);
+    var var_questionsJson = sse_decode_String(deserializer);
+    var var_nextCursor = sse_decode_opt_String(deserializer);
+    var var_revision = sse_decode_u_64(deserializer);
+    var var_state = sse_decode_String(deserializer);
+    return OpenCodeSnapshotDto(
+      sessionId: var_sessionId,
+      messagesJson: var_messagesJson,
+      status: var_status,
+      permissionsJson: var_permissionsJson,
+      questionsJson: var_questionsJson,
+      nextCursor: var_nextCursor,
+      revision: var_revision,
+      state: var_state,
+    );
+  }
+
+  @protected
+  OpenCodeSubmissionDto sse_decode_open_code_submission_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_accepted = sse_decode_bool(deserializer);
+    var var_unknown = sse_decode_bool(deserializer);
+    return OpenCodeSubmissionDto(accepted: var_accepted, unknown: var_unknown);
   }
 
   @protected
@@ -5615,6 +6286,23 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_StreamSink_open_code_snapshot_dto_Sse(
+    RustStreamSink<OpenCodeSnapshotDto> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(
+      self.setupAndSerialize(
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_open_code_snapshot_dto,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+      ),
+      serializer,
+    );
+  }
+
+  @protected
   void sse_encode_StreamSink_retry_progress_dto_Sse(
     RustStreamSink<RetryProgressDto> self,
     SseSerializer serializer,
@@ -6023,6 +6711,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_list_open_code_session_dto(
+    List<OpenCodeSessionDto> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_open_code_session_dto(item, serializer);
+    }
+  }
+
+  @protected
   void sse_encode_list_prim_u_8_loose(
     List<int> self,
     SseSerializer serializer,
@@ -6161,6 +6861,42 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_list_thread_item_dto(self.items, serializer);
     sse_encode_bool(self.hasOlder, serializer);
+  }
+
+  @protected
+  void sse_encode_open_code_session_dto(
+    OpenCodeSessionDto self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.id, serializer);
+    sse_encode_String(self.title, serializer);
+  }
+
+  @protected
+  void sse_encode_open_code_snapshot_dto(
+    OpenCodeSnapshotDto self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.sessionId, serializer);
+    sse_encode_String(self.messagesJson, serializer);
+    sse_encode_String(self.status, serializer);
+    sse_encode_String(self.permissionsJson, serializer);
+    sse_encode_String(self.questionsJson, serializer);
+    sse_encode_opt_String(self.nextCursor, serializer);
+    sse_encode_u_64(self.revision, serializer);
+    sse_encode_String(self.state, serializer);
+  }
+
+  @protected
+  void sse_encode_open_code_submission_dto(
+    OpenCodeSubmissionDto self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_bool(self.accepted, serializer);
+    sse_encode_bool(self.unknown, serializer);
   }
 
   @protected

@@ -31,6 +31,114 @@ use tokio::net::TcpListener;
 
 const JWT_SECRET: &str = "test-jwt-secret";
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn opencode_listing_requires_opt_in_and_preserves_account_isolation() {
+    use std::time::Duration;
+
+    use pocket_codex_account_proto::http::ServicesResponse;
+    use pocket_codex_pb::{register, RegisterOptions, RelaySession};
+
+    let state_dir = tempfile::tempdir().expect("isolated relay directory");
+    let auth = pb_mapper_auth::AuthRuntime::from_isolated_state(pb_mapper_auth::AuthConfig {
+        state_dir: state_dir.path().to_owned(),
+        max_temporary_keys: 16,
+        max_temporary_key_ttl: Duration::from_secs(172800),
+        legacy_protocol: pb_mapper_auth::LegacyProtocolPolicy::Deny,
+    })
+    .await
+    .expect("isolated auth");
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("relay listener");
+    let address = listener.local_addr().expect("relay address").to_string();
+    let key = std::fs::read_to_string(state_dir.path().join("admin.key")).expect("fixture key");
+    let relay = RelaySession::new(&address, key.trim());
+    let shutdown = tokio_util::sync::CancellationToken::new();
+    let server = tokio::spawn(pb_mapper_server::run_server_on_listener(
+        listener,
+        shutdown.clone(),
+        None,
+        false,
+        auth,
+    ));
+    let base = start_backend(relay).await;
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .expect("client");
+    let token = mint("alice", "alice", 42);
+    let other_token = mint("bob", "bob", 43);
+    let mut credentials = Vec::new();
+    for token in [&token, &other_token] {
+        let response = client
+            .get(format!("{base}/v1/relay"))
+            .bearer_auth(token)
+            .send()
+            .await
+            .expect("issue credential")
+            .error_for_status()
+            .expect("credential status");
+        credentials.push(
+            response
+                .json::<RelayCredentialResponse>()
+                .await
+                .expect("credential body"),
+        );
+    }
+    let mut registrations = Vec::new();
+    for (owner, key) in [
+        (0, "pcxu:alice:studio:app:work"),
+        (0, "pcxu:alice:studio:opencode:work"),
+        (1, "pcxu:alice:intruder:opencode:work"),
+    ] {
+        registrations.push(
+            register(
+                &RelaySession::new(&address, &credentials[owner].credential),
+                RegisterOptions {
+                    key: key.into(),
+                    local_addr: "127.0.0.1:9".into(),
+                    codec: false,
+                },
+            )
+            .await
+            .expect("register fixture service"),
+        );
+    }
+    for (query, expected) in [
+        ("", vec!["app"]),
+        ("?include_opencode=false", vec!["app"]),
+        ("?include_opencode=true", vec!["app", "opencode"]),
+    ] {
+        let response = client
+            .get(format!("{base}/v1/services{query}"))
+            .bearer_auth(&token)
+            .send()
+            .await
+            .expect("services")
+            .error_for_status()
+            .expect("services status")
+            .json::<ServicesResponse>()
+            .await
+            .expect("services body");
+        assert!(response
+            .services
+            .iter()
+            .all(|service| service.device == "studio"));
+        let mut kinds: Vec<_> = response
+            .services
+            .iter()
+            .map(|service| service.kind.as_key_segment())
+            .collect();
+        kinds.sort();
+        assert_eq!(kinds, expected, "listing {query}");
+    }
+    for registration in registrations {
+        registration.stop().await.expect("unregister fixture");
+    }
+    shutdown.cancel();
+    server.await.expect("relay join").expect("relay stop");
+}
+
 /// A relay to test against, from the environment. `None` skips the cases that
 /// need one rather than failing them: a missing relay is a missing fixture, not
 /// a defect in the code under test.

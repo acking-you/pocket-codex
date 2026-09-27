@@ -48,3 +48,7 @@ time = { workspace = true }
 async-trait = { workspace = true }
 jsonwebtoken = { workspace = true }
 reqwest = { workspace = true }
+pb-mapper-server = { git = "https://github.com/acking-you/pb-mapper", branch = "pocket-codex" }
+pb-mapper-auth = { git = "https://github.com/acking-you/pb-mapper", branch = "pocket-codex" }
+tokio-util = { workspace = true }
+tempfile = "3"

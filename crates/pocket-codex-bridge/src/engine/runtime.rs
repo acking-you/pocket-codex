@@ -26,6 +26,7 @@ static REGISTRY: OnceCell<Mutex<HashMap<String, SubEntry>>> = OnceCell::new();
 struct SubEntry {
     local_addr: String,
     handle: JoinHandle<()>,
+    users: usize,
 }
 
 /// Initialise the runtime + support dir. Idempotent; safe to call once at boot.
@@ -91,9 +92,10 @@ pub struct SubStatus {
 /// to be bound would refuse that connection nondeterministically.
 pub fn subscribe_service(key: String, local_port: u16, transport: &Transport) -> Result<SubStatus> {
     {
-        let reg = registry().lock().expect("registry poisoned");
-        if let Some(e) = reg.get(&key) {
+        let mut reg = registry().lock().expect("registry poisoned");
+        if let Some(e) = reg.get_mut(&key) {
             if !e.handle.is_finished() {
+                e.users = e.users.saturating_add(1);
                 return Ok(SubStatus {
                     key,
                     local_addr: e.local_addr.clone(),
@@ -114,6 +116,7 @@ pub fn subscribe_service(key: String, local_port: u16, transport: &Transport) ->
         .insert(key.clone(), SubEntry {
             local_addr: local_addr.clone(),
             handle,
+            users: 1,
         });
     Ok(SubStatus {
         key,
@@ -234,8 +237,22 @@ fn subscribe_ready_timeout() -> std::time::Duration {
 
 /// Abort and forget the subscription for `key`. No-op if absent.
 pub fn unsubscribe_service(key: &str) {
-    if let Some(e) = registry().lock().expect("registry poisoned").remove(key) {
-        e.handle.abort();
+    let mut reg = registry().lock().expect("registry poisoned");
+    let should_remove = reg
+        .get_mut(key)
+        .map(|entry| {
+            if entry.users > 1 {
+                entry.users -= 1;
+                false
+            } else {
+                true
+            }
+        })
+        .unwrap_or(false);
+    if should_remove {
+        if let Some(entry) = reg.remove(key) {
+            entry.handle.abort();
+        }
     }
 }
 
@@ -339,5 +356,34 @@ mod tests {
         let addr = probe.local_addr().expect("probe addr");
         assert_ne!(addr.port(), 0, "the OS must assign a concrete port for :0");
         assert_eq!(addr.ip().to_string(), "127.0.0.1", "subscriptions stay on loopback");
+    }
+
+    #[test]
+    fn shared_subscription_is_removed_only_after_last_user_disconnects() {
+        init(std::env::temp_dir()).expect("init");
+        let key = "pcx:test:opencode:shared-ref-count".to_string();
+        let handle = runtime().spawn(std::future::pending::<()>());
+        registry()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(key.clone(), SubEntry {
+                local_addr: "127.0.0.1:1".into(),
+                handle,
+                users: 2,
+            });
+
+        unsubscribe_service(&key);
+        let remaining = registry()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(&key)
+            .map(|entry| entry.users);
+        assert_eq!(remaining, Some(1));
+
+        unsubscribe_service(&key);
+        assert!(!registry()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .contains_key(&key));
     }
 }

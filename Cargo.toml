@@ -59,6 +59,7 @@ tokio = { version = "1.40", features = ["full"] }
 tokio-util = { version = "0.7", features = ["io"] }
 tokio-stream = "0.1"
 futures = "0.3"
+eventsource-stream = "0.2.3"
 async-trait = "0.1"
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "ws"] }
 base64 = "0.22"

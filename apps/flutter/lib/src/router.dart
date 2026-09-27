@@ -8,7 +8,9 @@ import 'package:pocket_codex/src/screens/account_onboarding_screen.dart';
 import 'package:pocket_codex/src/screens/local_sessions_screen.dart';
 import 'package:pocket_codex/src/screens/log_view_screen.dart';
 import 'package:pocket_codex/src/screens/onboarding_screen.dart';
+import 'package:pocket_codex/src/screens/opencode_screen.dart';
 import 'package:pocket_codex/src/screens/services_screen.dart';
+import 'package:pocket_codex/src/bridge_api_rust.dart';
 import 'package:pocket_codex/src/screens/settings_screen.dart';
 import 'package:pocket_codex/src/screens/welcome_guide_screen.dart';
 
@@ -83,6 +85,13 @@ GoRouter buildRouter({
     // First-run welcome guide, shown once per device after the first sign-in.
     GoRoute(path: '/welcome', builder: (c, s) => const WelcomeGuideScreen()),
     GoRoute(path: '/manage', builder: (c, s) => const ServicesScreen()),
+    GoRoute(
+      path: '/opencode',
+      builder: (c, s) => OpenCodeScreen(
+        api: const RustBridgeApi(),
+        serviceKey: s.uri.queryParameters['svc'],
+      ),
+    ),
     GoRoute(path: '/settings', builder: (c, s) => const SettingsScreen()),
     // External Codex setup: detect CODEX_HOME, configure login/provider and prompt.
     GoRoute(path: '/setup/codex', builder: (c, s) => const CodexSetupScreen()),

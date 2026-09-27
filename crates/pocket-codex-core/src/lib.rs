@@ -31,4 +31,7 @@ pub mod service;
 /// Provider-independent, restart-safe history window synchronization.
 pub mod history_sync;
 
+/// Independent, credential-free OpenCode connection profiles and defaults.
+pub mod opencode;
+
 pub use error::{Error, Result};

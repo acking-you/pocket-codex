@@ -3,13 +3,15 @@
 //! Thin glue over `crate::engine`; DTOs are plain (FRB-friendly) structs.
 use std::path::PathBuf;
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, ensure, Result};
 use flutter_rust_bridge::frb;
 use pocket_codex_core::config::Mode;
+use pocket_codex_host_svc::opencode::{BasicCredentials, PermissionReply};
 
 use crate::{
     engine::{
-        account, app_session, config, discovery, logging, meta, runtime, serve, sessions, transport,
+        account, app_session, config, discovery, logging, meta, opencode, runtime, serve, sessions,
+        transport,
     },
     frb_generated::StreamSink,
 };
@@ -54,6 +56,43 @@ pub struct SubStatusDto {
     pub local_addr: String,
     /// Task still running.
     pub alive: bool,
+}
+
+/// An OpenCode session summary, retaining the upstream identifier.
+pub struct OpenCodeSessionDto {
+    /// Upstream session ID.
+    pub id: String,
+    /// User-visible title.
+    pub title: String,
+}
+
+/// A bounded OpenCode snapshot. JSON fields are native upstream DTOs so the
+/// bridge does not reinterpret unknown message parts or tool metadata.
+pub struct OpenCodeSnapshotDto {
+    /// Selected upstream session ID.
+    pub session_id: String,
+    /// JSON array of native messages.
+    pub messages_json: String,
+    /// `idle`, `busy`, or `retry` as reported by OpenCode.
+    pub status: String,
+    /// JSON array of currently pending permission requests.
+    pub permissions_json: String,
+    /// JSON array of currently pending question requests.
+    pub questions_json: String,
+    /// Opaque cursor for the next older page.
+    pub next_cursor: Option<String>,
+    /// Local controller revision.
+    pub revision: u64,
+    /// `ready` for a live snapshot; transport state is managed by the caller.
+    pub state: String,
+}
+
+/// Whether an OpenCode prompt was accepted or has an unknown submission result.
+pub struct OpenCodeSubmissionDto {
+    /// True only when the upstream returned a definite success response.
+    pub accepted: bool,
+    /// True when the request may have been accepted but the response was lost.
+    pub unknown: bool,
 }
 
 /// Initialise the engine with the platform app-support dir (from Dart's
@@ -768,6 +807,269 @@ pub fn api_probe(service_key: String) -> Result<bool> {
 /// `false` instead of a false "running". Fast because it stays on loopback.
 pub fn app_probe_local(local_addr: String) -> bool {
     app_session::probe_endpoint(&local_addr)
+}
+
+fn opencode_snapshot_dto(snapshot: opencode::Snapshot) -> Result<OpenCodeSnapshotDto> {
+    Ok(OpenCodeSnapshotDto {
+        session_id: snapshot.session_id,
+        messages_json: serde_json::to_string(&snapshot.messages)?,
+        status: snapshot.status,
+        permissions_json: serde_json::to_string(&snapshot.permissions)?,
+        questions_json: serde_json::to_string(&snapshot.questions)?,
+        next_cursor: snapshot.next_cursor,
+        revision: snapshot.revision,
+        state: "ready".into(),
+    })
+}
+
+/// Connect directly to an existing OpenCode HTTP service or to an OpenCode
+/// relay service. Password material is accepted only in memory and is never
+/// persisted or returned through this API.
+pub async fn opencode_connect(
+    base_url: Option<String>,
+    service_key: Option<String>,
+    directory: String,
+    username: String,
+    password: Option<String>,
+) -> Result<String> {
+    if base_url.is_none() && service_key.is_none() {
+        let client = pocket_codex_host_svc::opencode::discovery::discover(&directory)
+            .await
+            .map_err(|_| anyhow!("PCX_OPENCODE_LOCAL_DISCOVERY"))?;
+        return Ok(opencode::register(client, None));
+    }
+    let (origin, relay_key, credentials) = match (base_url, service_key) {
+        (Some(origin), None) => {
+            (origin, None, password.map(|secret| BasicCredentials::new(username, secret)))
+        },
+        (None, Some(key)) => {
+            if key.is_empty() {
+                return Err(anyhow!("OpenCode service key cannot be empty"));
+            }
+            let transport = transport::resolve().await?;
+            let key_for_subscribe = key.clone();
+            let local = if tokio::runtime::Handle::try_current().is_ok() {
+                tokio::task::block_in_place(|| {
+                    runtime::subscribe_service(key_for_subscribe, 0, &transport)
+                })?
+            } else {
+                runtime::subscribe_service(key_for_subscribe, 0, &transport)?
+            };
+            (format!("http://{}", local.local_addr), Some(key), None)
+        },
+        _ => return Err(anyhow!("choose exactly one OpenCode base URL or service key")),
+    };
+    let client = match pocket_codex_host_svc::opencode::connection::Connection::connect(
+        &origin,
+        &directory,
+        credentials,
+    )
+    .await
+    {
+        Ok(client) => client,
+        Err(error) => {
+            if let Some(key) = relay_key.as_deref() {
+                runtime::unsubscribe_service(key);
+            }
+            return Err(opencode_connection_error(error));
+        },
+    };
+    Ok(opencode::register(client, relay_key))
+}
+
+fn opencode_connection_error(error: pocket_codex_host_svc::opencode::Error) -> anyhow::Error {
+    use pocket_codex_host_svc::opencode::Error;
+    anyhow!(match error {
+        Error::Rejected(401 | 403) => "PCX_OPENCODE_AUTH",
+        Error::Transport | Error::Disconnected => "PCX_OPENCODE_NETWORK",
+        _ => "PCX_OPENCODE_PROTOCOL",
+    })
+}
+
+/// List sessions for an OpenCode connection.
+pub async fn opencode_sessions(
+    connection_id: String,
+    search: Option<String>,
+) -> Result<Vec<OpenCodeSessionDto>> {
+    let controller = opencode::get(&connection_id)?;
+    Ok(controller
+        .sessions(search.as_deref())
+        .await?
+        .into_iter()
+        .map(|session| OpenCodeSessionDto {
+            id: session.id,
+            title: session.title,
+        })
+        .collect())
+}
+
+/// Open one OpenCode session and return its bounded tail plus live
+/// interactions.
+pub async fn opencode_open_session(
+    connection_id: String,
+    session_id: String,
+) -> Result<OpenCodeSnapshotDto> {
+    opencode_snapshot_dto(
+        opencode::get(&connection_id)?
+            .open_session(&session_id)
+            .await?,
+    )
+}
+
+/// Read one older OpenCode history page.
+pub async fn opencode_older(
+    connection_id: String,
+    session_id: String,
+) -> Result<OpenCodeSnapshotDto> {
+    opencode_snapshot_dto(opencode::get(&connection_id)?.older(&session_id).await?)
+}
+
+/// Create and select an empty OpenCode session.
+pub async fn opencode_create(
+    connection_id: String,
+    title: Option<String>,
+) -> Result<OpenCodeSnapshotDto> {
+    opencode_snapshot_dto(
+        opencode::get(&connection_id)?
+            .create(title.as_deref())
+            .await?,
+    )
+}
+
+/// Submit a text continuation. Unknown transport outcomes are explicit.
+pub async fn opencode_send(
+    connection_id: String,
+    session_id: String,
+    text: String,
+) -> Result<OpenCodeSubmissionDto> {
+    match opencode::get(&connection_id)?
+        .send(&session_id, &text)
+        .await
+    {
+        Ok(()) => Ok(OpenCodeSubmissionDto {
+            accepted: true,
+            unknown: false,
+        }),
+        Err(error)
+            if error.downcast_ref::<pocket_codex_host_svc::opencode::Error>()
+                == Some(&pocket_codex_host_svc::opencode::Error::SubmissionUnknown) =>
+        {
+            Ok(OpenCodeSubmissionDto {
+                accepted: false,
+                unknown: true,
+            })
+        },
+        Err(error) => Err(error),
+    }
+}
+
+/// Answer a pending permission request.
+pub async fn opencode_permission_reply(
+    connection_id: String,
+    request_id: String,
+    reply: String,
+    message: Option<String>,
+) -> Result<OpenCodeSnapshotDto> {
+    let decision = match reply.as_str() {
+        "once" => PermissionReply::Once,
+        "always" => PermissionReply::Always,
+        "reject" => PermissionReply::Reject,
+        _ => return Err(anyhow!("invalid OpenCode permission reply")),
+    };
+    let controller = opencode::get(&connection_id)?;
+    controller
+        .reply_permission(&request_id, decision, message.as_deref())
+        .await?;
+    opencode_snapshot_dto(controller.snapshot().await?)
+}
+
+/// Answer a pending question request using upstream ordered answer arrays.
+pub async fn opencode_question_reply(
+    connection_id: String,
+    request_id: String,
+    answers_json: String,
+) -> Result<OpenCodeSnapshotDto> {
+    let answers: Vec<Vec<String>> = serde_json::from_str(&answers_json)?;
+    let controller = opencode::get(&connection_id)?;
+    controller.reply_question(&request_id, answers).await?;
+    opencode_snapshot_dto(controller.snapshot().await?)
+}
+
+/// Answer a current OpenCode v2 form with its native keyed, typed answer
+/// object.
+pub async fn opencode_reply_form(
+    connection_id: String,
+    request_id: String,
+    answers_json: String,
+) -> Result<OpenCodeSnapshotDto> {
+    ensure!(answers_json.len() <= 1024 * 1024, "OpenCode form answer exceeds the resource limit");
+    let answers: serde_json::Value = serde_json::from_str(&answers_json)?;
+    let controller = opencode::get(&connection_id)?;
+    controller.reply_form(&request_id, answers).await?;
+    opencode_snapshot_dto(controller.snapshot().await?)
+}
+
+/// Reject a pending OpenCode question request.
+pub async fn opencode_question_reject(
+    connection_id: String,
+    request_id: String,
+) -> Result<OpenCodeSnapshotDto> {
+    let controller = opencode::get(&connection_id)?;
+    controller.reject_question(&request_id).await?;
+    opencode_snapshot_dto(controller.snapshot().await?)
+}
+
+/// Abort only the selected OpenCode session; the external service remains up.
+pub async fn opencode_abort(connection_id: String, session_id: String) -> Result<()> {
+    opencode::get(&connection_id)?.abort(&session_id).await
+}
+
+/// Disconnect a Pocket-Codex OpenCode connection and any relay subscription it
+/// owns. This never calls an OpenCode process or instance disposal endpoint.
+pub fn opencode_disconnect(connection_id: String) {
+    opencode::disconnect(&connection_id);
+}
+
+/// Stream authoritative OpenCode snapshots after scoped SSE events.
+pub fn opencode_events(connection_id: String, sink: StreamSink<OpenCodeSnapshotDto>) -> Result<()> {
+    let controller = opencode::get(&connection_id)?;
+    let task = runtime::runtime().spawn(async move {
+        let Ok(mut events) = controller.events().await else {
+            return;
+        };
+        loop {
+            match opencode::drain_event_burst(&mut events).await {
+                Ok(Some(events)) if !events.is_empty() => {
+                    if !emit_opencode_snapshot(&controller, &sink, events).await {
+                        return;
+                    }
+                },
+                Ok(Some(_)) => continue,
+                Ok(None) | Err(_) => return,
+            }
+        }
+    });
+    opencode::track_event_task(&connection_id, task);
+    Ok(())
+}
+
+async fn emit_opencode_snapshot(
+    controller: &opencode::OpenCodeController,
+    sink: &StreamSink<OpenCodeSnapshotDto>,
+    events: Vec<pocket_codex_host_svc::opencode::connection::NativeEvent>,
+) -> bool {
+    let Some(session_id) = controller.selected_session().await else {
+        return true;
+    };
+    let snapshot = match controller
+        .refresh(&session_id, events)
+        .await
+        .and_then(opencode_snapshot_dto)
+    {
+        Ok(snapshot) => snapshot,
+        Err(_) => return false,
+    };
+    sink.add(snapshot).is_ok()
 }
 
 /// Health-check an API proxy THIS machine hosts itself, by its loopback

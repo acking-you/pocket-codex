@@ -123,6 +123,12 @@ class _ServicesScreenState extends ConsumerState<ServicesScreen>
       title: l10n.manageServices,
       actions: [
         IconButton(
+          key: const Key('opencode-direct-btn'),
+          icon: const Icon(Icons.code),
+          tooltip: 'OpenCode',
+          onPressed: () => context.push('/opencode'),
+        ),
+        IconButton(
           key: const Key('refresh-btn'),
           icon: const Icon(Icons.refresh),
           tooltip: l10n.refreshStatus,
@@ -363,8 +369,14 @@ class _DeviceFirstServices extends ConsumerWidget {
     final apis = deviceEntries
         .where((service) => service.kind == 'api')
         .toList();
+    final opencodes = deviceEntries
+        .where((service) => service.kind == 'opencode')
+        .toList();
     final capabilityCount =
-        apps.length + apis.length + (account ? apps.length : 0);
+        apps.length +
+        apis.length +
+        opencodes.length +
+        (account ? apps.length : 0);
 
     final localAppAddr = <String, String>{
       for (final host in localHosts) host.appServiceKey: host.appListenAddr,
@@ -481,6 +493,7 @@ class _DeviceFirstServices extends ConsumerWidget {
     }
 
     bool unreachable(ServiceEntry service) {
+      if (service.kind == 'opencode') return false;
       final local = localTunnels.containsKey(service.key);
       if (local) return false;
       if (service.kind == 'app' && observedDown.contains(service.key)) {
@@ -499,6 +512,15 @@ class _DeviceFirstServices extends ConsumerWidget {
     // twice per row would double the watch registrations.
     final appStates = {for (final s in apps) s.key: appStatus(s)};
     final apiStates = {for (final s in apis) s.key: apiStatus(s)};
+    final opencodeState = <String, ({Widget chip, String? reason})>{
+      for (final service in opencodes)
+        service.key: status(
+          unreachable: false,
+          label: l10n.statusOnline,
+          color: online,
+          reasonText: l10n.unreachableReason,
+        ),
+    };
     // The instance name only earns its place when it isn't the default one: the
     // device already names itself above, and a lone "default" repeated down the
     // column says nothing.
@@ -608,6 +630,24 @@ class _DeviceFirstServices extends ConsumerWidget {
             unreachable: unreachableEntries.any(
               (entry) => entry.key == service.key,
             ),
+          ),
+        ),
+      for (final service in opencodes)
+        _CapabilityRow(
+          key: Key('device-capability-${service.key}'),
+          icon: Icons.code_outlined,
+          title: 'OpenCode',
+          protocol: protocolOf('OpenCode', service),
+          localAddr: null,
+          menuKey: Key('capability-menu-${service.key}'),
+          status: opencodeState[service.key]!.chip,
+          reason: opencodeState[service.key]!.reason,
+          actionLabel: l10n.servicesOpen,
+          onAction: () => context.push(
+            Uri(
+              path: '/opencode',
+              queryParameters: {'svc': service.key},
+            ).toString(),
           ),
         ),
       if (account)

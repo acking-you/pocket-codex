@@ -77,6 +77,15 @@ pub fn namespace(service: &str) -> Result<String> {
     Ok(digest_bytes(format!("{identity}\0{service}").as_bytes()))
 }
 
+/// Stable OpenCode cache identity for a validated direct connection profile.
+/// Labels and relay configuration do not affect direct connection history.
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn direct_opencode_namespace(profile: &pocket_codex_core::opencode::OpenCodeProfile) -> String {
+    let identity =
+        serde_json::json!(["opencode/direct/v1", profile.id, profile.base_url, profile.directory]);
+    digest_bytes(identity.to_string().as_bytes())
+}
+
 /// Open the application-wide disk budget without making a network request.
 pub fn application_cache() -> Result<DiskCache> {
     Ok(DiskCache::for_app(runtime::support_dir()?))
@@ -379,6 +388,30 @@ fn private_file(path: &Path, truncate: bool) -> Result<File> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn direct_opencode_cache_identity_separates_profiles_origins_and_directories() {
+        let profile = pocket_codex_core::opencode::OpenCodeProfile {
+            id: "work".into(),
+            label: "Work".into(),
+            base_url: "http://127.0.0.1:4096".into(),
+            directory: "/workspace".into(),
+        };
+        let owner = super::direct_opencode_namespace(&profile);
+        let mut changed = profile.clone();
+        changed.label = "Renamed".into();
+        assert_eq!(owner, super::direct_opencode_namespace(&changed));
+        changed = profile.clone();
+        changed.id = "other".into();
+        assert_ne!(owner, super::direct_opencode_namespace(&changed));
+        changed = profile.clone();
+        changed.base_url = "http://127.0.0.1:4097".into();
+        assert_ne!(owner, super::direct_opencode_namespace(&changed));
+        changed = profile;
+        changed.directory = "/another-workspace".into();
+        assert_ne!(owner, super::direct_opencode_namespace(&changed));
+        assert!(!owner.contains("workspace"));
+    }
+
     use super::*;
 
     #[test]

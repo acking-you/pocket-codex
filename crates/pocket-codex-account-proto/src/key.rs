@@ -140,6 +140,18 @@ mod tests {
     }
 
     #[test]
+    fn opencode_keys_round_trip_without_merging_account_namespaces() {
+        let service = ServiceId::new("studio", ServiceKind::OpenCode, "work");
+        let alice = NamespacedServiceId::new("alice", service.clone());
+        let bob = NamespacedServiceId::new("bob", service);
+        assert_eq!(alice.key(), "pcxu:alice:studio:opencode:work");
+        assert_eq!(NamespacedServiceId::parse_key(&alice.key()), Some(alice));
+        assert_eq!(NamespacedServiceId::parse_key(&bob.key()), Some(bob));
+        assert!(!"pcxu:alice:studio:opencode:work"
+            .starts_with(&NamespacedServiceId::user_prefix("bob")));
+    }
+
+    #[test]
     fn namespace_and_prefix_agree_with_the_key_a_client_builds() {
         // The backend sends `namespace_of`; the client feeds it to `new`. If those
         // two disagreed, a client's keys would fall outside the prefix the backend

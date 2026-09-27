@@ -30,7 +30,15 @@ serde_json = { workspace = true }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 tracing = { workspace = true }
+reqwest = { workspace = true, features = ["zstd", "gzip"] }
+thiserror = { workspace = true }
+futures = { workspace = true }
+eventsource-stream = { workspace = true }
+bytes = { workspace = true }
 tower-http = { workspace = true, features = ["compression-zstd", "compression-gzip"] }
+
+[target.'cfg(unix)'.dependencies]
+nix = { workspace = true, features = ["user"] }
 
 [dev-dependencies]
 tempfile = "3"

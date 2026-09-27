@@ -1,12 +1,160 @@
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:pocket_codex/src/bridge_api.dart';
+import 'package:pocket_codex/src/opencode_api.dart';
 import 'package:pocket_codex/src/rust/api/bridge.dart' as frb;
 
 /// Real [BridgeApi] backed by the flutter_rust_bridge bindings.
-class RustBridgeApi implements BridgeApi {
+class RustBridgeApi implements BridgeApi, OpenCodeApi {
   /// Creates the real bridge.
   const RustBridgeApi();
+
+  OpenCodeSnapshot _openCodeSnapshot(frb.OpenCodeSnapshotDto value) =>
+      OpenCodeSnapshot(
+        sessionId: value.sessionId,
+        messages: _jsonList(value.messagesJson),
+        status: value.status,
+        permissions: _jsonList(value.permissionsJson),
+        questions: _jsonList(value.questionsJson),
+        nextCursor: value.nextCursor,
+        revision: value.revision.toInt(),
+        state: value.state,
+      );
+
+  List<Map<String, dynamic>> _jsonList(String raw) {
+    final value = jsonDecode(raw);
+    if (value is! List) return const [];
+    return value
+        .whereType<Map>()
+        .map((entry) => Map<String, dynamic>.from(entry))
+        .toList(growable: false);
+  }
+
+  @override
+  Future<String> connect({
+    String? baseUrl,
+    String? serviceKey,
+    required String directory,
+    String username = 'opencode',
+    String? password,
+  }) => frb.opencodeConnect(
+    baseUrl: baseUrl,
+    serviceKey: serviceKey,
+    directory: directory,
+    username: username,
+    password: password,
+  );
+
+  @override
+  Future<List<OpenCodeSession>> sessions(
+    String connectionId, {
+    String? search,
+  }) async =>
+      (await frb.opencodeSessions(connectionId: connectionId, search: search))
+          .map(
+            (session) => OpenCodeSession(id: session.id, title: session.title),
+          )
+          .toList(growable: false);
+
+  @override
+  Future<OpenCodeSnapshot> openSession(
+    String connectionId,
+    String sessionId,
+  ) async => _openCodeSnapshot(
+    await frb.opencodeOpenSession(
+      connectionId: connectionId,
+      sessionId: sessionId,
+    ),
+  );
+
+  @override
+  Future<OpenCodeSnapshot> older(String connectionId, String sessionId) async =>
+      _openCodeSnapshot(
+        await frb.opencodeOlder(
+          connectionId: connectionId,
+          sessionId: sessionId,
+        ),
+      );
+
+  @override
+  Future<OpenCodeSnapshot> create(String connectionId) async =>
+      _openCodeSnapshot(await frb.opencodeCreate(connectionId: connectionId));
+
+  @override
+  Future<OpenCodeSubmission> send(
+    String connectionId,
+    String sessionId,
+    String text,
+  ) async {
+    final result = await frb.opencodeSend(
+      connectionId: connectionId,
+      sessionId: sessionId,
+      text: text,
+    );
+    return result.unknown
+        ? OpenCodeSubmission.unknown
+        : OpenCodeSubmission.accepted;
+  }
+
+  @override
+  Future<void> permissionReply(
+    String connectionId,
+    String requestId,
+    String reply,
+  ) async {
+    await frb.opencodePermissionReply(
+      connectionId: connectionId,
+      requestId: requestId,
+      reply: reply,
+    );
+  }
+
+  @override
+  Future<void> questionReply(
+    String connectionId,
+    String requestId,
+    List<List<String>> answers,
+  ) async {
+    await frb.opencodeQuestionReply(
+      connectionId: connectionId,
+      requestId: requestId,
+      answersJson: jsonEncode(answers),
+    );
+  }
+
+  @override
+  Future<void> questionReject(String connectionId, String requestId) async {
+    await frb.opencodeQuestionReject(
+      connectionId: connectionId,
+      requestId: requestId,
+    );
+  }
+
+  @override
+  Future<void> formReply(
+    String connectionId,
+    String requestId,
+    Map<String, dynamic> answers,
+  ) async {
+    await frb.opencodeReplyForm(
+      connectionId: connectionId,
+      requestId: requestId,
+      answersJson: jsonEncode(answers),
+    );
+  }
+
+  @override
+  Future<void> abort(String connectionId, String sessionId) =>
+      frb.opencodeAbort(connectionId: connectionId, sessionId: sessionId);
+
+  @override
+  Future<void> disconnect(String connectionId) =>
+      frb.opencodeDisconnect(connectionId: connectionId);
+
+  @override
+  Stream<OpenCodeSnapshot> events(String connectionId) =>
+      frb.opencodeEvents(connectionId: connectionId).map(_openCodeSnapshot);
 
   @override
   Future<ThreadHistory?> appHistoryCached(

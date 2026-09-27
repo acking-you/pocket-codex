@@ -84,6 +84,7 @@ or a per-account GitHub login (hosted).
 | Transport compression | host HTTP negotiates Zstd/Gzip; app-server WebSocket offers permessage-deflate when the external server supports it; uncompressed peers and streaming SSE remain compatible |
 | Direct Responses API proxy     | local HTTP/WS proxy registered through pb-mapper |
 | Hosted account (GitHub)        | optional `pocket-codex-backend`: GitHub login, then a short-lived per-account relay credential (`/v1/relay`) scoped to a `pcxu:<user>:…` namespace — clients register/connect against the relay **directly** and the administrator key never leaves the server; self-host preserved behind `--relay`. See [`deploy/`](deploy/README.md) |
+| OpenCode attached hosting      | connect to legacy v1 or native 2.0.18 through the independent OpenCode entry; discover the local 2.0.18 service, browse/create sessions and history, continue conversations with SSE, answer permissions/questions/typed Forms, abort, and optionally publish a restricted loopback gateway through relay; stopping Pocket-Codex never stops the external OpenCode process; host credentials remain in memory ([verification and limits](docs/opencode-v2-runtime-verification.md)) |
 | Flutter UI (`apps/flutter`)    | chat-first home (opens straight into the latest session; all sessions in the sidebar; auto-connects to the explicit default / last-used / locally hosted / first reachable host, desktop auto-restores hosting); account onboarding ("Sign in with GitHub") + self-host onboarding (relay+key, `pcx1:` import/export); device-first service management, settings, sessions, and logs with shared secondary-page navigation; shared neutral/blue design system, persistent utility navigation, adaptive desktop/tablet/phone layouts (light/dark), a compact resizable composer with remembered height, and matching icons/artwork |
 
 Multi-device CLI flows are usable in both modes:
@@ -200,6 +201,7 @@ pocket-codex status
 pocket-codex stop
 pocket-codex codex   start | stop | status
 pocket-codex pb      register | subscribe | status
+pocket-codex opencode serve | connect | status | stop
 pocket-codex remote-hint
 pocket-codex version
 ```
@@ -228,6 +230,11 @@ codex --remote ws://127.0.0.1:28080
 # Or reach your Codex login as an OpenAI-compatible Responses API.
 pocket-codex api serve
 pocket-codex api connect
+
+# Attach to an existing OpenCode service. The password is read from
+# OPENCODE_PASSWORD and is never placed in argv, URLs, profile files, or relay data.
+pocket-codex opencode serve --url http://127.0.0.1:4096 --directory /work/project --password-env OPENCODE_PASSWORD
+pocket-codex opencode connect --key pcx:host:opencode:default
 
 pocket-codex logout                # revoke + clear the local session
 ```
