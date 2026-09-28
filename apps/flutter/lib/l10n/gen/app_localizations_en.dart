@@ -1790,4 +1790,70 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get fileLinkClose => 'Close';
+
+  @override
+  String get providerLabel => 'Provider';
+
+  @override
+  String get providerCodex => 'Codex';
+
+  @override
+  String get providerOpenCode => 'OpenCode';
+
+  @override
+  String get openCodeHostHint =>
+      'Attaches to your running OpenCode service and registers it to your account. Stopping hosting does not stop OpenCode.';
+
+  @override
+  String get openCodeBinaryPath => 'opencode binary path (optional)';
+
+  @override
+  String get openCodeBinaryHint =>
+      'Only used when OpenCode\'s background service is not running and has to be started.';
+
+  @override
+  String get openCodeNotFound =>
+      'opencode wasn\'t found. If its service isn\'t running, enter the binary path.';
+
+  @override
+  String get openCodeVersionLabel => 'OpenCode version';
+
+  @override
+  String get openCodeVerified => 'Verified';
+
+  @override
+  String get openCodeUnverified =>
+      'Unverified version: its API matched the contract, but this build was not tested against it.';
+
+  @override
+  String get openCodeGatewayLabel => 'OpenCode gateway';
+
+  @override
+  String get hostMetaLabel => 'Meta service';
+
+  @override
+  String get openCodeStopNote =>
+      'Stopping hosting only withdraws access. OpenCode keeps running.';
+
+  @override
+  String get variant => 'Variant';
+
+  @override
+  String get approveAlwaysProject => 'Always allow (project)';
+
+  @override
+  String get approveAlwaysProjectTitle => 'Always allow in this project?';
+
+  @override
+  String get approveAlwaysProjectBody =>
+      'OpenCode saves this as a permission rule for the whole project. Matching requests in every session of this project will run without asking until you remove the rule in OpenCode.';
+
+  @override
+  String get viewSubSession => 'View sub-session';
+
+  @override
+  String get subSessionReadOnly => 'Sub-session · read-only';
+
+  @override
+  String get backToParentSession => 'Back to parent session';
 }

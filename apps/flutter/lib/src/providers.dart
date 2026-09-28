@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:pocket_codex/src/app_modes.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
 import 'package:pocket_codex/src/bridge_api_rust.dart';
+import 'package:pocket_codex/src/service_key.dart';
 import 'package:pocket_codex/src/web_authenticator.dart';
 
 /// The engine API. Overridden with a FakeBridgeApi in tests.
@@ -267,6 +268,18 @@ typedef RunningSessionSnapshot = ({
   DateTime requestedAt,
 });
 
+/// A running session known only by id (OpenCode's active-session report).
+LocalSession _runningStub(String threadId) => LocalSession(
+  threadId: threadId,
+  preview: '',
+  updatedAt: 0,
+  turnState: 'incomplete',
+  heldOpen: true,
+  safety: 'ownedRunning',
+  allowsResume: false,
+  requiresTakeover: false,
+);
+
 /// Discovers external writers without opening their threads. Probes never
 /// overlap, and the host reads lifecycle records only for held rollout files.
 final runningSessionInventoryProvider = StreamProvider.autoDispose
@@ -286,6 +299,18 @@ final runningSessionInventoryProvider = StreamProvider.autoDispose
         inFlight = true;
         final requestedAt = DateTime.now();
         try {
+          // OpenCode reports its running sessions itself; it has no meta
+          // rollout inventory, and its history is not prefetched here.
+          if (isOpenCodeKey(serviceKey)) {
+            final ids = await api.appRunningThreads(serviceKey);
+            if (!disposed) {
+              out.add((
+                sessions: [for (final id in ids) _runningStub(id)],
+                requestedAt: requestedAt,
+              ));
+            }
+            return;
+          }
           final sessions = await api.metaSessions(
             serviceKey,
             runningOnly: true,

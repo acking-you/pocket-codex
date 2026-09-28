@@ -346,7 +346,7 @@ pub async fn services(support_dir: &Path) -> Result<Vec<ServiceEntry>> {
     let backend = backend_base(&config);
     let token = valid_token(support_dir, &mut config, &backend).await?;
     let body: pocket_codex_account_proto::http::ServicesResponse = http_client()?
-        .get(format!("{backend}/v1/services"))
+        .get(format!("{backend}/v1/services?include_opencode=true"))
         .bearer_auth(&token)
         .send()
         .await

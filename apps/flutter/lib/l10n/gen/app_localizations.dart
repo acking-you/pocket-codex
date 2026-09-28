@@ -3295,6 +3295,126 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Close'**
   String get fileLinkClose;
+
+  /// No description provided for @providerLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Provider'**
+  String get providerLabel;
+
+  /// No description provided for @providerCodex.
+  ///
+  /// In en, this message translates to:
+  /// **'Codex'**
+  String get providerCodex;
+
+  /// No description provided for @providerOpenCode.
+  ///
+  /// In en, this message translates to:
+  /// **'OpenCode'**
+  String get providerOpenCode;
+
+  /// No description provided for @openCodeHostHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Attaches to your running OpenCode service and registers it to your account. Stopping hosting does not stop OpenCode.'**
+  String get openCodeHostHint;
+
+  /// No description provided for @openCodeBinaryPath.
+  ///
+  /// In en, this message translates to:
+  /// **'opencode binary path (optional)'**
+  String get openCodeBinaryPath;
+
+  /// No description provided for @openCodeBinaryHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Only used when OpenCode\'s background service is not running and has to be started.'**
+  String get openCodeBinaryHint;
+
+  /// No description provided for @openCodeNotFound.
+  ///
+  /// In en, this message translates to:
+  /// **'opencode wasn\'t found. If its service isn\'t running, enter the binary path.'**
+  String get openCodeNotFound;
+
+  /// No description provided for @openCodeVersionLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'OpenCode version'**
+  String get openCodeVersionLabel;
+
+  /// No description provided for @openCodeVerified.
+  ///
+  /// In en, this message translates to:
+  /// **'Verified'**
+  String get openCodeVerified;
+
+  /// No description provided for @openCodeUnverified.
+  ///
+  /// In en, this message translates to:
+  /// **'Unverified version: its API matched the contract, but this build was not tested against it.'**
+  String get openCodeUnverified;
+
+  /// No description provided for @openCodeGatewayLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'OpenCode gateway'**
+  String get openCodeGatewayLabel;
+
+  /// No description provided for @hostMetaLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Meta service'**
+  String get hostMetaLabel;
+
+  /// No description provided for @openCodeStopNote.
+  ///
+  /// In en, this message translates to:
+  /// **'Stopping hosting only withdraws access. OpenCode keeps running.'**
+  String get openCodeStopNote;
+
+  /// No description provided for @variant.
+  ///
+  /// In en, this message translates to:
+  /// **'Variant'**
+  String get variant;
+
+  /// No description provided for @approveAlwaysProject.
+  ///
+  /// In en, this message translates to:
+  /// **'Always allow (project)'**
+  String get approveAlwaysProject;
+
+  /// No description provided for @approveAlwaysProjectTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Always allow in this project?'**
+  String get approveAlwaysProjectTitle;
+
+  /// No description provided for @approveAlwaysProjectBody.
+  ///
+  /// In en, this message translates to:
+  /// **'OpenCode saves this as a permission rule for the whole project. Matching requests in every session of this project will run without asking until you remove the rule in OpenCode.'**
+  String get approveAlwaysProjectBody;
+
+  /// No description provided for @viewSubSession.
+  ///
+  /// In en, this message translates to:
+  /// **'View sub-session'**
+  String get viewSubSession;
+
+  /// No description provided for @subSessionReadOnly.
+  ///
+  /// In en, this message translates to:
+  /// **'Sub-session · read-only'**
+  String get subSessionReadOnly;
+
+  /// No description provided for @backToParentSession.
+  ///
+  /// In en, this message translates to:
+  /// **'Back to parent session'**
+  String get backToParentSession;
 }
 
 class _AppLocalizationsDelegate

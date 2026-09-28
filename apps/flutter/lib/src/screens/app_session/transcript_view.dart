@@ -150,7 +150,9 @@ class _MessageViewState extends State<MessageView> {
       _reviewRequest = isUser ? ApprovalReviewRequest.parse(item.text) : null;
       _reviewResult = isUser ? null : ApprovalReviewResult.parse(item.text);
     }
-    if (_reviewRequest != null || _reviewResult != null) {
+    final guardian =
+        SessionFeatureScope.maybeOf(context)?.guardianReviews ?? true;
+    if (guardian && (_reviewRequest != null || _reviewResult != null)) {
       return ApprovalReviewCard(
         raw: item.text,
         request: _reviewRequest,

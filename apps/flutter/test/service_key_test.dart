@@ -40,6 +40,22 @@ void main() {
     expect(parseServiceKey('pcx:box:meta:default').kind, 'meta');
   });
 
+  test('OpenCode keys parse, even when the name equals a kind', () {
+    final self = parseServiceKey('pcx:box:opencode:opencode');
+    expect(self.device, 'box');
+    expect(self.kind, 'opencode');
+    expect(self.name, 'opencode');
+    final account = parseServiceKey('pcxu:u1:box:opencode:app');
+    expect(account.device, 'box');
+    expect(account.kind, 'opencode');
+    expect(account.name, 'app');
+    expect(isOpenCodeKey('pcx:box:opencode:work'), isTrue);
+    expect(isOpenCodeKey('pcx:box:app:opencode'), isFalse);
+    expect(isSessionKind('opencode'), isTrue);
+    expect(isSessionKind('app'), isTrue);
+    expect(isSessionKind('api'), isFalse);
+  });
+
   test('a non-key yields empties, and labels fall back to the raw string', () {
     // Callers pass whatever they hold; an index-based parse would crash here.
     expect(parseServiceKey('not-a-key').device, '');

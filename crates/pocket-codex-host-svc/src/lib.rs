@@ -18,6 +18,7 @@ pub mod file_links;
 pub mod fs;
 pub mod history_sync;
 mod history_sync_revision;
+pub mod opencode;
 pub mod resume;
 pub mod sessions;
 pub mod store;
@@ -46,6 +47,11 @@ struct AppState {
     app_ws_addr: SocketAddr,
     store: Arc<ConfigStore>,
     host: Arc<HostStore>,
+    /// Upload destination; `None` keeps the Codex default under `CODEX_HOME`.
+    uploads_dir: Option<PathBuf>,
+    /// Session working directories for `/fs/thread-file`; `None` reads them
+    /// from Codex rollouts.
+    session_dirs: Option<Arc<dyn file_links::SessionDirResolver>>,
 }
 
 /// Bind `listen` and serve the meta service until the process is signalled,
@@ -91,15 +97,35 @@ pub async fn serve(
         app_ws_addr,
         store,
         host,
+        uploads_dir: None,
+        session_dirs: None,
     });
-    let app = Router::new()
-        .route("/healthz", get(healthz))
+    let app = generic_routes()
         .route("/sessions", get(list_sessions))
         .route("/sessions/{id}/liveness", get(session_liveness))
         .route("/sessions/{id}/transcript", get(session_transcript))
         .route("/sessions/{id}/follow", get(session_follow))
         .route("/sessions/{id}/resume", post(session_resume))
         .route("/threads/{id}/config", get(get_config).put(put_config))
+        .route("/fs/thread-file", get(file_links::read))
+        // Inline image previews: not root-confined, but authorised by the
+        // thread's own transcript — see `read_thread_image`.
+        .route("/fs/thread-image", get(read_thread_image))
+        .layer(tower_http::compression::CompressionLayer::new())
+        .with_state(state)
+        .merge(history_sync::router(Arc::new(
+            history_sync::CodexHistorySource::new(app_ws_addr),
+        )));
+    axum::serve(listener, app)
+        .await
+        .context("running meta service")
+}
+
+/// Routes that only touch the host filesystem and host config — no Codex
+/// rollout or app-server — shared by every provider's meta service.
+fn generic_routes() -> Router<Arc<AppState>> {
+    Router::new()
+        .route("/healthz", get(healthz))
         // Project-folder browser: the configured roots + default, and a
         // root-confined directory listing to drill the host's project tree.
         .route("/projects", get(get_projects).put(put_projects))
@@ -108,11 +134,7 @@ pub async fn serve(
         // file's bytes, upload a local file into a chosen dir — root-confined.
         .route("/fs/files", get(list_files_in))
         .route("/fs/read", get(read_file))
-        .route("/fs/thread-file", get(file_links::read))
         .route("/host/local-probe", get(file_links::local_probe))
-        // Inline image previews: not root-confined, but authorised by the
-        // thread's own transcript — see `read_thread_image`.
-        .route("/fs/thread-image", get(read_thread_image))
         .route(
             "/fs/write",
             post(write_file).layer(DefaultBodyLimit::max(UPLOAD_BODY_LIMIT)),
@@ -123,11 +145,32 @@ pub async fn serve(
             "/uploads/{name}",
             post(upload_file).layer(DefaultBodyLimit::max(UPLOAD_BODY_LIMIT)),
         )
+}
+
+/// Serve the provider-neutral meta service (host files, uploads, project
+/// folders) on `listener` — the meta service of an OpenCode host, which has no
+/// Codex rollouts or app-server. Uploads land in `uploads_dir`; conversation
+/// links (`/fs/thread-file`) resolve against the session directories reported
+/// by `session_dirs`.
+pub async fn serve_generic(
+    listener: TcpListener,
+    store: Arc<ConfigStore>,
+    host: Arc<HostStore>,
+    uploads_dir: PathBuf,
+    session_dirs: Arc<dyn file_links::SessionDirResolver>,
+) -> Result<()> {
+    let state = Arc::new(AppState {
+        // Never read by the generic routes.
+        app_ws_addr: SocketAddr::from(([127, 0, 0, 1], 0)),
+        store,
+        host,
+        uploads_dir: Some(uploads_dir),
+        session_dirs: Some(session_dirs),
+    });
+    let app = generic_routes()
+        .route("/fs/thread-file", get(file_links::read))
         .layer(tower_http::compression::CompressionLayer::new())
-        .with_state(state)
-        .merge(history_sync::router(Arc::new(
-            history_sync::CodexHistorySource::new(app_ws_addr),
-        )));
+        .with_state(state);
     axum::serve(listener, app)
         .await
         .context("running meta service")
@@ -146,19 +189,20 @@ impl IntoResponse for ApiError {
         // contract is correct; everything else is a genuine 500. Matched on the
         // message because the underlying ops return `anyhow` — these substrings
         // are fixed strings in `sessions`/`resume` (keep them in sync).
-        let status = if msg.contains("no rollout found") {
-            StatusCode::NOT_FOUND
-        } else if msg.contains("running in another client") {
-            StatusCode::CONFLICT
-        } else if msg.contains("outside the configured project roots") {
-            StatusCode::FORBIDDEN
-        } else if msg.contains("already exists") {
-            StatusCode::CONFLICT
-        } else if msg.contains("is not a file") {
-            StatusCode::BAD_REQUEST
-        } else {
-            StatusCode::INTERNAL_SERVER_ERROR
-        };
+        let status =
+            if msg.contains("no rollout found") || msg.starts_with(file_links::SESSION_NOT_FOUND) {
+                StatusCode::NOT_FOUND
+            } else if msg.contains("running in another client") {
+                StatusCode::CONFLICT
+            } else if msg.contains("outside the configured project roots") {
+                StatusCode::FORBIDDEN
+            } else if msg.contains("already exists") {
+                StatusCode::CONFLICT
+            } else if msg.contains("is not a file") {
+                StatusCode::BAD_REQUEST
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            };
         (status, msg).into_response()
     }
 }
@@ -684,11 +728,16 @@ struct UploadResponse {
 /// authenticated account owner can reach this tunnel; the filename is
 /// sanitized to a single path component regardless.
 async fn upload_file(
+    State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
     body: axum::body::Bytes,
 ) -> Result<Json<UploadResponse>, ApiError> {
-    let home = pocket_codex_codex::rollout::codex_home().context("resolving CODEX_HOME")?;
-    let dir = home.join("pocket-codex-uploads");
+    let dir = match &state.uploads_dir {
+        Some(dir) => dir.clone(),
+        None => pocket_codex_codex::rollout::codex_home()
+            .context("resolving CODEX_HOME")?
+            .join("pocket-codex-uploads"),
+    };
     tokio::fs::create_dir_all(&dir)
         .await
         .with_context(|| format!("creating uploads dir {}", dir.display()))?;
@@ -803,6 +852,8 @@ mod upload_tests {
                         .expect("config store"),
                 ),
                 host: Arc::new(host),
+                uploads_dir: None,
+                session_dirs: None,
             });
 
             let block_worker = || {

@@ -130,6 +130,23 @@ Future<void> apiUnsubscribe({required String serviceKey}) =>
 Future<List<SubStatusDto>> subscriptions() =>
     RustLib.instance.api.crateApiBridgeSubscriptions();
 
+/// Attach to the local OpenCode background service (asking OpenCode to start
+/// it when none is running) and publish it as `opencode:<name>` plus a
+/// `meta:<name>` service. Stopping hosting never stops OpenCode. The name must
+/// not be in use by a Codex host on this device.
+Future<OpenCodeServeDto> appServeStartOpencode({
+  String? name,
+  String? binaryOverride,
+}) => RustLib.instance.api.crateApiBridgeAppServeStartOpencode(
+  name: name,
+  binaryOverride: binaryOverride,
+);
+
+/// The resolved `opencode` executable (explicit → `$PATH` →
+/// `~/.opencode/bin/opencode`), or `None`.
+Future<String?> opencodeLocate({String? binaryOverride}) => RustLib.instance.api
+    .crateApiBridgeOpencodeLocate(binaryOverride: binaryOverride);
+
 /// Legacy version endpoint; returns `unavailable` because no engine is bundled.
 Future<String> embeddedCodexVersion() =>
     RustLib.instance.api.crateApiBridgeEmbeddedCodexVersion();
@@ -531,6 +548,16 @@ Future<void> appTurnInterrupt({
   threadId: threadId,
   turnId: turnId,
 );
+
+/// Static capabilities of the provider behind `service_key` (no network).
+AppCapabilitiesDto appCapabilities({required String serviceKey}) =>
+    RustLib.instance.api.crateApiBridgeAppCapabilities(serviceKey: serviceKey);
+
+/// Ids of an OpenCode service's sessions that are executing now.
+Future<List<String>> appRunningThreads({required String serviceKey}) => RustLib
+    .instance
+    .api
+    .crateApiBridgeAppRunningThreads(serviceKey: serviceKey);
 
 /// List every codex session under the shared `CODEX_HOME`, newest first,
 /// each annotated with whether it is safe to resume.
@@ -966,6 +993,100 @@ class AccountUserDto {
           accountId == other.accountId;
 }
 
+/// What a session service's provider supports, so the shared session UI can
+/// hide controls that do not apply.
+class AppCapabilitiesDto {
+  /// `codex` or `opencode`.
+  final String provider;
+
+  /// Fast service tier toggle.
+  final bool fast;
+
+  /// Approval / sandbox permission presets.
+  final bool permissionPresets;
+
+  /// Guardian (auto-review) approvals.
+  final bool guardian;
+
+  /// Account rate-limit snapshot.
+  final bool rateLimits;
+
+  /// Taking over a session held by another local process.
+  final bool takeover;
+
+  /// Monitoring another writer of the same session.
+  final bool externalWriterMonitor;
+
+  /// Sessions read directly from this device's disk.
+  final bool localSessions;
+
+  /// Plan collaboration mode.
+  final bool planMode;
+
+  /// Label of the reasoning selector: `effort` or `variant`.
+  final String effortLabel;
+
+  /// Whether "allow for session" persists a project rule instead.
+  final bool approveAlwaysPersistsProject;
+
+  /// Multi-select questions.
+  final bool multiSelectQuestions;
+
+  /// Child (subagent) sessions that can be opened read-only.
+  final bool childSessions;
+
+  const AppCapabilitiesDto({
+    required this.provider,
+    required this.fast,
+    required this.permissionPresets,
+    required this.guardian,
+    required this.rateLimits,
+    required this.takeover,
+    required this.externalWriterMonitor,
+    required this.localSessions,
+    required this.planMode,
+    required this.effortLabel,
+    required this.approveAlwaysPersistsProject,
+    required this.multiSelectQuestions,
+    required this.childSessions,
+  });
+
+  @override
+  int get hashCode =>
+      provider.hashCode ^
+      fast.hashCode ^
+      permissionPresets.hashCode ^
+      guardian.hashCode ^
+      rateLimits.hashCode ^
+      takeover.hashCode ^
+      externalWriterMonitor.hashCode ^
+      localSessions.hashCode ^
+      planMode.hashCode ^
+      effortLabel.hashCode ^
+      approveAlwaysPersistsProject.hashCode ^
+      multiSelectQuestions.hashCode ^
+      childSessions.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AppCapabilitiesDto &&
+          runtimeType == other.runtimeType &&
+          provider == other.provider &&
+          fast == other.fast &&
+          permissionPresets == other.permissionPresets &&
+          guardian == other.guardian &&
+          rateLimits == other.rateLimits &&
+          takeover == other.takeover &&
+          externalWriterMonitor == other.externalWriterMonitor &&
+          localSessions == other.localSessions &&
+          planMode == other.planMode &&
+          effortLabel == other.effortLabel &&
+          approveAlwaysPersistsProject == other.approveAlwaysPersistsProject &&
+          multiSelectQuestions == other.multiSelectQuestions &&
+          childSessions == other.childSessions;
+}
+
 /// One app-server event mirrored for Dart. `kind` is the JSON-RPC method
 /// (e.g. `turn/started`, `item/agentMessage/delta`, `turn/completed`).
 class AppEventDto {
@@ -1167,6 +1288,16 @@ class AppServeStatusDto {
   /// they inherit the app's environment.
   final String? proxy;
 
+  /// Service provider of this host: `codex` or `opencode`. For `opencode`
+  /// the `app_*` fields describe the OpenCode gateway and `api_*` are empty.
+  final String provider;
+
+  /// Provider version when known (OpenCode).
+  final String? providerVersion;
+
+  /// Whether that version is the one this build was verified against.
+  final bool providerVerified;
+
   const AppServeStatusDto({
     required this.name,
     required this.device,
@@ -1184,6 +1315,9 @@ class AppServeStatusDto {
     required this.embedded,
     this.codexBinary,
     this.proxy,
+    required this.provider,
+    this.providerVersion,
+    required this.providerVerified,
   });
 
   @override
@@ -1203,7 +1337,10 @@ class AppServeStatusDto {
       metaRegistered.hashCode ^
       embedded.hashCode ^
       codexBinary.hashCode ^
-      proxy.hashCode;
+      proxy.hashCode ^
+      provider.hashCode ^
+      providerVersion.hashCode ^
+      providerVerified.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -1225,7 +1362,10 @@ class AppServeStatusDto {
           metaRegistered == other.metaRegistered &&
           embedded == other.embedded &&
           codexBinary == other.codexBinary &&
-          proxy == other.proxy;
+          proxy == other.proxy &&
+          provider == other.provider &&
+          providerVersion == other.providerVersion &&
+          providerVerified == other.providerVerified;
 }
 
 /// codex auth status for the app-server behind `service_key`, mirrored for
@@ -1850,6 +1990,75 @@ class OlderPageDto {
           runtimeType == other.runtimeType &&
           items == other.items &&
           hasOlder == other.hasOlder;
+}
+
+/// Result of attaching and publishing a local OpenCode service.
+class OpenCodeServeDto {
+  /// Device id the services registered under.
+  final String device;
+
+  /// Instance name.
+  final String name;
+
+  /// `pcx:<device>:opencode:<name>` key.
+  final String serviceKey;
+
+  /// Loopback gateway address.
+  final String listenAddr;
+
+  /// `pcx:<device>:meta:<name>` key.
+  final String metaServiceKey;
+
+  /// OpenCode version.
+  final String version;
+
+  /// Whether the version is the verified one (others passed the contract).
+  final bool verified;
+
+  /// Whether an existing host was reused.
+  final bool reused;
+
+  /// Whether this call asked OpenCode to start its background service.
+  final bool startedService;
+
+  const OpenCodeServeDto({
+    required this.device,
+    required this.name,
+    required this.serviceKey,
+    required this.listenAddr,
+    required this.metaServiceKey,
+    required this.version,
+    required this.verified,
+    required this.reused,
+    required this.startedService,
+  });
+
+  @override
+  int get hashCode =>
+      device.hashCode ^
+      name.hashCode ^
+      serviceKey.hashCode ^
+      listenAddr.hashCode ^
+      metaServiceKey.hashCode ^
+      version.hashCode ^
+      verified.hashCode ^
+      reused.hashCode ^
+      startedService.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is OpenCodeServeDto &&
+          runtimeType == other.runtimeType &&
+          device == other.device &&
+          name == other.name &&
+          serviceKey == other.serviceKey &&
+          listenAddr == other.listenAddr &&
+          metaServiceKey == other.metaServiceKey &&
+          version == other.version &&
+          verified == other.verified &&
+          reused == other.reused &&
+          startedService == other.startedService;
 }
 
 /// The host's project-folder config (mirrored for Dart): the roots a remote

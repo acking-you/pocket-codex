@@ -3025,7 +3025,7 @@ fn parse_turn_item(item: &Value, turn: &TurnStamp) -> Option<ThreadItem> {
 /// both the snake_case `in_progress` (thread-history items) and the camelCase
 /// `inProgress` (the v2 `turn/plan/updated` notification) status tokens. Falls
 /// back to a `text` field, then empty.
-fn encode_plan(v: &Value) -> String {
+pub(super) fn encode_plan(v: &Value) -> String {
     let explanation = v
         .get("explanation")
         .and_then(Value::as_str)
@@ -3271,7 +3271,7 @@ fn normalize_file_change_diff(change: &Value) -> Option<String> {
     }
 }
 
-fn format_content_diff(path: &str, content: &str, added: bool) -> String {
+pub(super) fn format_content_diff(path: &str, content: &str, added: bool) -> String {
     let lines: Vec<&str> = content.lines().collect();
     let count = lines.len();
     let (old_path, new_path, hunk, marker) = if added {

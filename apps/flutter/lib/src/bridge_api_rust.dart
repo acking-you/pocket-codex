@@ -198,6 +198,9 @@ class RustBridgeApi implements BridgeApi {
             embedded: s.embedded,
             codexBinary: s.codexBinary,
             proxy: s.proxy,
+            provider: s.provider,
+            providerVersion: s.providerVersion,
+            providerVerified: s.providerVerified,
           ),
         )
         .toList();
@@ -226,6 +229,56 @@ class RustBridgeApi implements BridgeApi {
 
   @override
   Future<String?> codexLocate() => frb.codexLocate();
+
+  @override
+  Future<OpenCodeServeResult> appServeStartOpencode({
+    String? name,
+    String? binaryOverride,
+  }) async {
+    final r = await frb.appServeStartOpencode(
+      name: name,
+      binaryOverride: binaryOverride,
+    );
+    return OpenCodeServeResult(
+      device: r.device,
+      name: r.name,
+      serviceKey: r.serviceKey,
+      listenAddr: r.listenAddr,
+      metaServiceKey: r.metaServiceKey,
+      version: r.version,
+      verified: r.verified,
+      reused: r.reused,
+      startedService: r.startedService,
+    );
+  }
+
+  @override
+  Future<String?> opencodeLocate({String? binaryOverride}) =>
+      frb.opencodeLocate(binaryOverride: binaryOverride);
+
+  @override
+  AppCapabilities appCapabilities(String serviceKey) {
+    final c = frb.appCapabilities(serviceKey: serviceKey);
+    return AppCapabilities(
+      provider: c.provider,
+      fast: c.fast,
+      permissionPresets: c.permissionPresets,
+      guardian: c.guardian,
+      rateLimits: c.rateLimits,
+      takeover: c.takeover,
+      externalWriterMonitor: c.externalWriterMonitor,
+      localSessions: c.localSessions,
+      planMode: c.planMode,
+      effortLabel: c.effortLabel,
+      approveAlwaysPersistsProject: c.approveAlwaysPersistsProject,
+      multiSelectQuestions: c.multiSelectQuestions,
+      childSessions: c.childSessions,
+    );
+  }
+
+  @override
+  Future<List<String>> appRunningThreads(String serviceKey) =>
+      frb.appRunningThreads(serviceKey: serviceKey);
 
   @override
   Future<void> setRelay(String relay) => frb.setRelay(relay: relay);

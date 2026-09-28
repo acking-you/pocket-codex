@@ -19,6 +19,10 @@ use crate::{fs, sessions, ApiError, AppState};
 /// Maximum bytes returned for a preview, including images.
 pub const PREVIEW_LIMIT: u64 = 8 * 1024 * 1024;
 
+/// Error prefix for a session a [`SessionDirResolver`] does not know; the meta
+/// service renders it as 404.
+pub(crate) const SESSION_NOT_FOUND: &str = "unknown session";
+
 #[derive(Deserialize)]
 pub(crate) struct FileQuery {
     thread: Option<String>,
@@ -110,6 +114,18 @@ fn authorize_link(query: &FileQuery, roots: &[String], rollout: Option<&Path>) -
         .as_ref()
         .and_then(|info| info.cwd.as_deref())
         .map(Path::new);
+    authorize_in(query, roots, cwd, rollout)
+}
+
+/// Authorize a link against the project roots and the session's working
+/// directory `cwd`; a Codex `rollout` additionally grants its transcript's
+/// explicitly referenced artifacts.
+fn authorize_in(
+    query: &FileQuery,
+    roots: &[String],
+    cwd: Option<&Path>,
+    rollout: Option<&Path>,
+) -> Result<PathBuf> {
     let path = resolve_link(&query.href, cwd)?;
     if !path.is_file() {
         bail!("path is not a file");
@@ -148,15 +164,39 @@ fn authorize_link(query: &FileQuery, roots: &[String], rollout: Option<&Path>) -
     bail!("path is outside the configured project roots and session links")
 }
 
+/// Finds a session's working directory for a provider without Codex rollouts.
+#[async_trait::async_trait]
+pub trait SessionDirResolver: Send + Sync {
+    /// The absolute working directory of `session`, or `None` when the
+    /// provider does not know that session.
+    async fn session_dir(&self, session: &str) -> Result<Option<String>>;
+}
+
 pub(crate) async fn read(
     State(state): State<std::sync::Arc<AppState>>,
     Query(query): Query<FileQuery>,
 ) -> Result<Response, ApiError> {
     let roots = state.host.get().await.project_roots;
     let preview = query.preview;
-    let path = tokio::task::spawn_blocking(move || authorized_file(&query, &roots))
-        .await
-        .context("file authorization task panicked")??;
+    let path = match (&state.session_dirs, query.thread.clone()) {
+        (None, _) => tokio::task::spawn_blocking(move || authorized_file(&query, &roots)).await,
+        (Some(dirs), thread) => {
+            let cwd = match thread {
+                // `SESSION_NOT_FOUND` renders as 404, like a missing rollout.
+                Some(thread) => Some(
+                    dirs.session_dir(&thread)
+                        .await?
+                        .ok_or_else(|| anyhow!("{SESSION_NOT_FOUND}: {thread}"))?,
+                ),
+                None => None,
+            };
+            tokio::task::spawn_blocking(move || {
+                authorize_in(&query, &roots, cwd.as_deref().map(Path::new), None)
+            })
+            .await
+        },
+    }
+    .context("file authorization task panicked")??;
     let file = tokio::fs::File::open(path)
         .await
         .context("opening linked file")?;

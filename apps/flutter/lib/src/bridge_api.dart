@@ -115,6 +115,9 @@ class AppServeStatus {
     this.embedded = false,
     this.codexBinary,
     this.proxy,
+    this.provider = 'codex',
+    this.providerVersion,
+    this.providerVerified = false,
   });
 
   /// Service instance name.
@@ -165,6 +168,157 @@ class AppServeStatus {
   /// Upstream proxy codex + the API proxy were started with, or `null` when
   /// they inherit the app's environment.
   final String? proxy;
+
+  /// Service provider of this host: `codex` or `opencode`. For `opencode`
+  /// the `app*` fields describe the OpenCode gateway and `api*` are empty.
+  final String provider;
+
+  /// Provider version when known (OpenCode).
+  final String? providerVersion;
+
+  /// Whether that version is the one this build was verified against.
+  final bool providerVerified;
+
+  /// Whether this host attaches to OpenCode rather than running Codex.
+  bool get isOpenCode => provider == 'opencode';
+}
+
+/// Result of attaching to the local OpenCode service and publishing it as
+/// `opencode:<name>` plus `meta:<name>`.
+class OpenCodeServeResult {
+  /// Creates an OpenCode hosting-start result.
+  const OpenCodeServeResult({
+    required this.device,
+    required this.name,
+    required this.serviceKey,
+    required this.listenAddr,
+    required this.metaServiceKey,
+    required this.version,
+    required this.verified,
+    required this.reused,
+    required this.startedService,
+  });
+
+  /// Device id the services registered under.
+  final String device;
+
+  /// Instance name.
+  final String name;
+
+  /// `pcx:<device>:opencode:<name>` key.
+  final String serviceKey;
+
+  /// Loopback gateway address.
+  final String listenAddr;
+
+  /// `pcx:<device>:meta:<name>` key.
+  final String metaServiceKey;
+
+  /// OpenCode version.
+  final String version;
+
+  /// Whether the version is the verified one (others passed the contract).
+  final bool verified;
+
+  /// Whether an existing host was reused.
+  final bool reused;
+
+  /// Whether this call asked OpenCode to start its background service.
+  final bool startedService;
+}
+
+/// What a session service's provider supports, so the shared session UI can
+/// hide controls that do not apply.
+class AppCapabilities {
+  /// Creates a capability description.
+  const AppCapabilities({
+    required this.provider,
+    required this.fast,
+    required this.permissionPresets,
+    required this.guardian,
+    required this.rateLimits,
+    required this.takeover,
+    required this.externalWriterMonitor,
+    required this.localSessions,
+    required this.planMode,
+    required this.effortLabel,
+    required this.approveAlwaysPersistsProject,
+    required this.multiSelectQuestions,
+    required this.childSessions,
+  });
+
+  /// The Codex app-server's capabilities.
+  static const codex = AppCapabilities(
+    provider: 'codex',
+    fast: true,
+    permissionPresets: true,
+    guardian: true,
+    rateLimits: true,
+    takeover: true,
+    externalWriterMonitor: true,
+    localSessions: true,
+    planMode: true,
+    effortLabel: 'effort',
+    approveAlwaysPersistsProject: false,
+    multiSelectQuestions: false,
+    childSessions: false,
+  );
+
+  /// The OpenCode gateway's capabilities.
+  static const openCode = AppCapabilities(
+    provider: 'opencode',
+    fast: false,
+    permissionPresets: false,
+    guardian: false,
+    rateLimits: false,
+    takeover: false,
+    externalWriterMonitor: false,
+    localSessions: false,
+    planMode: true,
+    effortLabel: 'variant',
+    approveAlwaysPersistsProject: true,
+    multiSelectQuestions: true,
+    childSessions: true,
+  );
+
+  /// `codex` or `opencode`.
+  final String provider;
+
+  /// Fast service tier toggle.
+  final bool fast;
+
+  /// Approval / sandbox permission presets.
+  final bool permissionPresets;
+
+  /// Guardian (auto-review) approvals.
+  final bool guardian;
+
+  /// Account rate-limit snapshot.
+  final bool rateLimits;
+
+  /// Taking over a session held by another local process.
+  final bool takeover;
+
+  /// Monitoring another writer of the same session.
+  final bool externalWriterMonitor;
+
+  /// Sessions read directly from this device's disk.
+  final bool localSessions;
+
+  /// Plan collaboration mode.
+  final bool planMode;
+
+  /// Label of the reasoning selector: `effort` or `variant`.
+  final String effortLabel;
+
+  /// Whether "allow for session" persists a project rule instead.
+  final bool approveAlwaysPersistsProject;
+
+  /// Multi-select questions.
+  final bool multiSelectQuestions;
+
+  /// Child (subagent) sessions that can be opened read-only.
+  final bool childSessions;
 }
 
 /// View of persisted config (relay/key presence, locale, account state).
@@ -1261,6 +1415,25 @@ abstract interface class BridgeApi {
   /// The resolved codex binary path (persisted config → `PATH`), or `null` so
   /// the UI can prompt the user to point at one.
   Future<String?> codexLocate();
+
+  /// Attach to the local OpenCode background service (asking OpenCode to start
+  /// it when none is running, via [binaryOverride] when given) and publish it
+  /// as `opencode:<name>` plus `meta:<name>`. Stopping hosting never stops
+  /// OpenCode. Fails when [name] is already used by a Codex host here.
+  Future<OpenCodeServeResult> appServeStartOpencode({
+    String? name,
+    String? binaryOverride,
+  });
+
+  /// The resolved `opencode` executable (explicit → `PATH` →
+  /// `~/.opencode/bin/opencode`), or `null`.
+  Future<String?> opencodeLocate({String? binaryOverride});
+
+  /// Static capabilities of the provider behind [serviceKey] (no network).
+  AppCapabilities appCapabilities(String serviceKey);
+
+  /// Ids of an OpenCode service's sessions that are executing now.
+  Future<List<String>> appRunningThreads(String serviceKey);
 
   // --- App-server remote control ---
 

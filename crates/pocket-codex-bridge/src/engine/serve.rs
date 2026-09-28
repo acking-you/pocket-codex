@@ -163,6 +163,12 @@ pub struct ServeStatus {
     /// Upstream proxy codex + the API proxy were started with, or `None` when
     /// they inherit the app's environment.
     pub proxy: Option<String>,
+    /// Service provider: `codex` or `opencode`.
+    pub provider: String,
+    /// Provider version, when known (OpenCode reports it).
+    pub provider_version: Option<String>,
+    /// Whether that version is the one this build was verified against.
+    pub provider_verified: bool,
 }
 
 fn hosts() -> &'static Mutex<HashMap<String, LocalServe>> {
@@ -190,7 +196,7 @@ fn hosts_locked() -> std::sync::MutexGuard<'static, HashMap<String, LocalServe>>
 /// unwritable `CODEX_HOME`) is returned as an `Err` for the caller to surface
 /// as a hosting error rather than panicking the process (the bridge builds with
 /// `panic = "abort"`, so an `expect` here would take the whole app down).
-fn config_store() -> Result<Arc<pocket_codex_host_svc::store::ConfigStore>> {
+pub(super) fn config_store() -> Result<Arc<pocket_codex_host_svc::store::ConfigStore>> {
     static STORE: OnceCell<Arc<pocket_codex_host_svc::store::ConfigStore>> = OnceCell::new();
     STORE
         .get_or_try_init(|| -> Result<Arc<pocket_codex_host_svc::store::ConfigStore>> {
@@ -208,7 +214,7 @@ fn config_store() -> Result<Arc<pocket_codex_host_svc::store::ConfigStore>> {
 /// The process-wide host-config store (project roots + default project), opened
 /// once and shared by every host — like [`config_store`], co-located under
 /// CODEX_HOME so all hosts on this machine share one host config.
-fn host_store() -> Result<Arc<pocket_codex_host_svc::store::HostStore>> {
+pub(super) fn host_store() -> Result<Arc<pocket_codex_host_svc::store::HostStore>> {
     static STORE: OnceCell<Arc<pocket_codex_host_svc::store::HostStore>> = OnceCell::new();
     STORE
         .get_or_try_init(|| -> Result<Arc<pocket_codex_host_svc::store::HostStore>> {
@@ -244,7 +250,7 @@ pub fn codex_locate() -> Option<String> {
 /// relay would leave the service permanently unpublished rather than merely
 /// late. The bound comes from the SDK's own readiness budget instead, and
 /// [`pocket_codex_pb::publish_pending`] hands the handle back either way.
-fn register_service(
+pub(super) fn register_service(
     transport: &Transport,
     device: &str,
     kind: ServiceKind,
@@ -295,7 +301,7 @@ fn register_service(
 /// reconnecting and a second registration for one key is the eviction leapfrog.
 /// [`is_published`] is what the UI shows; this is what decides whether to
 /// publish again.
-fn needs_publishing(published: &Option<Published>) -> bool {
+pub(super) fn needs_publishing(published: &Option<Published>) -> bool {
     published.as_ref().is_none_or(|p| p.failure().is_some())
 }
 
@@ -305,7 +311,7 @@ fn needs_publishing(published: &Option<Published>) -> bool {
 /// key may still be indexed while nothing is forwarding, and showing that as
 /// online is what would withhold the offline / re-register controls from a user
 /// whose service is unreachable.
-fn is_published(published: &Option<Published>) -> bool {
+pub(super) fn is_published(published: &Option<Published>) -> bool {
     published.as_ref().is_some_and(|p| p.is_live())
 }
 
@@ -400,7 +406,7 @@ fn registration_slot(ls: &mut LocalServe, kind: ServiceKind) -> &mut Option<Publ
 
 /// Reserve a free loopback port (when the caller passed 0 for an automatic
 /// one).
-fn free_loopback_port() -> Result<u16> {
+pub(super) fn free_loopback_port() -> Result<u16> {
     let l = std::net::TcpListener::bind("127.0.0.1:0").context("reserving a loopback port")?;
     Ok(l.local_addr()?.port())
 }
@@ -680,6 +686,11 @@ pub fn serve_start(
         pocket_codex_api_proxy::validate_proxy(p)?;
     }
 
+    // A meta key is derived from the instance name, so one name cannot serve
+    // two providers on this device.
+    if super::serve_opencode::is_hosting(&name) {
+        bail!("`{name}` is already hosting OpenCode on this device; choose another name");
+    }
     if let Some(report) = reuse_or_retire_host(&name, port)? {
         return Ok(report);
     }
@@ -922,18 +933,30 @@ pub fn serve_status() -> Vec<ServeStatus> {
             embedded: false,
             codex_binary: ls.codex_binary.clone(),
             proxy: ls.proxy.clone(),
+            provider: "codex".to_string(),
+            provider_version: None,
+            provider_verified: true,
         })
         .collect();
+    drop(guard);
+    out.extend(super::serve_opencode::status());
     out.sort_by(|a, b| a.name.cmp(&b.name));
     out
 }
 
-/// Resolve this process's own app and meta listeners without relay probes.
+/// Whether `name` is a Codex host of this process.
+pub(super) fn is_hosting_codex(name: &str) -> bool {
+    hosts_locked().contains_key(name)
+}
+
+/// Resolve this process's own session (app-server or OpenCode gateway) and
+/// meta listeners without relay probes.
 pub(super) fn local_endpoints(service_key: &str) -> Option<(String, String)> {
-    hosts_locked()
+    let codex = hosts_locked()
         .values()
         .find(|host| host.app_key == service_key)
-        .map(|host| (host.app_local.to_string(), host.meta_local.to_string()))
+        .map(|host| (host.app_local.to_string(), host.meta_local.to_string()));
+    codex.or_else(|| super::serve_opencode::local_endpoints(service_key))
 }
 
 /// Re-publish every host's permanently-refused services, quietly.
@@ -987,6 +1010,9 @@ fn republish_refused() {
 /// until its lease expired unless the backend was asked to retire it. With the
 /// app registering directly there is no second party holding anything.
 pub fn serve_deregister(name: &str, kind: &str) -> Result<()> {
+    if super::serve_opencode::is_hosting(name) {
+        return super::serve_opencode::deregister(name, kind);
+    }
     let kind: ServiceKind = kind
         .parse()
         .map_err(|_| anyhow!("invalid service kind `{kind}`"))?;
@@ -1015,6 +1041,9 @@ pub fn serve_deregister(name: &str, kind: &str) -> Result<()> {
 /// Re-publish a previously [`serve_deregister`]'d service, forwarding to the
 /// still-running process. No-op if already published.
 pub fn serve_reregister(name: &str, kind: &str) -> Result<()> {
+    if super::serve_opencode::is_hosting(name) {
+        return super::serve_opencode::reregister(name, kind);
+    }
     let kind: ServiceKind = kind
         .parse()
         .map_err(|_| anyhow!("invalid service kind `{kind}`"))?;
@@ -1044,6 +1073,10 @@ pub fn serve_reregister(name: &str, kind: &str) -> Result<()> {
 /// watchdog, API proxy, and meta service tasks, and stop its codex.
 /// Best-effort and idempotent — a no-op when that name isn't hosting.
 pub fn serve_stop(name: &str) -> Result<()> {
+    if super::serve_opencode::is_hosting(name) {
+        super::serve_opencode::stop(name);
+        return Ok(());
+    }
     let removed = hosts_locked().remove(name);
     if let Some(ls) = removed {
         stop_host_tasks(ls);
@@ -1053,6 +1086,7 @@ pub fn serve_stop(name: &str) -> Result<()> {
 
 /// Stop every host (called on app quit so a real quit leaves no orphan codex).
 pub fn serve_stop_all() {
+    super::serve_opencode::stop_all();
     let all: Vec<LocalServe> = hosts_locked().drain().map(|(_, ls)| ls).collect();
     for ls in all {
         stop_host_tasks(ls);
@@ -1107,7 +1141,7 @@ fn stop_codex_at(listen_addr: &str) {
 }
 
 /// `true` if something is accepting TCP on a `host:port` listen address.
-fn listen_addr_open(listen_addr: &str) -> bool {
+pub(super) fn listen_addr_open(listen_addr: &str) -> bool {
     match listen_addr.rsplit_once(':') {
         Some((host, port)) => port
             .parse::<u16>()
@@ -1124,8 +1158,12 @@ fn listen_addr_open(listen_addr: &str) -> bool {
 /// socket. `first` is the listener already bound in [`serve_start`] (so the
 /// port is reserved); later restarts re-bind it. `label` names the service in
 /// logs. Aborting this task (on `serve_stop`) drops the listener.
-async fn supervise<F, Fut>(label: &str, addr: SocketAddr, first: std::net::TcpListener, serve: F)
-where
+pub(super) async fn supervise<F, Fut>(
+    label: &str,
+    addr: SocketAddr,
+    first: std::net::TcpListener,
+    serve: F,
+) where
     F: Fn(tokio::net::TcpListener) -> Fut,
     Fut: std::future::Future<Output = Result<()>>,
 {

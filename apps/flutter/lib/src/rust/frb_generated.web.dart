@@ -56,6 +56,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   AccountUserDto dco_decode_account_user_dto(dynamic raw);
 
   @protected
+  AppCapabilitiesDto dco_decode_app_capabilities_dto(dynamic raw);
+
+  @protected
   AppEventDto dco_decode_app_event_dto(dynamic raw);
 
   @protected
@@ -187,6 +190,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   OlderPageDto dco_decode_older_page_dto(dynamic raw);
 
   @protected
+  OpenCodeServeDto dco_decode_open_code_serve_dto(dynamic raw);
+
+  @protected
   String? dco_decode_opt_String(dynamic raw);
 
   @protected
@@ -306,6 +312,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   AccountUserDto sse_decode_account_user_dto(SseDeserializer deserializer);
+
+  @protected
+  AppCapabilitiesDto sse_decode_app_capabilities_dto(
+    SseDeserializer deserializer,
+  );
 
   @protected
   AppEventDto sse_decode_app_event_dto(SseDeserializer deserializer);
@@ -479,6 +490,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   OlderPageDto sse_decode_older_page_dto(SseDeserializer deserializer);
 
   @protected
+  OpenCodeServeDto sse_decode_open_code_serve_dto(SseDeserializer deserializer);
+
+  @protected
   String? sse_decode_opt_String(SseDeserializer deserializer);
 
   @protected
@@ -622,6 +636,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_account_user_dto(
     AccountUserDto self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_app_capabilities_dto(
+    AppCapabilitiesDto self,
     SseSerializer serializer,
   );
 
@@ -834,6 +854,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_older_page_dto(OlderPageDto self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_open_code_serve_dto(
+    OpenCodeServeDto self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_opt_String(String? self, SseSerializer serializer);

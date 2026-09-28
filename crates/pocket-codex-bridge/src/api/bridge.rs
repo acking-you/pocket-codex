@@ -9,7 +9,8 @@ use pocket_codex_core::config::Mode;
 
 use crate::{
     engine::{
-        account, app_session, config, discovery, logging, meta, runtime, serve, sessions, transport,
+        account, app_session, config, discovery, logging, meta, opencode, runtime, serve,
+        serve_opencode, sessions, transport,
     },
     frb_generated::StreamSink,
 };
@@ -387,6 +388,63 @@ pub struct AppServeStatusDto {
     /// Upstream proxy codex + the API proxy were started with, or `None` when
     /// they inherit the app's environment.
     pub proxy: Option<String>,
+    /// Service provider of this host: `codex` or `opencode`. For `opencode`
+    /// the `app_*` fields describe the OpenCode gateway and `api_*` are empty.
+    pub provider: String,
+    /// Provider version when known (OpenCode).
+    pub provider_version: Option<String>,
+    /// Whether that version is the one this build was verified against.
+    pub provider_verified: bool,
+}
+
+/// Result of attaching and publishing a local OpenCode service.
+pub struct OpenCodeServeDto {
+    /// Device id the services registered under.
+    pub device: String,
+    /// Instance name.
+    pub name: String,
+    /// `pcx:<device>:opencode:<name>` key.
+    pub service_key: String,
+    /// Loopback gateway address.
+    pub listen_addr: String,
+    /// `pcx:<device>:meta:<name>` key.
+    pub meta_service_key: String,
+    /// OpenCode version.
+    pub version: String,
+    /// Whether the version is the verified one (others passed the contract).
+    pub verified: bool,
+    /// Whether an existing host was reused.
+    pub reused: bool,
+    /// Whether this call asked OpenCode to start its background service.
+    pub started_service: bool,
+}
+
+/// Attach to the local OpenCode background service (asking OpenCode to start
+/// it when none is running) and publish it as `opencode:<name>` plus a
+/// `meta:<name>` service. Stopping hosting never stops OpenCode. The name must
+/// not be in use by a Codex host on this device.
+pub fn app_serve_start_opencode(
+    name: Option<String>,
+    binary_override: Option<String>,
+) -> Result<OpenCodeServeDto> {
+    let r = serve_opencode::start(name, binary_override)?;
+    Ok(OpenCodeServeDto {
+        device: r.device,
+        name: r.name,
+        service_key: r.service_key,
+        listen_addr: r.listen_addr,
+        meta_service_key: r.meta_service_key,
+        version: r.version,
+        verified: r.verified,
+        reused: r.reused,
+        started_service: r.started_service,
+    })
+}
+
+/// The resolved `opencode` executable (explicit → `$PATH` →
+/// `~/.opencode/bin/opencode`), or `None`.
+pub fn opencode_locate(binary_override: Option<String>) -> Option<String> {
+    serve_opencode::locate(binary_override.as_deref()).map(|p| p.display().to_string())
 }
 
 /// Legacy version endpoint; returns `unavailable` because no engine is bundled.
@@ -443,6 +501,9 @@ pub fn app_serve_status() -> Vec<AppServeStatusDto> {
             embedded: s.embedded,
             codex_binary: s.codex_binary,
             proxy: s.proxy,
+            provider: s.provider,
+            provider_version: s.provider_version,
+            provider_verified: s.provider_verified,
         })
         .collect()
 }
@@ -657,7 +718,9 @@ pub fn app_thread_turn_page(
     load_more: bool,
     delta_only: Option<bool>,
 ) -> Result<TurnItemsPageDto> {
-    let read = if delta_only.unwrap_or(false) {
+    let read = if opencode::is_opencode(&service_key) {
+        opencode::thread_turn_page
+    } else if delta_only.unwrap_or(false) {
         app_session::thread_turn_page_delta
     } else {
         app_session::thread_turn_page
@@ -713,17 +776,26 @@ pub struct ThreadRuntimeConfigDto {
 /// Connect to an app-server service: subscribe on `127.0.0.1:<local_port>`,
 /// open the JSON-RPC websocket and run the `initialize` handshake. Idempotent.
 pub fn app_connect(service_key: String, local_port: u16) -> Result<()> {
+    if opencode::is_opencode(&service_key) {
+        return opencode::connect(service_key, local_port, &transport::resolve_blocking()?);
+    }
     app_session::connect(service_key, local_port, &transport::resolve_blocking()?)
 }
 
 /// Whether a live app-server session exists for `service_key`.
 #[frb(sync)]
 pub fn app_is_connected(service_key: String) -> bool {
+    if opencode::is_opencode(&service_key) {
+        return opencode::is_connected(&service_key);
+    }
     app_session::is_connected(&service_key)
 }
 
 /// Disconnect the app-server session and its pb-mapper subscription.
 pub fn app_disconnect(service_key: String) {
+    if opencode::is_opencode(&service_key) {
+        return opencode::disconnect(&service_key);
+    }
     app_session::disconnect(&service_key);
 }
 
@@ -746,6 +818,9 @@ pub fn app_probe(service_key: String) -> Result<bool> {
 /// needs a different fix from a dead backend. This hands the transport's own
 /// words to the UI so it can name the actual problem.
 pub fn app_probe_reason(service_key: String) -> Result<Option<String>> {
+    if opencode::is_opencode(&service_key) {
+        return Ok(opencode::probe_reason(service_key, &transport::resolve_blocking()?));
+    }
     Ok(app_session::probe_reason(service_key, 0, &transport::resolve_blocking()?))
 }
 
@@ -881,7 +956,12 @@ pub fn app_events(service_key: String, sink: StreamSink<AppEventDto>) -> Result<
     // surfaces as an uncaught async error on the Dart side — fatal on desktop
     // (no global handler) — rather than a catchable stream `onError`/`onDone`.
     runtime::runtime().spawn(async move {
-        let mut rx = match app_session::subscribe_events(&service_key) {
+        let subscribed = if opencode::is_opencode(&service_key) {
+            opencode::subscribe_events(&service_key)
+        } else {
+            app_session::subscribe_events(&service_key)
+        };
+        let mut rx = match subscribed {
             Ok(rx) => rx,
             // Not connected: close the stream so Dart sees `onDone`.
             Err(_) => return,
@@ -916,7 +996,12 @@ pub fn app_events(service_key: String, sink: StreamSink<AppEventDto>) -> Result<
 
 /// List threads known to the app-server.
 pub fn app_thread_list(service_key: String) -> Result<Vec<ThreadMetaDto>> {
-    Ok(app_session::thread_list(&service_key)?
+    let threads = if opencode::is_opencode(&service_key) {
+        opencode::thread_list(&service_key)?
+    } else {
+        app_session::thread_list(&service_key)?
+    };
+    Ok(threads
         .into_iter()
         .map(|t| ThreadMetaDto {
             id: t.id,
@@ -930,7 +1015,12 @@ pub fn app_thread_list(service_key: String) -> Result<Vec<ThreadMetaDto>> {
 
 /// List the models the app-server offers.
 pub fn app_model_list(service_key: String) -> Result<Vec<ModelInfoDto>> {
-    Ok(app_session::model_list(&service_key)?
+    let models = if opencode::is_opencode(&service_key) {
+        opencode::model_list(&service_key)?
+    } else {
+        app_session::model_list(&service_key)?
+    };
+    Ok(models
         .into_iter()
         .map(|m| ModelInfoDto {
             id: m.id,
@@ -957,6 +1047,9 @@ pub fn app_thread_start(
     service_tier: Option<String>,
     sandbox: Option<String>,
 ) -> Result<String> {
+    if opencode::is_opencode(&service_key) {
+        return opencode::thread_start(&service_key, model, cwd);
+    }
     app_session::thread_start(
         &service_key,
         model,
@@ -976,6 +1069,10 @@ pub fn app_turn_steer(
     text: String,
     images: Option<Vec<String>>,
 ) -> Result<String> {
+    if opencode::is_opencode(&service_key) {
+        let images = images.unwrap_or_default();
+        return opencode::turn_steer(&service_key, &thread_id, turn_id.as_deref(), &text, &images);
+    }
     app_session::turn_steer(
         &service_key,
         &thread_id,
@@ -993,6 +1090,9 @@ pub fn app_respond_approval(
     request_id: String,
     decision: String,
 ) -> Result<()> {
+    if opencode::is_opencode(&service_key) {
+        return opencode::respond_approval(&service_key, &request_id, &decision);
+    }
     app_session::respond_approval(&service_key, &request_id, &decision)
 }
 
@@ -1008,12 +1108,18 @@ pub fn app_respond_user_input(
     request_id: String,
     answers_json: String,
 ) -> Result<()> {
+    if opencode::is_opencode(&service_key) {
+        return opencode::respond_user_input(&service_key, &request_id, &answers_json);
+    }
     app_session::respond_user_input(&service_key, &request_id, &answers_json)
 }
 
 /// Resume an existing thread (load it into the session) before reading it or
 /// sending turns; otherwise the server reports "thread not found".
 pub fn app_thread_resume(service_key: String, thread_id: String) -> Result<()> {
+    if opencode::is_opencode(&service_key) {
+        return opencode::thread_resume(&service_key, &thread_id);
+    }
     app_session::thread_resume(&service_key, &thread_id)
 }
 
@@ -1043,7 +1149,9 @@ pub fn app_thread_read(
     thread_id: String,
     include_turn_pages: Option<bool>,
 ) -> Result<ThreadHistoryDto> {
-    let h = if include_turn_pages.unwrap_or(true) {
+    let h = if opencode::is_opencode(&service_key) {
+        opencode::thread_read(&service_key, &thread_id)?
+    } else if include_turn_pages.unwrap_or(true) {
         app_session::thread_read(&service_key, &thread_id)?
     } else {
         app_session::thread_read_with_pages(&service_key, &thread_id, false)?
@@ -1091,7 +1199,11 @@ fn history_dto(h: app_session::ThreadHistory) -> ThreadHistoryDto {
 /// Returns an empty page when the thread reads whole or is already at its
 /// start.
 pub fn app_thread_older_page(service_key: String, thread_id: String) -> Result<OlderPageDto> {
-    let page = app_session::thread_older_page(&service_key, &thread_id)?;
+    let page = if opencode::is_opencode(&service_key) {
+        opencode::thread_older_page(&service_key, &thread_id)?
+    } else {
+        app_session::thread_older_page(&service_key, &thread_id)?
+    };
     Ok(OlderPageDto {
         items: page.items.into_iter().map(item_dto).collect(),
         has_older: page.has_older,
@@ -1105,6 +1217,10 @@ pub fn app_thread_turn_items(
     thread_id: String,
     turn_id: String,
 ) -> Result<Vec<ThreadItemDto>> {
+    if opencode::is_opencode(&service_key) {
+        let page = opencode::thread_turn_page(&service_key, &thread_id, &turn_id, false)?;
+        return Ok(page.items.into_iter().map(item_dto).collect());
+    }
     Ok(app_session::thread_turn_items(&service_key, &thread_id, &turn_id)?
         .into_iter()
         .map(item_dto)
@@ -1120,7 +1236,12 @@ pub fn app_thread_runtime_config(
     service_key: String,
     thread_id: String,
 ) -> Option<ThreadRuntimeConfigDto> {
-    app_session::thread_runtime_config(&service_key, &thread_id).map(|c| ThreadRuntimeConfigDto {
+    let config = if opencode::is_opencode(&service_key) {
+        opencode::thread_runtime_config(&service_key, &thread_id)
+    } else {
+        app_session::thread_runtime_config(&service_key, &thread_id)
+    };
+    config.map(|c| ThreadRuntimeConfigDto {
         model: c.model,
         model_provider: c.model_provider,
         reasoning_effort: c.reasoning_effort,
@@ -1136,18 +1257,27 @@ pub fn app_thread_runtime_config(
 /// Read the account rate-limit / quota snapshot as raw JSON (5h + weekly
 /// windows). Parsed on the Dart side since the shape is nested and volatile.
 pub fn app_rate_limits(service_key: String) -> Result<String> {
+    if opencode::is_opencode(&service_key) {
+        return Err(anyhow!("rate limits are not available for OpenCode services"));
+    }
     app_session::rate_limits(&service_key)
 }
 
 /// Unified diff of the repo at `cwd` vs its remote default branch. Empty when
 /// the cwd isn't a git repo or there are no changes.
 pub fn app_git_diff(service_key: String, cwd: String) -> Result<String> {
+    if opencode::is_opencode(&service_key) {
+        return opencode::git_diff(&service_key, &cwd);
+    }
     app_session::git_diff(&service_key, &cwd)
 }
 
 /// Start a manual conversation compaction; the server emits `thread/compacted`
 /// when done.
 pub fn app_compact(service_key: String, thread_id: String) -> Result<()> {
+    if opencode::is_opencode(&service_key) {
+        return opencode::compact(&service_key, &thread_id);
+    }
     app_session::compact(&service_key, &thread_id)
 }
 
@@ -1159,6 +1289,9 @@ pub fn app_compact(service_key: String, thread_id: String) -> Result<()> {
 /// so the UI fetches these lazily for the rows it actually shows instead of
 /// paying for every conversation up front.
 pub async fn app_thread_summary(service_key: String, thread_id: String) -> Result<Option<String>> {
+    if opencode::is_opencode(&service_key) {
+        return Ok(None);
+    }
     // Summary RPCs must not occupy the CPU-sized FRB pool, even on one-core
     // devices. The UI separately bounds how many background requests run.
     runtime::runtime()
@@ -1170,6 +1303,9 @@ pub async fn app_thread_summary(service_key: String, thread_id: String) -> Resul
 /// follows the thread across devices); an empty `name` clears it, and the UI
 /// falls back to the thread preview.
 pub fn app_set_thread_name(service_key: String, thread_id: String, name: String) -> Result<()> {
+    if opencode::is_opencode(&service_key) {
+        return opencode::set_thread_name(&service_key, &thread_id, &name);
+    }
     app_session::set_thread_name(&service_key, &thread_id, &name)
 }
 
@@ -1199,6 +1335,17 @@ pub fn app_turn_start(
     collaboration_mode: Option<String>,
     reasoning_effort: Option<String>,
 ) -> Result<()> {
+    if opencode::is_opencode(&service_key) {
+        return opencode::turn_start(
+            &service_key,
+            &thread_id,
+            text,
+            images,
+            model,
+            collaboration_mode,
+            reasoning_effort,
+        );
+    }
     app_session::turn_start(
         &service_key,
         &thread_id,
@@ -1221,7 +1368,70 @@ pub fn app_turn_interrupt(
     thread_id: String,
     turn_id: Option<String>,
 ) -> Result<()> {
+    if opencode::is_opencode(&service_key) {
+        return opencode::turn_interrupt(&service_key, &thread_id, turn_id);
+    }
     app_session::turn_interrupt(&service_key, &thread_id, turn_id)
+}
+
+/// What a session service's provider supports, so the shared session UI can
+/// hide controls that do not apply.
+pub struct AppCapabilitiesDto {
+    /// `codex` or `opencode`.
+    pub provider: String,
+    /// Fast service tier toggle.
+    pub fast: bool,
+    /// Approval / sandbox permission presets.
+    pub permission_presets: bool,
+    /// Guardian (auto-review) approvals.
+    pub guardian: bool,
+    /// Account rate-limit snapshot.
+    pub rate_limits: bool,
+    /// Taking over a session held by another local process.
+    pub takeover: bool,
+    /// Monitoring another writer of the same session.
+    pub external_writer_monitor: bool,
+    /// Sessions read directly from this device's disk.
+    pub local_sessions: bool,
+    /// Plan collaboration mode.
+    pub plan_mode: bool,
+    /// Label of the reasoning selector: `effort` or `variant`.
+    pub effort_label: String,
+    /// Whether "allow for session" persists a project rule instead.
+    pub approve_always_persists_project: bool,
+    /// Multi-select questions.
+    pub multi_select_questions: bool,
+    /// Child (subagent) sessions that can be opened read-only.
+    pub child_sessions: bool,
+}
+
+/// Static capabilities of the provider behind `service_key` (no network).
+#[frb(sync)]
+pub fn app_capabilities(service_key: String) -> AppCapabilitiesDto {
+    let opencode = opencode::is_opencode(&service_key);
+    AppCapabilitiesDto {
+        provider: if opencode { "opencode" } else { "codex" }.to_string(),
+        fast: !opencode,
+        permission_presets: !opencode,
+        guardian: !opencode,
+        rate_limits: !opencode,
+        takeover: !opencode,
+        external_writer_monitor: !opencode,
+        local_sessions: !opencode,
+        plan_mode: true,
+        effort_label: if opencode { "variant" } else { "effort" }.to_string(),
+        approve_always_persists_project: opencode,
+        multi_select_questions: opencode,
+        child_sessions: opencode,
+    }
+}
+
+/// Ids of an OpenCode service's sessions that are executing now.
+pub fn app_running_threads(service_key: String) -> Result<Vec<String>> {
+    if !opencode::is_opencode(&service_key) {
+        return Err(anyhow!("running threads are listed through the meta service for Codex"));
+    }
+    opencode::running_sessions(&service_key)
 }
 
 // ---------------------------------------------------------------------------
@@ -1397,6 +1607,9 @@ pub fn app_local_session_transcript(thread_id: String) -> Result<Vec<ThreadItemD
 /// report says exactly which processes were killed / survived and whether
 /// the resume took.
 pub fn app_force_resume(service_key: String, thread_id: String) -> Result<ForceResumeReportDto> {
+    if opencode::is_opencode(&service_key) {
+        return Err(anyhow!("OpenCode sessions do not need a forced resume"));
+    }
     let outcome = sessions::force_resume(&service_key, &thread_id)?;
     Ok(ForceResumeReportDto {
         killed: outcome.killed.into_iter().map(holder_dto).collect(),
@@ -1986,11 +2199,17 @@ pub fn app_history_cached(
 
 /// Negotiate the independent meta history protocol before remote reads.
 pub fn app_history_sync_prepare(service_key: String) -> Result<bool> {
+    if opencode::is_opencode(&service_key) {
+        return Ok(false);
+    }
     crate::engine::session_sync::prepare(&service_key)
 }
 
 /// Prefetch only a bounded running-session tail without resuming it.
 pub fn app_history_prefetch(service_key: String, thread_id: String) -> Result<()> {
+    if opencode::is_opencode(&service_key) {
+        return Ok(());
+    }
     crate::engine::session_sync::prefetch(&service_key, &thread_id)
 }
 
