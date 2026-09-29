@@ -92,7 +92,9 @@ class _ProjectMenuState extends State<ProjectMenu> {
               children: [
                 Icon(icon, size: 16, color: scheme.onSurfaceVariant),
                 const SizedBox(width: 10),
-                Text(label, style: const TextStyle(fontSize: 13)),
+                Expanded(
+                  child: Text(label, style: const TextStyle(fontSize: 13)),
+                ),
               ],
             ),
           ),

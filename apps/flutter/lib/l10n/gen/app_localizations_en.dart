@@ -120,6 +120,14 @@ class AppLocalizationsEn extends AppLocalizations {
   String get newConversation => 'New conversation';
 
   @override
+  String newConversationInProject(String project) {
+    return 'New conversation in $project';
+  }
+
+  @override
+  String get copyProjectPath => 'Copy project path';
+
+  @override
   String get noThreads => 'No conversations yet';
 
   @override

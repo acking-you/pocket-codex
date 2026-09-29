@@ -19,6 +19,7 @@ Future<void> _mount(
   FakeBridgeApi api, {
   String service = _service,
   String? thread = 'a',
+  String? cwd,
   bool settle = true,
 }) async {
   await api.appConnect(service, 28080);
@@ -28,6 +29,7 @@ Future<void> _mount(
         key: ValueKey(service),
         serviceKey: service,
         threadId: thread,
+        cwd: cwd,
         home: true,
       ),
       api,
@@ -133,6 +135,104 @@ class _DelayedFileSelector extends FakeFileSelector {
 
 void main() {
   setUp(AppSessionScreen.debugResetThreadMemory);
+
+  Future<void> switchProject(WidgetTester t, String cwd) async {
+    if (find.byKey(const Key('project-switcher-btn')).evaluate().isEmpty) {
+      await t.longPress(find.byKey(Key('project-header-$cwd')));
+      await _frames(t);
+      await t.tap(find.text('New conversation in ${cwd.split('/').last}'));
+    } else {
+      await t.tap(find.byKey(const Key('project-switcher-btn')));
+      await _frames(t);
+      await t.tap(find.byKey(Key('project-menu-item-$cwd')));
+    }
+    await _frames(t);
+  }
+
+  testWidgets('new project drafts keep uploads in their originating project', (
+    t,
+  ) async {
+    t.view.devicePixelRatio = 1;
+    t.view.physicalSize = const Size(1280, 900);
+    addTearDown(t.view.reset);
+    final api = _UploadingApi()
+      ..appThreads.add(
+        const ThreadMeta(id: 'b', preview: 'Beta', cwd: '/beta', updatedAt: 0),
+      );
+    final previous = fsel.FileSelectorPlatform.instance;
+    fsel.FileSelectorPlatform.instance = FakeFileSelector()
+      ..files = [
+        MemXFile(Uint8List.fromList([1, 2]), 'alpha.txt'),
+      ];
+    addTearDown(() => fsel.FileSelectorPlatform.instance = previous);
+    await _mount(t, api, thread: null, cwd: '/alpha');
+    await t.tap(find.byKey(const Key('attach-menu-btn')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('attach-file-btn')));
+    await t.pump();
+    await switchProject(t, '/beta');
+    await t.enterText(_input, 'Beta draft');
+    api.upload.complete('/host/alpha.txt');
+    await t.pumpAndSettle();
+    expect(find.text('alpha.txt'), findsNothing);
+    await switchProject(t, '/alpha');
+    expect(find.text('alpha.txt'), findsOneWidget);
+    expect(_controller(t).text, isEmpty);
+    await switchProject(t, '/beta');
+    expect(_controller(t).text, 'Beta draft');
+    expect(find.text('alpha.txt'), findsNothing);
+  });
+
+  testWidgets('a background first send adopts only its project draft', (
+    t,
+  ) async {
+    t.view.devicePixelRatio = 1;
+    t.view.physicalSize = const Size(1280, 900);
+    addTearDown(t.view.reset);
+    final api = _StartingApi()
+      ..appThreads.add(
+        const ThreadMeta(id: 'b', preview: 'Beta', cwd: '/beta', updatedAt: 0),
+      );
+    await _mount(t, api, thread: null, cwd: '/alpha');
+    await t.enterText(_input, 'Start alpha');
+    await t.pump();
+    await t.tap(find.byKey(const Key('send-btn')));
+    await t.pump();
+    await t.enterText(_input, 'Alpha followup');
+    await switchProject(t, '/beta');
+    await t.enterText(_input, 'Beta draft');
+    api.start.complete();
+    await t.pumpAndSettle();
+    expect(api.lastCwd, '/alpha');
+    expect(api.sentTo, ['thread-0']);
+    expect(_controller(t).text, 'Beta draft');
+    await t.tap(find.byKey(const Key('conv-tile-thread-0')));
+    await t.pumpAndSettle();
+    expect(_controller(t).text, 'Alpha followup');
+    await t.tap(find.byKey(const Key('new-conversation-btn')));
+    await t.pumpAndSettle();
+    expect(_controller(t).text, isEmpty);
+    await switchProject(t, '/beta');
+    expect(_controller(t).text, 'Beta draft');
+  });
+
+  testWidgets(
+    'reopening the default project restores its existing unsent draft',
+    (t) async {
+      final api = FakeBridgeApi();
+      api.projectConfigs[_service] = const ProjectConfig(
+        defaultProject: '/alpha',
+      );
+      await _mount(t, api, thread: null, cwd: '/alpha');
+      await t.enterText(_input, 'Remember alpha');
+      await t.pumpWidget(
+        host(const SizedBox(), api, locale: const Locale('en')),
+      );
+      await _mount(t, api, thread: null);
+      expect(_controller(t).text, 'Remember alpha');
+      expect(find.text('alpha'), findsWidgets);
+    },
+  );
 
   testWidgets('growing the composer preserves the message being read', (
     t,
@@ -296,7 +396,7 @@ void main() {
             updatedAt: 0,
           ),
         );
-      await _mount(t, api, thread: null);
+      await _mount(t, api, thread: null, cwd: '/project');
       await t.enterText(_input, 'First message');
       await t.pump();
       await t.tap(find.byKey(const Key('send-btn')));
@@ -332,7 +432,7 @@ void main() {
             updatedAt: 0,
           ),
         );
-      await _mount(t, api, thread: null);
+      await _mount(t, api, thread: null, cwd: '/project');
       await t.enterText(_input, 'First message');
       await t.pump();
       await t.tap(find.byKey(const Key('send-btn')));

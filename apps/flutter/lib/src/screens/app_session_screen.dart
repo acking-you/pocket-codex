@@ -52,6 +52,7 @@ import 'package:pocket_codex/src/widgets/loading.dart';
 import 'package:pocket_codex/src/widgets/message_images.dart';
 import 'package:pocket_codex/src/widgets/middle_click_scroll.dart';
 import 'package:pocket_codex/src/widgets/project_menu.dart';
+import 'package:pocket_codex/src/widgets/project_section_header.dart';
 import 'package:pocket_codex/src/widgets/status_dots.dart';
 import 'package:pocket_codex/src/widgets/takeover_dialog.dart';
 import 'package:pocket_codex/src/widgets/theme_toggle.dart';
@@ -197,6 +198,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     with WidgetsBindingObserver {
   final _input = TextEditingController();
   final _inputFocus = FocusNode();
+  int? _newDraftFocusAfterDrawer;
+  int _projectSelectionGeneration = 0;
   final _expandedInputFocus = FocusNode();
   late final _ComposerDrafts _drafts;
   late _ComposerDraft _draft;
@@ -626,7 +629,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     _threadId = widget.threadId;
     _cwd = widget.cwd;
     _drafts = ref.read(_composerDraftsProvider(widget.serviceKey));
-    _draft = _drafts.forThread(_threadId);
+    _draft = _drafts.forThread(_threadId, cwd: _cwd);
     _input.value = _draft.value.copyWith(composing: TextRange.empty);
     _input.addListener(_saveDraft);
     // Remember where the user is chatting so the next cold start (and the
@@ -1119,7 +1122,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       _sentModel = null;
       _sentEffort = null;
       _implementDismissed = false;
-      _draft = _drafts.forThread(tid);
+      _draft = _drafts.forThread(tid, cwd: cwd);
       _input.value = _draft.value.copyWith(composing: TextRange.empty);
       // Undo and retry snapshots belong to the previous conversation.
       _outputStarted = false;
@@ -4752,6 +4755,12 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     // bar is a plain AppBar naming the conversation.
     if (width < 720) {
       return Scaffold(
+        onDrawerChanged: (open) {
+          if (open) return;
+          final generation = _newDraftFocusAfterDrawer;
+          _newDraftFocusAfterDrawer = null;
+          if (generation != null) _focusNewComposer(generation);
+        },
         drawer: Drawer(
           // The scheme's container colours are translucent washes. A drawer
           // floats above a scrim, so resolve the wash onto its opaque ground
@@ -5960,136 +5969,66 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     );
   }
 
-  /// Guidance shown for a brand-new, empty conversation: a short intro plus a
-  /// few tappable starter prompts tailored to remote-controlling a codex
-  /// workspace (explore the project, run/fix tests, review git changes, plan a
-  /// feature). Tapping a card prefills the composer — the user reviews and
-  /// sends — rather than firing a remote action immediately.
+  /// Keep the empty view focused on the project and the composer below it.
   Widget _newSessionGuidance(AppLocalizations l10n) {
-    final scheme = Theme.of(context).colorScheme;
-    final suggestions = <(IconData, String, String)>[
-      (
-        Icons.account_tree_outlined,
-        l10n.suggestExploreTitle,
-        l10n.suggestExplorePrompt,
-      ),
-      (Icons.science_outlined, l10n.suggestTestsTitle, l10n.suggestTestsPrompt),
-      (
-        Icons.difference_outlined,
-        l10n.suggestDiffTitle,
-        l10n.suggestDiffPrompt,
-      ),
-      (Icons.checklist_rtl, l10n.suggestPlanTitle, l10n.suggestPlanPrompt),
-    ];
-    return LayoutBuilder(
-      builder: (context, c) {
-        // Two columns of cards once there's room for them; a phone-width pane
-        // keeps the single column (a 2-up grid there is unreadable).
-        final twoUp = c.maxWidth >= 560;
-        return Center(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
-            child: ConstrainedBox(
-              constraints: BoxConstraints(maxWidth: twoUp ? 620 : 460),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // A terminal mark, not a sparkle: this drives a real shell on
-                  // a real checkout.
-                  Container(
-                    width: 56,
-                    height: 56,
-                    alignment: Alignment.center,
-                    decoration: BoxDecoration(
-                      color: scheme.surfaceContainerHighest,
-                      borderRadius: BorderRadius.circular(kPanelRadius),
-                      border: Border.all(
-                        color: scheme.outlineVariant,
-                        width: 0.5,
-                      ),
-                    ),
-                    child: Icon(
-                      Icons.terminal_rounded,
-                      size: 28,
-                      color: scheme.primary,
-                    ),
-                  ),
-                  const SizedBox(height: 18),
-                  _newSessionHeadline(l10n),
-                  const SizedBox(height: 8),
-                  Text(
-                    l10n.newSessionSubtitle,
-                    textAlign: TextAlign.center,
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: scheme.onSurfaceVariant,
-                    ),
-                  ),
-                  const SizedBox(height: 26),
-                  if (twoUp)
-                    // Pair the cards into rows so the two in a row share a
-                    // height regardless of how long each prompt wraps.
-                    for (var i = 0; i < suggestions.length; i += 2) ...[
-                      IntrinsicHeight(
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            Expanded(child: _suggestionCard(suggestions[i])),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: i + 1 < suggestions.length
-                                  ? _suggestionCard(suggestions[i + 1])
-                                  : const SizedBox.shrink(),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                    ]
-                  else
-                    for (final s in suggestions) ...[
-                      _suggestionCard(s),
-                      const SizedBox(height: 10),
-                    ],
-                ],
-              ),
-            ),
+    return Center(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(24),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 460),
+          child: _projectSwitcher(
+            l10n,
+            label: (_cwd?.isNotEmpty ?? false)
+                ? _projectName()
+                : l10n.workOutsideProject,
+            style: Theme.of(
+              context,
+            ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w500),
           ),
-        );
-      },
+        ),
+      ),
     );
   }
 
-  /// The empty state's headline. With a project in effect it names it inline
-  /// and makes that word the project switcher, so changing what the next
-  /// conversation is about is one click on the thing being changed — rather
-  /// than three levels down a settings sheet.
-  Widget _newSessionHeadline(AppLocalizations l10n) {
-    final style = Theme.of(
-      context,
-    ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w600);
-    final project = _cwd?.trim();
-    if (project == null || project.isEmpty) {
-      // No project: nothing to name, so the plain question + a switcher below.
-      return Column(
-        children: [
-          Text(l10n.newSessionTitle, textAlign: TextAlign.center, style: style),
-          const SizedBox(height: 10),
-          _projectSwitcher(l10n, label: l10n.projectsSection, dimmed: true),
-        ],
-      );
+  void _focusNewComposer(int generation) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && generation == _threadLoadGeneration && _threadId == null) {
+        _inputFocus.requestFocus();
+      }
+    });
+  }
+
+  void _newConversationInProject(String? cwd, BuildContext paneContext) {
+    if (!mounted || !paneContext.mounted) return;
+    if (_threadId != null || _cwd != cwd) _openThread(null, cwd);
+    final scaffold = Scaffold.maybeOf(paneContext);
+    if (scaffold?.isDrawerOpen ?? false) {
+      _newDraftFocusAfterDrawer = _threadLoadGeneration;
+      scaffold!.closeDrawer();
+    } else {
+      _focusNewComposer(_threadLoadGeneration);
     }
-    final parts = l10n.newSessionTitleIn(_kProjectSlot).split(_kProjectSlot);
-    return Wrap(
-      alignment: WrapAlignment.center,
-      crossAxisAlignment: WrapCrossAlignment.center,
-      children: [
-        if (parts.isNotEmpty && parts.first.isNotEmpty)
-          Text(parts.first, style: style),
-        _projectSwitcher(l10n, label: _projectName(), style: style),
-        if (parts.length > 1 && parts[1].isNotEmpty)
-          Text(parts[1], style: style),
-      ],
+  }
+
+  void _selectProject(String? cwd) {
+    if (_threadId != null) return;
+    _projectSelectionGeneration++;
+    _openLoadDone(_kCwdSeed);
+    if (_cwd == cwd) return;
+    _openThread(null, cwd);
+    _focusNewComposer(_threadLoadGeneration);
+  }
+
+  Future<void> _browseDraftProject() async {
+    final generation = _threadLoadGeneration;
+    final picked = await showFolderPicker(
+      context,
+      serviceKey: widget.serviceKey,
+      initialPath: _cwd,
     );
+    if (mounted && generation == _threadLoadGeneration && picked != null) {
+      _selectProject(picked);
+    }
   }
 
   /// The project name rendered as a dropdown trigger, wired to [ProjectMenu].
@@ -6097,56 +6036,45 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     AppLocalizations l10n, {
     required String label,
     TextStyle? style,
-    bool dimmed = false,
   }) {
     final scheme = Theme.of(context).colorScheme;
     return ProjectMenu(
       projects: _knownProjects(),
       current: _cwd?.trim().isEmpty ?? true ? null : _cwd!.trim(),
-      onPick: (p) => setState(() => _cwd = p),
-      onBrowse: () async {
-        final picked = await showFolderPicker(
-          context,
-          serviceKey: widget.serviceKey,
-          initialPath: _cwd,
-        );
-        if (picked != null && mounted) setState(() => _cwd = picked);
-      },
-      onClear: () => setState(() => _cwd = null),
-      builder: (ctx, ctrl) => InkWell(
-        mouseCursor: clickable,
-        key: const Key('project-switcher-btn'),
-        borderRadius: BorderRadius.circular(8),
-        onTap: () => ctrl.isOpen ? ctrl.close() : ctrl.open(),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (dimmed) ...[
+      onPick: _selectProject,
+      onBrowse: _browseDraftProject,
+      onClear: () => _selectProject(null),
+      builder: (ctx, ctrl) => Tooltip(
+        message: _cwd ?? l10n.workOutsideProject,
+        triggerMode: TooltipTriggerMode.manual,
+        child: InkWell(
+          mouseCursor: clickable,
+          key: const Key('project-switcher-btn'),
+          borderRadius: BorderRadius.circular(8),
+          onTap: () => ctrl.isOpen ? ctrl.close() : ctrl.open(),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Flexible(
+                  child: Text(
+                    label,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style:
+                        style ??
+                        TextStyle(fontSize: 13, color: scheme.onSurfaceVariant),
+                  ),
+                ),
+                const SizedBox(width: 2),
                 Icon(
-                  Icons.folder_outlined,
-                  size: 16,
+                  Icons.expand_more,
+                  size: style == null ? 16 : 20,
                   color: scheme.onSurfaceVariant,
                 ),
-                const SizedBox(width: 6),
               ],
-              Text(
-                label,
-                style:
-                    style?.copyWith(
-                      decoration: TextDecoration.underline,
-                      decorationColor: scheme.outlineVariant,
-                    ) ??
-                    TextStyle(fontSize: 13, color: scheme.onSurfaceVariant),
-              ),
-              const SizedBox(width: 2),
-              Icon(
-                Icons.expand_more,
-                size: style == null ? 16 : 20,
-                color: scheme.onSurfaceVariant,
-              ),
-            ],
+            ),
           ),
         ),
       ),
@@ -6170,78 +6098,12 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     for (final p in _allProjects) {
       add(p);
     }
+    for (final p in _drafts.projects) {
+      add(p);
+    }
     return out;
   }
 
-  /// One tappable starter-prompt card; tapping prefills + focuses the composer.
-  Widget _suggestionCard((IconData, String, String) s) {
-    final (icon, title, prompt) = s;
-    final scheme = Theme.of(context).colorScheme;
-    return Material(
-      // The page ground under the wash: the container ladder is a translucent
-      // ink, and Material composites its colour against nothing, so a wash
-      // handed to it directly would paint as flat dark ink.
-      color: scheme.surface,
-      borderRadius: BorderRadius.circular(kPanelRadius),
-      child: InkWell(
-        mouseCursor: clickable,
-        borderRadius: BorderRadius.circular(kPanelRadius),
-        onTap: () => _useSuggestion(prompt),
-        child: Container(
-          decoration: BoxDecoration(
-            color: scheme.surfaceContainerLow,
-            border: Border.all(color: scheme.outlineVariant),
-            borderRadius: BorderRadius.circular(kPanelRadius),
-          ),
-          padding: const EdgeInsets.fromLTRB(14, 13, 14, 13),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Row(
-                children: [
-                  Icon(icon, size: 17, color: scheme.primary),
-                  const SizedBox(width: 9),
-                  Expanded(
-                    child: Text(
-                      title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.titleSmall,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 6),
-              Text(
-                prompt,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: scheme.onSurfaceVariant,
-                  height: 1.35,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  /// Prefill the composer with [prompt] and focus it so the user can review or
-  /// edit before sending.
-  void _useSuggestion(String prompt) {
-    _input.text = prompt;
-    _input.selection = TextSelection.collapsed(offset: prompt.length);
-    _inputFocus.requestFocus();
-  }
-
-  /// Left pane: this project's conversations + a "new session" button. Used
-  /// inline on wide screens and inside a [Drawer] on phones. Wrapped in a
-  /// [Builder] so the callbacks get a context *under* the Scaffold (a bare
-  /// `context` here is the State's, which is above the Scaffold this build
-  /// returns — `Scaffold.of` on it would throw).
   Widget _sessionsPane(AppLocalizations l10n, {bool inDrawer = false}) {
     final scheme = Theme.of(context).colorScheme;
     // Live set of running threads for this service, so other sessions show a
@@ -6363,16 +6225,23 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           }
         } else if (widget.home) {
           // The home pane spans every project, so the rest reads as a tree:
-          // project → its conversations, newest project first, with the open
-          // project pinned to the top. Each project shows only its newest few
+          // project → its conversations, newest project first. Switching the
+          // open draft must not move these headings. Each shows its newest few
           // rows unless expanded, so many projects stay scannable at a glance.
           // A live search is the one case that shows everything: the user is
           // looking for a specific row, so hiding matches behind "show more"
           // would be actively unhelpful.
           final searching = q.isNotEmpty;
-          for (final p in _byProject(<ThreadMeta>[...today, ...earlier])) {
+          for (final p in _byProject(filtered)) {
+            final idle = p.threads
+                .where((t) => !running.contains(t.id))
+                .toList();
             rows.add(
-              () => _projectSectionLabel(p.cwd, count: p.threads.length),
+              () => _projectSectionLabel(
+                p.cwd,
+                count: p.threads.length,
+                onNew: () => _newConversationInProject(p.cwd, ctx),
+              ),
             );
             // A search overrides a collapsed project: these rows already
             // matched the query, so hiding them would answer "no results" to a
@@ -6380,14 +6249,14 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
             if (!searching && _collapsedProjects.contains(p.cwd)) continue;
             final expanded = searching || _expandedProjects.contains(p.cwd);
             var shown = expanded
-                ? p.threads
-                : p.threads.take(_projectPeek).toList(growable: false);
+                ? idle
+                : idle.take(_projectPeek).toList(growable: false);
             // Never truncate away the conversation that's actually open: the
             // sidebar would show no selection at all, and the user loses where
             // they are. It's the newest rows that are worth previewing, so keep
             // them and append the open one rather than reordering.
             if (!expanded && !shown.any((t) => t.id == _threadId)) {
-              final open = p.threads.where((t) => t.id == _threadId);
+              final open = idle.where((t) => t.id == _threadId);
               if (open.isNotEmpty) shown = [...shown, open.first];
             }
             rows.addAll(
@@ -6396,7 +6265,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                     () => tile(t, showProject: false),
               ),
             );
-            final hidden = p.threads.length - shown.length;
+            final hidden = idle.length - shown.length;
             if (!searching && (hidden > 0 || expanded)) {
               rows.add(
                 () => _projectPeekToggle(
@@ -6501,10 +6370,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                       mouseCursor: clickable,
                       key: const Key('new-conversation-btn'),
                       customBorder: const CircleBorder(),
-                      onTap: () {
-                        closeDrawerIfOpen(ctx);
-                        _openThread(null, _cwd);
-                      },
+                      onTap: () => _newConversationInProject(_cwd, ctx),
                       child: Tooltip(
                         message: l10n.newConversation,
                         child: Padding(
@@ -6853,9 +6719,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     return segs.isEmpty ? c : segs.last;
   }
 
-  /// Bucket [threads] by the project they run in, preserving each bucket's
-  /// incoming (recency) order. The currently-open project leads; the rest
-  /// follow by how recently anything in them was touched.
+  /// Preserve project recency when opening another project's draft.
   List<({String cwd, List<ThreadMeta> threads})> _byProject(
     List<ThreadMeta> threads,
   ) {
@@ -6863,17 +6727,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     for (final t in threads) {
       buckets.putIfAbsent(t.cwd, () => <ThreadMeta>[]).add(t);
     }
-    final current = _cwd?.trim();
-    final keys = buckets.keys.toList()
-      ..sort((a, b) {
-        if (a == current) return b == current ? 0 : -1;
-        if (b == current) return 1;
-        // Each bucket keeps the source order, so its head IS its newest thread.
-        return buckets[b]!.first.updatedAt.compareTo(
-          buckets[a]!.first.updatedAt,
-        );
-      });
-    return [for (final k in keys) (cwd: k, threads: buckets[k]!)];
+    return [
+      for (final entry in buckets.entries)
+        (cwd: entry.key, threads: entry.value),
+    ];
   }
 
   /// Drops the cached activity-view summary for [threadId], so the next build
@@ -6949,77 +6806,22 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     ];
   }
 
-  /// A project heading in the home pane's conversation tree: the folder is the
-  /// hit target, so clicking it collapses/expands the project's conversations
-  /// (codex-app style). [count] is how many rows sit under it, shown while
-  /// collapsed so a folded project still says how much it holds.
-  Widget _projectSectionLabel(String cwd, {required int count}) {
-    final scheme = Theme.of(context).colorScheme;
+  Widget _projectSectionLabel(
+    String cwd, {
+    required int count,
+    required VoidCallback onNew,
+  }) {
     final leaf = _leafOf(cwd);
-    final collapsed = _collapsedProjects.contains(cwd);
-    return Padding(
-      padding: const EdgeInsets.only(top: 10, bottom: 2),
-      child: Material(
-        color: Colors.transparent,
-        borderRadius: BorderRadius.circular(8),
-        child: InkWell(
-          mouseCursor: clickable,
-          key: Key('project-header-$cwd'),
-          borderRadius: BorderRadius.circular(8),
-          onTap: () => setState(() {
-            if (!_collapsedProjects.remove(cwd)) _collapsedProjects.add(cwd);
-          }),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(8, 5, 8, 5),
-            child: Row(
-              children: [
-                // A chevron, not a folder: it states which way the group will
-                // move when clicked, which is what the hit target actually
-                // does. The folder glyph only restated "this is a project",
-                // already obvious from the heading's weight and indent.
-                Icon(
-                  collapsed
-                      ? Icons.keyboard_arrow_right
-                      : Icons.keyboard_arrow_down,
-                  size: 18,
-                  color: scheme.onSurfaceVariant,
-                ),
-                const SizedBox(width: 3),
-                Expanded(
-                  child: Tooltip(
-                    message: cwd.trim().isEmpty ? '' : cwd,
-                    child: Text(
-                      leaf.isEmpty
-                          ? AppLocalizations.of(context).defaultFolder
-                          : leaf,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        // A project is the tree's top level, so it reads a
-                        // notch LARGER than the conversation rows beneath it
-                        // (which are 13) — not just bolder.
-                        fontSize: 14,
-                        fontWeight: FontWeight.w700,
-                        color: scheme.onSurface,
-                      ),
-                    ),
-                  ),
-                ),
-                if (collapsed) ...[
-                  const SizedBox(width: 6),
-                  Text(
-                    '$count',
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: scheme.onSurfaceVariant,
-                    ),
-                  ),
-                ],
-              ],
-            ),
-          ),
-        ),
-      ),
+    return ProjectSectionHeader(
+      key: ValueKey('project-section-$cwd'),
+      path: cwd,
+      name: leaf.isEmpty ? AppLocalizations.of(context).defaultFolder : leaf,
+      collapsed: _collapsedProjects.contains(cwd),
+      count: count,
+      onToggle: () => setState(() {
+        if (!_collapsedProjects.remove(cwd)) _collapsedProjects.add(cwd);
+      }),
+      onNewConversation: onNew,
     );
   }
 
@@ -8651,41 +8453,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       );
     }
 
-    // A conversation's working directory is fixed once the thread exists, so
-    // the project is only switchable before the first turn — and only THEN is
-    // it worth a chip here. Once the thread exists the name is pure repetition:
-    // the sidebar already heads the conversation's project, and a label you
-    // can't act on adds nothing above the field you're typing in.
-    final project = _threadId == null
-        ? ProjectMenu(
-            projects: _knownProjects(),
-            current: (_cwd?.trim().isEmpty ?? true) ? null : _cwd!.trim(),
-            onPick: (p) => setState(() => _cwd = p),
-            onBrowse: () async {
-              final picked = await showFolderPicker(
-                context,
-                serviceKey: widget.serviceKey,
-                initialPath: _cwd,
-              );
-              if (picked != null && mounted) setState(() => _cwd = picked);
-            },
-            onClear: () => setState(() => _cwd = null),
-            builder: (ctx, ctrl) => chip(
-              Icons.folder_outlined,
-              _projectName(),
-              key: const Key('composer-project-chip'),
-              tip: l10n.switchProjectTip,
-              onTap: () => ctrl.isOpen ? ctrl.close() : ctrl.open(),
-            ),
-          )
-        : null;
-
     return Row(
       children: [
-        if (project != null) ...[
-          Flexible(child: project),
-          const SizedBox(width: 10),
-        ],
         chip(Icons.computer, _hostLabel(l10n)),
         if (_branch != null) ...[
           const SizedBox(width: 10),
@@ -9187,12 +8956,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         ? scheme.onSurfaceVariant
         : scheme.onSurfaceVariant.withValues(alpha: 0.5);
     final touch = !isDesktop;
-    // These sit inside the composer card, so the raised card is the ground the
-    // resting wash composites against.
     return Material(
-      color: active
-          ? scheme.primaryContainer
-          : Color.alphaBlend(scheme.surfaceContainer, scheme.surfaceBright),
+      color: active ? scheme.primaryContainer : Colors.transparent,
       borderRadius: BorderRadius.circular(kControlRadius),
       child: InkWell(
         mouseCursor: clickable,
@@ -9664,6 +9429,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// empty and the thread is still new, so it never overrides a folder the user
   /// picked or a resumed thread's cwd.
   Future<void> _seedDefaultCwd() async {
+    final generation = _threadLoadGeneration;
+    final selectionGeneration = _projectSelectionGeneration;
+    final draft = _draft;
     try {
       final cfg = await ref
           .read(bridgeApiProvider)
@@ -9674,8 +9442,18 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       _openLoadDone(_kCwdSeed);
       final def = cfg.defaultProject?.trim();
       if (!mounted || def == null || def.isEmpty) return;
-      if (_threadId == null && (_cwd == null || _cwd!.trim().isEmpty)) {
-        setState(() => _cwd = def);
+      if (generation == _threadLoadGeneration &&
+          selectionGeneration == _projectSelectionGeneration &&
+          identical(draft, _draft) &&
+          _threadId == null &&
+          (_cwd == null || _cwd!.trim().isEmpty)) {
+        final resolved = _drafts.resolveProject(draft, def);
+        if (resolved == null) return;
+        setState(() {
+          _cwd = def;
+          _draft = resolved;
+          _input.value = resolved.value.copyWith(composing: TextRange.empty);
+        });
       }
     } catch (_) {
       // No reachable meta → keep the codex default for now, but retry: this
@@ -9684,11 +9462,16 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       // conversation rooted in the wrong folder — the agent would then read and
       // edit files somewhere the user never chose, which is worse than a slow
       // seed. The guard above keeps a folder the user picked meanwhile.
-      if (mounted) _retryOpenLoad(_kCwdSeed);
+      if (mounted &&
+          selectionGeneration == _projectSelectionGeneration &&
+          generation == _threadLoadGeneration) {
+        _retryOpenLoad(_kCwdSeed);
+      }
     }
   }
 
   Future<void> _pickProject() async {
+    final generation = _threadLoadGeneration;
     final l10n = AppLocalizations.of(context);
     // Does the host offer a project-folder tree to browse? Best-effort — a
     // failure just means the manual path field (the fallback that always works,
@@ -9762,7 +9545,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         ],
       ),
     );
-    if (ok == true) setState(() => _cwd = ctrl.text.trim());
+    if (mounted && generation == _threadLoadGeneration && ok == true) {
+      _selectProject(ctrl.text.trim());
+    }
   }
 }
 
@@ -9770,8 +9555,3 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
 class _CancelTitleEditIntent extends Intent {
   const _CancelTitleEditIntent();
 }
-
-/// Stand-in fed to `newSessionTitleIn` so the localized sentence can be split
-/// around the project name and the name rendered as a live dropdown. A private
-///-use codepoint, so it can never collide with real text in any translation.
-const String _kProjectSlot = '';

@@ -308,6 +308,18 @@ abstract class AppLocalizations {
   /// **'New conversation'**
   String get newConversation;
 
+  /// No description provided for @newConversationInProject.
+  ///
+  /// In en, this message translates to:
+  /// **'New conversation in {project}'**
+  String newConversationInProject(String project);
+
+  /// No description provided for @copyProjectPath.
+  ///
+  /// In en, this message translates to:
+  /// **'Copy project path'**
+  String get copyProjectPath;
+
   /// No description provided for @noThreads.
   ///
   /// In en, this message translates to:

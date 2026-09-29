@@ -80,6 +80,7 @@ void main() {
     for (final target in <(String, Finder)>[
       ('conversation row', find.text('a conversation')),
       ('project heading', find.text('alpha')),
+      ('project shortcut', find.byKey(const Key('project-new-/work/alpha'))),
       ('new conversation', find.byKey(const Key('new-conversation-btn'))),
       ('sidebar shortcut', find.byKey(const Key('sidebar-settings-btn'))),
     ]) {

@@ -335,7 +335,7 @@ void main() {
     await t.pumpAndSettle();
 
     // A brand-new conversation shows the guidance view (not a bare hint).
-    expect(find.text('我们该构建什么?'), findsOneWidget);
+    expect(find.byKey(const Key('project-switcher-btn')), findsOneWidget);
 
     await t.enterText(find.byType(TextField), 'hello');
     await t.pump(); // let the send button enable for the non-empty input
@@ -1454,7 +1454,7 @@ void main() {
     );
     await t.pumpAndSettle();
     // Still the new-session guidance (the foreign event was dropped, no items).
-    expect(find.text('我们该构建什么?'), findsOneWidget);
+    expect(find.byKey(const Key('project-switcher-btn')), findsOneWidget);
     expect(find.textContaining('not mine', findRichText: true), findsNothing);
   });
 
@@ -2980,30 +2980,6 @@ void main() {
     expect(find.text('alpha'), findsNothing);
     expect(find.text('beta'), findsNothing);
     expect(convTiles(), findsOneWidget);
-  });
-
-  testWidgets('Tapping a guidance card prefills the composer', (t) async {
-    final api = FakeBridgeApi(
-      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
-    );
-    await api.appConnect('pcx:lb7666:app:default', 28080);
-    await t.pumpWidget(
-      host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
-    );
-    await t.pumpAndSettle();
-
-    // The prompt shows once on the guidance card before a tap.
-    const prompt = '介绍一下这个项目的结构、主要模块和技术栈。';
-    expect(find.text(prompt), findsOneWidget);
-
-    // Tapping the "了解项目" card prefills the composer (review-then-send).
-    await t.tap(find.text('了解项目'));
-    await t.pumpAndSettle();
-    // The prompt now appears twice: the card subtitle + the composer field.
-    expect(find.text(prompt), findsNWidgets(2));
-    // The send button is enabled now that the composer is non-empty.
-    final sendBtn = t.widget<IconButton>(find.byKey(const Key('send-btn')));
-    expect(sendBtn.onPressed, isNotNull);
   });
 
   group("a turn's work folds behind one row", () {
@@ -4788,7 +4764,7 @@ void main() {
     expect(btn, findsOneWidget);
   });
 
-  testWidgets('The composer drops the project chip once the thread exists', (
+  testWidgets('The new-session project selector disappears after the first send', (
     t,
   ) async {
     final api = FakeBridgeApi(
@@ -4809,9 +4785,9 @@ void main() {
     );
     await t.pumpAndSettle();
 
-    // Before the first turn the project is still switchable, so the chip earns
-    // its place above the field.
-    expect(find.byKey(const Key('composer-project-chip')), findsOneWidget);
+    // The empty view has one project selector, without a duplicate composer chip.
+    expect(find.byKey(const Key('project-switcher-btn')), findsOneWidget);
+    expect(find.byKey(const Key('composer-project-chip')), findsNothing);
 
     await t.enterText(find.byKey(const Key('composer-input')), 'hello');
     await t.pump();
@@ -5238,7 +5214,10 @@ void main() {
     await t.pumpAndSettle();
     expect(t.takeException(), isNull);
     // Tapping "new conversation" shows the new-session guidance.
-    expect(find.text('我们该构建什么?'), findsOneWidget); // guidance (zh)
+    expect(
+      find.byKey(const Key('project-switcher-btn')),
+      findsOneWidget,
+    ); // guidance (zh)
   });
 
   testWidgets('Plan renders as a status-iconed checklist', (t) async {

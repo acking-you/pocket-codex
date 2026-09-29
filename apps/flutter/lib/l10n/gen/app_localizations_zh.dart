@@ -118,6 +118,14 @@ class AppLocalizationsZh extends AppLocalizations {
   String get newConversation => '新建对话';
 
   @override
+  String newConversationInProject(String project) {
+    return '在 $project 中新建会话';
+  }
+
+  @override
+  String get copyProjectPath => '复制项目路径';
+
+  @override
   String get noThreads => '暂无会话';
 
   @override

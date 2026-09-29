@@ -379,6 +379,10 @@ The order below is our current best guess; it is not a contract.
    Conversation drafts survive navigation during the app session, with sidebar
    draft/queue indicators, an expanded editor, explicit height reset, separate
    Queue/Stop controls, IME-safe desktop sending, and retryable attachments.
+   New-session views focus on the project and input. Project headings reveal
+   one new-conversation action on hover/keyboard focus, with right-click menus
+   and touch long-press sheets. Unsent drafts are isolated by host and project;
+   a server thread is created only on first send.
 11. **Persistent controller history (2026-09-25).** The App owns a configurable
     512 MB disk cache shared across hosts, reusable after restart. Independent
     meta `/history/v1` routes reconcile bounded windows and UTF-8 text prefixes
@@ -468,7 +472,7 @@ this file's roadmap so the source of truth stays in sync.
   Grow and shrink with wrapped text up to the viewport cap, then scroll internally;
   automatic sizing must not overwrite the saved minimum. Keep draft text,
   selection, attachments, and pending queues scoped to the host and conversation
-  for the app session; a queue resumes when its conversation is active. An upload
+  (host and project before first send) for the app session; a queue resumes when its conversation is active. An upload
   completing after navigation must update its original draft. Failed attachments
   remain removable/retryable and block sending until resolved. Mobile Return
   inserts a newline; desktop Enter sends and Shift+Enter inserts a newline, while
