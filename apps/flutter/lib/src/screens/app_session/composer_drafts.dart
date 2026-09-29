@@ -25,7 +25,9 @@ class _ComposerDrafts extends ChangeNotifier {
   int nextQueueId = 0;
   bool _disposed = false;
 
-  _ComposerDraft forThread(String? id) => _drafts[id] ?? _ComposerDraft(id);
+  // Keep even empty drafts stable while a picker or clipboard read is pending.
+  _ComposerDraft forThread(String? id) =>
+      _drafts.putIfAbsent(id, () => _ComposerDraft(id));
 
   bool hasDraft(String id) => _badges.contains(id);
 
@@ -34,11 +36,7 @@ class _ComposerDrafts extends ChangeNotifier {
   void save(_ComposerDraft draft, {bool changed = false}) {
     if (_disposed) return;
     final id = draft.threadId;
-    if (draft.hasDraft || draft.queue.isNotEmpty) {
-      _drafts[id] = draft;
-    } else {
-      _drafts.remove(id);
-    }
+    _drafts[id] = draft;
     final badgeChanged = draft.hasDraft ? _badges.add(id) : _badges.remove(id);
     // Keystrokes update the value without rebuilding the transcript.
     if (changed || badgeChanged) notifyListeners();

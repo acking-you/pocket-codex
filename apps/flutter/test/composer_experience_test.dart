@@ -50,6 +50,17 @@ class _UploadingApi extends FakeBridgeApi {
   ) => upload.future;
 }
 
+class _DelayedFileSelector extends FakeFileSelector {
+  final selection = Completer<List<fsel.XFile>>();
+
+  @override
+  Future<List<fsel.XFile>> openFiles({
+    List<fsel.XTypeGroup>? acceptedTypeGroups,
+    String? initialDirectory,
+    String? confirmButtonText,
+  }) => selection.future;
+}
+
 void main() {
   setUp(AppSessionScreen.debugResetThreadMemory);
 
@@ -152,6 +163,60 @@ void main() {
       );
       await _mount(t, api);
       expect(_controller(t).text, 'Unfinished alpha');
+      expect(t.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'a pending picker survives leaving and returning to an empty draft',
+    (t) async {
+      t.view.devicePixelRatio = 1;
+      t.view.physicalSize = const Size(1280, 900);
+      addTearDown(t.view.reset);
+      final api = FakeBridgeApi()
+        ..appThreads.addAll([
+          const ThreadMeta(
+            id: 'a',
+            preview: 'Alpha',
+            cwd: '/project',
+            updatedAt: 0,
+          ),
+          const ThreadMeta(
+            id: 'b',
+            preview: 'Beta',
+            cwd: '/project',
+            updatedAt: 0,
+          ),
+        ]);
+      final previous = fsel.FileSelectorPlatform.instance;
+      final selector = _DelayedFileSelector();
+      fsel.FileSelectorPlatform.instance = selector;
+      addTearDown(() => fsel.FileSelectorPlatform.instance = previous);
+      await _mount(t, api);
+      await t.tap(find.byKey(const Key('attach-menu-btn')));
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(const Key('attach-file-btn')));
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(const Key('conv-tile-b')));
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(const Key('conv-tile-a')));
+      await t.pumpAndSettle();
+      selector.selection.complete([
+        MemXFile(Uint8List.fromList([1, 2]), 'late.txt'),
+      ]);
+      await t.pumpAndSettle();
+      expect(find.text('late.txt'), findsOneWidget);
+      expect(
+        t.widget<IconButton>(find.byKey(const Key('send-btn'))).onPressed,
+        isNotNull,
+      );
+      await t.enterText(_input, 'Keep this attachment');
+      await t.pumpWidget(
+        host(const SizedBox(), api, locale: const Locale('en')),
+      );
+      await _mount(t, api);
+      expect(find.text('late.txt'), findsOneWidget);
+      expect(_controller(t).text, 'Keep this attachment');
       expect(t.takeException(), isNull);
     },
   );
