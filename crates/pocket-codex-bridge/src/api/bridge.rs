@@ -871,7 +871,7 @@ pub fn meta_retry_events(sink: StreamSink<RetryProgressDto>) -> Result<()> {
 
 /// Stream live app-server events (turn/item notifications) for `service_key`.
 /// The Dart side receives one [`AppEventDto`] per notification until the
-/// session is disconnected.
+/// session is disconnected or the feed lags and requires history recovery.
 pub fn app_events(service_key: String, sink: StreamSink<AppEventDto>) -> Result<()> {
     // Subscribe *inside* the task and always return `Ok` at setup. If the service
     // isn't connected, the task returns immediately and dropping `sink` closes the
@@ -881,38 +881,57 @@ pub fn app_events(service_key: String, sink: StreamSink<AppEventDto>) -> Result<
     // surfaces as an uncaught async error on the Dart side — fatal on desktop
     // (no global handler) — rather than a catchable stream `onError`/`onDone`.
     runtime::runtime().spawn(async move {
-        let mut rx = match app_session::subscribe_events(&service_key) {
+        let rx = match app_session::subscribe_events(&service_key) {
             Ok(rx) => rx,
             // Not connected: close the stream so Dart sees `onDone`.
             Err(_) => return,
         };
-        loop {
-            match rx.recv().await {
-                Ok(ev) => {
-                    let dto = AppEventDto {
-                        kind: ev.kind,
-                        thread_id: ev.thread_id,
-                        item_id: ev.item_id,
-                        item_type: ev.item_type,
-                        title: ev.title,
-                        text: ev.text,
-                        images: ev.images,
-                        request_id: ev.request_id,
-                        raw: ev.raw,
-                    };
-                    // Dart dropped the stream: stop forwarding.
-                    if sink.add(dto).is_err() {
-                        break;
-                    }
-                },
-                // Slow consumer dropped some events; keep going.
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-            }
-        }
+        forward_app_events(rx, |ev| {
+            sink.add(AppEventDto {
+                kind: ev.kind,
+                thread_id: ev.thread_id,
+                item_id: ev.item_id,
+                item_type: ev.item_type,
+                title: ev.title,
+                text: ev.text,
+                images: ev.images,
+                request_id: ev.request_id,
+                raw: ev.raw,
+            })
+            .is_ok()
+        })
+        .await;
     });
     Ok(())
 }
+
+async fn forward_app_events(
+    mut rx: tokio::sync::broadcast::Receiver<app_session::AppEvent>,
+    mut send: impl FnMut(app_session::AppEvent) -> bool,
+) {
+    use tokio::sync::broadcast::error::RecvError;
+
+    loop {
+        match rx.recv().await {
+            Ok(event) => {
+                if !send(event) {
+                    break;
+                }
+            },
+            Err(RecvError::Lagged(skipped)) => {
+                // Missing final items or turn/completed cannot be recovered by
+                // later deltas. Close only this feed so Dart reloads history.
+                tracing::warn!(skipped, "app event feed lagged; closing for history recovery");
+                break;
+            },
+            Err(RecvError::Closed) => break,
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "bridge_events_tests.rs"]
+mod bridge_events_tests;
 
 /// List threads known to the app-server.
 pub fn app_thread_list(service_key: String) -> Result<Vec<ThreadMetaDto>> {

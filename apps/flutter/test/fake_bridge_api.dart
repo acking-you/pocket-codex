@@ -522,6 +522,11 @@ class FakeBridgeApi implements BridgeApi {
   void pushEvent(String serviceKey, AppEvent event) =>
       _appEvents[serviceKey]?.add(event);
 
+  /// Closes a lagged event feed while retaining its live app-server socket.
+  Future<void> closeAppEventStream(String serviceKey) async {
+    await _appEvents.remove(serviceKey)?.close();
+  }
+
   /// When true, the next [appThreadList] throws (simulating a stale/closed
   /// socket), then resets — to exercise the picker's reconnect-and-retry path.
   bool failNextThreadList = false;

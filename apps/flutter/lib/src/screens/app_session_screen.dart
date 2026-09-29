@@ -406,6 +406,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   bool _activityView = false;
 
   bool _streaming = false;
+  int _turnStateRevision = 0;
+  // Only retain rows changed while the current history snapshot is in flight.
+  Map<String, TranscriptItem>? _historyLiveItems;
+  Set<String>? _historyPartialItems;
   // Current running turn's id, captured from turn/started — required to
   // interrupt it (turn/interrupt rejects a threadId without a turnId).
   String? _turnId;
@@ -685,7 +689,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     // surfaces it promptly).
     _healthTimer = Timer.periodic(const Duration(seconds: 12), (_) {
       if (!mounted || _reconnecting) return;
-      if (!ref.read(bridgeApiProvider).appIsConnected(widget.serviceKey)) {
+      if (_connectionLost ||
+          !ref.read(bridgeApiProvider).appIsConnected(widget.serviceKey)) {
         _onStreamClosed();
       }
     });
@@ -1031,6 +1036,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     }
     _cancelExternalWriterSubscription();
     _threadLoadGeneration++;
+    _historyLiveItems = null;
+    _historyPartialItems = null;
     setState(() {
       _threadId = tid;
       _historySyncing = false;
@@ -1348,8 +1355,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
 
   void _onStreamClosed() {
     if (!mounted) return;
-    // The event stream closing means the socket dropped — recover automatically
-    // rather than leaving the session silently dead.
+    // The socket may still be alive when the bridge closes a lagged event feed.
+    // Both cases need a new subscription and a history read to recover gaps.
     setState(() {
       _streaming = false;
       _connectionLost = true;
@@ -1731,6 +1738,11 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     });
     final startTid = _threadId!;
     final generation = ++_threadLoadGeneration;
+    final turnStateRevision = _turnStateRevision;
+    final liveItems = <String, TranscriptItem>{};
+    final partialItems = <String>{};
+    _historyLiveItems = liveItems;
+    _historyPartialItems = partialItems;
     bool current() =>
         mounted && _threadId == startTid && generation == _threadLoadGeneration;
     try {
@@ -1741,7 +1753,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       if (_items.isEmpty) {
         final cached = await api.appHistoryCached(widget.serviceKey, startTid);
         if (!current()) return;
-        if (cached != null) {
+        if (cached != null && _items.isEmpty) {
           setState(() {
             _replaceTranscriptItems(cached.items);
             _turnSummaries = cached.turns;
@@ -1768,6 +1780,11 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       final persistedFuture = _loadPersistedConfig(startTid);
       final history = await historyFuture;
       if (!current()) return;
+      final liveTurnChanged = turnStateRevision != _turnStateRevision;
+      final activeTurnId = liveTurnChanged ? _turnId : history.activeTurnId;
+      final liveQuestions = _asyncQuestions.entries
+          .where((entry) => liveItems.containsKey(entry.key))
+          .toList();
       final anchor = _items.isNotEmpty && !_atBottom
           ? _captureHistoryAnchor()
           : null;
@@ -1776,10 +1793,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         _showingCachedHistory = false;
         _historyEpoch = history.historyEpoch;
         _loading = false;
-        _replaceTranscriptItems(
-          history.items,
-          activeTurnId: history.activeTurnId,
-        );
+        _replaceTranscriptItems(history.items, activeTurnId: activeTurnId);
         _turnSummaries = history.turns;
         _hasOlder = history.hasOlder;
         _historyError = false;
@@ -1795,30 +1809,50 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           _spliceTranscriptItems(
             page.items,
             atStart: true,
-            activeTurnId: history.activeTurnId,
+            activeTurnId: activeTurnId,
           );
         }
+        for (final item in liveItems.values) {
+          final index = _itemIndex[item.id];
+          if (index == null) {
+            _itemIndex[item.id] = _items.length;
+            _items.add(item);
+          } else {
+            // A delta first seen during loading has no known text prefix.
+            // Keep the snapshot until a complete live item supplies its body.
+            if (!partialItems.contains(item.id)) _items[index] = item;
+          }
+        }
+        _asyncQuestions.addEntries(liveQuestions);
         _cachedRows = null;
         _loadingOlder = false;
         _historyLoad = null;
         _historyGeneration++;
-        // Restore the "thinking" state if a turn was still running when we
-        // left: live events (delivered after resume) will finish rendering it.
-        _streaming = history.running;
-        // We can't tell whether a resumed turn has already produced output, and
-        // it wasn't sent from this composer, so there's nothing to un-send —
-        // treat it as output-started so Esc interrupts (with a marker) instead.
-        _outputStarted = history.running;
-        // Restore the running turn's live clock + loading animation. Without
-        // this the streaming flag was set but the ticker wasn't, so the bottom
-        // in-progress indicator showed a frozen 0:00 (looked "gone"). We can't
-        // recover the real start time on a cold re-open, so count from now — the
-        // point is to show, live, that the turn is still working.
-        _elapsedTicker?.cancel();
-        _elapsedTicker = null;
-        if (history.running) {
-          _elapsedSecs = 0;
-          _startElapsedTicker();
+        // Events received during the read are newer than its lifecycle snapshot.
+        if (!liveTurnChanged) {
+          final keepClock =
+              _streaming &&
+              history.running &&
+              _turnId == activeTurnId &&
+              _turnStartedAt != null;
+          _streaming = history.running;
+          _turnId = activeTurnId;
+          // A resumed turn has nothing in this composer to un-send with Esc.
+          _outputStarted = history.running;
+          if (!keepClock) {
+            _elapsedTicker?.cancel();
+            _elapsedTicker = null;
+            _turnStartedAt = null;
+            if (_streaming) {
+              _elapsedSecs = 0;
+              _startElapsedTicker();
+            }
+          }
+        }
+        if (!_streaming) {
+          for (final item in _items) {
+            item.streaming = false;
+          }
         }
         // Seed the status gauge + branch chip + cwd from the thread metadata.
         // _cwd may be null if the thread was opened without it (e.g. a default
@@ -1831,6 +1865,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           _ctx = ContextStatus(tokensUsed: tu, contextWindow: cw);
         }
       });
+      if (identical(_historyLiveItems, liveItems)) {
+        _historyLiveItems = null;
+        _historyPartialItems = null;
+      }
       _restoreHistorySettings(
         history,
         const ThreadConfig(),
@@ -1886,6 +1924,11 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         _error = friendlyError(e);
         _retry = _resumeAndLoad;
       });
+    } finally {
+      if (identical(_historyLiveItems, liveItems)) {
+        _historyLiveItems = null;
+        _historyPartialItems = null;
+      }
     }
   }
 
@@ -2099,6 +2142,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         _externalHistoryRevision = update.historyRevision;
         _externalHistoryDirty = true;
       }
+      // The host samples rollout revisions and liveness independently. A
+      // completed turn can follow the final revision without another append.
+      if (wasRunning != willRun) _externalHistoryDirty = true;
       if (_externalHistoryDirty) _scheduleExternalHistory(threadId, epoch);
     } else if (followTail) {
       _scrollToEnd(force: true);
@@ -2436,6 +2482,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     }
     switch (e.kind) {
       case 'turn/started':
+        _turnStateRevision++;
         // A fresh turn supersedes any prior plan: re-enable the implement
         // prompt so a new plan (if this turn produces one) can offer it again.
         // Capture the turn id so the stop button can interrupt this turn.
@@ -2477,6 +2524,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         _startElapsedTicker();
         _scrollToEnd();
       case 'turn/completed':
+        _turnStateRevision++;
         // v2 reports turn FAILURES here (turn.status == 'failed' + error.message),
         // not via a separate turn/failed method — surface the error the same way.
         final failure = _turnFailureText(e.raw);
@@ -2505,6 +2553,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         // permanently stale for the thread the user is actually working in.
         _invalidateSummary(e.threadId);
       case 'turn/failed':
+        _turnStateRevision++;
         setState(() {
           _streaming = false;
           _supplement = false;
@@ -2600,6 +2649,11 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       // than undoing the send.
       _outputStarted = true;
       final idx = _itemIndex[id];
+      if (idx == null && isDelta) {
+        _historyPartialItems?.add(id);
+      } else if (!isDelta) {
+        _historyPartialItems?.remove(id);
+      }
       if (idx == null) {
         _items.add(
           TranscriptItem(
@@ -2632,6 +2686,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         }
         if (!it.isAgent) it.streaming = running;
       }
+      _historyLiveItems?[id] = _items[_itemIndex[id]!];
     });
     _scrollToEnd();
   }
@@ -3279,6 +3334,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     final id = 'local-stopped-${_localSeq++}';
     _itemIndex[id] = _items.length;
     _items.add(TranscriptItem(id: id, type: 'interrupted', text: ''));
+    _historyLiveItems?[id] = _items.last;
   }
 
   /// Begin ticking the running turn's elapsed clock once a second so the status
@@ -3323,6 +3379,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         modelRerouted: _turnRerouted,
       ),
     );
+    _historyLiveItems?[id] = _items.last;
   }
 
   /// Stopwatch-format an elapsed-second count. Shared with the turn-work fold
@@ -3573,6 +3630,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       try {
         // Let the bridge retain a live socket if only its event subscription ended.
         await api.appConnect(widget.serviceKey, appLocalPort);
+        _connectionLost = false;
         _subscribe();
         if (reload && _threadId != null) {
           if (_externalWriterMode) {
@@ -3609,8 +3667,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         _loadGit(); // the working tree may have moved on while we were away
         // Content loaders retain old data on failure. A timed-out RPC can
         // therefore close this new connection without throwing out of them.
-        if (!api.appIsConnected(widget.serviceKey)) {
-          throw StateError('app-server connection closed during reconnect');
+        if (_connectionLost || !api.appIsConnected(widget.serviceKey)) {
+          throw StateError('app-server event feed closed during reconnect');
         }
         if (mounted) {
           setState(() {
