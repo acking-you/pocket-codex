@@ -66,6 +66,7 @@ class _UploadingApi extends FakeBridgeApi {
 class _StartingApi extends FakeBridgeApi {
   final start = Completer<void>();
   bool starting = false;
+  Completer<void>? turnAck;
   final sentTo = <String>[];
 
   @override
@@ -119,6 +120,7 @@ class _StartingApi extends FakeBridgeApi {
       collaborationMode: collaborationMode,
       reasoningEffort: reasoningEffort,
     );
+    if (turnAck != null) await turnAck!.future;
   }
 }
 
@@ -131,6 +133,13 @@ class _DelayedFileSelector extends FakeFileSelector {
     String? initialDirectory,
     String? confirmButtonText,
   }) => selection.future;
+}
+
+class _LateDefaultStartingApi extends _StartingApi {
+  final project = Completer<ProjectConfig>();
+
+  @override
+  Future<ProjectConfig> metaProjectConfig(String serviceKey) => project.future;
 }
 
 void main() {
@@ -148,6 +157,132 @@ void main() {
     }
     await _frames(t);
   }
+
+  testWidgets(
+    'a project draft keeps its send lock when reopened before thread creation',
+    (t) async {
+      t.view.devicePixelRatio = 1;
+      t.view.physicalSize = const Size(1280, 900);
+      addTearDown(t.view.reset);
+      final api = _StartingApi()
+        ..appThreads.addAll([
+          const ThreadMeta(
+            id: 'a',
+            preview: 'Alpha history',
+            cwd: '/alpha',
+            updatedAt: 2,
+          ),
+          const ThreadMeta(
+            id: 'b',
+            preview: 'Beta history',
+            cwd: '/beta',
+            updatedAt: 1,
+          ),
+        ]);
+      await _mount(t, api, thread: null, cwd: '/alpha');
+      await t.enterText(_input, 'Start alpha');
+      await t.pump();
+      await t.tap(find.byKey(const Key('send-btn')));
+      await t.pump();
+      await switchProject(t, '/beta');
+      await switchProject(t, '/alpha');
+      await t.enterText(_input, 'Alpha followup');
+      await t.pump();
+      expect(
+        t.widget<IconButton>(find.byKey(const Key('send-btn'))).onPressed,
+        isNull,
+      );
+      api.start.complete();
+      await t.pumpAndSettle();
+      expect(api.sentTo, ['thread-0']);
+      expect(_controller(t).text, 'Alpha followup');
+      expect(
+        t.widget<IconButton>(find.byKey(const Key('send-btn'))).onPressed,
+        isNotNull,
+      );
+      await t.tap(find.byKey(const Key('send-btn')));
+      await t.pumpAndSettle();
+      expect(api.sentTo, ['thread-0', 'thread-0']);
+      expect(api.appThreads, hasLength(3));
+    },
+  );
+
+  testWidgets(
+    'reopened project drains queued input after the pending first send',
+    (t) async {
+      t.view.devicePixelRatio = 1;
+      t.view.physicalSize = const Size(1280, 900);
+      addTearDown(t.view.reset);
+      final api = _StartingApi()
+        ..turnAck = Completer<void>()
+        ..appThreads.addAll([
+          const ThreadMeta(
+            id: 'a',
+            preview: 'Alpha history',
+            cwd: '/alpha',
+            updatedAt: 2,
+          ),
+          const ThreadMeta(
+            id: 'b',
+            preview: 'Beta history',
+            cwd: '/beta',
+            updatedAt: 1,
+          ),
+        ]);
+      await _mount(t, api, thread: null, cwd: '/alpha');
+      await t.enterText(_input, 'Start alpha');
+      await t.pump();
+      await t.tap(find.byKey(const Key('send-btn')));
+      await t.pump();
+      await switchProject(t, '/beta');
+      await switchProject(t, '/alpha');
+      await t.enterText(_input, 'Queued alpha');
+      await t.sendKeyEvent(LogicalKeyboardKey.enter);
+      await t.pump();
+      expect(find.byKey(const Key('queued-0')), findsOneWidget);
+      api.start.complete();
+      await _frames(t);
+      expect(api.sentTo, ['thread-0']);
+      api.turnAck!.complete();
+      await t.pumpAndSettle();
+      expect(api.sentTo, ['thread-0', 'thread-0']);
+      expect(api.lastTurnText, 'Queued alpha');
+      expect(find.byKey(const Key('queued-0')), findsNothing);
+      expect(api.appThreads, hasLength(3));
+    },
+    variant: const TargetPlatformVariant({TargetPlatform.windows}),
+  );
+
+  testWidgets(
+    'late defaults cannot replace a draft whose first send is pending',
+    (t) async {
+      final api = _LateDefaultStartingApi();
+      await _mount(t, api, thread: null, cwd: '/alpha');
+      await t.enterText(_input, 'Saved alpha draft');
+      await t.pumpWidget(
+        host(const SizedBox(), api, locale: const Locale('en')),
+      );
+      await _mount(t, api, thread: null, settle: false);
+      await t.enterText(_input, 'Send in the current working directory');
+      await t.pump();
+      await t.tap(find.byKey(const Key('send-btn')));
+      await t.pump();
+      expect(api.starting, isTrue);
+      api.project.complete(const ProjectConfig(defaultProject: '/alpha'));
+      await t.pumpAndSettle();
+      expect(_controller(t).text, isEmpty);
+      api.start.complete();
+      await t.pumpAndSettle();
+      expect(api.sentTo, ['thread-0']);
+      expect(api.lastCwd, isNull);
+      await t.enterText(_input, 'Followup');
+      await t.pump();
+      expect(
+        t.widget<IconButton>(find.byKey(const Key('send-btn'))).onPressed,
+        isNotNull,
+      );
+    },
+  );
 
   testWidgets('new project drafts keep uploads in their originating project', (
     t,
@@ -449,6 +584,10 @@ void main() {
       await t.tap(find.byKey(const Key('new-conversation-btn')));
       await t.pumpAndSettle();
       expect(_controller(t).text, 'First message\n\nNext draft');
+      expect(
+        t.widget<IconButton>(find.byKey(const Key('send-btn'))).onPressed,
+        isNotNull,
+      );
       expect(t.takeException(), isNull);
     },
   );

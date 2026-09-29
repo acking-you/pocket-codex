@@ -12,6 +12,7 @@ class _ComposerDraft {
 
   String? threadId;
   String? project;
+  bool sendPending = false;
   (String?, String?) get key => (threadId, threadId == null ? project : null);
   TextEditingValue value = TextEditingValue.empty;
   final List<_Attachment> attachments = [];

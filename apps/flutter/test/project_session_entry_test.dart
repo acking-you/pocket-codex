@@ -229,6 +229,26 @@ void main() {
     );
   }
 
+  testWidgets(
+    'late default project discovery preserves active IME composition',
+    (t) async {
+      final api = _LateProjectApi();
+      await _mount(t, api, cwd: null, settle: false);
+      const value = TextEditingValue(
+        text: 'ni',
+        selection: TextSelection.collapsed(offset: 2),
+        composing: TextRange(start: 0, end: 2),
+      );
+      await t.showKeyboard(_input);
+      t.testTextInput.updateEditingValue(value);
+      await t.pump();
+      api.project.complete(const ProjectConfig(defaultProject: '/work/alpha'));
+      await t.pumpAndSettle();
+      expect(_controller(t).value, value);
+      expect(find.text('alpha'), findsWidgets);
+    },
+  );
+
   testWidgets('explicit outside-project selection wins over a late default', (
     t,
   ) async {

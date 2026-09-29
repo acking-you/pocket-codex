@@ -441,7 +441,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   bool _externalWriterLegacy = false;
   int _externalWriterEpoch = 0;
   bool _takingOver = false;
-  bool _sending = false;
+  bool _localSending = false;
+  // Navigation clears local operations, but cannot unlock a draft's send.
+  bool get _sending => _localSending || _draft.sendPending;
   bool _atBottom = true; // is the list scrolled to the latest message?
   // Every turn of the open thread, oldest first — including turns whose items
   // aren't loaded. The rail shows the conversation's shape, so it reads this
@@ -1104,7 +1106,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       _supplement = false;
       _sendRequest = null;
       _supplementRequest = null;
-      _sending = false;
+      _localSending = false;
       _plan = false;
       _planToggledByUser = false;
       // Drop the previous thread's effort (pending pick + active) so an unsent
@@ -2802,7 +2804,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     final mode = _mode;
     final tier = _requestedServiceTier;
     setState(() {
-      _sending = true;
+      _localSending = true;
       if (queued != null) _queue.remove(queued);
     });
     // Retry safety: a send can commit server-side just before the socket drops
@@ -2816,7 +2818,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       final committed = await _turnAlreadyCommitted(text, images);
       if (!current()) return;
       if (committed) {
-        setState(() => _sending = false);
+        setState(() => _localSending = false);
         await _resumeAndLoad();
         return;
       }
@@ -2856,6 +2858,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     });
     _scrollToEnd(force: true);
     var dropped = false;
+    var sent = false;
+    sendingDraft.sendPending = true;
+    _drafts.save(sendingDraft, changed: true);
     try {
       // Collaboration mode for this turn. Send it when the user explicitly
       // toggled the plan chip (so an explicit on/off is always honored, even if
@@ -2963,6 +2968,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         // thread's sticky effort. null only when no effort has ever been set.
         reasoningEffort: effort?.wire,
       );
+      sent = true;
       if (current()) {
         setState(() {
           _planActive = _plan;
@@ -3005,9 +3011,17 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       }
       if (current() && _looksDisconnected(msg)) dropped = true;
     } finally {
+      sendingDraft.sendPending = false;
+      _drafts.save(sendingDraft, changed: true);
       if (current()) {
-        setState(() => _sending = false);
-        if (_error == null && !dropped) _maybeFlushQueue();
+        setState(() => _localSending = false);
+      }
+      if (sent &&
+          mounted &&
+          identical(_draft, sendingDraft) &&
+          _error == null &&
+          !dropped) {
+        _maybeFlushQueue();
       }
     }
     // The connection dropped mid-send: recover it in the background so a retry
@@ -3151,7 +3165,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     _supplementRequest = request;
     bool current() =>
         mounted && _threadId == tid && identical(_supplementRequest, request);
-    setState(() => _sending = true);
+    setState(() => _localSending = true);
     try {
       final acceptedTurnId = await ref
           .read(bridgeApiProvider)
@@ -3201,7 +3215,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     } finally {
       if (current()) {
         setState(() {
-          _sending = false;
+          _localSending = false;
           _supplementRequest = null;
         });
         _maybeFlushQueue();
@@ -3787,7 +3801,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       return;
     }
     final text = prompt.answerText(answers);
-    setState(() => _sending = true);
+    setState(() => _localSending = true);
     try {
       final api = ref.read(bridgeApiProvider);
       if (_streaming) {
@@ -3807,7 +3821,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         setState(() => _error = friendlyError(e));
       }
     } finally {
-      if (mounted) setState(() => _sending = false);
+      if (mounted) setState(() => _localSending = false);
     }
   }
 
@@ -9445,14 +9459,17 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       if (generation == _threadLoadGeneration &&
           selectionGeneration == _projectSelectionGeneration &&
           identical(draft, _draft) &&
+          !draft.sendPending &&
           _threadId == null &&
           (_cwd == null || _cwd!.trim().isEmpty)) {
         final resolved = _drafts.resolveProject(draft, def);
         if (resolved == null) return;
         setState(() {
           _cwd = def;
-          _draft = resolved;
-          _input.value = resolved.value.copyWith(composing: TextRange.empty);
+          if (!identical(_draft, resolved)) {
+            _draft = resolved;
+            _input.value = resolved.value.copyWith(composing: TextRange.empty);
+          }
         });
       }
     } catch (_) {
