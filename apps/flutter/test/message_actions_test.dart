@@ -35,6 +35,8 @@ Future<void> _mount(
   ValueChanged<String>? onEdit,
   double textScale = 1,
   Locale locale = const Locale('en'),
+  Widget? message,
+  ValueChanged<String?>? onSelectionChanged,
 }) async {
   t.view.devicePixelRatio = 1;
   t.view.physicalSize = size;
@@ -56,20 +58,23 @@ Future<void> _mount(
       home: Scaffold(
         body: SafeArea(
           child: SelectionArea(
+            onSelectionChanged: (selection) =>
+                onSelectionChanged?.call(selection?.plainText),
             child: ListView(
               padding: const EdgeInsets.all(16),
               children: [
                 const SizedBox(height: 100),
-                MessageView(
-                  item:
-                      item ??
-                      TranscriptItem(
-                        id: 'prompt',
-                        type: 'userMessage',
-                        text: _prompt,
-                      ),
-                  onEdit: onEdit,
-                ),
+                message ??
+                    MessageView(
+                      item:
+                          item ??
+                          TranscriptItem(
+                            id: 'prompt',
+                            type: 'userMessage',
+                            text: _prompt,
+                          ),
+                      onEdit: onEdit,
+                    ),
                 const SizedBox(height: 1000),
               ],
             ),
@@ -158,6 +163,72 @@ void main() {
     expect(selectable, findsNothing);
     expect(t.takeException(), isNull);
   });
+
+  testWidgets(
+    'an open menu cannot edit after the conversation becomes read-only',
+    (t) async {
+      var editable = true;
+      final edits = <String>[];
+      late StateSetter update;
+      await _mount(
+        t,
+        message: StatefulBuilder(
+          builder: (context, setState) {
+            update = setState;
+            return MessageView(
+              item: TranscriptItem(
+                id: 'prompt',
+                type: 'userMessage',
+                text: _prompt,
+              ),
+              onEdit: editable ? edits.add : null,
+            );
+          },
+        ),
+      );
+      await _open(t);
+      expect(_edit, findsOneWidget);
+      update(() => editable = false);
+      await t.pumpAndSettle();
+      await t.tap(_edit);
+      await t.pumpAndSettle();
+      expect(t.takeException(), isNull);
+      expect(edits, isEmpty);
+    },
+  );
+
+  for (final platform in [TargetPlatform.android, TargetPlatform.iOS]) {
+    testWidgets('$platform keeps mouse selection alongside touch actions', (
+      t,
+    ) async {
+      String? selected;
+      await _mount(
+        t,
+        platform: platform,
+        onSelectionChanged: (text) => selected = text,
+      );
+      final start = t.getTopLeft(find.text(_prompt)) + const Offset(4, 10);
+      await t.dragFrom(
+        start,
+        const Offset(170, 0),
+        kind: PointerDeviceKind.mouse,
+      );
+      await t.pumpAndSettle();
+      expect(selected, isNotNull);
+      expect(selected, isNotEmpty);
+      expect(_copy, findsNothing);
+      await t.tapAt(const Offset(20, 60));
+      await t.pumpAndSettle();
+      selected = null;
+      await _open(t);
+      expect(_copy, findsOneWidget);
+      expect(selected, anyOf(isNull, isEmpty));
+      await t.tap(_copy);
+      await t.pumpAndSettle();
+      expect(clipboard, [_prompt]);
+      expect(t.takeException(), isNull);
+    });
+  }
 
   testWidgets('sharing uses visible prompt text and a nonempty iPad origin', (
     t,

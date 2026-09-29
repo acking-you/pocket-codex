@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
@@ -105,7 +106,8 @@ class _MessageActionsState extends State<MessageActions> {
           builder: (_) => _MessageSelection(text: text),
         );
       case _MessageAction.edit:
-        onEdit?.call();
+        // A monitoring refresh can revoke editing while the menu is open.
+        if (widget.onEdit != null) onEdit?.call();
       case _MessageAction.share:
         try {
           final size = MediaQuery.sizeOf(context);
@@ -155,12 +157,17 @@ class _MessageActionsState extends State<MessageActions> {
             platform != TargetPlatform.iOS)) {
       return widget.child;
     }
-    return SelectionContainer.disabled(
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onLongPressStart: (details) => _open(details.globalPosition),
-        child: widget.child,
-      ),
+    // The child long-press wins over the enclosing SelectionArea. Keep its
+    // selection registration so attached mice can still drag-select text.
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      supportedDevices: const {
+        PointerDeviceKind.touch,
+        PointerDeviceKind.stylus,
+        PointerDeviceKind.invertedStylus,
+      },
+      onLongPressStart: (details) => _open(details.globalPosition),
+      child: widget.child,
     );
   }
 }

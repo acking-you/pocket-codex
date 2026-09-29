@@ -287,6 +287,7 @@ class _MessageViewState extends State<MessageView> {
     // No copy for an image-only message (empty text) — it would clobber the
     // clipboard with an empty string while confirming "copied".
     final showActions = !item.streaming && item.text.trim().isNotEmpty;
+    final onEdit = widget.onEdit;
     final mobile = switch (Theme.of(context).platform) {
       TargetPlatform.android || TargetPlatform.iOS => true,
       _ => false,
@@ -360,11 +361,8 @@ class _MessageViewState extends State<MessageView> {
                     : AppLocalizations.of(
                         context,
                       ).completedAt(_fmtTurnTime(item.turnCompletedAt!)),
-                onEdit:
-                    isUser &&
-                        refs.text.trim().isNotEmpty &&
-                        widget.onEdit != null
-                    ? () => widget.onEdit!(refs.text)
+                onEdit: isUser && refs.text.trim().isNotEmpty && onEdit != null
+                    ? () => onEdit(refs.text)
                     : null,
                 child: content,
               )
