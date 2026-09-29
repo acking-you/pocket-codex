@@ -1762,4 +1762,28 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get composerKeyboardHint => 'Enter 发送 · Shift+Enter 换行';
+
+  @override
+  String get selectText => '选择文本';
+
+  @override
+  String get sharePrompt => '分享提示';
+
+  @override
+  String get shareMessage => '分享消息';
+
+  @override
+  String get messageShareFailed => '无法打开分享，可先复制文字。';
+
+  @override
+  String get messageCopyFailed => '复制失败，请重试。';
+
+  @override
+  String get addToDraft => '加入输入框';
+
+  @override
+  String get editMessageHint => '将文字作为新消息使用，保留原有历史，不会重新附加原消息的附件。';
+
+  @override
+  String get editMessageDraftHint => '保留当前草稿和附件，编辑后的文字将加在草稿末尾。';
 }

@@ -34,6 +34,7 @@ import 'package:pocket_codex/src/screens/app_session/async_questions.dart';
 import 'package:pocket_codex/src/screens/app_session/activity_cards.dart';
 import 'package:pocket_codex/src/screens/app_session/composer_cards.dart';
 import 'package:pocket_codex/src/screens/app_session/expanded_composer.dart';
+import 'package:pocket_codex/src/screens/app_session/message_editor.dart';
 import 'package:pocket_codex/src/screens/app_session/transcript_model.dart';
 import 'package:pocket_codex/src/screens/app_session/generated_image_card.dart';
 import 'package:pocket_codex/src/screens/app_session/history_merge.dart';
@@ -1317,6 +1318,40 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     if (!mounted) return;
     setState(() => _editorOpen = false);
     _inputFocus.requestFocus();
+  }
+
+  Future<void> _editMessage(String text) async {
+    if (_editorOpen ||
+        _externalWriterMode ||
+        _historySyncing ||
+        _showingCachedHistory) {
+      return;
+    }
+    final draft = _draft;
+    setState(() => _editorOpen = true);
+    _inputFocus.unfocus();
+    final edited = await showDialog<String>(
+      context: context,
+      builder: (_) => MessageEditor(
+        text: text,
+        hasDraft: draft.value.text.isNotEmpty || draft.attachments.isNotEmpty,
+      ),
+    );
+    if (!mounted) return;
+    setState(() => _editorOpen = false);
+    if (edited != null && edited.trim().isNotEmpty) {
+      // Read the latest draft: a queued send or upload may finish while the
+      // editor is open. Keep its attachments and any newer text intact.
+      final previous = draft.value.text;
+      final combined = previous.isEmpty ? edited : '$previous\n\n$edited';
+      draft.value = TextEditingValue(
+        text: combined,
+        selection: TextSelection.collapsed(offset: combined.length),
+      );
+      _drafts.save(draft, changed: true);
+      if (identical(_draft, draft)) _input.value = draft.value;
+    }
+    if (identical(_draft, draft)) _inputFocus.requestFocus();
   }
 
   /// The keyboard inset animates in over several frames, and each frame shrinks
@@ -5557,6 +5592,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       item: row as TranscriptItem,
       hostImageLoader: _loadHostImage,
       imageCacheScope: '${widget.serviceKey}:$_threadId',
+      onEdit: _externalWriterMode || _historySyncing || _showingCachedHistory
+          ? null
+          : _editMessage,
     );
   }
 
@@ -5620,8 +5658,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                                             ),
                                           ))
                                   // One SelectionArea over the whole conversation so text can be
-                                  // drag-selected and copied (desktop drag, mobile long-press) —
-                                  // per-message actions appear on hover instead of always-on. The
+                                  // drag-selected and copied on desktop. Mobile messages open
+                                  // their own long-press actions and text-selection page. The
                                   // list is centered with a max width so it reads well even when
                                   // both side panes are collapsed on a wide screen.
                                   : Stack(

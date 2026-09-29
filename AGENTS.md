@@ -383,6 +383,10 @@ The order below is our current best guess; it is not a contract.
    one new-conversation action on hover/keyboard focus, with right-click menus
    and touch long-press sheets. Unsent drafts are isolated by host and project;
    a server thread is created only on first send.
+   Mobile messages offer long-press copy, text selection and native sharing.
+   Editable conversations can reuse a user message in a separate editor;
+   adding it preserves existing draft text and attachments and never sends
+   automatically or rewrites history. Read-only views expose no edit action.
 11. **Persistent controller history (2026-09-25).** The App owns a configurable
     512 MB disk cache shared across hosts, reusable after restart. Independent
     meta `/history/v1` routes reconcile bounded windows and UTF-8 text prefixes

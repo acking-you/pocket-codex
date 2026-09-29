@@ -84,6 +84,7 @@ dependencies:
   file_selector: ^1.1.0
   # Native mobile Save As dialogs; 0.5+ needs a newer SDK-pinned meta package.
   file_saver: ^0.4.0
+  share_plus: ^13.2.1
   path: ^1.9.1
   # Message image attachments: pick from the photo library on Android/iOS
   # (PHPicker / system Photo Picker — no runtime permission needed) and a

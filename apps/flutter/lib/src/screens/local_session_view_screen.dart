@@ -17,6 +17,7 @@ import 'package:pocket_codex/src/realtime_delegation.dart';
 import 'package:pocket_codex/src/screens/local_sessions_screen.dart'
     show SessionSource, resumeLocalSession;
 import 'package:pocket_codex/src/screens/app_session/generated_image_card.dart';
+import 'package:pocket_codex/src/screens/app_session/message_actions.dart';
 import 'package:pocket_codex/src/screens/app_session/transcript_model.dart';
 import 'package:pocket_codex/src/theme.dart';
 import 'package:pocket_codex/src/widgets/loading.dart';
@@ -499,7 +500,12 @@ class _TranscriptRow extends StatelessWidget {
                   if (paths.isNotEmpty) FileRefChips(paths: paths),
                   if (paths.isNotEmpty && refs.text.isNotEmpty)
                     const SizedBox(height: 8),
-                  if (refs.text.isNotEmpty) Text(refs.text),
+                  if (refs.text.isNotEmpty)
+                    MessageActions(
+                      text: refs.text,
+                      isUser: true,
+                      child: Text(refs.text),
+                    ),
                 ],
               ),
             ),
@@ -508,7 +514,11 @@ class _TranscriptRow extends StatelessWidget {
       case 'agentMessage':
         return Padding(
           padding: const EdgeInsets.symmetric(vertical: 6),
-          child: MarkdownView(data: item.text),
+          child: MessageActions(
+            text: item.text,
+            isUser: false,
+            child: MarkdownView(data: item.text),
+          ),
         );
       case 'reasoning':
         // Reasoning summaries are Markdown prose (they open with a `**bold**`

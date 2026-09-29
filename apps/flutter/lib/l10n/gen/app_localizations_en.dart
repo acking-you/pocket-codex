@@ -1817,4 +1817,31 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get composerKeyboardHint =>
       'Enter to send · Shift+Enter for a new line';
+
+  @override
+  String get selectText => 'Select text';
+
+  @override
+  String get sharePrompt => 'Share prompt';
+
+  @override
+  String get shareMessage => 'Share message';
+
+  @override
+  String get messageShareFailed =>
+      'Could not open sharing. You can copy the text instead.';
+
+  @override
+  String get messageCopyFailed => 'Could not copy the text. Please try again.';
+
+  @override
+  String get addToDraft => 'Add to draft';
+
+  @override
+  String get editMessageHint =>
+      'Reuse this text as a new message. History stays unchanged; original attachments are not added.';
+
+  @override
+  String get editMessageDraftHint =>
+      'Your existing draft and attachments will be kept. This text will be added below.';
 }

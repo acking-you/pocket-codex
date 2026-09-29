@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 import 'approval_review.dart';
 import 'async_questions.dart';
 import 'generated_image_card.dart';
+import 'message_actions.dart';
 import 'approval_review_card.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart' show DateFormat;
@@ -48,19 +49,23 @@ Widget _planBadge(BuildContext context, ColorScheme scheme) => Row(
 /// Renders one timeline entry. Messages render Gemini-style (user = soft
 /// right bubble, agent = full-width Markdown); tool/activity items render as a
 /// collapsible [ActivityCard]. Message copy fades in on hover (desktop);
-/// touch uses the enclosing [SelectionArea]'s long-press.
+/// mobile long-press opens a menu with a dedicated text-selection surface.
 class MessageView extends StatefulWidget {
   const MessageView({
     super.key,
     required this.item,
     this.hostImageLoader,
     this.imageCacheScope,
+    this.onEdit,
   });
   final TranscriptItem item;
 
   /// Reads a host-side image so a mentioned file renders as a picture.
   final HostImageLoader? hostImageLoader;
   final Object? imageCacheScope;
+
+  /// Reuses the visible user prompt in the conversation's draft editor.
+  final ValueChanged<String>? onEdit;
 
   @override
   State<MessageView> createState() => _MessageViewState();
@@ -282,6 +287,10 @@ class _MessageViewState extends State<MessageView> {
     // No copy for an image-only message (empty text) — it would clobber the
     // clipboard with an empty string while confirming "copied".
     final showActions = !item.streaming && item.text.trim().isNotEmpty;
+    final mobile = switch (Theme.of(context).platform) {
+      TargetPlatform.android || TargetPlatform.iOS => true,
+      _ => false,
+    };
     // Only this subtree rebuilds on hover; `content` above is built once.
     final actions = SizedBox(
       height: 30,
@@ -339,7 +348,30 @@ class _MessageViewState extends State<MessageView> {
           crossAxisAlignment: isUser
               ? CrossAxisAlignment.end
               : CrossAxisAlignment.start,
-          children: [content, actions],
+          children: [
+            if (mobile &&
+                showActions &&
+                (!isUser || refs.text.trim().isNotEmpty))
+              MessageActions(
+                text: isUser ? refs.text : proposal.text,
+                isUser: isUser,
+                completedAtLabel: item.turnCompletedAt == null
+                    ? null
+                    : AppLocalizations.of(
+                        context,
+                      ).completedAt(_fmtTurnTime(item.turnCompletedAt!)),
+                onEdit:
+                    isUser &&
+                        refs.text.trim().isNotEmpty &&
+                        widget.onEdit != null
+                    ? () => widget.onEdit!(refs.text)
+                    : null,
+                child: content,
+              )
+            else
+              content,
+            actions,
+          ],
         ),
       ),
     );

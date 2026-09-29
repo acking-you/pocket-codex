@@ -658,5 +658,13 @@
   "done": "完成",
   "expandComposer": "展开编辑器",
   "resetComposerHeight": "重置输入框高度",
-  "composerKeyboardHint": "Enter 发送 · Shift+Enter 换行"
+  "composerKeyboardHint": "Enter 发送 · Shift+Enter 换行",
+  "selectText": "选择文本",
+  "sharePrompt": "分享提示",
+  "shareMessage": "分享消息",
+  "messageShareFailed": "无法打开分享，可先复制文字。",
+  "messageCopyFailed": "复制失败，请重试。",
+  "addToDraft": "加入输入框",
+  "editMessageHint": "将文字作为新消息使用，保留原有历史，不会重新附加原消息的附件。",
+  "editMessageDraftHint": "保留当前草稿和附件，编辑后的文字将加在草稿末尾。"
 }

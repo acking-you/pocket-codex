@@ -759,5 +759,13 @@
   "done": "Done",
   "expandComposer": "Expand editor",
   "resetComposerHeight": "Reset height",
-  "composerKeyboardHint": "Enter to send · Shift+Enter for a new line"
+  "composerKeyboardHint": "Enter to send · Shift+Enter for a new line",
+  "selectText": "Select text",
+  "sharePrompt": "Share prompt",
+  "shareMessage": "Share message",
+  "messageShareFailed": "Could not open sharing. You can copy the text instead.",
+  "messageCopyFailed": "Could not copy the text. Please try again.",
+  "addToDraft": "Add to draft",
+  "editMessageHint": "Reuse this text as a new message. History stays unchanged; original attachments are not added.",
+  "editMessageDraftHint": "Your existing draft and attachments will be kept. This text will be added below."
 }

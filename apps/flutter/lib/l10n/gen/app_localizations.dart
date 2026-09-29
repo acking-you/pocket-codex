@@ -3343,6 +3343,54 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Enter to send · Shift+Enter for a new line'**
   String get composerKeyboardHint;
+
+  /// No description provided for @selectText.
+  ///
+  /// In en, this message translates to:
+  /// **'Select text'**
+  String get selectText;
+
+  /// No description provided for @sharePrompt.
+  ///
+  /// In en, this message translates to:
+  /// **'Share prompt'**
+  String get sharePrompt;
+
+  /// No description provided for @shareMessage.
+  ///
+  /// In en, this message translates to:
+  /// **'Share message'**
+  String get shareMessage;
+
+  /// No description provided for @messageShareFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Could not open sharing. You can copy the text instead.'**
+  String get messageShareFailed;
+
+  /// No description provided for @messageCopyFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Could not copy the text. Please try again.'**
+  String get messageCopyFailed;
+
+  /// No description provided for @addToDraft.
+  ///
+  /// In en, this message translates to:
+  /// **'Add to draft'**
+  String get addToDraft;
+
+  /// No description provided for @editMessageHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Reuse this text as a new message. History stays unchanged; original attachments are not added.'**
+  String get editMessageHint;
+
+  /// No description provided for @editMessageDraftHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Your existing draft and attachments will be kept. This text will be added below.'**
+  String get editMessageDraftHint;
 }
 
 class _AppLocalizationsDelegate
