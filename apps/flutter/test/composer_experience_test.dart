@@ -19,6 +19,7 @@ Future<void> _mount(
   FakeBridgeApi api, {
   String service = _service,
   String? thread = 'a',
+  bool settle = true,
 }) async {
   await api.appConnect(service, 28080);
   await t.pumpWidget(
@@ -33,7 +34,17 @@ Future<void> _mount(
       locale: const Locale('en'),
     ),
   );
-  await t.pumpAndSettle();
+  if (settle) {
+    await t.pumpAndSettle();
+  } else {
+    await _frames(t);
+  }
+}
+
+Future<void> _frames(WidgetTester t) async {
+  for (var i = 0; i < 8; i++) {
+    await t.pump(const Duration(milliseconds: 50));
+  }
 }
 
 TextEditingController _controller(WidgetTester t) =>
@@ -48,6 +59,65 @@ class _UploadingApi extends FakeBridgeApi {
     String fileName,
     Uint8List bytes,
   ) => upload.future;
+}
+
+class _StartingApi extends FakeBridgeApi {
+  final start = Completer<void>();
+  bool starting = false;
+  final sentTo = <String>[];
+
+  @override
+  Future<String> appThreadStart(
+    String serviceKey, {
+    String? model,
+    String? cwd,
+    String? approvalPolicy,
+    String? approvalsReviewer,
+    String? serviceTier,
+    String? sandbox,
+  }) async {
+    starting = true;
+    await start.future;
+    return super.appThreadStart(
+      serviceKey,
+      model: model,
+      cwd: cwd,
+      approvalPolicy: approvalPolicy,
+      approvalsReviewer: approvalsReviewer,
+      serviceTier: serviceTier,
+      sandbox: sandbox,
+    );
+  }
+
+  @override
+  Future<void> appTurnStart(
+    String serviceKey,
+    String threadId,
+    String text, {
+    List<String> images = const [],
+    String? model,
+    String? approvalPolicy,
+    String? approvalsReviewer,
+    String? serviceTier,
+    String? sandbox,
+    String? collaborationMode,
+    String? reasoningEffort,
+  }) async {
+    sentTo.add(threadId);
+    await super.appTurnStart(
+      serviceKey,
+      threadId,
+      text,
+      images: images,
+      model: model,
+      approvalPolicy: approvalPolicy,
+      approvalsReviewer: approvalsReviewer,
+      serviceTier: serviceTier,
+      sandbox: sandbox,
+      collaborationMode: collaborationMode,
+      reasoningEffort: reasoningEffort,
+    );
+  }
 }
 
 class _DelayedFileSelector extends FakeFileSelector {
@@ -166,6 +236,198 @@ void main() {
       expect(t.takeException(), isNull);
     },
   );
+
+  testWidgets(
+    'a pending first send keeps its original conversation and draft',
+    (t) async {
+      t.view.devicePixelRatio = 1;
+      t.view.physicalSize = const Size(1280, 900);
+      addTearDown(t.view.reset);
+      final api = _StartingApi()
+        ..appThreads.add(
+          const ThreadMeta(
+            id: 'b',
+            preview: 'Beta',
+            cwd: '/project',
+            updatedAt: 0,
+          ),
+        );
+      await _mount(t, api, thread: null);
+      await t.enterText(_input, 'First message');
+      await t.pump();
+      await t.tap(find.byKey(const Key('send-btn')));
+      await t.pump();
+      expect(api.starting, isTrue);
+      await t.enterText(_input, 'Next draft for the new conversation');
+      await t.tap(find.byKey(const Key('conv-tile-b')));
+      await t.pumpAndSettle();
+      await t.enterText(_input, 'Unfinished beta');
+      api.start.complete();
+      await t.pumpAndSettle();
+      expect(api.sentTo, ['thread-0']);
+      expect(_controller(t).text, 'Unfinished beta');
+      // A second send must still target the conversation the user selected.
+      await t.tap(find.byKey(const Key('send-btn')));
+      await t.pumpAndSettle();
+      expect(api.sentTo, ['thread-0', 'b']);
+      await t.enterText(_input, 'Keep beta');
+      await t.tap(find.byKey(const Key('conv-tile-thread-0')));
+      await t.pumpAndSettle();
+      expect(_controller(t).text, 'Next draft for the new conversation');
+      await t.tap(find.byKey(const Key('conv-tile-b')));
+      await t.pumpAndSettle();
+      expect(_controller(t).text, 'Keep beta');
+      expect(t.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'returning to a pending new conversation adopts its created thread',
+    (t) async {
+      t.view.devicePixelRatio = 1;
+      t.view.physicalSize = const Size(1280, 900);
+      addTearDown(t.view.reset);
+      final api = _StartingApi()
+        ..appThreads.add(
+          const ThreadMeta(
+            id: 'b',
+            preview: 'Beta',
+            cwd: '/project',
+            updatedAt: 0,
+          ),
+        );
+      await _mount(t, api, thread: null);
+      await t.enterText(_input, 'First message');
+      await t.pump();
+      await t.tap(find.byKey(const Key('send-btn')));
+      await t.pump();
+      expect(api.starting, isTrue);
+      await t.enterText(_input, 'Next message');
+      await t.tap(find.byKey(const Key('conv-tile-b')));
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(const Key('new-conversation-btn')));
+      await t.pumpAndSettle();
+      api.start.complete();
+      await t.pumpAndSettle();
+      expect(_controller(t).text, 'Next message');
+      await t.tap(find.byKey(const Key('send-btn')));
+      await t.pumpAndSettle();
+      expect(api.sentTo, ['thread-0', 'thread-0']);
+      expect(t.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'a failed background first send restores only its original draft',
+    (t) async {
+      t.view.devicePixelRatio = 1;
+      t.view.physicalSize = const Size(1280, 900);
+      addTearDown(t.view.reset);
+      final api = _StartingApi()
+        ..appThreads.add(
+          const ThreadMeta(
+            id: 'b',
+            preview: 'Beta',
+            cwd: '/project',
+            updatedAt: 0,
+          ),
+        );
+      await _mount(t, api, thread: null);
+      await t.enterText(_input, 'First message');
+      await t.pump();
+      await t.tap(find.byKey(const Key('send-btn')));
+      await t.pump();
+      expect(api.starting, isTrue);
+      await t.enterText(_input, 'Next draft');
+      await t.tap(find.byKey(const Key('conv-tile-b')));
+      await t.pumpAndSettle();
+      await t.enterText(_input, 'Unfinished beta');
+      api.start.completeError(StateError('Thread creation failed'));
+      await t.pumpAndSettle();
+      expect(_controller(t).text, 'Unfinished beta');
+      expect(api.sentTo, isEmpty);
+      await t.tap(find.byKey(const Key('new-conversation-btn')));
+      await t.pumpAndSettle();
+      expect(_controller(t).text, 'First message\n\nNext draft');
+      expect(t.takeException(), isNull);
+    },
+  );
+
+  for (final returnBeforeAck in [false, true]) {
+    testWidgets(
+      'accepted supplement clears only its original draft (return before ack: $returnBeforeAck)',
+      (t) async {
+        t.view.devicePixelRatio = 1;
+        t.view.physicalSize = const Size(1280, 900);
+        addTearDown(t.view.reset);
+        final api = FakeBridgeApi()
+          ..steerGate = Completer<void>()
+          ..readResult = const ThreadHistory(items: [], running: true)
+          ..appThreads.addAll([
+            const ThreadMeta(
+              id: 'a',
+              preview: 'Alpha',
+              cwd: '/project',
+              updatedAt: 0,
+            ),
+            const ThreadMeta(
+              id: 'b',
+              preview: 'Beta',
+              cwd: '/project',
+              updatedAt: 0,
+            ),
+          ]);
+        final previous = fsel.FileSelectorPlatform.instance;
+        final selector = FakeFileSelector()
+          ..files = [
+            MemXFile(Uint8List.fromList([1, 2]), 'sent.txt'),
+          ];
+        fsel.FileSelectorPlatform.instance = selector;
+        addTearDown(() => fsel.FileSelectorPlatform.instance = previous);
+        await _mount(t, api, settle: false);
+        await t.tap(find.byKey(const Key('attach-menu-btn')));
+        await _frames(t);
+        await t.tap(find.byKey(const Key('attach-file-btn')));
+        await _frames(t);
+        await t.tap(find.byKey(const Key('supplement-toggle')));
+        await t.enterText(_input, 'Accepted supplement');
+        await t.tap(find.byKey(const Key('send-btn')));
+        await t.pump();
+        await t.tap(find.byKey(const Key('conv-tile-b')));
+        await _frames(t);
+        await t.enterText(_input, 'Unfinished beta');
+        if (returnBeforeAck) {
+          await t.tap(find.byKey(const Key('conv-tile-a')));
+          await _frames(t);
+          await t.enterText(_input, 'Newer alpha draft');
+          selector.files = [
+            MemXFile(Uint8List.fromList([3]), 'new.txt'),
+          ];
+          await t.tap(find.byKey(const Key('attach-menu-btn')));
+          await _frames(t);
+          await t.tap(find.byKey(const Key('attach-file-btn')));
+          await _frames(t);
+        }
+        api.steerGate!.complete();
+        await _frames(t);
+        if (!returnBeforeAck) {
+          expect(_controller(t).text, 'Unfinished beta');
+          await t.tap(find.byKey(const Key('conv-tile-a')));
+          await _frames(t);
+        }
+        expect(
+          _controller(t).text,
+          returnBeforeAck ? 'Newer alpha draft' : isEmpty,
+        );
+        expect(find.text('sent.txt'), findsNothing);
+        if (returnBeforeAck) expect(find.text('new.txt'), findsOneWidget);
+        await t.tap(find.byKey(const Key('conv-tile-b')));
+        await _frames(t);
+        expect(_controller(t).text, 'Unfinished beta');
+        expect(t.takeException(), isNull);
+      },
+    );
+  }
 
   testWidgets(
     'a pending picker survives leaving and returning to an empty draft',

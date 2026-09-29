@@ -242,6 +242,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   bool _serviceTierPickPending = false;
   bool _modePickPending = false;
   bool _supplement = false;
+  Object? _sendRequest;
   Object? _supplementRequest;
   bool _plan = false; // plan mode: the agent plans before implementing
   // Whether the thread is currently in plan mode server-side. Collaboration
@@ -1091,6 +1092,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       _serviceTierPickPending = false;
       _modePickPending = false;
       _supplement = false;
+      _sendRequest = null;
       _supplementRequest = null;
       _sending = false;
       _plan = false;
@@ -2646,7 +2648,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     // (e.g. "implement the plan") must not consume them, and a retry re-sends
     // the snapshot taken at the original send.
     final ordinary = !retry && overrideText == null;
-    final sendAttachments = queued?.attachments ?? _attachments;
+    final sendAttachments = List<_Attachment>.of(
+      queued?.attachments ?? _attachments,
+    );
     final images = retry
         ? _lastUserImages
         : !ordinary
@@ -2690,6 +2694,23 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     }
     // Take the send lock up front, before the retry probe's await below, so the
     // composer can't start a second send during that round-trip (re-entrancy).
+    final api = ref.read(bridgeApiProvider);
+    final sendingDraft = _draft;
+    final request = Object();
+    _sendRequest = request;
+    bool current() =>
+        mounted &&
+        identical(_sendRequest, request) &&
+        identical(_draft, sendingDraft);
+    var targetThread = _threadId;
+    final targetCwd = _cwd;
+    final isNewThread = targetThread == null;
+    final l10n = AppLocalizations.of(context);
+    final preview = typed.isNotEmpty
+        ? typed
+        : filePaths.isNotEmpty
+        ? l10n.fileOnlyMessage
+        : l10n.imageOnlyMessage;
     _settingsRevision++;
     final mode = _mode;
     final tier = _requestedServiceTier;
@@ -2704,10 +2725,14 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     // that hides the plan-implement choice. So on retry, ask the server first;
     // if this prompt is already the latest user turn, just reload its (possibly
     // in-progress) history instead of sending again.
-    if (retry && await _turnAlreadyCommitted(text, images)) {
-      if (mounted) setState(() => _sending = false);
-      await _resumeAndLoad();
-      return;
+    if (retry) {
+      final committed = await _turnAlreadyCommitted(text, images);
+      if (!current()) return;
+      if (committed) {
+        setState(() => _sending = false);
+        await _resumeAndLoad();
+        return;
+      }
     }
     setState(() {
       _error = null;
@@ -2745,7 +2770,6 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     _scrollToEnd(force: true);
     var dropped = false;
     try {
-      final api = ref.read(bridgeApiProvider);
       // Collaboration mode for this turn. Send it when the user explicitly
       // toggled the plan chip (so an explicit on/off is always honored, even if
       // our view of the server mode is stale), or when the desired toggle
@@ -2764,7 +2788,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         final models = await api.appModelList(widget.serviceKey);
         if (models.isNotEmpty) {
           modelId = models.first.id;
-          if (mounted) setState(() => _model = models.first);
+          if (current()) setState(() => _model = models.first);
         }
       }
       // The server silently ignores collaborationMode without a concrete model,
@@ -2772,34 +2796,38 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       // flip _planActive below — a silent UI/server divergence. Refuse instead so
       // the switch (enter/leave plan mode) never appears to succeed when it can't.
       if (collab != null && modelId == null) {
-        if (mounted) {
+        if (current()) {
           setState(() {
-            _error = AppLocalizations.of(context).noModelForMode;
+            _error = l10n.noModelForMode;
             _retry = () => _send(retry: true);
           });
+        } else if (ordinary) {
+          _restoreDraft(typed, sendAttachments, into: sendingDraft);
         }
         return;
       }
-      final isNewThread = _threadId == null;
-      _threadId ??= await api.appThreadStart(
+      targetThread ??= await api.appThreadStart(
         widget.serviceKey,
         model: modelId,
-        cwd: _cwd,
+        cwd: targetCwd,
         approvalPolicy: mode.approval,
         approvalsReviewer: mode.reviewer,
         serviceTier: tier,
         sandbox: mode.sandbox,
       );
       if (isNewThread) {
-        _drafts.adoptThread(_draft, _threadId!);
-        // The fresh conversation is now the one to restore on next launch.
-        ref
-            .read(uiPrefsProvider.notifier)
-            .setLastThread(widget.serviceKey, _threadId);
+        _drafts.adoptThread(sendingDraft, targetThread);
+        // The user may have reopened this same draft while thread/start waited.
+        if (mounted && identical(_draft, sendingDraft)) {
+          _threadId = targetThread;
+          ref
+              .read(uiPrefsProvider.notifier)
+              .setLastThread(widget.serviceKey, targetThread);
+        }
         // Surface the new session in the left pane immediately. `thread/list`
         // can lag `thread/start`, so optimistically insert it now (newest
         // first) and let _loadThreads reconcile once the server catches up.
-        final tid = _threadId!;
+        final tid = targetThread;
         if (mounted && !_threads.any((t) => t.id == tid)) {
           setState(() {
             _threads = [
@@ -2807,35 +2835,33 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                 id: tid,
                 // Preview the TYPED text (never the appended file-reference
                 // block); an attachment-only first message gets a placeholder.
-                preview: typed.isNotEmpty
-                    ? typed
-                    : filePaths.isNotEmpty
-                    ? AppLocalizations.of(context).fileOnlyMessage
-                    : AppLocalizations.of(context).imageOnlyMessage,
-                cwd: _cwd ?? '',
+                preview: preview,
+                cwd: targetCwd ?? '',
                 updatedAt: 0,
               ),
               ..._threads,
             ];
           });
         }
-        _loadThreads();
+        if (mounted) _loadThreads();
         // Persist this new thread's config now that it has a server-side id, so
         // it's stored even if the first turn/start below fails.
-        _persistThreadConfig();
+        if (current()) _persistThreadConfig();
       }
       // Record what this turn puts on the wire BEFORE sending: turn/started
       // (and the stamp it takes) can arrive while the await below is still in
       // flight. Turn params override thread defaults, so on servers that never
       // notify settings these ARE the effective values.
-      _sentModel = modelId;
-      _sentEffort = effort?.wire;
+      if (current()) {
+        _sentModel = modelId;
+        _sentEffort = effort?.wire;
+      }
       // Pass the current model + permission + collaboration mode every turn:
       // turn/start overrides apply to this and subsequent turns, so switching
       // works mid-conversation.
       await api.appTurnStart(
         widget.serviceKey,
-        _threadId!,
+        targetThread,
         text,
         images: images,
         model: modelId,
@@ -2850,7 +2876,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         // thread's sticky effort. null only when no effort has ever been set.
         reasoningEffort: effort?.wire,
       );
-      if (mounted) {
+      if (current()) {
         setState(() {
           _planActive = _plan;
           _planToggledByUser = false;
@@ -2882,15 +2908,17 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       }
     } catch (e) {
       final msg = friendlyError(e);
-      if (mounted) {
+      if (current()) {
         setState(() {
           _error = msg;
           _retry = () => _send(retry: true);
         });
+      } else if (ordinary) {
+        _restoreDraft(typed, sendAttachments, into: sendingDraft);
       }
-      if (_looksDisconnected(msg)) dropped = true;
+      if (current() && _looksDisconnected(msg)) dropped = true;
     } finally {
-      if (mounted) {
+      if (current()) {
         setState(() => _sending = false);
         if (_error == null && !dropped) _maybeFlushQueue();
       }
@@ -2900,11 +2928,11 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     // committed server-side before the socket dropped, and resending would
     // duplicate it; the user retries with one tap instead. `reload: false`
     // keeps the optimistic message visible (and the plan toggle) for that retry.
-    if (dropped) {
+    if (dropped && current()) {
       await _autoReconnect(reload: false);
       // _autoReconnect cleared the error; re-offer the retry now that the
       // connection is back (retry reuses _lastUserText + the existing bubble).
-      if (mounted && !_connectionLost) {
+      if (current() && !_connectionLost) {
         setState(() {
           _error = AppLocalizations.of(context).turnFailed;
           _retry = () => _send(retry: true);
@@ -3018,6 +3046,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         _attachments.any((a) => !a.ready)) {
       return;
     }
+    final sendingDraft = _draft;
     final draft = _input.text;
     final attachments = List<_Attachment>.of(_attachments);
     if (draft.trim().isEmpty && attachments.isEmpty) return;
@@ -3040,6 +3069,16 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       final acceptedTurnId = await ref
           .read(bridgeApiProvider)
           .appTurnSteer(widget.serviceKey, tid, turnId, text, images: images);
+      if (sendingDraft.value.text == draft) {
+        sendingDraft.value = TextEditingValue.empty;
+      }
+      sendingDraft.attachments.removeWhere(
+        (a) => attachments.any((sent) => sent.id == a.id),
+      );
+      if (mounted && identical(_draft, sendingDraft)) {
+        _input.value = sendingDraft.value;
+      }
+      _drafts.save(sendingDraft, changed: true);
       if (!current()) return;
       setState(() {
         final item = TranscriptItem(
@@ -3055,11 +3094,6 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           _itemIndex[item.id] = _items.length;
           _items.add(item);
         }
-        if (_input.text == draft) _input.clear();
-        _attachments.removeWhere(
-          (a) => attachments.any((sent) => sent.id == a.id),
-        );
-        _saveDraft();
         _supplement = false;
         _error = null;
         _retry = null;
@@ -3158,23 +3192,32 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     _restoreDraft(q.text, q.attachments);
   }
 
-  void _restoreDraft(String text, List<_Attachment> attachments) {
-    final current = _input.text;
-    _input.text = text.isEmpty
+  void _restoreDraft(
+    String text,
+    List<_Attachment> attachments, {
+    _ComposerDraft? into,
+  }) {
+    final draft = into ?? _draft;
+    final current = draft.value.text;
+    final restored = text.isEmpty
         ? current
         : current.isEmpty
         ? text
         : '$text\n\n$current';
-    setState(() {
-      final ids = _attachments.map((a) => a.id).toSet();
-      _attachments.insertAll(
-        0,
-        attachments.where((a) => ids.add(a.id)).toList(),
-      );
-    });
-    _input.selection = TextSelection.collapsed(offset: _input.text.length);
-    _saveDraft();
-    _inputFocus.requestFocus();
+    draft.value = TextEditingValue(
+      text: restored,
+      selection: TextSelection.collapsed(offset: restored.length),
+    );
+    final ids = draft.attachments.map((a) => a.id).toSet();
+    draft.attachments.insertAll(
+      0,
+      attachments.where((a) => ids.add(a.id)).toList(),
+    );
+    _drafts.save(draft, changed: true);
+    if (mounted && identical(_draft, draft)) {
+      _input.value = draft.value;
+      _inputFocus.requestFocus();
+    }
   }
 
   /// Discard a specific queued message (the ✕ on its chip). Unlike Esc, this
