@@ -1415,6 +1415,37 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     }
   }
 
+  void _mergeHistoryLiveItems(
+    Map<String, TranscriptItem> liveItems,
+    Set<String> partialItems,
+  ) {
+    for (final item in liveItems.values) {
+      final index = _itemIndex[item.id];
+      if (index == null || partialItems.contains(item.id)) continue;
+      final snapshot = _items[index];
+      if (item.turnId.isEmpty) item.turnId = snapshot.turnId;
+      item.turnCompletedAt ??= snapshot.turnCompletedAt;
+      item.turnDurationMs ??= snapshot.turnDurationMs;
+      _items[index] = item;
+    }
+    // A bounded tail may omit earlier live work. Shared IDs anchor that work
+    // before its reply instead of appending it after (and folding the reply).
+    final merged = mergeHistoryItems(
+      _items,
+      liveItems.values.toList(),
+      turnOrder: _turnSummaries.map((turn) => turn.turnId),
+      olderPage: false,
+    );
+    _items
+      ..clear()
+      ..addAll(merged);
+    _itemIndex.clear();
+    for (var i = 0; i < _items.length; i++) {
+      _itemIndex[_items[i].id] = i;
+    }
+    _cachedRows = null;
+  }
+
   /// Splice [items] into the transcript by turn order, skipping ids already
   /// present, and rebuild the id→index map.
   ///
@@ -1725,7 +1756,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   }
 
   /// Attach to an existing thread for live events and turns, then load history.
-  Future<void> _resumeAndLoad() async {
+  Future<void> _resumeAndLoad({bool propagateErrors = false}) async {
     // Guard: a stale event (e.g. thread/compacted from a prior thread) can
     // arrive after switching to a new, unsaved conversation — don't `_threadId!`
     // through a null here.
@@ -1753,10 +1784,13 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       if (_items.isEmpty) {
         final cached = await api.appHistoryCached(widget.serviceKey, startTid);
         if (!current()) return;
-        if (cached != null && _items.isEmpty) {
+        if (cached != null) {
+          final liveQuestions = Map.of(_asyncQuestions);
           setState(() {
             _replaceTranscriptItems(cached.items);
             _turnSummaries = cached.turns;
+            _mergeHistoryLiveItems(liveItems, partialItems);
+            _asyncQuestions.addAll(liveQuestions);
             _hasOlder = cached.hasOlder;
             _firstTurnId = cached.firstTurnId;
             _sequentialHistoryIds.addAll(cached.items.map((item) => item.id));
@@ -1812,17 +1846,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
             activeTurnId: activeTurnId,
           );
         }
-        for (final item in liveItems.values) {
-          final index = _itemIndex[item.id];
-          if (index == null) {
-            _itemIndex[item.id] = _items.length;
-            _items.add(item);
-          } else {
-            // A delta first seen during loading has no known text prefix.
-            // Keep the snapshot until a complete live item supplies its body.
-            if (!partialItems.contains(item.id)) _items[index] = item;
-          }
-        }
+        _mergeHistoryLiveItems(liveItems, partialItems);
         _asyncQuestions.addEntries(liveQuestions);
         _cachedRows = null;
         _loadingOlder = false;
@@ -1924,6 +1948,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         _error = friendlyError(e);
         _retry = _resumeAndLoad;
       });
+      if (propagateErrors) rethrow;
     } finally {
       if (identical(_historyLiveItems, liveItems)) {
         _historyLiveItems = null;
@@ -2649,7 +2674,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       // than undoing the send.
       _outputStarted = true;
       final idx = _itemIndex[id];
-      if (idx == null && isDelta) {
+      // A pre-existing row can also have missed deltas while disconnected.
+      // Only a full snapshot received during this read establishes its prefix.
+      if (isDelta &&
+          (idx == null || _historyLiveItems?.containsKey(id) == false)) {
         _historyPartialItems?.add(id);
       } else if (!isDelta) {
         _historyPartialItems?.remove(id);
@@ -2666,13 +2694,14 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
             streaming: type == 'agentMessage' ? true : running,
             // The live turn this item belongs to, so a reply that streams in as
             // several items groups the same way it will after a reload.
-            turnId: _turnId ?? '',
+            turnId: _parseTurnId(e.raw) ?? _turnId ?? '',
           ),
         );
         _itemIndex[id] = _items.length - 1;
       } else {
         final it = _items[idx];
         it.type = type;
+        if (it.turnId.isEmpty) it.turnId = _parseTurnId(e.raw) ?? _turnId ?? '';
         if ((e.title ?? '').isNotEmpty) it.title = e.title!;
         if (isDelta) {
           it.text += e.text ?? '';
@@ -3637,7 +3666,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
             _externalHistoryDirty = true;
             await _refreshExternalHistory(_threadId!, _externalWriterEpoch);
           } else {
-            await _resumeAndLoad();
+            await _resumeAndLoad(propagateErrors: true);
           }
         }
         // Re-list too, not just the open transcript. `_loadThreads` runs once at

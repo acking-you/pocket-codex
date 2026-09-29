@@ -922,9 +922,30 @@ async fn forward_app_events(
                 // Missing final items or turn/completed cannot be recovered by
                 // later deltas. Close only this feed so Dart reloads history.
                 tracing::warn!(skipped, "app event feed lagged; closing for history recovery");
+                forward_retained_requests(&mut rx, &mut send);
                 break;
             },
             Err(RecvError::Closed) => break,
+        }
+    }
+}
+
+fn forward_retained_requests(
+    rx: &mut tokio::sync::broadcast::Receiver<app_session::AppEvent>,
+    send: &mut impl FnMut(app_session::AppEvent) -> bool,
+) {
+    // History cannot reconstruct request IDs. Preserve prompts in the retained
+    // tail before closing, without waiting for new data or chasing new events.
+    let retained = rx.len();
+    for _ in 0..retained {
+        match rx.try_recv() {
+            Ok(event) => {
+                if event.request_id.is_some() && !send(event) {
+                    return;
+                }
+            },
+            Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => {},
+            Err(_) => break,
         }
     }
 }

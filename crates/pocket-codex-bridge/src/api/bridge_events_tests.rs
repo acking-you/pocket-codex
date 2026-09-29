@@ -71,3 +71,34 @@ async fn a_dropped_dart_listener_stops_forwarding() {
     assert_eq!(received, ["item/completed"]);
     assert_eq!(tx.receiver_count(), 0);
 }
+
+#[tokio::test]
+async fn a_gap_preserves_retained_approvals_and_questions_before_closing() {
+    let (tx, rx) = broadcast::channel(4);
+    tx.send(event("lost-item")).unwrap();
+    for (kind, id) in [
+        ("item/commandExecution/requestApproval", "approval-1"),
+        ("item/tool/requestUserInput", "question-1"),
+    ] {
+        let mut prompt = event(kind);
+        prompt.request_id = Some(id.into());
+        tx.send(prompt).unwrap();
+    }
+    tx.send(event("item/completed")).unwrap();
+    tx.send(event("turn/completed")).unwrap();
+    let mut received = Vec::new();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        forward_app_events(rx, |event| {
+            received.push((event.kind, event.request_id));
+            true
+        }),
+    )
+    .await
+    .expect("close after preserving prompts");
+    assert_eq!(received, vec![
+        ("item/commandExecution/requestApproval".into(), Some("approval-1".into())),
+        ("item/tool/requestUserInput".into(), Some("question-1".into())),
+    ]);
+    assert_eq!(tx.receiver_count(), 0);
+}

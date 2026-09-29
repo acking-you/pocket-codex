@@ -93,6 +93,26 @@ Future<void> mount(WidgetTester t, FakeBridgeApi api) async {
   await frames(t);
 }
 
+class DelayedCachedApi extends FakeBridgeApi {
+  final cached = Completer<ThreadHistory?>();
+
+  @override
+  Future<ThreadHistory?> appHistoryCached(String serviceKey, String threadId) =>
+      cached.future;
+}
+
+void answer(FakeBridgeApi api) => api.pushEvent(
+  service,
+  const AppEvent(
+    kind: 'item/completed',
+    threadId: thread,
+    itemId: 'answer',
+    itemType: 'agentMessage',
+    text: 'The completed answer',
+    raw: '{"turnId":"turn-1"}',
+  ),
+);
+
 void main() {
   setUp(AppSessionScreen.debugResetThreadMemory);
 
@@ -292,4 +312,169 @@ void main() {
       },
     );
   }
+
+  for (final sawStart in [true, false]) {
+    testWidgets(
+      'live rows outside the history tail stay before their final answer (start seen: $sawStart)',
+      (t) async {
+        final read = Completer<ThreadHistory>();
+        final api = FakeBridgeApi()..pendingReads[thread] = [read.future];
+        await mount(t, api);
+        if (sawStart) event(api, 'turn/started', 'turn-1');
+        work(
+          api,
+          'turn-1',
+          'earlier-command',
+          'earlier work outside the bounded tail',
+        );
+        answer(api);
+        event(api, 'turn/completed', 'turn-1');
+        await frames(t);
+        read.complete(completedHistory);
+        await frames(t);
+        expect(find.text('The completed answer'), findsOneWidget);
+        expect(
+          t
+              .widget<TurnWorkCard>(find.byType(TurnWorkCard))
+              .work
+              .items
+              .any((item) => item.isAgent),
+          isFalse,
+        );
+        expect(t.takeException(), isNull);
+        await t.pumpWidget(const SizedBox.shrink());
+      },
+    );
+  }
+
+  testWidgets(
+    'a stale existing prefix cannot overwrite the recovered complete reply',
+    (t) async {
+      final api = FakeBridgeApi()
+        ..readResult = ThreadHistory(
+          running: true,
+          activeTurnId: 'turn-1',
+          items: [
+            ...runningHistory.items,
+            const ThreadItem(
+              id: 'answer',
+              turnId: 'turn-1',
+              itemType: 'agentMessage',
+              title: '',
+              text: 'The',
+            ),
+          ],
+        );
+      await mount(t, api);
+      final read = Completer<ThreadHistory>();
+      api.pendingReads[thread] = [read.future];
+      await api.closeAppEventStream(service);
+      await frames(t);
+      api.pushEvent(
+        service,
+        const AppEvent(
+          kind: 'item/agentMessage/delta',
+          threadId: thread,
+          itemId: 'answer',
+          itemType: 'agentMessage',
+          text: ' answer',
+          raw: '{"turnId":"turn-1"}',
+        ),
+      );
+      event(api, 'turn/completed', 'turn-1');
+      await frames(t);
+      read.complete(completedHistory);
+      await frames(t);
+      expect(find.text('The completed answer'), findsOneWidget);
+      expect(find.text('The answer'), findsNothing);
+      expect(t.takeException(), isNull);
+      await t.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
+  testWidgets(
+    'cached history remains available when live events precede it and sync fails',
+    (t) async {
+      final read = Completer<ThreadHistory>();
+      final api = DelayedCachedApi()..pendingReads[thread] = [read.future];
+      await mount(t, api);
+      event(api, 'turn/started', 'turn-1');
+      work(api, 'turn-1', 'command', 'new live output');
+      await frames(t);
+      api.cached.complete(runningHistory);
+      await frames(t);
+      expect(find.text('Do the work'), findsOneWidget);
+      expect(
+        t
+            .widget<TurnWorkCard>(find.byType(TurnWorkCard))
+            .work
+            .items
+            .single
+            .text,
+        'new live output',
+      );
+      read.completeError(StateError('history unavailable'));
+      await frames(t);
+      expect(find.text('Do the work'), findsOneWidget);
+      expect(
+        t
+            .widget<TurnWorkCard>(find.byType(TurnWorkCard))
+            .work
+            .items
+            .single
+            .text,
+        'new live output',
+      );
+      expect(t.takeException(), isNull);
+      await t.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
+  testWidgets('failed history recovery retries even with a healthy socket', (
+    t,
+  ) async {
+    final api = FakeBridgeApi()..readResult = runningHistory;
+    await mount(t, api);
+    final read = Completer<ThreadHistory>();
+    api.pendingReads[thread] = [read.future];
+    await api.closeAppEventStream(service);
+    await frames(t);
+    expect(api.threadReads.length, 2);
+    read.completeError(StateError('history temporarily unavailable'));
+    api.readResult = completedHistory;
+    await frames(t);
+    await t.pump(const Duration(seconds: 1));
+    await frames(t);
+    expect(api.threadReads.length, 3);
+    expect(find.text('The completed answer'), findsOneWidget);
+    expect(t.takeException(), isNull);
+    await t.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets(
+    'an approval retained before feed closure stays answerable after recovery',
+    (t) async {
+      final api = FakeBridgeApi()..readResult = runningHistory;
+      await mount(t, api);
+      api.pushEvent(
+        service,
+        const AppEvent(
+          kind: 'execCommandApproval',
+          threadId: thread,
+          requestId: 'retained-approval',
+          raw: '{"command":["ls"]}',
+        ),
+      );
+      await api.closeAppEventStream(service);
+      await frames(t);
+      expect(api.threadReads.length, 2);
+      expect(find.byKey(const Key('approval-card')), findsOneWidget);
+      await t.tap(find.byKey(const Key('approve-btn')));
+      await frames(t);
+      expect(api.lastApprovalDecision, 'accept');
+      expect(find.byKey(const Key('approval-card')), findsNothing);
+      expect(t.takeException(), isNull);
+      await t.pumpWidget(const SizedBox.shrink());
+    },
+  );
 }
