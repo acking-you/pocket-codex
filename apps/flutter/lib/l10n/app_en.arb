@@ -750,5 +750,11 @@
   "fileLinkRemoteWeb": "This address points to the controlled device, not this device. Use pb-mapper to register the web service port on the host and subscribe to it on this device, then open the mapped local address. Keep the URL path and query unchanged.",
   "fileLinkCheckingHost": "Checking host location…",
   "fileLinkFailed": "Unable to read the file. Check that it still exists and the host is running a version that supports file links.",
-  "fileLinkClose": "Close"
+  "fileLinkClose": "Close",
+  "draft": "Draft",
+  "editMessage": "Edit message",
+  "done": "Done",
+  "expandComposer": "Expand editor",
+  "resetComposerHeight": "Reset height",
+  "composerKeyboardHint": "Enter to send · Shift+Enter for a new line"
 }

@@ -370,7 +370,11 @@ The order below is our current best guess; it is not a contract.
    services hub lives on at `/manage`; desktop auto-restores hosting on
    boot (`ui_state.json`). P4 adds structured Guardian review history,
    a searchable turn directory, bounded long-step browsing, and coordinated
-   initial-load / continuation / navigation / monitoring feedback.
+   initial-load / continuation / navigation / monitoring feedback. The composer
+   grows and shrinks with text, preserving the manually resized minimum height.
+   Conversation drafts survive navigation during the app session, with sidebar
+   draft/queue indicators, an expanded editor, explicit height reset, separate
+   Queue/Stop controls, IME-safe desktop sending, and retryable attachments.
 11. **Persistent controller history (2026-09-25).** The App owns a configurable
     512 MB disk cache shared across hosts, reusable after restart. Independent
     meta `/history/v1` routes reconcile bounded windows and UTF-8 text prefixes
@@ -456,7 +460,16 @@ this file's roadmap so the source of truth stays in sync.
   turn a historical model assessment into an interactive approval or execute
   command text extracted for presentation. Unknown formats keep normal rendering.
 - Keep the composer compact by default, resizable with mouse/touch and
-  accessibility actions, and persist its height with the UI preferences.
+  accessibility actions, and persist its minimum height with the UI preferences.
+  Grow and shrink with wrapped text up to the viewport cap, then scroll internally;
+  automatic sizing must not overwrite the saved minimum. Keep draft text,
+  selection, attachments, and pending queues scoped to the host and conversation
+  for the app session; a queue resumes when its conversation is active. An upload
+  completing after navigation must update its original draft. Failed attachments
+  remain removable/retryable and block sending until resolved. Mobile Return
+  inserts a newline; desktop Enter sends and Shift+Enter inserts a newline, while
+  IME composition must never submit. The expanded editor shares the draft and
+  returns focus and selection to the compact input.
 - Branding uses the same blue/neutral palette as the UI. When changing it,
   update the brand masters and regenerate launcher, tray, and splash assets
   for every platform; keep both README posters and logo copies in sync.

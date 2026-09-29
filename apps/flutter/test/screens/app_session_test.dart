@@ -304,6 +304,16 @@ void main() {
     expect(height, greaterThan(90));
     final container = ProviderScope.containerOf(t.element(input));
     expect(container.read(uiPrefsProvider).valueOrNull?.composerHeight, height);
+
+    final field = find.byKey(const Key('composer-input'));
+    await t.enterText(field, List.filled(10, 'A multiline draft').join('\n'));
+    await t.pumpAndSettle();
+    expect(t.getSize(input).height, greaterThan(height));
+    await t.tap(find.byKey(const Key('send-btn')));
+    await t.pumpAndSettle();
+    expect(t.widget<TextField>(field).controller!.text, isEmpty);
+    expect(t.getSize(input).height, height);
+    expect(container.read(uiPrefsProvider).valueOrNull?.composerHeight, height);
     expect(t.takeException(), isNull);
   });
 
@@ -732,6 +742,39 @@ void main() {
       processImageImpl = (bytes) => compute(processImageBytes, bytes);
     });
 
+    testWidgets('a failed image remains retryable without choosing it again', (
+      t,
+    ) async {
+      final api = FakeBridgeApi(
+        config: const ConfigInfo(relay: 'relay:7666', hasKey: true),
+      );
+      const service = 'pcx:lb7666:app:default';
+      await api.appConnect(service, 28080);
+      await t.pumpWidget(
+        host(const AppSessionScreen(serviceKey: service), api),
+      );
+      await t.pumpAndSettle();
+      processImageImpl = (_) async =>
+          throw StateError('decoder temporarily unavailable');
+      picker.files = [MemXFile(tinyPng(), 'retry.png')];
+      await attachMenu(t, 'attach-btn');
+      await t.pumpAndSettle();
+      expect(find.byKey(const Key('attachment-0')), findsOneWidget);
+      expect(find.text('重试'), findsOneWidget);
+      expect(
+        t.widget<IconButton>(find.byKey(const Key('send-btn'))).onPressed,
+        isNull,
+      );
+      processImageImpl = (bytes) async => processImageBytes(bytes);
+      await t.tap(find.byKey(const Key('attachment-0')));
+      await t.pumpAndSettle();
+      expect(find.text('重试'), findsNothing);
+      expect(
+        t.widget<IconButton>(find.byKey(const Key('send-btn'))).onPressed,
+        isNotNull,
+      );
+    });
+
     Future<FakeBridgeApi> pumpSession(
       WidgetTester t, {
       String? threadId,
@@ -1142,7 +1185,7 @@ void main() {
       expect(find.text('data.bin'), findsOneWidget); // bubble chip
     });
 
-    testWidgets('a failed upload removes the chip and reports the error', (
+    testWidgets('a failed upload stays in the draft and can be retried', (
       t,
     ) async {
       final api = await pumpSession(t);
@@ -1153,11 +1196,20 @@ void main() {
       await attachMenu(t, 'attach-file-btn');
       await t.pumpAndSettle();
 
-      expect(find.byKey(const Key('attachment-0')), findsNothing);
-      expect(find.textContaining('上传文件到主机失败'), findsOneWidget);
-      // Nothing to send: the button stays disabled without text.
+      expect(find.byKey(const Key('attachment-0')), findsOneWidget);
+      expect(find.text('重试'), findsOneWidget);
+      // The failed attachment must not silently disappear from a send.
       final btn = t.widget<IconButton>(find.byKey(const Key('send-btn')));
       expect(btn.onPressed, isNull);
+      api.uploadError = null;
+      await t.tap(find.byKey(const Key('attachment-0')));
+      await t.pumpAndSettle();
+      expect(api.lastUploadName, 'x.log');
+      expect(find.text('重试'), findsNothing);
+      expect(
+        t.widget<IconButton>(find.byKey(const Key('send-btn'))).onPressed,
+        isNotNull,
+      );
     });
 
     testWidgets('an image picked through the FILE picker routes to the image '
@@ -3552,11 +3604,10 @@ void main() {
     // Not pumpAndSettle: the restored typing indicator animates forever.
     await t.pump();
     await t.pump(const Duration(milliseconds: 50));
-    // Past message recovered, and the running state restored (composer shows
-    // the stop button instead of send).
+    // Past message recovered, with independent stop and queue actions.
     expect(find.text('earlier question'), findsOneWidget);
     expect(find.byKey(const Key('stop-btn')), findsOneWidget);
-    expect(find.byKey(const Key('send-btn')), findsNothing);
+    expect(find.byKey(const Key('send-btn')), findsOneWidget);
   });
 
   testWidgets('#2: a thread restores its persisted config on open', (t) async {

@@ -33,7 +33,7 @@ void main() {
     for (final brightness in Brightness.values) {
       for (final scale in [1.0, 2.0]) {
         testWidgets(
-          'compact composer keeps text visible on ${device.name} $brightness at $scale',
+          'composer grows and shrinks on ${device.name} $brightness at $scale',
           (t) async {
             t.view.devicePixelRatio = 1;
             t.view.physicalSize = device.size;
@@ -113,6 +113,67 @@ void main() {
               t.getRect(find.byKey(const Key('send-btn'))).bottom,
               lessThanOrEqualTo(device.size.height - t.view.viewInsets.bottom),
             );
+            final compactHeight = t.getSize(area).height;
+            final savedHeight = container
+                .read(uiPrefsProvider)
+                .valueOrNull
+                ?.composerHeight;
+            await t.enterText(input, '$draft\n$draft\n$draft');
+            await t.pumpAndSettle();
+            expect(t.getSize(area).height, greaterThan(compactHeight));
+
+            // Soft wrapping must grow the field just like explicit newlines.
+            await t.enterText(input, List.filled(200, '输入内容 hello ').join());
+            await t.pumpAndSettle();
+            final cappedHeight = t.getSize(area).height;
+            expect(cappedHeight, greaterThan(compactHeight));
+            expect(cappedHeight, lessThanOrEqualTo(280));
+            expect(
+              t.getRect(find.byKey(const Key('send-btn'))).bottom,
+              lessThanOrEqualTo(device.size.height - t.view.viewInsets.bottom),
+            );
+            final editableState = t.state<EditableTextState>(
+              find.descendant(of: input, matching: find.byType(EditableText)),
+            );
+            expect(
+              editableState.renderEditable.maxScrollExtent,
+              greaterThan(0),
+            );
+            await t.enterText(input, List.filled(100, draft).join('\n'));
+            await t.pumpAndSettle();
+            expect(t.getSize(area).height, cappedHeight);
+            expect(
+              container.read(uiPrefsProvider).valueOrNull?.composerHeight,
+              savedHeight,
+              reason: 'Automatic growth must not overwrite the saved height.',
+            );
+
+            await t.enterText(input, draft);
+            await t.pumpAndSettle();
+            expect(t.getSize(area).height, compactHeight);
+            expect(editableState.renderEditable.maxScrollExtent, 0);
+
+            // Queue editing and starter prompts update the controller directly.
+            final controller = t.widget<TextField>(input).controller!;
+            controller.text = '$draft\n$draft\n$draft';
+            await t.pumpAndSettle();
+            expect(t.getSize(area).height, greaterThan(compactHeight));
+            controller.clear();
+            await t.pumpAndSettle();
+            expect(t.getSize(area).height, lessThanOrEqualTo(compactHeight));
+            expect(t.getSize(area).height, greaterThanOrEqualTo(savedHeight!));
+            await t.tap(find.byKey(const Key('composer-expand')));
+            await t.pumpAndSettle();
+            final expanded = find.byKey(const Key('composer-expanded-input'));
+            await t.enterText(expanded, '$draft\n$draft');
+            await t.pumpAndSettle();
+            expect(
+              t.getRect(expanded).bottom,
+              lessThanOrEqualTo(device.size.height - t.view.viewInsets.bottom),
+            );
+            await t.tap(find.byKey(const Key('composer-editor-done')));
+            await t.pumpAndSettle();
+            expect(controller.text, '$draft\n$draft');
             expect(t.takeException(), isNull);
           },
           variant: TargetPlatformVariant({device.platform}),

@@ -1736,4 +1736,22 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get fileLinkClose => '关闭';
+
+  @override
+  String get draft => '草稿';
+
+  @override
+  String get editMessage => '编辑消息';
+
+  @override
+  String get done => '完成';
+
+  @override
+  String get expandComposer => '展开编辑器';
+
+  @override
+  String get resetComposerHeight => '重置输入框高度';
+
+  @override
+  String get composerKeyboardHint => 'Enter 发送 · Shift+Enter 换行';
 }

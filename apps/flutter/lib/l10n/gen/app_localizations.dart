@@ -3295,6 +3295,42 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Close'**
   String get fileLinkClose;
+
+  /// No description provided for @draft.
+  ///
+  /// In en, this message translates to:
+  /// **'Draft'**
+  String get draft;
+
+  /// No description provided for @editMessage.
+  ///
+  /// In en, this message translates to:
+  /// **'Edit message'**
+  String get editMessage;
+
+  /// No description provided for @done.
+  ///
+  /// In en, this message translates to:
+  /// **'Done'**
+  String get done;
+
+  /// No description provided for @expandComposer.
+  ///
+  /// In en, this message translates to:
+  /// **'Expand editor'**
+  String get expandComposer;
+
+  /// No description provided for @resetComposerHeight.
+  ///
+  /// In en, this message translates to:
+  /// **'Reset height'**
+  String get resetComposerHeight;
+
+  /// No description provided for @composerKeyboardHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Enter to send · Shift+Enter for a new line'**
+  String get composerKeyboardHint;
 }
 
 class _AppLocalizationsDelegate

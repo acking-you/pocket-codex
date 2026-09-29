@@ -33,6 +33,7 @@ import 'package:pocket_codex/src/service_key.dart';
 import 'package:pocket_codex/src/screens/app_session/async_questions.dart';
 import 'package:pocket_codex/src/screens/app_session/activity_cards.dart';
 import 'package:pocket_codex/src/screens/app_session/composer_cards.dart';
+import 'package:pocket_codex/src/screens/app_session/expanded_composer.dart';
 import 'package:pocket_codex/src/screens/app_session/transcript_model.dart';
 import 'package:pocket_codex/src/screens/app_session/generated_image_card.dart';
 import 'package:pocket_codex/src/screens/app_session/history_merge.dart';
@@ -58,6 +59,8 @@ import 'package:pocket_codex/src/widgets/turn_minimap.dart';
 import 'package:pocket_codex/src/widgets/turn_outline.dart';
 import 'package:pocket_codex/src/screens/app_session/approval_review.dart';
 import 'package:pocket_codex/src/widgets/window_title_bar.dart';
+
+part 'app_session/composer_drafts.dart';
 
 /// Local port for the app-server ws tunnel (shared with the service screen).
 /// `0` is a sentinel: the bridge assigns a free OS port *per service* so several
@@ -148,9 +151,13 @@ class _Attachment {
   final bool isFile;
   ProcessedImage? processed; // image: null while the isolate is still working
   String? hostPath; // file: null while the upload is still in flight
+  XFile? source;
+  Uint8List? sourceBytes;
+  String? error;
 
   /// Whether this attachment is sendable.
-  bool get ready => isFile ? hostPath != null : processed != null;
+  bool get ready =>
+      error == null && (isFile ? hostPath != null : processed != null);
 }
 
 /// A message the user composed while a turn was already running. It isn't sent
@@ -190,6 +197,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     with WidgetsBindingObserver {
   final _input = TextEditingController();
   final _inputFocus = FocusNode();
+  final _expandedInputFocus = FocusNode();
+  late final _ComposerDrafts _drafts;
+  late _ComposerDraft _draft;
+  bool _editorOpen = false;
   final _scroll = ScrollController();
   // Index-based scrolling for the transcript (super_sliver_list): powers the
   // turn minimap and the compact prev/next-turn jumps via `visibleRange` +
@@ -481,8 +492,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   List<String> _lastUserImages = const [];
   // Composer attachments not yet sent; an entry with `processed == null` is
   // still being downscaled/re-encoded in a background isolate.
-  final List<_Attachment> _attachments = [];
-  int _attachSeq = 0; // ids for attachment list entries
+  List<_Attachment> get _attachments => _draft.attachments;
   // True while a file is being dragged over the chat (desktop) — shows the
   // "drop to attach" overlay.
   bool _dragging = false;
@@ -490,8 +500,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   // Messages composed while a turn was already in flight. They queue instead of
   // racing the running turn and each flushes as its own turn once the prior one
   // ends (codex-cli parity). Esc pops the most recent back into the composer.
-  final List<_Queued> _queue = [];
-  int _queueSeq = 0; // ids for queue entries
+  List<_Queued> get _queue => _draft.queue;
   // Whether the running turn has produced ANY output yet (reasoning, a tool
   // call, or reply text). Distinguishes "sent, nothing back" — where Esc undoes
   // the send and restores the text — from "output started", where Esc simply
@@ -611,6 +620,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     super.initState();
     _threadId = widget.threadId;
     _cwd = widget.cwd;
+    _drafts = ref.read(_composerDraftsProvider(widget.serviceKey));
+    _draft = _drafts.forThread(_threadId);
+    _input.value = _draft.value.copyWith(composing: TextRange.empty);
+    _input.addListener(_saveDraft);
     // Remember where the user is chatting so the next cold start (and the
     // chat-first home) lands right back here. Deferred: provider writes are
     // not allowed while the tree is building. A thread-less mount (fresh
@@ -1097,13 +1110,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       _sentModel = null;
       _sentEffort = null;
       _implementDismissed = false;
-      _input.clear();
-      // Pending attachments are drafts of the previous thread's message —
-      // clear them with the input (and the retry snapshot, which references a
-      // turn on the previous thread).
-      _attachments.clear();
-      // The queue + undo state belong to the previous conversation.
-      _queue.clear();
+      _draft = _drafts.forThread(tid);
+      _input.value = _draft.value.copyWith(composing: TextRange.empty);
+      // Undo and retry snapshots belong to the previous conversation.
       _outputStarted = false;
       _undoableDraft = null;
       _suppressStopMarker = false;
@@ -1161,7 +1170,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     _threadsRefreshTimer?.cancel();
     _elapsedTicker?.cancel();
     _sub?.cancel();
+    _input.removeListener(_saveDraft);
     _input.dispose();
+    _expandedInputFocus.dispose();
     WidgetsBinding.instance.removeObserver(this);
     _inputFocus.removeListener(_onComposerFocus);
     _inputFocus.dispose();
@@ -1262,6 +1273,37 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// Only when the user was already at the bottom — pulling someone back down
   /// while they're reading history would be worse than the keyboard.
   void _onComposerFocus() => _repinForKeyboard();
+
+  void _saveDraft() {
+    _draft.value = _input.value;
+    _drafts.save(_draft);
+  }
+
+  bool _composerSizeChanged(SizeChangedLayoutNotification notification) {
+    if (_atBottom) {
+      final intent = _scrollIntent;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && intent == _scrollIntent) _scrollToEnd(force: true);
+      });
+    }
+    return false;
+  }
+
+  Future<void> _expandComposer() async {
+    if (_editorOpen) return;
+    final selection = _input.selection;
+    setState(() => _editorOpen = true);
+    _inputFocus.unfocus();
+    _input.selection = selection;
+    await showDialog<void>(
+      context: context,
+      builder: (_) =>
+          ExpandedComposer(controller: _input, focusNode: _expandedInputFocus),
+    );
+    if (!mounted) return;
+    setState(() => _editorOpen = false);
+    _inputFocus.requestFocus();
+  }
 
   /// The keyboard inset animates in over several frames, and each frame shrinks
   /// the transcript viewport a little more. `_scrollToEnd`'s settle loop gives
@@ -2694,9 +2736,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         // Don't clear the composer for a programmatic send (e.g. "implement
         // the plan") — the user may have text in progress there.
         if (overrideText == null && queued == null) {
-          _input.clear();
           _attachments.clear();
+          _input.clear();
         }
+        _saveDraft();
       }
     });
     _scrollToEnd(force: true);
@@ -2748,6 +2791,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         sandbox: mode.sandbox,
       );
       if (isNewThread) {
+        _drafts.adoptThread(_draft, _threadId!);
         // The fresh conversation is now the one to restore on next launch.
         ref
             .read(uiPrefsProvider.notifier)
@@ -3015,6 +3059,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         _attachments.removeWhere(
           (a) => attachments.any((sent) => sent.id == a.id),
         );
+        _saveDraft();
         _supplement = false;
         _error = null;
         _retry = null;
@@ -3052,10 +3097,15 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     if (atts.any((a) => !a.ready)) return;
     setState(() {
       _queue.add(
-        _Queued(id: _queueSeq++, text: _input.text, attachments: atts),
+        _Queued(
+          id: _drafts.nextQueueId++,
+          text: _input.text,
+          attachments: atts,
+        ),
       );
-      _input.clear();
       _attachments.clear();
+      _input.clear();
+      _saveDraft();
     });
   }
 
@@ -3123,6 +3173,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       );
     });
     _input.selection = TextSelection.collapsed(offset: _input.text.length);
+    _saveDraft();
     _inputFocus.requestFocus();
   }
 
@@ -3130,6 +3181,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// drops it rather than restoring it — the user explicitly removed it.
   void _discardQueued(int id) {
     setState(() => _queue.removeWhere((q) => q.id == id));
+    _saveDraft();
   }
 
   /// Esc "undo" for a turn that hasn't produced output yet: interrupt it and
@@ -4560,6 +4612,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   );
 
   Widget _buildSession(BuildContext context) {
+    ref.watch(_composerDraftsProvider(widget.serviceKey));
     final l10n = AppLocalizations.of(context);
     final scheme = Theme.of(context).colorScheme;
     final width = MediaQuery.of(context).size.width;
@@ -6924,6 +6977,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     // Cross-project pane rows show "project · time" so the user always knows
     // where a conversation lives.
     final subtitle = [
+      if (_drafts.hasDraft(thread.id)) l10n.draft,
+      if (_drafts.queuedCount(thread.id) > 0)
+        l10n.queuedCount(_drafts.queuedCount(thread.id)),
       if (project != null && project.isNotEmpty) project,
       if (when.isNotEmpty) when,
     ].join(' · ');
@@ -7526,6 +7582,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// processed (EXIF-bake / downscale / JPEG re-encode) on a background
   /// isolate before it becomes sendable, showing a spinner chip meanwhile.
   Future<void> _pickImages() async {
+    final draft = _draft;
     final l10n = AppLocalizations.of(context);
     final messenger = ToastMessenger.of(context);
     // Only IMAGE chips consume image slots — _attachments also holds document
@@ -7560,38 +7617,53 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     }
     setState(() {
       for (final file in picked) {
-        final att = _Attachment.image(id: _attachSeq++, name: file.name);
-        _attachments.add(att);
+        final att = _Attachment.image(
+          id: _drafts.nextAttachmentId++,
+          name: file.name,
+        );
+        draft.attachments.add(att);
         unawaited(_processAttachment(att, file));
       }
     });
+    _drafts.save(draft, changed: true);
   }
 
   Future<void> _processAttachment(_Attachment att, XFile file) async {
+    att.source = file;
     try {
       final bytes = await file.readAsBytes();
+      if (!_drafts.containsAttachment(att)) return;
       await _processImageBytes(att, bytes);
-    } catch (_) {
-      _failImageAttachment(att);
+    } catch (e) {
+      att.error = friendlyError(e);
+      _drafts.attachmentChanged(att);
     }
   }
 
-  /// Downscale/re-encode raw image bytes for [att] (shared by picked/dropped
-  /// files and pasted clipboard image bytes, which have no readable path).
   Future<void> _processImageBytes(_Attachment att, Uint8List bytes) async {
+    att.sourceBytes = bytes;
     try {
-      final processed = await processImage(bytes);
-      if (!mounted || !_attachments.contains(att)) return; // removed via ×
-      setState(() => att.processed = processed);
-    } catch (_) {
-      _failImageAttachment(att);
+      att.processed = await processImage(bytes);
+      att.sourceBytes = null;
+    } catch (e) {
+      att.error = friendlyError(e);
     }
+    _drafts.attachmentChanged(att);
   }
 
-  void _failImageAttachment(_Attachment att) {
-    if (!mounted || !_attachments.contains(att)) return;
-    setState(() => _attachments.remove(att));
-    showToastError(context, AppLocalizations.of(context).imagePickFailed);
+  void _retryAttachment(_Attachment att) {
+    if (att.error == null) return;
+    att.error = null;
+    _drafts.attachmentChanged(att);
+    if (att.source case final file?) {
+      unawaited(
+        att.isFile
+            ? _uploadAttachment(att, file)
+            : _processAttachment(att, file),
+      );
+    } else if (att.sourceBytes case final bytes?) {
+      unawaited(_processImageBytes(att, bytes));
+    }
   }
 
   /// Extensions the image pipeline can decode; a file picked with one of
@@ -7609,6 +7681,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// right away (spinner chip while in flight) and later travels as a path
   /// reference in the turn text; image files route to the image pipeline.
   Future<void> _pickFiles() async {
+    final draft = _draft;
     final l10n = AppLocalizations.of(context);
     final messenger = ToastMessenger.of(context);
     final remaining =
@@ -7626,7 +7699,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       }
       return;
     }
-    _addFiles(picked);
+    _addFiles(picked, draft: draft);
   }
 
   /// Route a batch of files (picked, DRAGGED-and-dropped, or PASTED as paths)
@@ -7635,12 +7708,14 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// image/file caps, surfacing a snackbar for anything dropped over-cap so a
   /// selection never silently vanishes. Shared by [_pickFiles], the drop
   /// target, and clipboard paste.
-  void _addFiles(List<XFile> picked) {
+  void _addFiles(List<XFile> picked, {_ComposerDraft? draft}) {
     if (picked.isEmpty || !mounted) return;
+    final destination = draft ?? _draft;
+    final attachments = destination.attachments;
     final l10n = AppLocalizations.of(context);
     final messenger = ToastMessenger.of(context);
     final remaining =
-        kMaxFilesPerMessage - _attachments.where((a) => a.isFile).length;
+        kMaxFilesPerMessage - attachments.where((a) => a.isFile).length;
     var files = 0;
     var filesDropped = 0;
     var imagesDropped = 0;
@@ -7651,24 +7726,31 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         // never let it be blank.
         final name = f.name.isNotEmpty ? f.name : 'file';
         if (_looksLikeImage(name)) {
-          if (_attachments.where((a) => !a.isFile).length <
+          if (attachments.where((a) => !a.isFile).length <
               kMaxImagesPerMessage) {
-            final att = _Attachment.image(id: _attachSeq++, name: name);
-            _attachments.add(att);
+            final att = _Attachment.image(
+              id: _drafts.nextAttachmentId++,
+              name: name,
+            );
+            attachments.add(att);
             unawaited(_processAttachment(att, f));
           } else {
             imagesDropped++;
           }
         } else if (files < remaining) {
           files++;
-          final att = _Attachment.file(id: _attachSeq++, name: name);
-          _attachments.add(att);
+          final att = _Attachment.file(
+            id: _drafts.nextAttachmentId++,
+            name: name,
+          );
+          attachments.add(att);
           unawaited(_uploadAttachment(att, f));
         } else {
           filesDropped++;
         }
       }
     });
+    _drafts.save(destination, changed: true);
     if (filesDropped > 0) {
       messenger.error(l10n.fileTooMany(kMaxFilesPerMessage));
     }
@@ -7751,11 +7833,12 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// add an attachment.
   Future<void> _onClipboardPaste() async {
     if (_sending || !mounted) return;
+    final draft = _draft;
     try {
       final img = await Pasteboard.image;
       if (img != null && img.isNotEmpty) {
         if (!mounted) return;
-        if (_attachments.where((a) => !a.isFile).length >=
+        if (draft.attachments.where((a) => !a.isFile).length >=
             kMaxImagesPerMessage) {
           showToastError(
             context,
@@ -7764,16 +7847,17 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           return;
         }
         final att = _Attachment.image(
-          id: _attachSeq++,
+          id: _drafts.nextAttachmentId++,
           name: 'pasted-image.png',
         );
-        setState(() => _attachments.add(att));
+        draft.attachments.add(att);
+        _drafts.save(draft, changed: true);
         unawaited(_processImageBytes(att, img));
         return;
       }
       final files = await Pasteboard.files();
       if (files.isNotEmpty && mounted) {
-        _addFiles([for (final p in files) XFile(p)]);
+        _addFiles([for (final p in files) XFile(p)], draft: draft);
       }
     } catch (_) {
       // Clipboard read is best-effort; a text paste already happened natively.
@@ -7783,16 +7867,31 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// Global key hook (desktop), active only while the composer is focused:
   ///   • Ctrl/Cmd+V → also attach a clipboard image/file (returns false so the
   ///     text field still handles ordinary text paste).
+  ///   • Enter      → send/queue, unless Shift is held or the IME is composing.
   ///   • Esc        → the interrupt / undo / dequeue state machine (returns true
   ///     when it acts, consuming the key).
   /// Gating on composer focus keeps Esc from firing while a dialog/picker is
   /// open (those steal focus), so their own Esc-to-dismiss still works.
   bool _onHardwareKey(KeyEvent e) {
-    if (e is! KeyDownEvent || !_inputFocus.hasFocus) return false;
+    if (e is! KeyDownEvent ||
+        (!_inputFocus.hasFocus && !_expandedInputFocus.hasFocus)) {
+      return false;
+    }
     final key = e.logicalKey;
     if (key == LogicalKeyboardKey.keyV && _isCtrlOrCmdDown()) {
       unawaited(_onClipboardPaste());
       return false; // never consume — text paste must still fire
+    }
+    if (_editorOpen) return false;
+    if (key == LogicalKeyboardKey.enter ||
+        key == LogicalKeyboardKey.numpadEnter) {
+      if (_input.value.composing.isValid &&
+          !_input.value.composing.isCollapsed) {
+        return false;
+      }
+      if (HardwareKeyboard.instance.isShiftPressed) return false;
+      _submit();
+      return true;
     }
     if (key == LogicalKeyboardKey.escape) {
       return _onEscape();
@@ -7810,40 +7909,23 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   }
 
   Future<void> _uploadAttachment(_Attachment att, XFile file) async {
-    final l10n = AppLocalizations.of(context);
-    final messenger = ToastMessenger.of(context);
-    void rejectTooLarge() {
-      setState(() => _attachments.remove(att));
-      messenger.error(l10n.fileTooLarge(kMaxFileBytes ~/ (1024 * 1024)));
-    }
-
+    att.source = file;
+    final api = ref.read(bridgeApiProvider);
+    final service = widget.serviceKey;
+    final tooLarge = AppLocalizations.of(
+      context,
+    ).fileTooLarge(kMaxFileBytes ~/ (1024 * 1024));
     try {
-      // Enforce the cap BEFORE buffering: readAsBytes on a multi-GB pick
-      // would materialize the whole file (OOM-killing a phone) just to be
-      // rejected.
-      final size = await file.length();
-      if (!mounted || !_attachments.contains(att)) return; // removed via ×
-      if (size > kMaxFileBytes) {
-        rejectTooLarge();
-        return;
-      }
+      if (await file.length() > kMaxFileBytes) throw StateError(tooLarge);
+      if (!_drafts.containsAttachment(att)) return;
       final bytes = await file.readAsBytes();
-      if (!mounted || !_attachments.contains(att)) return;
-      if (bytes.length > kMaxFileBytes) {
-        // Belt-and-braces: length() can be stale/absent for synthetic files.
-        rejectTooLarge();
-        return;
-      }
-      final path = await ref
-          .read(bridgeApiProvider)
-          .metaUploadFile(widget.serviceKey, att.name, bytes);
-      if (!mounted || !_attachments.contains(att)) return;
-      setState(() => att.hostPath = path);
+      if (bytes.length > kMaxFileBytes) throw StateError(tooLarge);
+      if (!_drafts.containsAttachment(att)) return;
+      att.hostPath = await api.metaUploadFile(service, att.name, bytes);
     } catch (e) {
-      if (!mounted || !_attachments.contains(att)) return;
-      setState(() => _attachments.remove(att));
-      messenger.error('${l10n.fileUploadFailed}: ${friendlyError(e)}');
+      att.error = friendlyError(e);
     }
+    _drafts.attachmentChanged(att);
   }
 
   /// Horizontal strip of pending attachments above the composer input: a
@@ -7962,7 +8044,33 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                     .where((a) => !a.isFile && a.processed != null)
                     .length;
           final Widget body;
-          if (!att.ready) {
+          if (att.error != null) {
+            body = Tooltip(
+              message: '${att.name}: ${att.error}',
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    Icons.refresh,
+                    size: 18,
+                    color: Theme.of(context).colorScheme.error,
+                  ),
+                  Text(
+                    l10n.retry,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 12, height: 1.2),
+                  ),
+                  Text(
+                    att.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 10, height: 1.1),
+                  ),
+                ],
+              ),
+            );
+          } else if (!att.ready) {
             body = const Center(
               child: SizedBox(
                 width: 20,
@@ -8014,14 +8122,23 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
             key: Key('attachment-${att.id}'),
             removeKey: Key('attachment-remove-${att.id}'),
             removeTooltip: att.isFile ? l10n.removeFile : l10n.removeImage,
-            onRemove: () => setState(() => _attachments.remove(att)),
+            onRemove: () {
+              setState(() => _attachments.remove(att));
+              _saveDraft();
+            },
             // A staged image opens the same viewer a sent one does, so you can
             // check what you attached BEFORE sending it. A file has no pixels
             // to show, and an image still processing has none yet.
-            onTap: previewIndex < 0
+            onTap: att.error != null
+                ? () => _retryAttachment(att)
+                : previewIndex < 0
                 ? null
                 : () => ImageViewerPage.show(context, staged, previewIndex),
-            tapTooltip: previewIndex < 0 ? null : l10n.previewImage,
+            tapTooltip: att.error != null
+                ? l10n.retry
+                : previewIndex < 0
+                ? null
+                : l10n.previewImage,
             child: body,
           );
         },
@@ -8097,45 +8214,91 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Semantics(
-                    label: l10n.resizeComposer,
-                    value: '${inputHeight.round()}',
-                    increasedValue:
-                        '${(inputHeight + 24).clamp(minHeight, maxHeight).round()}',
-                    decreasedValue:
-                        '${(inputHeight - 24).clamp(minHeight, maxHeight).round()}',
-                    onIncrease: () => resize(inputHeight + 24, save: true),
-                    onDecrease: () => resize(inputHeight - 24, save: true),
-                    child: MouseRegion(
-                      cursor: SystemMouseCursors.resizeUpDown,
-                      child: GestureDetector(
-                        key: const Key('composer-resize-handle'),
-                        behavior: HitTestBehavior.opaque,
-                        onVerticalDragUpdate: (details) =>
-                            resize(inputHeight - details.delta.dy),
-                        onVerticalDragEnd: (_) => ref
-                            .read(uiPrefsProvider.notifier)
-                            .setComposerHeight(_composerHeight ?? inputHeight),
-                        onDoubleTap: () => resize(defaultHeight, save: true),
-                        child: Tooltip(
-                          message: l10n.resizeComposer,
-                          child: SizedBox(
-                            height: isDesktop ? 18 : 24,
-                            width: double.infinity,
-                            child: Center(
-                              child: Container(
-                                width: 28,
-                                height: 3,
-                                decoration: BoxDecoration(
-                                  color: scheme.outline,
-                                  borderRadius: BorderRadius.circular(2),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Semantics(
+                          label: l10n.resizeComposer,
+                          value: '${inputHeight.round()}',
+                          increasedValue:
+                              '${(inputHeight + 24).clamp(minHeight, maxHeight).round()}',
+                          decreasedValue:
+                              '${(inputHeight - 24).clamp(minHeight, maxHeight).round()}',
+                          onIncrease: () =>
+                              resize(inputHeight + 24, save: true),
+                          onDecrease: () =>
+                              resize(inputHeight - 24, save: true),
+                          child: MouseRegion(
+                            cursor: SystemMouseCursors.resizeUpDown,
+                            child: GestureDetector(
+                              key: const Key('composer-resize-handle'),
+                              behavior: HitTestBehavior.opaque,
+                              onVerticalDragUpdate: (details) =>
+                                  resize(inputHeight - details.delta.dy),
+                              onVerticalDragEnd: (_) => ref
+                                  .read(uiPrefsProvider.notifier)
+                                  .setComposerHeight(
+                                    _composerHeight ?? inputHeight,
+                                  ),
+                              onDoubleTap: () =>
+                                  resize(defaultHeight, save: true),
+                              child: Tooltip(
+                                message: l10n.resizeComposer,
+                                child: SizedBox(
+                                  height: 44,
+                                  width: double.infinity,
+                                  child: Center(
+                                    child: Container(
+                                      width: 28,
+                                      height: 3,
+                                      decoration: BoxDecoration(
+                                        color: scheme.outline,
+                                        borderRadius: BorderRadius.circular(2),
+                                      ),
+                                    ),
+                                  ),
                                 ),
                               ),
                             ),
                           ),
                         ),
                       ),
-                    ),
+                      if (_streaming)
+                        IconButton.outlined(
+                          key: const Key('stop-btn'),
+                          onPressed: _interrupt,
+                          tooltip: l10n.stop,
+                          constraints: const BoxConstraints(
+                            minWidth: 44,
+                            minHeight: 44,
+                          ),
+                          icon: const Icon(Icons.stop_rounded, size: 20),
+                        ),
+                      if ((_composerHeight ??
+                              prefs?.composerHeight ??
+                              defaultHeight) >
+                          defaultHeight)
+                        IconButton(
+                          key: const Key('composer-reset-height'),
+                          tooltip: l10n.resetComposerHeight,
+                          constraints: const BoxConstraints(
+                            minWidth: 44,
+                            minHeight: 44,
+                          ),
+                          icon: const Icon(Icons.unfold_less, size: 18),
+                          onPressed: () => resize(defaultHeight, save: true),
+                        ),
+                      IconButton(
+                        key: const Key('composer-expand'),
+                        tooltip: l10n.expandComposer,
+                        constraints: const BoxConstraints(
+                          minWidth: 44,
+                          minHeight: 44,
+                        ),
+                        icon: const Icon(Icons.open_in_full, size: 18),
+                        onPressed: _expandComposer,
+                      ),
+                    ],
                   ),
                   if (_queue.isNotEmpty) ...[
                     _queuedStrip(l10n),
@@ -8152,26 +8315,44 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                     _composerContext(l10n),
                     const SizedBox(height: 8),
                   ],
-                  SizedBox(
-                    key: const Key('composer-input-area'),
-                    height: inputHeight,
-                    child: TextField(
-                      key: const Key('composer-input'),
-                      controller: _input,
-                      focusNode: _inputFocus,
-                      minLines: null,
-                      maxLines: null,
-                      expands: true,
-                      textInputAction: TextInputAction.send,
-                      onSubmitted: (_) => _submit(),
-                      style: inputStyle,
-                      decoration: InputDecoration(
-                        filled: false,
-                        hintText: l10n.messageHint,
-                        border: InputBorder.none,
-                        isCollapsed: true,
-                        // Override the shared form-field padding inside this compact card.
-                        contentPadding: EdgeInsets.zero,
+                  // The saved height is a floor; Flutter measures wrapped text
+                  // and scrolls internally only after reaching the screen cap.
+                  NotificationListener<SizeChangedLayoutNotification>(
+                    onNotification: _composerSizeChanged,
+                    child: SizeChangedLayoutNotifier(
+                      child: ConstrainedBox(
+                        key: const Key('composer-input-area'),
+                        constraints: BoxConstraints(
+                          minHeight: inputHeight,
+                          maxHeight: maxHeight,
+                        ),
+                        child: TextField(
+                          key: const Key('composer-input'),
+                          controller: _input,
+                          focusNode: _inputFocus,
+                          readOnly: _editorOpen,
+                          minLines: 1,
+                          maxLines: null,
+                          keyboardType: TextInputType.multiline,
+                          textInputAction: TextInputAction.newline,
+                          onSubmitted: _isDesktop
+                              ? (_) {
+                                  if (!_input.value.composing.isValid ||
+                                      _input.value.composing.isCollapsed) {
+                                    _submit();
+                                  }
+                                }
+                              : null,
+                          style: inputStyle,
+                          decoration: InputDecoration(
+                            filled: false,
+                            hintText: l10n.messageHint,
+                            border: InputBorder.none,
+                            isCollapsed: true,
+                            // Override the shared form-field padding inside this compact card.
+                            contentPadding: EdgeInsets.zero,
+                          ),
+                        ),
                       ),
                     ),
                   ),
@@ -8215,13 +8396,6 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                                         setState(() => _supplement = selected),
                             ),
                           ),
-                        if (_streaming)
-                          IconButton.filled(
-                            key: const Key('stop-btn'),
-                            onPressed: _interrupt,
-                            tooltip: l10n.stop,
-                            icon: const Icon(Icons.stop_rounded, size: 20),
-                          ),
                       ],
                     ),
                   ],
@@ -8257,6 +8431,16 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                       ],
                     ),
                   ),
+                  if (_isDesktop)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Text(
+                        l10n.composerKeyboardHint,
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ),
                 ],
               ),
             ),
@@ -8828,7 +9012,6 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     builder: (context, value, _) {
       final l10n = AppLocalizations.of(context);
       final hasDraft = value.text.trim().isNotEmpty || _attachments.isNotEmpty;
-      if (_streaming && !hasDraft) return const SizedBox.shrink();
       final canSend =
           !_sending &&
           !_reconnecting &&
@@ -8842,7 +9025,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         onPressed: canSend ? _submit : null,
         tooltip: _streaming
             ? (_supplement ? l10n.steerMessage : l10n.queueNextTurn)
-            : null,
+            : l10n.send,
         icon: Icon(
           _streaming && !_supplement ? Icons.playlist_add : Icons.arrow_upward,
           size: 20,

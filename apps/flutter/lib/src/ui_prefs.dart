@@ -49,7 +49,8 @@ class UiPrefs {
   /// index-shift-proof.
   final String? themeMode;
 
-  /// Preferred input height in logical pixels; null uses the compact default.
+  /// Preferred minimum input height; null uses the compact default.
+  /// Text can grow the input beyond this height without changing the preference.
   final double? composerHeight;
 
   /// Copy with the given fields replaced. `clearAutoHost` removes the

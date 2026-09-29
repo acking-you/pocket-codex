@@ -649,5 +649,11 @@
   "fileLinkRemoteWeb": "此地址指向被控制的设备。请通过 pb-mapper 在宿主上注册网页服务端口，再在当前设备订阅映射端口，然后打开映射后的本地地址。保留原网址的路径和查询参数。",
   "fileLinkCheckingHost": "正在确认宿主位置…",
   "fileLinkFailed": "无法读取文件。请确认文件仍然存在，且宿主已更新到支持文件链接的版本。",
-  "fileLinkClose": "关闭"
+  "fileLinkClose": "关闭",
+  "draft": "草稿",
+  "editMessage": "编辑消息",
+  "done": "完成",
+  "expandComposer": "展开编辑器",
+  "resetComposerHeight": "重置输入框高度",
+  "composerKeyboardHint": "Enter 发送 · Shift+Enter 换行"
 }

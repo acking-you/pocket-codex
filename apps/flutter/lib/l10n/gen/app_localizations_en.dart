@@ -1790,4 +1790,23 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get fileLinkClose => 'Close';
+
+  @override
+  String get draft => 'Draft';
+
+  @override
+  String get editMessage => 'Edit message';
+
+  @override
+  String get done => 'Done';
+
+  @override
+  String get expandComposer => 'Expand editor';
+
+  @override
+  String get resetComposerHeight => 'Reset height';
+
+  @override
+  String get composerKeyboardHint =>
+      'Enter to send · Shift+Enter for a new line';
 }
