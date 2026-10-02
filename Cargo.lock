@@ -2054,16 +2054,16 @@ checksum = "df94ce210e5bc13cb6651479fa48d14f601d9858cfe0467f43ae157023b938d3"
 
 [[package]]
 name = "pb-mapper"
-version = "0.5.0"
-source = "git+https://github.com/acking-you/pb-mapper?branch=pocket-codex#f0ed4271de962b8759d11171bcf901aa6df458cc"
+version = "0.5.1"
+source = "git+https://github.com/acking-you/pb-mapper?branch=pocket-codex#73d3592bb9acb6fe09a0670ae4e56d327057769e"
 dependencies = [
  "pb-mapper-client",
 ]
 
 [[package]]
 name = "pb-mapper-auth"
-version = "0.5.0"
-source = "git+https://github.com/acking-you/pb-mapper?branch=pocket-codex#f0ed4271de962b8759d11171bcf901aa6df458cc"
+version = "0.5.1"
+source = "git+https://github.com/acking-you/pb-mapper?branch=pocket-codex#73d3592bb9acb6fe09a0670ae4e56d327057769e"
 dependencies = [
  "parking_lot",
  "pb-mapper-core",
@@ -2079,12 +2079,13 @@ dependencies = [
 
 [[package]]
 name = "pb-mapper-client"
-version = "0.5.0"
-source = "git+https://github.com/acking-you/pb-mapper?branch=pocket-codex#f0ed4271de962b8759d11171bcf901aa6df458cc"
+version = "0.5.1"
+source = "git+https://github.com/acking-you/pb-mapper?branch=pocket-codex#73d3592bb9acb6fe09a0670ae4e56d327057769e"
 dependencies = [
  "pb-mapper-auth",
  "pb-mapper-core",
  "pb-mapper-protocol",
+ "rand 0.10.1",
  "serde_json",
  "snafu",
  "tokio",
@@ -2095,8 +2096,8 @@ dependencies = [
 
 [[package]]
 name = "pb-mapper-core"
-version = "0.5.0"
-source = "git+https://github.com/acking-you/pb-mapper?branch=pocket-codex#f0ed4271de962b8759d11171bcf901aa6df458cc"
+version = "0.5.1"
+source = "git+https://github.com/acking-you/pb-mapper?branch=pocket-codex#73d3592bb9acb6fe09a0670ae4e56d327057769e"
 dependencies = [
  "base64 0.23.1",
  "clap",
@@ -2113,8 +2114,8 @@ dependencies = [
 
 [[package]]
 name = "pb-mapper-protocol"
-version = "0.5.0"
-source = "git+https://github.com/acking-you/pb-mapper?branch=pocket-codex#f0ed4271de962b8759d11171bcf901aa6df458cc"
+version = "0.5.1"
+source = "git+https://github.com/acking-you/pb-mapper?branch=pocket-codex#73d3592bb9acb6fe09a0670ae4e56d327057769e"
 dependencies = [
  "bytes",
  "parking_lot",
@@ -3704,6 +3705,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "futures-util",
  "pin-project-lite",
  "tokio",
 ]
