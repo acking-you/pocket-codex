@@ -427,6 +427,30 @@ The order below is our current best guess; it is not a contract.
     explain pb-mapper mapping and never open the controller's loopback address.
     See [`docs/session-file-links.md`](docs/session-file-links.md).
 
+15. **OpenCode in the shared UI (2026-09-28, branch `fix-opencode`).** Hosting
+    picks a provider (Codex or OpenCode) and then works the same way. The
+    service kind is `opencode:<name>`, and names are unique across providers
+    on a device. OpenCode is attached, never owned: the app publishes the
+    user's background service through a loopback gateway that only forwards
+    allowlisted routes and injects credentials, and it asks OpenCode to run
+    `service start` when no service is found. The bridge's OpenCode engine
+    emits the Codex item and event shapes plus capabilities, and the UI gates
+    controls on capabilities rather than provider names. The contract is
+    checked against the running server; 2.0.18 counts as verified. See
+    [PRD](docs/opencode-unified/PRD.md), [TRD](docs/opencode-unified/TRD.md) and
+    [ADR-0002](docs/adr/0002-opencode-shared-session-ui.md).
+
+16. **Generic ACP provider (2026-10-01, branch `feat-acp`).** One desktop
+    `AcpHub` per hosted instance is the only ACP client of its agent process
+    and multiplexes sessions to controllers over `_pcx`-extended ACP
+    (`acp:<name>` plus `meta:<name>`); the bridge never folds updates itself.
+    Agents install from the pinned catalog (`scripts/acp_catalog.py`, CI runs
+    `check`) with SRI-verified HTTPS downloads and no silent upgrades; gateway
+    tokens are write-only and remote management needs the host toggle. Hosting
+    is desktop only (an `android cargo check` job guards the mobile stubs).
+    Live checks with real agents (M10) are still open. See
+    [TRD](docs/acp-integration/TRD.md).
+
 When you ship a milestone, update `README.md` (Status table) **and**
 this file's roadmap so the source of truth stays in sync.
 

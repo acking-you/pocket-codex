@@ -1,0 +1,53 @@
+{
+  "def": "InitializeResponse",
+  "frame": {
+    "jsonrpc": "2.0",
+    "id": 0,
+    "result": {
+      "protocolVersion": 1,
+      "agentCapabilities": {
+        "loadSession": true,
+        "promptCapabilities": {
+          "image": true,
+          "audio": false,
+          "embeddedContext": true
+        },
+        "mcpCapabilities": {
+          "http": true,
+          "sse": false
+        },
+        "sessionCapabilities": {
+          "list": {},
+          "resume": {},
+          "close": {}
+        },
+        "auth": {
+          "logout": {}
+        }
+      },
+      "authMethods": [
+        {
+          "id": "login",
+          "name": "Log in",
+          "description": "Run login"
+        },
+        {
+          "type": "terminal",
+          "id": "term",
+          "name": "Terminal login",
+          "args": [
+            "--login"
+          ],
+          "env": {
+            "A": "1"
+          }
+        }
+      ],
+      "agentInfo": {
+        "name": "fake",
+        "title": "Fake",
+        "version": "1.0.0"
+      }
+    }
+  }
+}

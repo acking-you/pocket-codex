@@ -1,0 +1,11 @@
+{
+  "def": "AuthenticateRequest",
+  "frame": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "authenticate",
+    "params": {
+      "methodId": "login"
+    }
+  }
+}

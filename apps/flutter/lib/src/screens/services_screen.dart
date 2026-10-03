@@ -11,6 +11,7 @@ import 'package:pocket_codex/src/fonts.dart';
 import 'package:pocket_codex/src/dismissed_services.dart';
 import 'package:pocket_codex/src/error_format.dart';
 import 'package:pocket_codex/src/providers.dart';
+import 'package:pocket_codex/src/service_key.dart';
 import 'package:pocket_codex/src/theme.dart';
 import 'package:pocket_codex/src/ui_prefs.dart';
 import 'package:pocket_codex/src/widgets/api_service_panel.dart';
@@ -20,6 +21,7 @@ import 'package:pocket_codex/src/widgets/group_card.dart';
 import 'package:pocket_codex/src/widgets/icon_badge.dart';
 import 'package:pocket_codex/src/widgets/loading.dart';
 import 'package:pocket_codex/src/widgets/local_host_dialog.dart';
+import 'package:pocket_codex/src/widgets/provider_badge.dart';
 import 'package:pocket_codex/src/widgets/status_dots.dart';
 import 'package:pocket_codex/src/widgets/utility_page.dart';
 
@@ -292,8 +294,19 @@ class _DeviceFirstServices extends ConsumerWidget {
         );
       }
 
-      synthesize('app', host.appServiceKey, registered: host.appRegistered);
-      synthesize('api', host.apiServiceKey, registered: host.apiRegistered);
+      synthesize(
+        host.isOpenCode
+            ? 'opencode'
+            : host.isAcp
+            ? 'acp'
+            : 'app',
+        host.appServiceKey,
+        registered: host.appRegistered,
+      );
+      // Only a Codex host publishes a Responses API proxy.
+      if (host.isCodex) {
+        synthesize('api', host.apiServiceKey, registered: host.apiRegistered);
+      }
     }
 
     // A dismissed orphan should reappear if its backend later recovers. This
@@ -302,7 +315,7 @@ class _DeviceFirstServices extends ConsumerWidget {
       final recovered = <String>[
         for (final service in services)
           if (dismissed.contains(service.key) &&
-              (service.kind == 'app'
+              (isSessionKind(service.kind)
                           ? ref.watch(appReachableProvider(service.key))
                           : ref.watch(apiReachableProvider(service.key)))
                       .valueOrNull ==
@@ -358,25 +371,37 @@ class _DeviceFirstServices extends ConsumerWidget {
             return byName == 0 ? a.kind.compareTo(b.kind) : byName;
           });
     final apps = deviceEntries
-        .where((service) => service.kind == 'app')
+        .where((service) => isSessionKind(service.kind))
         .toList();
+    // The session browser reads Codex rollouts, so only Codex hosts get a
+    // Sessions (meta) row.
+    final codexApps = apps.where((service) => service.kind == 'app').toList();
     final apis = deviceEntries
         .where((service) => service.kind == 'api')
         .toList();
     final capabilityCount =
-        apps.length + apis.length + (account ? apps.length : 0);
+        apps.length + apis.length + (account ? codexApps.length : 0);
 
+    // Loopback probing speaks the Codex handshake; an OpenCode gateway is
+    // probed through appProbe, which dispatches by key kind.
     final localAppAddr = <String, String>{
-      for (final host in localHosts) host.appServiceKey: host.appListenAddr,
+      for (final host in localHosts)
+        if (host.isCodex) host.appServiceKey: host.appListenAddr,
     };
     final localApiAddr = <String, String>{
-      for (final host in localHosts) host.apiServiceKey: host.apiListenAddr,
+      for (final host in localHosts)
+        if (host.isCodex) host.apiServiceKey: host.apiListenAddr,
     };
     final localTunnels = <String, ({String name, String kind})>{
-      for (final host in localHosts) ...{
-        host.appServiceKey: (name: host.name, kind: 'app'),
-        host.apiServiceKey: (name: host.name, kind: 'api'),
-      },
+      for (final host in localHosts)
+        if (host.isOpenCode)
+          host.appServiceKey: (name: host.name, kind: 'opencode')
+        else if (host.isAcp)
+          host.appServiceKey: (name: host.name, kind: 'acp')
+        else ...{
+          host.appServiceKey: (name: host.name, kind: 'app'),
+          host.apiServiceKey: (name: host.name, kind: 'api'),
+        },
     };
     final subscriptions = {
       for (final sub
@@ -483,10 +508,10 @@ class _DeviceFirstServices extends ConsumerWidget {
     bool unreachable(ServiceEntry service) {
       final local = localTunnels.containsKey(service.key);
       if (local) return false;
-      if (service.kind == 'app' && observedDown.contains(service.key)) {
+      if (isSessionKind(service.kind) && observedDown.contains(service.key)) {
         return true;
       }
-      final probe = service.kind == 'app'
+      final probe = isSessionKind(service.kind)
           ? ref.watch(appReachableProvider(service.key))
           : ref.watch(apiReachableProvider(service.key));
       return probe.hasError || probe.valueOrNull == false;
@@ -559,7 +584,23 @@ class _DeviceFirstServices extends ConsumerWidget {
           key: Key('device-capability-${service.key}'),
           icon: Icons.chat_bubble_outline,
           title: l10n.servicesChatCapability,
-          protocol: protocolOf('App-server', service),
+          provider: switch (service.kind) {
+            'opencode' => 'opencode',
+            'acp' => 'acp',
+            _ => 'codex',
+          },
+          label: service.kind == 'acp'
+              ? (localHosts
+                        .where((h) => h.appServiceKey == service.key)
+                        .firstOrNull
+                        ?.agentName ??
+                    bridge.appCapabilities(service.key).agentName)
+              : null,
+          protocol: protocolOf(switch (service.kind) {
+            'opencode' => 'OpenCode',
+            'acp' => 'ACP',
+            _ => 'App-server',
+          }, service),
           localAddr: localAppAddr[service.key],
           menuKey: Key('capability-menu-${service.key}'),
           status: offlineChip(service.key) ?? appStates[service.key]!.chip,
@@ -611,7 +652,7 @@ class _DeviceFirstServices extends ConsumerWidget {
           ),
         ),
       if (account)
-        for (final service in apps)
+        for (final service in codexApps)
           _CapabilityRow(
             key: Key('device-capability-meta-${service.key}'),
             icon: Icons.forum_outlined,
@@ -689,6 +730,16 @@ class _DeviceFirstServices extends ConsumerWidget {
         onClean: unreachableEntries.isEmpty
             ? null
             : () => _batchRemove(context, ref, unreachableEntries),
+        // Any session service of a remote device reaches its meta service,
+        // which serves the host's `/acp/v1` management routes.
+        onManageAcp:
+            activeDevice == null ||
+                localDevices.contains(activeDevice) ||
+                apps.isEmpty
+            ? null
+            : () => context.push(
+                '/settings/acp?svc=${Uri.encodeQueryComponent(apps.first.key)}',
+              ),
       ),
       GroupCard(
         title: l10n.servicesCapabilities,
@@ -1062,12 +1113,17 @@ class _DeviceDetailHeader extends StatelessWidget {
     required this.local,
     required this.isDefault,
     required this.onClean,
+    this.onManageAcp,
   });
 
   final String? device;
   final bool local;
   final bool isDefault;
   final VoidCallback? onClean;
+
+  /// Opens the remote device's ACP agent management, when it has a session
+  /// service to reach it through.
+  final VoidCallback? onManageAcp;
 
   @override
   Widget build(BuildContext context) {
@@ -1098,6 +1154,19 @@ class _DeviceDetailHeader extends StatelessWidget {
           if (local) _CountPill(label: l10n.servicesLocalDevice),
           if (local && isDefault) const SizedBox(width: 8),
           if (isDefault) _CountPill(label: l10n.servicesDefault, accent: true),
+          if (onManageAcp != null)
+            PopupMenuButton<VoidCallback>(
+              key: const Key('host-menu'),
+              icon: const Icon(Icons.more_horiz),
+              onSelected: (action) => action(),
+              itemBuilder: (_) => [
+                PopupMenuItem(
+                  key: const Key('host-acp-manage'),
+                  value: onManageAcp,
+                  child: Text(l10n.acpManageHost),
+                ),
+              ],
+            ),
           if (onClean != null) ...[
             const SizedBox(width: 8),
             TextButton.icon(
@@ -1121,6 +1190,8 @@ class _CapabilityRow extends StatelessWidget {
     required this.protocol,
     required this.actionLabel,
     required this.onAction,
+    this.provider,
+    this.label,
     this.status,
     this.reason,
     this.localAddr,
@@ -1136,6 +1207,13 @@ class _CapabilityRow extends StatelessWidget {
   final String protocol;
   final String actionLabel;
   final VoidCallback onAction;
+
+  /// The session provider (`codex` / `opencode` / `acp`) to badge, or null
+  /// for rows that are not a chat host.
+  final String? provider;
+
+  /// Agent name shown on an ACP badge.
+  final String? label;
   final Widget? status;
 
   /// Why this capability is unavailable, when it is. A bare "unreachable" leaves
@@ -1179,9 +1257,21 @@ class _CapabilityRow extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Text(
-                  title,
-                  style: const TextStyle(fontWeight: FontWeight.w600),
+                Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        title,
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    if (provider != null) ...[
+                      const SizedBox(width: 6),
+                      ProviderBadge(provider: provider!, label: label),
+                    ],
+                  ],
                 ),
                 // One rich line rather than a Row, so a long address ellipsises
                 // with the protocol instead of overflowing the row.
@@ -1345,7 +1435,7 @@ Future<void> _batchRemove(
     // that recovered while the dialog was open must not be dismissed — that
     // would strand a live service off the list.
     final reachableNow =
-        (s.kind == 'app'
+        (isSessionKind(s.kind)
                 ? ref.read(appReachableProvider(s.key))
                 : ref.read(apiReachableProvider(s.key)))
             .valueOrNull ==
@@ -1490,7 +1580,7 @@ Future<void> _confirmDeregister(
       // dialog was open. If it's live again, don't hide it — only best-effort
       // drop — so a now-working service isn't stranded off the list.
       final reachableNow =
-          (s.kind == 'app'
+          (isSessionKind(s.kind)
                   ? ref.read(appReachableProvider(s.key))
                   : ref.read(apiReachableProvider(s.key)))
               .valueOrNull ==
@@ -1558,7 +1648,11 @@ class _LocalHostCard extends ConsumerWidget {
       );
     } else {
       codexChip = ref
-          .watch(appReachableLocalProvider(host.appListenAddr))
+          .watch(
+            host.isCodex
+                ? appReachableLocalProvider(host.appListenAddr)
+                : appReachableProvider(host.appServiceKey),
+          )
           .when(
             data: (ok) => ok
                 ? StatusChip(
@@ -1619,11 +1713,24 @@ class _LocalHostCard extends ConsumerWidget {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(
-                              host.name,
-                              style: Theme.of(context).textTheme.titleSmall,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
+                            Row(
+                              children: [
+                                Flexible(
+                                  child: Text(
+                                    host.name,
+                                    style: Theme.of(
+                                      context,
+                                    ).textTheme.titleSmall,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                                const SizedBox(width: 6),
+                                ProviderBadge(
+                                  provider: host.provider,
+                                  label: host.agentName,
+                                ),
+                              ],
                             ),
                             const SizedBox(height: 2),
                             Text(

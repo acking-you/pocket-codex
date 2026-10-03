@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:go_router/go_router.dart';
+import 'package:pocket_codex/src/screens/acp_agents_screen.dart';
 import 'package:pocket_codex/src/screens/app_session_screen.dart';
 import 'package:pocket_codex/src/screens/codex_setup_screen.dart';
 import 'package:pocket_codex/src/screens/home_screen.dart';
@@ -86,6 +87,13 @@ GoRouter buildRouter({
     GoRoute(path: '/settings', builder: (c, s) => const SettingsScreen()),
     // External Codex setup: detect CODEX_HOME, configure login/provider and prompt.
     GoRoute(path: '/setup/codex', builder: (c, s) => const CodexSetupScreen()),
+    GoRoute(
+      path: '/settings/acp',
+      builder: (c, s) => AcpAgentsScreen(
+        serviceKey: s.uri.queryParameters['svc'],
+        gatewayAgentId: s.uri.queryParameters['gateway'],
+      ),
+    ),
     GoRoute(path: '/logs', builder: (c, s) => const LogViewScreen()),
     // Session browser: no param = this machine's CODEX_HOME; ?svc=<key> = the
     // host behind that app service, read over its meta tunnel.

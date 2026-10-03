@@ -1,0 +1,10 @@
+{
+  "def": "CancelNotification",
+  "frame": {
+    "jsonrpc": "2.0",
+    "method": "session/cancel",
+    "params": {
+      "sessionId": "sess-1"
+    }
+  }
+}

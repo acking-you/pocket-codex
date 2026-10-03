@@ -1,0 +1,8 @@
+{
+  "def": "ResumeSessionResponse",
+  "frame": {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "result": {}
+  }
+}

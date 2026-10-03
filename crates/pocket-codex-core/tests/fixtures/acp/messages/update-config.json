@@ -1,0 +1,21 @@
+{
+  "def": "SessionNotification",
+  "frame": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess-1",
+      "update": {
+        "sessionUpdate": "config_option_update",
+        "configOptions": [
+          {
+            "id": "fast",
+            "name": "Fast",
+            "type": "boolean",
+            "currentValue": true
+          }
+        ]
+      }
+    }
+  }
+}

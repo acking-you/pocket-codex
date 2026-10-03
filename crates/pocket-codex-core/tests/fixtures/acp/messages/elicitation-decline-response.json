@@ -1,0 +1,10 @@
+{
+  "def": "CreateElicitationResponse",
+  "frame": {
+    "jsonrpc": "2.0",
+    "id": 14,
+    "result": {
+      "action": "decline"
+    }
+  }
+}

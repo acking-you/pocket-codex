@@ -39,7 +39,13 @@ fn generation_key(owner: &str, session: &str) -> String {
     format!("{owner}:{session}")
 }
 
-type Capabilities = Mutex<HashMap<String, (bool, Instant)>>;
+/// Codex rollout history schema.
+pub const CODEX_PROVIDER: &str = "codex/app-server-v2";
+/// ACP hub transcript schema.
+pub const ACP_PROVIDER: &str = "acp/hub-v1";
+
+/// owner → (supported, checked at, provider).
+type Capabilities = Mutex<HashMap<String, (bool, Instant, &'static str)>>;
 fn capabilities() -> &'static Capabilities {
     static STATE: OnceLock<Capabilities> = OnceLock::new();
     STATE.get_or_init(Default::default)
@@ -95,7 +101,7 @@ pub(super) fn live_checkpoint(owner: &str, session: &str, reset: bool) -> LiveCh
 /// timeouts, authorization failures and unsupported versions stay visible.
 pub fn prepare(service: &str) -> Result<bool> {
     let owner = namespace(service)?;
-    if let Some((enabled, checked)) = capabilities()
+    if let Some((enabled, checked, _)) = capabilities()
         .lock()
         .ok()
         .and_then(|s| s.get(&owner).copied())
@@ -105,25 +111,29 @@ pub fn prepare(service: &str) -> Result<bool> {
         }
     }
     let url = meta::endpoint(service, &["history", "v1", "capabilities"])?;
-    let supported = runtime::runtime().block_on(async {
+    let (supported, provider) = runtime::runtime().block_on(async {
         let response = meta::client()
             .get(url)
             .send()
             .await
             .context("history capability negotiation")?;
         if response.status() == reqwest::StatusCode::NOT_FOUND {
-            return Ok(false);
+            return Ok((false, CODEX_PROVIDER));
         }
         let body: Value = response.error_for_status()?.json().await?;
         ensure!(body["version"] == wire::VERSION, "unsupported history synchronization version");
-        ensure!(body["provider"] == "codex/app-server-v2", "unsupported history document schema");
-        Ok::<_, anyhow::Error>(true)
+        let provider = match body["provider"].as_str() {
+            Some(CODEX_PROVIDER) => CODEX_PROVIDER,
+            Some(ACP_PROVIDER) => ACP_PROVIDER,
+            _ => bail!("unsupported history document schema"),
+        };
+        Ok::<_, anyhow::Error>((true, provider))
     })?;
     if let Ok(mut state) = capabilities().lock() {
         if state.len() >= 128 {
             state.clear();
         }
-        state.insert(owner, (supported, Instant::now()));
+        state.insert(owner, (supported, Instant::now(), provider));
     }
     Ok(supported)
 }
@@ -138,6 +148,17 @@ pub(super) fn enabled(service: &str) -> bool {
                 .and_then(|s| s.get(&owner).map(|s| s.0))
         })
         .unwrap_or(false)
+}
+
+/// Negotiated document schema of `service`, once [`prepare`] succeeded.
+pub(super) fn provider(service: &str) -> Option<&'static str> {
+    let owner = namespace(service).ok()?;
+    capabilities()
+        .lock()
+        .ok()?
+        .get(&owner)
+        .filter(|s| s.0)
+        .map(|s| s.2)
 }
 
 /// Latest validated source generation, separate from an RPC connection.
@@ -160,6 +181,10 @@ pub fn request(
     if !enabled(service) {
         return runtime::runtime().block_on(client.request(method, params));
     }
+    ensure!(
+        provider(service) == Some(CODEX_PROVIDER),
+        "synchronized Codex reads are not available for this host's history schema"
+    );
     let query = query_for(method, &params)?;
     let window = sync(service, &query, false)?;
     pocket_codex_host_svc::history_sync::codex_response(&window, &query)
@@ -191,6 +216,11 @@ fn query_for(method: &str, params: &Value) -> Result<WindowQuery> {
 
 fn key(query: &WindowQuery) -> Result<String> {
     Ok(format!("window:{}", wire::digest_bytes(&serde_json::to_vec(query)?)))
+}
+
+/// One synchronized `/history/v1` window (used by the ACP engine).
+pub fn sync_window(service: &str, query: &WindowQuery, running: bool) -> Result<HistoryWindow> {
+    sync(service, query, running)
 }
 
 fn sync(service: &str, query: &WindowQuery, running: bool) -> Result<HistoryWindow> {
@@ -414,6 +444,9 @@ pub fn prefetch(service: &str, session: &str) -> Result<()> {
     }
     if !prepare(service)? {
         return Ok(());
+    }
+    if provider(service) == Some(ACP_PROVIDER) {
+        return super::acp::prefetch_history(service, session);
     }
     let mut history = ThreadHistory::default();
     let metadata_query = query_for("thread/read", &json!({"threadId": session}))?;

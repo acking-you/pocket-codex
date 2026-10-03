@@ -1,0 +1,6 @@
+{"sessionId": "sess-1", "update": {"sessionUpdate": "user_message_chunk", "content": {"type": "text", "text": "hi"}, "messageId": "msg_u1"}}
+{"sessionId": "sess-1", "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Hello!"}, "messageId": "msg_a1"}}
+{"sessionId": "sess-1", "update": {"sessionUpdate": "tool_call", "toolCallId": "tool_1", "title": "bash", "kind": "execute", "status": "pending", "rawInput": {}}}
+{"sessionId": "sess-1", "update": {"sessionUpdate": "tool_call_update", "toolCallId": "tool_1", "title": "bash", "status": "completed", "rawInput": {"command": "pwd"}, "rawOutput": {"output": "/work"}}}
+{"sessionId": "sess-1", "update": {"sessionUpdate": "session_info_update", "title": "Greeting"}}
+{"sessionId": "sess-1", "update": {"sessionUpdate": "available_commands_update", "availableCommands": [{"name": "init", "description": "create AGENTS.md"}]}}

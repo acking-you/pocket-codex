@@ -1,0 +1,33 @@
+{
+  "def": "RequestPermissionRequest",
+  "frame": {
+    "jsonrpc": "2.0",
+    "id": 11,
+    "method": "session/request_permission",
+    "params": {
+      "sessionId": "sess-1",
+      "toolCall": {
+        "toolCallId": "t1",
+        "title": "Run ls",
+        "kind": "execute"
+      },
+      "options": [
+        {
+          "optionId": "allow",
+          "name": "Allow",
+          "kind": "allow_once"
+        },
+        {
+          "optionId": "always",
+          "name": "Always",
+          "kind": "allow_always"
+        },
+        {
+          "optionId": "deny",
+          "name": "Deny",
+          "kind": "reject_once"
+        }
+      ]
+    }
+  }
+}

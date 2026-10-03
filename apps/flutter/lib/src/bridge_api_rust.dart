@@ -198,6 +198,11 @@ class RustBridgeApi implements BridgeApi {
             embedded: s.embedded,
             codexBinary: s.codexBinary,
             proxy: s.proxy,
+            provider: s.provider,
+            providerVersion: s.providerVersion,
+            providerVerified: s.providerVerified,
+            agentId: s.agentId,
+            agentName: s.agentName,
           ),
         )
         .toList();
@@ -226,6 +231,416 @@ class RustBridgeApi implements BridgeApi {
 
   @override
   Future<String?> codexLocate() => frb.codexLocate();
+
+  @override
+  Future<OpenCodeServeResult> appServeStartOpencode({
+    String? name,
+    String? binaryOverride,
+  }) async {
+    final r = await frb.appServeStartOpencode(
+      name: name,
+      binaryOverride: binaryOverride,
+    );
+    return OpenCodeServeResult(
+      device: r.device,
+      name: r.name,
+      serviceKey: r.serviceKey,
+      listenAddr: r.listenAddr,
+      metaServiceKey: r.metaServiceKey,
+      version: r.version,
+      verified: r.verified,
+      reused: r.reused,
+      startedService: r.startedService,
+    );
+  }
+
+  @override
+  Future<String?> opencodeLocate({String? binaryOverride}) =>
+      frb.opencodeLocate(binaryOverride: binaryOverride);
+
+  static AcpAuth _acpAuth(frb.AcpAuthDto a) => AcpAuth(
+    status: a.status,
+    methods: a.methods
+        .map(
+          (m) => AcpAuthMethod(
+            id: m.id,
+            name: m.name,
+            description: m.description,
+            kind: m.kind,
+            remote: m.remote,
+            available: m.available,
+            gatewayProtocol: m.gatewayProtocol,
+            gatewayConfigured: m.gatewayConfigured,
+          ),
+        )
+        .toList(),
+    message: a.message,
+  );
+
+  static AcpAgent _acpAgent(frb.AcpAgentDto a) => AcpAgent(
+    id: a.id,
+    name: a.name,
+    description: a.description,
+    source: a.source,
+    pinnedVersion: a.pinnedVersion,
+    installedVersion: a.installedVersion,
+    state: a.state,
+    detail: a.detail,
+    jobId: a.jobId,
+    registryVersion: a.registryVersion,
+    hostedNames: a.hostedNames,
+    approxSizeMb: a.approxSizeMb,
+    needsNode: a.needsNode,
+    remoteInstallAllowed: a.remoteInstallAllowed,
+  );
+
+  static AcpJob? _acpJob(frb.AcpJobDto? j) => j == null
+      ? null
+      : AcpJob(
+          id: j.id,
+          kind: j.kind,
+          agentId: j.agentId,
+          version: j.version,
+          state: j.state,
+          bytes: j.bytes.toInt(),
+          total: j.total?.toInt(),
+          message: j.message,
+          errorCode: j.errorCode,
+          serviceKey: j.serviceKey,
+        );
+
+  static List<AcpEnvVar> _vars(List<frb.AcpEnvVarDto> list) =>
+      list.map((e) => AcpEnvVar(name: e.name, value: e.value)).toList();
+
+  static List<frb.AcpEnvVarDto> _varDtos(List<AcpEnvVar> list) =>
+      list.map((e) => frb.AcpEnvVarDto(name: e.name, value: e.value)).toList();
+
+  @override
+  Future<AcpServeResult> appServeStartAcp({
+    String? name,
+    required String agentId,
+  }) async {
+    final r = await frb.appServeStartAcp(name: name, agentId: agentId);
+    return AcpServeResult(
+      device: r.device,
+      name: r.name,
+      serviceKey: r.serviceKey,
+      listenAddr: r.listenAddr,
+      metaServiceKey: r.metaServiceKey,
+      agentId: r.agentId,
+      agentName: r.agentName,
+      agentVersion: r.agentVersion,
+      auth: _acpAuth(r.auth),
+      reused: r.reused,
+    );
+  }
+
+  @override
+  Future<List<AcpAgent>> acpAgents() async =>
+      (await frb.acpAgents()).map(_acpAgent).toList();
+
+  @override
+  Future<String> acpInstall(String agentId, {String? version}) =>
+      frb.acpInstall(agentId: agentId, version: version);
+
+  @override
+  Future<AcpJob?> acpJob(String jobId) async =>
+      _acpJob(await frb.acpJob(jobId: jobId));
+
+  @override
+  Future<void> acpUninstall(String agentId) =>
+      frb.acpUninstall(agentId: agentId);
+
+  @override
+  Future<AcpSettings> acpSettings() async {
+    final s = await frb.acpSettings();
+    return AcpSettings(
+      remoteManagement: s.remoteManagement,
+      npmRegistry: s.npmRegistry,
+      claudeEnginePath: s.claudeEnginePath,
+      codexBinary: s.codexBinary,
+      binaryOverrides: s.binaryOverrides
+          .map((b) => AcpBinaryOverride(agentId: b.agentId, path: b.path))
+          .toList(),
+      opencodeData: s.opencodeData
+          .map((d) => AcpDataMode(family: d.family, mode: d.mode))
+          .toList(),
+      gateways: s.gateways
+          .map(
+            (g) => AcpGateway(
+              agentId: g.agentId,
+              methodId: g.methodId,
+              baseUrl: g.baseUrl,
+              hasToken: g.hasToken,
+              providerName: g.providerName,
+              extraHeaders: _vars(g.extraHeaders),
+            ),
+          )
+          .toList(),
+      flags: s.flags
+          .map(
+            (f) => AcpAgentFlag(
+              agentId: f.agentId,
+              setting: f.setting,
+              labelKey: f.labelKey,
+              confirmKey: f.confirmKey,
+              value: f.value,
+            ),
+          )
+          .toList(),
+    );
+  }
+
+  @override
+  Future<AcpSaveResult> acpSettingsSet(
+    AcpSettings settings, {
+    bool force = false,
+  }) async {
+    final r = await frb.acpSettingsSet(
+      settings: frb.AcpSettingsDto(
+        remoteManagement: settings.remoteManagement,
+        npmRegistry: settings.npmRegistry,
+        claudeEnginePath: settings.claudeEnginePath,
+        codexBinary: settings.codexBinary,
+        binaryOverrides: settings.binaryOverrides
+            .map(
+              (b) => frb.AcpBinaryOverrideDto(agentId: b.agentId, path: b.path),
+            )
+            .toList(),
+        opencodeData: settings.opencodeData
+            .map((d) => frb.AcpDataModeDto(family: d.family, mode: d.mode))
+            .toList(),
+        gateways: settings.gateways
+            .map(
+              (g) => frb.AcpGatewayDto(
+                agentId: g.agentId,
+                methodId: g.methodId,
+                baseUrl: g.baseUrl,
+                token: g.token,
+                hasToken: g.hasToken,
+                providerName: g.providerName,
+                extraHeaders: _varDtos(g.extraHeaders),
+                clear: g.clear,
+              ),
+            )
+            .toList(),
+        flags: settings.flags
+            .map(
+              (f) => frb.AcpAgentFlagDto(
+                agentId: f.agentId,
+                setting: f.setting,
+                labelKey: f.labelKey,
+                confirmKey: f.confirmKey,
+                value: f.value,
+              ),
+            )
+            .toList(),
+      ),
+      force: force,
+    );
+    return AcpSaveResult(saved: r.saved, warnings: r.warnings);
+  }
+
+  @override
+  Future<List<AcpCustomAgent>> acpCustomAgents() async =>
+      (await frb.acpCustomAgents())
+          .map(
+            (c) => AcpCustomAgent(
+              id: c.id,
+              name: c.name,
+              command: c.command,
+              args: c.args,
+              env: _vars(c.env),
+            ),
+          )
+          .toList();
+
+  @override
+  Future<void> acpCustomAgentPut(AcpCustomAgent agent) => frb.acpCustomAgentPut(
+    agent: frb.AcpCustomAgentDto(
+      id: agent.id,
+      name: agent.name,
+      command: agent.command,
+      args: agent.args,
+      env: _varDtos(agent.env),
+    ),
+  );
+
+  @override
+  Future<void> acpCustomAgentDelete(String id) =>
+      frb.acpCustomAgentDelete(id: id);
+
+  @override
+  Future<void> acpAuthTerminal(String name, String methodId) =>
+      frb.acpAuthTerminal(name: name, methodId: methodId);
+
+  @override
+  Future<AcpAuth> acpAuthAgent(String name, String methodId) async =>
+      _acpAuth(await frb.acpAuthAgent(name: name, methodId: methodId));
+
+  @override
+  Future<AcpAuth> acpAuthRecheck(String name) async =>
+      _acpAuth(await frb.acpAuthRecheck(name: name));
+
+  @override
+  Future<AcpAgents> metaAcpAgents(String serviceKey) async {
+    final r = await frb.metaAcpAgents(serviceKey: serviceKey);
+    return AcpAgents(
+      remoteManagement: r.remoteManagement,
+      agents: r.agents.map(_acpAgent).toList(),
+    );
+  }
+
+  @override
+  Future<String> metaAcpInstall(String serviceKey, String agentId) =>
+      frb.metaAcpInstall(serviceKey: serviceKey, agentId: agentId);
+
+  @override
+  Future<AcpJob?> metaAcpJob(String serviceKey, String jobId) async =>
+      _acpJob(await frb.metaAcpJob(serviceKey: serviceKey, jobId: jobId));
+
+  @override
+  Future<String> metaAcpHost(
+    String serviceKey,
+    String agentId, {
+    String? name,
+  }) => frb.metaAcpHost(serviceKey: serviceKey, agentId: agentId, name: name);
+
+  @override
+  AppCapabilities appCapabilities(String serviceKey) {
+    final c = frb.appCapabilities(serviceKey: serviceKey);
+    return AppCapabilities(
+      provider: c.provider,
+      fast: c.fast,
+      permissionPresets: c.permissionPresets,
+      guardian: c.guardian,
+      rateLimits: c.rateLimits,
+      takeover: c.takeover,
+      externalWriterMonitor: c.externalWriterMonitor,
+      localSessions: c.localSessions,
+      planMode: c.planMode,
+      effortLabel: c.effortLabel,
+      approveAlwaysPersistsProject: c.approveAlwaysPersistsProject,
+      multiSelectQuestions: c.multiSelectQuestions,
+      childSessions: c.childSessions,
+      agentName: c.agentName,
+      steer: c.steer,
+      rename: c.rename,
+      compact: c.compact,
+      gitDiff: c.gitDiff,
+      images: c.images,
+      configOptions: c.configOptions,
+      slashCommands: c.slashCommands,
+      approvalOptions: c.approvalOptions,
+      urlElicitation: c.urlElicitation,
+      runningViaThreads: c.runningViaThreads,
+      historyPrefetch: c.historyPrefetch,
+      sessionReload: c.sessionReload,
+    );
+  }
+
+  @override
+  Future<List<String>> appRunningThreads(String serviceKey) =>
+      frb.appRunningThreads(serviceKey: serviceKey);
+
+  @override
+  Future<void> appRespondPermissionOption(
+    String serviceKey,
+    String requestId,
+    String optionId,
+  ) => frb.appRespondPermissionOption(
+    serviceKey: serviceKey,
+    requestId: requestId,
+    optionId: optionId,
+  );
+
+  @override
+  Future<void> appRespondElicitationUrl(
+    String serviceKey,
+    String requestId,
+    bool accept,
+  ) => frb.appRespondElicitationUrl(
+    serviceKey: serviceKey,
+    requestId: requestId,
+    accept: accept,
+  );
+
+  @override
+  Future<List<AcpConfigOption>> appConfigOptions(
+    String serviceKey,
+    String threadId,
+  ) async =>
+      (await frb.appConfigOptions(serviceKey: serviceKey, threadId: threadId))
+          .map(
+            (o) => AcpConfigOption(
+              id: o.id,
+              name: o.name,
+              description: o.description,
+              category: o.category,
+              role: o.role,
+              kind: o.kind,
+              currentValue: o.currentValue,
+              options: o.options
+                  .map(
+                    (v) => AcpConfigValue(
+                      value: v.value,
+                      name: v.name,
+                      description: v.description,
+                      group: v.group,
+                    ),
+                  )
+                  .toList(),
+            ),
+          )
+          .toList();
+
+  @override
+  Future<void> appSetConfigOption(
+    String serviceKey,
+    String threadId,
+    String configId,
+    String value, {
+    bool boolean = false,
+  }) => frb.appSetConfigOption(
+    serviceKey: serviceKey,
+    threadId: threadId,
+    configId: configId,
+    value: value,
+    boolean: boolean,
+  );
+
+  @override
+  Future<List<AcpCommand>> appSlashCommands(
+    String serviceKey,
+    String threadId,
+  ) async =>
+      (await frb.appSlashCommands(serviceKey: serviceKey, threadId: threadId))
+          .map(
+            (c) => AcpCommand(
+              name: c.name,
+              description: c.description,
+              hint: c.hint,
+            ),
+          )
+          .toList();
+
+  @override
+  Future<void> appThreadReload(String serviceKey, String threadId) =>
+      frb.appThreadReload(serviceKey: serviceKey, threadId: threadId);
+
+  @override
+  AcpAuth? appAuthState(String serviceKey) {
+    final a = frb.appAuthState(serviceKey: serviceKey);
+    return a == null ? null : _acpAuth(a);
+  }
+
+  @override
+  Future<AcpAuth> appAuthAuthenticate(
+    String serviceKey,
+    String methodId,
+  ) async => _acpAuth(
+    await frb.appAuthAuthenticate(serviceKey: serviceKey, methodId: methodId),
+  );
 
   @override
   Future<void> setRelay(String relay) => frb.setRelay(relay: relay);
@@ -501,6 +916,7 @@ class RustBridgeApi implements BridgeApi {
     hasOlder: h.hasOlder,
     firstTurnId: h.firstTurnId,
     turnPages: h.turnPages.map(_turnPage).toList(),
+    olderUnavailable: h.olderUnavailable,
     turns: h.turns
         .map(
           (t) => TurnSummary(
@@ -559,6 +975,7 @@ class RustBridgeApi implements BridgeApi {
     return OlderPage(
       items: page.items.map(_item).toList(),
       hasOlder: page.hasOlder,
+      olderUnavailable: page.olderUnavailable,
     );
   }
 

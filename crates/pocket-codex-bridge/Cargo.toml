@@ -51,8 +51,12 @@ webpki-roots = "0.26"
 once_cell = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+futures = { workspace = true }
+# ACP session timestamps (already in the mobile tree through core).
+chrono = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"
-futures = { workspace = true }
 tokio-tungstenite = { workspace = true }
+# FakeAgent / DuplexConnector for the ACP hosting and engine tests.
+pocket-codex-host-svc = { workspace = true, features = ["acp-testing"] }

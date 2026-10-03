@@ -566,6 +566,8 @@ pub struct OlderPage {
     pub items: Vec<ThreadItem>,
     /// Whether history continues before these.
     pub has_older: bool,
+    /// Older history exists but is no longer available (ACP transcripts).
+    pub older_unavailable: bool,
 }
 
 /// Walk one page further back through a paginated thread's history.
@@ -581,6 +583,7 @@ pub fn thread_older_page(service_key: &str, thread_id: &str) -> Result<OlderPage
     let empty = || OlderPage {
         items: Vec::new(),
         has_older: false,
+        older_unavailable: false,
     };
     let Some(mut state) = pagination_of(service_key, thread_id) else {
         return Ok(empty());
@@ -648,6 +651,7 @@ pub fn thread_older_page(service_key: &str, thread_id: &str) -> Result<OlderPage
     Ok(OlderPage {
         items,
         has_older,
+        older_unavailable: false,
     })
 }
 
@@ -1548,6 +1552,9 @@ pub struct ThreadHistory {
     pub first_turn_id: Option<String>,
     /// Cached independently loaded turns, including their continuation state.
     pub turn_pages: Vec<TurnItemsPage>,
+    /// Older history exists but is no longer available (ACP transcripts).
+    #[serde(default)]
+    pub older_unavailable: bool,
 }
 
 /// A turn reduced to what the rail shows: the question, and how it was
@@ -2181,6 +2188,7 @@ fn thread_read_inner(
         } else {
             Vec::new()
         },
+        older_unavailable: false,
     })
 }
 
@@ -3025,7 +3033,7 @@ fn parse_turn_item(item: &Value, turn: &TurnStamp) -> Option<ThreadItem> {
 /// both the snake_case `in_progress` (thread-history items) and the camelCase
 /// `inProgress` (the v2 `turn/plan/updated` notification) status tokens. Falls
 /// back to a `text` field, then empty.
-fn encode_plan(v: &Value) -> String {
+pub(super) fn encode_plan(v: &Value) -> String {
     let explanation = v
         .get("explanation")
         .and_then(Value::as_str)
@@ -3271,7 +3279,7 @@ fn normalize_file_change_diff(change: &Value) -> Option<String> {
     }
 }
 
-fn format_content_diff(path: &str, content: &str, added: bool) -> String {
+pub(super) fn format_content_diff(path: &str, content: &str, added: bool) -> String {
     let lines: Vec<&str> = content.lines().collect();
     let count = lines.len();
     let (old_path, new_path, hunk, marker) = if added {

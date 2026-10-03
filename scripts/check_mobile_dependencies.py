@@ -13,6 +13,8 @@ names = {line.split()[0] for line in tree.splitlines() if line.strip()}
 forbidden = {name for name in names if name.startswith("codex-") or name in {
     "starlark", "pagable", "openssl", "openssl-sys", "native-tls",
     "rusqlite", "libsqlite3-sys", "sqlx",
+    # ACP installer archives are desktop-only (docs/acp-integration/TRD.md §1).
+    "tar", "zip",
 }}
 if forbidden:
     raise SystemExit("Mobile bridge imports runtime dependencies: " + ", ".join(sorted(forbidden)))

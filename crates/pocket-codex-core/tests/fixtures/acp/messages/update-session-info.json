@@ -1,0 +1,15 @@
+{
+  "def": "SessionNotification",
+  "frame": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess-1",
+      "update": {
+        "sessionUpdate": "session_info_update",
+        "title": "New title",
+        "updatedAt": null
+      }
+    }
+  }
+}

@@ -12,6 +12,10 @@ readme.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Exposes acp::testing (FakeAgent, DuplexConnector) to other crates' tests.
+acp-testing = []
+
 [dependencies]
 pocket-codex-core = { workspace = true }
 pocket-codex-codex = { workspace = true }
@@ -31,6 +35,27 @@ anyhow = { workspace = true }
 async-trait = { workspace = true }
 tracing = { workspace = true }
 tower-http = { workspace = true, features = ["compression-zstd", "compression-gzip"] }
+# OpenCode client + gateway (`src/opencode`); all already in the lockfile.
+reqwest = { workspace = true, features = ["zstd", "gzip"] }
+thiserror = { workspace = true }
+futures = { workspace = true }
+bytes = { workspace = true }
+# ACP hub: RFC 3339 timestamps of listed sessions; already in the lockfile.
+chrono = { workspace = true }
+
+# ACP installer (desktop only; kept out of the mobile bridge, see
+# scripts/check_mobile_dependencies.py). Only tar and zip are new crates.
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tar = { version = "=0.4.46", default-features = false }
+zip = { version = "=8.6.0", default-features = false, features = ["deflate-flate2"] }
+flate2 = "=1.1.9"
+semver = "=1.0.28"
+sha2 = { workspace = true }
+base64 = { workspace = true }
+toml = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+nix = { workspace = true, features = ["user", "signal", "fs"] }
 
 [dev-dependencies]
 tempfile = "3"
@@ -38,3 +63,8 @@ tempfile = "3"
 # the same rustls-webpki reqwest the bridge's meta client uses, so no new
 # workspace dep and the exact request path is exercised.
 reqwest = { workspace = true, features = ["zstd", "gzip"] }
+# Integration tests under tests/ use acp::testing; paused clocks need test-util.
+pocket-codex-host-svc = { path = ".", features = ["acp-testing"] }
+tokio = { workspace = true, features = ["test-util"] }
+# Raw WebSocket client for the hub transport tests; already in the lockfile.
+tokio-tungstenite = { workspace = true }

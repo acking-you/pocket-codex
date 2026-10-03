@@ -1,0 +1,18 @@
+{
+  "def": "SessionNotification",
+  "frame": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess-1",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "t1",
+        "status": "completed",
+        "rawOutput": {
+          "ok": true
+        }
+      }
+    }
+  }
+}

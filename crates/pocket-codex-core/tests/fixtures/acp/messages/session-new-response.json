@@ -1,0 +1,69 @@
+{
+  "def": "NewSessionResponse",
+  "frame": {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+      "sessionId": "sess-1",
+      "modes": {
+        "currentModeId": "default",
+        "availableModes": [
+          {
+            "id": "default",
+            "name": "Default"
+          },
+          {
+            "id": "plan",
+            "name": "Plan",
+            "description": "Plan only"
+          }
+        ]
+      },
+      "configOptions": [
+        {
+          "id": "model",
+          "name": "Model",
+          "category": "model",
+          "type": "select",
+          "currentValue": "m1",
+          "options": [
+            {
+              "value": "m1",
+              "name": "M1"
+            },
+            {
+              "value": "m2",
+              "name": "M2",
+              "description": "second"
+            }
+          ]
+        },
+        {
+          "id": "effort",
+          "name": "Effort",
+          "category": "thought_level",
+          "type": "select",
+          "currentValue": "low",
+          "options": [
+            {
+              "group": "g",
+              "name": "Group",
+              "options": [
+                {
+                  "value": "low",
+                  "name": "Low"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "fast",
+          "name": "Fast",
+          "type": "boolean",
+          "currentValue": false
+        }
+      ]
+    }
+  }
+}

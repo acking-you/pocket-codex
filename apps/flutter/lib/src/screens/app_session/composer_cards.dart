@@ -35,6 +35,8 @@ class _UiQuestion {
     required this.isOther,
     required this.isSecret,
     required this.options,
+    this.multiSelect = false,
+    this.unsupported = false,
   });
   final String id;
   final String header;
@@ -42,6 +44,12 @@ class _UiQuestion {
   final bool isOther;
   final bool isSecret;
   final List<({String label, String? description})> options;
+
+  /// Any number of options may be chosen; the answer lists all of them.
+  final bool multiSelect;
+
+  /// A note for a field this app cannot answer: shown, never answered.
+  final bool unsupported;
 }
 
 /// Interactive card for an `item/tool/requestUserInput` elicitation: the model
@@ -68,6 +76,7 @@ class _UserInputCardState extends State<UserInputCard> {
   static const _other = '\u0000other';
   late final List<_UiQuestion> _questions = _parse(widget.prompt.raw);
   final Map<String, String> _choice = {}; // qid -> option label or _other
+  final Map<String, Set<String>> _multi = {}; // multiSelect qid -> picks
   final Map<String, TextEditingController> _otherCtrls = {};
   bool _submitting = false;
 
@@ -103,6 +112,8 @@ class _UserInputCardState extends State<UserInputCard> {
             isOther: (q['isOther'] as bool?) ?? false,
             isSecret: (q['isSecret'] as bool?) ?? false,
             options: opts,
+            multiSelect: q['multiSelect'] == true,
+            unsupported: q['unsupported'] == true,
           ),
         );
       }
@@ -114,6 +125,23 @@ class _UserInputCardState extends State<UserInputCard> {
 
   TextEditingController _ctrl(String qid) =>
       _otherCtrls.putIfAbsent(qid, TextEditingController.new);
+
+  List<String>? _answers(_UiQuestion q) {
+    if (!q.multiSelect || q.options.isEmpty) {
+      final a = _answer(q);
+      return a == null ? null : [a];
+    }
+    final picked = _multi[q.id] ?? const <String>{};
+    final out = [
+      for (final o in q.options)
+        if (picked.contains(o.label)) o.label,
+    ];
+    if (picked.contains(_other)) {
+      final t = _ctrl(q.id).text.trim();
+      if (t.isNotEmpty) out.add(t);
+    }
+    return out.isEmpty ? null : out;
+  }
 
   String? _answer(_UiQuestion q) {
     // No options → pure free-text; an explicit "其他" pick → free-text too.
@@ -130,14 +158,19 @@ class _UserInputCardState extends State<UserInputCard> {
     return c;
   }
 
+  /// A form with a field this app cannot render can only be cancelled.
+  bool get _hasUnsupported => _questions.any((q) => q.unsupported);
+
   bool get _complete =>
-      _questions.isNotEmpty && _questions.every((q) => _answer(q) != null);
+      _questions.isNotEmpty &&
+      !_hasUnsupported &&
+      _questions.every((q) => _answers(q) != null);
 
   Future<void> _submit() async {
     final answers = <String, List<String>>{};
     for (final q in _questions) {
-      final a = _answer(q);
-      if (a != null) answers[q.id] = [a];
+      final a = _answers(q);
+      if (a != null) answers[q.id] = a;
     }
     setState(() => _submitting = true);
     try {
@@ -221,6 +254,32 @@ class _UserInputCardState extends State<UserInputCard> {
     );
   }
 
+  Widget _multiChips(_UiQuestion q, AppLocalizations l10n) {
+    final picked = _multi.putIfAbsent(q.id, () => <String>{});
+    Widget chip(String value, String label, String? tooltip) => FilterChip(
+      label: Text(label),
+      tooltip: tooltip,
+      selected: picked.contains(value),
+      onSelected: _submitting
+          ? null
+          : (on) =>
+                setState(() => on ? picked.add(value) : picked.remove(value)),
+    );
+    return Wrap(
+      spacing: 8,
+      runSpacing: 6,
+      children: [
+        for (final o in q.options)
+          chip(
+            o.label,
+            o.label,
+            (o.description?.isNotEmpty ?? false) ? o.description : null,
+          ),
+        if (q.isOther) chip(_other, l10n.userInputOther, null),
+      ],
+    );
+  }
+
   Widget _questionBlock(
     BuildContext context,
     _UiQuestion q,
@@ -247,9 +306,13 @@ class _UserInputCardState extends State<UserInputCard> {
               child: Text(q.question, style: const TextStyle(fontSize: 13.5)),
             ),
           const SizedBox(height: 6),
+          if (q.unsupported)
+            const SizedBox.shrink()
+          else if (q.multiSelect && q.options.isNotEmpty)
+            _multiChips(q, l10n)
           // A question with no options is a pure free-text prompt; otherwise show
           // the option chips (+ an "其他" chip when free text is also allowed).
-          if (q.options.isNotEmpty)
+          else if (q.options.isNotEmpty)
             Wrap(
               spacing: 8,
               runSpacing: 6,
@@ -276,7 +339,12 @@ class _UserInputCardState extends State<UserInputCard> {
                   ),
               ],
             ),
-          if (q.options.isEmpty || (q.isOther && _choice[q.id] == _other))
+          if (!q.unsupported &&
+              (q.options.isEmpty ||
+                  (q.isOther &&
+                      (q.multiSelect
+                          ? (_multi[q.id]?.contains(_other) ?? false)
+                          : _choice[q.id] == _other))))
             Padding(
               padding: const EdgeInsets.only(top: 6),
               child: TextField(
@@ -297,9 +365,83 @@ class _UserInputCardState extends State<UserInputCard> {
 }
 
 class ApprovalCard extends StatelessWidget {
-  const ApprovalCard({super.key, required this.prompt, required this.onDecide});
+  const ApprovalCard({
+    super.key,
+    required this.prompt,
+    required this.onDecide,
+    this.onOption,
+  });
   final AppEvent prompt;
   final Future<void> Function(AppEvent, String) onDecide;
+
+  /// Answers with one of an ACP agent's own options (`raw.acpOptions`); when
+  /// null, or the request carries no options, the standard buttons show.
+  final Future<void> Function(AppEvent, String optionId)? onOption;
+
+  /// The agent's options, in its order.
+  List<({String id, String name, String kind})> get _acpOptions {
+    try {
+      final p = jsonDecode(prompt.raw);
+      final list = p is Map ? p['acpOptions'] : null;
+      if (list is! List) return const [];
+      return [
+        for (final o in list)
+          if (o is Map && o['optionId'] is String)
+            (
+              id: o['optionId'] as String,
+              name: '${o['name'] ?? o['optionId']}',
+              kind: '${o['kind'] ?? ''}',
+            ),
+      ];
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  Future<void> _pickOption(
+    BuildContext context,
+    ({String id, String name, String kind}) option,
+  ) async {
+    if (option.kind == 'allow_always' || option.kind == 'reject_always') {
+      final l10n = AppLocalizations.of(context);
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          key: const Key('acp-option-confirm'),
+          title: Text(l10n.acpOptionConfirmTitle(option.name)),
+          content: Text(l10n.acpOptionConfirmBody),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: Text(l10n.cancel),
+            ),
+            FilledButton(
+              key: const Key('acp-option-confirm-ok'),
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: Text(option.name),
+            ),
+          ],
+        ),
+      );
+      if (ok != true) return;
+    }
+    await onOption!(prompt, option.id);
+  }
+
+  List<Widget> _optionButtons(BuildContext context) => [
+    for (final o in _acpOptions)
+      o.kind == 'allow_once'
+          ? FilledButton(
+              key: Key('acp-option-${o.id}'),
+              onPressed: () => _pickOption(context, o),
+              child: Text(o.name),
+            )
+          : TextButton(
+              key: Key('acp-option-${o.id}'),
+              onPressed: () => _pickOption(context, o),
+              child: Text(o.name),
+            ),
+  ];
 
   ({IconData icon, String title}) _meta(AppLocalizations l10n) {
     final k = prompt.kind;
@@ -331,6 +473,43 @@ class ApprovalCard extends StatelessWidget {
       if (parts.isNotEmpty) return parts.join('\n');
     } catch (_) {}
     return prompt.raw;
+  }
+
+  /// Whether "allow for session" is an always-allow rule the provider persists
+  /// for the whole project (OpenCode) rather than for this session only.
+  bool get _persistsProject {
+    try {
+      final p = jsonDecode(prompt.raw);
+      return p is Map && p['persistsProject'] == true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> _acceptForSession(BuildContext context) async {
+    if (_persistsProject) {
+      final l10n = AppLocalizations.of(context);
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text(l10n.approveAlwaysProjectTitle),
+          content: Text(l10n.approveAlwaysProjectBody),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: Text(l10n.cancel),
+            ),
+            FilledButton(
+              key: const Key('approve-always-confirm'),
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: Text(l10n.approveAlwaysProject),
+            ),
+          ],
+        ),
+      );
+      if (ok != true) return;
+    }
+    await onDecide(prompt, 'acceptForSession');
   }
 
   @override
@@ -393,24 +572,126 @@ class ApprovalCard extends StatelessWidget {
             Wrap(
               alignment: WrapAlignment.end,
               spacing: 8,
-              children: [
-                TextButton(
-                  onPressed: () => onDecide(prompt, 'decline'),
-                  child: Text(l10n.deny),
-                ),
-                TextButton(
-                  onPressed: () => onDecide(prompt, 'acceptForSession'),
-                  child: Text(l10n.approveForSession),
-                ),
-                FilledButton(
-                  key: const Key('approve-btn'),
-                  onPressed: () => onDecide(prompt, 'accept'),
-                  child: Text(l10n.approve),
-                ),
-              ],
+              children: onOption != null && _acpOptions.isNotEmpty
+                  ? _optionButtons(context)
+                  : [
+                      TextButton(
+                        onPressed: () => onDecide(prompt, 'decline'),
+                        child: Text(l10n.deny),
+                      ),
+                      TextButton(
+                        key: const Key('approve-session-btn'),
+                        onPressed: () => _acceptForSession(context),
+                        child: Text(
+                          _persistsProject
+                              ? l10n.approveAlwaysProject
+                              : l10n.approveForSession,
+                        ),
+                      ),
+                      FilledButton(
+                        key: const Key('approve-btn'),
+                        onPressed: () => onDecide(prompt, 'accept'),
+                        child: Text(l10n.approve),
+                      ),
+                    ],
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// An ACP URL elicitation (`acp/elicitation/url`): the agent asks the user to
+/// open a page (for example a device-code login). The host is shown
+/// prominently so the user can judge where the link goes before opening it.
+class UrlElicitationCard extends StatelessWidget {
+  const UrlElicitationCard({
+    super.key,
+    required this.prompt,
+    required this.onAnswer,
+  });
+
+  final AppEvent prompt;
+
+  /// `true` after the page was opened, `false` when declined.
+  final Future<void> Function(AppEvent, bool accept) onAnswer;
+
+  Map<String, dynamic> get _raw {
+    try {
+      final p = jsonDecode(prompt.raw);
+      return p is Map<String, dynamic> ? p : const {};
+    } catch (_) {
+      return const {};
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    final scheme = Theme.of(context).colorScheme;
+    final raw = _raw;
+    final url = '${raw['url'] ?? ''}';
+    final host = Uri.tryParse(url)?.host ?? '';
+    final message = '${raw['message'] ?? prompt.title ?? ''}';
+    return Container(
+      key: const Key('acp-url-card'),
+      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHigh,
+        border: Border.all(color: scheme.outlineVariant, width: 0.5),
+        borderRadius: BorderRadius.circular(kPanelRadius),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.open_in_new, size: 18, color: scheme.primary),
+              const SizedBox(width: 9),
+              Expanded(
+                child: Text(
+                  l10n.acpUrlTitle,
+                  style: const TextStyle(fontWeight: FontWeight.w500),
+                ),
+              ),
+            ],
+          ),
+          if (message.isNotEmpty) ...[const SizedBox(height: 8), Text(message)],
+          const SizedBox(height: 8),
+          Text(
+            host,
+            key: const Key('acp-url-host'),
+            style: TextStyle(
+              fontWeight: FontWeight.w700,
+              fontSize: 15,
+              color: scheme.primary,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            alignment: WrapAlignment.end,
+            spacing: 8,
+            children: [
+              TextButton(
+                key: const Key('acp-url-decline'),
+                onPressed: () => onAnswer(prompt, false),
+                child: Text(l10n.acpUrlDecline),
+              ),
+              FilledButton(
+                key: const Key('acp-url-open'),
+                onPressed: url.isEmpty
+                    ? null
+                    : () async {
+                        await openWebUrl(context, url);
+                        await onAnswer(prompt, true);
+                      },
+                child: Text(l10n.acpUrlOpen(host)),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }

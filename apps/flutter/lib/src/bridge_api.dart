@@ -115,6 +115,11 @@ class AppServeStatus {
     this.embedded = false,
     this.codexBinary,
     this.proxy,
+    this.provider = 'codex',
+    this.providerVersion,
+    this.providerVerified = false,
+    this.agentId,
+    this.agentName,
   });
 
   /// Service instance name.
@@ -165,6 +170,772 @@ class AppServeStatus {
   /// Upstream proxy codex + the API proxy were started with, or `null` when
   /// they inherit the app's environment.
   final String? proxy;
+
+  /// Service provider of this host: `codex` or `opencode`. For `opencode`
+  /// the `app*` fields describe the OpenCode gateway and `api*` are empty.
+  final String provider;
+
+  /// Provider version when known (OpenCode).
+  final String? providerVersion;
+
+  /// Whether that version is the one this build was verified against.
+  final bool providerVerified;
+
+  /// ACP hosts: catalog or custom agent id.
+  final String? agentId;
+
+  /// ACP hosts: agent display name.
+  final String? agentName;
+
+  /// Whether this host attaches to OpenCode rather than running Codex.
+  bool get isOpenCode => provider == 'opencode';
+
+  /// Whether this host runs Codex.
+  bool get isCodex => provider == 'codex';
+
+  /// Whether this host runs an agent through the generic ACP hub.
+  bool get isAcp => provider == 'acp';
+}
+
+/// Result of attaching to the local OpenCode service and publishing it as
+/// `opencode:<name>` plus `meta:<name>`.
+class OpenCodeServeResult {
+  /// Creates an OpenCode hosting-start result.
+  const OpenCodeServeResult({
+    required this.device,
+    required this.name,
+    required this.serviceKey,
+    required this.listenAddr,
+    required this.metaServiceKey,
+    required this.version,
+    required this.verified,
+    required this.reused,
+    required this.startedService,
+  });
+
+  /// Device id the services registered under.
+  final String device;
+
+  /// Instance name.
+  final String name;
+
+  /// `pcx:<device>:opencode:<name>` key.
+  final String serviceKey;
+
+  /// Loopback gateway address.
+  final String listenAddr;
+
+  /// `pcx:<device>:meta:<name>` key.
+  final String metaServiceKey;
+
+  /// OpenCode version.
+  final String version;
+
+  /// Whether the version is the verified one (others passed the contract).
+  final bool verified;
+
+  /// Whether an existing host was reused.
+  final bool reused;
+
+  /// Whether this call asked OpenCode to start its background service.
+  final bool startedService;
+}
+
+/// Authentication state of an ACP agent.
+class AcpAuth {
+  /// Creates an authentication state.
+  const AcpAuth({required this.status, this.methods = const [], this.message});
+
+  /// `unknown` | `ok` | `required` | `inProgress`.
+  final String status;
+
+  /// Offered methods.
+  final List<AcpAuthMethod> methods;
+
+  /// Detail for the user.
+  final String? message;
+
+  /// The agent asks for a login.
+  bool get required => status == 'required';
+}
+
+/// One ACP authentication method.
+class AcpAuthMethod {
+  /// Creates an authentication method.
+  const AcpAuthMethod({
+    required this.id,
+    required this.name,
+    this.description = '',
+    required this.kind,
+    this.remote = false,
+    this.available = true,
+    this.gatewayProtocol,
+    this.gatewayConfigured = false,
+  });
+
+  /// Method id.
+  final String id;
+
+  /// Display name.
+  final String name;
+
+  /// Description.
+  final String description;
+
+  /// `agent` | `terminal` | `gateway`.
+  final String kind;
+
+  /// A remote controller may start it.
+  final bool remote;
+
+  /// False when a legacy terminal method cannot be reproduced safely.
+  final bool available;
+
+  /// Gateway protocol (`anthropic`, `openai`, …), for gateway methods.
+  final String? gatewayProtocol;
+
+  /// A gateway is configured on the host for this method.
+  final bool gatewayConfigured;
+}
+
+/// Result of starting (or reusing) an ACP host.
+class AcpServeResult {
+  /// Creates an ACP hosting-start result.
+  const AcpServeResult({
+    required this.device,
+    required this.name,
+    required this.serviceKey,
+    required this.listenAddr,
+    required this.metaServiceKey,
+    required this.agentId,
+    required this.agentName,
+    required this.agentVersion,
+    required this.auth,
+    required this.reused,
+  });
+
+  /// Device id.
+  final String device;
+
+  /// Instance name.
+  final String name;
+
+  /// `pcx:<device>:acp:<name>`.
+  final String serviceKey;
+
+  /// Loopback hub address.
+  final String listenAddr;
+
+  /// `pcx:<device>:meta:<name>`.
+  final String metaServiceKey;
+
+  /// Agent id.
+  final String agentId;
+
+  /// Agent display name.
+  final String agentName;
+
+  /// Installed agent version.
+  final String agentVersion;
+
+  /// Authentication state.
+  final AcpAuth auth;
+
+  /// An existing host was reused.
+  final bool reused;
+}
+
+/// Install / hosting state of one ACP agent on a host.
+class AcpAgent {
+  /// Creates an agent state.
+  const AcpAgent({
+    required this.id,
+    required this.name,
+    this.description = '',
+    this.source = 'catalog',
+    this.pinnedVersion,
+    this.installedVersion,
+    required this.state,
+    this.detail,
+    this.jobId,
+    this.registryVersion,
+    this.hostedNames = const [],
+    this.approxSizeMb = 0,
+    this.needsNode = false,
+    this.remoteInstallAllowed = false,
+  });
+
+  /// Agent id.
+  final String id;
+
+  /// Display name.
+  final String name;
+
+  /// Description.
+  final String description;
+
+  /// `catalog` | `custom`.
+  final String source;
+
+  /// Catalog version.
+  final String? pinnedVersion;
+
+  /// Installed version.
+  final String? installedVersion;
+
+  /// not_installed | installing | installed | failed | unsupported_platform |
+  /// engine_missing | engine_incompatible.
+  final String state;
+
+  /// Detail.
+  final String? detail;
+
+  /// Running install job.
+  final String? jobId;
+
+  /// Newer, unverified registry version.
+  final String? registryVersion;
+
+  /// Instances hosting this agent.
+  final List<String> hostedNames;
+
+  /// Approximate install size.
+  final int approxSizeMb;
+
+  /// Installs the private Node runtime.
+  final bool needsNode;
+
+  /// Remote controllers may install it.
+  final bool remoteInstallAllowed;
+
+  /// Whether the agent can be hosted now.
+  bool get installed => state == 'installed';
+}
+
+/// A remote host's agents.
+class AcpAgents {
+  /// Creates a remote agent list.
+  const AcpAgents({required this.remoteManagement, required this.agents});
+
+  /// Remote management is switched on.
+  final bool remoteManagement;
+
+  /// Agents.
+  final List<AcpAgent> agents;
+}
+
+/// Progress of an ACP install or host job.
+class AcpJob {
+  /// Creates a job snapshot.
+  const AcpJob({
+    required this.id,
+    required this.kind,
+    required this.agentId,
+    this.version = '',
+    required this.state,
+    this.bytes = 0,
+    this.total,
+    this.message,
+    this.errorCode,
+    this.serviceKey,
+  });
+
+  /// Job id.
+  final String id;
+
+  /// `install` | `host`.
+  final String kind;
+
+  /// Agent id.
+  final String agentId;
+
+  /// Version.
+  final String version;
+
+  /// State (queued … done | failed).
+  final String state;
+
+  /// Bytes downloaded.
+  final int bytes;
+
+  /// Total bytes, when known.
+  final int? total;
+
+  /// Detail.
+  final String? message;
+
+  /// `acp.<code>` on failure.
+  final String? errorCode;
+
+  /// Set when a host job is done.
+  final String? serviceKey;
+
+  /// The job ended (successfully or not).
+  bool get finished => state == 'done' || state == 'failed';
+
+  /// Download progress 0..1, when the total is known.
+  double? get fraction {
+    final t = total;
+    return t == null || t == 0 ? null : (bytes / t).clamp(0.0, 1.0);
+  }
+}
+
+/// One environment variable or header.
+class AcpEnvVar {
+  /// Creates a name/value pair.
+  const AcpEnvVar({required this.name, required this.value});
+
+  /// Name.
+  final String name;
+
+  /// Value.
+  final String value;
+}
+
+/// A user-defined ACP agent.
+class AcpCustomAgent {
+  /// Creates a custom agent definition.
+  const AcpCustomAgent({
+    required this.id,
+    required this.name,
+    required this.command,
+    this.args = const [],
+    this.env = const [],
+  });
+
+  /// Id.
+  final String id;
+
+  /// Display name.
+  final String name;
+
+  /// Absolute executable path.
+  final String command;
+
+  /// Arguments.
+  final List<String> args;
+
+  /// Environment (stored in plain text on the host).
+  final List<AcpEnvVar> env;
+}
+
+/// Executable override of an archive agent.
+class AcpBinaryOverride {
+  /// Creates an override.
+  const AcpBinaryOverride({required this.agentId, required this.path});
+
+  /// Agent id.
+  final String agentId;
+
+  /// Absolute path.
+  final String path;
+}
+
+/// D19 data mode of an OpenCode data family.
+class AcpDataMode {
+  /// Creates a data mode.
+  const AcpDataMode({required this.family, required this.mode});
+
+  /// `opencode-v1` | `opencode-v2`.
+  final String family;
+
+  /// `auto` | `shared` | `isolated`.
+  final String mode;
+}
+
+/// D20 model gateway of one agent. Reading returns `token: null` plus
+/// [hasToken]; saving with `token: null` keeps the stored token, `''` deletes
+/// it, and [clear] removes the whole entry.
+class AcpGateway {
+  /// Creates a gateway entry.
+  const AcpGateway({
+    required this.agentId,
+    this.methodId,
+    required this.baseUrl,
+    this.token,
+    this.hasToken = false,
+    this.providerName,
+    this.extraHeaders = const [],
+    this.clear = false,
+  });
+
+  /// Agent id.
+  final String agentId;
+
+  /// Gateway method; `null` = the first one.
+  final String? methodId;
+
+  /// Base URL.
+  final String baseUrl;
+
+  /// Write-only token.
+  final String? token;
+
+  /// A token is stored.
+  final bool hasToken;
+
+  /// Provider name (codex-acp).
+  final String? providerName;
+
+  /// Extra headers.
+  final List<AcpEnvVar> extraHeaders;
+
+  /// Remove this gateway.
+  final bool clear;
+}
+
+/// One catalog `conditional_args` switch (D21).
+class AcpAgentFlag {
+  /// Creates a switch.
+  const AcpAgentFlag({
+    required this.agentId,
+    required this.setting,
+    required this.labelKey,
+    this.confirmKey,
+    required this.value,
+  });
+
+  /// Agent id.
+  final String agentId;
+
+  /// Setting key.
+  final String setting;
+
+  /// l10n key of the label.
+  final String labelKey;
+
+  /// l10n key of the confirm dialog when turning it on.
+  final String? confirmKey;
+
+  /// Current value.
+  final bool value;
+}
+
+/// Host ACP settings.
+class AcpSettings {
+  /// Creates a settings snapshot.
+  const AcpSettings({
+    this.remoteManagement = true,
+    this.npmRegistry,
+    this.claudeEnginePath,
+    this.codexBinary,
+    this.binaryOverrides = const [],
+    this.opencodeData = const [],
+    this.gateways = const [],
+    this.flags = const [],
+  });
+
+  /// Remote management (D14).
+  final bool remoteManagement;
+
+  /// npm mirror (https).
+  final String? npmRegistry;
+
+  /// Claude Code executable override (D7).
+  final String? claudeEnginePath;
+
+  /// Codex path for codex-acp (D6).
+  final String? codexBinary;
+
+  /// Archive agent executable overrides.
+  final List<AcpBinaryOverride> binaryOverrides;
+
+  /// OpenCode data families (D19).
+  final List<AcpDataMode> opencodeData;
+
+  /// Model gateways (D20).
+  final List<AcpGateway> gateways;
+
+  /// Catalog switches (D21).
+  final List<AcpAgentFlag> flags;
+}
+
+/// Result of saving ACP settings.
+class AcpSaveResult {
+  /// Creates a save result.
+  const AcpSaveResult({required this.saved, this.warnings = const []});
+
+  /// The settings were saved.
+  final bool saved;
+
+  /// D16 warnings to confirm before forcing the save.
+  final List<String> warnings;
+}
+
+/// What a session service's provider supports, so the shared session UI can
+/// hide controls that do not apply.
+class AppCapabilities {
+  /// Creates a capability description.
+  const AppCapabilities({
+    required this.provider,
+    required this.fast,
+    required this.permissionPresets,
+    required this.guardian,
+    required this.rateLimits,
+    required this.takeover,
+    required this.externalWriterMonitor,
+    required this.localSessions,
+    required this.planMode,
+    required this.effortLabel,
+    required this.approveAlwaysPersistsProject,
+    required this.multiSelectQuestions,
+    required this.childSessions,
+    this.agentName = '',
+    this.steer = false,
+    this.rename = false,
+    this.compact = false,
+    this.gitDiff = false,
+    this.images = false,
+    this.configOptions = false,
+    this.slashCommands = false,
+    this.approvalOptions = false,
+    this.urlElicitation = false,
+    this.runningViaThreads = false,
+    this.historyPrefetch = false,
+    this.sessionReload = false,
+  });
+
+  /// The Codex app-server's capabilities.
+  static const codex = AppCapabilities(
+    provider: 'codex',
+    fast: true,
+    permissionPresets: true,
+    guardian: true,
+    rateLimits: true,
+    takeover: true,
+    externalWriterMonitor: true,
+    localSessions: true,
+    planMode: true,
+    effortLabel: 'effort',
+    approveAlwaysPersistsProject: false,
+    multiSelectQuestions: false,
+    childSessions: false,
+    agentName: '',
+    steer: true,
+    rename: true,
+    compact: true,
+    gitDiff: true,
+    images: true,
+    configOptions: false,
+    slashCommands: false,
+    approvalOptions: false,
+    urlElicitation: false,
+    runningViaThreads: false,
+    historyPrefetch: true,
+    sessionReload: false,
+  );
+
+  /// The OpenCode gateway's capabilities.
+  static const openCode = AppCapabilities(
+    provider: 'opencode',
+    fast: false,
+    permissionPresets: false,
+    guardian: false,
+    rateLimits: false,
+    takeover: false,
+    externalWriterMonitor: false,
+    localSessions: false,
+    planMode: true,
+    effortLabel: 'variant',
+    approveAlwaysPersistsProject: true,
+    multiSelectQuestions: true,
+    childSessions: true,
+    agentName: '',
+    steer: true,
+    rename: true,
+    compact: true,
+    gitDiff: true,
+    images: true,
+    configOptions: false,
+    slashCommands: false,
+    approvalOptions: false,
+    urlElicitation: false,
+    runningViaThreads: true,
+    historyPrefetch: false,
+    sessionReload: false,
+  );
+
+  /// An ACP service before its hub answered: every optional capability off
+  /// except the running list and history prefetch.
+  static const acpDefault = AppCapabilities(
+    provider: 'acp',
+    fast: false,
+    permissionPresets: false,
+    guardian: false,
+    rateLimits: false,
+    takeover: false,
+    externalWriterMonitor: false,
+    localSessions: false,
+    planMode: false,
+    effortLabel: 'effort',
+    approveAlwaysPersistsProject: false,
+    multiSelectQuestions: false,
+    childSessions: false,
+    runningViaThreads: true,
+    historyPrefetch: true,
+  );
+
+  /// `codex`, `opencode` or `acp`.
+  final String provider;
+
+  /// Fast service tier toggle.
+  final bool fast;
+
+  /// Approval / sandbox permission presets.
+  final bool permissionPresets;
+
+  /// Guardian (auto-review) approvals.
+  final bool guardian;
+
+  /// Account rate-limit snapshot.
+  final bool rateLimits;
+
+  /// Taking over a session held by another local process.
+  final bool takeover;
+
+  /// Monitoring another writer of the same session.
+  final bool externalWriterMonitor;
+
+  /// Sessions read directly from this device's disk.
+  final bool localSessions;
+
+  /// Plan collaboration mode.
+  final bool planMode;
+
+  /// Label of the reasoning selector: `effort` or `variant`.
+  final String effortLabel;
+
+  /// Whether "allow for session" persists a project rule instead.
+  final bool approveAlwaysPersistsProject;
+
+  /// Multi-select questions.
+  final bool multiSelectQuestions;
+
+  /// Child (subagent) sessions that can be opened read-only.
+  final bool childSessions;
+
+  /// Agent display name (ACP; empty otherwise).
+  final String agentName;
+
+  /// Supplementing a running turn.
+  final bool steer;
+
+  /// Renaming a conversation.
+  final bool rename;
+
+  /// Manual compaction.
+  final bool compact;
+
+  /// Git diff review.
+  final bool gitDiff;
+
+  /// Image attachments.
+  final bool images;
+
+  /// The generic config option panel (ACP).
+  final bool configOptions;
+
+  /// Agent slash commands (ACP).
+  final bool slashCommands;
+
+  /// Approval cards offer the agent's own options (ACP).
+  final bool approvalOptions;
+
+  /// URL elicitation cards (ACP).
+  final bool urlElicitation;
+
+  /// Running sessions come from `appRunningThreads`.
+  final bool runningViaThreads;
+
+  /// Running-session tails can be prefetched.
+  final bool historyPrefetch;
+
+  /// The host can re-materialize a session (ACP).
+  final bool sessionReload;
+
+  /// Whether this is an ACP service.
+  bool get isAcp => provider == 'acp';
+}
+
+/// One ACP session config option. [role] is `model` | `effort` | `mode` |
+/// `other`; the generic panel shows `mode` and `other`.
+class AcpConfigOption {
+  /// Creates a config option.
+  const AcpConfigOption({
+    required this.id,
+    required this.name,
+    this.description = '',
+    this.category = '',
+    required this.role,
+    required this.kind,
+    required this.currentValue,
+    this.options = const [],
+  });
+
+  /// Option id.
+  final String id;
+
+  /// Display name.
+  final String name;
+
+  /// Description.
+  final String description;
+
+  /// ACP category (may be empty).
+  final String category;
+
+  /// `model` | `effort` | `mode` | `other`.
+  final String role;
+
+  /// `select` | `boolean`.
+  final String kind;
+
+  /// Current value (`true` / `false` for booleans).
+  final String currentValue;
+
+  /// Values of a select option.
+  final List<AcpConfigValue> options;
+
+  /// Whether this is a boolean switch.
+  bool get isBoolean => kind == 'boolean';
+}
+
+/// One value of a select config option.
+class AcpConfigValue {
+  /// Creates a select value.
+  const AcpConfigValue({
+    required this.value,
+    required this.name,
+    this.description = '',
+    this.group,
+  });
+
+  /// Value id.
+  final String value;
+
+  /// Display name.
+  final String name;
+
+  /// Description.
+  final String description;
+
+  /// Group name, when grouped.
+  final String? group;
+}
+
+/// One agent slash command.
+class AcpCommand {
+  /// Creates a slash command.
+  const AcpCommand({required this.name, this.description = '', this.hint});
+
+  /// Command name (without `/`).
+  final String name;
+
+  /// Description.
+  final String description;
+
+  /// Input hint.
+  final String? hint;
 }
 
 /// View of persisted config (relay/key presence, locale, account state).
@@ -466,7 +1237,11 @@ class ThreadHistory {
     this.turns = const [],
     this.firstTurnId,
     this.turnPages = const [],
+    this.olderUnavailable = false,
   });
+
+  /// Older history exists but is no longer available (ACP transcripts).
+  final bool olderUnavailable;
 
   /// Conversation items, oldest first.
   final List<ThreadItem> items;
@@ -588,13 +1363,20 @@ class TurnSummary {
 /// One page of older items, and whether history continues before them.
 class OlderPage {
   /// Creates an older page.
-  const OlderPage({required this.items, required this.hasOlder});
+  const OlderPage({
+    required this.items,
+    required this.hasOlder,
+    this.olderUnavailable = false,
+  });
 
   /// Older items, oldest first, to prepend to the transcript.
   final List<ThreadItem> items;
 
   /// Whether older items still remain.
   final bool hasOlder;
+
+  /// Older history exists but is no longer available (ACP transcripts).
+  final bool olderUnavailable;
 }
 
 /// The server-reported runtime configuration of a thread — what its turns
@@ -1261,6 +2043,132 @@ abstract interface class BridgeApi {
   /// The resolved codex binary path (persisted config → `PATH`), or `null` so
   /// the UI can prompt the user to point at one.
   Future<String?> codexLocate();
+
+  /// Attach to the local OpenCode background service (asking OpenCode to start
+  /// it when none is running, via [binaryOverride] when given) and publish it
+  /// as `opencode:<name>` plus `meta:<name>`. Stopping hosting never stops
+  /// OpenCode. Fails when [name] is already used by a Codex host here.
+  Future<OpenCodeServeResult> appServeStartOpencode({
+    String? name,
+    String? binaryOverride,
+  });
+
+  /// The resolved `opencode` executable (explicit → `PATH` →
+  /// `~/.opencode/bin/opencode`), or `null`.
+  Future<String?> opencodeLocate({String? binaryOverride});
+
+  // --- ACP hosting and agent management (desktop; meta* work remotely) ---
+
+  /// Host [agentId] (an installed catalog agent or a custom agent) as
+  /// `acp:<name>` plus `meta:<name>`. Desktop only.
+  Future<AcpServeResult> appServeStartAcp({
+    String? name,
+    required String agentId,
+  });
+
+  /// Catalog and custom agents of this device. Desktop only.
+  Future<List<AcpAgent>> acpAgents();
+
+  /// Install [agentId] ([version] = the catalog pin when `null`); returns the
+  /// job id to poll with [acpJob]. Desktop only.
+  Future<String> acpInstall(String agentId, {String? version});
+
+  /// Progress of a local install or host job.
+  Future<AcpJob?> acpJob(String jobId);
+
+  /// Uninstall [agentId] (refused while hosted). Desktop only.
+  Future<void> acpUninstall(String agentId);
+
+  /// Host ACP settings (gateway tokens are never returned). Desktop only.
+  Future<AcpSettings> acpSettings();
+
+  /// Save host ACP settings; with `force: false`, D16 warnings come back
+  /// without saving. Desktop only.
+  Future<AcpSaveResult> acpSettingsSet(
+    AcpSettings settings, {
+    bool force = false,
+  });
+
+  /// User-defined agents. Desktop only.
+  Future<List<AcpCustomAgent>> acpCustomAgents();
+
+  /// Add or replace a user-defined agent. Desktop only.
+  Future<void> acpCustomAgentPut(AcpCustomAgent agent);
+
+  /// Delete a user-defined agent (refused while hosted). Desktop only.
+  Future<void> acpCustomAgentDelete(String id);
+
+  /// Run a terminal login of host [name] in a terminal on this desktop.
+  Future<void> acpAuthTerminal(String name, String methodId);
+
+  /// Start an agent-type login of host [name]; returns `inProgress`.
+  Future<AcpAuth> acpAuthAgent(String name, String methodId);
+
+  /// Restart the agent of host [name] and re-detect authentication.
+  Future<AcpAuth> acpAuthRecheck(String name);
+
+  /// Agents of the host behind [serviceKey] (any of its services).
+  Future<AcpAgents> metaAcpAgents(String serviceKey);
+
+  /// Install the pinned version of [agentId] on the remote host; returns the
+  /// job id to poll with [metaAcpJob].
+  Future<String> metaAcpInstall(String serviceKey, String agentId);
+
+  /// Progress of a job on the remote host (`null` once forgotten).
+  Future<AcpJob?> metaAcpJob(String serviceKey, String jobId);
+
+  /// Start hosting [agentId] on the remote host; returns a host job id whose
+  /// `serviceKey` is set when done.
+  Future<String> metaAcpHost(String serviceKey, String agentId, {String? name});
+
+  /// Static capabilities of the provider behind [serviceKey] (no network).
+  AppCapabilities appCapabilities(String serviceKey);
+
+  /// Ids of an OpenCode or ACP service's sessions that are executing now.
+  Future<List<String>> appRunningThreads(String serviceKey);
+
+  // --- ACP sessions ---
+
+  /// Answer an ACP permission request with one of the agent's own options.
+  Future<void> appRespondPermissionOption(
+    String serviceKey,
+    String requestId,
+    String optionId,
+  );
+
+  /// Accept or decline an ACP URL elicitation.
+  Future<void> appRespondElicitationUrl(
+    String serviceKey,
+    String requestId,
+    bool accept,
+  );
+
+  /// Config options of an ACP session.
+  Future<List<AcpConfigOption>> appConfigOptions(
+    String serviceKey,
+    String threadId,
+  );
+
+  /// Set an ACP session option; [boolean] sends `value == 'true'` as a bool.
+  Future<void> appSetConfigOption(
+    String serviceKey,
+    String threadId,
+    String configId,
+    String value, {
+    bool boolean = false,
+  });
+
+  /// Slash commands an ACP session currently offers.
+  Future<List<AcpCommand>> appSlashCommands(String serviceKey, String threadId);
+
+  /// Ask the host to re-materialize an ACP session from the agent.
+  Future<void> appThreadReload(String serviceKey, String threadId);
+
+  /// Cached authentication state of an ACP service; `null` before connect.
+  AcpAuth? appAuthState(String serviceKey);
+
+  /// Start an agent-type login on the host; returns `inProgress`.
+  Future<AcpAuth> appAuthAuthenticate(String serviceKey, String methodId);
 
   // --- App-server remote control ---
 

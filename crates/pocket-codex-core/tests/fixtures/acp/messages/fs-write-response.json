@@ -1,0 +1,8 @@
+{
+  "def": "WriteTextFileResponse",
+  "frame": {
+    "jsonrpc": "2.0",
+    "id": 16,
+    "result": {}
+  }
+}

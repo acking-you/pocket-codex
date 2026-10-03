@@ -1,0 +1,13 @@
+{
+  "def": "RequestPermissionResponse",
+  "frame": {
+    "jsonrpc": "2.0",
+    "id": 11,
+    "result": {
+      "outcome": {
+        "outcome": "selected",
+        "optionId": "allow"
+      }
+    }
+  }
+}

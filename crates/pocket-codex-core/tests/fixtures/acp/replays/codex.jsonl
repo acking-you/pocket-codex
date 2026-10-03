@@ -1,0 +1,8 @@
+{"sessionId": "sess-1", "update": {"sessionUpdate": "user_message_chunk", "content": {"type": "text", "text": "Explain main"}, "messageId": "u-1"}}
+{"sessionId": "sess-1", "update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "Reading"}, "messageId": "r-1"}}
+{"sessionId": "sess-1", "update": {"sessionUpdate": "tool_call", "toolCallId": "call_1", "title": "Read main.rs", "kind": "read", "status": "in_progress", "locations": [{"path": "/work/main.rs", "line": 1}]}}
+{"sessionId": "sess-1", "update": {"sessionUpdate": "tool_call_update", "toolCallId": "call_1", "status": "completed"}}
+{"sessionId": "sess-1", "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "It prints "}, "messageId": "a-1"}}
+{"sessionId": "sess-1", "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "hello."}, "messageId": "a-1"}}
+{"sessionId": "sess-1", "update": {"sessionUpdate": "plan", "entries": [{"content": "Read", "priority": "medium", "status": "completed"}]}}
+{"sessionId": "sess-1", "update": {"sessionUpdate": "usage_update", "used": 5000, "size": 272000}}

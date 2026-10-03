@@ -7,6 +7,7 @@ import 'package:pocket_codex/src/bridge_api.dart';
 import 'package:pocket_codex/src/desktop_theme.dart';
 import 'package:pocket_codex/src/error_format.dart';
 import 'package:pocket_codex/src/fonts.dart';
+import 'package:pocket_codex/src/hosting_support.dart';
 import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/theme.dart';
 import 'package:pocket_codex/src/ui_prefs.dart';
@@ -162,6 +163,14 @@ class _SettingsState extends ConsumerState<SettingsScreen> {
               trailing: const Icon(Icons.chevron_right),
               onTap: () => context.push('/setup/codex'),
             ),
+            if (hostingSupportedPlatform())
+              ListTile(
+                key: const Key('acp-agents-btn'),
+                leading: const Icon(Icons.extension_outlined),
+                title: Text(l10n.acpAgentsTitle),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => context.push('/settings/acp'),
+              ),
             const Divider(),
             if (config?.mode == 'account') ...[
               Padding(
@@ -357,6 +366,20 @@ class _SettingsState extends ConsumerState<SettingsScreen> {
                       ),
                     ],
                   ),
+                  if (hostingSupportedPlatform()) ...[
+                    const SizedBox(height: 10),
+                    GroupCard(
+                      title: 'ACP',
+                      children: [
+                        _SettingsRow(
+                          key: const Key('acp-agents-btn'),
+                          icon: Icons.extension_outlined,
+                          title: l10n.acpAgentsTitle,
+                          onTap: () => context.push('/settings/acp'),
+                        ),
+                      ],
+                    ),
+                  ],
                   const SizedBox(height: 10),
                   GroupCard(
                     title: l10n.settingsAccountConnection,

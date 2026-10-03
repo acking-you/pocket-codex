@@ -267,6 +267,18 @@ typedef RunningSessionSnapshot = ({
   DateTime requestedAt,
 });
 
+/// A running session known only by id (OpenCode's active-session report).
+LocalSession _runningStub(String threadId) => LocalSession(
+  threadId: threadId,
+  preview: '',
+  updatedAt: 0,
+  turnState: 'incomplete',
+  heldOpen: true,
+  safety: 'ownedRunning',
+  allowsResume: false,
+  requiresTakeover: false,
+);
+
 /// Discovers external writers without opening their threads. Probes never
 /// overlap, and the host reads lifecycle records only for held rollout files.
 final runningSessionInventoryProvider = StreamProvider.autoDispose
@@ -286,6 +298,31 @@ final runningSessionInventoryProvider = StreamProvider.autoDispose
         inFlight = true;
         final requestedAt = DateTime.now();
         try {
+          // OpenCode and ACP report their running sessions themselves; they
+          // have no meta rollout inventory. ACP tails are prefetched through
+          // its own history source, OpenCode's are not.
+          final caps = api.appCapabilities(serviceKey);
+          if (caps.runningViaThreads) {
+            final ids = await api.appRunningThreads(serviceKey);
+            if (!disposed) {
+              out.add((
+                sessions: [for (final id in ids) _runningStub(id)],
+                requestedAt: requestedAt,
+              ));
+            }
+            if (caps.historyPrefetch) {
+              for (var i = 0; i < ids.length && i < 2; i++) {
+                if (disposed || paused || !foreground) break;
+                final id = ids[prefetchOffset++ % ids.length];
+                try {
+                  await api.appHistoryPrefetch(serviceKey, id);
+                } catch (_) {
+                  // Prefetch failure must not hide the running list.
+                }
+              }
+            }
+            return;
+          }
           final sessions = await api.metaSessions(
             serviceKey,
             runningOnly: true,

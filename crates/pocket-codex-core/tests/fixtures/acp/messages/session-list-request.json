@@ -1,0 +1,12 @@
+{
+  "def": "ListSessionsRequest",
+  "frame": {
+    "jsonrpc": "2.0",
+    "id": 6,
+    "method": "session/list",
+    "params": {
+      "cwd": "/work",
+      "cursor": "c1"
+    }
+  }
+}

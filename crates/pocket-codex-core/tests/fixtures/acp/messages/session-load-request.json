@@ -1,0 +1,13 @@
+{
+  "def": "LoadSessionRequest",
+  "frame": {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "session/load",
+    "params": {
+      "sessionId": "sess-1",
+      "cwd": "/work",
+      "mcpServers": []
+    }
+  }
+}

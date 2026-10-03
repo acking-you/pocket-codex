@@ -1,0 +1,35 @@
+{
+  "protocolVersion": 1,
+  "agentCapabilities": {
+    "loadSession": true,
+    "mcpCapabilities": {
+      "http": true,
+      "sse": false
+    },
+    "promptCapabilities": {
+      "embeddedContext": true,
+      "image": true
+    },
+    "sessionCapabilities": {
+      "close": {},
+      "delete": {},
+      "fork": {},
+      "list": {},
+      "resume": {}
+    },
+    "_meta": {
+      "opencode/child-session-updates": true
+    }
+  },
+  "authMethods": [
+    {
+      "id": "opencode-login",
+      "name": "Login with opencode",
+      "description": "Run `opencode auth login` in the terminal"
+    }
+  ],
+  "agentInfo": {
+    "name": "OpenCode",
+    "version": "2.0.18"
+  }
+}

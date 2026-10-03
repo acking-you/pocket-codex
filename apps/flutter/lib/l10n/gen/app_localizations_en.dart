@@ -1844,4 +1844,394 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get editMessageDraftHint =>
       'Your existing draft and attachments will be kept. This text will be added below.';
+
+  @override
+  String get providerLabel => 'Provider';
+
+  @override
+  String get providerCodex => 'Codex';
+
+  @override
+  String get providerOpenCode => 'OpenCode';
+
+  @override
+  String get openCodeHostHint =>
+      'Attaches to your running OpenCode service and registers it to your account. Stopping hosting does not stop OpenCode.';
+
+  @override
+  String get openCodeBinaryPath => 'opencode binary path (optional)';
+
+  @override
+  String get openCodeBinaryHint =>
+      'Only used when OpenCode\'s background service is not running and has to be started.';
+
+  @override
+  String get openCodeNotFound =>
+      'opencode wasn\'t found. If its service isn\'t running, enter the binary path.';
+
+  @override
+  String get openCodeVersionLabel => 'OpenCode version';
+
+  @override
+  String get openCodeVerified => 'Verified';
+
+  @override
+  String get openCodeUnverified =>
+      'Unverified version: its API matched the contract, but this build was not tested against it.';
+
+  @override
+  String get openCodeGatewayLabel => 'OpenCode gateway';
+
+  @override
+  String get hostMetaLabel => 'Meta service';
+
+  @override
+  String get openCodeStopNote =>
+      'Stopping hosting only withdraws access. OpenCode keeps running.';
+
+  @override
+  String get variant => 'Variant';
+
+  @override
+  String get approveAlwaysProject => 'Always allow (project)';
+
+  @override
+  String get approveAlwaysProjectTitle => 'Always allow in this project?';
+
+  @override
+  String get approveAlwaysProjectBody =>
+      'OpenCode saves this as a permission rule for the whole project. Matching requests in every session of this project will run without asking until you remove the rule in OpenCode.';
+
+  @override
+  String get viewSubSession => 'View sub-session';
+
+  @override
+  String get subSessionReadOnly => 'Sub-session · read-only';
+
+  @override
+  String get backToParentSession => 'Back to parent session';
+
+  @override
+  String get providerAcp => 'ACP';
+
+  @override
+  String get acpAgentLabel => 'Agent';
+
+  @override
+  String get acpAgentsTitle => 'ACP agents';
+
+  @override
+  String get acpManageHost => 'Manage ACP agents';
+
+  @override
+  String get acpManageAgents => 'Manage agents…';
+
+  @override
+  String get acpInstall => 'Install';
+
+  @override
+  String get acpInstalling => 'Installing…';
+
+  @override
+  String acpInstallFailed(String message) {
+    return 'Install failed: $message';
+  }
+
+  @override
+  String get acpUpgrade => 'Upgrade';
+
+  @override
+  String get acpUninstall => 'Uninstall';
+
+  @override
+  String acpUninstallConfirm(String name) {
+    return 'Uninstall $name? Its sessions stay with the agent; you can install it again later.';
+  }
+
+  @override
+  String get acpUninstallInUse => 'Stop hosting it before uninstalling.';
+
+  @override
+  String get acpInstalled => 'Installed';
+
+  @override
+  String acpInstalledVersion(String version) {
+    return 'Installed $version';
+  }
+
+  @override
+  String acpPinnedVersion(String version) {
+    return 'Pinned $version';
+  }
+
+  @override
+  String acpSizeMb(int size) {
+    return 'About $size MB';
+  }
+
+  @override
+  String acpHostedAs(String names) {
+    return 'Hosted as $names';
+  }
+
+  @override
+  String get acpSourceCustom => 'Custom';
+
+  @override
+  String get acpNotInstalled => 'Not installed';
+
+  @override
+  String get acpUnsupportedPlatform => 'Not available on this platform';
+
+  @override
+  String get acpEngineMissing => 'Codex is not installed or not found';
+
+  @override
+  String acpEngineIncompatible(String found, String required) {
+    return 'Codex $found is not supported (needs $required)';
+  }
+
+  @override
+  String acpRegistryNewer(String version) {
+    return 'The registry has a newer version $version (not verified by Pocket-Codex)';
+  }
+
+  @override
+  String get acpRegistryInstall => 'Install registry version';
+
+  @override
+  String get acpRegistryInstallWarning =>
+      'This version comes from the ACP registry and was not verified by Pocket-Codex. Its npm dependencies are not locked. Install it anyway?';
+
+  @override
+  String get acpUnpinned => 'This version is not pinned by Pocket-Codex';
+
+  @override
+  String get acpRemoteManagement => 'Remote management';
+
+  @override
+  String get acpRemoteManagementHint =>
+      'Lets your other signed-in devices install pinned agent versions on this computer and start hosting them. Custom agents and settings stay host-only.';
+
+  @override
+  String get acpRemoteDisabled =>
+      'Remote management is turned off on this host. Turn it on in the host\'s ACP settings.';
+
+  @override
+  String get acpHostStart => 'Start hosting';
+
+  @override
+  String get acpLogin => 'Log in';
+
+  @override
+  String get acpLoginOnHost => 'Finish this login on the host computer.';
+
+  @override
+  String get acpRecheck => 'Check again';
+
+  @override
+  String get acpAuthRequired => 'The agent needs you to log in.';
+
+  @override
+  String get acpOtherLogins => 'Other ways to log in';
+
+  @override
+  String get acpGateway => 'Model gateway';
+
+  @override
+  String acpGatewayConfigured(String url) {
+    return 'Model gateway configured: $url';
+  }
+
+  @override
+  String get acpGatewayConfigure => 'Configure model gateway';
+
+  @override
+  String get acpGatewayUnsupported =>
+      'This agent offers no gateway login, so the gateway setting has no effect.';
+
+  @override
+  String get acpGatewayMethod => 'Login method';
+
+  @override
+  String get acpGatewayAuto => 'Automatic (first gateway method)';
+
+  @override
+  String acpGatewayProtocol(String protocol) {
+    return '$protocol protocol';
+  }
+
+  @override
+  String get acpGatewayUrl => 'Gateway URL';
+
+  @override
+  String get acpGatewayUrlHintAnthropic =>
+      'Root address, e.g. https://relay.example.com — Claude Code adds /v1/messages.';
+
+  @override
+  String get acpGatewayUrlHintOpenai =>
+      'Up to /v1, e.g. https://relay.example.com/v1 — the gateway must support /v1/responses.';
+
+  @override
+  String get acpGatewayToken => 'Token';
+
+  @override
+  String get acpGatewayTokenKept => 'Saved — leave empty to keep it';
+
+  @override
+  String get acpGatewayProvider => 'Provider name (optional)';
+
+  @override
+  String get acpGatewayHeaders => 'Extra headers (one KEY=VALUE per line)';
+
+  @override
+  String get acpGatewayNote =>
+      'The token is stored only in agents.toml on this host (mode 0600) and is never sent to other devices.';
+
+  @override
+  String get acpGatewayInsecureHttp =>
+      'Plain http is only allowed on loopback and private networks; traffic is not encrypted.';
+
+  @override
+  String acpGatewayFailed(String message) {
+    return 'Gateway login failed: $message';
+  }
+
+  @override
+  String get acpGatewayClear => 'Remove gateway';
+
+  @override
+  String get acpSubscriptionLogin => 'Allow Claude subscription login';
+
+  @override
+  String get acpSubscriptionLoginConfirmTitle => 'Allow subscription login?';
+
+  @override
+  String get acpSubscriptionLoginConfirmBody =>
+      'This shows Claude\'s own subscription login in the agent. Using a Claude subscription through third-party clients may be against Anthropic\'s terms. Continue only if you accept that.';
+
+  @override
+  String get acpRestartToApply => 'Restart the agent for this to take effect.';
+
+  @override
+  String get acpAdvanced => 'Advanced';
+
+  @override
+  String get acpCustomAgent => 'Custom agents';
+
+  @override
+  String get acpCustomAdd => 'Add custom agent';
+
+  @override
+  String get acpCustomId => 'Id (lowercase letters, digits, -)';
+
+  @override
+  String get acpCustomName => 'Name';
+
+  @override
+  String get acpCustomCommand => 'Command (absolute path)';
+
+  @override
+  String get acpCustomArgs => 'Arguments (one per line)';
+
+  @override
+  String get acpCustomEnv => 'Environment (one KEY=VALUE per line)';
+
+  @override
+  String get acpCustomEnvNote =>
+      'Environment variables are stored in plain text in agents.toml on the host (mode 0600).';
+
+  @override
+  String get acpCustomDelete => 'Delete';
+
+  @override
+  String get acpNpmRegistry => 'npm registry mirror (https)';
+
+  @override
+  String get acpCodexBinary => 'Codex executable for codex-acp';
+
+  @override
+  String get acpClaudeEnginePath => 'Claude Code executable';
+
+  @override
+  String get acpBinaryOverride => 'Executable override';
+
+  @override
+  String acpDataMode(String family) {
+    return '$family data';
+  }
+
+  @override
+  String get acpDataAuto => 'Automatic';
+
+  @override
+  String get acpDataShared => 'Shared';
+
+  @override
+  String get acpDataIsolated => 'Isolated';
+
+  @override
+  String get acpSharedDataWarning =>
+      'Shared mode lets the agent read and write the same database as your own OpenCode. Different OpenCode versions may change data the other one also reads. Continue?';
+
+  @override
+  String get acpSettingsSaved => 'Settings saved';
+
+  @override
+  String acpOptionConfirmTitle(String option) {
+    return 'Choose \"$option\"?';
+  }
+
+  @override
+  String get acpOptionConfirmBody =>
+      'The agent will remember this choice and may not ask again.';
+
+  @override
+  String get acpUrlTitle => 'The agent asks you to open a page';
+
+  @override
+  String acpUrlOpen(String host) {
+    return 'Open $host';
+  }
+
+  @override
+  String get acpUrlDecline => 'Decline';
+
+  @override
+  String acpQueueFailed(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count queued messages were not sent',
+      one: '1 queued message was not sent',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get acpOlderUnavailable =>
+      'Earlier history is no longer available from the agent.';
+
+  @override
+  String get acpSessionChanged =>
+      'This session changed elsewhere. Reload to see the latest.';
+
+  @override
+  String get acpSessionNotLoadable =>
+      'This agent cannot open earlier sessions.';
+
+  @override
+  String get acpReload => 'Reload';
+
+  @override
+  String get acpStopRunningConfirm =>
+      'A conversation is still running on this host. Stop hosting anyway? Running turns will be cancelled.';
+
+  @override
+  String get acpProcessRestarting =>
+      'The agent stopped unexpectedly and is restarting…';
+
+  @override
+  String get acpProcessFailed =>
+      'The agent keeps exiting. Check it on the host and restart hosting.';
 }

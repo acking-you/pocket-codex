@@ -1,0 +1,10 @@
+{
+  "def": "PromptResponse",
+  "frame": {
+    "jsonrpc": "2.0",
+    "id": 7,
+    "result": {
+      "stopReason": "end_turn"
+    }
+  }
+}

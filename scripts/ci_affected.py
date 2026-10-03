@@ -12,6 +12,7 @@ and writes them to $GITHUB_OUTPUT:
   test_crates    space-separated: changed crates + their workspace dependents
   clippy_crates  space-separated: the directly-changed crates
   flutter        true | false
+  android        true | false  (the bridge, or anything it depends on, changed)
 
 `run-clippy` / `run-test` consume MODE + CRATES and invoke cargo for the
 affected crates (or the whole workspace for `all`); `none` skips cargo.
@@ -130,14 +131,21 @@ def dependents_closure(seeds, deps):
     return affected
 
 
+# The Android compile check covers the bridge and everything it links.
+ANDROID_CRATE = "pocket_codex_bridge"
+
+
 def emit(rust_mode, test_crates, clippy_crates, flutter):
     test_s = " ".join(sorted(test_crates))
     clippy_s = " ".join(sorted(clippy_crates))
     flutter_s = "true" if flutter else "false"
+    android = rust_mode == "all" or ANDROID_CRATE in test_crates
+    android_s = "true" if android else "false"
     print(f"[detect] rust_mode={rust_mode}")
     print(f"[detect] test_crates=[{test_s}]")
     print(f"[detect] clippy_crates=[{clippy_s}]")
     print(f"[detect] flutter={flutter_s}")
+    print(f"[detect] android={android_s}")
     gh_out = os.environ.get("GITHUB_OUTPUT")
     if gh_out:
         with open(gh_out, "a") as fh:
@@ -146,6 +154,7 @@ def emit(rust_mode, test_crates, clippy_crates, flutter):
                 f"test_crates={test_s}\n"
                 f"clippy_crates={clippy_s}\n"
                 f"flutter={flutter_s}\n"
+                f"android={android_s}\n"
             )
 
 

@@ -67,7 +67,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.12.0';
 
   @override
-  int get rustContentHash => -101957185;
+  int get rustContentHash => 893024780;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -109,6 +109,44 @@ abstract class RustLibApi extends BaseApi {
     String? backend,
   });
 
+  Future<List<AcpAgentDto>> crateApiBridgeAcpAgents();
+
+  Future<AcpAuthDto> crateApiBridgeAcpAuthAgent({
+    required String name,
+    required String methodId,
+  });
+
+  Future<AcpAuthDto> crateApiBridgeAcpAuthRecheck({required String name});
+
+  Future<void> crateApiBridgeAcpAuthTerminal({
+    required String name,
+    required String methodId,
+  });
+
+  Future<void> crateApiBridgeAcpCustomAgentDelete({required String id});
+
+  Future<void> crateApiBridgeAcpCustomAgentPut({
+    required AcpCustomAgentDto agent,
+  });
+
+  Future<List<AcpCustomAgentDto>> crateApiBridgeAcpCustomAgents();
+
+  Future<String> crateApiBridgeAcpInstall({
+    required String agentId,
+    String? version,
+  });
+
+  Future<AcpJobDto?> crateApiBridgeAcpJob({required String jobId});
+
+  Future<AcpSettingsDto> crateApiBridgeAcpSettings();
+
+  Future<AcpSaveDto> crateApiBridgeAcpSettingsSet({
+    required AcpSettingsDto settings,
+    required bool force,
+  });
+
+  Future<void> crateApiBridgeAcpUninstall({required String agentId});
+
   Future<bool> crateApiBridgeApiProbe({required String serviceKey});
 
   Future<bool> crateApiBridgeApiProbeLocal({required String localAddr});
@@ -120,7 +158,23 @@ abstract class RustLibApi extends BaseApi {
 
   Future<void> crateApiBridgeApiUnsubscribe({required String serviceKey});
 
+  Future<AcpAuthDto> crateApiBridgeAppAuthAuthenticate({
+    required String serviceKey,
+    required String methodId,
+  });
+
+  AcpAuthDto? crateApiBridgeAppAuthState({required String serviceKey});
+
+  AppCapabilitiesDto crateApiBridgeAppCapabilities({
+    required String serviceKey,
+  });
+
   Future<void> crateApiBridgeAppCompact({
+    required String serviceKey,
+    required String threadId,
+  });
+
+  Future<List<AcpConfigOptionDto>> crateApiBridgeAppConfigOptions({
     required String serviceKey,
     required String threadId,
   });
@@ -189,10 +243,26 @@ abstract class RustLibApi extends BaseApi {
     required String decision,
   });
 
+  Future<void> crateApiBridgeAppRespondElicitationUrl({
+    required String serviceKey,
+    required String requestId,
+    required bool accept,
+  });
+
+  Future<void> crateApiBridgeAppRespondPermissionOption({
+    required String serviceKey,
+    required String requestId,
+    required String optionId,
+  });
+
   Future<void> crateApiBridgeAppRespondUserInput({
     required String serviceKey,
     required String requestId,
     required String answersJson,
+  });
+
+  Future<List<String>> crateApiBridgeAppRunningThreads({
+    required String serviceKey,
   });
 
   Future<void> crateApiBridgeAppServeDeregister({
@@ -213,6 +283,16 @@ abstract class RustLibApi extends BaseApi {
     required bool embedded,
   });
 
+  Future<AcpServeDto> crateApiBridgeAppServeStartAcp({
+    String? name,
+    required String agentId,
+  });
+
+  Future<OpenCodeServeDto> crateApiBridgeAppServeStartOpencode({
+    String? name,
+    String? binaryOverride,
+  });
+
   Future<List<AppServeStatusDto>> crateApiBridgeAppServeStatus();
 
   Future<void> crateApiBridgeAppServeStop({required String name});
@@ -223,10 +303,23 @@ abstract class RustLibApi extends BaseApi {
     required String threadId,
   });
 
+  Future<void> crateApiBridgeAppSetConfigOption({
+    required String serviceKey,
+    required String threadId,
+    required String configId,
+    required String value,
+    required bool boolean,
+  });
+
   Future<void> crateApiBridgeAppSetThreadName({
     required String serviceKey,
     required String threadId,
     required String name,
+  });
+
+  Future<List<AcpCommandDto>> crateApiBridgeAppSlashCommands({
+    required String serviceKey,
+    required String threadId,
   });
 
   Future<List<ThreadMetaDto>> crateApiBridgeAppThreadList({
@@ -242,6 +335,11 @@ abstract class RustLibApi extends BaseApi {
     required String serviceKey,
     required String threadId,
     bool? includeTurnPages,
+  });
+
+  Future<void> crateApiBridgeAppThreadReload({
+    required String serviceKey,
+    required String threadId,
   });
 
   Future<void> crateApiBridgeAppThreadResume({
@@ -364,6 +462,26 @@ abstract class RustLibApi extends BaseApi {
 
   Stream<LogLineDto> crateApiBridgeLogEvents();
 
+  Future<AcpAgentsDto> crateApiBridgeMetaAcpAgents({
+    required String serviceKey,
+  });
+
+  Future<String> crateApiBridgeMetaAcpHost({
+    required String serviceKey,
+    required String agentId,
+    String? name,
+  });
+
+  Future<String> crateApiBridgeMetaAcpInstall({
+    required String serviceKey,
+    required String agentId,
+  });
+
+  Future<AcpJobDto?> crateApiBridgeMetaAcpJob({
+    required String serviceKey,
+    required String jobId,
+  });
+
   Future<void> crateApiBridgeMetaFileDownload({
     required String serviceKey,
     String? threadId,
@@ -460,6 +578,8 @@ abstract class RustLibApi extends BaseApi {
     required String fileName,
     required List<int> bytes,
   });
+
+  Future<String?> crateApiBridgeOpencodeLocate({String? binaryOverride});
 
   Future<void> crateApiBridgeSetKey({required String key});
 
@@ -735,6 +855,373 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<List<AcpAgentDto>> crateApiBridgeAcpAgents() {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 9,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_acp_agent_dto,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiBridgeAcpAgentsConstMeta,
+        argValues: [],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiBridgeAcpAgentsConstMeta =>
+      const TaskConstMeta(debugName: "acp_agents", argNames: []);
+
+  @override
+  Future<AcpAuthDto> crateApiBridgeAcpAuthAgent({
+    required String name,
+    required String methodId,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(name, serializer);
+          sse_encode_String(methodId, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 10,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_acp_auth_dto,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiBridgeAcpAuthAgentConstMeta,
+        argValues: [name, methodId],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiBridgeAcpAuthAgentConstMeta => const TaskConstMeta(
+    debugName: "acp_auth_agent",
+    argNames: ["name", "methodId"],
+  );
+
+  @override
+  Future<AcpAuthDto> crateApiBridgeAcpAuthRecheck({required String name}) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(name, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 11,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_acp_auth_dto,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiBridgeAcpAuthRecheckConstMeta,
+        argValues: [name],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiBridgeAcpAuthRecheckConstMeta =>
+      const TaskConstMeta(debugName: "acp_auth_recheck", argNames: ["name"]);
+
+  @override
+  Future<void> crateApiBridgeAcpAuthTerminal({
+    required String name,
+    required String methodId,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(name, serializer);
+          sse_encode_String(methodId, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 12,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiBridgeAcpAuthTerminalConstMeta,
+        argValues: [name, methodId],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiBridgeAcpAuthTerminalConstMeta =>
+      const TaskConstMeta(
+        debugName: "acp_auth_terminal",
+        argNames: ["name", "methodId"],
+      );
+
+  @override
+  Future<void> crateApiBridgeAcpCustomAgentDelete({required String id}) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(id, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 13,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiBridgeAcpCustomAgentDeleteConstMeta,
+        argValues: [id],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiBridgeAcpCustomAgentDeleteConstMeta =>
+      const TaskConstMeta(
+        debugName: "acp_custom_agent_delete",
+        argNames: ["id"],
+      );
+
+  @override
+  Future<void> crateApiBridgeAcpCustomAgentPut({
+    required AcpCustomAgentDto agent,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_box_autoadd_acp_custom_agent_dto(agent, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 14,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiBridgeAcpCustomAgentPutConstMeta,
+        argValues: [agent],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiBridgeAcpCustomAgentPutConstMeta =>
+      const TaskConstMeta(
+        debugName: "acp_custom_agent_put",
+        argNames: ["agent"],
+      );
+
+  @override
+  Future<List<AcpCustomAgentDto>> crateApiBridgeAcpCustomAgents() {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 15,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_acp_custom_agent_dto,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiBridgeAcpCustomAgentsConstMeta,
+        argValues: [],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiBridgeAcpCustomAgentsConstMeta =>
+      const TaskConstMeta(debugName: "acp_custom_agents", argNames: []);
+
+  @override
+  Future<String> crateApiBridgeAcpInstall({
+    required String agentId,
+    String? version,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(agentId, serializer);
+          sse_encode_opt_String(version, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 16,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiBridgeAcpInstallConstMeta,
+        argValues: [agentId, version],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiBridgeAcpInstallConstMeta => const TaskConstMeta(
+    debugName: "acp_install",
+    argNames: ["agentId", "version"],
+  );
+
+  @override
+  Future<AcpJobDto?> crateApiBridgeAcpJob({required String jobId}) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(jobId, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 17,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_opt_box_autoadd_acp_job_dto,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiBridgeAcpJobConstMeta,
+        argValues: [jobId],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiBridgeAcpJobConstMeta =>
+      const TaskConstMeta(debugName: "acp_job", argNames: ["jobId"]);
+
+  @override
+  Future<AcpSettingsDto> crateApiBridgeAcpSettings() {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 18,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_acp_settings_dto,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiBridgeAcpSettingsConstMeta,
+        argValues: [],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiBridgeAcpSettingsConstMeta =>
+      const TaskConstMeta(debugName: "acp_settings", argNames: []);
+
+  @override
+  Future<AcpSaveDto> crateApiBridgeAcpSettingsSet({
+    required AcpSettingsDto settings,
+    required bool force,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_box_autoadd_acp_settings_dto(settings, serializer);
+          sse_encode_bool(force, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 19,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_acp_save_dto,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiBridgeAcpSettingsSetConstMeta,
+        argValues: [settings, force],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiBridgeAcpSettingsSetConstMeta =>
+      const TaskConstMeta(
+        debugName: "acp_settings_set",
+        argNames: ["settings", "force"],
+      );
+
+  @override
+  Future<void> crateApiBridgeAcpUninstall({required String agentId}) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(agentId, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 20,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiBridgeAcpUninstallConstMeta,
+        argValues: [agentId],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiBridgeAcpUninstallConstMeta =>
+      const TaskConstMeta(debugName: "acp_uninstall", argNames: ["agentId"]);
+
+  @override
   Future<bool> crateApiBridgeApiProbe({required String serviceKey}) {
     return handler.executeNormal(
       NormalTask(
@@ -744,7 +1231,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 9,
+            funcId: 21,
             port: port_,
           );
         },
@@ -772,7 +1259,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 10,
+            funcId: 22,
             port: port_,
           );
         },
@@ -807,7 +1294,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 11,
+            funcId: 23,
             port: port_,
           );
         },
@@ -837,7 +1324,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 12,
+            funcId: 24,
             port: port_,
           );
         },
@@ -859,6 +1346,94 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<AcpAuthDto> crateApiBridgeAppAuthAuthenticate({
+    required String serviceKey,
+    required String methodId,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(serviceKey, serializer);
+          sse_encode_String(methodId, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 25,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_acp_auth_dto,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiBridgeAppAuthAuthenticateConstMeta,
+        argValues: [serviceKey, methodId],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiBridgeAppAuthAuthenticateConstMeta =>
+      const TaskConstMeta(
+        debugName: "app_auth_authenticate",
+        argNames: ["serviceKey", "methodId"],
+      );
+
+  @override
+  AcpAuthDto? crateApiBridgeAppAuthState({required String serviceKey}) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(serviceKey, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 26)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_opt_box_autoadd_acp_auth_dto,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiBridgeAppAuthStateConstMeta,
+        argValues: [serviceKey],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiBridgeAppAuthStateConstMeta => const TaskConstMeta(
+    debugName: "app_auth_state",
+    argNames: ["serviceKey"],
+  );
+
+  @override
+  AppCapabilitiesDto crateApiBridgeAppCapabilities({
+    required String serviceKey,
+  }) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(serviceKey, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 27)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_app_capabilities_dto,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiBridgeAppCapabilitiesConstMeta,
+        argValues: [serviceKey],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiBridgeAppCapabilitiesConstMeta =>
+      const TaskConstMeta(
+        debugName: "app_capabilities",
+        argNames: ["serviceKey"],
+      );
+
+  @override
   Future<void> crateApiBridgeAppCompact({
     required String serviceKey,
     required String threadId,
@@ -872,7 +1447,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 13,
+            funcId: 28,
             port: port_,
           );
         },
@@ -893,6 +1468,41 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   );
 
   @override
+  Future<List<AcpConfigOptionDto>> crateApiBridgeAppConfigOptions({
+    required String serviceKey,
+    required String threadId,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(serviceKey, serializer);
+          sse_encode_String(threadId, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 29,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_acp_config_option_dto,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiBridgeAppConfigOptionsConstMeta,
+        argValues: [serviceKey, threadId],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiBridgeAppConfigOptionsConstMeta =>
+      const TaskConstMeta(
+        debugName: "app_config_options",
+        argNames: ["serviceKey", "threadId"],
+      );
+
+  @override
   Future<void> crateApiBridgeAppConnect({
     required String serviceKey,
     required int localPort,
@@ -906,7 +1516,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 14,
+            funcId: 30,
             port: port_,
           );
         },
@@ -936,7 +1546,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 15,
+            funcId: 31,
             port: port_,
           );
         },
@@ -970,7 +1580,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 16,
+              funcId: 32,
               port: port_,
             );
           },
@@ -1006,7 +1616,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 17,
+            funcId: 33,
             port: port_,
           );
         },
@@ -1041,7 +1651,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 18,
+            funcId: 34,
             port: port_,
           );
         },
@@ -1075,7 +1685,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 19,
+            funcId: 35,
             port: port_,
           );
         },
@@ -1110,7 +1720,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 20,
+            funcId: 36,
             port: port_,
           );
         },
@@ -1145,7 +1755,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 21,
+            funcId: 37,
             port: port_,
           );
         },
@@ -1178,7 +1788,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 22,
+            funcId: 38,
             port: port_,
           );
         },
@@ -1206,7 +1816,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_String(serviceKey, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 23)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 39)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_bool,
@@ -1237,7 +1847,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 24,
+            funcId: 40,
             port: port_,
           );
         },
@@ -1267,7 +1877,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 25,
+            funcId: 41,
             port: port_,
           );
         },
@@ -1297,7 +1907,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 26,
+            funcId: 42,
             port: port_,
           );
         },
@@ -1327,7 +1937,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 27,
+            funcId: 43,
             port: port_,
           );
         },
@@ -1355,7 +1965,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 28,
+            funcId: 44,
             port: port_,
           );
         },
@@ -1386,7 +1996,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 29,
+            funcId: 45,
             port: port_,
           );
         },
@@ -1417,7 +2027,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 30,
+            funcId: 46,
             port: port_,
           );
         },
@@ -1454,7 +2064,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 31,
+            funcId: 47,
             port: port_,
           );
         },
@@ -1476,6 +2086,80 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<void> crateApiBridgeAppRespondElicitationUrl({
+    required String serviceKey,
+    required String requestId,
+    required bool accept,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(serviceKey, serializer);
+          sse_encode_String(requestId, serializer);
+          sse_encode_bool(accept, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 48,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiBridgeAppRespondElicitationUrlConstMeta,
+        argValues: [serviceKey, requestId, accept],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiBridgeAppRespondElicitationUrlConstMeta =>
+      const TaskConstMeta(
+        debugName: "app_respond_elicitation_url",
+        argNames: ["serviceKey", "requestId", "accept"],
+      );
+
+  @override
+  Future<void> crateApiBridgeAppRespondPermissionOption({
+    required String serviceKey,
+    required String requestId,
+    required String optionId,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(serviceKey, serializer);
+          sse_encode_String(requestId, serializer);
+          sse_encode_String(optionId, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 49,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiBridgeAppRespondPermissionOptionConstMeta,
+        argValues: [serviceKey, requestId, optionId],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiBridgeAppRespondPermissionOptionConstMeta =>
+      const TaskConstMeta(
+        debugName: "app_respond_permission_option",
+        argNames: ["serviceKey", "requestId", "optionId"],
+      );
+
+  @override
   Future<void> crateApiBridgeAppRespondUserInput({
     required String serviceKey,
     required String requestId,
@@ -1491,7 +2175,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 32,
+            funcId: 50,
             port: port_,
           );
         },
@@ -1513,6 +2197,39 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<List<String>> crateApiBridgeAppRunningThreads({
+    required String serviceKey,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(serviceKey, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 51,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_String,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiBridgeAppRunningThreadsConstMeta,
+        argValues: [serviceKey],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiBridgeAppRunningThreadsConstMeta =>
+      const TaskConstMeta(
+        debugName: "app_running_threads",
+        argNames: ["serviceKey"],
+      );
+
+  @override
   Future<void> crateApiBridgeAppServeDeregister({
     required String name,
     required String kind,
@@ -1526,7 +2243,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 33,
+            funcId: 52,
             port: port_,
           );
         },
@@ -1561,7 +2278,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 34,
+            funcId: 53,
             port: port_,
           );
         },
@@ -1602,7 +2319,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 35,
+            funcId: 54,
             port: port_,
           );
         },
@@ -1624,6 +2341,76 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<AcpServeDto> crateApiBridgeAppServeStartAcp({
+    String? name,
+    required String agentId,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_opt_String(name, serializer);
+          sse_encode_String(agentId, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 55,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_acp_serve_dto,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiBridgeAppServeStartAcpConstMeta,
+        argValues: [name, agentId],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiBridgeAppServeStartAcpConstMeta =>
+      const TaskConstMeta(
+        debugName: "app_serve_start_acp",
+        argNames: ["name", "agentId"],
+      );
+
+  @override
+  Future<OpenCodeServeDto> crateApiBridgeAppServeStartOpencode({
+    String? name,
+    String? binaryOverride,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_opt_String(name, serializer);
+          sse_encode_opt_String(binaryOverride, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 56,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_open_code_serve_dto,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiBridgeAppServeStartOpencodeConstMeta,
+        argValues: [name, binaryOverride],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiBridgeAppServeStartOpencodeConstMeta =>
+      const TaskConstMeta(
+        debugName: "app_serve_start_opencode",
+        argNames: ["name", "binaryOverride"],
+      );
+
+  @override
   Future<List<AppServeStatusDto>> crateApiBridgeAppServeStatus() {
     return handler.executeNormal(
       NormalTask(
@@ -1632,7 +2419,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 36,
+            funcId: 57,
             port: port_,
           );
         },
@@ -1660,7 +2447,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 37,
+            funcId: 58,
             port: port_,
           );
         },
@@ -1687,7 +2474,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 38,
+            funcId: 59,
             port: port_,
           );
         },
@@ -1717,7 +2504,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 39,
+            funcId: 60,
             port: port_,
           );
         },
@@ -1739,6 +2526,47 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<void> crateApiBridgeAppSetConfigOption({
+    required String serviceKey,
+    required String threadId,
+    required String configId,
+    required String value,
+    required bool boolean,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(serviceKey, serializer);
+          sse_encode_String(threadId, serializer);
+          sse_encode_String(configId, serializer);
+          sse_encode_String(value, serializer);
+          sse_encode_bool(boolean, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 61,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiBridgeAppSetConfigOptionConstMeta,
+        argValues: [serviceKey, threadId, configId, value, boolean],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiBridgeAppSetConfigOptionConstMeta =>
+      const TaskConstMeta(
+        debugName: "app_set_config_option",
+        argNames: ["serviceKey", "threadId", "configId", "value", "boolean"],
+      );
+
+  @override
   Future<void> crateApiBridgeAppSetThreadName({
     required String serviceKey,
     required String threadId,
@@ -1754,7 +2582,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 40,
+            funcId: 62,
             port: port_,
           );
         },
@@ -1776,6 +2604,41 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<List<AcpCommandDto>> crateApiBridgeAppSlashCommands({
+    required String serviceKey,
+    required String threadId,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(serviceKey, serializer);
+          sse_encode_String(threadId, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 63,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_acp_command_dto,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiBridgeAppSlashCommandsConstMeta,
+        argValues: [serviceKey, threadId],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiBridgeAppSlashCommandsConstMeta =>
+      const TaskConstMeta(
+        debugName: "app_slash_commands",
+        argNames: ["serviceKey", "threadId"],
+      );
+
+  @override
   Future<List<ThreadMetaDto>> crateApiBridgeAppThreadList({
     required String serviceKey,
   }) {
@@ -1787,7 +2650,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 41,
+            funcId: 64,
             port: port_,
           );
         },
@@ -1822,7 +2685,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 42,
+            funcId: 65,
             port: port_,
           );
         },
@@ -1859,7 +2722,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 43,
+            funcId: 66,
             port: port_,
           );
         },
@@ -1881,6 +2744,41 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<void> crateApiBridgeAppThreadReload({
+    required String serviceKey,
+    required String threadId,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(serviceKey, serializer);
+          sse_encode_String(threadId, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 67,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiBridgeAppThreadReloadConstMeta,
+        argValues: [serviceKey, threadId],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiBridgeAppThreadReloadConstMeta =>
+      const TaskConstMeta(
+        debugName: "app_thread_reload",
+        argNames: ["serviceKey", "threadId"],
+      );
+
+  @override
   Future<void> crateApiBridgeAppThreadResume({
     required String serviceKey,
     required String threadId,
@@ -1894,7 +2792,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 44,
+            funcId: 68,
             port: port_,
           );
         },
@@ -1926,7 +2824,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_String(serviceKey, serializer);
           sse_encode_String(threadId, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 45)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 69)!;
         },
         codec: SseCodec(
           decodeSuccessData:
@@ -1970,7 +2868,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 46,
+            funcId: 70,
             port: port_,
           );
         },
@@ -2021,7 +2919,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 47,
+            funcId: 71,
             port: port_,
           );
         },
@@ -2058,7 +2956,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 48,
+            funcId: 72,
             port: port_,
           );
         },
@@ -2099,7 +2997,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 49,
+            funcId: 73,
             port: port_,
           );
         },
@@ -2136,7 +3034,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 50,
+            funcId: 74,
             port: port_,
           );
         },
@@ -2189,7 +3087,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 51,
+            funcId: 75,
             port: port_,
           );
         },
@@ -2253,7 +3151,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 52,
+            funcId: 76,
             port: port_,
           );
         },
@@ -2279,7 +3177,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 53)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 77)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_String,
@@ -2307,7 +3205,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 54,
+            funcId: 78,
             port: port_,
           );
         },
@@ -2337,7 +3235,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 55,
+            funcId: 79,
             port: port_,
           );
         },
@@ -2369,7 +3267,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 56,
+            funcId: 80,
             port: port_,
           );
         },
@@ -2402,7 +3300,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 57,
+            funcId: 81,
             port: port_,
           );
         },
@@ -2433,7 +3331,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 58,
+            funcId: 82,
             port: port_,
           );
         },
@@ -2460,7 +3358,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 59,
+            funcId: 83,
             port: port_,
           );
         },
@@ -2488,7 +3386,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 60,
+            funcId: 84,
             port: port_,
           );
         },
@@ -2525,7 +3423,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 61,
+            funcId: 85,
             port: port_,
           );
         },
@@ -2555,7 +3453,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 62,
+            funcId: 86,
             port: port_,
           );
         },
@@ -2582,7 +3480,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 63,
+            funcId: 87,
             port: port_,
           );
         },
@@ -2609,7 +3507,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 64,
+            funcId: 88,
             port: port_,
           );
         },
@@ -2636,7 +3534,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 65,
+            funcId: 89,
             port: port_,
           );
         },
@@ -2663,7 +3561,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 66,
+            funcId: 90,
             port: port_,
           );
         },
@@ -2688,7 +3586,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_String(name, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 67)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 91)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_String,
@@ -2714,7 +3612,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 68,
+            funcId: 92,
             port: port_,
           );
         },
@@ -2744,7 +3642,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 69,
+            funcId: 93,
             port: port_,
           );
         },
@@ -2772,7 +3670,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 70,
+            funcId: 94,
             port: port_,
           );
         },
@@ -2799,7 +3697,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 71,
+            funcId: 95,
             port: port_,
           );
         },
@@ -2827,7 +3725,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 72,
+            funcId: 96,
             port: port_,
           );
         },
@@ -2857,7 +3755,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 73,
+              funcId: 97,
               port: port_,
             );
           },
@@ -2878,6 +3776,144 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       const TaskConstMeta(debugName: "log_events", argNames: ["sink"]);
 
   @override
+  Future<AcpAgentsDto> crateApiBridgeMetaAcpAgents({
+    required String serviceKey,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(serviceKey, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 98,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_acp_agents_dto,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiBridgeMetaAcpAgentsConstMeta,
+        argValues: [serviceKey],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiBridgeMetaAcpAgentsConstMeta =>
+      const TaskConstMeta(
+        debugName: "meta_acp_agents",
+        argNames: ["serviceKey"],
+      );
+
+  @override
+  Future<String> crateApiBridgeMetaAcpHost({
+    required String serviceKey,
+    required String agentId,
+    String? name,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(serviceKey, serializer);
+          sse_encode_String(agentId, serializer);
+          sse_encode_opt_String(name, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 99,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiBridgeMetaAcpHostConstMeta,
+        argValues: [serviceKey, agentId, name],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiBridgeMetaAcpHostConstMeta => const TaskConstMeta(
+    debugName: "meta_acp_host",
+    argNames: ["serviceKey", "agentId", "name"],
+  );
+
+  @override
+  Future<String> crateApiBridgeMetaAcpInstall({
+    required String serviceKey,
+    required String agentId,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(serviceKey, serializer);
+          sse_encode_String(agentId, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 100,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiBridgeMetaAcpInstallConstMeta,
+        argValues: [serviceKey, agentId],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiBridgeMetaAcpInstallConstMeta =>
+      const TaskConstMeta(
+        debugName: "meta_acp_install",
+        argNames: ["serviceKey", "agentId"],
+      );
+
+  @override
+  Future<AcpJobDto?> crateApiBridgeMetaAcpJob({
+    required String serviceKey,
+    required String jobId,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(serviceKey, serializer);
+          sse_encode_String(jobId, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 101,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_opt_box_autoadd_acp_job_dto,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiBridgeMetaAcpJobConstMeta,
+        argValues: [serviceKey, jobId],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiBridgeMetaAcpJobConstMeta => const TaskConstMeta(
+    debugName: "meta_acp_job",
+    argNames: ["serviceKey", "jobId"],
+  );
+
+  @override
   Future<void> crateApiBridgeMetaFileDownload({
     required String serviceKey,
     String? threadId,
@@ -2895,7 +3931,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 74,
+            funcId: 102,
             port: port_,
           );
         },
@@ -2932,7 +3968,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 75,
+            funcId: 103,
             port: port_,
           );
         },
@@ -2967,7 +4003,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 76,
+            funcId: 104,
             port: port_,
           );
         },
@@ -2998,7 +4034,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 77,
+            funcId: 105,
             port: port_,
           );
         },
@@ -3033,7 +4069,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 78,
+            funcId: 106,
             port: port_,
           );
         },
@@ -3067,7 +4103,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 79,
+            funcId: 107,
             port: port_,
           );
         },
@@ -3100,7 +4136,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 80,
+            funcId: 108,
             port: port_,
           );
         },
@@ -3135,7 +4171,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 81,
+            funcId: 109,
             port: port_,
           );
         },
@@ -3171,7 +4207,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 82,
+            funcId: 110,
             port: port_,
           );
         },
@@ -3204,7 +4240,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 83,
+              funcId: 111,
               port: port_,
             );
           },
@@ -3244,7 +4280,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 84,
+              funcId: 112,
               port: port_,
             );
           },
@@ -3281,7 +4317,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 85,
+            funcId: 113,
             port: port_,
           );
         },
@@ -3316,7 +4352,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 86,
+            funcId: 114,
             port: port_,
           );
         },
@@ -3351,7 +4387,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 87,
+            funcId: 115,
             port: port_,
           );
         },
@@ -3387,7 +4423,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 88,
+            funcId: 116,
             port: port_,
           );
         },
@@ -3422,7 +4458,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 89,
+            funcId: 117,
             port: port_,
           );
         },
@@ -3459,7 +4495,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 90,
+            funcId: 118,
             port: port_,
           );
         },
@@ -3496,7 +4532,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 91,
+            funcId: 119,
             port: port_,
           );
         },
@@ -3535,7 +4571,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 92,
+            funcId: 120,
             port: port_,
           );
         },
@@ -3557,6 +4593,37 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<String?> crateApiBridgeOpencodeLocate({String? binaryOverride}) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_opt_String(binaryOverride, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 121,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_opt_String,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiBridgeOpencodeLocateConstMeta,
+        argValues: [binaryOverride],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiBridgeOpencodeLocateConstMeta =>
+      const TaskConstMeta(
+        debugName: "opencode_locate",
+        argNames: ["binaryOverride"],
+      );
+
+  @override
   Future<void> crateApiBridgeSetKey({required String key}) {
     return handler.executeNormal(
       NormalTask(
@@ -3566,7 +4633,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 93,
+            funcId: 122,
             port: port_,
           );
         },
@@ -3594,7 +4661,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 94,
+            funcId: 123,
             port: port_,
           );
         },
@@ -3622,7 +4689,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 95,
+            funcId: 124,
             port: port_,
           );
         },
@@ -3649,7 +4716,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 96,
+            funcId: 125,
             port: port_,
           );
         },
@@ -3749,6 +4816,308 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  AcpAgentDto dco_decode_acp_agent_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 14)
+      throw Exception('unexpected arr length: expect 14 but see ${arr.length}');
+    return AcpAgentDto(
+      id: dco_decode_String(arr[0]),
+      name: dco_decode_String(arr[1]),
+      description: dco_decode_String(arr[2]),
+      source: dco_decode_String(arr[3]),
+      pinnedVersion: dco_decode_opt_String(arr[4]),
+      installedVersion: dco_decode_opt_String(arr[5]),
+      state: dco_decode_String(arr[6]),
+      detail: dco_decode_opt_String(arr[7]),
+      jobId: dco_decode_opt_String(arr[8]),
+      registryVersion: dco_decode_opt_String(arr[9]),
+      hostedNames: dco_decode_list_String(arr[10]),
+      approxSizeMb: dco_decode_u_32(arr[11]),
+      needsNode: dco_decode_bool(arr[12]),
+      remoteInstallAllowed: dco_decode_bool(arr[13]),
+    );
+  }
+
+  @protected
+  AcpAgentFlagDto dco_decode_acp_agent_flag_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 5)
+      throw Exception('unexpected arr length: expect 5 but see ${arr.length}');
+    return AcpAgentFlagDto(
+      agentId: dco_decode_String(arr[0]),
+      setting: dco_decode_String(arr[1]),
+      labelKey: dco_decode_String(arr[2]),
+      confirmKey: dco_decode_opt_String(arr[3]),
+      value: dco_decode_bool(arr[4]),
+    );
+  }
+
+  @protected
+  AcpAgentsDto dco_decode_acp_agents_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 2)
+      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    return AcpAgentsDto(
+      remoteManagement: dco_decode_bool(arr[0]),
+      agents: dco_decode_list_acp_agent_dto(arr[1]),
+    );
+  }
+
+  @protected
+  AcpAuthDto dco_decode_acp_auth_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 3)
+      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
+    return AcpAuthDto(
+      status: dco_decode_String(arr[0]),
+      methods: dco_decode_list_acp_auth_method_dto(arr[1]),
+      message: dco_decode_opt_String(arr[2]),
+    );
+  }
+
+  @protected
+  AcpAuthMethodDto dco_decode_acp_auth_method_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 8)
+      throw Exception('unexpected arr length: expect 8 but see ${arr.length}');
+    return AcpAuthMethodDto(
+      id: dco_decode_String(arr[0]),
+      name: dco_decode_String(arr[1]),
+      description: dco_decode_String(arr[2]),
+      kind: dco_decode_String(arr[3]),
+      remote: dco_decode_bool(arr[4]),
+      available: dco_decode_bool(arr[5]),
+      gatewayProtocol: dco_decode_opt_String(arr[6]),
+      gatewayConfigured: dco_decode_bool(arr[7]),
+    );
+  }
+
+  @protected
+  AcpBinaryOverrideDto dco_decode_acp_binary_override_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 2)
+      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    return AcpBinaryOverrideDto(
+      agentId: dco_decode_String(arr[0]),
+      path: dco_decode_String(arr[1]),
+    );
+  }
+
+  @protected
+  AcpCommandDto dco_decode_acp_command_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 3)
+      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
+    return AcpCommandDto(
+      name: dco_decode_String(arr[0]),
+      description: dco_decode_String(arr[1]),
+      hint: dco_decode_opt_String(arr[2]),
+    );
+  }
+
+  @protected
+  AcpConfigOptionDto dco_decode_acp_config_option_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 8)
+      throw Exception('unexpected arr length: expect 8 but see ${arr.length}');
+    return AcpConfigOptionDto(
+      id: dco_decode_String(arr[0]),
+      name: dco_decode_String(arr[1]),
+      description: dco_decode_String(arr[2]),
+      category: dco_decode_String(arr[3]),
+      role: dco_decode_String(arr[4]),
+      kind: dco_decode_String(arr[5]),
+      currentValue: dco_decode_String(arr[6]),
+      options: dco_decode_list_acp_config_value_dto(arr[7]),
+    );
+  }
+
+  @protected
+  AcpConfigValueDto dco_decode_acp_config_value_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 4)
+      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
+    return AcpConfigValueDto(
+      value: dco_decode_String(arr[0]),
+      name: dco_decode_String(arr[1]),
+      description: dco_decode_String(arr[2]),
+      group: dco_decode_opt_String(arr[3]),
+    );
+  }
+
+  @protected
+  AcpCustomAgentDto dco_decode_acp_custom_agent_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 5)
+      throw Exception('unexpected arr length: expect 5 but see ${arr.length}');
+    return AcpCustomAgentDto(
+      id: dco_decode_String(arr[0]),
+      name: dco_decode_String(arr[1]),
+      command: dco_decode_String(arr[2]),
+      args: dco_decode_list_String(arr[3]),
+      env: dco_decode_list_acp_env_var_dto(arr[4]),
+    );
+  }
+
+  @protected
+  AcpDataModeDto dco_decode_acp_data_mode_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 2)
+      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    return AcpDataModeDto(
+      family: dco_decode_String(arr[0]),
+      mode: dco_decode_String(arr[1]),
+    );
+  }
+
+  @protected
+  AcpEnvVarDto dco_decode_acp_env_var_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 2)
+      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    return AcpEnvVarDto(
+      name: dco_decode_String(arr[0]),
+      value: dco_decode_String(arr[1]),
+    );
+  }
+
+  @protected
+  AcpGatewayDto dco_decode_acp_gateway_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 8)
+      throw Exception('unexpected arr length: expect 8 but see ${arr.length}');
+    return AcpGatewayDto(
+      agentId: dco_decode_String(arr[0]),
+      methodId: dco_decode_opt_String(arr[1]),
+      baseUrl: dco_decode_String(arr[2]),
+      token: dco_decode_opt_String(arr[3]),
+      hasToken: dco_decode_bool(arr[4]),
+      providerName: dco_decode_opt_String(arr[5]),
+      extraHeaders: dco_decode_list_acp_env_var_dto(arr[6]),
+      clear: dco_decode_bool(arr[7]),
+    );
+  }
+
+  @protected
+  AcpJobDto dco_decode_acp_job_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 10)
+      throw Exception('unexpected arr length: expect 10 but see ${arr.length}');
+    return AcpJobDto(
+      id: dco_decode_String(arr[0]),
+      kind: dco_decode_String(arr[1]),
+      agentId: dco_decode_String(arr[2]),
+      version: dco_decode_String(arr[3]),
+      state: dco_decode_String(arr[4]),
+      bytes: dco_decode_u_64(arr[5]),
+      total: dco_decode_opt_box_autoadd_u_64(arr[6]),
+      message: dco_decode_opt_String(arr[7]),
+      errorCode: dco_decode_opt_String(arr[8]),
+      serviceKey: dco_decode_opt_String(arr[9]),
+    );
+  }
+
+  @protected
+  AcpSaveDto dco_decode_acp_save_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 2)
+      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    return AcpSaveDto(
+      saved: dco_decode_bool(arr[0]),
+      warnings: dco_decode_list_String(arr[1]),
+    );
+  }
+
+  @protected
+  AcpServeDto dco_decode_acp_serve_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 10)
+      throw Exception('unexpected arr length: expect 10 but see ${arr.length}');
+    return AcpServeDto(
+      device: dco_decode_String(arr[0]),
+      name: dco_decode_String(arr[1]),
+      serviceKey: dco_decode_String(arr[2]),
+      listenAddr: dco_decode_String(arr[3]),
+      metaServiceKey: dco_decode_String(arr[4]),
+      agentId: dco_decode_String(arr[5]),
+      agentName: dco_decode_String(arr[6]),
+      agentVersion: dco_decode_String(arr[7]),
+      auth: dco_decode_acp_auth_dto(arr[8]),
+      reused: dco_decode_bool(arr[9]),
+    );
+  }
+
+  @protected
+  AcpSettingsDto dco_decode_acp_settings_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 8)
+      throw Exception('unexpected arr length: expect 8 but see ${arr.length}');
+    return AcpSettingsDto(
+      remoteManagement: dco_decode_bool(arr[0]),
+      npmRegistry: dco_decode_opt_String(arr[1]),
+      claudeEnginePath: dco_decode_opt_String(arr[2]),
+      codexBinary: dco_decode_opt_String(arr[3]),
+      binaryOverrides: dco_decode_list_acp_binary_override_dto(arr[4]),
+      opencodeData: dco_decode_list_acp_data_mode_dto(arr[5]),
+      gateways: dco_decode_list_acp_gateway_dto(arr[6]),
+      flags: dco_decode_list_acp_agent_flag_dto(arr[7]),
+    );
+  }
+
+  @protected
+  AppCapabilitiesDto dco_decode_app_capabilities_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 26)
+      throw Exception('unexpected arr length: expect 26 but see ${arr.length}');
+    return AppCapabilitiesDto(
+      provider: dco_decode_String(arr[0]),
+      fast: dco_decode_bool(arr[1]),
+      permissionPresets: dco_decode_bool(arr[2]),
+      guardian: dco_decode_bool(arr[3]),
+      rateLimits: dco_decode_bool(arr[4]),
+      takeover: dco_decode_bool(arr[5]),
+      externalWriterMonitor: dco_decode_bool(arr[6]),
+      localSessions: dco_decode_bool(arr[7]),
+      planMode: dco_decode_bool(arr[8]),
+      effortLabel: dco_decode_String(arr[9]),
+      approveAlwaysPersistsProject: dco_decode_bool(arr[10]),
+      multiSelectQuestions: dco_decode_bool(arr[11]),
+      childSessions: dco_decode_bool(arr[12]),
+      agentName: dco_decode_String(arr[13]),
+      steer: dco_decode_bool(arr[14]),
+      rename: dco_decode_bool(arr[15]),
+      compact: dco_decode_bool(arr[16]),
+      gitDiff: dco_decode_bool(arr[17]),
+      images: dco_decode_bool(arr[18]),
+      configOptions: dco_decode_bool(arr[19]),
+      slashCommands: dco_decode_bool(arr[20]),
+      approvalOptions: dco_decode_bool(arr[21]),
+      urlElicitation: dco_decode_bool(arr[22]),
+      runningViaThreads: dco_decode_bool(arr[23]),
+      historyPrefetch: dco_decode_bool(arr[24]),
+      sessionReload: dco_decode_bool(arr[25]),
+    );
+  }
+
+  @protected
   AppEventDto dco_decode_app_event_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
@@ -3791,8 +5160,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   AppServeStatusDto dco_decode_app_serve_status_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 16)
-      throw Exception('unexpected arr length: expect 16 but see ${arr.length}');
+    if (arr.length != 21)
+      throw Exception('unexpected arr length: expect 21 but see ${arr.length}');
     return AppServeStatusDto(
       name: dco_decode_String(arr[0]),
       device: dco_decode_String(arr[1]),
@@ -3810,6 +5179,11 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       embedded: dco_decode_bool(arr[13]),
       codexBinary: dco_decode_opt_String(arr[14]),
       proxy: dco_decode_opt_String(arr[15]),
+      provider: dco_decode_String(arr[16]),
+      providerVersion: dco_decode_opt_String(arr[17]),
+      providerVerified: dco_decode_bool(arr[18]),
+      agentId: dco_decode_opt_String(arr[19]),
+      agentName: dco_decode_opt_String(arr[20]),
     );
   }
 
@@ -3823,6 +5197,30 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   AccountUserDto dco_decode_box_autoadd_account_user_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_account_user_dto(raw);
+  }
+
+  @protected
+  AcpAuthDto dco_decode_box_autoadd_acp_auth_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_acp_auth_dto(raw);
+  }
+
+  @protected
+  AcpCustomAgentDto dco_decode_box_autoadd_acp_custom_agent_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_acp_custom_agent_dto(raw);
+  }
+
+  @protected
+  AcpJobDto dco_decode_box_autoadd_acp_job_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_acp_job_dto(raw);
+  }
+
+  @protected
+  AcpSettingsDto dco_decode_box_autoadd_acp_settings_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_acp_settings_dto(raw);
   }
 
   @protected
@@ -3861,6 +5259,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   int dco_decode_box_autoadd_u_32(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as int;
+  }
+
+  @protected
+  BigInt dco_decode_box_autoadd_u_64(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_u_64(raw);
   }
 
   @protected
@@ -4037,6 +5441,78 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  List<AcpAgentDto> dco_decode_list_acp_agent_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_acp_agent_dto).toList();
+  }
+
+  @protected
+  List<AcpAgentFlagDto> dco_decode_list_acp_agent_flag_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_acp_agent_flag_dto).toList();
+  }
+
+  @protected
+  List<AcpAuthMethodDto> dco_decode_list_acp_auth_method_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_acp_auth_method_dto).toList();
+  }
+
+  @protected
+  List<AcpBinaryOverrideDto> dco_decode_list_acp_binary_override_dto(
+    dynamic raw,
+  ) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>)
+        .map(dco_decode_acp_binary_override_dto)
+        .toList();
+  }
+
+  @protected
+  List<AcpCommandDto> dco_decode_list_acp_command_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_acp_command_dto).toList();
+  }
+
+  @protected
+  List<AcpConfigOptionDto> dco_decode_list_acp_config_option_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>)
+        .map(dco_decode_acp_config_option_dto)
+        .toList();
+  }
+
+  @protected
+  List<AcpConfigValueDto> dco_decode_list_acp_config_value_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_acp_config_value_dto).toList();
+  }
+
+  @protected
+  List<AcpCustomAgentDto> dco_decode_list_acp_custom_agent_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_acp_custom_agent_dto).toList();
+  }
+
+  @protected
+  List<AcpDataModeDto> dco_decode_list_acp_data_mode_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_acp_data_mode_dto).toList();
+  }
+
+  @protected
+  List<AcpEnvVarDto> dco_decode_list_acp_env_var_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_acp_env_var_dto).toList();
+  }
+
+  @protected
+  List<AcpGatewayDto> dco_decode_list_acp_gateway_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_acp_gateway_dto).toList();
+  }
+
+  @protected
   List<AppServeStatusDto> dco_decode_list_app_serve_status_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return (raw as List<dynamic>).map(dco_decode_app_serve_status_dto).toList();
@@ -4176,11 +5652,31 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   OlderPageDto dco_decode_older_page_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 2)
-      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    if (arr.length != 3)
+      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
     return OlderPageDto(
       items: dco_decode_list_thread_item_dto(arr[0]),
       hasOlder: dco_decode_bool(arr[1]),
+      olderUnavailable: dco_decode_bool(arr[2]),
+    );
+  }
+
+  @protected
+  OpenCodeServeDto dco_decode_open_code_serve_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 9)
+      throw Exception('unexpected arr length: expect 9 but see ${arr.length}');
+    return OpenCodeServeDto(
+      device: dco_decode_String(arr[0]),
+      name: dco_decode_String(arr[1]),
+      serviceKey: dco_decode_String(arr[2]),
+      listenAddr: dco_decode_String(arr[3]),
+      metaServiceKey: dco_decode_String(arr[4]),
+      version: dco_decode_String(arr[5]),
+      verified: dco_decode_bool(arr[6]),
+      reused: dco_decode_bool(arr[7]),
+      startedService: dco_decode_bool(arr[8]),
     );
   }
 
@@ -4194,6 +5690,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   AccountUserDto? dco_decode_opt_box_autoadd_account_user_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw == null ? null : dco_decode_box_autoadd_account_user_dto(raw);
+  }
+
+  @protected
+  AcpAuthDto? dco_decode_opt_box_autoadd_acp_auth_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw == null ? null : dco_decode_box_autoadd_acp_auth_dto(raw);
+  }
+
+  @protected
+  AcpJobDto? dco_decode_opt_box_autoadd_acp_job_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw == null ? null : dco_decode_box_autoadd_acp_job_dto(raw);
   }
 
   @protected
@@ -4228,6 +5736,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   int? dco_decode_opt_box_autoadd_u_32(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw == null ? null : dco_decode_box_autoadd_u_32(raw);
+  }
+
+  @protected
+  BigInt? dco_decode_opt_box_autoadd_u_64(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw == null ? null : dco_decode_box_autoadd_u_64(raw);
   }
 
   @protected
@@ -4336,8 +5850,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ThreadHistoryDto dco_decode_thread_history_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 21)
-      throw Exception('unexpected arr length: expect 21 but see ${arr.length}');
+    if (arr.length != 22)
+      throw Exception('unexpected arr length: expect 22 but see ${arr.length}');
     return ThreadHistoryDto(
       historyEpoch: dco_decode_opt_String(arr[0]),
       items: dco_decode_list_thread_item_dto(arr[1]),
@@ -4360,6 +5874,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       turns: dco_decode_list_turn_summary_dto(arr[18]),
       firstTurnId: dco_decode_opt_String(arr[19]),
       turnPages: dco_decode_list_turn_items_page_dto(arr[20]),
+      olderUnavailable: dco_decode_bool(arr[21]),
     );
   }
 
@@ -4571,6 +6086,378 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  AcpAgentDto sse_decode_acp_agent_dto(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_id = sse_decode_String(deserializer);
+    var var_name = sse_decode_String(deserializer);
+    var var_description = sse_decode_String(deserializer);
+    var var_source = sse_decode_String(deserializer);
+    var var_pinnedVersion = sse_decode_opt_String(deserializer);
+    var var_installedVersion = sse_decode_opt_String(deserializer);
+    var var_state = sse_decode_String(deserializer);
+    var var_detail = sse_decode_opt_String(deserializer);
+    var var_jobId = sse_decode_opt_String(deserializer);
+    var var_registryVersion = sse_decode_opt_String(deserializer);
+    var var_hostedNames = sse_decode_list_String(deserializer);
+    var var_approxSizeMb = sse_decode_u_32(deserializer);
+    var var_needsNode = sse_decode_bool(deserializer);
+    var var_remoteInstallAllowed = sse_decode_bool(deserializer);
+    return AcpAgentDto(
+      id: var_id,
+      name: var_name,
+      description: var_description,
+      source: var_source,
+      pinnedVersion: var_pinnedVersion,
+      installedVersion: var_installedVersion,
+      state: var_state,
+      detail: var_detail,
+      jobId: var_jobId,
+      registryVersion: var_registryVersion,
+      hostedNames: var_hostedNames,
+      approxSizeMb: var_approxSizeMb,
+      needsNode: var_needsNode,
+      remoteInstallAllowed: var_remoteInstallAllowed,
+    );
+  }
+
+  @protected
+  AcpAgentFlagDto sse_decode_acp_agent_flag_dto(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_agentId = sse_decode_String(deserializer);
+    var var_setting = sse_decode_String(deserializer);
+    var var_labelKey = sse_decode_String(deserializer);
+    var var_confirmKey = sse_decode_opt_String(deserializer);
+    var var_value = sse_decode_bool(deserializer);
+    return AcpAgentFlagDto(
+      agentId: var_agentId,
+      setting: var_setting,
+      labelKey: var_labelKey,
+      confirmKey: var_confirmKey,
+      value: var_value,
+    );
+  }
+
+  @protected
+  AcpAgentsDto sse_decode_acp_agents_dto(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_remoteManagement = sse_decode_bool(deserializer);
+    var var_agents = sse_decode_list_acp_agent_dto(deserializer);
+    return AcpAgentsDto(
+      remoteManagement: var_remoteManagement,
+      agents: var_agents,
+    );
+  }
+
+  @protected
+  AcpAuthDto sse_decode_acp_auth_dto(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_status = sse_decode_String(deserializer);
+    var var_methods = sse_decode_list_acp_auth_method_dto(deserializer);
+    var var_message = sse_decode_opt_String(deserializer);
+    return AcpAuthDto(
+      status: var_status,
+      methods: var_methods,
+      message: var_message,
+    );
+  }
+
+  @protected
+  AcpAuthMethodDto sse_decode_acp_auth_method_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_id = sse_decode_String(deserializer);
+    var var_name = sse_decode_String(deserializer);
+    var var_description = sse_decode_String(deserializer);
+    var var_kind = sse_decode_String(deserializer);
+    var var_remote = sse_decode_bool(deserializer);
+    var var_available = sse_decode_bool(deserializer);
+    var var_gatewayProtocol = sse_decode_opt_String(deserializer);
+    var var_gatewayConfigured = sse_decode_bool(deserializer);
+    return AcpAuthMethodDto(
+      id: var_id,
+      name: var_name,
+      description: var_description,
+      kind: var_kind,
+      remote: var_remote,
+      available: var_available,
+      gatewayProtocol: var_gatewayProtocol,
+      gatewayConfigured: var_gatewayConfigured,
+    );
+  }
+
+  @protected
+  AcpBinaryOverrideDto sse_decode_acp_binary_override_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_agentId = sse_decode_String(deserializer);
+    var var_path = sse_decode_String(deserializer);
+    return AcpBinaryOverrideDto(agentId: var_agentId, path: var_path);
+  }
+
+  @protected
+  AcpCommandDto sse_decode_acp_command_dto(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_name = sse_decode_String(deserializer);
+    var var_description = sse_decode_String(deserializer);
+    var var_hint = sse_decode_opt_String(deserializer);
+    return AcpCommandDto(
+      name: var_name,
+      description: var_description,
+      hint: var_hint,
+    );
+  }
+
+  @protected
+  AcpConfigOptionDto sse_decode_acp_config_option_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_id = sse_decode_String(deserializer);
+    var var_name = sse_decode_String(deserializer);
+    var var_description = sse_decode_String(deserializer);
+    var var_category = sse_decode_String(deserializer);
+    var var_role = sse_decode_String(deserializer);
+    var var_kind = sse_decode_String(deserializer);
+    var var_currentValue = sse_decode_String(deserializer);
+    var var_options = sse_decode_list_acp_config_value_dto(deserializer);
+    return AcpConfigOptionDto(
+      id: var_id,
+      name: var_name,
+      description: var_description,
+      category: var_category,
+      role: var_role,
+      kind: var_kind,
+      currentValue: var_currentValue,
+      options: var_options,
+    );
+  }
+
+  @protected
+  AcpConfigValueDto sse_decode_acp_config_value_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_value = sse_decode_String(deserializer);
+    var var_name = sse_decode_String(deserializer);
+    var var_description = sse_decode_String(deserializer);
+    var var_group = sse_decode_opt_String(deserializer);
+    return AcpConfigValueDto(
+      value: var_value,
+      name: var_name,
+      description: var_description,
+      group: var_group,
+    );
+  }
+
+  @protected
+  AcpCustomAgentDto sse_decode_acp_custom_agent_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_id = sse_decode_String(deserializer);
+    var var_name = sse_decode_String(deserializer);
+    var var_command = sse_decode_String(deserializer);
+    var var_args = sse_decode_list_String(deserializer);
+    var var_env = sse_decode_list_acp_env_var_dto(deserializer);
+    return AcpCustomAgentDto(
+      id: var_id,
+      name: var_name,
+      command: var_command,
+      args: var_args,
+      env: var_env,
+    );
+  }
+
+  @protected
+  AcpDataModeDto sse_decode_acp_data_mode_dto(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_family = sse_decode_String(deserializer);
+    var var_mode = sse_decode_String(deserializer);
+    return AcpDataModeDto(family: var_family, mode: var_mode);
+  }
+
+  @protected
+  AcpEnvVarDto sse_decode_acp_env_var_dto(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_name = sse_decode_String(deserializer);
+    var var_value = sse_decode_String(deserializer);
+    return AcpEnvVarDto(name: var_name, value: var_value);
+  }
+
+  @protected
+  AcpGatewayDto sse_decode_acp_gateway_dto(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_agentId = sse_decode_String(deserializer);
+    var var_methodId = sse_decode_opt_String(deserializer);
+    var var_baseUrl = sse_decode_String(deserializer);
+    var var_token = sse_decode_opt_String(deserializer);
+    var var_hasToken = sse_decode_bool(deserializer);
+    var var_providerName = sse_decode_opt_String(deserializer);
+    var var_extraHeaders = sse_decode_list_acp_env_var_dto(deserializer);
+    var var_clear = sse_decode_bool(deserializer);
+    return AcpGatewayDto(
+      agentId: var_agentId,
+      methodId: var_methodId,
+      baseUrl: var_baseUrl,
+      token: var_token,
+      hasToken: var_hasToken,
+      providerName: var_providerName,
+      extraHeaders: var_extraHeaders,
+      clear: var_clear,
+    );
+  }
+
+  @protected
+  AcpJobDto sse_decode_acp_job_dto(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_id = sse_decode_String(deserializer);
+    var var_kind = sse_decode_String(deserializer);
+    var var_agentId = sse_decode_String(deserializer);
+    var var_version = sse_decode_String(deserializer);
+    var var_state = sse_decode_String(deserializer);
+    var var_bytes = sse_decode_u_64(deserializer);
+    var var_total = sse_decode_opt_box_autoadd_u_64(deserializer);
+    var var_message = sse_decode_opt_String(deserializer);
+    var var_errorCode = sse_decode_opt_String(deserializer);
+    var var_serviceKey = sse_decode_opt_String(deserializer);
+    return AcpJobDto(
+      id: var_id,
+      kind: var_kind,
+      agentId: var_agentId,
+      version: var_version,
+      state: var_state,
+      bytes: var_bytes,
+      total: var_total,
+      message: var_message,
+      errorCode: var_errorCode,
+      serviceKey: var_serviceKey,
+    );
+  }
+
+  @protected
+  AcpSaveDto sse_decode_acp_save_dto(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_saved = sse_decode_bool(deserializer);
+    var var_warnings = sse_decode_list_String(deserializer);
+    return AcpSaveDto(saved: var_saved, warnings: var_warnings);
+  }
+
+  @protected
+  AcpServeDto sse_decode_acp_serve_dto(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_device = sse_decode_String(deserializer);
+    var var_name = sse_decode_String(deserializer);
+    var var_serviceKey = sse_decode_String(deserializer);
+    var var_listenAddr = sse_decode_String(deserializer);
+    var var_metaServiceKey = sse_decode_String(deserializer);
+    var var_agentId = sse_decode_String(deserializer);
+    var var_agentName = sse_decode_String(deserializer);
+    var var_agentVersion = sse_decode_String(deserializer);
+    var var_auth = sse_decode_acp_auth_dto(deserializer);
+    var var_reused = sse_decode_bool(deserializer);
+    return AcpServeDto(
+      device: var_device,
+      name: var_name,
+      serviceKey: var_serviceKey,
+      listenAddr: var_listenAddr,
+      metaServiceKey: var_metaServiceKey,
+      agentId: var_agentId,
+      agentName: var_agentName,
+      agentVersion: var_agentVersion,
+      auth: var_auth,
+      reused: var_reused,
+    );
+  }
+
+  @protected
+  AcpSettingsDto sse_decode_acp_settings_dto(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_remoteManagement = sse_decode_bool(deserializer);
+    var var_npmRegistry = sse_decode_opt_String(deserializer);
+    var var_claudeEnginePath = sse_decode_opt_String(deserializer);
+    var var_codexBinary = sse_decode_opt_String(deserializer);
+    var var_binaryOverrides = sse_decode_list_acp_binary_override_dto(
+      deserializer,
+    );
+    var var_opencodeData = sse_decode_list_acp_data_mode_dto(deserializer);
+    var var_gateways = sse_decode_list_acp_gateway_dto(deserializer);
+    var var_flags = sse_decode_list_acp_agent_flag_dto(deserializer);
+    return AcpSettingsDto(
+      remoteManagement: var_remoteManagement,
+      npmRegistry: var_npmRegistry,
+      claudeEnginePath: var_claudeEnginePath,
+      codexBinary: var_codexBinary,
+      binaryOverrides: var_binaryOverrides,
+      opencodeData: var_opencodeData,
+      gateways: var_gateways,
+      flags: var_flags,
+    );
+  }
+
+  @protected
+  AppCapabilitiesDto sse_decode_app_capabilities_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_provider = sse_decode_String(deserializer);
+    var var_fast = sse_decode_bool(deserializer);
+    var var_permissionPresets = sse_decode_bool(deserializer);
+    var var_guardian = sse_decode_bool(deserializer);
+    var var_rateLimits = sse_decode_bool(deserializer);
+    var var_takeover = sse_decode_bool(deserializer);
+    var var_externalWriterMonitor = sse_decode_bool(deserializer);
+    var var_localSessions = sse_decode_bool(deserializer);
+    var var_planMode = sse_decode_bool(deserializer);
+    var var_effortLabel = sse_decode_String(deserializer);
+    var var_approveAlwaysPersistsProject = sse_decode_bool(deserializer);
+    var var_multiSelectQuestions = sse_decode_bool(deserializer);
+    var var_childSessions = sse_decode_bool(deserializer);
+    var var_agentName = sse_decode_String(deserializer);
+    var var_steer = sse_decode_bool(deserializer);
+    var var_rename = sse_decode_bool(deserializer);
+    var var_compact = sse_decode_bool(deserializer);
+    var var_gitDiff = sse_decode_bool(deserializer);
+    var var_images = sse_decode_bool(deserializer);
+    var var_configOptions = sse_decode_bool(deserializer);
+    var var_slashCommands = sse_decode_bool(deserializer);
+    var var_approvalOptions = sse_decode_bool(deserializer);
+    var var_urlElicitation = sse_decode_bool(deserializer);
+    var var_runningViaThreads = sse_decode_bool(deserializer);
+    var var_historyPrefetch = sse_decode_bool(deserializer);
+    var var_sessionReload = sse_decode_bool(deserializer);
+    return AppCapabilitiesDto(
+      provider: var_provider,
+      fast: var_fast,
+      permissionPresets: var_permissionPresets,
+      guardian: var_guardian,
+      rateLimits: var_rateLimits,
+      takeover: var_takeover,
+      externalWriterMonitor: var_externalWriterMonitor,
+      localSessions: var_localSessions,
+      planMode: var_planMode,
+      effortLabel: var_effortLabel,
+      approveAlwaysPersistsProject: var_approveAlwaysPersistsProject,
+      multiSelectQuestions: var_multiSelectQuestions,
+      childSessions: var_childSessions,
+      agentName: var_agentName,
+      steer: var_steer,
+      rename: var_rename,
+      compact: var_compact,
+      gitDiff: var_gitDiff,
+      images: var_images,
+      configOptions: var_configOptions,
+      slashCommands: var_slashCommands,
+      approvalOptions: var_approvalOptions,
+      urlElicitation: var_urlElicitation,
+      runningViaThreads: var_runningViaThreads,
+      historyPrefetch: var_historyPrefetch,
+      sessionReload: var_sessionReload,
+    );
+  }
+
+  @protected
   AppEventDto sse_decode_app_event_dto(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_kind = sse_decode_String(deserializer);
@@ -4643,6 +6530,11 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_embedded = sse_decode_bool(deserializer);
     var var_codexBinary = sse_decode_opt_String(deserializer);
     var var_proxy = sse_decode_opt_String(deserializer);
+    var var_provider = sse_decode_String(deserializer);
+    var var_providerVersion = sse_decode_opt_String(deserializer);
+    var var_providerVerified = sse_decode_bool(deserializer);
+    var var_agentId = sse_decode_opt_String(deserializer);
+    var var_agentName = sse_decode_opt_String(deserializer);
     return AppServeStatusDto(
       name: var_name,
       device: var_device,
@@ -4660,6 +6552,11 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       embedded: var_embedded,
       codexBinary: var_codexBinary,
       proxy: var_proxy,
+      provider: var_provider,
+      providerVersion: var_providerVersion,
+      providerVerified: var_providerVerified,
+      agentId: var_agentId,
+      agentName: var_agentName,
     );
   }
 
@@ -4675,6 +6572,34 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return (sse_decode_account_user_dto(deserializer));
+  }
+
+  @protected
+  AcpAuthDto sse_decode_box_autoadd_acp_auth_dto(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_acp_auth_dto(deserializer));
+  }
+
+  @protected
+  AcpCustomAgentDto sse_decode_box_autoadd_acp_custom_agent_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_acp_custom_agent_dto(deserializer));
+  }
+
+  @protected
+  AcpJobDto sse_decode_box_autoadd_acp_job_dto(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_acp_job_dto(deserializer));
+  }
+
+  @protected
+  AcpSettingsDto sse_decode_box_autoadd_acp_settings_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_acp_settings_dto(deserializer));
   }
 
   @protected
@@ -4717,6 +6642,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   int sse_decode_box_autoadd_u_32(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return (sse_decode_u_32(deserializer));
+  }
+
+  @protected
+  BigInt sse_decode_box_autoadd_u_64(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_u_64(deserializer));
   }
 
   @protected
@@ -4918,6 +6849,160 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var ans_ = <AccountServiceDto>[];
     for (var idx_ = 0; idx_ < len_; ++idx_) {
       ans_.add(sse_decode_account_service_dto(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
+  List<AcpAgentDto> sse_decode_list_acp_agent_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <AcpAgentDto>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_acp_agent_dto(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
+  List<AcpAgentFlagDto> sse_decode_list_acp_agent_flag_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <AcpAgentFlagDto>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_acp_agent_flag_dto(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
+  List<AcpAuthMethodDto> sse_decode_list_acp_auth_method_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <AcpAuthMethodDto>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_acp_auth_method_dto(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
+  List<AcpBinaryOverrideDto> sse_decode_list_acp_binary_override_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <AcpBinaryOverrideDto>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_acp_binary_override_dto(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
+  List<AcpCommandDto> sse_decode_list_acp_command_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <AcpCommandDto>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_acp_command_dto(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
+  List<AcpConfigOptionDto> sse_decode_list_acp_config_option_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <AcpConfigOptionDto>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_acp_config_option_dto(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
+  List<AcpConfigValueDto> sse_decode_list_acp_config_value_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <AcpConfigValueDto>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_acp_config_value_dto(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
+  List<AcpCustomAgentDto> sse_decode_list_acp_custom_agent_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <AcpCustomAgentDto>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_acp_custom_agent_dto(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
+  List<AcpDataModeDto> sse_decode_list_acp_data_mode_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <AcpDataModeDto>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_acp_data_mode_dto(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
+  List<AcpEnvVarDto> sse_decode_list_acp_env_var_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <AcpEnvVarDto>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_acp_env_var_dto(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
+  List<AcpGatewayDto> sse_decode_list_acp_gateway_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <AcpGatewayDto>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_acp_gateway_dto(deserializer));
     }
     return ans_;
   }
@@ -5172,7 +7257,39 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_items = sse_decode_list_thread_item_dto(deserializer);
     var var_hasOlder = sse_decode_bool(deserializer);
-    return OlderPageDto(items: var_items, hasOlder: var_hasOlder);
+    var var_olderUnavailable = sse_decode_bool(deserializer);
+    return OlderPageDto(
+      items: var_items,
+      hasOlder: var_hasOlder,
+      olderUnavailable: var_olderUnavailable,
+    );
+  }
+
+  @protected
+  OpenCodeServeDto sse_decode_open_code_serve_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_device = sse_decode_String(deserializer);
+    var var_name = sse_decode_String(deserializer);
+    var var_serviceKey = sse_decode_String(deserializer);
+    var var_listenAddr = sse_decode_String(deserializer);
+    var var_metaServiceKey = sse_decode_String(deserializer);
+    var var_version = sse_decode_String(deserializer);
+    var var_verified = sse_decode_bool(deserializer);
+    var var_reused = sse_decode_bool(deserializer);
+    var var_startedService = sse_decode_bool(deserializer);
+    return OpenCodeServeDto(
+      device: var_device,
+      name: var_name,
+      serviceKey: var_serviceKey,
+      listenAddr: var_listenAddr,
+      metaServiceKey: var_metaServiceKey,
+      version: var_version,
+      verified: var_verified,
+      reused: var_reused,
+      startedService: var_startedService,
+    );
   }
 
   @protected
@@ -5194,6 +7311,32 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
     if (sse_decode_bool(deserializer)) {
       return (sse_decode_box_autoadd_account_user_dto(deserializer));
+    } else {
+      return null;
+    }
+  }
+
+  @protected
+  AcpAuthDto? sse_decode_opt_box_autoadd_acp_auth_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    if (sse_decode_bool(deserializer)) {
+      return (sse_decode_box_autoadd_acp_auth_dto(deserializer));
+    } else {
+      return null;
+    }
+  }
+
+  @protected
+  AcpJobDto? sse_decode_opt_box_autoadd_acp_job_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    if (sse_decode_bool(deserializer)) {
+      return (sse_decode_box_autoadd_acp_job_dto(deserializer));
     } else {
       return null;
     }
@@ -5253,6 +7396,17 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
     if (sse_decode_bool(deserializer)) {
       return (sse_decode_box_autoadd_u_32(deserializer));
+    } else {
+      return null;
+    }
+  }
+
+  @protected
+  BigInt? sse_decode_opt_box_autoadd_u_64(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    if (sse_decode_bool(deserializer)) {
+      return (sse_decode_box_autoadd_u_64(deserializer));
     } else {
       return null;
     }
@@ -5395,6 +7549,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_turns = sse_decode_list_turn_summary_dto(deserializer);
     var var_firstTurnId = sse_decode_opt_String(deserializer);
     var var_turnPages = sse_decode_list_turn_items_page_dto(deserializer);
+    var var_olderUnavailable = sse_decode_bool(deserializer);
     return ThreadHistoryDto(
       historyEpoch: var_historyEpoch,
       items: var_items,
@@ -5417,6 +7572,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       turns: var_turns,
       firstTurnId: var_firstTurnId,
       turnPages: var_turnPages,
+      olderUnavailable: var_olderUnavailable,
     );
   }
 
@@ -5687,6 +7843,251 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_acp_agent_dto(AcpAgentDto self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.id, serializer);
+    sse_encode_String(self.name, serializer);
+    sse_encode_String(self.description, serializer);
+    sse_encode_String(self.source, serializer);
+    sse_encode_opt_String(self.pinnedVersion, serializer);
+    sse_encode_opt_String(self.installedVersion, serializer);
+    sse_encode_String(self.state, serializer);
+    sse_encode_opt_String(self.detail, serializer);
+    sse_encode_opt_String(self.jobId, serializer);
+    sse_encode_opt_String(self.registryVersion, serializer);
+    sse_encode_list_String(self.hostedNames, serializer);
+    sse_encode_u_32(self.approxSizeMb, serializer);
+    sse_encode_bool(self.needsNode, serializer);
+    sse_encode_bool(self.remoteInstallAllowed, serializer);
+  }
+
+  @protected
+  void sse_encode_acp_agent_flag_dto(
+    AcpAgentFlagDto self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.agentId, serializer);
+    sse_encode_String(self.setting, serializer);
+    sse_encode_String(self.labelKey, serializer);
+    sse_encode_opt_String(self.confirmKey, serializer);
+    sse_encode_bool(self.value, serializer);
+  }
+
+  @protected
+  void sse_encode_acp_agents_dto(AcpAgentsDto self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_bool(self.remoteManagement, serializer);
+    sse_encode_list_acp_agent_dto(self.agents, serializer);
+  }
+
+  @protected
+  void sse_encode_acp_auth_dto(AcpAuthDto self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.status, serializer);
+    sse_encode_list_acp_auth_method_dto(self.methods, serializer);
+    sse_encode_opt_String(self.message, serializer);
+  }
+
+  @protected
+  void sse_encode_acp_auth_method_dto(
+    AcpAuthMethodDto self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.id, serializer);
+    sse_encode_String(self.name, serializer);
+    sse_encode_String(self.description, serializer);
+    sse_encode_String(self.kind, serializer);
+    sse_encode_bool(self.remote, serializer);
+    sse_encode_bool(self.available, serializer);
+    sse_encode_opt_String(self.gatewayProtocol, serializer);
+    sse_encode_bool(self.gatewayConfigured, serializer);
+  }
+
+  @protected
+  void sse_encode_acp_binary_override_dto(
+    AcpBinaryOverrideDto self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.agentId, serializer);
+    sse_encode_String(self.path, serializer);
+  }
+
+  @protected
+  void sse_encode_acp_command_dto(
+    AcpCommandDto self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.name, serializer);
+    sse_encode_String(self.description, serializer);
+    sse_encode_opt_String(self.hint, serializer);
+  }
+
+  @protected
+  void sse_encode_acp_config_option_dto(
+    AcpConfigOptionDto self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.id, serializer);
+    sse_encode_String(self.name, serializer);
+    sse_encode_String(self.description, serializer);
+    sse_encode_String(self.category, serializer);
+    sse_encode_String(self.role, serializer);
+    sse_encode_String(self.kind, serializer);
+    sse_encode_String(self.currentValue, serializer);
+    sse_encode_list_acp_config_value_dto(self.options, serializer);
+  }
+
+  @protected
+  void sse_encode_acp_config_value_dto(
+    AcpConfigValueDto self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.value, serializer);
+    sse_encode_String(self.name, serializer);
+    sse_encode_String(self.description, serializer);
+    sse_encode_opt_String(self.group, serializer);
+  }
+
+  @protected
+  void sse_encode_acp_custom_agent_dto(
+    AcpCustomAgentDto self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.id, serializer);
+    sse_encode_String(self.name, serializer);
+    sse_encode_String(self.command, serializer);
+    sse_encode_list_String(self.args, serializer);
+    sse_encode_list_acp_env_var_dto(self.env, serializer);
+  }
+
+  @protected
+  void sse_encode_acp_data_mode_dto(
+    AcpDataModeDto self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.family, serializer);
+    sse_encode_String(self.mode, serializer);
+  }
+
+  @protected
+  void sse_encode_acp_env_var_dto(AcpEnvVarDto self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.name, serializer);
+    sse_encode_String(self.value, serializer);
+  }
+
+  @protected
+  void sse_encode_acp_gateway_dto(
+    AcpGatewayDto self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.agentId, serializer);
+    sse_encode_opt_String(self.methodId, serializer);
+    sse_encode_String(self.baseUrl, serializer);
+    sse_encode_opt_String(self.token, serializer);
+    sse_encode_bool(self.hasToken, serializer);
+    sse_encode_opt_String(self.providerName, serializer);
+    sse_encode_list_acp_env_var_dto(self.extraHeaders, serializer);
+    sse_encode_bool(self.clear, serializer);
+  }
+
+  @protected
+  void sse_encode_acp_job_dto(AcpJobDto self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.id, serializer);
+    sse_encode_String(self.kind, serializer);
+    sse_encode_String(self.agentId, serializer);
+    sse_encode_String(self.version, serializer);
+    sse_encode_String(self.state, serializer);
+    sse_encode_u_64(self.bytes, serializer);
+    sse_encode_opt_box_autoadd_u_64(self.total, serializer);
+    sse_encode_opt_String(self.message, serializer);
+    sse_encode_opt_String(self.errorCode, serializer);
+    sse_encode_opt_String(self.serviceKey, serializer);
+  }
+
+  @protected
+  void sse_encode_acp_save_dto(AcpSaveDto self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_bool(self.saved, serializer);
+    sse_encode_list_String(self.warnings, serializer);
+  }
+
+  @protected
+  void sse_encode_acp_serve_dto(AcpServeDto self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.device, serializer);
+    sse_encode_String(self.name, serializer);
+    sse_encode_String(self.serviceKey, serializer);
+    sse_encode_String(self.listenAddr, serializer);
+    sse_encode_String(self.metaServiceKey, serializer);
+    sse_encode_String(self.agentId, serializer);
+    sse_encode_String(self.agentName, serializer);
+    sse_encode_String(self.agentVersion, serializer);
+    sse_encode_acp_auth_dto(self.auth, serializer);
+    sse_encode_bool(self.reused, serializer);
+  }
+
+  @protected
+  void sse_encode_acp_settings_dto(
+    AcpSettingsDto self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_bool(self.remoteManagement, serializer);
+    sse_encode_opt_String(self.npmRegistry, serializer);
+    sse_encode_opt_String(self.claudeEnginePath, serializer);
+    sse_encode_opt_String(self.codexBinary, serializer);
+    sse_encode_list_acp_binary_override_dto(self.binaryOverrides, serializer);
+    sse_encode_list_acp_data_mode_dto(self.opencodeData, serializer);
+    sse_encode_list_acp_gateway_dto(self.gateways, serializer);
+    sse_encode_list_acp_agent_flag_dto(self.flags, serializer);
+  }
+
+  @protected
+  void sse_encode_app_capabilities_dto(
+    AppCapabilitiesDto self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.provider, serializer);
+    sse_encode_bool(self.fast, serializer);
+    sse_encode_bool(self.permissionPresets, serializer);
+    sse_encode_bool(self.guardian, serializer);
+    sse_encode_bool(self.rateLimits, serializer);
+    sse_encode_bool(self.takeover, serializer);
+    sse_encode_bool(self.externalWriterMonitor, serializer);
+    sse_encode_bool(self.localSessions, serializer);
+    sse_encode_bool(self.planMode, serializer);
+    sse_encode_String(self.effortLabel, serializer);
+    sse_encode_bool(self.approveAlwaysPersistsProject, serializer);
+    sse_encode_bool(self.multiSelectQuestions, serializer);
+    sse_encode_bool(self.childSessions, serializer);
+    sse_encode_String(self.agentName, serializer);
+    sse_encode_bool(self.steer, serializer);
+    sse_encode_bool(self.rename, serializer);
+    sse_encode_bool(self.compact, serializer);
+    sse_encode_bool(self.gitDiff, serializer);
+    sse_encode_bool(self.images, serializer);
+    sse_encode_bool(self.configOptions, serializer);
+    sse_encode_bool(self.slashCommands, serializer);
+    sse_encode_bool(self.approvalOptions, serializer);
+    sse_encode_bool(self.urlElicitation, serializer);
+    sse_encode_bool(self.runningViaThreads, serializer);
+    sse_encode_bool(self.historyPrefetch, serializer);
+    sse_encode_bool(self.sessionReload, serializer);
+  }
+
+  @protected
   void sse_encode_app_event_dto(AppEventDto self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.kind, serializer);
@@ -5737,6 +8138,11 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_bool(self.embedded, serializer);
     sse_encode_opt_String(self.codexBinary, serializer);
     sse_encode_opt_String(self.proxy, serializer);
+    sse_encode_String(self.provider, serializer);
+    sse_encode_opt_String(self.providerVersion, serializer);
+    sse_encode_bool(self.providerVerified, serializer);
+    sse_encode_opt_String(self.agentId, serializer);
+    sse_encode_opt_String(self.agentName, serializer);
   }
 
   @protected
@@ -5752,6 +8158,42 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_account_user_dto(self, serializer);
+  }
+
+  @protected
+  void sse_encode_box_autoadd_acp_auth_dto(
+    AcpAuthDto self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_acp_auth_dto(self, serializer);
+  }
+
+  @protected
+  void sse_encode_box_autoadd_acp_custom_agent_dto(
+    AcpCustomAgentDto self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_acp_custom_agent_dto(self, serializer);
+  }
+
+  @protected
+  void sse_encode_box_autoadd_acp_job_dto(
+    AcpJobDto self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_acp_job_dto(self, serializer);
+  }
+
+  @protected
+  void sse_encode_box_autoadd_acp_settings_dto(
+    AcpSettingsDto self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_acp_settings_dto(self, serializer);
   }
 
   @protected
@@ -5800,6 +8242,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   void sse_encode_box_autoadd_u_32(int self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_u_32(self, serializer);
+  }
+
+  @protected
+  void sse_encode_box_autoadd_u_64(BigInt self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_u_64(self, serializer);
   }
 
   @protected
@@ -5947,6 +8395,138 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_i_32(self.length, serializer);
     for (final item in self) {
       sse_encode_account_service_dto(item, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_list_acp_agent_dto(
+    List<AcpAgentDto> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_acp_agent_dto(item, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_list_acp_agent_flag_dto(
+    List<AcpAgentFlagDto> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_acp_agent_flag_dto(item, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_list_acp_auth_method_dto(
+    List<AcpAuthMethodDto> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_acp_auth_method_dto(item, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_list_acp_binary_override_dto(
+    List<AcpBinaryOverrideDto> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_acp_binary_override_dto(item, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_list_acp_command_dto(
+    List<AcpCommandDto> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_acp_command_dto(item, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_list_acp_config_option_dto(
+    List<AcpConfigOptionDto> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_acp_config_option_dto(item, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_list_acp_config_value_dto(
+    List<AcpConfigValueDto> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_acp_config_value_dto(item, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_list_acp_custom_agent_dto(
+    List<AcpCustomAgentDto> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_acp_custom_agent_dto(item, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_list_acp_data_mode_dto(
+    List<AcpDataModeDto> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_acp_data_mode_dto(item, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_list_acp_env_var_dto(
+    List<AcpEnvVarDto> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_acp_env_var_dto(item, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_list_acp_gateway_dto(
+    List<AcpGatewayDto> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_acp_gateway_dto(item, serializer);
     }
   }
 
@@ -6161,6 +8741,24 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_list_thread_item_dto(self.items, serializer);
     sse_encode_bool(self.hasOlder, serializer);
+    sse_encode_bool(self.olderUnavailable, serializer);
+  }
+
+  @protected
+  void sse_encode_open_code_serve_dto(
+    OpenCodeServeDto self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.device, serializer);
+    sse_encode_String(self.name, serializer);
+    sse_encode_String(self.serviceKey, serializer);
+    sse_encode_String(self.listenAddr, serializer);
+    sse_encode_String(self.metaServiceKey, serializer);
+    sse_encode_String(self.version, serializer);
+    sse_encode_bool(self.verified, serializer);
+    sse_encode_bool(self.reused, serializer);
+    sse_encode_bool(self.startedService, serializer);
   }
 
   @protected
@@ -6183,6 +8781,32 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_bool(self != null, serializer);
     if (self != null) {
       sse_encode_box_autoadd_account_user_dto(self, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_opt_box_autoadd_acp_auth_dto(
+    AcpAuthDto? self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    sse_encode_bool(self != null, serializer);
+    if (self != null) {
+      sse_encode_box_autoadd_acp_auth_dto(self, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_opt_box_autoadd_acp_job_dto(
+    AcpJobDto? self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    sse_encode_bool(self != null, serializer);
+    if (self != null) {
+      sse_encode_box_autoadd_acp_job_dto(self, serializer);
     }
   }
 
@@ -6242,6 +8866,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_bool(self != null, serializer);
     if (self != null) {
       sse_encode_box_autoadd_u_32(self, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_opt_box_autoadd_u_64(BigInt? self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    sse_encode_bool(self != null, serializer);
+    if (self != null) {
+      sse_encode_box_autoadd_u_64(self, serializer);
     }
   }
 
@@ -6361,6 +8995,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_list_turn_summary_dto(self.turns, serializer);
     sse_encode_opt_String(self.firstTurnId, serializer);
     sse_encode_list_turn_items_page_dto(self.turnPages, serializer);
+    sse_encode_bool(self.olderUnavailable, serializer);
   }
 
   @protected

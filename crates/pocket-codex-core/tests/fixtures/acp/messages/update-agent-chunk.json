@@ -1,0 +1,17 @@
+{
+  "def": "SessionNotification",
+  "frame": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess-1",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "hello"
+        }
+      }
+    }
+  }
+}

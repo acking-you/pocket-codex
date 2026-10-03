@@ -1,0 +1,10 @@
+{
+  "def": "CompleteElicitationNotification",
+  "frame": {
+    "jsonrpc": "2.0",
+    "method": "elicitation/complete",
+    "params": {
+      "elicitationId": "e1"
+    }
+  }
+}

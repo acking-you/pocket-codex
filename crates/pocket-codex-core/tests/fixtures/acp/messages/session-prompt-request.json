@@ -1,0 +1,37 @@
+{
+  "def": "PromptRequest",
+  "frame": {
+    "jsonrpc": "2.0",
+    "id": 7,
+    "method": "session/prompt",
+    "params": {
+      "sessionId": "sess-1",
+      "prompt": [
+        {
+          "type": "text",
+          "text": "hi"
+        },
+        {
+          "type": "image",
+          "data": "aGk=",
+          "mimeType": "image/png"
+        },
+        {
+          "type": "resource_link",
+          "uri": "file:///work/a.rs",
+          "name": "a.rs",
+          "mimeType": "text/x-rust",
+          "size": 10
+        },
+        {
+          "type": "resource",
+          "resource": {
+            "uri": "file:///work/b.txt",
+            "text": "b",
+            "mimeType": "text/plain"
+          }
+        }
+      ]
+    }
+  }
+}

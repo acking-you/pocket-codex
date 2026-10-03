@@ -1,0 +1,10 @@
+{
+  "def": "ReadTextFileResponse",
+  "frame": {
+    "jsonrpc": "2.0",
+    "id": 15,
+    "result": {
+      "content": "fn main() {}"
+    }
+  }
+}

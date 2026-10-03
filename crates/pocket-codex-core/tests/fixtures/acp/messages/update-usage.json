@@ -1,0 +1,19 @@
+{
+  "def": "SessionNotification",
+  "frame": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess-1",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 1200,
+        "size": 200000,
+        "cost": {
+          "amount": 0.5,
+          "currency": "USD"
+        }
+      }
+    }
+  }
+}

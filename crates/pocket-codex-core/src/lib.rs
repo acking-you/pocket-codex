@@ -31,4 +31,8 @@ pub mod service;
 /// Provider-independent, restart-safe history window synchronization.
 pub mod history_sync;
 
+/// Agent Client Protocol (ACP) v1 wire types, transcript folding and `_pcx`
+/// extension types.
+pub mod acp;
+
 pub use error::{Error, Result};

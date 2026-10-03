@@ -9,6 +9,20 @@ breaking change goes.
 
 ## Unreleased
 
+- Host and control OpenCode sessions with the same hosting flow and session UI
+  as Codex. Hosting picks a provider; OpenCode is attached to the user's
+  background service (started with `opencode service start` when missing, never
+  stopped by Pocket-Codex) and published through a loopback gateway that only
+  forwards allowlisted routes. Sessions are grouped by directory, child sessions
+  open read-only, and controls follow each provider's capabilities. OpenCode
+  2.0.18 is the verified contract version.
+- Host any ACP (Agent Client Protocol) agent through one generic provider:
+  Claude Code, Codex (codex-acp) and OpenCode 1.x / 2.x. One desktop hub per
+  hosted instance multiplexes its sessions to every controller. Agents install
+  from a pinned catalog with HTTPS + SRI downloads and no silent upgrades; model
+  gateway tokens are write-only, and remote management needs the host's
+  explicit toggle. A new conversation shows the agent's models, effort and
+  modes before its first prompt. Hosting is desktop only.
 - Resolve a macOS GUI host's login-shell PATH on demand for external Codex and
   npm's Node launcher. Keep the controller environment and window startup
   unchanged, preserve inherited tool choices, and terminate the probe's process

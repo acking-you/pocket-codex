@@ -1,0 +1,20 @@
+{
+  "def": "SessionNotification",
+  "frame": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess-1",
+      "update": {
+        "sessionUpdate": "plan",
+        "entries": [
+          {
+            "content": "Step",
+            "priority": "high",
+            "status": "in_progress"
+          }
+        ]
+      }
+    }
+  }
+}

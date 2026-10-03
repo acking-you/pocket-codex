@@ -1,0 +1,11 @@
+{
+  "def": "CloseSessionRequest",
+  "frame": {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "method": "session/close",
+    "params": {
+      "sessionId": "sess-1"
+    }
+  }
+}

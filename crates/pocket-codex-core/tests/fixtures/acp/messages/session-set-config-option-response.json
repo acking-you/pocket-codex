@@ -1,0 +1,23 @@
+{
+  "def": "SetSessionConfigOptionResponse",
+  "frame": {
+    "jsonrpc": "2.0",
+    "id": 8,
+    "result": {
+      "configOptions": [
+        {
+          "id": "model",
+          "name": "Model",
+          "type": "select",
+          "currentValue": "m2",
+          "options": [
+            {
+              "value": "m2",
+              "name": "M2"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

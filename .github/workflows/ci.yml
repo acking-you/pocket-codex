@@ -29,6 +29,7 @@ jobs:
       test_crates: ${{ steps.detect.outputs.test_crates }}
       clippy_crates: ${{ steps.detect.outputs.clippy_crates }}
       flutter: ${{ steps.detect.outputs.flutter }}
+      android: ${{ steps.detect.outputs.android }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -132,6 +133,9 @@ jobs:
       - name: Check Android dependency boundary
         run: python3 scripts/check_mobile_dependencies.py
 
+      - name: Check the ACP agent catalog
+        run: python3 scripts/acp_catalog.py check
+
       - name: Run tests for affected crates
         # subset -> the changed crates + their dependents; all -> the full
         # workspace. See scripts/ci_affected.py.
@@ -139,6 +143,35 @@ jobs:
           MODE: ${{ needs.changes.outputs.rust_mode }}
           CRATES: ${{ needs.changes.outputs.test_crates }}
         run: python3 scripts/ci_affected.py run-test
+
+  # Compile the bridge for Android: the desktop-only ACP hosting modules are
+  # replaced by stubs there, which no desktop build compiles. The runner image
+  # ships an Android NDK at $ANDROID_NDK_LATEST_HOME.
+  android-check:
+    name: android cargo check
+    needs: changes
+    if: needs.changes.outputs.android == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: cargo check the bridge for aarch64-linux-android
+        run: |
+          export CC_aarch64_linux_android="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang"
+          export AR_aarch64_linux_android="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
+          rustup target add aarch64-linux-android
+          cargo check -p pocket_codex_bridge --target aarch64-linux-android --locked
 
   flutter:
     name: flutter analyze + test
@@ -207,13 +240,13 @@ jobs:
   # any real failure or cancellation fails it.
   ci-result:
     name: CI result
-    needs: [changes, fmt, clippy, test, flutter, macos-host]
+    needs: [changes, fmt, clippy, test, android-check, flutter, macos-host]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Verify no required job failed
         run: |
-          results="${{ needs.changes.result }} ${{ needs.fmt.result }} ${{ needs.clippy.result }} ${{ needs.test.result }} ${{ needs.flutter.result }} ${{ needs.macos-host.result }}"
+          results="${{ needs.changes.result }} ${{ needs.fmt.result }} ${{ needs.clippy.result }} ${{ needs.test.result }} ${{ needs.android-check.result }} ${{ needs.flutter.result }} ${{ needs.macos-host.result }}"
           echo "job results: $results"
           for r in $results; do
             if [ "$r" = "failure" ] || [ "$r" = "cancelled" ]; then

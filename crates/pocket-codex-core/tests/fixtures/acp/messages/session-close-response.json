@@ -1,0 +1,8 @@
+{
+  "def": "CloseSessionResponse",
+  "frame": {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "result": {}
+  }
+}

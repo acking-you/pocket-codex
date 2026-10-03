@@ -1786,4 +1786,372 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get editMessageDraftHint => '保留当前草稿和附件，编辑后的文字将加在草稿末尾。';
+
+  @override
+  String get providerLabel => '服务提供方';
+
+  @override
+  String get providerCodex => 'Codex';
+
+  @override
+  String get providerOpenCode => 'OpenCode';
+
+  @override
+  String get openCodeHostHint =>
+      '附接到本机正在运行的 OpenCode 服务并注册到你的账号。停止托管不会关闭 OpenCode。';
+
+  @override
+  String get openCodeBinaryPath => 'opencode 可执行文件路径（可选）';
+
+  @override
+  String get openCodeBinaryHint => '仅在 OpenCode 后台服务未运行、需要启动时使用。';
+
+  @override
+  String get openCodeNotFound => '未找到 opencode。如果其服务未运行，请填写可执行文件路径。';
+
+  @override
+  String get openCodeVersionLabel => 'OpenCode 版本';
+
+  @override
+  String get openCodeVerified => '已验证';
+
+  @override
+  String get openCodeUnverified => '未验证版本：接口契约检查已通过，但本版本未针对它测试。';
+
+  @override
+  String get openCodeGatewayLabel => 'OpenCode 网关';
+
+  @override
+  String get hostMetaLabel => 'Meta 服务';
+
+  @override
+  String get openCodeStopNote => '停止托管只撤销访问能力，OpenCode 会继续运行。';
+
+  @override
+  String get variant => '变体';
+
+  @override
+  String get approveAlwaysProject => '始终允许（项目）';
+
+  @override
+  String get approveAlwaysProjectTitle => '在此项目中始终允许？';
+
+  @override
+  String get approveAlwaysProjectBody =>
+      'OpenCode 会把它保存为整个项目的权限规则。在你于 OpenCode 中删除该规则之前，此项目所有会话里匹配的请求都不会再询问。';
+
+  @override
+  String get viewSubSession => '查看子会话';
+
+  @override
+  String get subSessionReadOnly => '子会话 · 只读';
+
+  @override
+  String get backToParentSession => '返回父会话';
+
+  @override
+  String get providerAcp => 'ACP';
+
+  @override
+  String get acpAgentLabel => 'Agent';
+
+  @override
+  String get acpAgentsTitle => 'ACP agent';
+
+  @override
+  String get acpManageHost => '管理 ACP agent';
+
+  @override
+  String get acpManageAgents => '管理 agent…';
+
+  @override
+  String get acpInstall => '安装';
+
+  @override
+  String get acpInstalling => '正在安装…';
+
+  @override
+  String acpInstallFailed(String message) {
+    return '安装失败：$message';
+  }
+
+  @override
+  String get acpUpgrade => '升级';
+
+  @override
+  String get acpUninstall => '卸载';
+
+  @override
+  String acpUninstallConfirm(String name) {
+    return '确定卸载 $name？会话仍保存在 agent 自己的目录里，之后可以重新安装。';
+  }
+
+  @override
+  String get acpUninstallInUse => '正在托管，停止托管后才能卸载。';
+
+  @override
+  String get acpInstalled => '已安装';
+
+  @override
+  String acpInstalledVersion(String version) {
+    return '已安装 $version';
+  }
+
+  @override
+  String acpPinnedVersion(String version) {
+    return '清单版本 $version';
+  }
+
+  @override
+  String acpSizeMb(int size) {
+    return '约 $size MB';
+  }
+
+  @override
+  String acpHostedAs(String names) {
+    return '托管为 $names';
+  }
+
+  @override
+  String get acpSourceCustom => '自定义';
+
+  @override
+  String get acpNotInstalled => '未安装';
+
+  @override
+  String get acpUnsupportedPlatform => '此平台不支持';
+
+  @override
+  String get acpEngineMissing => '未找到 Codex';
+
+  @override
+  String acpEngineIncompatible(String found, String required) {
+    return '不支持 Codex $found（需要 $required）';
+  }
+
+  @override
+  String acpRegistryNewer(String version) {
+    return '注册表有新版本 $version（未经 Pocket-Codex 验证）';
+  }
+
+  @override
+  String get acpRegistryInstall => '安装注册表版本';
+
+  @override
+  String get acpRegistryInstallWarning =>
+      '这个版本来自 ACP 注册表，未经 Pocket-Codex 验证，npm 依赖也没有锁定。仍要安装吗？';
+
+  @override
+  String get acpUnpinned => '此版本未经 Pocket-Codex 锁定';
+
+  @override
+  String get acpRemoteManagement => '远程管理';
+
+  @override
+  String get acpRemoteManagementHint =>
+      '允许你登录的其他设备在这台电脑上安装清单锁定的 agent 版本并开始托管。自定义 agent 和设置只能在本机修改。';
+
+  @override
+  String get acpRemoteDisabled => '这台主机关闭了远程管理，请在主机的 ACP 设置里打开。';
+
+  @override
+  String get acpHostStart => '开始托管';
+
+  @override
+  String get acpLogin => '登录';
+
+  @override
+  String get acpLoginOnHost => '请在主机上完成登录。';
+
+  @override
+  String get acpRecheck => '重新检测';
+
+  @override
+  String get acpAuthRequired => 'agent 需要登录。';
+
+  @override
+  String get acpOtherLogins => '其他登录方式';
+
+  @override
+  String get acpGateway => '模型网关';
+
+  @override
+  String acpGatewayConfigured(String url) {
+    return '已配置模型网关：$url';
+  }
+
+  @override
+  String get acpGatewayConfigure => '配置模型网关';
+
+  @override
+  String get acpGatewayUnsupported => '该 agent 没有提供网关登录方式，网关配置未生效。';
+
+  @override
+  String get acpGatewayMethod => '登录方式';
+
+  @override
+  String get acpGatewayAuto => '自动（第一个网关方式）';
+
+  @override
+  String acpGatewayProtocol(String protocol) {
+    return '$protocol 协议';
+  }
+
+  @override
+  String get acpGatewayUrl => '网关地址';
+
+  @override
+  String get acpGatewayUrlHintAnthropic =>
+      '填根地址，例如 https://relay.example.com，Claude Code 会自己拼上 /v1/messages。';
+
+  @override
+  String get acpGatewayUrlHintOpenai =>
+      '填到 /v1，例如 https://relay.example.com/v1，网关需要支持 /v1/responses。';
+
+  @override
+  String get acpGatewayToken => '密钥';
+
+  @override
+  String get acpGatewayTokenKept => '已保存，留空表示不修改';
+
+  @override
+  String get acpGatewayProvider => 'provider 名称（可选）';
+
+  @override
+  String get acpGatewayHeaders => '额外请求头（每行一个 KEY=VALUE）';
+
+  @override
+  String get acpGatewayNote => '密钥只保存在这台主机的 agents.toml（权限 0600），不会发送给其他设备。';
+
+  @override
+  String get acpGatewayInsecureHttp => '只有本机和内网地址允许使用 http，流量不加密。';
+
+  @override
+  String acpGatewayFailed(String message) {
+    return '网关登录失败：$message';
+  }
+
+  @override
+  String get acpGatewayClear => '删除网关';
+
+  @override
+  String get acpSubscriptionLogin => '允许 Claude 订阅登录';
+
+  @override
+  String get acpSubscriptionLoginConfirmTitle => '允许订阅登录？';
+
+  @override
+  String get acpSubscriptionLoginConfirmBody =>
+      '打开后，agent 会显示 Claude 自带的订阅登录。通过第三方客户端使用 Claude 订阅可能不符合 Anthropic 的条款，确认接受后再继续。';
+
+  @override
+  String get acpRestartToApply => '重启该 agent 后生效。';
+
+  @override
+  String get acpAdvanced => '高级';
+
+  @override
+  String get acpCustomAgent => '自定义 agent';
+
+  @override
+  String get acpCustomAdd => '添加自定义 agent';
+
+  @override
+  String get acpCustomId => 'id（小写字母、数字、-）';
+
+  @override
+  String get acpCustomName => '名称';
+
+  @override
+  String get acpCustomCommand => '命令（绝对路径）';
+
+  @override
+  String get acpCustomArgs => '参数（每行一个）';
+
+  @override
+  String get acpCustomEnv => '环境变量（每行一个 KEY=VALUE）';
+
+  @override
+  String get acpCustomEnvNote => '环境变量以明文保存在主机的 agents.toml（权限 0600）。';
+
+  @override
+  String get acpCustomDelete => '删除';
+
+  @override
+  String get acpNpmRegistry => 'npm 镜像地址（https）';
+
+  @override
+  String get acpCodexBinary => 'codex-acp 使用的 Codex 可执行文件';
+
+  @override
+  String get acpClaudeEnginePath => 'Claude Code 可执行文件';
+
+  @override
+  String get acpBinaryOverride => '可执行文件覆盖';
+
+  @override
+  String acpDataMode(String family) {
+    return '$family 数据';
+  }
+
+  @override
+  String get acpDataAuto => '自动';
+
+  @override
+  String get acpDataShared => '共享';
+
+  @override
+  String get acpDataIsolated => '隔离';
+
+  @override
+  String get acpSharedDataWarning =>
+      '共享模式下，agent 会读写你自己的 OpenCode 使用的同一个数据库。不同版本的 OpenCode 可能会修改对方也在读取的数据。确定继续？';
+
+  @override
+  String get acpSettingsSaved => '设置已保存';
+
+  @override
+  String acpOptionConfirmTitle(String option) {
+    return '选择“$option”？';
+  }
+
+  @override
+  String get acpOptionConfirmBody => 'agent 会记住这个选择，之后可能不再询问。';
+
+  @override
+  String get acpUrlTitle => 'agent 请你打开一个网页';
+
+  @override
+  String acpUrlOpen(String host) {
+    return '打开 $host';
+  }
+
+  @override
+  String get acpUrlDecline => '拒绝';
+
+  @override
+  String acpQueueFailed(int count) {
+    return '$count 条排队的消息没有发送';
+  }
+
+  @override
+  String get acpOlderUnavailable => '更早的历史已经无法从 agent 读取。';
+
+  @override
+  String get acpSessionChanged => '这个会话在别处有更新，重新载入可查看最新内容。';
+
+  @override
+  String get acpSessionNotLoadable => '这个 agent 无法打开以前的会话。';
+
+  @override
+  String get acpReload => '重新载入';
+
+  @override
+  String get acpStopRunningConfirm => '这台主机上还有对话在运行。仍要停止托管吗？运行中的轮次会被取消。';
+
+  @override
+  String get acpProcessRestarting => 'agent 意外退出，正在重启…';
+
+  @override
+  String get acpProcessFailed => 'agent 反复退出，请在主机上检查后重新开始托管。';
 }

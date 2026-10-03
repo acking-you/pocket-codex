@@ -25,7 +25,24 @@ String friendlyError(Object error) {
     }
   }
 
-  return text.trim();
+  text = text.trim();
+  // Hub errors carry a machine-readable `[acp.<code>] ` prefix (TRD §6); the
+  // UI shows the message after it.
+  final code = _acpPrefix.firstMatch(text);
+  if (code != null) text = text.substring(code.end).trimLeft();
+  return text;
+}
+
+final _acpPrefix = RegExp(r'^\[(acp\.[a-z_]+)\] ?');
+
+/// The `acp.<code>` of an ACP hub error, so the UI can pick its own wording.
+String? acpErrorCode(Object error) {
+  final text = (error is AnyhowException ? error.message : error.toString())
+      .trim();
+  final match =
+      _acpPrefix.firstMatch(text) ??
+      RegExp(r'\[(acp\.[a-z_]+)\]').firstMatch(text);
+  return match?.group(1);
 }
 
 /// True when a turn-failure message is the Windows sandbox helper failing to

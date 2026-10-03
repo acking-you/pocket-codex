@@ -767,5 +767,160 @@
   "messageCopyFailed": "Could not copy the text. Please try again.",
   "addToDraft": "Add to draft",
   "editMessageHint": "Reuse this text as a new message. History stays unchanged; original attachments are not added.",
-  "editMessageDraftHint": "Your existing draft and attachments will be kept. This text will be added below."
+  "editMessageDraftHint": "Your existing draft and attachments will be kept. This text will be added below.",
+  "providerLabel": "Provider",
+  "providerCodex": "Codex",
+  "providerOpenCode": "OpenCode",
+  "openCodeHostHint": "Attaches to your running OpenCode service and registers it to your account. Stopping hosting does not stop OpenCode.",
+  "openCodeBinaryPath": "opencode binary path (optional)",
+  "openCodeBinaryHint": "Only used when OpenCode's background service is not running and has to be started.",
+  "openCodeNotFound": "opencode wasn't found. If its service isn't running, enter the binary path.",
+  "openCodeVersionLabel": "OpenCode version",
+  "openCodeVerified": "Verified",
+  "openCodeUnverified": "Unverified version: its API matched the contract, but this build was not tested against it.",
+  "openCodeGatewayLabel": "OpenCode gateway",
+  "hostMetaLabel": "Meta service",
+  "openCodeStopNote": "Stopping hosting only withdraws access. OpenCode keeps running.",
+  "variant": "Variant",
+  "approveAlwaysProject": "Always allow (project)",
+  "approveAlwaysProjectTitle": "Always allow in this project?",
+  "approveAlwaysProjectBody": "OpenCode saves this as a permission rule for the whole project. Matching requests in every session of this project will run without asking until you remove the rule in OpenCode.",
+  "viewSubSession": "View sub-session",
+  "subSessionReadOnly": "Sub-session · read-only",
+  "backToParentSession": "Back to parent session",
+  "providerAcp": "ACP",
+  "acpAgentLabel": "Agent",
+  "acpAgentsTitle": "ACP agents",
+  "acpManageHost": "Manage ACP agents",
+  "acpManageAgents": "Manage agents…",
+  "acpInstall": "Install",
+  "acpInstalling": "Installing…",
+  "acpInstallFailed": "Install failed: {message}",
+  "@acpInstallFailed": {
+    "placeholders": { "message": { "type": "String" } }
+  },
+  "acpUpgrade": "Upgrade",
+  "acpUninstall": "Uninstall",
+  "acpUninstallConfirm": "Uninstall {name}? Its sessions stay with the agent; you can install it again later.",
+  "@acpUninstallConfirm": {
+    "placeholders": { "name": { "type": "String" } }
+  },
+  "acpUninstallInUse": "Stop hosting it before uninstalling.",
+  "acpInstalled": "Installed",
+  "acpInstalledVersion": "Installed {version}",
+  "@acpInstalledVersion": {
+    "placeholders": { "version": { "type": "String" } }
+  },
+  "acpPinnedVersion": "Pinned {version}",
+  "@acpPinnedVersion": {
+    "placeholders": { "version": { "type": "String" } }
+  },
+  "acpSizeMb": "About {size} MB",
+  "@acpSizeMb": {
+    "placeholders": { "size": { "type": "int" } }
+  },
+  "acpHostedAs": "Hosted as {names}",
+  "@acpHostedAs": {
+    "placeholders": { "names": { "type": "String" } }
+  },
+  "acpSourceCustom": "Custom",
+  "acpNotInstalled": "Not installed",
+  "acpUnsupportedPlatform": "Not available on this platform",
+  "acpEngineMissing": "Codex is not installed or not found",
+  "acpEngineIncompatible": "Codex {found} is not supported (needs {required})",
+  "@acpEngineIncompatible": {
+    "placeholders": { "found": { "type": "String" }, "required": { "type": "String" } }
+  },
+  "acpRegistryNewer": "The registry has a newer version {version} (not verified by Pocket-Codex)",
+  "@acpRegistryNewer": {
+    "placeholders": { "version": { "type": "String" } }
+  },
+  "acpRegistryInstall": "Install registry version",
+  "acpRegistryInstallWarning": "This version comes from the ACP registry and was not verified by Pocket-Codex. Its npm dependencies are not locked. Install it anyway?",
+  "acpUnpinned": "This version is not pinned by Pocket-Codex",
+  "acpRemoteManagement": "Remote management",
+  "acpRemoteManagementHint": "Lets your other signed-in devices install pinned agent versions on this computer and start hosting them. Custom agents and settings stay host-only.",
+  "acpRemoteDisabled": "Remote management is turned off on this host. Turn it on in the host's ACP settings.",
+  "acpHostStart": "Start hosting",
+  "acpLogin": "Log in",
+  "acpLoginOnHost": "Finish this login on the host computer.",
+  "acpRecheck": "Check again",
+  "acpAuthRequired": "The agent needs you to log in.",
+  "acpOtherLogins": "Other ways to log in",
+  "acpGateway": "Model gateway",
+  "acpGatewayConfigured": "Model gateway configured: {url}",
+  "@acpGatewayConfigured": {
+    "placeholders": { "url": { "type": "String" } }
+  },
+  "acpGatewayConfigure": "Configure model gateway",
+  "acpGatewayUnsupported": "This agent offers no gateway login, so the gateway setting has no effect.",
+  "acpGatewayMethod": "Login method",
+  "acpGatewayAuto": "Automatic (first gateway method)",
+  "acpGatewayProtocol": "{protocol} protocol",
+  "@acpGatewayProtocol": {
+    "placeholders": { "protocol": { "type": "String" } }
+  },
+  "acpGatewayUrl": "Gateway URL",
+  "acpGatewayUrlHintAnthropic": "Root address, e.g. https://relay.example.com — Claude Code adds /v1/messages.",
+  "acpGatewayUrlHintOpenai": "Up to /v1, e.g. https://relay.example.com/v1 — the gateway must support /v1/responses.",
+  "acpGatewayToken": "Token",
+  "acpGatewayTokenKept": "Saved — leave empty to keep it",
+  "acpGatewayProvider": "Provider name (optional)",
+  "acpGatewayHeaders": "Extra headers (one KEY=VALUE per line)",
+  "acpGatewayNote": "The token is stored only in agents.toml on this host (mode 0600) and is never sent to other devices.",
+  "acpGatewayInsecureHttp": "Plain http is only allowed on loopback and private networks; traffic is not encrypted.",
+  "acpGatewayFailed": "Gateway login failed: {message}",
+  "@acpGatewayFailed": {
+    "placeholders": { "message": { "type": "String" } }
+  },
+  "acpGatewayClear": "Remove gateway",
+  "acpSubscriptionLogin": "Allow Claude subscription login",
+  "acpSubscriptionLoginConfirmTitle": "Allow subscription login?",
+  "acpSubscriptionLoginConfirmBody": "This shows Claude's own subscription login in the agent. Using a Claude subscription through third-party clients may be against Anthropic's terms. Continue only if you accept that.",
+  "acpRestartToApply": "Restart the agent for this to take effect.",
+  "acpAdvanced": "Advanced",
+  "acpCustomAgent": "Custom agents",
+  "acpCustomAdd": "Add custom agent",
+  "acpCustomId": "Id (lowercase letters, digits, -)",
+  "acpCustomName": "Name",
+  "acpCustomCommand": "Command (absolute path)",
+  "acpCustomArgs": "Arguments (one per line)",
+  "acpCustomEnv": "Environment (one KEY=VALUE per line)",
+  "acpCustomEnvNote": "Environment variables are stored in plain text in agents.toml on the host (mode 0600).",
+  "acpCustomDelete": "Delete",
+  "acpNpmRegistry": "npm registry mirror (https)",
+  "acpCodexBinary": "Codex executable for codex-acp",
+  "acpClaudeEnginePath": "Claude Code executable",
+  "acpBinaryOverride": "Executable override",
+  "acpDataMode": "{family} data",
+  "@acpDataMode": {
+    "placeholders": { "family": { "type": "String" } }
+  },
+  "acpDataAuto": "Automatic",
+  "acpDataShared": "Shared",
+  "acpDataIsolated": "Isolated",
+  "acpSharedDataWarning": "Shared mode lets the agent read and write the same database as your own OpenCode. Different OpenCode versions may change data the other one also reads. Continue?",
+  "acpSettingsSaved": "Settings saved",
+  "acpOptionConfirmTitle": "Choose \"{option}\"?",
+  "@acpOptionConfirmTitle": {
+    "placeholders": { "option": { "type": "String" } }
+  },
+  "acpOptionConfirmBody": "The agent will remember this choice and may not ask again.",
+  "acpUrlTitle": "The agent asks you to open a page",
+  "acpUrlOpen": "Open {host}",
+  "@acpUrlOpen": {
+    "placeholders": { "host": { "type": "String" } }
+  },
+  "acpUrlDecline": "Decline",
+  "acpQueueFailed": "{count, plural, =1{1 queued message was not sent} other{{count} queued messages were not sent}}",
+  "@acpQueueFailed": {
+    "placeholders": { "count": { "type": "int" } }
+  },
+  "acpOlderUnavailable": "Earlier history is no longer available from the agent.",
+  "acpSessionChanged": "This session changed elsewhere. Reload to see the latest.",
+  "acpSessionNotLoadable": "This agent cannot open earlier sessions.",
+  "acpReload": "Reload",
+  "acpStopRunningConfirm": "A conversation is still running on this host. Stop hosting anyway? Running turns will be cancelled.",
+  "acpProcessRestarting": "The agent stopped unexpectedly and is restarting…",
+  "acpProcessFailed": "The agent keeps exiting. Check it on the host and restart hosting."
 }

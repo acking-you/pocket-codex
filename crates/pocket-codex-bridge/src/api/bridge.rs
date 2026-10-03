@@ -9,7 +9,8 @@ use pocket_codex_core::config::Mode;
 
 use crate::{
     engine::{
-        account, app_session, config, discovery, logging, meta, runtime, serve, sessions, transport,
+        account, acp, acp_manage, app_session, config, discovery, logging, meta, opencode, runtime,
+        serve, serve_acp, serve_opencode, sessions, transport,
     },
     frb_generated::StreamSink,
 };
@@ -67,7 +68,11 @@ pub fn init_bridge(support_dir: String) -> Result<()> {
     // Mirror the captured log to disk (last 6 hours), so a hang can be read
     // after the fact instead of only in a viewer that was open at the time.
     logging::init_file(&support_dir);
-    runtime::init(support_dir)
+    runtime::init(support_dir)?;
+    // Desktop: back the `/acp/v1` routes of every meta service; a no-op on
+    // mobile.
+    acp_manage::register();
+    Ok(())
 }
 
 /// Current config view (relay/key presence, locale, and account state).
@@ -387,6 +392,589 @@ pub struct AppServeStatusDto {
     /// Upstream proxy codex + the API proxy were started with, or `None` when
     /// they inherit the app's environment.
     pub proxy: Option<String>,
+    /// Service provider of this host: `codex` or `opencode`. For `opencode`
+    /// the `app_*` fields describe the OpenCode gateway and `api_*` are empty.
+    pub provider: String,
+    /// Provider version when known (OpenCode).
+    pub provider_version: Option<String>,
+    /// Whether that version is the one this build was verified against.
+    pub provider_verified: bool,
+    /// ACP hosts: agent id (`None` for Codex and OpenCode).
+    pub agent_id: Option<String>,
+    /// ACP hosts: agent display name.
+    pub agent_name: Option<String>,
+}
+
+/// Result of attaching and publishing a local OpenCode service.
+pub struct OpenCodeServeDto {
+    /// Device id the services registered under.
+    pub device: String,
+    /// Instance name.
+    pub name: String,
+    /// `pcx:<device>:opencode:<name>` key.
+    pub service_key: String,
+    /// Loopback gateway address.
+    pub listen_addr: String,
+    /// `pcx:<device>:meta:<name>` key.
+    pub meta_service_key: String,
+    /// OpenCode version.
+    pub version: String,
+    /// Whether the version is the verified one (others passed the contract).
+    pub verified: bool,
+    /// Whether an existing host was reused.
+    pub reused: bool,
+    /// Whether this call asked OpenCode to start its background service.
+    pub started_service: bool,
+}
+
+/// Attach to the local OpenCode background service (asking OpenCode to start
+/// it when none is running) and publish it as `opencode:<name>` plus a
+/// `meta:<name>` service. Stopping hosting never stops OpenCode. The name must
+/// not be in use by a Codex host on this device.
+pub fn app_serve_start_opencode(
+    name: Option<String>,
+    binary_override: Option<String>,
+) -> Result<OpenCodeServeDto> {
+    let r = serve_opencode::start(name, binary_override)?;
+    Ok(OpenCodeServeDto {
+        device: r.device,
+        name: r.name,
+        service_key: r.service_key,
+        listen_addr: r.listen_addr,
+        meta_service_key: r.meta_service_key,
+        version: r.version,
+        verified: r.verified,
+        reused: r.reused,
+        started_service: r.started_service,
+    })
+}
+
+/// The resolved `opencode` executable (explicit → `$PATH` →
+/// `~/.opencode/bin/opencode`), or `None`.
+pub fn opencode_locate(binary_override: Option<String>) -> Option<String> {
+    serve_opencode::locate(binary_override.as_deref()).map(|p| p.display().to_string())
+}
+
+// ---------------------------------------------------------------------------
+// ACP hosting and agent management (TRD §4.4.5). Hosting and local management
+// are desktop only; `meta_acp_*` manage a remote host through its meta service.
+// ---------------------------------------------------------------------------
+
+/// Result of starting (or reusing) an ACP host.
+pub struct AcpServeDto {
+    /// Device id.
+    pub device: String,
+    /// Instance name.
+    pub name: String,
+    /// `pcx:<device>:acp:<name>`.
+    pub service_key: String,
+    /// Loopback hub address.
+    pub listen_addr: String,
+    /// `pcx:<device>:meta:<name>`.
+    pub meta_service_key: String,
+    /// Agent id.
+    pub agent_id: String,
+    /// Agent display name.
+    pub agent_name: String,
+    /// Installed agent version.
+    pub agent_version: String,
+    /// Authentication state.
+    pub auth: AcpAuthDto,
+    /// An existing host was reused.
+    pub reused: bool,
+}
+
+/// Authentication state of an ACP agent.
+pub struct AcpAuthDto {
+    /// `unknown` | `ok` | `required` | `inProgress`.
+    pub status: String,
+    /// Offered methods.
+    pub methods: Vec<AcpAuthMethodDto>,
+    /// Detail for the user.
+    pub message: Option<String>,
+}
+
+/// One authentication method.
+pub struct AcpAuthMethodDto {
+    /// Method id.
+    pub id: String,
+    /// Display name.
+    pub name: String,
+    /// Description.
+    pub description: String,
+    /// `agent` | `terminal` | `gateway`.
+    pub kind: String,
+    /// A remote controller may start it.
+    pub remote: bool,
+    /// False when a legacy terminal method cannot be reproduced safely.
+    pub available: bool,
+    /// Gateway protocol (`anthropic`, `openai`, …), for gateway methods.
+    pub gateway_protocol: Option<String>,
+    /// A gateway is configured on the host for this method.
+    pub gateway_configured: bool,
+}
+
+/// Install / hosting state of one agent.
+pub struct AcpAgentDto {
+    /// Agent id.
+    pub id: String,
+    /// Display name.
+    pub name: String,
+    /// Description.
+    pub description: String,
+    /// `catalog` | `custom`.
+    pub source: String,
+    /// Catalog version.
+    pub pinned_version: Option<String>,
+    /// Installed version.
+    pub installed_version: Option<String>,
+    /// not_installed | installing | installed | failed | unsupported_platform |
+    /// engine_missing | engine_incompatible.
+    pub state: String,
+    /// Detail.
+    pub detail: Option<String>,
+    /// Running install job.
+    pub job_id: Option<String>,
+    /// Newer, unverified registry version.
+    pub registry_version: Option<String>,
+    /// Instances hosting it.
+    pub hosted_names: Vec<String>,
+    /// Approximate size.
+    pub approx_size_mb: u32,
+    /// Installs the private Node runtime.
+    pub needs_node: bool,
+    /// Remote controllers may install it.
+    pub remote_install_allowed: bool,
+}
+
+/// A remote host's agents.
+pub struct AcpAgentsDto {
+    /// Remote management is on.
+    pub remote_management: bool,
+    /// Agents.
+    pub agents: Vec<AcpAgentDto>,
+}
+
+/// Progress of an install or host job.
+pub struct AcpJobDto {
+    /// Job id.
+    pub id: String,
+    /// `install` | `host`.
+    pub kind: String,
+    /// Agent id.
+    pub agent_id: String,
+    /// Version.
+    pub version: String,
+    /// State (see TRD §4.3.9).
+    pub state: String,
+    /// Bytes downloaded.
+    pub bytes: u64,
+    /// Total bytes, when known.
+    pub total: Option<u64>,
+    /// Detail.
+    pub message: Option<String>,
+    /// `acp.<code>` on failure.
+    pub error_code: Option<String>,
+    /// Set when a host job is done.
+    pub service_key: Option<String>,
+}
+
+/// One environment variable or header.
+pub struct AcpEnvVarDto {
+    /// Name.
+    pub name: String,
+    /// Value.
+    pub value: String,
+}
+
+/// A user-defined agent.
+pub struct AcpCustomAgentDto {
+    /// Id.
+    pub id: String,
+    /// Display name.
+    pub name: String,
+    /// Absolute executable path.
+    pub command: String,
+    /// Arguments.
+    pub args: Vec<String>,
+    /// Environment (stored in plain text on the host).
+    pub env: Vec<AcpEnvVarDto>,
+}
+
+/// Host ACP settings.
+pub struct AcpSettingsDto {
+    /// Remote management (D14).
+    pub remote_management: bool,
+    /// npm mirror (https).
+    pub npm_registry: Option<String>,
+    /// Claude Code executable override (D7).
+    pub claude_engine_path: Option<String>,
+    /// Codex path for codex-acp (D6).
+    pub codex_binary: Option<String>,
+    /// Archive agent executable overrides.
+    pub binary_overrides: Vec<AcpBinaryOverrideDto>,
+    /// OpenCode data families (D19).
+    pub opencode_data: Vec<AcpDataModeDto>,
+    /// Model gateways (D20).
+    pub gateways: Vec<AcpGatewayDto>,
+    /// Catalog switches (D21).
+    pub flags: Vec<AcpAgentFlagDto>,
+}
+
+/// One `conditional_args` switch from the catalog (D21), e.g. claude-acp /
+/// allow_subscription_login.
+pub struct AcpAgentFlagDto {
+    /// Agent id.
+    pub agent_id: String,
+    /// Setting key.
+    pub setting: String,
+    /// l10n key of the label.
+    pub label_key: String,
+    /// l10n key of the confirm dialog.
+    pub confirm_key: Option<String>,
+    /// Current value.
+    pub value: bool,
+}
+
+/// D20. Reading returns `token: None` plus `has_token`; writing with
+/// `token: None` keeps the stored token, `Some("")` deletes it. `clear == true`
+/// removes the whole gateway entry.
+pub struct AcpGatewayDto {
+    /// Agent id.
+    pub agent_id: String,
+    /// Gateway method; `None` = the first one.
+    pub method_id: Option<String>,
+    /// Base URL.
+    pub base_url: String,
+    /// Write-only token.
+    pub token: Option<String>,
+    /// A token is stored.
+    pub has_token: bool,
+    /// Provider name (codex-acp).
+    pub provider_name: Option<String>,
+    /// Extra headers.
+    pub extra_headers: Vec<AcpEnvVarDto>,
+    /// Remove the gateway.
+    pub clear: bool,
+}
+
+/// Executable override of an archive agent.
+pub struct AcpBinaryOverrideDto {
+    /// Agent id.
+    pub agent_id: String,
+    /// Absolute path.
+    pub path: String,
+}
+
+/// Result of saving settings.
+pub struct AcpSaveDto {
+    /// The settings were saved.
+    pub saved: bool,
+    /// D16 warnings to confirm.
+    pub warnings: Vec<String>,
+}
+
+/// D19 data mode of an OpenCode data family.
+pub struct AcpDataModeDto {
+    /// `opencode-v1` | `opencode-v2`.
+    pub family: String,
+    /// `auto` | `shared` | `isolated`.
+    pub mode: String,
+}
+
+fn acp_auth_dto(auth: pocket_codex_core::acp::pcx::AuthState) -> AcpAuthDto {
+    AcpAuthDto {
+        status: auth.status,
+        methods: auth
+            .methods
+            .into_iter()
+            .map(|m| AcpAuthMethodDto {
+                id: m.id,
+                name: m.name,
+                description: m.description,
+                kind: m.kind,
+                remote: m.remote,
+                available: m.available,
+                gateway_protocol: m.gateway_protocol,
+                gateway_configured: m.gateway_configured,
+            })
+            .collect(),
+        message: auth.message,
+    }
+}
+
+fn acp_agent_dto(a: pocket_codex_core::acp::pcx::AgentStatus) -> AcpAgentDto {
+    AcpAgentDto {
+        id: a.id,
+        name: a.name,
+        description: a.description,
+        source: a.source,
+        pinned_version: a.pinned_version,
+        installed_version: a.installed_version,
+        state: a.state,
+        detail: a.detail,
+        job_id: a.job_id,
+        registry_version: a.registry_version,
+        hosted_names: a.hosted_names,
+        approx_size_mb: a.approx_size_mb,
+        needs_node: a.needs_node,
+        remote_install_allowed: a.remote_install_allowed,
+    }
+}
+
+fn acp_job_dto(j: pocket_codex_core::acp::pcx::JobProgress) -> AcpJobDto {
+    AcpJobDto {
+        id: j.id,
+        kind: j.kind,
+        agent_id: j.agent_id,
+        version: j.version,
+        state: j.state,
+        bytes: j.bytes,
+        total: j.total,
+        message: j.message,
+        error_code: j.error_code,
+        service_key: j.service_key,
+    }
+}
+
+fn pairs(list: Vec<(String, String)>) -> Vec<AcpEnvVarDto> {
+    list.into_iter()
+        .map(|(name, value)| AcpEnvVarDto {
+            name,
+            value,
+        })
+        .collect()
+}
+
+fn unpairs(list: Vec<AcpEnvVarDto>) -> Vec<(String, String)> {
+    list.into_iter().map(|e| (e.name, e.value)).collect()
+}
+
+fn acp_settings_dto(v: pocket_codex_core::acp::pcx::AcpSettingsView) -> AcpSettingsDto {
+    AcpSettingsDto {
+        remote_management: v.remote_management,
+        npm_registry: v.npm_registry,
+        claude_engine_path: v.claude_engine_path,
+        codex_binary: v.codex_binary,
+        binary_overrides: v
+            .binary_overrides
+            .into_iter()
+            .map(|(agent_id, path)| AcpBinaryOverrideDto {
+                agent_id,
+                path,
+            })
+            .collect(),
+        opencode_data: v
+            .opencode_data
+            .into_iter()
+            .map(|(family, mode)| AcpDataModeDto {
+                family,
+                mode,
+            })
+            .collect(),
+        gateways: v
+            .gateways
+            .into_iter()
+            .map(|g| AcpGatewayDto {
+                agent_id: g.agent_id,
+                method_id: g.method_id,
+                base_url: g.base_url,
+                token: None,
+                has_token: g.has_token,
+                provider_name: g.provider_name,
+                extra_headers: pairs(g.extra_headers),
+                clear: false,
+            })
+            .collect(),
+        flags: v
+            .flags
+            .into_iter()
+            .map(|f| AcpAgentFlagDto {
+                agent_id: f.agent_id,
+                setting: f.setting,
+                label_key: f.label_key,
+                confirm_key: f.confirm_key,
+                value: f.value,
+            })
+            .collect(),
+    }
+}
+
+fn acp_settings_view(d: AcpSettingsDto) -> pocket_codex_core::acp::pcx::AcpSettingsView {
+    use pocket_codex_core::acp::pcx::{AcpSettingsView, AgentFlagView, GatewayView};
+    AcpSettingsView {
+        remote_management: d.remote_management,
+        npm_registry: d.npm_registry,
+        claude_engine_path: d.claude_engine_path,
+        codex_binary: d.codex_binary,
+        binary_overrides: d
+            .binary_overrides
+            .into_iter()
+            .map(|b| (b.agent_id, b.path))
+            .collect(),
+        opencode_data: d
+            .opencode_data
+            .into_iter()
+            .map(|m| (m.family, m.mode))
+            .collect(),
+        gateways: d
+            .gateways
+            .into_iter()
+            .map(|g| GatewayView {
+                agent_id: g.agent_id,
+                method_id: g.method_id,
+                base_url: g.base_url,
+                token: g.token,
+                has_token: g.has_token,
+                provider_name: g.provider_name,
+                extra_headers: unpairs(g.extra_headers),
+                clear: g.clear,
+            })
+            .collect(),
+        flags: d
+            .flags
+            .into_iter()
+            .map(|f| AgentFlagView {
+                agent_id: f.agent_id,
+                setting: f.setting,
+                label_key: f.label_key,
+                confirm_key: f.confirm_key,
+                value: f.value,
+            })
+            .collect(),
+    }
+}
+
+/// Host `agent_id` (an installed catalog agent or a custom agent) as
+/// `acp:<name>` plus `meta:<name>`. Desktop only.
+pub fn app_serve_start_acp(name: Option<String>, agent_id: String) -> Result<AcpServeDto> {
+    let r = serve_acp::start(name, agent_id)?;
+    Ok(AcpServeDto {
+        device: r.device,
+        name: r.name,
+        service_key: r.service_key,
+        listen_addr: r.listen_addr,
+        meta_service_key: r.meta_service_key,
+        agent_id: r.agent_id,
+        agent_name: r.agent_name,
+        agent_version: r.agent_version,
+        auth: acp_auth_dto(r.auth),
+        reused: r.reused,
+    })
+}
+
+/// Catalog and custom agents of this device. Desktop only.
+pub fn acp_agents() -> Result<Vec<AcpAgentDto>> {
+    Ok(acp_manage::agents()?
+        .into_iter()
+        .map(acp_agent_dto)
+        .collect())
+}
+
+/// Install `agent_id` (`version` = the catalog pin when `None`); returns the
+/// job id. Desktop only.
+pub fn acp_install(agent_id: String, version: Option<String>) -> Result<String> {
+    acp_manage::install(&agent_id, version.as_deref())
+}
+
+/// Progress of a local install or host job.
+pub fn acp_job(job_id: String) -> Result<Option<AcpJobDto>> {
+    Ok(acp_manage::job(&job_id).map(acp_job_dto))
+}
+
+/// Uninstall `agent_id` (refused while hosted). Desktop only.
+pub fn acp_uninstall(agent_id: String) -> Result<()> {
+    acp_manage::uninstall(&agent_id)
+}
+
+/// Host ACP settings (gateway tokens are never returned). Desktop only.
+pub fn acp_settings() -> Result<AcpSettingsDto> {
+    Ok(acp_settings_dto(acp_manage::settings()?))
+}
+
+/// Save host ACP settings. `force == false` returns the D16 warnings without
+/// saving when there are any. Desktop only.
+pub fn acp_settings_set(settings: AcpSettingsDto, force: bool) -> Result<AcpSaveDto> {
+    let (saved, warnings) = acp_manage::save_settings(acp_settings_view(settings), force)?;
+    Ok(AcpSaveDto {
+        saved,
+        warnings,
+    })
+}
+
+/// User-defined agents. Desktop only.
+pub fn acp_custom_agents() -> Result<Vec<AcpCustomAgentDto>> {
+    Ok(acp_manage::custom_agents()?
+        .into_iter()
+        .map(|c| AcpCustomAgentDto {
+            id: c.id,
+            name: c.name,
+            command: c.command,
+            args: c.args,
+            env: pairs(c.env),
+        })
+        .collect())
+}
+
+/// Add or replace a user-defined agent. Desktop only.
+pub fn acp_custom_agent_put(agent: AcpCustomAgentDto) -> Result<()> {
+    acp_manage::put_custom_agent(pocket_codex_core::acp::pcx::CustomAgentDef {
+        id: agent.id,
+        name: agent.name,
+        command: agent.command,
+        args: agent.args,
+        env: unpairs(agent.env),
+    })
+}
+
+/// Delete a user-defined agent (refused while hosted). Desktop only.
+pub fn acp_custom_agent_delete(id: String) -> Result<()> {
+    acp_manage::delete_custom_agent(&id)
+}
+
+/// Run a terminal login of host `name` in a terminal on this desktop.
+pub fn acp_auth_terminal(name: String, method_id: String) -> Result<()> {
+    acp_manage::auth_terminal(&name, &method_id)
+}
+
+/// Start an agent-type login of host `name`; returns `inProgress`.
+pub fn acp_auth_agent(name: String, method_id: String) -> Result<AcpAuthDto> {
+    Ok(acp_auth_dto(acp_manage::auth_agent(&name, &method_id)?))
+}
+
+/// Restart the agent of host `name` and re-detect authentication.
+pub fn acp_auth_recheck(name: String) -> Result<AcpAuthDto> {
+    Ok(acp_auth_dto(acp_manage::auth_recheck(&name)?))
+}
+
+/// Agents of the host behind `service_key` (any of its services).
+pub fn meta_acp_agents(service_key: String) -> Result<AcpAgentsDto> {
+    let r = meta::acp_agents(&service_key)?;
+    Ok(AcpAgentsDto {
+        remote_management: r.remote_management,
+        agents: r.agents.into_iter().map(acp_agent_dto).collect(),
+    })
+}
+
+/// Install the pinned version of `agent_id` on the remote host; returns the
+/// job id to poll with [`meta_acp_job`].
+pub fn meta_acp_install(service_key: String, agent_id: String) -> Result<String> {
+    meta::acp_install(&service_key, &agent_id)
+}
+
+/// Progress of a job on the remote host.
+pub fn meta_acp_job(service_key: String, job_id: String) -> Result<Option<AcpJobDto>> {
+    Ok(meta::acp_job(&service_key, &job_id)?.map(acp_job_dto))
+}
+
+/// Start hosting `agent_id` on the remote host; returns a host job id (poll
+/// [`meta_acp_job`]; its `service_key` is set when done).
+pub fn meta_acp_host(
+    service_key: String,
+    agent_id: String,
+    name: Option<String>,
+) -> Result<String> {
+    meta::acp_host(&service_key, &agent_id, name)
 }
 
 /// Legacy version endpoint; returns `unavailable` because no engine is bundled.
@@ -443,6 +1031,11 @@ pub fn app_serve_status() -> Vec<AppServeStatusDto> {
             embedded: s.embedded,
             codex_binary: s.codex_binary,
             proxy: s.proxy,
+            provider: s.provider,
+            provider_version: s.provider_version,
+            provider_verified: s.provider_verified,
+            agent_id: s.agent_id,
+            agent_name: s.agent_name,
         })
         .collect()
 }
@@ -626,6 +1219,8 @@ pub struct ThreadHistoryDto {
     pub first_turn_id: Option<String>,
     /// Cached pages of independently selected turns.
     pub turn_pages: Vec<TurnItemsPageDto>,
+    /// Older history exists but is no longer available (ACP transcripts).
+    pub older_unavailable: bool,
 }
 
 /// A selected turn's bounded, ascending history window.
@@ -657,7 +1252,19 @@ pub fn app_thread_turn_page(
     load_more: bool,
     delta_only: Option<bool>,
 ) -> Result<TurnItemsPageDto> {
-    let read = if delta_only.unwrap_or(false) {
+    if acp::is_acp(&service_key) {
+        return acp::thread_turn_page(
+            &service_key,
+            &thread_id,
+            &turn_id,
+            load_more,
+            delta_only.unwrap_or(false),
+        )
+        .map(turn_page_dto);
+    }
+    let read = if opencode::is_opencode(&service_key) {
+        opencode::thread_turn_page
+    } else if delta_only.unwrap_or(false) {
         app_session::thread_turn_page_delta
     } else {
         app_session::thread_turn_page
@@ -683,6 +1290,8 @@ pub struct OlderPageDto {
     pub items: Vec<ThreadItemDto>,
     /// Whether older items still remain.
     pub has_older: bool,
+    /// Older history exists but is no longer available (ACP transcripts).
+    pub older_unavailable: bool,
 }
 
 /// The server-reported runtime configuration of a thread — what its turns
@@ -713,17 +1322,35 @@ pub struct ThreadRuntimeConfigDto {
 /// Connect to an app-server service: subscribe on `127.0.0.1:<local_port>`,
 /// open the JSON-RPC websocket and run the `initialize` handshake. Idempotent.
 pub fn app_connect(service_key: String, local_port: u16) -> Result<()> {
+    if acp::is_acp(&service_key) {
+        return acp::connect(service_key, local_port, &transport::resolve_blocking()?);
+    }
+    if opencode::is_opencode(&service_key) {
+        return opencode::connect(service_key, local_port, &transport::resolve_blocking()?);
+    }
     app_session::connect(service_key, local_port, &transport::resolve_blocking()?)
 }
 
 /// Whether a live app-server session exists for `service_key`.
 #[frb(sync)]
 pub fn app_is_connected(service_key: String) -> bool {
+    if acp::is_acp(&service_key) {
+        return acp::is_connected(&service_key);
+    }
+    if opencode::is_opencode(&service_key) {
+        return opencode::is_connected(&service_key);
+    }
     app_session::is_connected(&service_key)
 }
 
 /// Disconnect the app-server session and its pb-mapper subscription.
 pub fn app_disconnect(service_key: String) {
+    if acp::is_acp(&service_key) {
+        return acp::disconnect(&service_key);
+    }
+    if opencode::is_opencode(&service_key) {
+        return opencode::disconnect(&service_key);
+    }
     app_session::disconnect(&service_key);
 }
 
@@ -746,6 +1373,12 @@ pub fn app_probe(service_key: String) -> Result<bool> {
 /// needs a different fix from a dead backend. This hands the transport's own
 /// words to the UI so it can name the actual problem.
 pub fn app_probe_reason(service_key: String) -> Result<Option<String>> {
+    if acp::is_acp(&service_key) {
+        return Ok(acp::probe_reason(service_key, &transport::resolve_blocking()?));
+    }
+    if opencode::is_opencode(&service_key) {
+        return Ok(opencode::probe_reason(service_key, &transport::resolve_blocking()?));
+    }
     Ok(app_session::probe_reason(service_key, 0, &transport::resolve_blocking()?))
 }
 
@@ -881,7 +1514,14 @@ pub fn app_events(service_key: String, sink: StreamSink<AppEventDto>) -> Result<
     // surfaces as an uncaught async error on the Dart side — fatal on desktop
     // (no global handler) — rather than a catchable stream `onError`/`onDone`.
     runtime::runtime().spawn(async move {
-        let rx = match app_session::subscribe_events(&service_key) {
+        let subscribed = if acp::is_acp(&service_key) {
+            acp::subscribe_events(&service_key)
+        } else if opencode::is_opencode(&service_key) {
+            opencode::subscribe_events(&service_key)
+        } else {
+            app_session::subscribe_events(&service_key)
+        };
+        let rx = match subscribed {
             Ok(rx) => rx,
             // Not connected: close the stream so Dart sees `onDone`.
             Err(_) => return,
@@ -956,7 +1596,14 @@ mod bridge_events_tests;
 
 /// List threads known to the app-server.
 pub fn app_thread_list(service_key: String) -> Result<Vec<ThreadMetaDto>> {
-    Ok(app_session::thread_list(&service_key)?
+    let threads = if acp::is_acp(&service_key) {
+        acp::thread_list(&service_key)?
+    } else if opencode::is_opencode(&service_key) {
+        opencode::thread_list(&service_key)?
+    } else {
+        app_session::thread_list(&service_key)?
+    };
+    Ok(threads
         .into_iter()
         .map(|t| ThreadMetaDto {
             id: t.id,
@@ -970,7 +1617,14 @@ pub fn app_thread_list(service_key: String) -> Result<Vec<ThreadMetaDto>> {
 
 /// List the models the app-server offers.
 pub fn app_model_list(service_key: String) -> Result<Vec<ModelInfoDto>> {
-    Ok(app_session::model_list(&service_key)?
+    let models = if acp::is_acp(&service_key) {
+        acp::model_list(&service_key)?
+    } else if opencode::is_opencode(&service_key) {
+        opencode::model_list(&service_key)?
+    } else {
+        app_session::model_list(&service_key)?
+    };
+    Ok(models
         .into_iter()
         .map(|m| ModelInfoDto {
             id: m.id,
@@ -997,6 +1651,12 @@ pub fn app_thread_start(
     service_tier: Option<String>,
     sandbox: Option<String>,
 ) -> Result<String> {
+    if acp::is_acp(&service_key) {
+        return acp::thread_start(&service_key, model, cwd);
+    }
+    if opencode::is_opencode(&service_key) {
+        return opencode::thread_start(&service_key, model, cwd);
+    }
     app_session::thread_start(
         &service_key,
         model,
@@ -1016,6 +1676,13 @@ pub fn app_turn_steer(
     text: String,
     images: Option<Vec<String>>,
 ) -> Result<String> {
+    if acp::is_acp(&service_key) {
+        return Err(anyhow!("steer is not supported by ACP agents"));
+    }
+    if opencode::is_opencode(&service_key) {
+        let images = images.unwrap_or_default();
+        return opencode::turn_steer(&service_key, &thread_id, turn_id.as_deref(), &text, &images);
+    }
     app_session::turn_steer(
         &service_key,
         &thread_id,
@@ -1033,6 +1700,12 @@ pub fn app_respond_approval(
     request_id: String,
     decision: String,
 ) -> Result<()> {
+    if acp::is_acp(&service_key) {
+        return acp::respond_approval(&service_key, &request_id, &decision);
+    }
+    if opencode::is_opencode(&service_key) {
+        return opencode::respond_approval(&service_key, &request_id, &decision);
+    }
     app_session::respond_approval(&service_key, &request_id, &decision)
 }
 
@@ -1048,12 +1721,24 @@ pub fn app_respond_user_input(
     request_id: String,
     answers_json: String,
 ) -> Result<()> {
+    if acp::is_acp(&service_key) {
+        return acp::respond_user_input(&service_key, &request_id, &answers_json);
+    }
+    if opencode::is_opencode(&service_key) {
+        return opencode::respond_user_input(&service_key, &request_id, &answers_json);
+    }
     app_session::respond_user_input(&service_key, &request_id, &answers_json)
 }
 
 /// Resume an existing thread (load it into the session) before reading it or
 /// sending turns; otherwise the server reports "thread not found".
 pub fn app_thread_resume(service_key: String, thread_id: String) -> Result<()> {
+    if acp::is_acp(&service_key) {
+        return acp::thread_resume(&service_key, &thread_id);
+    }
+    if opencode::is_opencode(&service_key) {
+        return opencode::thread_resume(&service_key, &thread_id);
+    }
     app_session::thread_resume(&service_key, &thread_id)
 }
 
@@ -1083,7 +1768,11 @@ pub fn app_thread_read(
     thread_id: String,
     include_turn_pages: Option<bool>,
 ) -> Result<ThreadHistoryDto> {
-    let h = if include_turn_pages.unwrap_or(true) {
+    let h = if acp::is_acp(&service_key) {
+        acp::thread_read(&service_key, &thread_id)?
+    } else if opencode::is_opencode(&service_key) {
+        opencode::thread_read(&service_key, &thread_id)?
+    } else if include_turn_pages.unwrap_or(true) {
         app_session::thread_read(&service_key, &thread_id)?
     } else {
         app_session::thread_read_with_pages(&service_key, &thread_id, false)?
@@ -1113,6 +1802,7 @@ fn history_dto(h: app_session::ThreadHistory) -> ThreadHistoryDto {
         has_older: h.has_older,
         first_turn_id: h.first_turn_id,
         turn_pages: h.turn_pages.into_iter().map(turn_page_dto).collect(),
+        older_unavailable: h.older_unavailable,
         turns: h
             .turns
             .into_iter()
@@ -1131,10 +1821,17 @@ fn history_dto(h: app_session::ThreadHistory) -> ThreadHistoryDto {
 /// Returns an empty page when the thread reads whole or is already at its
 /// start.
 pub fn app_thread_older_page(service_key: String, thread_id: String) -> Result<OlderPageDto> {
-    let page = app_session::thread_older_page(&service_key, &thread_id)?;
+    let page = if acp::is_acp(&service_key) {
+        acp::thread_older_page(&service_key, &thread_id)?
+    } else if opencode::is_opencode(&service_key) {
+        opencode::thread_older_page(&service_key, &thread_id)?
+    } else {
+        app_session::thread_older_page(&service_key, &thread_id)?
+    };
     Ok(OlderPageDto {
         items: page.items.into_iter().map(item_dto).collect(),
         has_older: page.has_older,
+        older_unavailable: page.older_unavailable,
     })
 }
 
@@ -1145,6 +1842,16 @@ pub fn app_thread_turn_items(
     thread_id: String,
     turn_id: String,
 ) -> Result<Vec<ThreadItemDto>> {
+    if acp::is_acp(&service_key) {
+        return Ok(acp::thread_turn_items(&service_key, &thread_id, &turn_id)?
+            .into_iter()
+            .map(item_dto)
+            .collect());
+    }
+    if opencode::is_opencode(&service_key) {
+        let page = opencode::thread_turn_page(&service_key, &thread_id, &turn_id, false)?;
+        return Ok(page.items.into_iter().map(item_dto).collect());
+    }
     Ok(app_session::thread_turn_items(&service_key, &thread_id, &turn_id)?
         .into_iter()
         .map(item_dto)
@@ -1160,7 +1867,14 @@ pub fn app_thread_runtime_config(
     service_key: String,
     thread_id: String,
 ) -> Option<ThreadRuntimeConfigDto> {
-    app_session::thread_runtime_config(&service_key, &thread_id).map(|c| ThreadRuntimeConfigDto {
+    let config = if acp::is_acp(&service_key) {
+        acp::thread_runtime_config(&service_key, &thread_id)
+    } else if opencode::is_opencode(&service_key) {
+        opencode::thread_runtime_config(&service_key, &thread_id)
+    } else {
+        app_session::thread_runtime_config(&service_key, &thread_id)
+    };
+    config.map(|c| ThreadRuntimeConfigDto {
         model: c.model,
         model_provider: c.model_provider,
         reasoning_effort: c.reasoning_effort,
@@ -1176,18 +1890,36 @@ pub fn app_thread_runtime_config(
 /// Read the account rate-limit / quota snapshot as raw JSON (5h + weekly
 /// windows). Parsed on the Dart side since the shape is nested and volatile.
 pub fn app_rate_limits(service_key: String) -> Result<String> {
+    if acp::is_acp(&service_key) {
+        return Err(anyhow!("rate limits are not supported by ACP agents"));
+    }
+    if opencode::is_opencode(&service_key) {
+        return Err(anyhow!("rate limits are not available for OpenCode services"));
+    }
     app_session::rate_limits(&service_key)
 }
 
 /// Unified diff of the repo at `cwd` vs its remote default branch. Empty when
 /// the cwd isn't a git repo or there are no changes.
 pub fn app_git_diff(service_key: String, cwd: String) -> Result<String> {
+    if acp::is_acp(&service_key) {
+        return Err(anyhow!("git diff is not supported by ACP agents"));
+    }
+    if opencode::is_opencode(&service_key) {
+        return opencode::git_diff(&service_key, &cwd);
+    }
     app_session::git_diff(&service_key, &cwd)
 }
 
 /// Start a manual conversation compaction; the server emits `thread/compacted`
 /// when done.
 pub fn app_compact(service_key: String, thread_id: String) -> Result<()> {
+    if acp::is_acp(&service_key) {
+        return Err(anyhow!("compaction is not supported by ACP agents"));
+    }
+    if opencode::is_opencode(&service_key) {
+        return opencode::compact(&service_key, &thread_id);
+    }
     app_session::compact(&service_key, &thread_id)
 }
 
@@ -1199,6 +1931,9 @@ pub fn app_compact(service_key: String, thread_id: String) -> Result<()> {
 /// so the UI fetches these lazily for the rows it actually shows instead of
 /// paying for every conversation up front.
 pub async fn app_thread_summary(service_key: String, thread_id: String) -> Result<Option<String>> {
+    if acp::is_acp(&service_key) || opencode::is_opencode(&service_key) {
+        return Ok(None);
+    }
     // Summary RPCs must not occupy the CPU-sized FRB pool, even on one-core
     // devices. The UI separately bounds how many background requests run.
     runtime::runtime()
@@ -1210,6 +1945,12 @@ pub async fn app_thread_summary(service_key: String, thread_id: String) -> Resul
 /// follows the thread across devices); an empty `name` clears it, and the UI
 /// falls back to the thread preview.
 pub fn app_set_thread_name(service_key: String, thread_id: String, name: String) -> Result<()> {
+    if acp::is_acp(&service_key) {
+        return Err(anyhow!("renaming is not supported by ACP agents"));
+    }
+    if opencode::is_opencode(&service_key) {
+        return opencode::set_thread_name(&service_key, &thread_id, &name);
+    }
     app_session::set_thread_name(&service_key, &thread_id, &name)
 }
 
@@ -1239,6 +1980,28 @@ pub fn app_turn_start(
     collaboration_mode: Option<String>,
     reasoning_effort: Option<String>,
 ) -> Result<()> {
+    if acp::is_acp(&service_key) {
+        return acp::turn_start(
+            &service_key,
+            &thread_id,
+            text,
+            images,
+            model,
+            collaboration_mode,
+            reasoning_effort,
+        );
+    }
+    if opencode::is_opencode(&service_key) {
+        return opencode::turn_start(
+            &service_key,
+            &thread_id,
+            text,
+            images,
+            model,
+            collaboration_mode,
+            reasoning_effort,
+        );
+    }
     app_session::turn_start(
         &service_key,
         &thread_id,
@@ -1261,7 +2024,309 @@ pub fn app_turn_interrupt(
     thread_id: String,
     turn_id: Option<String>,
 ) -> Result<()> {
+    if acp::is_acp(&service_key) {
+        return acp::turn_interrupt(&service_key, &thread_id, turn_id);
+    }
+    if opencode::is_opencode(&service_key) {
+        return opencode::turn_interrupt(&service_key, &thread_id, turn_id);
+    }
     app_session::turn_interrupt(&service_key, &thread_id, turn_id)
+}
+
+/// What a session service's provider supports, so the shared session UI can
+/// hide controls that do not apply.
+pub struct AppCapabilitiesDto {
+    /// `codex` or `opencode`.
+    pub provider: String,
+    /// Fast service tier toggle.
+    pub fast: bool,
+    /// Approval / sandbox permission presets.
+    pub permission_presets: bool,
+    /// Guardian (auto-review) approvals.
+    pub guardian: bool,
+    /// Account rate-limit snapshot.
+    pub rate_limits: bool,
+    /// Taking over a session held by another local process.
+    pub takeover: bool,
+    /// Monitoring another writer of the same session.
+    pub external_writer_monitor: bool,
+    /// Sessions read directly from this device's disk.
+    pub local_sessions: bool,
+    /// Plan collaboration mode.
+    pub plan_mode: bool,
+    /// Label of the reasoning selector: `effort` or `variant`.
+    pub effort_label: String,
+    /// Whether "allow for session" persists a project rule instead.
+    pub approve_always_persists_project: bool,
+    /// Multi-select questions.
+    pub multi_select_questions: bool,
+    /// Child (subagent) sessions that can be opened read-only.
+    pub child_sessions: bool,
+    /// Agent display name (ACP; empty otherwise).
+    pub agent_name: String,
+    /// Supplementing a running turn.
+    pub steer: bool,
+    /// Renaming a conversation.
+    pub rename: bool,
+    /// Manual compaction.
+    pub compact: bool,
+    /// Git diff review.
+    pub git_diff: bool,
+    /// Image attachments.
+    pub images: bool,
+    /// The generic config option panel (ACP).
+    pub config_options: bool,
+    /// Agent slash commands (ACP).
+    pub slash_commands: bool,
+    /// Approval cards offer the agent's own options (ACP).
+    pub approval_options: bool,
+    /// URL elicitation cards (ACP).
+    pub url_elicitation: bool,
+    /// Running sessions come from `app_running_threads`.
+    pub running_via_threads: bool,
+    /// Running-session tails can be prefetched.
+    pub history_prefetch: bool,
+    /// The hub can re-materialize a session (ACP).
+    pub session_reload: bool,
+}
+
+/// Static capabilities of the provider behind `service_key` (no network).
+#[frb(sync)]
+pub fn app_capabilities(service_key: String) -> AppCapabilitiesDto {
+    if acp::is_acp(&service_key) {
+        let caps = acp::capabilities(&service_key);
+        return AppCapabilitiesDto {
+            provider: "acp".to_string(),
+            fast: false,
+            permission_presets: false,
+            guardian: false,
+            rate_limits: false,
+            takeover: false,
+            external_writer_monitor: false,
+            local_sessions: false,
+            plan_mode: caps.plan_mode,
+            effort_label: "effort".to_string(),
+            approve_always_persists_project: false,
+            multi_select_questions: caps.connected,
+            child_sessions: false,
+            agent_name: caps.agent_name,
+            steer: false,
+            rename: false,
+            compact: false,
+            git_diff: false,
+            images: caps.images,
+            config_options: caps.config_options,
+            slash_commands: caps.slash_commands,
+            approval_options: caps.connected,
+            url_elicitation: caps.connected,
+            running_via_threads: true,
+            history_prefetch: true,
+            session_reload: caps.connected,
+        };
+    }
+    let opencode = opencode::is_opencode(&service_key);
+    AppCapabilitiesDto {
+        provider: if opencode { "opencode" } else { "codex" }.to_string(),
+        fast: !opencode,
+        permission_presets: !opencode,
+        guardian: !opencode,
+        rate_limits: !opencode,
+        takeover: !opencode,
+        external_writer_monitor: !opencode,
+        local_sessions: !opencode,
+        plan_mode: true,
+        effort_label: if opencode { "variant" } else { "effort" }.to_string(),
+        approve_always_persists_project: opencode,
+        multi_select_questions: opencode,
+        child_sessions: opencode,
+        agent_name: String::new(),
+        steer: true,
+        rename: true,
+        compact: true,
+        git_diff: true,
+        images: true,
+        config_options: false,
+        slash_commands: false,
+        approval_options: false,
+        url_elicitation: false,
+        running_via_threads: opencode,
+        history_prefetch: !opencode,
+        session_reload: false,
+    }
+}
+
+/// Ids of an OpenCode service's sessions that are executing now.
+pub fn app_running_threads(service_key: String) -> Result<Vec<String>> {
+    if acp::is_acp(&service_key) {
+        return acp::running_sessions(&service_key);
+    }
+    if !opencode::is_opencode(&service_key) {
+        return Err(anyhow!("running threads are listed through the meta service for Codex"));
+    }
+    opencode::running_sessions(&service_key)
+}
+
+// ---------------------------------------------------------------------------
+// ACP sessions (TRD §4.4.5): agent-specific approvals, URL elicitations,
+// config options, slash commands, reload and login.
+// ---------------------------------------------------------------------------
+
+/// One ACP session config option. `role` is `model` | `effort` | `mode` |
+/// `other` (§4.5.3); the generic panel shows `mode` and `other`.
+pub struct AcpConfigOptionDto {
+    /// Option id.
+    pub id: String,
+    /// Display name.
+    pub name: String,
+    /// Description.
+    pub description: String,
+    /// ACP category (may be empty).
+    pub category: String,
+    /// `model` | `effort` | `mode` | `other`.
+    pub role: String,
+    /// `select` | `boolean`.
+    pub kind: String,
+    /// Current value (`true` / `false` for booleans).
+    pub current_value: String,
+    /// Values of a select option.
+    pub options: Vec<AcpConfigValueDto>,
+}
+
+/// One value of a select option.
+pub struct AcpConfigValueDto {
+    /// Value id.
+    pub value: String,
+    /// Display name.
+    pub name: String,
+    /// Description.
+    pub description: String,
+    /// Group name, when grouped.
+    pub group: Option<String>,
+}
+
+/// One agent slash command.
+pub struct AcpCommandDto {
+    /// Command name (without `/`).
+    pub name: String,
+    /// Description.
+    pub description: String,
+    /// Input hint.
+    pub hint: Option<String>,
+}
+
+/// Answer a permission request with one of the agent's own options.
+pub fn app_respond_permission_option(
+    service_key: String,
+    request_id: String,
+    option_id: String,
+) -> Result<()> {
+    acp::respond_permission_option(&service_key, &request_id, &option_id)
+}
+
+/// Accept or decline a URL elicitation.
+pub fn app_respond_elicitation_url(
+    service_key: String,
+    request_id: String,
+    accept: bool,
+) -> Result<()> {
+    acp::respond_elicitation_url(&service_key, &request_id, accept)
+}
+
+fn config_value_str(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Null => String::new(),
+        other => other.to_string(),
+    }
+}
+
+/// Config options of an ACP session (falling back to the hub defaults).
+pub fn app_config_options(
+    service_key: String,
+    thread_id: String,
+) -> Result<Vec<AcpConfigOptionDto>> {
+    use pocket_codex_core::acp::ConfigSelectEntry;
+    Ok(acp::config_options(&service_key, &thread_id)?
+        .into_iter()
+        .map(|o| {
+            let mut values = Vec::new();
+            for entry in &o.options {
+                match entry {
+                    ConfigSelectEntry::Option(v) => values.push(AcpConfigValueDto {
+                        value: v.value.clone(),
+                        name: v.name.clone(),
+                        description: v.description.clone().unwrap_or_default(),
+                        group: None,
+                    }),
+                    ConfigSelectEntry::Group(g) => {
+                        values.extend(g.options.iter().map(|v| AcpConfigValueDto {
+                            value: v.value.clone(),
+                            name: v.name.clone(),
+                            description: v.description.clone().unwrap_or_default(),
+                            group: Some(if g.name.is_empty() {
+                                g.group.clone()
+                            } else {
+                                g.name.clone()
+                            }),
+                        }))
+                    },
+                }
+            }
+            AcpConfigOptionDto {
+                role: acp::config_role(&o).to_string(),
+                current_value: config_value_str(&o.current_value),
+                id: o.id,
+                name: o.name,
+                description: o.description.unwrap_or_default(),
+                category: o.category.unwrap_or_default(),
+                kind: o.kind,
+                options: values,
+            }
+        })
+        .collect())
+}
+
+/// Set an ACP session option; `boolean` sends `value == "true"` as a bool.
+pub fn app_set_config_option(
+    service_key: String,
+    thread_id: String,
+    config_id: String,
+    value: String,
+    boolean: bool,
+) -> Result<()> {
+    acp::set_config_option(&service_key, &thread_id, &config_id, &value, boolean)
+}
+
+/// Slash commands an ACP session currently offers.
+pub fn app_slash_commands(service_key: String, thread_id: String) -> Result<Vec<AcpCommandDto>> {
+    Ok(acp::slash_commands(&service_key, &thread_id)?
+        .into_iter()
+        .map(|c| AcpCommandDto {
+            hint: c
+                .input
+                .as_ref()
+                .and_then(|i| i["hint"].as_str())
+                .map(str::to_string),
+            name: c.name,
+            description: c.description,
+        })
+        .collect())
+}
+
+/// Ask the hub to re-materialize an ACP session from the agent.
+pub fn app_thread_reload(service_key: String, thread_id: String) -> Result<()> {
+    acp::thread_reload(&service_key, &thread_id)
+}
+
+/// Cached authentication state of an ACP service; `None` before connect.
+#[frb(sync)]
+pub fn app_auth_state(service_key: String) -> Option<AcpAuthDto> {
+    acp::auth_state(&service_key).map(acp_auth_dto)
+}
+
+/// Start an agent-type login on the host; returns `inProgress`.
+pub fn app_auth_authenticate(service_key: String, method_id: String) -> Result<AcpAuthDto> {
+    Ok(acp_auth_dto(acp::auth_authenticate(&service_key, &method_id)?))
 }
 
 // ---------------------------------------------------------------------------
@@ -1437,6 +2502,12 @@ pub fn app_local_session_transcript(thread_id: String) -> Result<Vec<ThreadItemD
 /// report says exactly which processes were killed / survived and whether
 /// the resume took.
 pub fn app_force_resume(service_key: String, thread_id: String) -> Result<ForceResumeReportDto> {
+    if acp::is_acp(&service_key) {
+        return Err(anyhow!("forced resume is not supported by ACP agents"));
+    }
+    if opencode::is_opencode(&service_key) {
+        return Err(anyhow!("OpenCode sessions do not need a forced resume"));
+    }
     let outcome = sessions::force_resume(&service_key, &thread_id)?;
     Ok(ForceResumeReportDto {
         killed: outcome.killed.into_iter().map(holder_dto).collect(),
@@ -2026,11 +3097,17 @@ pub fn app_history_cached(
 
 /// Negotiate the independent meta history protocol before remote reads.
 pub fn app_history_sync_prepare(service_key: String) -> Result<bool> {
+    if opencode::is_opencode(&service_key) {
+        return Ok(false);
+    }
     crate::engine::session_sync::prepare(&service_key)
 }
 
 /// Prefetch only a bounded running-session tail without resuming it.
 pub fn app_history_prefetch(service_key: String, thread_id: String) -> Result<()> {
+    if opencode::is_opencode(&service_key) {
+        return Ok(());
+    }
     crate::engine::session_sync::prefetch(&service_key, &thread_id)
 }
 

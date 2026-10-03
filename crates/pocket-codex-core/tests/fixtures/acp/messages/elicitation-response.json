@@ -1,0 +1,13 @@
+{
+  "def": "CreateElicitationResponse",
+  "frame": {
+    "jsonrpc": "2.0",
+    "id": 13,
+    "result": {
+      "action": "accept",
+      "content": {
+        "name": "x"
+      }
+    }
+  }
+}

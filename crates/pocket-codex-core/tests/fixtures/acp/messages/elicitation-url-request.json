@@ -1,0 +1,15 @@
+{
+  "def": "CreateElicitationRequest",
+  "frame": {
+    "jsonrpc": "2.0",
+    "id": 14,
+    "method": "elicitation/create",
+    "params": {
+      "message": "Open",
+      "mode": "url",
+      "sessionId": "sess-1",
+      "elicitationId": "e1",
+      "url": "https://example.com/auth"
+    }
+  }
+}

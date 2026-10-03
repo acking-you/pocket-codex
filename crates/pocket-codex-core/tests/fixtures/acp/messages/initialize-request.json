@@ -1,0 +1,41 @@
+{
+  "def": "InitializeRequest",
+  "frame": {
+    "jsonrpc": "2.0",
+    "id": 0,
+    "method": "initialize",
+    "params": {
+      "protocolVersion": 1,
+      "clientCapabilities": {
+        "fs": {
+          "readTextFile": false,
+          "writeTextFile": false
+        },
+        "terminal": false,
+        "auth": {
+          "terminal": true,
+          "_meta": {
+            "gateway": true
+          }
+        },
+        "elicitation": {
+          "form": {},
+          "url": {}
+        },
+        "session": {
+          "configOptions": {
+            "boolean": {}
+          }
+        },
+        "_meta": {
+          "terminal-auth": true
+        }
+      },
+      "clientInfo": {
+        "name": "pocket-codex",
+        "title": "Pocket-Codex",
+        "version": "0.1.0"
+      }
+    }
+  }
+}

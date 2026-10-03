@@ -1,0 +1,13 @@
+{
+  "def": "SetSessionConfigOptionRequest",
+  "frame": {
+    "jsonrpc": "2.0",
+    "id": 8,
+    "method": "session/set_config_option",
+    "params": {
+      "sessionId": "sess-1",
+      "configId": "model",
+      "value": "m2"
+    }
+  }
+}

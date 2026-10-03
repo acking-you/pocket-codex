@@ -467,7 +467,16 @@ pub fn force_resume(service_key: &str, thread_id: &str) -> Result<ForceResumeOut
 /// Read the host's project-folder config (configured roots + default project)
 /// over its meta tunnel — what a new session's folder browser starts from.
 pub fn project_config(service_key: &str) -> Result<HostConfig> {
-    let url = endpoint(service_key, &["projects"])?;
+    project_config_at(&base_url(service_key)?)
+}
+
+/// [`project_config`] against an explicit meta base URL (the ACP engine's
+/// direct test connections pass their loopback meta address).
+pub fn project_config_at(base: &Url) -> Result<HostConfig> {
+    let mut url = base.clone();
+    url.path_segments_mut()
+        .map_err(|_| anyhow!("meta base url cannot be a base"))?
+        .push("projects");
     runtime::runtime().block_on(get_json(url))
 }
 
@@ -820,6 +829,112 @@ pub fn config_put(
     runtime::runtime().block_on(async move {
         // Full replace, so a retry is safe (same reasoning as the projects PUT).
         put_json(url, &config).await.context("meta PUT config")
+    })
+}
+
+// --------------------------------------------------------------------------
+// Remote ACP management (`/acp/v1`, TRD §4.3.11): any controller can install
+// pinned agents and start hosting on a host whose remote management is on.
+// --------------------------------------------------------------------------
+
+/// The host's `{remoteManagement, agents}`.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpAgentsResponse {
+    /// Remote management is on.
+    pub remote_management: bool,
+    /// Agents and their state.
+    pub agents: Vec<pocket_codex_core::acp::pcx::AgentStatus>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct JobIdResponse {
+    job_id: String,
+}
+
+/// Turn an `/acp/v1` response into JSON or an `[acp.<code>] message` error.
+async fn acp_response(resp: reqwest::Response) -> Result<serde_json::Value> {
+    let status = resp.status();
+    let bytes = resp
+        .bytes()
+        .await
+        .context("reading the ACP management response")?;
+    if status.is_success() {
+        return serde_json::from_slice(&bytes).context("decoding the ACP management response");
+    }
+    #[derive(Deserialize)]
+    struct ErrorBody {
+        code: String,
+        message: String,
+    }
+    match serde_json::from_slice::<ErrorBody>(&bytes) {
+        Ok(body) => Err(anyhow!("[{}] {}", body.code, body.message)),
+        Err(_) if status == reqwest::StatusCode::NOT_FOUND => {
+            Err(anyhow!("this host does not support remote ACP management"))
+        },
+        Err(_) => {
+            Err(anyhow!("meta service returned {status}: {}", String::from_utf8_lossy(&bytes)))
+        },
+    }
+}
+
+/// Agents of the host behind `service_key`.
+pub fn acp_agents(service_key: &str) -> Result<AcpAgentsResponse> {
+    let url = endpoint(service_key, &["acp", "v1", "agents"])?;
+    runtime::runtime().block_on(async move {
+        let resp = client()
+            .get(url)
+            .send()
+            .await
+            .context("meta GET /acp/v1/agents")?;
+        Ok(serde_json::from_value(acp_response(resp).await?)?)
+    })
+}
+
+/// Install the pinned version of `agent_id` on the host; returns a job id.
+pub fn acp_install(service_key: &str, agent_id: &str) -> Result<String> {
+    let url = endpoint(service_key, &["acp", "v1", "agents", agent_id, "install"])?;
+    runtime::runtime().block_on(async move {
+        // Single-shot: a retried POST could start a second job.
+        let resp = client()
+            .post(url)
+            .send()
+            .await
+            .context("meta POST install")?;
+        let body: JobIdResponse = serde_json::from_value(acp_response(resp).await?)?;
+        Ok(body.job_id)
+    })
+}
+
+/// Progress of a host job; `None` when the host forgot it.
+pub fn acp_job(
+    service_key: &str,
+    job_id: &str,
+) -> Result<Option<pocket_codex_core::acp::pcx::JobProgress>> {
+    let url = endpoint(service_key, &["acp", "v1", "jobs", job_id])?;
+    runtime::runtime().block_on(async move {
+        let resp = client().get(url).send().await.context("meta GET job")?;
+        match acp_response(resp).await {
+            Ok(value) => Ok(Some(serde_json::from_value(value)?)),
+            Err(e) if e.to_string().starts_with("[acp.unknown_job]") => Ok(None),
+            Err(e) => Err(e),
+        }
+    })
+}
+
+/// Start hosting `agent_id` on the host; returns a `host` job id.
+pub fn acp_host(service_key: &str, agent_id: &str, name: Option<String>) -> Result<String> {
+    let url = endpoint(service_key, &["acp", "v1", "agents", agent_id, "host"])?;
+    runtime::runtime().block_on(async move {
+        let resp = client()
+            .post(url)
+            .json(&serde_json::json!({ "name": name }))
+            .send()
+            .await
+            .context("meta POST host")?;
+        let body: JobIdResponse = serde_json::from_value(acp_response(resp).await?)?;
+        Ok(body.job_id)
     })
 }
 

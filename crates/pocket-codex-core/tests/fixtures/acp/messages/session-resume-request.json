@@ -1,0 +1,13 @@
+{
+  "def": "ResumeSessionRequest",
+  "frame": {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "method": "session/resume",
+    "params": {
+      "sessionId": "sess-1",
+      "cwd": "/work",
+      "mcpServers": []
+    }
+  }
+}

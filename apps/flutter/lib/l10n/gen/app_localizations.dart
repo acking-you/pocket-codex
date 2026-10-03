@@ -3391,6 +3391,666 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Your existing draft and attachments will be kept. This text will be added below.'**
   String get editMessageDraftHint;
+
+  /// No description provided for @providerLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Provider'**
+  String get providerLabel;
+
+  /// No description provided for @providerCodex.
+  ///
+  /// In en, this message translates to:
+  /// **'Codex'**
+  String get providerCodex;
+
+  /// No description provided for @providerOpenCode.
+  ///
+  /// In en, this message translates to:
+  /// **'OpenCode'**
+  String get providerOpenCode;
+
+  /// No description provided for @openCodeHostHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Attaches to your running OpenCode service and registers it to your account. Stopping hosting does not stop OpenCode.'**
+  String get openCodeHostHint;
+
+  /// No description provided for @openCodeBinaryPath.
+  ///
+  /// In en, this message translates to:
+  /// **'opencode binary path (optional)'**
+  String get openCodeBinaryPath;
+
+  /// No description provided for @openCodeBinaryHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Only used when OpenCode\'s background service is not running and has to be started.'**
+  String get openCodeBinaryHint;
+
+  /// No description provided for @openCodeNotFound.
+  ///
+  /// In en, this message translates to:
+  /// **'opencode wasn\'t found. If its service isn\'t running, enter the binary path.'**
+  String get openCodeNotFound;
+
+  /// No description provided for @openCodeVersionLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'OpenCode version'**
+  String get openCodeVersionLabel;
+
+  /// No description provided for @openCodeVerified.
+  ///
+  /// In en, this message translates to:
+  /// **'Verified'**
+  String get openCodeVerified;
+
+  /// No description provided for @openCodeUnverified.
+  ///
+  /// In en, this message translates to:
+  /// **'Unverified version: its API matched the contract, but this build was not tested against it.'**
+  String get openCodeUnverified;
+
+  /// No description provided for @openCodeGatewayLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'OpenCode gateway'**
+  String get openCodeGatewayLabel;
+
+  /// No description provided for @hostMetaLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Meta service'**
+  String get hostMetaLabel;
+
+  /// No description provided for @openCodeStopNote.
+  ///
+  /// In en, this message translates to:
+  /// **'Stopping hosting only withdraws access. OpenCode keeps running.'**
+  String get openCodeStopNote;
+
+  /// No description provided for @variant.
+  ///
+  /// In en, this message translates to:
+  /// **'Variant'**
+  String get variant;
+
+  /// No description provided for @approveAlwaysProject.
+  ///
+  /// In en, this message translates to:
+  /// **'Always allow (project)'**
+  String get approveAlwaysProject;
+
+  /// No description provided for @approveAlwaysProjectTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Always allow in this project?'**
+  String get approveAlwaysProjectTitle;
+
+  /// No description provided for @approveAlwaysProjectBody.
+  ///
+  /// In en, this message translates to:
+  /// **'OpenCode saves this as a permission rule for the whole project. Matching requests in every session of this project will run without asking until you remove the rule in OpenCode.'**
+  String get approveAlwaysProjectBody;
+
+  /// No description provided for @viewSubSession.
+  ///
+  /// In en, this message translates to:
+  /// **'View sub-session'**
+  String get viewSubSession;
+
+  /// No description provided for @subSessionReadOnly.
+  ///
+  /// In en, this message translates to:
+  /// **'Sub-session · read-only'**
+  String get subSessionReadOnly;
+
+  /// No description provided for @backToParentSession.
+  ///
+  /// In en, this message translates to:
+  /// **'Back to parent session'**
+  String get backToParentSession;
+
+  /// No description provided for @providerAcp.
+  ///
+  /// In en, this message translates to:
+  /// **'ACP'**
+  String get providerAcp;
+
+  /// No description provided for @acpAgentLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Agent'**
+  String get acpAgentLabel;
+
+  /// No description provided for @acpAgentsTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'ACP agents'**
+  String get acpAgentsTitle;
+
+  /// No description provided for @acpManageHost.
+  ///
+  /// In en, this message translates to:
+  /// **'Manage ACP agents'**
+  String get acpManageHost;
+
+  /// No description provided for @acpManageAgents.
+  ///
+  /// In en, this message translates to:
+  /// **'Manage agents…'**
+  String get acpManageAgents;
+
+  /// No description provided for @acpInstall.
+  ///
+  /// In en, this message translates to:
+  /// **'Install'**
+  String get acpInstall;
+
+  /// No description provided for @acpInstalling.
+  ///
+  /// In en, this message translates to:
+  /// **'Installing…'**
+  String get acpInstalling;
+
+  /// No description provided for @acpInstallFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Install failed: {message}'**
+  String acpInstallFailed(String message);
+
+  /// No description provided for @acpUpgrade.
+  ///
+  /// In en, this message translates to:
+  /// **'Upgrade'**
+  String get acpUpgrade;
+
+  /// No description provided for @acpUninstall.
+  ///
+  /// In en, this message translates to:
+  /// **'Uninstall'**
+  String get acpUninstall;
+
+  /// No description provided for @acpUninstallConfirm.
+  ///
+  /// In en, this message translates to:
+  /// **'Uninstall {name}? Its sessions stay with the agent; you can install it again later.'**
+  String acpUninstallConfirm(String name);
+
+  /// No description provided for @acpUninstallInUse.
+  ///
+  /// In en, this message translates to:
+  /// **'Stop hosting it before uninstalling.'**
+  String get acpUninstallInUse;
+
+  /// No description provided for @acpInstalled.
+  ///
+  /// In en, this message translates to:
+  /// **'Installed'**
+  String get acpInstalled;
+
+  /// No description provided for @acpInstalledVersion.
+  ///
+  /// In en, this message translates to:
+  /// **'Installed {version}'**
+  String acpInstalledVersion(String version);
+
+  /// No description provided for @acpPinnedVersion.
+  ///
+  /// In en, this message translates to:
+  /// **'Pinned {version}'**
+  String acpPinnedVersion(String version);
+
+  /// No description provided for @acpSizeMb.
+  ///
+  /// In en, this message translates to:
+  /// **'About {size} MB'**
+  String acpSizeMb(int size);
+
+  /// No description provided for @acpHostedAs.
+  ///
+  /// In en, this message translates to:
+  /// **'Hosted as {names}'**
+  String acpHostedAs(String names);
+
+  /// No description provided for @acpSourceCustom.
+  ///
+  /// In en, this message translates to:
+  /// **'Custom'**
+  String get acpSourceCustom;
+
+  /// No description provided for @acpNotInstalled.
+  ///
+  /// In en, this message translates to:
+  /// **'Not installed'**
+  String get acpNotInstalled;
+
+  /// No description provided for @acpUnsupportedPlatform.
+  ///
+  /// In en, this message translates to:
+  /// **'Not available on this platform'**
+  String get acpUnsupportedPlatform;
+
+  /// No description provided for @acpEngineMissing.
+  ///
+  /// In en, this message translates to:
+  /// **'Codex is not installed or not found'**
+  String get acpEngineMissing;
+
+  /// No description provided for @acpEngineIncompatible.
+  ///
+  /// In en, this message translates to:
+  /// **'Codex {found} is not supported (needs {required})'**
+  String acpEngineIncompatible(String found, String required);
+
+  /// No description provided for @acpRegistryNewer.
+  ///
+  /// In en, this message translates to:
+  /// **'The registry has a newer version {version} (not verified by Pocket-Codex)'**
+  String acpRegistryNewer(String version);
+
+  /// No description provided for @acpRegistryInstall.
+  ///
+  /// In en, this message translates to:
+  /// **'Install registry version'**
+  String get acpRegistryInstall;
+
+  /// No description provided for @acpRegistryInstallWarning.
+  ///
+  /// In en, this message translates to:
+  /// **'This version comes from the ACP registry and was not verified by Pocket-Codex. Its npm dependencies are not locked. Install it anyway?'**
+  String get acpRegistryInstallWarning;
+
+  /// No description provided for @acpUnpinned.
+  ///
+  /// In en, this message translates to:
+  /// **'This version is not pinned by Pocket-Codex'**
+  String get acpUnpinned;
+
+  /// No description provided for @acpRemoteManagement.
+  ///
+  /// In en, this message translates to:
+  /// **'Remote management'**
+  String get acpRemoteManagement;
+
+  /// No description provided for @acpRemoteManagementHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Lets your other signed-in devices install pinned agent versions on this computer and start hosting them. Custom agents and settings stay host-only.'**
+  String get acpRemoteManagementHint;
+
+  /// No description provided for @acpRemoteDisabled.
+  ///
+  /// In en, this message translates to:
+  /// **'Remote management is turned off on this host. Turn it on in the host\'s ACP settings.'**
+  String get acpRemoteDisabled;
+
+  /// No description provided for @acpHostStart.
+  ///
+  /// In en, this message translates to:
+  /// **'Start hosting'**
+  String get acpHostStart;
+
+  /// No description provided for @acpLogin.
+  ///
+  /// In en, this message translates to:
+  /// **'Log in'**
+  String get acpLogin;
+
+  /// No description provided for @acpLoginOnHost.
+  ///
+  /// In en, this message translates to:
+  /// **'Finish this login on the host computer.'**
+  String get acpLoginOnHost;
+
+  /// No description provided for @acpRecheck.
+  ///
+  /// In en, this message translates to:
+  /// **'Check again'**
+  String get acpRecheck;
+
+  /// No description provided for @acpAuthRequired.
+  ///
+  /// In en, this message translates to:
+  /// **'The agent needs you to log in.'**
+  String get acpAuthRequired;
+
+  /// No description provided for @acpOtherLogins.
+  ///
+  /// In en, this message translates to:
+  /// **'Other ways to log in'**
+  String get acpOtherLogins;
+
+  /// No description provided for @acpGateway.
+  ///
+  /// In en, this message translates to:
+  /// **'Model gateway'**
+  String get acpGateway;
+
+  /// No description provided for @acpGatewayConfigured.
+  ///
+  /// In en, this message translates to:
+  /// **'Model gateway configured: {url}'**
+  String acpGatewayConfigured(String url);
+
+  /// No description provided for @acpGatewayConfigure.
+  ///
+  /// In en, this message translates to:
+  /// **'Configure model gateway'**
+  String get acpGatewayConfigure;
+
+  /// No description provided for @acpGatewayUnsupported.
+  ///
+  /// In en, this message translates to:
+  /// **'This agent offers no gateway login, so the gateway setting has no effect.'**
+  String get acpGatewayUnsupported;
+
+  /// No description provided for @acpGatewayMethod.
+  ///
+  /// In en, this message translates to:
+  /// **'Login method'**
+  String get acpGatewayMethod;
+
+  /// No description provided for @acpGatewayAuto.
+  ///
+  /// In en, this message translates to:
+  /// **'Automatic (first gateway method)'**
+  String get acpGatewayAuto;
+
+  /// No description provided for @acpGatewayProtocol.
+  ///
+  /// In en, this message translates to:
+  /// **'{protocol} protocol'**
+  String acpGatewayProtocol(String protocol);
+
+  /// No description provided for @acpGatewayUrl.
+  ///
+  /// In en, this message translates to:
+  /// **'Gateway URL'**
+  String get acpGatewayUrl;
+
+  /// No description provided for @acpGatewayUrlHintAnthropic.
+  ///
+  /// In en, this message translates to:
+  /// **'Root address, e.g. https://relay.example.com — Claude Code adds /v1/messages.'**
+  String get acpGatewayUrlHintAnthropic;
+
+  /// No description provided for @acpGatewayUrlHintOpenai.
+  ///
+  /// In en, this message translates to:
+  /// **'Up to /v1, e.g. https://relay.example.com/v1 — the gateway must support /v1/responses.'**
+  String get acpGatewayUrlHintOpenai;
+
+  /// No description provided for @acpGatewayToken.
+  ///
+  /// In en, this message translates to:
+  /// **'Token'**
+  String get acpGatewayToken;
+
+  /// No description provided for @acpGatewayTokenKept.
+  ///
+  /// In en, this message translates to:
+  /// **'Saved — leave empty to keep it'**
+  String get acpGatewayTokenKept;
+
+  /// No description provided for @acpGatewayProvider.
+  ///
+  /// In en, this message translates to:
+  /// **'Provider name (optional)'**
+  String get acpGatewayProvider;
+
+  /// No description provided for @acpGatewayHeaders.
+  ///
+  /// In en, this message translates to:
+  /// **'Extra headers (one KEY=VALUE per line)'**
+  String get acpGatewayHeaders;
+
+  /// No description provided for @acpGatewayNote.
+  ///
+  /// In en, this message translates to:
+  /// **'The token is stored only in agents.toml on this host (mode 0600) and is never sent to other devices.'**
+  String get acpGatewayNote;
+
+  /// No description provided for @acpGatewayInsecureHttp.
+  ///
+  /// In en, this message translates to:
+  /// **'Plain http is only allowed on loopback and private networks; traffic is not encrypted.'**
+  String get acpGatewayInsecureHttp;
+
+  /// No description provided for @acpGatewayFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Gateway login failed: {message}'**
+  String acpGatewayFailed(String message);
+
+  /// No description provided for @acpGatewayClear.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove gateway'**
+  String get acpGatewayClear;
+
+  /// No description provided for @acpSubscriptionLogin.
+  ///
+  /// In en, this message translates to:
+  /// **'Allow Claude subscription login'**
+  String get acpSubscriptionLogin;
+
+  /// No description provided for @acpSubscriptionLoginConfirmTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Allow subscription login?'**
+  String get acpSubscriptionLoginConfirmTitle;
+
+  /// No description provided for @acpSubscriptionLoginConfirmBody.
+  ///
+  /// In en, this message translates to:
+  /// **'This shows Claude\'s own subscription login in the agent. Using a Claude subscription through third-party clients may be against Anthropic\'s terms. Continue only if you accept that.'**
+  String get acpSubscriptionLoginConfirmBody;
+
+  /// No description provided for @acpRestartToApply.
+  ///
+  /// In en, this message translates to:
+  /// **'Restart the agent for this to take effect.'**
+  String get acpRestartToApply;
+
+  /// No description provided for @acpAdvanced.
+  ///
+  /// In en, this message translates to:
+  /// **'Advanced'**
+  String get acpAdvanced;
+
+  /// No description provided for @acpCustomAgent.
+  ///
+  /// In en, this message translates to:
+  /// **'Custom agents'**
+  String get acpCustomAgent;
+
+  /// No description provided for @acpCustomAdd.
+  ///
+  /// In en, this message translates to:
+  /// **'Add custom agent'**
+  String get acpCustomAdd;
+
+  /// No description provided for @acpCustomId.
+  ///
+  /// In en, this message translates to:
+  /// **'Id (lowercase letters, digits, -)'**
+  String get acpCustomId;
+
+  /// No description provided for @acpCustomName.
+  ///
+  /// In en, this message translates to:
+  /// **'Name'**
+  String get acpCustomName;
+
+  /// No description provided for @acpCustomCommand.
+  ///
+  /// In en, this message translates to:
+  /// **'Command (absolute path)'**
+  String get acpCustomCommand;
+
+  /// No description provided for @acpCustomArgs.
+  ///
+  /// In en, this message translates to:
+  /// **'Arguments (one per line)'**
+  String get acpCustomArgs;
+
+  /// No description provided for @acpCustomEnv.
+  ///
+  /// In en, this message translates to:
+  /// **'Environment (one KEY=VALUE per line)'**
+  String get acpCustomEnv;
+
+  /// No description provided for @acpCustomEnvNote.
+  ///
+  /// In en, this message translates to:
+  /// **'Environment variables are stored in plain text in agents.toml on the host (mode 0600).'**
+  String get acpCustomEnvNote;
+
+  /// No description provided for @acpCustomDelete.
+  ///
+  /// In en, this message translates to:
+  /// **'Delete'**
+  String get acpCustomDelete;
+
+  /// No description provided for @acpNpmRegistry.
+  ///
+  /// In en, this message translates to:
+  /// **'npm registry mirror (https)'**
+  String get acpNpmRegistry;
+
+  /// No description provided for @acpCodexBinary.
+  ///
+  /// In en, this message translates to:
+  /// **'Codex executable for codex-acp'**
+  String get acpCodexBinary;
+
+  /// No description provided for @acpClaudeEnginePath.
+  ///
+  /// In en, this message translates to:
+  /// **'Claude Code executable'**
+  String get acpClaudeEnginePath;
+
+  /// No description provided for @acpBinaryOverride.
+  ///
+  /// In en, this message translates to:
+  /// **'Executable override'**
+  String get acpBinaryOverride;
+
+  /// No description provided for @acpDataMode.
+  ///
+  /// In en, this message translates to:
+  /// **'{family} data'**
+  String acpDataMode(String family);
+
+  /// No description provided for @acpDataAuto.
+  ///
+  /// In en, this message translates to:
+  /// **'Automatic'**
+  String get acpDataAuto;
+
+  /// No description provided for @acpDataShared.
+  ///
+  /// In en, this message translates to:
+  /// **'Shared'**
+  String get acpDataShared;
+
+  /// No description provided for @acpDataIsolated.
+  ///
+  /// In en, this message translates to:
+  /// **'Isolated'**
+  String get acpDataIsolated;
+
+  /// No description provided for @acpSharedDataWarning.
+  ///
+  /// In en, this message translates to:
+  /// **'Shared mode lets the agent read and write the same database as your own OpenCode. Different OpenCode versions may change data the other one also reads. Continue?'**
+  String get acpSharedDataWarning;
+
+  /// No description provided for @acpSettingsSaved.
+  ///
+  /// In en, this message translates to:
+  /// **'Settings saved'**
+  String get acpSettingsSaved;
+
+  /// No description provided for @acpOptionConfirmTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose \"{option}\"?'**
+  String acpOptionConfirmTitle(String option);
+
+  /// No description provided for @acpOptionConfirmBody.
+  ///
+  /// In en, this message translates to:
+  /// **'The agent will remember this choice and may not ask again.'**
+  String get acpOptionConfirmBody;
+
+  /// No description provided for @acpUrlTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'The agent asks you to open a page'**
+  String get acpUrlTitle;
+
+  /// No description provided for @acpUrlOpen.
+  ///
+  /// In en, this message translates to:
+  /// **'Open {host}'**
+  String acpUrlOpen(String host);
+
+  /// No description provided for @acpUrlDecline.
+  ///
+  /// In en, this message translates to:
+  /// **'Decline'**
+  String get acpUrlDecline;
+
+  /// No description provided for @acpQueueFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'{count, plural, =1{1 queued message was not sent} other{{count} queued messages were not sent}}'**
+  String acpQueueFailed(int count);
+
+  /// No description provided for @acpOlderUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Earlier history is no longer available from the agent.'**
+  String get acpOlderUnavailable;
+
+  /// No description provided for @acpSessionChanged.
+  ///
+  /// In en, this message translates to:
+  /// **'This session changed elsewhere. Reload to see the latest.'**
+  String get acpSessionChanged;
+
+  /// No description provided for @acpSessionNotLoadable.
+  ///
+  /// In en, this message translates to:
+  /// **'This agent cannot open earlier sessions.'**
+  String get acpSessionNotLoadable;
+
+  /// No description provided for @acpReload.
+  ///
+  /// In en, this message translates to:
+  /// **'Reload'**
+  String get acpReload;
+
+  /// No description provided for @acpStopRunningConfirm.
+  ///
+  /// In en, this message translates to:
+  /// **'A conversation is still running on this host. Stop hosting anyway? Running turns will be cancelled.'**
+  String get acpStopRunningConfirm;
+
+  /// No description provided for @acpProcessRestarting.
+  ///
+  /// In en, this message translates to:
+  /// **'The agent stopped unexpectedly and is restarting…'**
+  String get acpProcessRestarting;
+
+  /// No description provided for @acpProcessFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The agent keeps exiting. Check it on the host and restart hosting.'**
+  String get acpProcessFailed;
 }
 
 class _AppLocalizationsDelegate

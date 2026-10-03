@@ -1,0 +1,45 @@
+{
+  "def": "SessionNotification",
+  "frame": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess-1",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "t1",
+        "title": "Edit a.rs",
+        "kind": "edit",
+        "status": "pending",
+        "content": [
+          {
+            "type": "diff",
+            "path": "/work/a.rs",
+            "oldText": "a",
+            "newText": "b"
+          },
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "ok"
+            }
+          },
+          {
+            "type": "terminal",
+            "terminalId": "term-1"
+          }
+        ],
+        "locations": [
+          {
+            "path": "/work/a.rs",
+            "line": 3
+          }
+        ],
+        "rawInput": {
+          "path": "/work/a.rs"
+        }
+      }
+    }
+  }
+}

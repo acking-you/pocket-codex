@@ -6,7 +6,7 @@
 import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `history_dto`, `holder_dto`, `item_dto`, `meta_follow_update_dto`, `meta_holder_dto`, `meta_liveness_dto`, `meta_thread_item_dto`, `project_config_dto`, `thread_config_dto`, `thread_config_from_dto`, `to_log_dto`, `turn_page_dto`
+// These functions are ignored because they are not marked as `pub`: `acp_agent_dto`, `acp_auth_dto`, `acp_job_dto`, `acp_settings_dto`, `acp_settings_view`, `config_value_str`, `forward_app_events`, `forward_retained_requests`, `history_dto`, `holder_dto`, `item_dto`, `meta_follow_update_dto`, `meta_holder_dto`, `meta_liveness_dto`, `meta_thread_item_dto`, `pairs`, `project_config_dto`, `thread_config_dto`, `thread_config_from_dto`, `to_log_dto`, `turn_page_dto`, `unpairs`
 
 /// Initialise the engine with the platform app-support dir (from Dart's
 /// path_provider). Must be called once after `RustLib.init()`.
@@ -129,6 +129,133 @@ Future<void> apiUnsubscribe({required String serviceKey}) =>
 /// List all active subscriptions.
 Future<List<SubStatusDto>> subscriptions() =>
     RustLib.instance.api.crateApiBridgeSubscriptions();
+
+/// Attach to the local OpenCode background service (asking OpenCode to start
+/// it when none is running) and publish it as `opencode:<name>` plus a
+/// `meta:<name>` service. Stopping hosting never stops OpenCode. The name must
+/// not be in use by a Codex host on this device.
+Future<OpenCodeServeDto> appServeStartOpencode({
+  String? name,
+  String? binaryOverride,
+}) => RustLib.instance.api.crateApiBridgeAppServeStartOpencode(
+  name: name,
+  binaryOverride: binaryOverride,
+);
+
+/// The resolved `opencode` executable (explicit → `$PATH` →
+/// `~/.opencode/bin/opencode`), or `None`.
+Future<String?> opencodeLocate({String? binaryOverride}) => RustLib.instance.api
+    .crateApiBridgeOpencodeLocate(binaryOverride: binaryOverride);
+
+/// Host `agent_id` (an installed catalog agent or a custom agent) as
+/// `acp:<name>` plus `meta:<name>`. Desktop only.
+Future<AcpServeDto> appServeStartAcp({String? name, required String agentId}) =>
+    RustLib.instance.api.crateApiBridgeAppServeStartAcp(
+      name: name,
+      agentId: agentId,
+    );
+
+/// Catalog and custom agents of this device. Desktop only.
+Future<List<AcpAgentDto>> acpAgents() =>
+    RustLib.instance.api.crateApiBridgeAcpAgents();
+
+/// Install `agent_id` (`version` = the catalog pin when `None`); returns the
+/// job id. Desktop only.
+Future<String> acpInstall({required String agentId, String? version}) => RustLib
+    .instance
+    .api
+    .crateApiBridgeAcpInstall(agentId: agentId, version: version);
+
+/// Progress of a local install or host job.
+Future<AcpJobDto?> acpJob({required String jobId}) =>
+    RustLib.instance.api.crateApiBridgeAcpJob(jobId: jobId);
+
+/// Uninstall `agent_id` (refused while hosted). Desktop only.
+Future<void> acpUninstall({required String agentId}) =>
+    RustLib.instance.api.crateApiBridgeAcpUninstall(agentId: agentId);
+
+/// Host ACP settings (gateway tokens are never returned). Desktop only.
+Future<AcpSettingsDto> acpSettings() =>
+    RustLib.instance.api.crateApiBridgeAcpSettings();
+
+/// Save host ACP settings. `force == false` returns the D16 warnings without
+/// saving when there are any. Desktop only.
+Future<AcpSaveDto> acpSettingsSet({
+  required AcpSettingsDto settings,
+  required bool force,
+}) => RustLib.instance.api.crateApiBridgeAcpSettingsSet(
+  settings: settings,
+  force: force,
+);
+
+/// User-defined agents. Desktop only.
+Future<List<AcpCustomAgentDto>> acpCustomAgents() =>
+    RustLib.instance.api.crateApiBridgeAcpCustomAgents();
+
+/// Add or replace a user-defined agent. Desktop only.
+Future<void> acpCustomAgentPut({required AcpCustomAgentDto agent}) =>
+    RustLib.instance.api.crateApiBridgeAcpCustomAgentPut(agent: agent);
+
+/// Delete a user-defined agent (refused while hosted). Desktop only.
+Future<void> acpCustomAgentDelete({required String id}) =>
+    RustLib.instance.api.crateApiBridgeAcpCustomAgentDelete(id: id);
+
+/// Run a terminal login of host `name` in a terminal on this desktop.
+Future<void> acpAuthTerminal({
+  required String name,
+  required String methodId,
+}) => RustLib.instance.api.crateApiBridgeAcpAuthTerminal(
+  name: name,
+  methodId: methodId,
+);
+
+/// Start an agent-type login of host `name`; returns `inProgress`.
+Future<AcpAuthDto> acpAuthAgent({
+  required String name,
+  required String methodId,
+}) => RustLib.instance.api.crateApiBridgeAcpAuthAgent(
+  name: name,
+  methodId: methodId,
+);
+
+/// Restart the agent of host `name` and re-detect authentication.
+Future<AcpAuthDto> acpAuthRecheck({required String name}) =>
+    RustLib.instance.api.crateApiBridgeAcpAuthRecheck(name: name);
+
+/// Agents of the host behind `service_key` (any of its services).
+Future<AcpAgentsDto> metaAcpAgents({required String serviceKey}) =>
+    RustLib.instance.api.crateApiBridgeMetaAcpAgents(serviceKey: serviceKey);
+
+/// Install the pinned version of `agent_id` on the remote host; returns the
+/// job id to poll with [`meta_acp_job`].
+Future<String> metaAcpInstall({
+  required String serviceKey,
+  required String agentId,
+}) => RustLib.instance.api.crateApiBridgeMetaAcpInstall(
+  serviceKey: serviceKey,
+  agentId: agentId,
+);
+
+/// Progress of a job on the remote host.
+Future<AcpJobDto?> metaAcpJob({
+  required String serviceKey,
+  required String jobId,
+}) => RustLib.instance.api.crateApiBridgeMetaAcpJob(
+  serviceKey: serviceKey,
+  jobId: jobId,
+);
+
+/// Start hosting `agent_id` on the remote host; returns a host job id (poll
+/// [`meta_acp_job`]; its `service_key` is set when done).
+Future<String> metaAcpHost({
+  required String serviceKey,
+  required String agentId,
+  String? name,
+}) => RustLib.instance.api.crateApiBridgeMetaAcpHost(
+  serviceKey: serviceKey,
+  agentId: agentId,
+  name: name,
+);
 
 /// Legacy version endpoint; returns `unavailable` because no engine is bundled.
 Future<String> embeddedCodexVersion() =>
@@ -290,7 +417,7 @@ Stream<RetryProgressDto> metaRetryEvents() =>
 
 /// Stream live app-server events (turn/item notifications) for `service_key`.
 /// The Dart side receives one [`AppEventDto`] per notification until the
-/// session is disconnected.
+/// session is disconnected or the feed lags and requires history recovery.
 Stream<AppEventDto> appEvents({required String serviceKey}) =>
     RustLib.instance.api.crateApiBridgeAppEvents(serviceKey: serviceKey);
 
@@ -530,6 +657,93 @@ Future<void> appTurnInterrupt({
   serviceKey: serviceKey,
   threadId: threadId,
   turnId: turnId,
+);
+
+/// Static capabilities of the provider behind `service_key` (no network).
+AppCapabilitiesDto appCapabilities({required String serviceKey}) =>
+    RustLib.instance.api.crateApiBridgeAppCapabilities(serviceKey: serviceKey);
+
+/// Ids of an OpenCode service's sessions that are executing now.
+Future<List<String>> appRunningThreads({required String serviceKey}) => RustLib
+    .instance
+    .api
+    .crateApiBridgeAppRunningThreads(serviceKey: serviceKey);
+
+/// Answer a permission request with one of the agent's own options.
+Future<void> appRespondPermissionOption({
+  required String serviceKey,
+  required String requestId,
+  required String optionId,
+}) => RustLib.instance.api.crateApiBridgeAppRespondPermissionOption(
+  serviceKey: serviceKey,
+  requestId: requestId,
+  optionId: optionId,
+);
+
+/// Accept or decline a URL elicitation.
+Future<void> appRespondElicitationUrl({
+  required String serviceKey,
+  required String requestId,
+  required bool accept,
+}) => RustLib.instance.api.crateApiBridgeAppRespondElicitationUrl(
+  serviceKey: serviceKey,
+  requestId: requestId,
+  accept: accept,
+);
+
+/// Config options of an ACP session (falling back to the hub defaults).
+Future<List<AcpConfigOptionDto>> appConfigOptions({
+  required String serviceKey,
+  required String threadId,
+}) => RustLib.instance.api.crateApiBridgeAppConfigOptions(
+  serviceKey: serviceKey,
+  threadId: threadId,
+);
+
+/// Set an ACP session option; `boolean` sends `value == "true"` as a bool.
+Future<void> appSetConfigOption({
+  required String serviceKey,
+  required String threadId,
+  required String configId,
+  required String value,
+  required bool boolean,
+}) => RustLib.instance.api.crateApiBridgeAppSetConfigOption(
+  serviceKey: serviceKey,
+  threadId: threadId,
+  configId: configId,
+  value: value,
+  boolean: boolean,
+);
+
+/// Slash commands an ACP session currently offers.
+Future<List<AcpCommandDto>> appSlashCommands({
+  required String serviceKey,
+  required String threadId,
+}) => RustLib.instance.api.crateApiBridgeAppSlashCommands(
+  serviceKey: serviceKey,
+  threadId: threadId,
+);
+
+/// Ask the hub to re-materialize an ACP session from the agent.
+Future<void> appThreadReload({
+  required String serviceKey,
+  required String threadId,
+}) => RustLib.instance.api.crateApiBridgeAppThreadReload(
+  serviceKey: serviceKey,
+  threadId: threadId,
+);
+
+/// Cached authentication state of an ACP service; `None` before connect.
+AcpAuthDto? appAuthState({required String serviceKey}) =>
+    RustLib.instance.api.crateApiBridgeAppAuthState(serviceKey: serviceKey);
+
+/// Start an agent-type login on the host; returns `inProgress`.
+Future<AcpAuthDto> appAuthAuthenticate({
+  required String serviceKey,
+  required String methodId,
+}) => RustLib.instance.api.crateApiBridgeAppAuthAuthenticate(
+  serviceKey: serviceKey,
+  methodId: methodId,
 );
 
 /// List every codex session under the shared `CODEX_HOME`, newest first,
@@ -966,6 +1180,976 @@ class AccountUserDto {
           accountId == other.accountId;
 }
 
+/// Install / hosting state of one agent.
+class AcpAgentDto {
+  /// Agent id.
+  final String id;
+
+  /// Display name.
+  final String name;
+
+  /// Description.
+  final String description;
+
+  /// `catalog` | `custom`.
+  final String source;
+
+  /// Catalog version.
+  final String? pinnedVersion;
+
+  /// Installed version.
+  final String? installedVersion;
+
+  /// not_installed | installing | installed | failed | unsupported_platform |
+  /// engine_missing | engine_incompatible.
+  final String state;
+
+  /// Detail.
+  final String? detail;
+
+  /// Running install job.
+  final String? jobId;
+
+  /// Newer, unverified registry version.
+  final String? registryVersion;
+
+  /// Instances hosting it.
+  final List<String> hostedNames;
+
+  /// Approximate size.
+  final int approxSizeMb;
+
+  /// Installs the private Node runtime.
+  final bool needsNode;
+
+  /// Remote controllers may install it.
+  final bool remoteInstallAllowed;
+
+  const AcpAgentDto({
+    required this.id,
+    required this.name,
+    required this.description,
+    required this.source,
+    this.pinnedVersion,
+    this.installedVersion,
+    required this.state,
+    this.detail,
+    this.jobId,
+    this.registryVersion,
+    required this.hostedNames,
+    required this.approxSizeMb,
+    required this.needsNode,
+    required this.remoteInstallAllowed,
+  });
+
+  @override
+  int get hashCode =>
+      id.hashCode ^
+      name.hashCode ^
+      description.hashCode ^
+      source.hashCode ^
+      pinnedVersion.hashCode ^
+      installedVersion.hashCode ^
+      state.hashCode ^
+      detail.hashCode ^
+      jobId.hashCode ^
+      registryVersion.hashCode ^
+      hostedNames.hashCode ^
+      approxSizeMb.hashCode ^
+      needsNode.hashCode ^
+      remoteInstallAllowed.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AcpAgentDto &&
+          runtimeType == other.runtimeType &&
+          id == other.id &&
+          name == other.name &&
+          description == other.description &&
+          source == other.source &&
+          pinnedVersion == other.pinnedVersion &&
+          installedVersion == other.installedVersion &&
+          state == other.state &&
+          detail == other.detail &&
+          jobId == other.jobId &&
+          registryVersion == other.registryVersion &&
+          hostedNames == other.hostedNames &&
+          approxSizeMb == other.approxSizeMb &&
+          needsNode == other.needsNode &&
+          remoteInstallAllowed == other.remoteInstallAllowed;
+}
+
+/// One `conditional_args` switch from the catalog (D21), e.g. claude-acp /
+/// allow_subscription_login.
+class AcpAgentFlagDto {
+  /// Agent id.
+  final String agentId;
+
+  /// Setting key.
+  final String setting;
+
+  /// l10n key of the label.
+  final String labelKey;
+
+  /// l10n key of the confirm dialog.
+  final String? confirmKey;
+
+  /// Current value.
+  final bool value;
+
+  const AcpAgentFlagDto({
+    required this.agentId,
+    required this.setting,
+    required this.labelKey,
+    this.confirmKey,
+    required this.value,
+  });
+
+  @override
+  int get hashCode =>
+      agentId.hashCode ^
+      setting.hashCode ^
+      labelKey.hashCode ^
+      confirmKey.hashCode ^
+      value.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AcpAgentFlagDto &&
+          runtimeType == other.runtimeType &&
+          agentId == other.agentId &&
+          setting == other.setting &&
+          labelKey == other.labelKey &&
+          confirmKey == other.confirmKey &&
+          value == other.value;
+}
+
+/// A remote host's agents.
+class AcpAgentsDto {
+  /// Remote management is on.
+  final bool remoteManagement;
+
+  /// Agents.
+  final List<AcpAgentDto> agents;
+
+  const AcpAgentsDto({required this.remoteManagement, required this.agents});
+
+  @override
+  int get hashCode => remoteManagement.hashCode ^ agents.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AcpAgentsDto &&
+          runtimeType == other.runtimeType &&
+          remoteManagement == other.remoteManagement &&
+          agents == other.agents;
+}
+
+/// Authentication state of an ACP agent.
+class AcpAuthDto {
+  /// `unknown` | `ok` | `required` | `inProgress`.
+  final String status;
+
+  /// Offered methods.
+  final List<AcpAuthMethodDto> methods;
+
+  /// Detail for the user.
+  final String? message;
+
+  const AcpAuthDto({required this.status, required this.methods, this.message});
+
+  @override
+  int get hashCode => status.hashCode ^ methods.hashCode ^ message.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AcpAuthDto &&
+          runtimeType == other.runtimeType &&
+          status == other.status &&
+          methods == other.methods &&
+          message == other.message;
+}
+
+/// One authentication method.
+class AcpAuthMethodDto {
+  /// Method id.
+  final String id;
+
+  /// Display name.
+  final String name;
+
+  /// Description.
+  final String description;
+
+  /// `agent` | `terminal` | `gateway`.
+  final String kind;
+
+  /// A remote controller may start it.
+  final bool remote;
+
+  /// False when a legacy terminal method cannot be reproduced safely.
+  final bool available;
+
+  /// Gateway protocol (`anthropic`, `openai`, …), for gateway methods.
+  final String? gatewayProtocol;
+
+  /// A gateway is configured on the host for this method.
+  final bool gatewayConfigured;
+
+  const AcpAuthMethodDto({
+    required this.id,
+    required this.name,
+    required this.description,
+    required this.kind,
+    required this.remote,
+    required this.available,
+    this.gatewayProtocol,
+    required this.gatewayConfigured,
+  });
+
+  @override
+  int get hashCode =>
+      id.hashCode ^
+      name.hashCode ^
+      description.hashCode ^
+      kind.hashCode ^
+      remote.hashCode ^
+      available.hashCode ^
+      gatewayProtocol.hashCode ^
+      gatewayConfigured.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AcpAuthMethodDto &&
+          runtimeType == other.runtimeType &&
+          id == other.id &&
+          name == other.name &&
+          description == other.description &&
+          kind == other.kind &&
+          remote == other.remote &&
+          available == other.available &&
+          gatewayProtocol == other.gatewayProtocol &&
+          gatewayConfigured == other.gatewayConfigured;
+}
+
+/// Executable override of an archive agent.
+class AcpBinaryOverrideDto {
+  /// Agent id.
+  final String agentId;
+
+  /// Absolute path.
+  final String path;
+
+  const AcpBinaryOverrideDto({required this.agentId, required this.path});
+
+  @override
+  int get hashCode => agentId.hashCode ^ path.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AcpBinaryOverrideDto &&
+          runtimeType == other.runtimeType &&
+          agentId == other.agentId &&
+          path == other.path;
+}
+
+/// One agent slash command.
+class AcpCommandDto {
+  /// Command name (without `/`).
+  final String name;
+
+  /// Description.
+  final String description;
+
+  /// Input hint.
+  final String? hint;
+
+  const AcpCommandDto({
+    required this.name,
+    required this.description,
+    this.hint,
+  });
+
+  @override
+  int get hashCode => name.hashCode ^ description.hashCode ^ hint.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AcpCommandDto &&
+          runtimeType == other.runtimeType &&
+          name == other.name &&
+          description == other.description &&
+          hint == other.hint;
+}
+
+/// One ACP session config option. `role` is `model` | `effort` | `mode` |
+/// `other` (§4.5.3); the generic panel shows `mode` and `other`.
+class AcpConfigOptionDto {
+  /// Option id.
+  final String id;
+
+  /// Display name.
+  final String name;
+
+  /// Description.
+  final String description;
+
+  /// ACP category (may be empty).
+  final String category;
+
+  /// `model` | `effort` | `mode` | `other`.
+  final String role;
+
+  /// `select` | `boolean`.
+  final String kind;
+
+  /// Current value (`true` / `false` for booleans).
+  final String currentValue;
+
+  /// Values of a select option.
+  final List<AcpConfigValueDto> options;
+
+  const AcpConfigOptionDto({
+    required this.id,
+    required this.name,
+    required this.description,
+    required this.category,
+    required this.role,
+    required this.kind,
+    required this.currentValue,
+    required this.options,
+  });
+
+  @override
+  int get hashCode =>
+      id.hashCode ^
+      name.hashCode ^
+      description.hashCode ^
+      category.hashCode ^
+      role.hashCode ^
+      kind.hashCode ^
+      currentValue.hashCode ^
+      options.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AcpConfigOptionDto &&
+          runtimeType == other.runtimeType &&
+          id == other.id &&
+          name == other.name &&
+          description == other.description &&
+          category == other.category &&
+          role == other.role &&
+          kind == other.kind &&
+          currentValue == other.currentValue &&
+          options == other.options;
+}
+
+/// One value of a select option.
+class AcpConfigValueDto {
+  /// Value id.
+  final String value;
+
+  /// Display name.
+  final String name;
+
+  /// Description.
+  final String description;
+
+  /// Group name, when grouped.
+  final String? group;
+
+  const AcpConfigValueDto({
+    required this.value,
+    required this.name,
+    required this.description,
+    this.group,
+  });
+
+  @override
+  int get hashCode =>
+      value.hashCode ^ name.hashCode ^ description.hashCode ^ group.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AcpConfigValueDto &&
+          runtimeType == other.runtimeType &&
+          value == other.value &&
+          name == other.name &&
+          description == other.description &&
+          group == other.group;
+}
+
+/// A user-defined agent.
+class AcpCustomAgentDto {
+  /// Id.
+  final String id;
+
+  /// Display name.
+  final String name;
+
+  /// Absolute executable path.
+  final String command;
+
+  /// Arguments.
+  final List<String> args;
+
+  /// Environment (stored in plain text on the host).
+  final List<AcpEnvVarDto> env;
+
+  const AcpCustomAgentDto({
+    required this.id,
+    required this.name,
+    required this.command,
+    required this.args,
+    required this.env,
+  });
+
+  @override
+  int get hashCode =>
+      id.hashCode ^
+      name.hashCode ^
+      command.hashCode ^
+      args.hashCode ^
+      env.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AcpCustomAgentDto &&
+          runtimeType == other.runtimeType &&
+          id == other.id &&
+          name == other.name &&
+          command == other.command &&
+          args == other.args &&
+          env == other.env;
+}
+
+/// D19 data mode of an OpenCode data family.
+class AcpDataModeDto {
+  /// `opencode-v1` | `opencode-v2`.
+  final String family;
+
+  /// `auto` | `shared` | `isolated`.
+  final String mode;
+
+  const AcpDataModeDto({required this.family, required this.mode});
+
+  @override
+  int get hashCode => family.hashCode ^ mode.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AcpDataModeDto &&
+          runtimeType == other.runtimeType &&
+          family == other.family &&
+          mode == other.mode;
+}
+
+/// One environment variable or header.
+class AcpEnvVarDto {
+  /// Name.
+  final String name;
+
+  /// Value.
+  final String value;
+
+  const AcpEnvVarDto({required this.name, required this.value});
+
+  @override
+  int get hashCode => name.hashCode ^ value.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AcpEnvVarDto &&
+          runtimeType == other.runtimeType &&
+          name == other.name &&
+          value == other.value;
+}
+
+/// D20. Reading returns `token: None` plus `has_token`; writing with
+/// `token: None` keeps the stored token, `Some("")` deletes it. `clear == true`
+/// removes the whole gateway entry.
+class AcpGatewayDto {
+  /// Agent id.
+  final String agentId;
+
+  /// Gateway method; `None` = the first one.
+  final String? methodId;
+
+  /// Base URL.
+  final String baseUrl;
+
+  /// Write-only token.
+  final String? token;
+
+  /// A token is stored.
+  final bool hasToken;
+
+  /// Provider name (codex-acp).
+  final String? providerName;
+
+  /// Extra headers.
+  final List<AcpEnvVarDto> extraHeaders;
+
+  /// Remove the gateway.
+  final bool clear;
+
+  const AcpGatewayDto({
+    required this.agentId,
+    this.methodId,
+    required this.baseUrl,
+    this.token,
+    required this.hasToken,
+    this.providerName,
+    required this.extraHeaders,
+    required this.clear,
+  });
+
+  @override
+  int get hashCode =>
+      agentId.hashCode ^
+      methodId.hashCode ^
+      baseUrl.hashCode ^
+      token.hashCode ^
+      hasToken.hashCode ^
+      providerName.hashCode ^
+      extraHeaders.hashCode ^
+      clear.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AcpGatewayDto &&
+          runtimeType == other.runtimeType &&
+          agentId == other.agentId &&
+          methodId == other.methodId &&
+          baseUrl == other.baseUrl &&
+          token == other.token &&
+          hasToken == other.hasToken &&
+          providerName == other.providerName &&
+          extraHeaders == other.extraHeaders &&
+          clear == other.clear;
+}
+
+/// Progress of an install or host job.
+class AcpJobDto {
+  /// Job id.
+  final String id;
+
+  /// `install` | `host`.
+  final String kind;
+
+  /// Agent id.
+  final String agentId;
+
+  /// Version.
+  final String version;
+
+  /// State (see TRD §4.3.9).
+  final String state;
+
+  /// Bytes downloaded.
+  final BigInt bytes;
+
+  /// Total bytes, when known.
+  final BigInt? total;
+
+  /// Detail.
+  final String? message;
+
+  /// `acp.<code>` on failure.
+  final String? errorCode;
+
+  /// Set when a host job is done.
+  final String? serviceKey;
+
+  const AcpJobDto({
+    required this.id,
+    required this.kind,
+    required this.agentId,
+    required this.version,
+    required this.state,
+    required this.bytes,
+    this.total,
+    this.message,
+    this.errorCode,
+    this.serviceKey,
+  });
+
+  @override
+  int get hashCode =>
+      id.hashCode ^
+      kind.hashCode ^
+      agentId.hashCode ^
+      version.hashCode ^
+      state.hashCode ^
+      bytes.hashCode ^
+      total.hashCode ^
+      message.hashCode ^
+      errorCode.hashCode ^
+      serviceKey.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AcpJobDto &&
+          runtimeType == other.runtimeType &&
+          id == other.id &&
+          kind == other.kind &&
+          agentId == other.agentId &&
+          version == other.version &&
+          state == other.state &&
+          bytes == other.bytes &&
+          total == other.total &&
+          message == other.message &&
+          errorCode == other.errorCode &&
+          serviceKey == other.serviceKey;
+}
+
+/// Result of saving settings.
+class AcpSaveDto {
+  /// The settings were saved.
+  final bool saved;
+
+  /// D16 warnings to confirm.
+  final List<String> warnings;
+
+  const AcpSaveDto({required this.saved, required this.warnings});
+
+  @override
+  int get hashCode => saved.hashCode ^ warnings.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AcpSaveDto &&
+          runtimeType == other.runtimeType &&
+          saved == other.saved &&
+          warnings == other.warnings;
+}
+
+/// Result of starting (or reusing) an ACP host.
+class AcpServeDto {
+  /// Device id.
+  final String device;
+
+  /// Instance name.
+  final String name;
+
+  /// `pcx:<device>:acp:<name>`.
+  final String serviceKey;
+
+  /// Loopback hub address.
+  final String listenAddr;
+
+  /// `pcx:<device>:meta:<name>`.
+  final String metaServiceKey;
+
+  /// Agent id.
+  final String agentId;
+
+  /// Agent display name.
+  final String agentName;
+
+  /// Installed agent version.
+  final String agentVersion;
+
+  /// Authentication state.
+  final AcpAuthDto auth;
+
+  /// An existing host was reused.
+  final bool reused;
+
+  const AcpServeDto({
+    required this.device,
+    required this.name,
+    required this.serviceKey,
+    required this.listenAddr,
+    required this.metaServiceKey,
+    required this.agentId,
+    required this.agentName,
+    required this.agentVersion,
+    required this.auth,
+    required this.reused,
+  });
+
+  @override
+  int get hashCode =>
+      device.hashCode ^
+      name.hashCode ^
+      serviceKey.hashCode ^
+      listenAddr.hashCode ^
+      metaServiceKey.hashCode ^
+      agentId.hashCode ^
+      agentName.hashCode ^
+      agentVersion.hashCode ^
+      auth.hashCode ^
+      reused.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AcpServeDto &&
+          runtimeType == other.runtimeType &&
+          device == other.device &&
+          name == other.name &&
+          serviceKey == other.serviceKey &&
+          listenAddr == other.listenAddr &&
+          metaServiceKey == other.metaServiceKey &&
+          agentId == other.agentId &&
+          agentName == other.agentName &&
+          agentVersion == other.agentVersion &&
+          auth == other.auth &&
+          reused == other.reused;
+}
+
+/// Host ACP settings.
+class AcpSettingsDto {
+  /// Remote management (D14).
+  final bool remoteManagement;
+
+  /// npm mirror (https).
+  final String? npmRegistry;
+
+  /// Claude Code executable override (D7).
+  final String? claudeEnginePath;
+
+  /// Codex path for codex-acp (D6).
+  final String? codexBinary;
+
+  /// Archive agent executable overrides.
+  final List<AcpBinaryOverrideDto> binaryOverrides;
+
+  /// OpenCode data families (D19).
+  final List<AcpDataModeDto> opencodeData;
+
+  /// Model gateways (D20).
+  final List<AcpGatewayDto> gateways;
+
+  /// Catalog switches (D21).
+  final List<AcpAgentFlagDto> flags;
+
+  const AcpSettingsDto({
+    required this.remoteManagement,
+    this.npmRegistry,
+    this.claudeEnginePath,
+    this.codexBinary,
+    required this.binaryOverrides,
+    required this.opencodeData,
+    required this.gateways,
+    required this.flags,
+  });
+
+  @override
+  int get hashCode =>
+      remoteManagement.hashCode ^
+      npmRegistry.hashCode ^
+      claudeEnginePath.hashCode ^
+      codexBinary.hashCode ^
+      binaryOverrides.hashCode ^
+      opencodeData.hashCode ^
+      gateways.hashCode ^
+      flags.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AcpSettingsDto &&
+          runtimeType == other.runtimeType &&
+          remoteManagement == other.remoteManagement &&
+          npmRegistry == other.npmRegistry &&
+          claudeEnginePath == other.claudeEnginePath &&
+          codexBinary == other.codexBinary &&
+          binaryOverrides == other.binaryOverrides &&
+          opencodeData == other.opencodeData &&
+          gateways == other.gateways &&
+          flags == other.flags;
+}
+
+/// What a session service's provider supports, so the shared session UI can
+/// hide controls that do not apply.
+class AppCapabilitiesDto {
+  /// `codex` or `opencode`.
+  final String provider;
+
+  /// Fast service tier toggle.
+  final bool fast;
+
+  /// Approval / sandbox permission presets.
+  final bool permissionPresets;
+
+  /// Guardian (auto-review) approvals.
+  final bool guardian;
+
+  /// Account rate-limit snapshot.
+  final bool rateLimits;
+
+  /// Taking over a session held by another local process.
+  final bool takeover;
+
+  /// Monitoring another writer of the same session.
+  final bool externalWriterMonitor;
+
+  /// Sessions read directly from this device's disk.
+  final bool localSessions;
+
+  /// Plan collaboration mode.
+  final bool planMode;
+
+  /// Label of the reasoning selector: `effort` or `variant`.
+  final String effortLabel;
+
+  /// Whether "allow for session" persists a project rule instead.
+  final bool approveAlwaysPersistsProject;
+
+  /// Multi-select questions.
+  final bool multiSelectQuestions;
+
+  /// Child (subagent) sessions that can be opened read-only.
+  final bool childSessions;
+
+  /// Agent display name (ACP; empty otherwise).
+  final String agentName;
+
+  /// Supplementing a running turn.
+  final bool steer;
+
+  /// Renaming a conversation.
+  final bool rename;
+
+  /// Manual compaction.
+  final bool compact;
+
+  /// Git diff review.
+  final bool gitDiff;
+
+  /// Image attachments.
+  final bool images;
+
+  /// The generic config option panel (ACP).
+  final bool configOptions;
+
+  /// Agent slash commands (ACP).
+  final bool slashCommands;
+
+  /// Approval cards offer the agent's own options (ACP).
+  final bool approvalOptions;
+
+  /// URL elicitation cards (ACP).
+  final bool urlElicitation;
+
+  /// Running sessions come from `app_running_threads`.
+  final bool runningViaThreads;
+
+  /// Running-session tails can be prefetched.
+  final bool historyPrefetch;
+
+  /// The hub can re-materialize a session (ACP).
+  final bool sessionReload;
+
+  const AppCapabilitiesDto({
+    required this.provider,
+    required this.fast,
+    required this.permissionPresets,
+    required this.guardian,
+    required this.rateLimits,
+    required this.takeover,
+    required this.externalWriterMonitor,
+    required this.localSessions,
+    required this.planMode,
+    required this.effortLabel,
+    required this.approveAlwaysPersistsProject,
+    required this.multiSelectQuestions,
+    required this.childSessions,
+    required this.agentName,
+    required this.steer,
+    required this.rename,
+    required this.compact,
+    required this.gitDiff,
+    required this.images,
+    required this.configOptions,
+    required this.slashCommands,
+    required this.approvalOptions,
+    required this.urlElicitation,
+    required this.runningViaThreads,
+    required this.historyPrefetch,
+    required this.sessionReload,
+  });
+
+  @override
+  int get hashCode =>
+      provider.hashCode ^
+      fast.hashCode ^
+      permissionPresets.hashCode ^
+      guardian.hashCode ^
+      rateLimits.hashCode ^
+      takeover.hashCode ^
+      externalWriterMonitor.hashCode ^
+      localSessions.hashCode ^
+      planMode.hashCode ^
+      effortLabel.hashCode ^
+      approveAlwaysPersistsProject.hashCode ^
+      multiSelectQuestions.hashCode ^
+      childSessions.hashCode ^
+      agentName.hashCode ^
+      steer.hashCode ^
+      rename.hashCode ^
+      compact.hashCode ^
+      gitDiff.hashCode ^
+      images.hashCode ^
+      configOptions.hashCode ^
+      slashCommands.hashCode ^
+      approvalOptions.hashCode ^
+      urlElicitation.hashCode ^
+      runningViaThreads.hashCode ^
+      historyPrefetch.hashCode ^
+      sessionReload.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AppCapabilitiesDto &&
+          runtimeType == other.runtimeType &&
+          provider == other.provider &&
+          fast == other.fast &&
+          permissionPresets == other.permissionPresets &&
+          guardian == other.guardian &&
+          rateLimits == other.rateLimits &&
+          takeover == other.takeover &&
+          externalWriterMonitor == other.externalWriterMonitor &&
+          localSessions == other.localSessions &&
+          planMode == other.planMode &&
+          effortLabel == other.effortLabel &&
+          approveAlwaysPersistsProject == other.approveAlwaysPersistsProject &&
+          multiSelectQuestions == other.multiSelectQuestions &&
+          childSessions == other.childSessions &&
+          agentName == other.agentName &&
+          steer == other.steer &&
+          rename == other.rename &&
+          compact == other.compact &&
+          gitDiff == other.gitDiff &&
+          images == other.images &&
+          configOptions == other.configOptions &&
+          slashCommands == other.slashCommands &&
+          approvalOptions == other.approvalOptions &&
+          urlElicitation == other.urlElicitation &&
+          runningViaThreads == other.runningViaThreads &&
+          historyPrefetch == other.historyPrefetch &&
+          sessionReload == other.sessionReload;
+}
+
 /// One app-server event mirrored for Dart. `kind` is the JSON-RPC method
 /// (e.g. `turn/started`, `item/agentMessage/delta`, `turn/completed`).
 class AppEventDto {
@@ -1167,6 +2351,22 @@ class AppServeStatusDto {
   /// they inherit the app's environment.
   final String? proxy;
 
+  /// Service provider of this host: `codex` or `opencode`. For `opencode`
+  /// the `app_*` fields describe the OpenCode gateway and `api_*` are empty.
+  final String provider;
+
+  /// Provider version when known (OpenCode).
+  final String? providerVersion;
+
+  /// Whether that version is the one this build was verified against.
+  final bool providerVerified;
+
+  /// ACP hosts: agent id (`None` for Codex and OpenCode).
+  final String? agentId;
+
+  /// ACP hosts: agent display name.
+  final String? agentName;
+
   const AppServeStatusDto({
     required this.name,
     required this.device,
@@ -1184,6 +2384,11 @@ class AppServeStatusDto {
     required this.embedded,
     this.codexBinary,
     this.proxy,
+    required this.provider,
+    this.providerVersion,
+    required this.providerVerified,
+    this.agentId,
+    this.agentName,
   });
 
   @override
@@ -1203,7 +2408,12 @@ class AppServeStatusDto {
       metaRegistered.hashCode ^
       embedded.hashCode ^
       codexBinary.hashCode ^
-      proxy.hashCode;
+      proxy.hashCode ^
+      provider.hashCode ^
+      providerVersion.hashCode ^
+      providerVerified.hashCode ^
+      agentId.hashCode ^
+      agentName.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -1225,7 +2435,12 @@ class AppServeStatusDto {
           metaRegistered == other.metaRegistered &&
           embedded == other.embedded &&
           codexBinary == other.codexBinary &&
-          proxy == other.proxy;
+          proxy == other.proxy &&
+          provider == other.provider &&
+          providerVersion == other.providerVersion &&
+          providerVerified == other.providerVerified &&
+          agentId == other.agentId &&
+          agentName == other.agentName;
 }
 
 /// codex auth status for the app-server behind `service_key`, mirrored for
@@ -1838,10 +3053,18 @@ class OlderPageDto {
   /// Whether older items still remain.
   final bool hasOlder;
 
-  const OlderPageDto({required this.items, required this.hasOlder});
+  /// Older history exists but is no longer available (ACP transcripts).
+  final bool olderUnavailable;
+
+  const OlderPageDto({
+    required this.items,
+    required this.hasOlder,
+    required this.olderUnavailable,
+  });
 
   @override
-  int get hashCode => items.hashCode ^ hasOlder.hashCode;
+  int get hashCode =>
+      items.hashCode ^ hasOlder.hashCode ^ olderUnavailable.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -1849,7 +3072,77 @@ class OlderPageDto {
       other is OlderPageDto &&
           runtimeType == other.runtimeType &&
           items == other.items &&
-          hasOlder == other.hasOlder;
+          hasOlder == other.hasOlder &&
+          olderUnavailable == other.olderUnavailable;
+}
+
+/// Result of attaching and publishing a local OpenCode service.
+class OpenCodeServeDto {
+  /// Device id the services registered under.
+  final String device;
+
+  /// Instance name.
+  final String name;
+
+  /// `pcx:<device>:opencode:<name>` key.
+  final String serviceKey;
+
+  /// Loopback gateway address.
+  final String listenAddr;
+
+  /// `pcx:<device>:meta:<name>` key.
+  final String metaServiceKey;
+
+  /// OpenCode version.
+  final String version;
+
+  /// Whether the version is the verified one (others passed the contract).
+  final bool verified;
+
+  /// Whether an existing host was reused.
+  final bool reused;
+
+  /// Whether this call asked OpenCode to start its background service.
+  final bool startedService;
+
+  const OpenCodeServeDto({
+    required this.device,
+    required this.name,
+    required this.serviceKey,
+    required this.listenAddr,
+    required this.metaServiceKey,
+    required this.version,
+    required this.verified,
+    required this.reused,
+    required this.startedService,
+  });
+
+  @override
+  int get hashCode =>
+      device.hashCode ^
+      name.hashCode ^
+      serviceKey.hashCode ^
+      listenAddr.hashCode ^
+      metaServiceKey.hashCode ^
+      version.hashCode ^
+      verified.hashCode ^
+      reused.hashCode ^
+      startedService.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is OpenCodeServeDto &&
+          runtimeType == other.runtimeType &&
+          device == other.device &&
+          name == other.name &&
+          serviceKey == other.serviceKey &&
+          listenAddr == other.listenAddr &&
+          metaServiceKey == other.metaServiceKey &&
+          version == other.version &&
+          verified == other.verified &&
+          reused == other.reused &&
+          startedService == other.startedService;
 }
 
 /// The host's project-folder config (mirrored for Dart): the roots a remote
@@ -2178,6 +3471,9 @@ class ThreadHistoryDto {
   /// Cached pages of independently selected turns.
   final List<TurnItemsPageDto> turnPages;
 
+  /// Older history exists but is no longer available (ACP transcripts).
+  final bool olderUnavailable;
+
   const ThreadHistoryDto({
     this.historyEpoch,
     required this.items,
@@ -2200,6 +3496,7 @@ class ThreadHistoryDto {
     required this.turns,
     this.firstTurnId,
     required this.turnPages,
+    required this.olderUnavailable,
   });
 
   @override
@@ -2224,7 +3521,8 @@ class ThreadHistoryDto {
       hasOlder.hashCode ^
       turns.hashCode ^
       firstTurnId.hashCode ^
-      turnPages.hashCode;
+      turnPages.hashCode ^
+      olderUnavailable.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -2251,7 +3549,8 @@ class ThreadHistoryDto {
           hasOlder == other.hasOlder &&
           turns == other.turns &&
           firstTurnId == other.firstTurnId &&
-          turnPages == other.turnPages;
+          turnPages == other.turnPages &&
+          olderUnavailable == other.olderUnavailable;
 }
 
 /// One materialised conversation item mirrored for Dart.

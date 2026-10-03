@@ -1,18 +1,27 @@
+import 'dart:async';
+
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
+import 'package:pocket_codex/src/acp_errors.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
 import 'package:pocket_codex/src/error_format.dart';
 import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/theme.dart';
 import 'package:pocket_codex/src/ui_prefs.dart';
 import 'package:pocket_codex/src/widgets/project_folders_editor.dart';
+import 'package:pocket_codex/src/widgets/provider_badge.dart';
+
+part 'local_host_acp.dart';
+part 'local_host_opencode.dart';
 
 /// Manage one local host. With [existing] set it shows that host's listen
 /// address + service key and a Stop button. Otherwise it's the "new host" form
-/// (codex path, port, instance name, proxy) with a Start button. codex is
-/// auto-detected (with a "change path" override) or picked when not on PATH.
+/// with a provider choice: Codex (codex path, port, instance name, proxy) or
+/// OpenCode (instance name, optional opencode path). codex is auto-detected
+/// (with a "change path" override) or picked when not on PATH.
 ///
 /// Shared by the manage page's hosting tab and the chat-first home screen's
 /// "start hosting" hero action, so both entry points behave identically.
@@ -40,11 +49,40 @@ class _LocalHostDialogState extends ConsumerState<LocalHostDialog> {
   bool _codexChecked = false;
   bool _busy = false;
   String? _error;
+  // New-host provider: `codex`, `opencode` or `acp`.
+  String _provider = 'codex';
+  final _ocName = TextEditingController(text: 'opencode');
+  final _ocPath = TextEditingController();
+  bool _ocChecked = false;
+  String? _ocLocated; // auto-detected opencode, null = not found
+  // ACP: agents of this device, the chosen one, its install job and login.
+  List<AcpAgent>? _acpAgents;
+  String? _acpAgentId;
+  AcpJob? _acpJob;
+  Timer? _acpPoll;
+  AcpAuth? _acpAuth;
+  final _acpName = TextEditingController();
+  bool _acpNameEdited = false;
+  // A host just started here that still needs a login: the dialog stays open
+  // on its details.
+  AppServeStatus? _acpHosted;
+  String? _acpGatewayUrl;
   bool get _isExisting => widget.existing != null;
   bool get _codexFound => _codexPath != null;
+
+  /// [setState] for the OpenCode and ACP parts of this library.
+  void _update(VoidCallback fn) => setState(fn);
+
+  /// Whether the new-host form can start (an ACP agent must be installed).
+  bool get _canStart =>
+      _provider != 'acp' || (_acpSelected?.installed ?? false);
+
   @override
   void initState() {
     super.initState();
+    if (widget.existing?.isAcp ?? false) {
+      Future.microtask(() => _loadAcpHost(widget.existing!));
+    }
     if (_isExisting) return;
     // Auto-detect codex: when found we just show "available" (with a "change
     // path" override); when not, the user picks a path (persisted on start) or
@@ -76,6 +114,10 @@ class _LocalHostDialogState extends ConsumerState<LocalHostDialog> {
     _path.dispose();
     _name.dispose();
     _proxy.dispose();
+    _ocName.dispose();
+    _ocPath.dispose();
+    _acpPoll?.cancel();
+    _acpName.dispose();
     super.dispose();
   }
 
@@ -154,6 +196,9 @@ class _LocalHostDialogState extends ConsumerState<LocalHostDialog> {
   }
 
   Future<void> _stop() async {
+    final host = _acpHosted ?? widget.existing!;
+    if (host.isAcp) return _stopAcp(host);
+    if (host.isOpenCode) return _stopOpenCode();
     setState(() {
       _busy = true;
       _error = null;
@@ -184,8 +229,22 @@ class _LocalHostDialogState extends ConsumerState<LocalHostDialog> {
     final l10n = AppLocalizations.of(context);
     final scheme = Theme.of(context).colorScheme;
     final small = Theme.of(context).textTheme.bodySmall;
-    final existing = widget.existing;
-    final children = <Widget>[Text(l10n.localHostHint)];
+    final existing = widget.existing ?? _acpHosted;
+    if (existing != null ? existing.isAcp : _provider == 'acp') {
+      return _dialog(existing != null ? _acpExisting(existing) : _acpForm());
+    }
+    if (existing != null ? existing.isOpenCode : _provider == 'opencode') {
+      return _dialog(
+        existing != null ? _openCodeExisting(existing) : _openCodeForm(),
+      );
+    }
+    final children = <Widget>[
+      if (existing == null) ...[
+        _providerPicker(l10n),
+        const SizedBox(height: 12),
+      ],
+      Text(l10n.localHostHint),
+    ];
     if (existing != null) {
       // Two tunnels under one name: show each kind's listen address + relay key.
       children
@@ -380,6 +439,15 @@ class _LocalHostDialogState extends ConsumerState<LocalHostDialog> {
         );
       }
     }
+    return _dialog(children);
+  }
+
+  /// The dialog frame shared by both providers: [children], the error line,
+  /// and Cancel plus Start / Stop.
+  Widget _dialog(List<Widget> children) {
+    final l10n = AppLocalizations.of(context);
+    final scheme = Theme.of(context).colorScheme;
+    final existing = widget.existing ?? _acpHosted;
     if (_error != null) {
       children
         ..add(const SizedBox(height: 12))
@@ -411,7 +479,13 @@ class _LocalHostDialogState extends ConsumerState<LocalHostDialog> {
         else
           FilledButton(
             key: const Key('start-hosting-btn'),
-            onPressed: _busy ? null : _start,
+            onPressed: _busy || !_canStart
+                ? null
+                : switch (_provider) {
+                    'opencode' => _startOpenCode,
+                    'acp' => _startAcp,
+                    _ => _start,
+                  },
             child: Text(l10n.startHosting),
           ),
       ],

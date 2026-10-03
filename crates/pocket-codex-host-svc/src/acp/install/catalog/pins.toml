@@ -1,0 +1,124 @@
+# Maintainer input of the ACP agent catalog (docs/acp-integration/TRD.md §4.3.13).
+#
+# `python3 scripts/acp_catalog.py update` turns this file into catalog.toml,
+# catalog/locks/*.json and ../locks.rs with integrity hashes; never edit those
+# generated files by hand. `python3 scripts/acp_catalog.py check` validates
+# them offline (CI).
+
+schema = 1
+
+[node]
+version = "24.21.0"
+# Platform key → file suffix in https://nodejs.org/dist/v<version>/.
+[node.files]
+darwin-aarch64 = "darwin-arm64.tar.gz"
+darwin-x86_64 = "darwin-x64.tar.gz"
+linux-aarch64 = "linux-arm64.tar.gz"
+linux-x86_64 = "linux-x64.tar.gz"
+windows-aarch64 = "win-arm64.zip"
+windows-x86_64 = "win-x64.zip"
+
+[[agents]]
+id = "claude-acp"
+name = "Claude Code"
+description = "Anthropic Claude Code，经 claude-agent-acp 适配器接入"
+registry_id = "claude-acp"
+approx_size_mb = 320
+engine_override = { env = "CLAUDE_CODE_EXECUTABLE", setting = "engine_path" }
+
+[[agents.releases]]
+version = "0.84.0"
+kind = "npm"
+package = "@agentclientprotocol/claude-agent-acp"
+entry = "node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js"
+omit = []
+platforms = ["darwin-aarch64", "darwin-x86_64", "linux-aarch64", "linux-x86_64", "windows-aarch64", "windows-x86_64"]
+# D21: without the setting (default false) the adapter starts with --hide-claude-auth.
+conditional_args = [
+  { setting = "allow_subscription_login", default = false, when_false = ["--hide-claude-auth"], label_key = "acpSubscriptionLogin", confirm_key = "acpSubscriptionLoginConfirmBody" },
+]
+
+[[agents]]
+id = "codex-acp"
+name = "Codex（ACP）"
+description = "OpenAI Codex，经 codex-acp 适配器接入，使用本机已安装的 codex"
+registry_id = "codex-acp"
+approx_size_mb = 60
+external_engine = { env = "CODEX_PATH", binary = "codex", setting = "codex_binary", version_args = ["--version"] }
+
+# Newest first; the installer picks the first release whose engine_range
+# matches the user's codex (T11).
+[[agents.releases]]
+version = "2.0.1"
+engine_range = ">=0.159.1, <0.160.0"
+kind = "npm"
+package = "@agentclientprotocol/codex-acp"
+entry = "node_modules/@agentclientprotocol/codex-acp/dist/index.js"
+omit = ["optional"]
+platforms = ["darwin-aarch64", "darwin-x86_64", "linux-aarch64", "linux-x86_64", "windows-aarch64", "windows-x86_64"]
+
+[[agents.releases]]
+version = "1.12.0"
+engine_range = ">=0.154.0, <0.155.0"
+kind = "npm"
+package = "@agentclientprotocol/codex-acp"
+entry = "node_modules/@agentclientprotocol/codex-acp/dist/index.js"
+omit = ["optional"]
+platforms = ["darwin-aarch64", "darwin-x86_64", "linux-aarch64", "linux-x86_64", "windows-aarch64", "windows-x86_64"]
+
+[[agents]]
+id = "opencode-acp"
+name = "OpenCode 1.x（ACP）"
+description = "OpenCode 1.x 的 ACP 模式"
+registry_id = "opencode"
+approx_size_mb = 200
+
+[[agents.releases]]
+version = "1.18.33"
+kind = "archive"
+args = ["acp", "--hostname", "127.0.0.1", "--port", "0", "--no-mdns"]
+random_env = ["OPENCODE_SERVER_PASSWORD"]
+data_family = "opencode-v1"
+# GitHub release assets; the script hashes each download and finds `binary`
+# inside the archive to record `cmd`.
+source = "github"
+repo = "anomalyco/opencode"
+tag = "v1.18.33"
+binary = "opencode"
+[agents.releases.assets]
+darwin-aarch64 = "opencode-darwin-arm64.zip"
+darwin-x86_64 = "opencode-darwin-x64.zip"
+darwin-x86_64-baseline = "opencode-darwin-x64-baseline.zip"
+linux-aarch64 = "opencode-linux-arm64.tar.gz"
+linux-x86_64 = "opencode-linux-x64.tar.gz"
+linux-x86_64-baseline = "opencode-linux-x64-baseline.tar.gz"
+windows-aarch64 = "opencode-windows-arm64.zip"
+windows-x86_64 = "opencode-windows-x64.zip"
+windows-x86_64-baseline = "opencode-windows-x64-baseline.zip"
+
+[[agents]]
+id = "opencode2-acp"
+name = "OpenCode 2.x（ACP）"
+description = "OpenCode 2.x 的 ACP 模式"
+approx_size_mb = 210
+
+[[agents.releases]]
+version = "2.0.20"
+kind = "archive"
+args = ["acp"]
+data_family = "opencode-v2"
+# npm platform package tarballs (postinstall is never run); integrity comes
+# from the registry metadata, the executable is package/bin/<binary>.
+source = "npm-platform"
+package_prefix = "@opencode/cli-"
+binary = "opencode"
+[agents.releases.packages]
+darwin-aarch64 = "darwin-arm64"
+darwin-x86_64 = "darwin-x64"
+darwin-x86_64-baseline = "darwin-x64-baseline"
+linux-aarch64 = "linux-arm64"
+linux-x86_64 = "linux-x64"
+linux-x86_64-baseline = "linux-x64-baseline"
+windows-aarch64 = "windows-arm64"
+windows-x86_64 = "windows-x64"
+windows-x86_64-baseline = "windows-x64-baseline"
