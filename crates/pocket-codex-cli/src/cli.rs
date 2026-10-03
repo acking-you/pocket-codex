@@ -431,6 +431,21 @@ pub enum PbCmd {
     Subscribe(PbSubscribeArgs),
     /// Query the relay for status info.
     Status(PbStatusArgs),
+    /// Show the actual running SDK version and recovery state of one worker.
+    Diagnostics(PbWorkerArgs),
+    /// Restart only one recorded network worker using this installed binary.
+    Restart(PbWorkerArgs),
+}
+
+/// Exact selector for standalone network-worker maintenance.
+#[derive(Debug, Args)]
+pub struct PbWorkerArgs {
+    /// Exact recorded relay service key; no implicit default.
+    #[arg(long)]
+    pub key: String,
+    /// Recorded worker role.
+    #[arg(long, value_enum)]
+    pub role: PbRoleArg,
 }
 
 /// Common pb-mapper relay locator.

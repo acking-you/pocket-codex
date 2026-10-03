@@ -52,8 +52,8 @@ const RETRY_DELAY: Duration = Duration::from_secs(60);
 /// — returning the new expiry. The credential itself is not returned because
 /// renewal does not change it.
 ///
-/// Dropping the handle stops refreshing; it does not stop the tunnels, which
-/// keep working until the credential actually lapses.
+/// Call `abort()` on the returned task to stop refreshing. As with any Tokio
+/// `JoinHandle`, dropping it detaches the task; it does not stop the tunnels.
 pub fn keep_credential_alive<F, Fut>(expires_at: u64, refresh: F) -> JoinHandle<()>
 where
     F: Fn() -> Fut + Send + 'static,

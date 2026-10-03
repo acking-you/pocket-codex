@@ -430,6 +430,13 @@ The order below is our current best guess; it is not a contract.
 When you ship a milestone, update `README.md` (Status table) **and**
 this file's roadmap so the source of truth stays in sync.
 
+15. **Relay recovery and maintenance (2026-10-03).** Network workers retain pending
+    registrations/subscriptions through offline startup. Runtime diagnostics report
+    the SDK actually loaded by each worker; an older worker reports unknown.
+    `pb restart --role <register|subscribe> --key <exact-key>` verifies process
+    identity and credentials before replacing that worker, preserving local Codex,
+    API proxy and host supervisor processes. See `docs/relay-worker-recovery.md`.
+
 ### UI and history maintenance (2026-09-13)
 
 - Keep shared colors, typography, and control shapes in `theme.dart` /

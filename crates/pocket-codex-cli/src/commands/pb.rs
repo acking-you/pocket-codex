@@ -13,7 +13,7 @@ use pocket_codex_pb::{
 };
 
 use crate::{
-    cli::{PbCmd, PbRegisterArgs, PbStatusArgs, PbStatusKind, PbSubscribeArgs},
+    cli::{PbCmd, PbRegisterArgs, PbStatusArgs, PbStatusKind, PbSubscribeArgs, PbWorkerArgs},
     commands::ui,
 };
 
@@ -23,6 +23,14 @@ pub async fn run(cmd: PbCmd) -> Result<()> {
         PbCmd::Register(args) => register(args).await,
         PbCmd::Subscribe(args) => subscribe(args).await,
         PbCmd::Status(args) => status(args).await,
+        PbCmd::Diagnostics(args) => diagnostics(args),
+        PbCmd::Restart(args) => {
+            let session = crate::commands::managed_pb::restart(args.role.into(), &args.key).await?;
+            ui::headline(ui::Tone::Ok, "network worker restarted");
+            ui::field("pid", &session.pid.to_string());
+            ui::field("key", &session.key);
+            diagnostics(args)
+        },
     }
 }
 
@@ -98,5 +106,22 @@ async fn status(args: PbStatusArgs) -> Result<()> {
             ui::field("remote id", &remote);
         },
     }
+    Ok(())
+}
+
+fn diagnostics(args: PbWorkerArgs) -> Result<()> {
+    let state = pocket_codex_core::state::RuntimeState::load()?;
+    let session = state
+        .find_pb(args.role.into(), &args.key)
+        .ok_or_else(|| anyhow::anyhow!("no recorded network worker for this role and key"))?;
+    let health = crate::commands::worker_health::read(session);
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "key": session.key, "role": session.role, "pid": session.pid,
+            "alive": pocket_codex_core::process::pid_running(session.pid),
+            "runtime": health,
+        }))?
+    );
     Ok(())
 }

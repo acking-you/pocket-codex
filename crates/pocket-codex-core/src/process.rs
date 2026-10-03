@@ -38,6 +38,54 @@ pub fn pid_running(pid: u32) -> bool {
     !matches!(process_status(pid), None | Some(ProcessStatus::Zombie | ProcessStatus::Dead))
 }
 
+/// Return the start time only if this PID is the exact standalone pb worker.
+/// Host supervisors and Codex processes never match, even if state is stale.
+pub fn pb_worker_start_time(session: &crate::state::PbSessionInfo) -> Option<u64> {
+    let mut sys = System::new();
+    sys.refresh_processes_specifics(
+        ProcessesToUpdate::Some(&[Pid::from_u32(session.pid)]),
+        true,
+        ProcessRefreshKind::new()
+            .with_cmd(UpdateKind::Always)
+            .with_exe(UpdateKind::Always),
+    );
+    let process = sys.process(Pid::from_u32(session.pid))?;
+    if matches!(process.status(), ProcessStatus::Zombie | ProcessStatus::Dead) {
+        return None;
+    }
+    let exe = process
+        .exe()?
+        .file_name()?
+        .to_str()?
+        .trim_end_matches(" (deleted)");
+    let cmd: Vec<_> = process
+        .cmd()
+        .iter()
+        .map(|s| s.to_string_lossy().into_owned())
+        .collect();
+    matches_pb_worker(exe, &cmd, session).then(|| process.start_time())
+}
+
+fn matches_pb_worker(exe: &str, cmd: &[String], session: &crate::state::PbSessionInfo) -> bool {
+    let role = match session.role {
+        crate::state::PbRole::Register => "pb-register",
+        crate::state::PbRole::Subscribe => "pb-subscribe",
+    };
+    let flag = |name: &str, value: &str| {
+        let mut values = cmd
+            .windows(2)
+            .filter(|pair| pair[0] == name)
+            .map(|pair| &pair[1]);
+        values.next().is_some_and(|actual| actual == value) && values.next().is_none()
+    };
+    matches!(exe, "pocket-codex" | "pocket-codex.exe")
+        && cmd.get(1).is_some_and(|arg| arg == "__worker")
+        && cmd.get(2).is_some_and(|arg| arg == role)
+        && flag("--key", &session.key)
+        && flag("--relay", &session.relay_addr)
+        && flag("--local-addr", &session.local_addr)
+}
+
 /// Host to dial when probing a listener that was bound to `host`: unspecified
 /// binds (`0.0.0.0` / `::`) are reachable over loopback, and a bracketed IPv6
 /// authority (`[::1]`) is unwrapped so `ToSocketAddrs` accepts it. Shared by
@@ -208,6 +256,47 @@ mod tests {
     use std::net::TcpListener;
 
     use super::*;
+
+    #[test]
+    fn network_maintenance_matches_exact_worker_and_rejects_host_or_reused_pid() {
+        let record = crate::state::PbSessionInfo {
+            role: crate::state::PbRole::Register,
+            key: "pcx:test:api:default".into(),
+            relay_addr: "relay.test:7666".into(),
+            local_addr: "127.0.0.1:12345".into(),
+            pid: 0,
+            log_file: Default::default(),
+            codec: true,
+            started_at: String::new(),
+        };
+        let args = [
+            "pocket-codex",
+            "__worker",
+            "pb-register",
+            "--key",
+            &record.key,
+            "--local-addr",
+            &record.local_addr,
+            "--relay",
+            &record.relay_addr,
+            "--codec",
+        ];
+        let cmd: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+        assert!(matches_pb_worker("pocket-codex", &cmd, &record));
+        assert!(!matches_pb_worker("codex", &cmd, &record));
+        let mut host = cmd.clone();
+        host[1] = "serve".into();
+        assert!(!matches_pb_worker("pocket-codex", &host, &record));
+        let mut wrong = cmd.clone();
+        wrong[4] = "another-key".into();
+        assert!(!matches_pb_worker("pocket-codex", &wrong, &record));
+        let mut wrong = cmd.clone();
+        wrong[8] = "different-relay:7666".into();
+        assert!(!matches_pb_worker("pocket-codex", &wrong, &record));
+        let mut wrong = cmd;
+        wrong.extend(["--key".into(), record.key.clone()]);
+        assert!(!matches_pb_worker("pocket-codex", &wrong, &record));
+    }
 
     #[test]
     fn tcp_port_open_sees_a_live_listener() {

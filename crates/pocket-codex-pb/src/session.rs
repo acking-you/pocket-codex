@@ -174,21 +174,15 @@ pub async fn register(session: &RelaySession, opts: RegisterOptions) -> Result<R
     Ok(registration)
 }
 
-/// Register, returning the handle AND the readiness outcome separately.
+/// Start a registration immediately and keep retrying while its handle is held.
 ///
-/// For a caller that must keep the registration even when it is not up yet: the
-/// SDK's worker goes on retrying, so the handle is what lets the service appear
-/// once the relay is reachable. [`register`] is this plus "treat not-ready as a
-/// failure", which is right when the caller has nowhere to hold a pending
-/// handle.
-///
-/// An `Err` from this function means the relay REFUSED the registration; the
-/// inner `Err` means it has not confirmed it yet.
-pub async fn register_pending(
+/// Use this in a supervisor that must survive starting without network access.
+/// Readiness is reported through the handle, separately from worker lifetime.
+pub async fn register_background(
     session: &RelaySession,
     opts: RegisterOptions,
-) -> Result<(Registration, Result<()>)> {
-    let registration = session
+) -> Result<Registration> {
+    session
         .client()?
         .register(RegisterRequest {
             key: opts.key.clone(),
@@ -200,7 +194,24 @@ pub async fn register_pending(
             force_namespace: false,
         })
         .await
-        .with_context(|| format!("registering `{}` on {}", opts.key, session.relay_addr))?;
+        .with_context(|| format!("registering `{}` on {}", opts.key, session.relay_addr))
+}
+
+/// Register, returning the handle AND the readiness outcome separately.
+///
+/// For a caller that must keep the registration even when it is not up yet: the
+/// SDK's worker goes on retrying, so the handle is what lets the service appear
+/// once the relay is reachable. [`register`] is this plus "treat not-ready as a
+/// failure", which is right when the caller has nowhere to hold a pending
+/// handle.
+///
+/// An outer `Err` means local setup failed. The inner result reports readiness,
+/// including timeouts and permanent relay rejection.
+pub async fn register_pending(
+    session: &RelaySession,
+    opts: RegisterOptions,
+) -> Result<(Registration, Result<()>)> {
+    let registration = register_background(session, opts.clone()).await?;
     let ready = registration
         .wait_ready_timeout(TUNNEL_READY_TIMEOUT)
         .await
@@ -210,13 +221,12 @@ pub async fn register_pending(
     Ok((registration, ready))
 }
 
-/// Subscribe to a remote service and expose it on a local TCP port.
-///
-/// Returns once the local listener is bound AND the relay has confirmed the
-/// service, so a caller told the tunnel is ready can immediately dial
-/// `opts.local_addr`.
-pub async fn subscribe(session: &RelaySession, opts: SubscribeOptions) -> Result<Connection> {
-    let connection = session
+/// Start a subscriber immediately, retaining its listener during relay outages.
+pub async fn subscribe_background(
+    session: &RelaySession,
+    opts: SubscribeOptions,
+) -> Result<Connection> {
+    session
         .client()?
         .connect(ConnectRequest {
             key: opts.key.clone(),
@@ -224,7 +234,16 @@ pub async fn subscribe(session: &RelaySession, opts: SubscribeOptions) -> Result
             transport: Transport::Tcp,
         })
         .await
-        .with_context(|| format!("subscribing to `{}` on {}", opts.key, session.relay_addr))?;
+        .with_context(|| format!("subscribing to `{}` on {}", opts.key, session.relay_addr))
+}
+
+/// Subscribe to a remote service and expose it on a local TCP port.
+///
+/// Returns once the local listener is bound AND the relay has confirmed the
+/// service, so a caller told the tunnel is ready can immediately dial
+/// `opts.local_addr`.
+pub async fn subscribe(session: &RelaySession, opts: SubscribeOptions) -> Result<Connection> {
+    let connection = subscribe_background(session, opts.clone()).await?;
     connection
         .wait_ready_timeout(TUNNEL_READY_TIMEOUT)
         .await
@@ -296,6 +315,34 @@ pub fn parse_relay_addr(addr: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn offline_background_handles_remain_owned_after_readiness_times_out() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("port");
+        let addr = listener.local_addr().expect("address");
+        drop(listener);
+        let session = RelaySession::for_test(addr.to_string());
+        let registration = tokio::time::timeout(
+            Duration::from_secs(1),
+            register_background(&session, RegisterOptions {
+                key: "offline".into(),
+                local_addr: "127.0.0.1:9".into(),
+                codec: true,
+            }),
+        )
+        .await
+        .expect("background setup must not wait for relay")
+        .expect("handle");
+        assert!(registration
+            .wait_ready_timeout(Duration::from_millis(50))
+            .await
+            .is_err());
+        assert!(!matches!(
+            registration.status(),
+            pb_mapper::TunnelStatus::Stopped | pb_mapper::TunnelStatus::Failed(_)
+        ));
+        registration.stop().await.expect("stop");
+    }
 
     #[test]
     fn a_session_rejects_an_empty_credential() {

@@ -1,15 +1,21 @@
 //! Hidden foreground worker entrypoints spawned by high-level commands.
 
-use anyhow::Result;
-use pocket_codex_core::config::{Config, Mode};
+use std::time::Duration;
+
+use anyhow::{bail, Result};
+use pocket_codex_core::{
+    config::{Config, Mode},
+    paths,
+    state::{PbRole, PbSessionInfo},
+};
 use pocket_codex_pb::{
-    register as pb_register, subscribe as pb_subscribe, RegisterOptions, RelaySession,
-    SubscribeOptions,
+    register_background as pb_register, subscribe_background as pb_subscribe, RegisterOptions,
+    RelaySession, SubscribeOptions, TunnelStatus,
 };
 
 use crate::{
     cli::WorkerCmd,
-    commands::{account, api_proxy},
+    commands::{account, api_proxy, worker_health::Reporter},
 };
 
 /// Run an internal worker command.
@@ -23,34 +29,36 @@ pub async fn run(cmd: WorkerCmd) -> Result<()> {
             let config = Config::load().unwrap_or_default();
             let session =
                 crate::commands::relay::resolve_session(args.relay.relay.as_deref(), &config)?;
+            let reporter =
+                reporter(PbRole::Register, &args.key, &args.local_addr, &session, args.codec)?;
             let registration = pb_register(&session, RegisterOptions {
                 key: args.key,
                 local_addr: args.local_addr,
                 codec: args.codec,
             })
             .await?;
-            // Keeps the credential alive under this registration; see
-            // [`keep_account_credential_alive`] for why a register worker cannot
-            // skip it.
-            let _refresh = keep_account_credential_alive(&session, &config).await;
-            // A worker's whole job is to hold the tunnel open, so it parks here
-            // until it is signalled. Returning would drop the handle and take
-            // the registration down with it.
-            tokio::signal::ctrl_c().await?;
+            let _refresh = keep_account_credential_alive(&session, &config);
+            let outcome =
+                monitor(&reporter, registration.subscribe(), || registration.diagnostics()).await;
             registration.stop().await?;
+            outcome?;
         },
         WorkerCmd::PbSubscribe(args) => {
             let config = Config::load().unwrap_or_default();
             let session =
                 crate::commands::relay::resolve_session(args.relay.relay.as_deref(), &config)?;
+            let reporter =
+                reporter(PbRole::Subscribe, &args.key, &args.local_addr, &session, false)?;
             let connection = pb_subscribe(&session, SubscribeOptions {
                 key: args.key,
                 local_addr: args.local_addr,
             })
             .await?;
-            let _refresh = keep_account_credential_alive(&session, &config).await;
-            tokio::signal::ctrl_c().await?;
+            let _refresh = keep_account_credential_alive(&session, &config);
+            let outcome =
+                monitor(&reporter, connection.subscribe(), || connection.diagnostics()).await;
             connection.stop().await?;
+            outcome?;
         },
         WorkerCmd::ApiProxy(args) => api_proxy::run(args.listen, args.proxy).await?,
     }
@@ -74,39 +82,105 @@ pub async fn run(cmd: WorkerCmd) -> Result<()> {
 ///
 /// Returns a guard whose drop stops refreshing. `None` in self-host mode, where
 /// the operator's own key does not expire.
-async fn keep_account_credential_alive(
-    session: &RelaySession,
-    config: &Config,
-) -> Option<tokio::task::JoinHandle<()>> {
-    // A permanent (32-byte administrator or operator) key needs no refreshing;
-    // only a `pbmt1_` temporary credential does.
+fn keep_account_credential_alive(session: &RelaySession, config: &Config) -> Option<OwnedTask> {
     if !session.credential.starts_with("pbmt1_") || config.account_mode() != Mode::Account {
         return None;
     }
     let backend = account::backend_base(None, config);
-    // The expiry has to come from the backend: the parent passed the credential
-    // through the environment, not its lifetime.
-    let expires_at = match account::fetch_relay_credential(&mut config.clone(), &backend).await {
-        Ok(relay) => relay.expires_at,
-        Err(err) => {
-            // Non-fatal: the tunnel is already up and works until the credential
-            // lapses. Warn rather than fail, so a transient backend outage does
-            // not take down a worker that is currently serving fine.
-            tracing::warn!(
-                error = %format!("{err:#}"),
-                "could not read the relay credential's expiry; this worker will stop serving when \
-                 it lapses"
-            );
-            return None;
-        },
-    };
-    Some(pocket_codex_pb::keep_credential_alive(expires_at, move || {
-        let backend = backend.clone();
-        async move {
-            let mut config = Config::load().unwrap_or_default();
-            Ok(account::fetch_relay_credential(&mut config, &backend)
-                .await?
-                .expires_at)
+    let initial_config = config.clone();
+    Some(OwnedTask(tokio::spawn(async move {
+        let mut delay = Duration::from_secs(2);
+        let expires_at = loop {
+            let mut config = Config::load().unwrap_or_else(|_| initial_config.clone());
+            match account::fetch_relay_credential(&mut config, &backend).await {
+                Ok(relay) => break relay.expires_at,
+                Err(error) => {
+                    tracing::warn!(%error, retry_secs = delay.as_secs(), "credential expiry lookup failed; retrying");
+                    tokio::time::sleep(delay).await;
+                    delay = (delay * 2).min(Duration::from_secs(30));
+                },
+            }
+        };
+        let mut refresh =
+            OwnedTask(pocket_codex_pb::keep_credential_alive(expires_at, move || {
+                let backend = backend.clone();
+                async move {
+                    let mut config = Config::load()?;
+                    Ok(account::fetch_relay_credential(&mut config, &backend)
+                        .await?
+                        .expires_at)
+                }
+            }));
+        let _ = (&mut refresh.0).await;
+    })))
+}
+
+struct OwnedTask(tokio::task::JoinHandle<()>);
+impl Drop for OwnedTask {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+fn reporter(
+    role: PbRole,
+    key: &str,
+    local_addr: &str,
+    session: &RelaySession,
+    codec: bool,
+) -> Result<Reporter> {
+    Reporter::new(&PbSessionInfo {
+        role,
+        key: key.to_string(),
+        local_addr: local_addr.to_string(),
+        relay_addr: session.relay_addr.clone(),
+        pid: std::process::id(),
+        log_file: paths::pb_log_file(role, key)?,
+        codec,
+        started_at: chrono::Utc::now().to_rfc3339(),
+    })
+}
+
+async fn monitor(
+    reporter: &Reporter,
+    mut status: tokio::sync::watch::Receiver<TunnelStatus>,
+    diagnostics: impl Fn() -> pocket_codex_pb::TunnelDiagnostics,
+) -> Result<()> {
+    let shutdown = shutdown_signal();
+    tokio::pin!(shutdown);
+    let mut interval = tokio::time::interval(Duration::from_secs(5));
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut snapshot_failed = false;
+    loop {
+        let current = status.borrow_and_update().clone();
+        if let Err(error) = reporter.write(current.clone(), diagnostics()) {
+            if !snapshot_failed {
+                tracing::warn!(%error, "worker runtime snapshot unavailable");
+            }
+            snapshot_failed = true;
+        } else {
+            snapshot_failed = false;
         }
-    }))
+        match current {
+            TunnelStatus::Failed(reason) => bail!("network worker failed: {reason}"),
+            TunnelStatus::Stopped => return Ok(()),
+            _ => {},
+        }
+        tokio::select! {
+            result = &mut shutdown => return result,
+            _ = interval.tick() => {},
+            result = status.changed() => { if result.is_err() { bail!("network worker stopped reporting status"); } },
+        }
+    }
+}
+
+async fn shutdown_signal() -> Result<()> {
+    #[cfg(unix)]
+    {
+        let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+        tokio::select! { result = tokio::signal::ctrl_c() => result?, _ = term.recv() => {} }
+    }
+    #[cfg(not(unix))]
+    tokio::signal::ctrl_c().await?;
+    Ok(())
 }

@@ -29,7 +29,8 @@ pub fn run() -> Result<()> {
     let relay = state.pb.first().map(|session| session.relay_addr.clone());
 
     ui::banner("Pocket-Codex runtime status", relay.as_deref());
-    let mut table = ui::new_table(&["COMPONENT", "STATE", "PID", "ENDPOINT", "KEY", "UPTIME"]);
+    let mut table =
+        ui::new_table(&["COMPONENT", "STATE", "PID", "ENDPOINT", "KEY", "UPTIME", "PB SDK"]);
 
     if let Some(info) = &codex.recorded {
         table.add_row(vec![
@@ -39,6 +40,7 @@ pub fn run() -> Result<()> {
             Cell::new(&info.listen),
             Cell::new("—"),
             Cell::new(ui::relative_time(&info.started_at)),
+            Cell::new("—"),
         ]);
     }
 
@@ -51,18 +53,30 @@ pub fn run() -> Result<()> {
             Cell::new(&session.local_addr),
             Cell::new(&session.key),
             Cell::new(ui::relative_time(&session.started_at)),
+            Cell::new("—"),
         ]);
     }
 
     for session in &state.pb {
-        let alive = pid_alive(session.pid);
+        let alive = pocket_codex_core::process::pid_running(session.pid);
+        let health = crate::commands::worker_health::read(session);
         table.add_row(vec![
             Cell::new(format!("pb {}", session.role)),
-            ui::state_cell(state_label(alive), alive),
+            ui::state_cell(
+                health
+                    .as_ref()
+                    .map_or(state_label(alive), |h| h.status.as_str()),
+                alive,
+            ),
             Cell::new(session.pid),
             Cell::new(&session.local_addr),
             Cell::new(&session.key),
             Cell::new(ui::relative_time(&session.started_at)),
+            Cell::new(
+                health
+                    .as_ref()
+                    .map_or("unknown", |h| h.sdk_version.as_str()),
+            ),
         ]);
     }
 
