@@ -15,8 +15,8 @@ members = [
 ]
 # `deps/codex` is a vendored upstream source kept as a git submodule,
 # intentionally excluded from this workspace so its own build
-# settings/lints/profiles are not entangled with ours; we import the bits
-# we need via path deps from individual crates.
+# settings/lints/profiles are not entangled with ours. It is a wire-schema
+# reference only; first-party crates use local envelopes instead of path deps.
 #
 # `deps/pb-mapper` used to sit here too, alongside the `deps/kanal` and
 # `deps/uni-stream` forks it pulled in transitively. All three are gone:
@@ -29,7 +29,7 @@ exclude = [
 ]
 
 [workspace.package]
-version = "0.2.6"
+version = "0.2.7"
 edition = "2021"
 rust-version = "1.95"
 authors = ["Pocket-Codex Contributors"]

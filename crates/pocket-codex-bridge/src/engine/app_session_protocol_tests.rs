@@ -1,6 +1,24 @@
 use super::*;
 
 #[test]
+fn persisted_command_truncation_survives_live_and_restored_items() {
+    let output = "first line\n... command output truncated for persistence ...\nlast line\n";
+    let item = json!({
+        "type": "commandExecution", "id": "command", "command": "cargo test",
+        "status": "completed", "aggregatedOutput": output, "exitCode": 0
+    });
+    let restored = parse_item(&item).expect("command history");
+    let live = map_event(Inbound {
+        method: "item/completed".into(),
+        params: Some(json!({"threadId": "thread", "turnId": "turn", "item": item})),
+        request_id: None,
+    });
+    assert_eq!(restored.text, format!("{output}\n[exit 0]"));
+    assert_eq!(live.text.as_deref(), Some(restored.text.as_str()));
+    assert_eq!(live.title.as_deref(), Some("cargo test"));
+}
+
+#[test]
 fn resume_reads_collaboration_mode_and_tolerates_legacy_responses() {
     for (mode, expected) in [
         (json!({"mode": "plan", "settings": {"model": "current-model"}}), Some("plan")),

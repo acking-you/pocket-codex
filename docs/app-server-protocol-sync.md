@@ -1,15 +1,24 @@
 # App-server protocol sync: 2026-10-04
 
-The reference is the requested `~/rust_pro/codex` working tree at
-`17a9df60e420b58e3edc55efb1bb052e39492bbc`. The fork merges it at `91f3ad911`.
-This identifies the audited source exactly; it does not assert that an external
-Codex executable installed by a user was built from this commit.
+The reference is upstream `openai/codex` main, pulled on 2026-10-04 with
+`git -C ~/rust_pro/codex pull --ff-only origin main`:
+`afb436df8b70bb5bc57b86d9a3e829968988cd21`. Local `HEAD` and `origin/main`
+matched after the pull. The fork merges that exact commit at
+`beaefbdf0ed3788762f7a30f3a83ad982d717fd4`; its `app-server-protocol` and
+`protocol` directories have no differences from the pulled upstream revision.
+
+This corrects 0.2.6, which used the stale local revision `17a9df60e` despite
+the request to pull latest. The new reference includes 225 further commits.
+It does not assert that an external Codex executable installed by a user was
+built from this commit.
 
 Pocket-Codex still launches the installed external executable. The submodule is
 the wire-schema reference, not a bundled runtime or a linked protocol library.
 
 ```mermaid
 flowchart LR
+    U["upstream main: afb436df8b"] -->|"git pull --ff-only"| L["~/rust_pro/codex"]
+    L -->|"merge: beaefbdf0"| S
     S["deps/codex: reference schemas"] -. "audit wire compatibility" .-> B["Pocket bridge: local JSON envelopes"]
     F[Flutter] <--> B
     B <-->|"initialize, initialized, requests and events"| C["Installed external codex app-server"]
@@ -26,6 +35,12 @@ flowchart LR
 | Enterprise MCP OAuth adds `loginId` and completion metadata | No enterprise login flow is added in this release; Pocket's existing account login behavior is unchanged. |
 | Plugin summary drops obsolete extension metadata; account plan/error variants expand | Pocket does not deserialize these into closed upstream enums. No runtime dependency or compatibility shim is added. |
 | Tool-call execution metadata changes within upstream model messages | The app-server item/event surface remains the integration boundary. Pocket does not interpret model-provider message internals. |
+| Command rollouts now persist only `aggregated_output`; app-server still sends `aggregatedOutput` | Both existing readers already accept these fields. Regression coverage checks current rollouts without legacy stdout/stderr/formatted output, plus live and restored app-server items. Older rollout fallback fields remain readable. |
+| Persisted paginated command output is capped at 64 KiB with a middle truncation marker | Keep the server's text and marker visible. Pocket does not claim the stored output is complete or reread files to reconstruct omitted bytes. |
+| Unknown `CodexErrorInfo` string/object variants are accepted upstream | Local JSON envelopes retain them; the UI shows the supplied error message without requiring a known error enum. Tests cover both future wire shapes. |
+| Resume reuses unchanged stored snapshots after validating writer ownership | This is internal to the external server. Existing `excludeTurns: true` resume and bounded history requests remain valid; no extra controller request or snapshot copy is added. |
+| Rollouts can contain `additional_tools` model metadata | Read-only history ignores it as metadata while retaining command output; it is not a user or assistant transcript row. |
+| Optional goal mutation `origin`, attachment owner lookup, prediction and Bedrock advisory methods are added; `namespaceTools` capability is removed | Pocket does not call these new methods, mutate goals, or depend on the removed capability. Existing consumed requests require no new fields. |
 
 Initialization still waits for the initialize response before sending
 `initialized`. Bounded history windows, model/service-tier discovery, async
@@ -53,8 +68,9 @@ matching uses an exact `--listen` argument, not a URL substring.
 ## Verification
 
 Run the full first-party gates in `AGENTS.md`, including Flutter lifecycle
-regressions for interrupted errors and ordinary interruptions. Audit the
-resolved bridge dependency graph on all targets/features: it must contain no
+regressions for interrupted errors and ordinary interruptions, current
+aggregated-output rollout/live/history shapes and future error variants.
+Audit the resolved bridge dependency graph on all targets/features: it must contain no
 Codex runtime/protocol crate. The Responses proxy's HTTP and WebSocket transport
 tests exercise host authentication, streaming and error forwarding. Build the
 desktop application and require the native macOS host CI result.

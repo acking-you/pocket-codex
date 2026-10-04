@@ -440,10 +440,12 @@ this file's roadmap so the source of truth stays in sync.
 16. **Low-latency relay and protocol sync (2026-10-04).** SDK 0.6.0 uses a shared
     per-leg data key with disjoint directional nonce prefixes, without data-key
     derivation, extra setup round trips or frame bytes. `deps/codex` merges the
-    requested local source `17a9df60e` at `91f3ad911`; interrupted turns may carry
-    an explicit error. Native app-server tracking excludes Linux thread IDs and
-    recognizes replaced executables; worker identity survives boot-time clock
-    corrections. See `docs/app-server-protocol-sync.md`.
+    freshly pulled upstream main `afb436df8b` at `beaefbdf0` (0.2.7 corrects the
+    stale local pin in 0.2.6). Aggregated command output, persisted truncation
+    markers and future error variants retain their existing display behavior;
+    interrupted turns may carry an explicit error. Native app-server tracking
+    excludes Linux thread IDs and recognizes replaced executables; worker identity
+    survives boot-time clock corrections. See `docs/app-server-protocol-sync.md`.
 
 ### UI and history maintenance (2026-09-13)
 

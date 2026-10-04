@@ -1682,6 +1682,42 @@ mod tests {
     }
 
     #[test]
+    fn read_transcript_keeps_aggregated_output_without_legacy_command_fields() {
+        // Current Codex persists only aggregated_output, including its durable
+        // truncation marker. additional_tools describes model tools, not a row.
+        let output = "first line\n... command output truncated for persistence ...\nlast line\n";
+        let lines = [
+            serde_json::json!({"type": "response_item", "payload": {
+                "type": "additional_tools", "role": "developer", "tools": []
+            }}),
+            serde_json::json!({"type": "event_msg", "payload": {
+                "type": "item_completed", "item": {
+                    "type": "CommandExecution", "id": "exec-current",
+                    "command": ["cargo", "test"], "parsed_cmd": [],
+                    "status": "completed", "aggregated_output": output,
+                    "exit_code": 0
+                }
+            }}),
+        ];
+        let dir = tempfile::tempdir().expect("transcript fixture");
+        let path = dir.path().join("rollout.jsonl");
+        std::fs::write(
+            &path,
+            lines
+                .iter()
+                .map(Value::to_string)
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
+        .expect("write transcript");
+        let items = read_transcript(&path).expect("read current transcript");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].id, "exec-current");
+        assert_eq!(items[0].title, "cargo test");
+        assert_eq!(items[0].text, output);
+    }
+
+    #[test]
     fn read_transcript_tracks_context_compaction_lifecycle() {
         let started = r#"{"type":"event_msg","payload":{"type":"item_started","item":{"type":"ContextCompaction","id":"compact-1"}}}"#;
         let completed = r#"{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"ContextCompaction","id":"compact-1"}}}"#;

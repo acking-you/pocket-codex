@@ -117,9 +117,19 @@ void answer(FakeBridgeApi api) => api.pushEvent(
 void main() {
   setUp(AppSessionScreen.debugResetThreadMemory);
 
-  for (final status in ['failed', 'interrupted']) {
+  for (final (status, errorInfo) in <(String, Object)>[
+    ('failed', 'tooManyDenials'),
+    ('interrupted', 'tooManyDenials'),
+    ('failed', 'futureError'),
+    (
+      'interrupted',
+      {
+        'futureError': {'retryAfterSeconds': 30},
+      },
+    ),
+  ]) {
     testWidgets(
-      '$status terminal errors remain visible without a separate error event',
+      '$status $errorInfo remains visible without a separate error event',
       (t) async {
         final api = FakeBridgeApi();
         await mount(t, api);
@@ -135,7 +145,7 @@ void main() {
                 'status': status,
                 'error': {
                   'message': 'Guardian denial limit reached',
-                  'codexErrorInfo': 'tooManyDenials',
+                  'codexErrorInfo': errorInfo,
                 },
               },
             }),
