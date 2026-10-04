@@ -2182,16 +2182,16 @@ checksum = "df94ce210e5bc13cb6651479fa48d14f601d9858cfe0467f43ae157023b938d3"
 
 [[package]]
 name = "pb-mapper"
-version = "0.5.2"
-source = "git+https://github.com/acking-you/pb-mapper?branch=pocket-codex#3e325a84b13128ff03c5a660596a1a0bcac7b3ad"
+version = "0.6.0"
+source = "git+https://github.com/acking-you/pb-mapper?branch=pocket-codex#a7a4061146612bc0edba98340ab8adb16341756c"
 dependencies = [
  "pb-mapper-client",
 ]
 
 [[package]]
 name = "pb-mapper-auth"
-version = "0.5.2"
-source = "git+https://github.com/acking-you/pb-mapper?branch=pocket-codex#3e325a84b13128ff03c5a660596a1a0bcac7b3ad"
+version = "0.6.0"
+source = "git+https://github.com/acking-you/pb-mapper?branch=pocket-codex#a7a4061146612bc0edba98340ab8adb16341756c"
 dependencies = [
  "parking_lot",
  "pb-mapper-core",
@@ -2207,8 +2207,8 @@ dependencies = [
 
 [[package]]
 name = "pb-mapper-client"
-version = "0.5.2"
-source = "git+https://github.com/acking-you/pb-mapper?branch=pocket-codex#3e325a84b13128ff03c5a660596a1a0bcac7b3ad"
+version = "0.6.0"
+source = "git+https://github.com/acking-you/pb-mapper?branch=pocket-codex#a7a4061146612bc0edba98340ab8adb16341756c"
 dependencies = [
  "if-addrs",
  "if-watch",
@@ -2227,8 +2227,8 @@ dependencies = [
 
 [[package]]
 name = "pb-mapper-core"
-version = "0.5.2"
-source = "git+https://github.com/acking-you/pb-mapper?branch=pocket-codex#3e325a84b13128ff03c5a660596a1a0bcac7b3ad"
+version = "0.6.0"
+source = "git+https://github.com/acking-you/pb-mapper?branch=pocket-codex#a7a4061146612bc0edba98340ab8adb16341756c"
 dependencies = [
  "base64 0.23.1",
  "clap",
@@ -2245,8 +2245,8 @@ dependencies = [
 
 [[package]]
 name = "pb-mapper-protocol"
-version = "0.5.2"
-source = "git+https://github.com/acking-you/pb-mapper?branch=pocket-codex#3e325a84b13128ff03c5a660596a1a0bcac7b3ad"
+version = "0.6.0"
+source = "git+https://github.com/acking-you/pb-mapper?branch=pocket-codex#a7a4061146612bc0edba98340ab8adb16341756c"
 dependencies = [
  "bytes",
  "parking_lot",
@@ -2347,7 +2347,7 @@ checksum = "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e"
 
 [[package]]
 name = "pocket-codex-account-proto"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "base64 0.22.1",
  "pocket-codex-core",
@@ -2360,7 +2360,7 @@ dependencies = [
 
 [[package]]
 name = "pocket-codex-api-proxy"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "anyhow",
  "axum",
@@ -2381,7 +2381,7 @@ dependencies = [
 
 [[package]]
 name = "pocket-codex-auth"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "base64 0.22.1",
  "jsonwebtoken",
@@ -2401,7 +2401,7 @@ dependencies = [
 
 [[package]]
 name = "pocket-codex-backend"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2431,7 +2431,7 @@ dependencies = [
 
 [[package]]
 name = "pocket-codex-cli"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2461,7 +2461,7 @@ dependencies = [
 
 [[package]]
 name = "pocket-codex-codex"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2487,7 +2487,7 @@ dependencies = [
 
 [[package]]
 name = "pocket-codex-core"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2506,7 +2506,7 @@ dependencies = [
 
 [[package]]
 name = "pocket-codex-host-svc"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2529,7 +2529,7 @@ dependencies = [
 
 [[package]]
 name = "pocket-codex-pb"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "anyhow",
  "pb-mapper",
@@ -2546,7 +2546,7 @@ dependencies = [
 
 [[package]]
 name = "pocket-codex-store"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "sqlx",
  "thiserror 2.0.18",
@@ -2557,7 +2557,7 @@ dependencies = [
 
 [[package]]
 name = "pocket_codex_bridge"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "anyhow",
  "async-trait",

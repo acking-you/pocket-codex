@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -115,6 +116,57 @@ void answer(FakeBridgeApi api) => api.pushEvent(
 
 void main() {
   setUp(AppSessionScreen.debugResetThreadMemory);
+
+  for (final status in ['failed', 'interrupted']) {
+    testWidgets(
+      '$status terminal errors remain visible without a separate error event',
+      (t) async {
+        final api = FakeBridgeApi();
+        await mount(t, api);
+        event(api, 'turn/started', 'turn-1');
+        api.pushEvent(
+          service,
+          AppEvent(
+            kind: 'turn/completed',
+            threadId: thread,
+            raw: jsonEncode({
+              'turn': {
+                'id': 'turn-1',
+                'status': status,
+                'error': {
+                  'message': 'Guardian denial limit reached',
+                  'codexErrorInfo': 'tooManyDenials',
+                },
+              },
+            }),
+          ),
+        );
+        await frames(t);
+        expect(find.byKey(const Key('session-error')), findsOneWidget);
+        expect(find.text('Guardian denial limit reached'), findsOneWidget);
+        expect(find.byKey(const Key('stop-btn')), findsNothing);
+        await t.pumpWidget(const SizedBox.shrink());
+      },
+    );
+  }
+
+  testWidgets('an ordinary interrupted turn has no error banner', (t) async {
+    final api = FakeBridgeApi();
+    await mount(t, api);
+    event(api, 'turn/started', 'turn-1');
+    api.pushEvent(
+      service,
+      const AppEvent(
+        kind: 'turn/completed',
+        threadId: thread,
+        raw: '{"turn":{"id":"turn-1","status":"interrupted","error":null}}',
+      ),
+    );
+    await frames(t);
+    expect(find.byKey(const Key('session-error')), findsNothing);
+    expect(find.byKey(const Key('stop-btn')), findsNothing);
+    await t.pumpWidget(const SizedBox.shrink());
+  });
 
   for (final terminal in ['turn/completed', 'turn/failed']) {
     testWidgets('$terminal wins over an older running history response', (

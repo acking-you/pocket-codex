@@ -149,13 +149,13 @@ pub(crate) async fn restart(role: PbRole, key: &str) -> Result<PbSessionInfo> {
 
     use pocket_codex_core::{
         config::{Config, Mode},
-        process::{pb_worker_start_time, pid_running},
+        process::{pb_worker_identity, pid_running},
     };
     let existing = RuntimeState::load()?
         .find_pb(role, key)
         .cloned()
         .context("no recorded network worker for this role and key")?;
-    let identity = pb_worker_start_time(&existing).context(
+    let identity = pb_worker_identity(&existing).context(
         "recorded PID is not the matching standalone network worker; refusing to signal it",
     )?;
     let config = Config::load()?;
@@ -175,13 +175,13 @@ pub(crate) async fn restart(role: PbRole, key: &str) -> Result<PbSessionInfo> {
         bail!("configured relay changed; refusing to retarget an existing worker");
     }
     let exe = std::env::current_exe().context("locating current executable")?;
-    if pb_worker_start_time(&existing) != Some(identity) {
+    if pb_worker_identity(&existing) != Some(identity.clone()) {
         bail!("worker process changed during preflight");
     }
     send_sigterm(existing.pid);
     tokio::time::timeout(Duration::from_secs(5), async {
         while pid_running(existing.pid) {
-            if pb_worker_start_time(&existing) != Some(identity) {
+            if pb_worker_identity(&existing) != Some(identity.clone()) {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(50)).await;

@@ -68,9 +68,9 @@ or a per-account GitHub login (hosted).
 | ------------------------------ | -------------------------------------- |
 | Workspace / lints / CI         | bootstrapped                           |
 | `pocket-codex` CLI             | `login`, `logout`, `account`, `init`, `serve`, `connect`, `api {serve,connect}`, `services {list,default set}`, top-level `status`/`stop`, `codex {start,stop,status}`, `pb {register,subscribe,status}`, `remote-hint`, `version` |
-| `pb-mapper` register/subscribe | Git SDK from the `pocket-codex` branch, pinned by `Cargo.lock`; includes connection timeout and interactive TCP latency fixes |
-| `codex app-server` supervision | spawn/stop/status via PID + state.toml |
-| App-server protocol | synced to upstream main `c098f97e5` (2026-09-24), fork merge `c08819510`; restores collaboration mode on resume, preserves opaque image attachments, and retains compatible initialization and paginated history |
+| `pb-mapper` register/subscribe | SDK 0.6.0 from the `pocket-codex` branch, pinned by `Cargo.lock`; bounded recovery and data-v2 nonce separation without data-key derivation or extra frame bytes |
+| `codex app-server` supervision | native process identity, upgrade-aware executable matching, and state.toml |
+| App-server protocol | synced to the requested local Codex source `17a9df60e` (2026-10-04), fork merge `91f3ad911`; surfaces interrupted-turn errors and preserves initialization, image references and opaque history cursors ([audit](docs/app-server-protocol-sync.md)) |
 | Android releases             | persistent release signing from v0.2.4, APK integrity/ABI/page-alignment checks, and SHA-256 checksums; older debug-signed installations need to be removed before switching signing identities (save settings first). |
 | External Codex hosting        | all desktop hosts spawn an installed `codex`; the mobile/desktop bridge uses wire envelopes without linking Codex protocol crates or their runtime dependencies. macOS GUI hosts resolve a login-shell PATH on demand for Codex/Node without blocking window creation or changing the controller environment. **Built-in engine** is disabled and not implemented. Existing embedded auto-host settings restore using external Codex, which must be installed or selected by path. |
 | Conversation history | bounded session cache, authoritative pagination end, and gaps at their actual position after timeline jumps; cached turn pages, explicit retry, stable reading position, and linear timeline grouping |
@@ -86,7 +86,7 @@ or a per-account GitHub login (hosted).
 | Direct Responses API proxy     | local HTTP/WS proxy registered through pb-mapper |
 | Hosted account (GitHub)        | optional `pocket-codex-backend`: GitHub login, then a short-lived per-account relay credential (`/v1/relay`) scoped to a `pcxu:<user>:…` namespace — clients register/connect against the relay **directly** and the administrator key never leaves the server; self-host preserved behind `--relay`. See [`deploy/`](deploy/README.md) |
 | Flutter UI (`apps/flutter`)    | chat-first home (opens straight into the latest session; all sessions in the sidebar; auto-connects to the explicit default / last-used / locally hosted / first reachable host, desktop auto-restores hosting); account onboarding ("Sign in with GitHub") + self-host onboarding (relay+key, `pcx1:` import/export); device-first service management, settings, sessions, and logs with shared secondary-page navigation; shared neutral/blue design system, persistent utility navigation, adaptive desktop/tablet/phone layouts (light/dark), a compact composer with automatic height, visible height reset, expanded editing, conversation and per-project unsent drafts retained during the app session, minimal new-session views, project shortcuts revealed on hover/keyboard focus or touch long-press, separate Queue/Stop actions, mobile newline / desktop Enter-to-send, retryable attachments, and matching icons/artwork |
-| Relay recovery | Shared DNS/network recovery and live worker SDK diagnostics; exact `pb restart --role … --key …` maintenance |
+| Relay recovery | Shared DNS/network recovery and clock-stable live worker SDK diagnostics; exact `pb restart --role … --key …` maintenance |
 
 Multi-device CLI flows are usable in both modes:
 
@@ -136,10 +136,7 @@ pocket-codex/
 │   ├── pocket-codex-cli         # `pocket-codex` binary
 │   └── pocket-codex-bridge      # cdylib consumed by flutter_rust_bridge
 ├── deps/
-│   ├── codex/                   # upstream codex (git submodule)
-│   ├── pb-mapper/               # upstream pb-mapper (git submodule)
-│   ├── kanal/                   # pinned fork transitively used by pb-mapper
-│   └── uni-stream/              # pinned fork transitively used by pb-mapper
+│   └── codex/                   # upstream codex (git submodule)
 ├── docs/                        # design notes & protocol references
 └── skills/                      # contributor / agent skill packs
 ```

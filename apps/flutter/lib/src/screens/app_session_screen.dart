@@ -2590,8 +2590,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         _scrollToEnd();
       case 'turn/completed':
         _turnStateRevision++;
-        // v2 reports turn FAILURES here (turn.status == 'failed' + error.message),
-        // not via a separate turn/failed method — surface the error the same way.
+        // Terminal notifications can carry errors on failed or interrupted turns.
         final failure = _turnFailureText(e.raw);
         setState(() {
           _streaming = false;
@@ -2657,17 +2656,19 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     return isSandboxHelperFailure(text) ? l10n.sandboxHelperUnavailable : text;
   }
 
-  /// If a `turn/completed` event actually represents a FAILED turn (v2 reports
-  /// failures here with `turn.status == 'failed'`), return its error message —
-  /// or an empty string if it failed without one. Returns null when the turn
-  /// completed successfully (so the caller leaves the transcript untouched).
+  /// Return failed-turn errors and explicit interrupted-turn errors. A normal
+  /// interruption has no error and must not display a failure banner.
   String? _turnFailureText(String raw) {
     try {
       final m = jsonDecode(raw);
       if (m is! Map) return null;
       final turn = m['turn'];
-      if (turn is! Map || turn['status'] != 'failed') return null;
+      if (turn is! Map) return null;
       final err = turn['error'];
+      if (turn['status'] != 'failed' &&
+          !(turn['status'] == 'interrupted' && err != null)) {
+        return null;
+      }
       return (err is Map && err['message'] is String)
           ? err['message'] as String
           : '';

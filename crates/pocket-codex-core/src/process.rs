@@ -66,6 +66,32 @@ pub fn pb_worker_start_time(session: &crate::state::PbSessionInfo) -> Option<u64
     matches_pb_worker(exe, &cmd, session).then(|| process.start_time())
 }
 
+/// Identify an exact standalone worker across PID reuse and wall-clock changes.
+/// Linux uses the boot ID and kernel start ticks; other platforms retain their
+/// native creation timestamp. This opaque value is only suitable for equality.
+pub fn pb_worker_identity(session: &crate::state::PbSessionInfo) -> Option<String> {
+    let started = pb_worker_start_time(session)?;
+    #[cfg(target_os = "linux")]
+    {
+        let _ = started;
+        let stat = std::fs::read_to_string(format!("/proc/{}/stat", session.pid)).ok()?;
+        let boot_id = std::fs::read_to_string("/proc/sys/kernel/random/boot_id").ok()?;
+        linux_process_identity(&stat, &boot_id)
+    }
+    #[cfg(not(target_os = "linux"))]
+    Some(format!("created:{started}"))
+}
+
+#[cfg(target_os = "linux")]
+fn linux_process_identity(stat: &str, boot_id: &str) -> Option<String> {
+    // comm (field 2) may contain spaces and ')'. The remainder starts at field 3;
+    // field 22 is measured since boot and is unaffected by NTP clock corrections.
+    let (_, fields) = stat.rsplit_once(") ")?;
+    let ticks = fields.split_whitespace().nth(19)?.parse::<u64>().ok()?;
+    let boot_id = boot_id.trim();
+    (!boot_id.is_empty()).then(|| format!("linux:{boot_id}:{ticks}"))
+}
+
 fn matches_pb_worker(exe: &str, cmd: &[String], session: &crate::state::PbSessionInfo) -> bool {
     let role = match session.role {
         crate::state::PbRole::Register => "pb-register",
@@ -148,22 +174,30 @@ pub fn wait_for_port_closed(addr: &str, timeout: Duration) -> bool {
 }
 
 /// Does this process look like a native `codex app-server` launched with
-/// `listen_url`? Matched by executable stem (`codex`) so the `node` /
+/// `listen_url`? Matched by executable name (`codex`) so the `node` /
 /// `powershell` wrappers of an npm install are skipped: they carry the same
 /// `app-server --listen …` arguments but are not the process holding the
 /// socket. Split out from [`find_codex_app_server`] so the matching rule is
 /// unit-testable without real processes.
-fn matches_codex_app_server(exe_stem: &str, cmd: &[String], listen_url: &str) -> bool {
-    exe_stem.eq_ignore_ascii_case("codex")
+fn matches_codex_app_server(exe_name: &str, cmd: &[String], listen_url: &str) -> bool {
+    // Linux keeps replaced executables running and appends this suffix to
+    // /proc/PID/exe. Their process identity does not change during an upgrade.
+    let exe_name = exe_name.trim_end_matches(" (deleted)");
+    (exe_name.eq_ignore_ascii_case("codex") || exe_name.eq_ignore_ascii_case("codex.exe"))
         && cmd.iter().any(|a| a == "app-server")
-        && cmd.iter().any(|a| a.contains(listen_url))
+        && (cmd
+            .windows(2)
+            .any(|pair| pair[0] == "--listen" && pair[1] == listen_url)
+            || cmd
+                .iter()
+                .any(|arg| arg.strip_prefix("--listen=") == Some(listen_url)))
 }
 
 /// PID of the native `codex app-server` process serving `listen_url`, if one
 /// is running. This is what keeps status/stop/`serve` correct when `codex`
 /// resolves to an npm/node shim: [`std::process::Command`] only sees the
 /// shim's PID (which exits), while the native binary several layers down keeps
-/// the listener. Returns the first match (only one process can hold the port).
+/// the listener. Linux worker threads and exited processes are excluded.
 pub fn find_codex_app_server(listen_url: &str) -> Option<u32> {
     let mut sys = System::new();
     sys.refresh_processes_specifics(
@@ -174,20 +208,24 @@ pub fn find_codex_app_server(listen_url: &str) -> Option<u32> {
             .with_exe(UpdateKind::Always),
     );
     sys.processes().values().find_map(|p| {
+        if p.thread_kind().is_some()
+            || matches!(p.status(), ProcessStatus::Zombie | ProcessStatus::Dead)
+        {
+            return None;
+        }
         let exe = p.exe().map(std::path::Path::to_path_buf);
-        let stem = exe
+        let name = exe
             .as_deref()
             .unwrap_or_else(|| std::path::Path::new(p.name()))
-            .file_stem()
+            .file_name()
             .and_then(|s| s.to_str())
-            .map(str::to_ascii_lowercase)
             .unwrap_or_default();
         let cmd: Vec<String> = p
             .cmd()
             .iter()
             .map(|a| a.to_string_lossy().into_owned())
             .collect();
-        matches_codex_app_server(&stem, &cmd, listen_url).then(|| p.pid().as_u32())
+        matches_codex_app_server(name, &cmd, listen_url).then(|| p.pid().as_u32())
     })
 }
 
@@ -256,6 +294,24 @@ mod tests {
     use std::net::TcpListener;
 
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_identity_uses_boot_and_ticks_without_comm_or_wall_time() {
+        let stat =
+            "123 (name with ) spaces) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 987654 0";
+        assert_eq!(
+            linux_process_identity(stat, "boot-a\n").as_deref(),
+            Some("linux:boot-a:987654")
+        );
+        assert_ne!(linux_process_identity(stat, "boot-a"), linux_process_identity(stat, "boot-b"));
+        assert_ne!(
+            linux_process_identity(stat, "boot-a"),
+            linux_process_identity(&stat.replace("987654", "987655"), "boot-a")
+        );
+        assert_eq!(linux_process_identity("123 (broken)", "boot-a"), None);
+        assert_eq!(linux_process_identity(stat, ""), None);
+    }
 
     #[test]
     fn network_maintenance_matches_exact_worker_and_rejects_host_or_reused_pid() {
@@ -348,6 +404,26 @@ mod tests {
         assert!(matches_codex_app_server(
             "codex",
             &cmd(&["codex", "app-server", "--listen", url]),
+            url,
+        ));
+        assert!(matches_codex_app_server(
+            "codex (deleted)",
+            &cmd(&["codex", "app-server", "--listen", url]),
+            url,
+        ));
+        assert!(matches_codex_app_server(
+            "codex.exe",
+            &cmd(&["codex.exe", "app-server", &format!("--listen={url}")]),
+            url,
+        ));
+        assert!(!matches_codex_app_server(
+            "codex",
+            &cmd(&["codex", "app-server", "--listen", "ws://127.0.0.1:180800"]),
+            url,
+        ));
+        assert!(!matches_codex_app_server(
+            "codex",
+            &cmd(&["codex", "app-server", "--config", url]),
             url,
         ));
         // The npm/node shim carries identical args but is named `node` — skip it.

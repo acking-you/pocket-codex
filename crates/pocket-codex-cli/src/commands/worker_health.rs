@@ -9,7 +9,10 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use pocket_codex_core::{process::pb_worker_start_time, state::PbSessionInfo};
+use pocket_codex_core::{
+    process::{pb_worker_identity, pb_worker_start_time},
+    state::PbSessionInfo,
+};
 use pocket_codex_pb::{TunnelDiagnostics, TunnelStatus};
 use serde::{Deserialize, Serialize};
 
@@ -17,6 +20,8 @@ use serde::{Deserialize, Serialize};
 pub(crate) struct WorkerHealth {
     pub pid: u32,
     pub process_started_at: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_identity: Option<String>,
     pub sdk_version: String,
     pub status: String,
     pub diagnostics: serde_json::Value,
@@ -25,6 +30,7 @@ pub(crate) struct WorkerHealth {
 pub(crate) struct Reporter {
     path: PathBuf,
     started: u64,
+    identity: String,
 }
 
 fn health_path(session: &PbSessionInfo) -> PathBuf {
@@ -38,6 +44,7 @@ impl Reporter {
         Ok(Self {
             path: health_path(session),
             started: pb_worker_start_time(session).context("identifying this network worker")?,
+            identity: pb_worker_identity(session).context("identifying this network worker")?,
         })
     }
 
@@ -45,6 +52,7 @@ impl Reporter {
         let health = WorkerHealth {
             pid: std::process::id(),
             process_started_at: self.started,
+            process_identity: Some(self.identity.clone()),
             sdk_version: diagnostics.sdk_version.to_string(),
             status: match status {
                 TunnelStatus::Starting => "starting",
@@ -100,6 +108,9 @@ pub(crate) fn read(session: &PbSessionInfo) -> Option<WorkerHealth> {
         return None;
     }
     let health: WorkerHealth = serde_json::from_slice(&bytes).ok()?;
-    (health.pid == session.pid && pb_worker_start_time(session) == Some(health.process_started_at))
-        .then_some(health)
+    let same_process = match &health.process_identity {
+        Some(identity) => pb_worker_identity(session).as_ref() == Some(identity),
+        None => pb_worker_start_time(session) == Some(health.process_started_at),
+    };
+    (health.pid == session.pid && same_process).then_some(health)
 }

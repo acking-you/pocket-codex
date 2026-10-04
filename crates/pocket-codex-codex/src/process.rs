@@ -633,25 +633,30 @@ pub(super) fn build_command(
 /// Snapshot of the current supervised process.
 #[derive(Debug, Clone)]
 pub struct StatusReport {
-    /// Recorded info, if any.
+    /// Recorded info, with the observed native PID when it can be identified.
     pub recorded: Option<CodexProcessInfo>,
-    /// Whether the recorded pid is still alive.
+    /// Whether the supervised native process is still alive.
     pub alive: bool,
 }
 
 /// Inspect the persisted state and report whether the supervised
 /// process is still running.
 pub fn status() -> pocket_codex_core::Result<StatusReport> {
-    let state = RuntimeState::load()?;
+    let mut state = RuntimeState::load()?;
     // "Alive" is whether a real codex app-server is serving the listen URL —
     // not merely whether the recorded PID exists (it may be a shim that exited
     // while the native binary keeps the socket) nor whether *anything* holds
     // the port (a foreign process must not read as our app-server). For
     // websocket transports require a `codex … app-server` bound to the URL;
     // fall back to the PID for unix sockets.
-    let alive = state.codex.as_ref().is_some_and(|c| {
+    let alive = state.codex.as_mut().is_some_and(|c| {
         if ws_host_port(&c.listen).is_some() {
-            find_codex_app_server(&c.listen).is_some()
+            if let Some(pid) = find_codex_app_server(&c.listen) {
+                c.pid = pid;
+                true
+            } else {
+                false
+            }
         } else {
             pid_alive(c.pid)
         }
