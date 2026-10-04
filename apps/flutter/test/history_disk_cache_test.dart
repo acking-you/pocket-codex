@@ -122,6 +122,69 @@ void main() {
     }
   }
 
+  testWidgets('retained turn windows appear before the host reconnects', (
+    tester,
+  ) async {
+    final resume = Completer<void>();
+    const cached = ThreadHistory(
+      running: false,
+      historyEpoch: 'one',
+      hasOlder: true,
+      firstTurnId: 'old',
+      items: [
+        ThreadItem(
+          id: 'tail',
+          itemType: 'agentMessage',
+          title: '',
+          text: 'tail',
+          turnId: 'new',
+        ),
+      ],
+      turns: [
+        TurnSummary(turnId: 'old', userText: 'old question', loaded: true),
+        TurnSummary(turnId: 'new', userText: 'new question'),
+      ],
+      turnPages: [
+        TurnItemsPage(
+          turnId: 'old',
+          hasMore: false,
+          items: [
+            ThreadItem(
+              id: 'old-user',
+              itemType: 'userMessage',
+              title: '',
+              text: 'Restored turn question',
+              turnId: 'old',
+            ),
+            ThreadItem(
+              id: 'old-answer',
+              itemType: 'agentMessage',
+              title: '',
+              text: 'Restored turn answer',
+              turnId: 'old',
+            ),
+          ],
+        ),
+      ],
+    );
+    final api = FakeBridgeApi()
+      ..cachedHistories[thread] = cached
+      ..pendingResumes[thread] = [resume.future]
+      ..readResult = cached;
+    await api.appConnect(service, 0);
+    await tester.pumpWidget(
+      host(const AppSessionScreen(serviceKey: service, threadId: thread), api),
+    );
+    await frames(tester);
+    expect(find.text('Restored turn answer'), findsOneWidget);
+    expect(api.turnItemCalls, isEmpty);
+    expect(api.threadReads, isEmpty);
+    resume.complete();
+    await frames(tester);
+    expect(find.text('Restored turn answer'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   testWidgets(
     'sync failure retains cached content and cannot send from stale state',
     (tester) async {

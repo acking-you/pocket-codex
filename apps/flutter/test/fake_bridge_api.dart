@@ -939,6 +939,8 @@ class FakeBridgeApi implements BridgeApi {
 
   /// Seedable local sessions returned by [appLocalSessions].
   List<LocalSession> localSessions = const [];
+  int localSessionCalls = 0;
+  Object? localSessionError;
 
   /// Seedable per-thread liveness returned by [appSessionLiveness].
   final Map<String, SessionLiveness> liveness = {};
@@ -958,7 +960,11 @@ class FakeBridgeApi implements BridgeApi {
   );
 
   @override
-  Future<List<LocalSession>> appLocalSessions() async => localSessions;
+  Future<List<LocalSession>> appLocalSessions() async {
+    localSessionCalls++;
+    if (localSessionError != null) throw localSessionError!;
+    return localSessions;
+  }
 
   @override
   Future<SessionLiveness> appSessionLiveness(String threadId) async =>

@@ -447,6 +447,17 @@ this file's roadmap so the source of truth stays in sync.
     excludes Linux thread IDs and recognizes replaced executables; worker identity
     survives boot-time clock corrections. See `docs/app-server-protocol-sync.md`.
 
+16. **Cached history and touch feedback (2026-10-04).** Local session lists
+    explain mobile filesystem unavailability, empty desktop history and retryable
+    scan failures. Opening restores retained sequential and selected-turn windows
+    locally within the memory budget; preserve real gaps and source generations.
+    Streaming writes a separate 100-item checkpoint, never the full display view.
+    Explicit history loads reveal and briefly highlight new rows; scroll loads
+    preserve the reading anchor and short-page edge gestures can load history.
+    Compact navigation is draggable and reads unloaded turns from the full
+    directory. Mobile message press feedback remains until menu dismissal and
+    respects reduced motion. See `docs/session-cache-sync.md`.
+
 ### UI and history maintenance (2026-09-13)
 
 - Keep shared colors, typography, and control shapes in `theme.dart` /

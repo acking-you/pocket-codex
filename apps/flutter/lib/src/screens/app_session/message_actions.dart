@@ -43,10 +43,15 @@ class MessageActions extends StatefulWidget {
 
 class _MessageActionsState extends State<MessageActions> {
   bool _menuOpen = false;
+  bool _pressed = false;
+
+  void _setPressed(bool value) {
+    if (mounted && value != _pressed) setState(() => _pressed = value);
+  }
 
   Future<void> _open(Offset globalPosition) async {
     if (_menuOpen) return;
-    _menuOpen = true;
+    setState(() => _menuOpen = true);
     final text = widget.text;
     final onEdit = widget.onEdit;
     final l10n = AppLocalizations.of(context);
@@ -95,8 +100,11 @@ class _MessageActionsState extends State<MessageActions> {
         ),
       ],
     );
-    _menuOpen = false;
     if (!mounted) return;
+    setState(() {
+      _menuOpen = false;
+      _pressed = false;
+    });
     switch (action) {
       case _MessageAction.copy:
         await _copyMessage(context, text);
@@ -166,8 +174,34 @@ class _MessageActionsState extends State<MessageActions> {
         PointerDeviceKind.stylus,
         PointerDeviceKind.invertedStylus,
       },
+      onLongPressDown: (_) => _setPressed(true),
+      onLongPressCancel: () => _setPressed(false),
+      onLongPressEnd: (_) => _setPressed(false),
       onLongPressStart: (details) => _open(details.globalPosition),
-      child: widget.child,
+      child: AnimatedScale(
+        scale: _pressed || _menuOpen ? 0.985 : 1,
+        duration: MediaQuery.disableAnimationsOf(context)
+            ? Duration.zero
+            : const Duration(milliseconds: 120),
+        child: AnimatedContainer(
+          key: const Key('message-press-feedback'),
+          duration: MediaQuery.disableAnimationsOf(context)
+              ? Duration.zero
+              : const Duration(milliseconds: 160),
+          foregroundDecoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.primary.withValues(
+              alpha: _pressed || _menuOpen ? 0.10 : 0,
+            ),
+            borderRadius: BorderRadius.circular(kControlRadius),
+            border: Border.all(
+              color: Theme.of(context).colorScheme.primary.withValues(
+                alpha: _pressed || _menuOpen ? 0.55 : 0,
+              ),
+            ),
+          ),
+          child: widget.child,
+        ),
+      ),
     );
   }
 }

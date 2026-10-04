@@ -568,6 +568,11 @@ pub struct OlderPage {
     pub has_older: bool,
 }
 
+/// The cursor belongs to the sequential window, never to a selected turn.
+pub(super) fn history_continuation(service: &str, thread: &str) -> Option<Option<String>> {
+    pagination_of(service, thread).map(|state| state.next_item_cursor)
+}
+
 /// Walk one page further back through a paginated thread's history.
 ///
 /// Returns an empty page when the thread reads whole or is already at its
@@ -1914,17 +1919,6 @@ fn load_paginated_window(
             .map(|turn| summarize_turn(turn, false))
             .collect();
     }
-    for skeleton in &mut skeletons {
-        skeleton.loaded = loaded_turns.contains(&skeleton.turn_id);
-    }
-    // The item window can cross more turns than the initial status shells.
-    // Summary pages carry the same timing metadata without loading their items.
-    for item in &mut items {
-        if let Some(stamp) = stamps.get(&item.turn_id) {
-            item.turn_completed_at = stamp.completed_at;
-            item.turn_duration_ms = stamp.duration_ms;
-        }
-    }
     // Where older history continues: this page's own continuation cursor.
     let mut item_cursor = items_page
         .get("nextCursor")
@@ -1935,6 +1929,7 @@ fn load_paginated_window(
     // Keep the immutable prefix and its exhausted/older cursor, while the new
     // tail replaces any live snapshots. Disjoint tails start a fresh window.
     let mut seen_item_cursors = HashSet::new();
+    let mut restored_turns = Vec::new();
     if let Some(cached) = previous.cached.as_ref() {
         if let Some(first) = items.first() {
             if let Some(at) = cached.items.iter().position(|item| item.id == first.id) {
@@ -1945,11 +1940,73 @@ fn load_paginated_window(
                 seen_item_cursors = previous.seen_item_cursors.clone();
             }
         }
+    } else {
+        match super::session_sync::restore_cached_prefix(
+            service_key,
+            thread_id,
+            &mut items,
+            &mut item_cursor,
+            &skeletons,
+        ) {
+            Ok(turns) => restored_turns = turns,
+            Err(error) => {
+                tracing::debug!(%error, "cached prefix unavailable; keeping the fresh tail")
+            },
+        }
+    }
+    // Restored pages arrive locally without another RPC. Apply current turn
+    // metadata after stitching, including to the restored opening messages.
+    let mut loaded = HashSet::new();
+    loaded_turns.clear();
+    for item in &mut items {
+        if let Some(stamp) = stamps.get(&item.turn_id) {
+            item.turn_completed_at = stamp.completed_at;
+            item.turn_duration_ms = stamp.duration_ms;
+        }
+        if item.item_type == "userMessage" && loaded.insert(item.turn_id.clone()) {
+            loaded_turns.push(item.turn_id.clone());
+        }
+    }
+    for skeleton in &mut skeletons {
+        skeleton.loaded = loaded.contains(&skeleton.turn_id);
+    }
+    let mut turn_pages = previous.turn_pages.clone();
+    let fresh: HashMap<_, _> = items.iter().map(|item| (item.id.as_str(), item)).collect();
+    for mut retained in restored_turns {
+        // An exhausted cached turn may have grown while offline. Without an
+        // overlap, its old end cannot prove continuity with the current tail.
+        let tail_turn = items
+            .last()
+            .is_some_and(|item| item.turn_id == retained.page.turn_id);
+        if tail_turn
+            && retained.cursor.is_none()
+            && !retained
+                .page
+                .items
+                .iter()
+                .any(|item| fresh.contains_key(item.id.as_str()))
+        {
+            continue;
+        }
+        for item in &mut retained.page.items {
+            if let Some(current) = fresh.get(item.id.as_str()) {
+                *item = (*current).clone();
+            }
+            item.questions_json = None;
+            if let Some(stamp) = stamps.get(&item.turn_id) {
+                item.turn_completed_at = stamp.completed_at;
+                item.turn_duration_ms = stamp.duration_ms;
+            }
+        }
+        turn_pages
+            .entry(retained.page.turn_id)
+            .or_insert_with(|| TurnWindow::restored(retained.page.items, retained.cursor));
     }
     // Seeing one item from every turn does not mean every item was loaded:
     // even a single turn can fill several pages. The item cursor is authoritative.
     let has_older = item_cursor.is_some();
     if !set_pagination(service_key, thread_id, ThreadPagination {
+        turn_pages,
         next_item_cursor: item_cursor,
         seen_item_cursors,
         loaded_turns,
@@ -2007,7 +2064,7 @@ pub fn thread_read_with_pages(
         result = thread_read_inner(service_key, thread_id, include_turn_pages);
     }
     if let Ok(history) = &result {
-        super::session_sync::save_history(service_key, thread_id, history);
+        super::session_sync::save_history(service_key, thread_id, history, include_turn_pages);
     }
     match &result {
         Ok(history) => tracing::info!(

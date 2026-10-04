@@ -109,7 +109,7 @@ pub struct DiskCache {
 impl DiskCache {
     /// Construct a cache with an exact byte budget; no filesystem side effects.
     #[cfg(test)]
-    fn new(root: PathBuf, limit: u64) -> Self {
+    pub(super) fn new(root: PathBuf, limit: u64) -> Self {
         Self {
             root,
             limit: CacheLimit::Fixed(limit),
@@ -266,6 +266,23 @@ impl DiskCache {
         running: bool,
     ) -> Result<bool> {
         self.write(owner, session, key, &serde_json::to_vec(value)?, running)
+    }
+
+    /// Remove one display checkpoint after publishing a newer snapshot.
+    pub(super) fn remove(&self, owner: &str, session: &str, key: &str) -> Result<()> {
+        let _lock = self.lock()?;
+        match fs::remove_file(self.path(owner, session, key)) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    /// Whether a display entry exists, without parsing a potentially large
+    /// view. Concurrent quota eviction can still turn a subsequent read
+    /// into a miss.
+    pub(super) fn contains(&self, owner: &str, session: &str, key: &str) -> bool {
+        self.path(owner, session, key).is_file()
     }
 
     /// Invalidate one source session after a provider generation change.

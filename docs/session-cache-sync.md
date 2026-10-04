@@ -123,12 +123,50 @@ Live snapshots are coalesced to roughly one second and final turn events, with a
 most two ordinary checkpoint jobs per connection; app death can lose the latest
 uncommitted snapshot, which the next delta repairs.
 
+### Cached opening and reading gestures (2026-10-04)
+
+```mermaid
+flowchart TD
+    Open[Open conversation] --> View[Read saved snapshot and small live tail]
+    View --> Local[Join retained pages of the same source generation]
+    Local --> UI[Render cached history in the lazy transcript]
+    Local --> Missing[Keep cursors at actual cache gaps]
+    UI --> Sync[Reconcile the current server tail]
+    Sync --> Overlap{Same generation and overlapping prefix?}
+    Overlap -->|Yes| Keep[Keep cached prefix and fresh tail values]
+    Overlap -->|No| Fresh[Use the fresh server window]
+    Click[Tap load earlier] --> Page[Read next page]
+    Scroll[Scroll toward a gap or past a short edge] --> Page
+    Page -->|Explicit tap| Reveal[Reveal and briefly highlight new content]
+    Page -->|Scrolling| Anchor[Preserve the visible message position]
+```
+
+Opening also reads retained ascending turn pages without requesting missing
+windows. Their independent continuation cursors stay separate from the descending
+tail cursor. A fresh source generation invalidates all of them; fresh tail values
+win over cached duplicates. Older 100-item snapshots can recover their prefix
+from the retained raw page chain without a cache migration.
+
+Compact navigation follows the complete turn directory and loads an unloaded
+target when selected. Dragging repositions it inside the transcript; layout
+changes clamp it inside the available viewport. Mobile message presses animate
+and highlight the target through menu dismissal, with reduced-motion support.
+Local-session lists distinguish an unsupported mobile filesystem, a desktop with
+no sessions, and a failed scan; remote host lists remain available on mobile.
+
 ### Deliberate limits
 
-- The offline display snapshot retains at most 100 items and omits independent
-  selected-turn windows. This is a disposable performance cache, not a complete
-  offline session archive. Previously fetched raw pages can still serve as delta
-  bases after reconnect.
+- Opening restores retained sequential pages and selected-turn windows locally,
+  within the approximately 32 MiB materialized-history budget. Missing, evicted,
+  mismatched or cyclic pages stop restoration at their real cursor. Very large
+  sessions still page; the 512 MB disk quota does not imply 512 MB of rendered
+  messages. The transcript remains lazy and independent windows keep their gaps.
+- Live checkpoints retain at most 100 items separately from the full display
+  snapshot, so streaming never reads or rewrites the entire restored history.
+  Monitoring also writes only this bounded tail. Prefetch keeps an existing
+  display snapshot and updates the raw tail. A successful full opening snapshot
+  replaces the live checkpoint. This remains a
+  disposable performance cache rather than a complete offline session archive.
 - An individual cache entry is limited to 32 MiB. Larger responses remain usable
   online without persistence. Incoming decompressed synchronization responses are
   capped at 64 MiB; requests are capped at 512 KiB.
@@ -142,6 +180,16 @@ uncommitted snapshot, which the next delta repairs.
   is required. Old clients keep using the existing endpoints.
 
 ## Verification
+
+The 2026-10-04 update passed workspace formatting and Clippy, 384 Rust tests
+(10 opt-in tests ignored), and Flutter formatting/analyze plus 683 widget/unit
+tests (3 opt-in tests skipped). The bridge suite was rerun after the final cache
+write-path change: 106 passed, 6 opt-in tests ignored. Regression cases include
+retained descending/ascending pages, legacy snapshots, missing and cyclic cursors,
+generation replacement, bounded live writes, cached first paint, short-page edge
+paging, explicit reveal, passive anchoring, dragging across resize, and press
+cancellation/menu dismissal. Phone, tablet and desktop layouts cover both themes.
+These checks do not substitute for touch testing on the user's physical phone.
 
 Verification in the isolated development worktree on 2026-09-25:
 

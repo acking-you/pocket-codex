@@ -14,7 +14,6 @@ import 'package:pocket_codex/src/screens/app_session_screen.dart'
 import 'package:pocket_codex/src/theme.dart';
 import 'package:pocket_codex/src/time_ago.dart';
 import 'package:pocket_codex/src/widgets/app_toast.dart';
-import 'package:pocket_codex/src/widgets/error_retry.dart';
 import 'package:pocket_codex/src/widgets/loading.dart';
 import 'package:pocket_codex/src/widgets/search_field.dart';
 import 'package:pocket_codex/src/widgets/status_dots.dart';
@@ -94,6 +93,8 @@ class _LocalSessionsState extends ConsumerState<LocalSessionsScreen> {
   String _query = '';
   _SessionViewFilter _filter = _SessionViewFilter.all;
 
+  bool get _localUnavailable => !widget.source.isRemote && !isDesktop;
+
   @override
   void initState() {
     super.initState();
@@ -101,6 +102,12 @@ class _LocalSessionsState extends ConsumerState<LocalSessionsScreen> {
   }
 
   Future<void> _load() async {
+    // Mobile controllers do not share a desktop Codex home. Their cached chats
+    // and remote host sessions remain available through their own routes.
+    if (_localUnavailable) {
+      setState(() => _loading = false);
+      return;
+    }
     setState(() {
       _loading = true;
       _error = null;
@@ -168,42 +175,126 @@ class _LocalSessionsState extends ConsumerState<LocalSessionsScreen> {
       // of the remote list rather than a level above it — the chat origin is
       // the real way out, and the page menu switches between them.
       actions: [
-        IconButton(
-          key: const Key('local-sessions-refresh'),
-          icon: const Icon(Icons.refresh),
-          tooltip: l10n.refreshStatus,
-          onPressed: _loading ? null : _load,
-        ),
+        if (!_localUnavailable)
+          IconButton(
+            key: const Key('local-sessions-refresh'),
+            icon: const Icon(Icons.refresh),
+            tooltip: l10n.refreshStatus,
+            onPressed: _loading ? null : _load,
+          ),
       ],
       body: body,
     );
   }
 
   Widget _buildBody(AppLocalizations l10n) {
+    if (_localUnavailable) {
+      return _emptyState(
+        key: const ValueKey('local-unavailable'),
+        icon: Icons.devices_outlined,
+        title: l10n.localSessionsUnavailable,
+        description: l10n.localSessionsMobileHint,
+      );
+    }
     if (_loading) {
       return const ListLoadingSkeleton(key: ValueKey('local-loading'));
     }
     if (_error != null) {
-      return ErrorRetry(
+      return _emptyState(
         key: const ValueKey('local-error'),
-        errorKey: const Key('local-error-message'),
-        message: _error!,
-        onRetry: _load,
+        icon: Icons.folder_off_outlined,
+        title: l10n.sessionsReadFailed,
+        description: widget.source.isRemote
+            ? l10n.remoteSessionsReadHint
+            : l10n.localSessionsReadHint,
+        retry: true,
+        details: _error,
       );
     }
     if (_sessions.isEmpty) {
-      return RefreshIndicator(
+      return _emptyState(
         key: const ValueKey('local-empty'),
-        onRefresh: _load,
-        child: ListView(
-          children: [
-            const SizedBox(height: 120),
-            Center(child: Text(l10n.noLocalSessions)),
-          ],
-        ),
+        icon: Icons.history_outlined,
+        title: widget.source.isRemote
+            ? l10n.noHostSessions
+            : l10n.noLocalSessions,
+        description: widget.source.isRemote
+            ? l10n.noHostSessionsHint
+            : l10n.noLocalSessionsHint,
+        retry: true,
       );
     }
     return _buildList(l10n);
+  }
+
+  Widget _emptyState({
+    required Key key,
+    required IconData icon,
+    required String title,
+    required String description,
+    bool retry = false,
+    String? details,
+  }) {
+    final l10n = AppLocalizations.of(context);
+    final scheme = Theme.of(context).colorScheme;
+    return Center(
+      key: key,
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(24),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 460),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 40, color: scheme.onSurfaceVariant),
+              const SizedBox(height: 16),
+              Text(
+                title,
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const SizedBox(height: 8),
+              Text(
+                description,
+                textAlign: TextAlign.center,
+                style: TextStyle(color: scheme.onSurfaceVariant),
+              ),
+              const SizedBox(height: 20),
+              Wrap(
+                alignment: WrapAlignment.center,
+                spacing: 12,
+                runSpacing: 8,
+                children: [
+                  if (retry)
+                    OutlinedButton.icon(
+                      onPressed: _load,
+                      icon: const Icon(Icons.refresh),
+                      label: Text(l10n.retry),
+                    ),
+                  if (!widget.source.isRemote)
+                    FilledButton.icon(
+                      key: const Key('local-sessions-services'),
+                      onPressed: () => context.go('/manage'),
+                      icon: const Icon(Icons.devices_outlined),
+                      label: Text(l10n.manageServices),
+                    ),
+                ],
+              ),
+              if (details != null)
+                ExpansionTile(
+                  title: Text(l10n.errorDetails),
+                  children: [
+                    SelectableText(
+                      details,
+                      key: const Key('local-error-message'),
+                    ),
+                  ],
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   Widget _buildList(AppLocalizations l10n) {

@@ -1886,6 +1886,78 @@ abstract class AppLocalizations {
   /// **'No local sessions'**
   String get noLocalSessions;
 
+  /// No description provided for @localSessionsUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Local sessions aren’t available on this device'**
+  String get localSessionsUnavailable;
+
+  /// No description provided for @localSessionsMobileHint.
+  ///
+  /// In en, this message translates to:
+  /// **'This page reads Codex sessions saved on this device. To browse your computer’s sessions, connect to it in Services. Cached conversations remain in Chats.'**
+  String get localSessionsMobileHint;
+
+  /// No description provided for @noLocalSessionsHint.
+  ///
+  /// In en, this message translates to:
+  /// **'This computer has no readable Codex sessions yet. Create a session with Codex, then refresh, or connect to another device.'**
+  String get noLocalSessionsHint;
+
+  /// No description provided for @noHostSessions.
+  ///
+  /// In en, this message translates to:
+  /// **'No sessions on this host'**
+  String get noHostSessions;
+
+  /// No description provided for @noHostSessionsHint.
+  ///
+  /// In en, this message translates to:
+  /// **'This host has no sessions to display yet. Create a Codex session on it, then refresh.'**
+  String get noHostSessionsHint;
+
+  /// No description provided for @sessionsReadFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Couldn’t read sessions'**
+  String get sessionsReadFailed;
+
+  /// No description provided for @localSessionsReadHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Check that Codex has saved sessions for this user and that its session folder is readable, then retry.'**
+  String get localSessionsReadHint;
+
+  /// No description provided for @remoteSessionsReadHint.
+  ///
+  /// In en, this message translates to:
+  /// **'The host’s sessions are temporarily unavailable. Check its connection, then retry.'**
+  String get remoteSessionsReadHint;
+
+  /// No description provided for @errorDetails.
+  ///
+  /// In en, this message translates to:
+  /// **'Error details'**
+  String get errorDetails;
+
+  /// No description provided for @moveTurnNavigation.
+  ///
+  /// In en, this message translates to:
+  /// **'Drag to move conversation controls'**
+  String get moveTurnNavigation;
+
+  /// No description provided for @historyLoaded.
+  ///
+  /// In en, this message translates to:
+  /// **'Loaded {count} earlier items'**
+  String historyLoaded(int count);
+
+  /// No description provided for @historyAlreadyVisible.
+  ///
+  /// In en, this message translates to:
+  /// **'This history is already displayed'**
+  String get historyAlreadyVisible;
+
   /// No description provided for @sessionResumable.
   ///
   /// In en, this message translates to:

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
@@ -30,7 +31,94 @@ Future<void> _settle(WidgetTester t) async {
   await t.pump(const Duration(milliseconds: 250));
 }
 
+void desktopTest(String description, WidgetTesterCallback callback) {
+  testWidgets(description, (t) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+    try {
+      await callback(t);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+}
+
 void main() {
+  desktopTest('mobile explains local support without scanning CODEX_HOME', (
+    t,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    final api = FakeBridgeApi()..localSessionError = StateError('missing home');
+    await t.binding.setSurfaceSize(const Size(320, 640));
+    addTearDown(() => t.binding.setSurfaceSize(null));
+    await t.pumpWidget(_host(const LocalSessionsScreen(), api));
+    await _settle(t);
+    expect(api.localSessionCalls, 0);
+    expect(find.text('此设备无法读取本地会话'), findsOneWidget);
+    expect(find.textContaining('CODEX_HOME'), findsNothing);
+    expect(t.takeException(), isNull);
+  });
+
+  desktopTest('desktop failure is explained and can be retried', (t) async {
+    final api = FakeBridgeApi()
+      ..localSessionError = StateError(
+        'cannot determine home directory for CODEX_HOME',
+      );
+    await t.pumpWidget(_host(const LocalSessionsScreen(), api));
+    await _settle(t);
+    expect(find.text('暂时无法读取会话'), findsOneWidget);
+    expect(find.textContaining('CODEX_HOME'), findsNothing);
+    api.localSessionError = null;
+    await t.tap(find.text('重试'));
+    await _settle(t);
+    expect(api.localSessionCalls, 2);
+    expect(find.text('暂时无法读取会话'), findsNothing);
+  });
+
+  for (final dark in [false, true]) {
+    for (final width in [320.0, 800.0, 1440.0]) {
+      desktopTest('session states fit width $width dark=$dark', (t) async {
+        debugDefaultTargetPlatformOverride = width < 1100
+            ? TargetPlatform.android
+            : TargetPlatform.linux;
+        t.view.devicePixelRatio = 1;
+        t.view.physicalSize = Size(width, 800);
+        addTearDown(t.view.reset);
+        final api = FakeBridgeApi();
+        await t.pumpWidget(
+          _host(
+            Theme(
+              data: ThemeData(
+                brightness: dark ? Brightness.dark : Brightness.light,
+              ),
+              child: MediaQuery(
+                data: MediaQueryData(
+                  size: Size(width, 800),
+                  textScaler: const TextScaler.linear(1.5),
+                ),
+                child: const LocalSessionsScreen(),
+              ),
+            ),
+            api,
+          ),
+        );
+        await _settle(t);
+        expect(api.localSessionCalls, width < 1100 ? 0 : 1);
+        expect(t.takeException(), isNull);
+        await t.pumpWidget(
+          _host(
+            const LocalSessionsScreen(
+              source: SessionSource.remote('pcx:remote:app:default'),
+            ),
+            api,
+          ),
+        );
+        await _settle(t);
+        expect(find.text('此设备无法读取本地会话'), findsNothing);
+        expect(t.takeException(), isNull);
+      });
+    }
+  }
+
   // Three sessions spanning the resume-safety states the UI must distinguish.
   const sessions = [
     LocalSession(
@@ -71,7 +159,7 @@ void main() {
     ),
   ];
 
-  testWidgets('lists sessions with their resume-safety chips', (t) async {
+  desktopTest('lists sessions with their resume-safety chips', (t) async {
     final api = FakeBridgeApi()..localSessions = sessions;
     await t.pumpWidget(_host(const LocalSessionsScreen(), api));
     await _settle(t);
@@ -88,7 +176,7 @@ void main() {
     expect(find.text('其他进程运行中'), findsOneWidget); // ownedRunning
   });
 
-  testWidgets('a running session is read-only (no resume action)', (t) async {
+  desktopTest('a running session is read-only (no resume action)', (t) async {
     final api = FakeBridgeApi()..localSessions = sessions;
     await t.pumpWidget(_host(const LocalSessionsScreen(), api));
     await _settle(t);
@@ -100,7 +188,7 @@ void main() {
     expect(find.byKey(const Key('resume-thr-running')), findsNothing);
   });
 
-  testWidgets('force-takeover opens a confirm dialog listing the holders', (
+  desktopTest('force-takeover opens a confirm dialog listing the holders', (
     t,
   ) async {
     final api = FakeBridgeApi()..localSessions = sessions;
@@ -128,14 +216,14 @@ void main() {
     expect(find.text('codex.exe · PID 21348'), findsOneWidget);
   });
 
-  testWidgets('empty state when there are no local sessions', (t) async {
+  desktopTest('empty state when there are no local sessions', (t) async {
     final api = FakeBridgeApi()..localSessions = const [];
     await t.pumpWidget(_host(const LocalSessionsScreen(), api));
     await t.pumpAndSettle();
     expect(find.text('没有本地会话'), findsOneWidget); // noLocalSessions (zh)
   });
 
-  testWidgets('remote resume connects the host app-server before navigating', (
+  desktopTest('remote resume connects the host app-server before navigating', (
     t,
   ) async {
     // A remote host viewed over its meta tunnel: the app-server session is NOT
@@ -192,7 +280,7 @@ void main() {
     expect(find.text('conversation'), findsOneWidget);
   });
 
-  testWidgets('resume connects a reachable app-server when none is connected', (
+  desktopTest('resume connects a reachable app-server when none is connected', (
     t,
   ) async {
     // A discoverable, reachable app-server that the user has NOT opened yet.
@@ -233,7 +321,7 @@ void main() {
     expect(api.appIsConnected('pcx:lb7666:app:default'), isTrue);
   });
 
-  testWidgets('groups by activity time and the search box filters content', (
+  desktopTest('groups by activity time and the search box filters content', (
     t,
   ) async {
     // Pin "now" to a fixed mid-day instant and thread it into the screen via its
@@ -300,7 +388,7 @@ void main() {
     expect(find.text('running now'), findsNothing);
   });
 
-  testWidgets('viewer renders the transcript read-only and offers force-resume '
+  desktopTest('viewer renders the transcript read-only and offers force-resume '
       'when the owning session is idle', (t) async {
     final api = FakeBridgeApi();
     api.transcripts['thr-owned'] = const [
@@ -346,7 +434,7 @@ void main() {
     await t.pumpWidget(const SizedBox()); // dispose → cancel the poll timer
   });
 
-  testWidgets('viewer captions each turn with the model that handled it', (
+  desktopTest('viewer captions each turn with the model that handled it', (
     t,
   ) async {
     final api = FakeBridgeApi();
@@ -406,7 +494,7 @@ void main() {
     await t.pumpWidget(const SizedBox()); // dispose → cancel the poll timer
   });
 
-  testWidgets(
+  desktopTest(
     'viewer stays read-only (no resume) while the session is actively '
     'running elsewhere',
     (t) async {

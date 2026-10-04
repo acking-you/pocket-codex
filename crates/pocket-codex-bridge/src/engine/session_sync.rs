@@ -27,7 +27,18 @@ use super::{
 struct CachedView {
     generation: Option<String>,
     history: ThreadHistory,
+    #[serde(default)]
+    continuation: Option<CachedContinuation>,
 }
+
+#[derive(Clone, Serialize, Deserialize)]
+struct CachedContinuation {
+    cursor: Option<String>,
+}
+
+#[path = "session_sync_cache.rs"]
+mod cache_restore;
+pub(super) use cache_restore::restore_cached_prefix;
 
 type Generations = Mutex<HashMap<String, String>>;
 fn generations() -> &'static Generations {
@@ -262,7 +273,7 @@ fn sync(service: &str, query: &WindowQuery, running: bool) -> Result<HistoryWind
 /// Load a display-only snapshot without transport setup or a live connection.
 pub fn cached_history(service: &str, session: &str) -> Result<Option<ThreadHistory>> {
     let owner = namespace(service)?;
-    let Some(view) = application_cache()?.read_json::<CachedView>(&owner, session, "view")? else {
+    let Some(view) = cache_restore::read_view(&application_cache()?, &owner, session)? else {
         return Ok(None);
     };
     if let Some(generation) = &view.generation {
@@ -277,15 +288,20 @@ pub fn cached_history(service: &str, session: &str) -> Result<Option<ThreadHisto
     // Cached state must never revive actionable approvals or claim live control.
     history.running = false;
     history.config_confirmed = false;
-    history.turn_pages.clear();
     for item in &mut history.items {
         item.questions_json = None;
+    }
+    for page in &mut history.turn_pages {
+        for item in &mut page.items {
+            item.questions_json = None;
+        }
     }
     Ok(Some(history))
 }
 
-/// Save a bounded display snapshot separately from authoritative wire windows.
-pub fn save_history(service: &str, session: &str, history: &ThreadHistory) {
+/// Save a display snapshot on opening; monitoring only checkpoints a small
+/// tail.
+pub fn save_history(service: &str, session: &str, history: &ThreadHistory, full_snapshot: bool) {
     let save = || -> Result<()> {
         let owner = namespace(service)?;
         let gate = gate(&owner, session);
@@ -293,7 +309,26 @@ pub fn save_history(service: &str, session: &str, history: &ThreadHistory) {
             .lock
             .lock()
             .map_err(|_| anyhow::anyhow!("history gate poisoned"))?;
-        save_history_locked(service, &owner, session, history)
+        if !full_snapshot {
+            let generation = source_generation(service, session);
+            ensure!(history.history_epoch == generation, "monitoring history source changed");
+            let tail = &history.items[history.items.len().saturating_sub(100)..];
+            return cache_restore::write_live(
+                &application_cache()?,
+                &owner,
+                session,
+                generation,
+                tail,
+                history.running,
+            );
+        }
+        let continuation =
+            super::app_session::history_continuation(service, session).map(|cursor| {
+                CachedContinuation {
+                    cursor,
+                }
+            });
+        save_history_locked(service, &owner, session, history, continuation)
     };
     if let Err(error) = save() {
         tracing::debug!(%error, "history display cache unavailable");
@@ -305,6 +340,7 @@ fn save_history_locked(
     owner: &str,
     session: &str,
     history: &ThreadHistory,
+    continuation: Option<CachedContinuation>,
 ) -> Result<()> {
     let current = source_generation(service, session);
     ensure!(
@@ -313,24 +349,24 @@ fn save_history_locked(
     );
     let mut snapshot = history.clone();
     snapshot.turn_pages.clear();
-    if snapshot.items.len() > 100 {
-        snapshot.items.drain(..snapshot.items.len() - 100);
-        snapshot.has_older = true;
-    }
     for item in &mut snapshot.items {
         item.questions_json = None;
     }
     let generation = history.history_epoch.clone().or(current);
-    application_cache()?.write_json(
+    let cache = application_cache()?;
+    if cache.write_json(
         owner,
         session,
         "view",
         &CachedView {
             generation,
             history: snapshot,
+            continuation,
         },
         history.running,
-    )?;
+    )? {
+        cache.remove(owner, session, "live")?;
+    }
     Ok(())
 }
 
@@ -358,19 +394,14 @@ pub(super) fn checkpoint_live(
             cache.invalidate_session(&owner, session)?;
             return Ok(());
         }
-        let mut history = cache
-            .read_json::<CachedView>(&owner, session, "view")?
-            .map(|view| view.history)
-            .unwrap_or_default();
-        for item in &items {
-            if let Some(old) = history.items.iter_mut().find(|old| old.id == item.id) {
-                *old = item.clone();
-            } else {
-                history.items.push(item.clone());
-            }
-        }
-        history.running = running;
-        save_history_locked(service, &owner, session, &history)?;
+        cache_restore::write_live(
+            &cache,
+            &owner,
+            session,
+            source_generation(service, session),
+            &items,
+            running,
+        )?;
         let query = query_for(
             "thread/items/list",
             &json!({"threadId": session, "limit": 20, "sortDirection": "desc"}),
@@ -435,7 +466,28 @@ pub fn prefetch(service: &str, session: &str) -> Result<()> {
     history.items = super::app_session::parse_prefetched_items(&response);
     history.has_older = response["nextCursor"].as_str().is_some();
     history.running = true;
-    save_history(service, session, &history);
+    let owner = namespace(service)?;
+    let session_gate = gate(&owner, session);
+    let _request = session_gate
+        .lock
+        .lock()
+        .map_err(|_| anyhow::anyhow!("history gate poisoned"))?;
+    // The authoritative 20-item wire tail above is already durable. Preserve
+    // the full display view without reading or rewriting it on inventory polls.
+    if application_cache()?.contains(&owner, session, "view") {
+        return Ok(());
+    }
+    if let Err(error) = save_history_locked(
+        service,
+        &owner,
+        session,
+        &history,
+        Some(CachedContinuation {
+            cursor: response["nextCursor"].as_str().map(str::to_owned),
+        }),
+    ) {
+        tracing::debug!(%error, "prefetched display cache unavailable");
+    }
     Ok(())
 }
 

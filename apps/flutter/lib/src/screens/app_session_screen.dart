@@ -46,6 +46,8 @@ import 'package:pocket_codex/src/widgets/adaptive_sheet.dart';
 import 'package:pocket_codex/src/widgets/app_toast.dart';
 import 'package:pocket_codex/src/widgets/brand_logo.dart';
 import 'package:pocket_codex/src/widgets/diff_review.dart';
+import 'package:pocket_codex/src/widgets/draggable_navigation.dart';
+import 'package:pocket_codex/src/widgets/history_arrival.dart';
 import 'package:pocket_codex/src/widgets/file_browser_panel.dart';
 import 'package:pocket_codex/src/widgets/folder_tree_picker.dart';
 import 'package:pocket_codex/src/widgets/links.dart';
@@ -478,6 +480,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   int _scrollIntent = 0;
   int _settleEpoch = 0;
   bool _historyFromTop = false;
+  Key? _historyArrivalRow;
+  int _historyArrivalRevision = 0;
   Locale? _minimapLocale;
   // True while `_scrollToEnd(force: true)` is re-jumping to the bottom. Those
   // jumps fire scroll events from positions that can look like the top of the
@@ -1073,6 +1077,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       _navigationLoading = false;
       _historyLoad = null;
       _historyGeneration++;
+      _historyArrivalRow = null;
       _approvals.clear();
       _asyncQuestions.clear();
       _ctx = null;
@@ -1544,9 +1549,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
 
   /// Fetch the page of history before what's shown, keeping the reading
   /// position: the list corrects its own offset when content is prepended.
-  Future<void> _loadOlder() async {
+  Future<void> _loadOlder({bool reveal = false}) async {
     if (_loadingOlder || !_hasOlder || _threadId == null) return;
-    await _startHistoryLoad(fromTop: true);
+    await _startHistoryLoad(fromTop: true, reveal: reveal);
   }
 
   bool get _startsAtBeginning {
@@ -1573,7 +1578,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     return window != null && window.items.isEmpty && !window.hasMore;
   }
 
-  Future<void> _loadAtTop() async {
+  Future<void> _loadAtTop({bool reveal = false}) async {
     if (_loadingOlder || _startsAtBeginning) return;
     if (_turnWindows.isNotEmpty && _items.isNotEmpty) {
       final first = _turnSummaries.indexWhere(
@@ -1585,16 +1590,24 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         previous--;
       }
       if (previous >= 0) {
-        await _loadTurn(_turnSummaries[previous].turnId, fromTop: true);
+        await _loadTurn(
+          _turnSummaries[previous].turnId,
+          fromTop: true,
+          reveal: reveal,
+        );
         return;
       }
     }
-    await _loadOlder();
+    await _loadOlder(reveal: reveal);
   }
 
-  Future<void> _loadGap(HistoryGap gap) async {
+  Future<void> _loadGap(HistoryGap gap, {bool reveal = false}) async {
     if (_loadingOlder || _threadId == null) return;
-    await _startHistoryLoad(turnId: gap.turnId, loadMore: gap.continuation);
+    await _startHistoryLoad(
+      turnId: gap.turnId,
+      loadMore: gap.continuation,
+      reveal: reveal,
+    );
   }
 
   /// Fetch one turn's items, for jumping to a turn not yet scrolled back to.
@@ -1603,6 +1616,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     bool preserveAnchor = true,
     bool fromTop = false,
     int? navigation,
+    bool reveal = false,
   }) async {
     final generation = _historyGeneration;
     while (_historyLoad != null) {
@@ -1622,6 +1636,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       turnId: turnId,
       preserveAnchor: preserveAnchor,
       fromTop: fromTop,
+      reveal: reveal,
     );
   }
 
@@ -1630,6 +1645,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     bool loadMore = false,
     bool preserveAnchor = true,
     bool fromTop = false,
+    bool reveal = false,
   }) {
     final tid = _threadId!;
     setState(() {
@@ -1644,6 +1660,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       turnId,
       loadMore,
       preserveAnchor,
+      reveal,
+      _scrollIntent,
+      _turnNavigation,
     );
   }
 
@@ -1653,6 +1672,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     String? turnId,
     bool loadMore,
     bool preserveAnchor,
+    bool reveal,
+    int intent,
+    int navigation,
   ) async {
     bool current() => mounted && _historyGeneration == generation;
     try {
@@ -1670,6 +1692,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
             );
       if (!current()) return;
       final items = older?.items ?? turn!.items;
+      final arrived = items
+          .where((item) => !_itemIndex.containsKey(item.id))
+          .map((item) => item.id)
+          .toSet();
       if (turn != null && loadMore) {
         final prefix = _turnWindows[turnId]?.items ?? const <ThreadItem>[];
         final known = prefix.map((item) => item.id).toSet();
@@ -1692,7 +1718,36 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         _cachedRows = null;
         _markTurnsLoaded();
       });
-      if (anchor != null) _restoreHistoryAnchor(anchor, generation);
+      // Explicit load -> reveal the first new row; passive paging -> keep the
+      // current anchor. A new scroll/navigation intent always wins over either.
+      if (reveal && intent == _scrollIntent && navigation == _turnNavigation) {
+        final rowIndex = _rows.indexWhere(
+          (row) => _rowItems(row).any((item) => arrived.contains(item.id)),
+        );
+        if (rowIndex >= 0) {
+          setState(() {
+            _historyArrivalRow = _rowKey(_rows[rowIndex]);
+            _historyArrivalRevision++;
+          });
+          await WidgetsBinding.instance.endOfFrame;
+          if (current() &&
+              intent == _scrollIntent &&
+              navigation == _turnNavigation) {
+            _scrollToRow(rowIndex);
+          }
+        }
+        if (mounted && current() && navigation == _turnNavigation) {
+          final l10n = AppLocalizations.of(context);
+          showToast(
+            context,
+            arrived.isEmpty
+                ? l10n.historyAlreadyVisible
+                : l10n.historyLoaded(arrived.length),
+          );
+        }
+      } else if (anchor != null) {
+        _restoreHistoryAnchor(anchor, generation);
+      }
     } catch (_) {
       if (current()) setState(() => _historyError = true);
     } finally {
@@ -1834,6 +1889,11 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
             _hasOlder = cached.hasOlder;
             _firstTurnId = cached.firstTurnId;
             _sequentialHistoryIds.addAll(cached.items.map((item) => item.id));
+            for (final page in cached.turnPages) {
+              _turnWindows[page.turnId] = page;
+              _fetchedTurns.add(page.turnId);
+              _spliceTranscriptItems(page.items, atStart: true);
+            }
             _cwd ??= cached.cwd;
             _loading = false;
             _showingCachedHistory = true;
@@ -3930,35 +3990,39 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   void _gotoAdjacentTurn({required bool next}) {
     if (!_listCtl.isAttached || !_scroll.hasClients) return;
     final rows = _rows;
-    final turnRows = <int>[
-      for (var i = 0; i < rows.length; i++)
-        if (rows[i] is TranscriptItem && (rows[i] as TranscriptItem).isUser) i,
-    ];
-    if (turnRows.isEmpty) return;
-    // Topmost row currently in view (fallback to 0 before the first layout).
+    final turns = _turnMinimapItems(rows);
+    if (rows.isEmpty || turns.isEmpty) return;
     final anchor = _visibleRowRange()?.$1 ?? 0;
-    int? target;
-    if (next) {
-      for (final t in turnRows) {
-        if (t > anchor) {
-          target = t;
-          break;
-        }
-      }
-    } else {
-      for (final t in turnRows) {
-        if (t < anchor) {
-          target = t;
-        } else {
-          break;
-        }
-      }
+    final visibleTurn = _rowItems(
+      rows[anchor.clamp(0, rows.length - 1)],
+    ).firstOrNull?.turnId;
+    var current = turns.indexWhere((turn) => turn.turnId == visibleTurn);
+    if (current < 0) {
+      current = turns.lastIndexWhere(
+        (turn) => turn.rowIndex >= 0 && turn.rowIndex <= anchor,
+      );
     }
-    if (target == null) return;
-    // Same landing as the minimap: the turn's user message at the top of the
-    // viewport, so stepping and jumping never frame a turn differently.
-    _scrollToRow(target);
+    if (current < 0) return;
+    final entry = turns[current];
+    final target = next
+        ? current + 1
+        : entry.rowIndex < 0 || entry.rowIndex < anchor
+        ? current
+        : current - 1;
+    if (target >= 0 && target < turns.length) {
+      _selectTurn(turns[target]);
+    } else if (!next) {
+      _loadAtTop(reveal: true);
+    }
   }
+
+  Iterable<TranscriptItem> _rowItems(Object row) => switch (row) {
+    TranscriptItem() => [row],
+    TurnWork() => row.items,
+    ActivityGroup() => row.items,
+    AgentTurn() => row.items,
+    _ => const [],
+  };
 
   /// One minimap entry per turn: the user's message, and how the turn answered.
   ///
@@ -4075,13 +4139,21 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                 key: _loadingOlder
                     ? null
                     : const Key('chat-older-history-load'),
-                onPressed: _loadingOlder ? null : _loadAtTop,
-                icon: Icon(
-                  _historyError && _historyFromTop
-                      ? Icons.refresh_rounded
-                      : Icons.history_rounded,
-                  size: 16,
-                ),
+                onPressed: _loadingOlder
+                    ? null
+                    : () => _loadAtTop(reveal: true),
+                icon: _loadingOlder && _historyFromTop
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : Icon(
+                        _historyError && _historyFromTop
+                            ? Icons.refresh_rounded
+                            : Icons.history_rounded,
+                        size: 16,
+                      ),
                 label: Text(
                   _loadingOlder && _historyFromTop
                       ? l10n.historyLoading
@@ -4309,13 +4381,14 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
               child: Center(child: _navCluster(showTurnNav: false)),
             )
           else
-            Positioned(
-              right: 12,
-              bottom: 12,
+            Positioned.fill(
               // Two turns is enough for stepping to mean something, which is a
               // lower bar than the rail's: the arrows carry a label and do not
               // need a shape to read.
-              child: _navCluster(showTurnNav: _turnCount >= 2),
+              child: DraggableNavigation(
+                label: AppLocalizations.of(context).moveTurnNavigation,
+                child: _navCluster(showTurnNav: _turnCount >= 2),
+              ),
             ),
         ],
       );
@@ -4367,7 +4440,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           visualDensity: VisualDensity.compact,
           iconSize: 22,
           padding: const EdgeInsets.all(6),
-          constraints: const BoxConstraints(),
+          constraints: BoxConstraints(
+            minWidth: isDesktop ? 34 : 48,
+            minHeight: isDesktop ? 34 : 48,
+          ),
           color: scheme.onSurfaceVariant,
           onPressed: onTap,
           icon: Icon(icon),
@@ -4387,37 +4463,39 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         borderRadius: BorderRadius.circular(24),
         child: Padding(
           padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (showTurnNav) ...[
-                btn(
-                  const Key('nav-turn-outline'),
-                  Icons.format_list_numbered,
-                  l10n.conversationOutline,
-                  _openTurnOutline,
-                ),
-                btn(
-                  const Key('nav-prev-turn'),
-                  Icons.keyboard_arrow_up,
-                  l10n.prevTurn,
-                  () => _gotoAdjacentTurn(next: false),
-                ),
-                btn(
-                  const Key('nav-next-turn'),
-                  Icons.keyboard_arrow_down,
-                  l10n.nextTurn,
-                  () => _gotoAdjacentTurn(next: true),
-                ),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (showTurnNav) ...[
+                  btn(
+                    const Key('nav-turn-outline'),
+                    Icons.format_list_numbered,
+                    l10n.conversationOutline,
+                    _openTurnOutline,
+                  ),
+                  btn(
+                    const Key('nav-prev-turn'),
+                    Icons.keyboard_arrow_up,
+                    l10n.prevTurn,
+                    () => _gotoAdjacentTurn(next: false),
+                  ),
+                  btn(
+                    const Key('nav-next-turn'),
+                    Icons.keyboard_arrow_down,
+                    l10n.nextTurn,
+                    () => _gotoAdjacentTurn(next: true),
+                  ),
+                ],
+                if (!_atBottom)
+                  btn(
+                    const Key('nav-to-bottom'),
+                    Icons.vertical_align_bottom,
+                    l10n.jumpToLatest,
+                    () => _scrollToEnd(force: true),
+                  ),
               ],
-              if (!_atBottom)
-                btn(
-                  const Key('nav-to-bottom'),
-                  Icons.vertical_align_bottom,
-                  l10n.jumpToLatest,
-                  () => _scrollToEnd(force: true),
-                ),
-            ],
+            ),
           ),
         ),
       ),
@@ -5516,7 +5594,14 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     );
   }
 
-  Widget _transcriptRow(Object row) {
+  Widget _transcriptRow(Object row) => HistoryArrival(
+    revision: _historyArrivalRow == _rowKey(row)
+        ? _historyArrivalRevision
+        : null,
+    child: _buildTranscriptRow(row),
+  );
+
+  Widget _buildTranscriptRow(Object row) {
     if (row is HistoryGap) {
       final l10n = AppLocalizations.of(context);
       final targeted =
@@ -5534,11 +5619,17 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
               textStyle: Theme.of(context).textTheme.labelSmall,
             ),
             key: Key('history-gap-${row.turnId}'),
-            onPressed: _loadingOlder ? null : () => _loadGap(row),
-            icon: Icon(
-              failed ? Icons.refresh_rounded : Icons.unfold_more_rounded,
-              size: 18,
-            ),
+            onPressed: _loadingOlder ? null : () => _loadGap(row, reveal: true),
+            icon: loading
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : Icon(
+                    failed ? Icons.refresh_rounded : Icons.unfold_more_rounded,
+                    size: 18,
+                  ),
             label: Text(
               loading
                   ? l10n.historyLoading
@@ -5616,11 +5707,31 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
             ),
           ),
         Expanded(
-          child: NotificationListener<UserScrollNotification>(
+          child: NotificationListener<ScrollNotification>(
             onNotification: (event) {
-              if (event.depth == 0 && event.direction != ScrollDirection.idle) {
+              if (event.depth != 0) return false;
+              if ((event is UserScrollNotification &&
+                      event.direction != ScrollDirection.idle) ||
+                  (event is ScrollUpdateNotification &&
+                      event.dragDetails != null) ||
+                  (event is OverscrollNotification &&
+                      event.dragDetails != null)) {
                 _scrollIntent++;
                 _settlingToEnd = false;
+              }
+              // Short pages cannot move their scroll offset. An overscroll is
+              // still a deliberate request to reach history beyond the edge.
+              if (event is OverscrollNotification &&
+                  event.dragDetails != null &&
+                  !_settlingToEnd &&
+                  !_historyError &&
+                  !_loadingOlder) {
+                if (event.overscroll < 0) {
+                  _loadAtTop();
+                } else if (event.overscroll > 0) {
+                  final gap = _rows.lastOrNull;
+                  if (gap is HistoryGap) _loadGap(gap);
+                }
               }
               return false;
             },
@@ -5707,6 +5818,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                                               // virtualization, same ScrollController — only
                                               // visible rows build, so streaming stays cheap.
                                               return SuperListView.builder(
+                                                physics:
+                                                    const AlwaysScrollableScrollPhysics(),
                                                 controller: _scroll,
                                                 listController: _listCtl,
                                                 findChildIndexCallback: (key) =>
@@ -5787,27 +5900,34 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                               key: const Key('history-navigation-status'),
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                if (_navigationLoading)
-                                  Padding(
-                                    padding: const EdgeInsets.symmetric(
-                                      vertical: 10,
-                                    ),
-                                    child: Text(
-                                      l10n.loadingTurn(
-                                        _turnMinimapItems(_rows).indexWhere(
-                                              (item) =>
-                                                  item.turnId == target.turnId,
-                                            ) +
-                                            1,
-                                      ),
-                                    ),
-                                  )
-                                else
-                                  TextButton.icon(
-                                    onPressed: () => _selectTurn(target),
-                                    icon: const Icon(Icons.refresh, size: 16),
-                                    label: Text(l10n.historyRetry),
-                                  ),
+                                Flexible(
+                                  child: _navigationLoading
+                                      ? Padding(
+                                          padding: const EdgeInsets.symmetric(
+                                            vertical: 10,
+                                          ),
+                                          child: Text(
+                                            l10n.loadingTurn(
+                                              _turnMinimapItems(
+                                                    _rows,
+                                                  ).indexWhere(
+                                                    (item) =>
+                                                        item.turnId ==
+                                                        target.turnId,
+                                                  ) +
+                                                  1,
+                                            ),
+                                          ),
+                                        )
+                                      : TextButton.icon(
+                                          onPressed: () => _selectTurn(target),
+                                          icon: const Icon(
+                                            Icons.refresh,
+                                            size: 16,
+                                          ),
+                                          label: Text(l10n.historyRetry),
+                                        ),
+                                ),
                                 IconButton(
                                   tooltip: MaterialLocalizations.of(
                                     context,

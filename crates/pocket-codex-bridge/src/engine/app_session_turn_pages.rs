@@ -10,6 +10,16 @@ pub(super) struct TurnWindow {
     pub(super) evicted: bool,
 }
 
+impl TurnWindow {
+    pub(super) fn restored(items: Vec<ThreadItem>, next_cursor: Option<String>) -> Self {
+        Self {
+            items: Arc::new(items),
+            next_cursor,
+            ..Self::default()
+        }
+    }
+}
+
 /// A selected turn's items and whether more follow them in that turn.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TurnItemsPage {

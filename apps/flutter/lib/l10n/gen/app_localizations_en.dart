@@ -993,6 +993,50 @@ class AppLocalizationsEn extends AppLocalizations {
   String get noLocalSessions => 'No local sessions';
 
   @override
+  String get localSessionsUnavailable =>
+      'Local sessions aren’t available on this device';
+
+  @override
+  String get localSessionsMobileHint =>
+      'This page reads Codex sessions saved on this device. To browse your computer’s sessions, connect to it in Services. Cached conversations remain in Chats.';
+
+  @override
+  String get noLocalSessionsHint =>
+      'This computer has no readable Codex sessions yet. Create a session with Codex, then refresh, or connect to another device.';
+
+  @override
+  String get noHostSessions => 'No sessions on this host';
+
+  @override
+  String get noHostSessionsHint =>
+      'This host has no sessions to display yet. Create a Codex session on it, then refresh.';
+
+  @override
+  String get sessionsReadFailed => 'Couldn’t read sessions';
+
+  @override
+  String get localSessionsReadHint =>
+      'Check that Codex has saved sessions for this user and that its session folder is readable, then retry.';
+
+  @override
+  String get remoteSessionsReadHint =>
+      'The host’s sessions are temporarily unavailable. Check its connection, then retry.';
+
+  @override
+  String get errorDetails => 'Error details';
+
+  @override
+  String get moveTurnNavigation => 'Drag to move conversation controls';
+
+  @override
+  String historyLoaded(int count) {
+    return 'Loaded $count earlier items';
+  }
+
+  @override
+  String get historyAlreadyVisible => 'This history is already displayed';
+
+  @override
   String get sessionResumable => 'Resumable';
 
   @override

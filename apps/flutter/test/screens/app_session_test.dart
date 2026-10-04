@@ -29,6 +29,7 @@ import 'package:pocket_codex/src/widgets/message_images.dart';
 import 'package:pocket_codex/src/widgets/status_dots.dart';
 import 'package:pocket_codex/src/widgets/turn_minimap.dart';
 import 'package:pocket_codex/src/widgets/middle_click_scroll.dart';
+import 'package:pocket_codex/src/widgets/history_arrival.dart';
 
 import '../fake_bridge_api.dart';
 import '../support/screen_harness.dart';
@@ -6634,6 +6635,45 @@ void main() {
       expect(find.byKey(const Key('chat-older-history')), findsOneWidget);
     });
 
+    testWidgets('compact previous button reads an unloaded turn', (t) async {
+      t.view.devicePixelRatio = 1;
+      t.view.physicalSize = const Size(390, 844);
+      addTearDown(t.view.reset);
+      final api = await openPaginated(t);
+      api.turnItems = {
+        't4': [
+          user('u4', 'fourth question', 't4'),
+          agent('a4', 'fourth answer', 't4'),
+        ],
+      };
+      await t.tap(find.byKey(const Key('nav-prev-turn')));
+      await t.pumpAndSettle();
+      expect(api.turnItemCalls, ['t4']);
+      expect(find.text('fourth question'), findsOneWidget);
+      final control = find.byKey(const Key('draggable-turn-navigation'));
+      final before = t.getTopLeft(control);
+      await t.drag(control, const Offset(-100, -100));
+      await t.pumpAndSettle();
+      expect(t.getTopLeft(control).dx, lessThan(before.dx - 60));
+      expect(t.getTopLeft(control).dy, lessThan(before.dy - 60));
+    });
+
+    testWidgets('overscrolling a short transcript loads older history', (
+      t,
+    ) async {
+      final api = await openPaginated(t);
+      api.olderPages = [
+        [
+          user('u4', 'fourth question', 't4'),
+          agent('a4', 'fourth answer', 't4'),
+        ],
+      ];
+      await t.drag(find.text('newest answer'), const Offset(0, 160));
+      await t.pumpAndSettle();
+      expect(api.olderPageCalls, 1);
+      expect(find.text('fourth question'), findsOneWidget);
+    });
+
     testWidgets('the rail has a tick per turn of the WHOLE thread', (t) async {
       await onDesktop(() async {
         await t.binding.setSurfaceSize(const Size(1600, 900));
@@ -6870,9 +6910,38 @@ void main() {
       expect(t.takeException(), isNull);
     });
 
-    testWidgets('prepending history preserves the visible message position', (
+    testWidgets('explicit history loading reveals the newly inserted message', (
       t,
     ) async {
+      await t.binding.setSurfaceSize(const Size(1000, 800));
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      final api = await openPaginated(t, longTail: true);
+      final scroll = t
+          .widget<MiddleClickScroll>(find.byType(MiddleClickScroll))
+          .controller;
+      scroll.jumpTo(0);
+      await t.pumpAndSettle();
+      api.olderPages = [
+        [
+          for (var i = 0; i < 4; i++) ...[
+            user('u$i', 'Earlier question $i', 't$i'),
+            agent('a$i', 'Earlier answer $i\n\n' * 15, 't$i'),
+          ],
+        ],
+      ];
+      await t.tap(find.byKey(const Key('chat-older-history-load')));
+      await t.pumpAndSettle();
+      expect(find.text('Earlier question 0').hitTestable(), findsOneWidget);
+      expect(
+        find.byWidgetPredicate(
+          (widget) => widget is HistoryArrival && widget.revision == 1,
+        ),
+        findsOneWidget,
+      );
+      expect(api.olderPageCalls, 1);
+    });
+
+    testWidgets('automatic prepending preserves the reading anchor', (t) async {
       await t.binding.setSurfaceSize(const Size(1000, 800));
       addTearDown(() => t.binding.setSurfaceSize(null));
       final api = await openPaginated(t, longTail: true);
@@ -6891,7 +6960,7 @@ void main() {
           ],
         ],
       ];
-      await t.tap(find.byKey(const Key('chat-older-history-load')));
+      await t.drag(find.text('newest question'), const Offset(0, 80));
       await t.pumpAndSettle();
       expect(t.getTopLeft(anchor).dy, closeTo(before, 2));
       expect(api.olderPageCalls, 1);

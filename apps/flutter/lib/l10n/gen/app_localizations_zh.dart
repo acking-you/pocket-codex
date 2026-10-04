@@ -974,6 +974,46 @@ class AppLocalizationsZh extends AppLocalizations {
   String get noLocalSessions => '没有本地会话';
 
   @override
+  String get localSessionsUnavailable => '此设备无法读取本地会话';
+
+  @override
+  String get localSessionsMobileHint =>
+      '此页面用于读取本机保存的 Codex 会话。查看电脑上的会话，请到服务管理连接电脑；已缓存的对话仍可在聊天中查看。';
+
+  @override
+  String get noLocalSessionsHint =>
+      '这台电脑还没有可查看的 Codex 会话。使用 Codex 创建会话后刷新，或连接其他设备。';
+
+  @override
+  String get noHostSessions => '这台设备暂无会话';
+
+  @override
+  String get noHostSessionsHint => '这台设备还没有可查看的会话。请在该设备上创建 Codex 会话后刷新。';
+
+  @override
+  String get sessionsReadFailed => '暂时无法读取会话';
+
+  @override
+  String get localSessionsReadHint => '请确认当前用户已有 Codex 会话，且有权限读取会话目录，然后重试。';
+
+  @override
+  String get remoteSessionsReadHint => '暂时无法读取该设备的会话，请检查设备连接后重试。';
+
+  @override
+  String get errorDetails => '错误详情';
+
+  @override
+  String get moveTurnNavigation => '拖动可移动对话导航按钮';
+
+  @override
+  String historyLoaded(int count) {
+    return '已加载 $count 条较早的记录';
+  }
+
+  @override
+  String get historyAlreadyVisible => '这部分历史已在当前对话中显示';
+
+  @override
   String get sessionResumable => '可恢复';
 
   @override

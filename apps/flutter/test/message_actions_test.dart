@@ -93,6 +93,33 @@ Future<void> _open(WidgetTester t, [String text = _prompt]) async {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  testWidgets('touch feedback follows press, menu and cancellation', (t) async {
+    await _mount(t);
+    final feedback = find.byKey(const Key('message-press-feedback'));
+    double alpha() =>
+        (t.widget<AnimatedContainer>(feedback).foregroundDecoration
+                as BoxDecoration)
+            .color!
+            .a;
+    expect(alpha(), 0);
+    final press = await t.startGesture(t.getCenter(find.text(_prompt)));
+    await t.pump(const Duration(milliseconds: 120));
+    expect(alpha(), greaterThan(0));
+    await t.pump(const Duration(milliseconds: 600));
+    await press.up();
+    await t.pumpAndSettle();
+    expect(_copy, findsOneWidget);
+    expect(alpha(), greaterThan(0));
+    await t.tapAt(const Offset(10, 60));
+    await t.pumpAndSettle();
+    expect(alpha(), 0);
+    final cancelled = await t.startGesture(t.getCenter(find.text(_prompt)));
+    await t.pump(const Duration(milliseconds: 100));
+    await cancelled.cancel();
+    await t.pumpAndSettle();
+    expect(alpha(), 0);
+    expect(_copy, findsNothing);
+  });
   final clipboard = <String>[];
   final shares = <Map<Object?, Object?>>[];
   var failShare = false;
