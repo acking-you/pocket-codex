@@ -183,7 +183,7 @@ pub async fn device_poll(
                 cred.account_id.clone(),
             );
             config.set_account_backend(backend);
-            save_config(support_dir, &config)?;
+            persist_login(support_dir, &config)?;
             Ok(PollOutcome::Authorized {
                 login: cred.login,
                 account_id: cred.account_id,
@@ -276,11 +276,29 @@ pub async fn web_login_exchange(
         cred.account_id.clone(),
     );
     config.set_account_backend(backend);
-    save_config(support_dir, &config)?;
+    persist_login(support_dir, &config)?;
     Ok(PollOutcome::Authorized {
         login: cred.login,
         account_id: cred.account_id,
     })
+}
+
+fn persist_login(support_dir: &Path, config: &Config) -> Result<()> {
+    // Serialize persistence with refresher creation so an old owner cannot
+    // start a new task between saving the replacement account and cancellation.
+    let mut refresh = credential_refresh()
+        .lock()
+        .map_err(|_| anyhow!("credential refresher poisoned"))?;
+    save_config(support_dir, config)?;
+    let owner = CacheOwner::of(config);
+    if refresh
+        .current
+        .as_ref()
+        .is_some_and(|(path, current, _, _)| path == support_dir && current != &owner)
+    {
+        refresh.stop();
+    }
+    Ok(())
 }
 
 /// The signed-in identity.
@@ -654,23 +672,23 @@ pub(super) fn stop_credential_refresh() {
 /// Keep the current account's credential renewed, replacing an obsolete task
 /// when its account, backend, support directory or issued deadline changes.
 pub fn start_credential_refresh(support_dir: &Path, expires_at: u64) -> Result<()> {
+    let mut refresh = credential_refresh()
+        .lock()
+        .map_err(|_| anyhow!("credential refresher poisoned"))?;
     let owner = CacheOwner::of(&load_config(support_dir)?);
     let support = support_dir.to_path_buf();
-    credential_refresh()
-        .lock()
-        .map_err(|_| anyhow!("credential refresher poisoned"))?
-        .start(support_dir, owner.clone(), expires_at, || {
-            pocket_codex_pb::keep_credential_alive(expires_at, move || {
-                let support = support.clone();
-                let owner = owner.clone();
-                async move {
-                    if CacheOwner::of(&load_config(&support)?) != owner {
-                        bail!("credential refresher belongs to a previous account");
-                    }
-                    Ok(relay_cache().credential(&support, true).await?.expires_at)
+    refresh.start(support_dir, owner.clone(), expires_at, || {
+        pocket_codex_pb::keep_credential_alive(expires_at, move || {
+            let support = support.clone();
+            let owner = owner.clone();
+            async move {
+                if CacheOwner::of(&load_config(&support)?) != owner {
+                    bail!("credential refresher belongs to a previous account");
                 }
-            })
-        });
+                Ok(relay_cache().credential(&support, true).await?.expires_at)
+            }
+        })
+    });
     Ok(())
 }
 

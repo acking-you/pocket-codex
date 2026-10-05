@@ -3400,6 +3400,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// draining), otherwise send now.
   void _submit() {
     if (_historySyncing ||
+        _restoringSettings ||
         _showingCachedHistory ||
         _reconnecting ||
         _connectionLost) {
@@ -3423,6 +3424,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     final tid = _threadId;
     if (tid == null ||
         !_streaming ||
+        _restoringSettings ||
         _sending ||
         _attachments.any((a) => !a.ready)) {
       return;
