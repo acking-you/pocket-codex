@@ -22,6 +22,10 @@ use tokio::{sync::broadcast, task::JoinHandle};
 
 use crate::engine::{runtime, transport::Transport};
 
+#[path = "app_session_live.rs"]
+mod live;
+use live::LiveTranscript;
+
 /// A UI-facing app-server event, flattened from a JSON-RPC notification.
 ///
 /// `kind` is the raw JSON-RPC method (e.g. `turn/started`,
@@ -160,7 +164,7 @@ struct Session {
     /// conversation: the forwarder drops events when no UI is attached, and
     /// the server's `thread/read` doesn't return the in-progress turn's
     /// items.
-    transcript: Arc<Mutex<HashMap<String, Vec<ThreadItem>>>>,
+    transcript: Arc<Mutex<LiveTranscript>>,
     /// Where each paginated thread's history reading got to, keyed by
     /// `threadId`. Paginated threads reject a whole-history read, so
     /// [`thread_read`] loads a bounded window and the UI asks for more; the
@@ -324,8 +328,7 @@ fn establish(service_key: String, local_addr: &str) -> Result<()> {
     let pending_approvals: Arc<Mutex<HashMap<String, Value>>> =
         Arc::new(Mutex::new(HashMap::new()));
     let approvals_for_forwarder = Arc::clone(&pending_approvals);
-    let transcript: Arc<Mutex<HashMap<String, Vec<ThreadItem>>>> =
-        Arc::new(Mutex::new(HashMap::new()));
+    let transcript: Arc<Mutex<LiveTranscript>> = Arc::new(Mutex::new(LiveTranscript::default()));
     let transcript_for_forwarder = Arc::clone(&transcript);
     let runtime_config: Arc<Mutex<HashMap<String, ThreadRuntimeConfig>>> =
         Arc::new(Mutex::new(HashMap::new()));
@@ -380,8 +383,8 @@ fn establish(service_key: String, local_addr: &str) -> Result<()> {
                     }
                     checkpoints.insert(thread.to_owned(), Instant::now());
                     let items = transcript_for_forwarder.lock().ok().and_then(|t| {
-                        t.get(thread)
-                            .map(|items| items.iter().rev().take(20).cloned().collect::<Vec<_>>())
+                        let items = t.tail(thread, 20);
+                        (!items.is_empty()).then_some(items)
                     });
                     let permit = Arc::clone(&checkpoint_slots).try_acquire_owned().ok();
                     if let Some(owner) = &checkpoint_owner {
@@ -391,8 +394,7 @@ fn establish(service_key: String, local_addr: &str) -> Result<()> {
                                 thread,
                                 replaces_history,
                             );
-                            let mut items = items.unwrap_or_default();
-                            items.reverse();
+                            let items = items.unwrap_or_default();
                             let service = checkpoint_service.clone();
                             let thread = thread.to_owned();
                             let running = turns_for_forwarder
@@ -443,7 +445,7 @@ fn plan_item_id(params: &Value) -> String {
 /// Retain streamed text and full item snapshots by id for resume and durable
 /// checkpoints. A completed snapshot replaces its preceding deltas. The plan
 /// notification has no item envelope and uses a stable per-turn identity.
-fn buffer_item(transcript: &Mutex<HashMap<String, Vec<ThreadItem>>>, inbound: &Inbound) {
+fn buffer_item(transcript: &Mutex<LiveTranscript>, inbound: &Inbound) {
     let Some(params) = inbound.params.as_ref() else {
         return;
     };
@@ -493,11 +495,8 @@ fn buffer_item(transcript: &Mutex<HashMap<String, Vec<ThreadItem>>>, inbound: &I
             return;
         };
         let Ok(mut map) = transcript.lock() else { return };
-        let items = map.entry(thread_id.to_owned()).or_default();
-        if let Some(item) = items.iter_mut().find(|item| item.id == id) {
-            item.text.push_str(&text);
-        } else {
-            items.push(ThreadItem {
+        if !map.append(thread_id, id, &text) {
+            map.upsert(thread_id, ThreadItem {
                 id: id.into(),
                 item_type,
                 title,
@@ -543,11 +542,7 @@ fn buffer_item(transcript: &Mutex<HashMap<String, Vec<ThreadItem>>>, inbound: &I
         return;
     }
     let mut map = transcript.lock().expect("transcript poisoned");
-    let items = map.entry(thread_id.to_string()).or_default();
-    match items.iter_mut().find(|i| i.id == parsed.id) {
-        Some(existing) => *existing = parsed, // later snapshot wins
-        None => items.push(parsed),           // new id keeps stream order
-    }
+    map.upsert(thread_id, parsed);
 }
 
 #[path = "app_session_history_cache.rs"]
@@ -731,9 +726,7 @@ fn buffered_items(service_key: &str, thread_id: &str) -> Vec<ThreadItem> {
             s.transcript
                 .lock()
                 .expect("transcript poisoned")
-                .get(thread_id)
-                .cloned()
-                .unwrap_or_default()
+                .tail(thread_id, 100)
         })
         .unwrap_or_default()
 }
@@ -3552,7 +3545,7 @@ mod tests {
 
     #[test]
     fn live_checkpoints_retain_text_before_item_completion() {
-        let transcript = Mutex::new(HashMap::new());
+        let transcript = Mutex::new(LiveTranscript::default());
         for (method, id) in [
             ("item/agentMessage/delta", "message"),
             ("item/commandExecution/outputDelta", "command"),
@@ -3569,8 +3562,9 @@ mod tests {
         }
         {
             let items = transcript.lock().expect("test transcript");
-            assert_eq!(items["thread"].len(), 2);
-            assert!(items["thread"]
+            assert_eq!(items.tail("thread", 100).len(), 2);
+            assert!(items
+                .tail("thread", 100)
                 .iter()
                 .all(|item| item.text == "partial 中文" && item.turn_id == "turn"));
         }
@@ -3582,8 +3576,8 @@ mod tests {
             request_id: None,
         });
         let items = transcript.lock().expect("test transcript");
-        assert_eq!(items["thread"][0].text, "partial 中文 completed");
-        assert_eq!(items["thread"].len(), 2);
+        assert_eq!(items.tail("thread", 100)[0].text, "partial 中文 completed");
+        assert_eq!(items.tail("thread", 100).len(), 2);
     }
 
     #[test]
@@ -3592,7 +3586,7 @@ mod tests {
         // buffered as a `plan` item so a resumed thread restores the plan card at
         // the tail. Otherwise the card is lost on re-open and the proposal message
         // re-reads as a misplaced plan (the plan-jumps-earlier-on-switch bug).
-        let transcript: Mutex<HashMap<String, Vec<ThreadItem>>> = Mutex::new(HashMap::new());
+        let transcript = Mutex::new(LiveTranscript::default());
         let plan = |status: &str| Inbound {
             method: "turn/plan/updated".into(),
             params: Some(json!({
@@ -3607,7 +3601,7 @@ mod tests {
         buffer_item(&transcript, &plan("completed"));
         {
             let items = transcript.lock().unwrap();
-            let t1 = items.get("t1").expect("plan buffered under its thread");
+            let t1 = items.tail("t1", 100);
             assert_eq!(t1.len(), 1, "plan updates upsert into a single item");
             assert_eq!(t1[0].item_type, "plan");
             assert_eq!(t1[0].id, "plan-turn-9");

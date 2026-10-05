@@ -121,6 +121,7 @@ fn diagnostics(args: PbWorkerArgs) -> Result<()> {
             "key": session.key, "role": session.role, "pid": session.pid,
             "alive": pocket_codex_core::process::pid_running(session.pid),
             "runtime": health,
+            "events": crate::commands::worker_health::read_events(session),
         }))?
     );
     Ok(())

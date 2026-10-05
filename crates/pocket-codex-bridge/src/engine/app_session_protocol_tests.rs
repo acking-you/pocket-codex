@@ -94,7 +94,7 @@ fn async_questions_survive_live_buffering_but_history_does_not_reopen_them() {
         "questions": questions,
     });
     let history = flatten_turns(&[json!({"id": "turn-1", "items": [item.clone()]})]);
-    let transcript = Mutex::new(HashMap::new());
+    let transcript = Mutex::new(LiveTranscript::default());
     buffer_item(&transcript, &Inbound {
         method: "item/completed".into(),
         params: Some(json!({"threadId": "thread-1", "turnId": "turn-1", "item": item})),
@@ -102,7 +102,7 @@ fn async_questions_survive_live_buffering_but_history_does_not_reopen_them() {
     });
     let buffered = transcript.lock().expect("transcript lock");
     assert_eq!(history[0].questions_json, None);
-    assert_eq!(buffered["thread-1"][0].questions_json, Some(questions.to_string()));
+    assert_eq!(buffered.tail("thread-1", 100)[0].questions_json, Some(questions.to_string()));
 }
 
 #[test]

@@ -251,3 +251,27 @@ benchmarked by these tests.
 | `apps/flutter/lib/src/screens/settings_screen.dart` | Disk budget and usage controls |
 | `crates/pocket-codex-host-svc/tests/history_sync_codex.rs` | Isolated real external Codex integration |
 | `apps/flutter/test/history_disk_cache_test.dart` | Cached UI and prefetch lifecycle regression tests |
+
+## Live retention and write accounting
+
+The connection's live transcript is separate from the paginated history cache. It
+retains at most eight threads, 1024 items and approximately 32 MiB of item allocations.
+Item IDs index incremental updates; restoration clones at most a 100-item tail.
+Eviction never interrupts event delivery or approval tracking. After eviction,
+missing items require a full snapshot to enter this cache again, preventing a late
+text suffix from being persisted as a complete message prefix. Completed history
+continues to come from the host's ordinary paginated APIs.
+
+Disk writes reuse a process-local byte count while a lock-file revision and directory
+mtime still match. Writers invalidate the revision before mutation under the existing
+OS file lock. A process crash, another writer, an orphan staging file, or a cold cache
+rebuilds accounting; explicit usage diagnostics reconcile it as well. Header reads and
+LRU sorting happen only when the quota requires eviction. Both old and staged data
+still count against the quota, and atomic data/manifest writes retain their file and
+directory syncs.
+
+Run the opt-in filesystem benchmark with:
+
+```sh
+cargo test --locked -p pocket_codex_bridge benchmark_cache_rewrites -- --ignored --nocapture
+```

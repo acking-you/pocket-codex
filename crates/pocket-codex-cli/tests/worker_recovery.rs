@@ -109,6 +109,10 @@ fn offline_worker_survives_readiness_deadline_and_restart_preserves_other_record
     let diagnostic: serde_json::Value = serde_json::from_slice(&diagnostic.stdout).unwrap();
     assert_eq!(diagnostic["runtime"]["sdk_version"], pocket_codex_pb::SDK_VERSION);
     assert_eq!(diagnostic["runtime"]["status"], "retrying");
+    let events = diagnostic["events"].as_array().expect("transition history");
+    assert!(!events.is_empty() && events.len() <= 32);
+    assert_eq!(events.last().unwrap()["status"], "retrying");
+    assert_eq!(events.last().unwrap()["pid"], old_pid);
     let refused = fixture
         .command()
         .args(["pb", "restart", "--role", "register", "--key", "protected-host"])
@@ -136,4 +140,15 @@ fn offline_worker_survives_readiness_deadline_and_restart_preserves_other_record
     );
     assert_eq!(replacement.relay_addr, entry.relay_addr);
     assert!(pocket_codex_core::process::pid_running(replacement.pid));
+    let events_path = entry.log_file.with_extension("events.json");
+    let retained: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(events_path).unwrap()).unwrap();
+    assert!(
+        retained
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|event| event["pid"] == old_pid),
+        "worker exit must preserve transition evidence"
+    );
 }
