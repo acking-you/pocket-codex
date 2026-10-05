@@ -693,6 +693,13 @@ class FakeBridgeApi implements BridgeApi {
     return id;
   }
 
+  @override
+  Future<String> appRealtimeRequest(
+    String serviceKey,
+    String method,
+    String paramsJson,
+  ) async => '{}';
+
   /// Records the last resumed thread id for assertions.
   String? lastResumed;
   final Map<String, List<Future<void>>> pendingResumes = {};

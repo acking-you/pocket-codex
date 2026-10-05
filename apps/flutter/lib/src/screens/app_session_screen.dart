@@ -29,6 +29,8 @@ import 'package:pocket_codex/src/git_diff.dart';
 import 'package:pocket_codex/src/ide_context.dart';
 import 'package:pocket_codex/src/image_attachments.dart';
 import 'package:pocket_codex/src/providers.dart';
+import 'package:pocket_codex/src/voice/voice_controller.dart';
+import 'package:pocket_codex/src/voice/voice_widgets.dart';
 import 'package:pocket_codex/src/service_key.dart';
 import 'package:pocket_codex/src/screens/app_session/async_questions.dart';
 import 'package:pocket_codex/src/screens/app_session/activity_cards.dart';
@@ -238,6 +240,23 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   int _subscriptionEpoch = 0;
 
   String? _threadId;
+  late final VoiceController _voice;
+  bool _voiceStarting = false;
+  int _voiceIntentGeneration = 0;
+
+  bool get _isVoiceThread =>
+      _threads.any((t) => t.id == _threadId && t.isVoice);
+  bool get _voiceAvailable =>
+      !_externalWriterMode &&
+      !_loading &&
+      !_historySyncing &&
+      !_showingCachedHistory &&
+      !_connectionLost;
+  bool get _canStartVoice =>
+      _voiceAvailable &&
+      !_voiceStarting &&
+      !_voice.busy &&
+      _voice.phase != VoicePhase.stopping;
   String? _cwd;
   ModelInfo? _model;
   // True while the user holds a model pick that hasn't been sent yet, so a
@@ -633,6 +652,11 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   @override
   void initState() {
     super.initState();
+    _voice = VoiceController(
+      api: ref.read(bridgeApiProvider),
+      serviceKey: widget.serviceKey,
+      createTransport: ref.read(voiceTransportFactoryProvider),
+    );
     _threadId = widget.threadId;
     _cwd = widget.cwd;
     _drafts = ref.read(_composerDraftsProvider(widget.serviceKey));
@@ -706,6 +730,116 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     });
   }
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.detached) {
+      ++_voiceIntentGeneration;
+      unawaited(_voice.stop());
+    }
+  }
+
+  Future<void> _startVoice() async {
+    if (!_canStartVoice) return;
+    final generation = _threadLoadGeneration;
+    final intent = ++_voiceIntentGeneration;
+    bool current() =>
+        mounted &&
+        intent == _voiceIntentGeneration &&
+        generation == _threadLoadGeneration &&
+        _voiceAvailable;
+    setState(() => _voiceStarting = true);
+    try {
+      final api = ref.read(bridgeApiProvider);
+      final settings = await showDialog<VoiceSettings>(
+        context: context,
+        builder: (_) =>
+            VoiceSetupDialog(api: api, serviceKey: widget.serviceKey),
+      );
+      if (!current() || settings == null) return;
+      var id = _isVoiceThread ? _threadId : null;
+      if (id == null) {
+        final result = await _voice.request('thread/start', {
+          'threadSource': 'pocket-codex-voice',
+          if (_cwd != null) 'cwd': _cwd,
+          if (_model != null) 'model': _model!.id,
+          'approvalPolicy': _mode.approval,
+          'approvalsReviewer': _mode.reviewer,
+          'sandbox': _mode.sandbox,
+        });
+        final thread = result['thread'] as Map;
+        id = thread['id'] as String;
+        if (!current()) return;
+        _threads = [
+          ThreadMeta(
+            id: id,
+            preview: '',
+            cwd: thread['cwd'] as String? ?? _cwd ?? '',
+            updatedAt: 0,
+            threadSource: 'pocket-codex-voice',
+          ),
+          ..._threads,
+        ];
+        _openThread(id, thread['cwd'] as String? ?? _cwd);
+      }
+      await _voice.start(id, model: settings.model, voice: settings.voice);
+      if (mounted) unawaited(_loadThreads());
+    } catch (e) {
+      if (mounted) {
+        showToastError(
+          context,
+          '${AppLocalizations.of(context).voiceUnavailable}: $e',
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _voiceStarting = false);
+    }
+  }
+
+  void _voiceHistory() {
+    final id = _threadId;
+    if (id == null) return;
+    showDialog<void>(
+      context: context,
+      builder: (_) => VoiceHistoryDialog(
+        api: ref.read(bridgeApiProvider),
+        serviceKey: widget.serviceKey,
+        threadId: id,
+      ),
+    );
+  }
+
+  Widget _voiceBar(AppLocalizations l10n) => AnimatedBuilder(
+    animation: _voice,
+    builder: (context, _) => _voice.threadId == _threadId
+        ? VoicePanel(
+            controller: _voice,
+            onHistory: _voiceHistory,
+            onRetry: _canStartVoice ? _startVoice : null,
+          )
+        : Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Row(
+              children: [
+                const Icon(Icons.graphic_eq),
+                const SizedBox(width: 8),
+                Expanded(child: Text(l10n.voiceLive)),
+                IconButton(
+                  tooltip: l10n.voiceHistory,
+                  onPressed: _voiceHistory,
+                  icon: const Icon(Icons.history),
+                ),
+                IconButton(
+                  tooltip: l10n.voiceStart,
+                  onPressed: _canStartVoice ? _startVoice : null,
+                  icon: const Icon(Icons.play_arrow),
+                ),
+              ],
+            ),
+          ),
+  );
+
   /// Load the conversations for the left sessions pane. As the home screen the
   /// pane lists EVERY conversation on the service (the user asked for "all
   /// sessions in the sidebar"); the classic pushed route keeps its
@@ -763,6 +897,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
               ? ThreadMeta(
                   id: t.id,
                   preview: localPreview[t.id]!,
+                  name: t.name,
+                  threadSource: t.threadSource,
                   cwd: t.cwd,
                   updatedAt: t.updatedAt,
                 )
@@ -1032,6 +1168,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// Switch the screen to another conversation (or a new one when [tid] is
   /// null) in place, resetting per-thread state. Used by the left sessions pane.
   void _openThread(String? tid, String? cwd) {
+    unawaited(_voice.stop());
     unawaited(
       ref
           .read(bridgeApiProvider)
@@ -1179,6 +1316,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
 
   @override
   void dispose() {
+    _voice.dispose();
     _healthTimer?.cancel();
     _externalHistoryTimer?.cancel();
     _externalWriterReconnect?.cancel();
@@ -6001,6 +6139,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         // restart since it's derived from the trailing plan item).
         if (!_externalWriterMode && _planReady) _implementBar(l10n),
         if (_error != null) _errorBanner(l10n),
+        if (_isVoiceThread) _voiceBar(l10n),
         if (_externalWriterMode)
           _externalWriterAction(l10n)
         else
@@ -7082,6 +7221,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     // Cross-project pane rows show "project · time" so the user always knows
     // where a conversation lives.
     final subtitle = [
+      if (thread.isVoice) l10n.voiceLive,
       if (_drafts.hasDraft(thread.id)) l10n.draft,
       if (_drafts.queuedCount(thread.id) > 0)
         l10n.queuedCount(_drafts.queuedCount(thread.id)),
@@ -7113,6 +7253,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
             child: Row(
               children: [
+                if (thread.isVoice) ...[
+                  Icon(Icons.graphic_eq, size: 18, color: scheme.primary),
+                  const SizedBox(width: 8),
+                ],
                 // No leading glyph: every row is a conversation, so an icon per
                 // row was a column of identical noise. The project heading's
                 // chevron is the only icon the tree needs.
@@ -8393,6 +8537,14 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                           icon: const Icon(Icons.unfold_less, size: 18),
                           onPressed: () => resize(defaultHeight, save: true),
                         ),
+                      IconButton(
+                        key: const Key('voice-start'),
+                        tooltip: _isVoiceThread
+                            ? l10n.voiceStart
+                            : l10n.voiceNewSession,
+                        onPressed: _canStartVoice ? _startVoice : null,
+                        icon: const Icon(Icons.graphic_eq),
+                      ),
                       IconButton(
                         key: const Key('composer-expand'),
                         tooltip: l10n.expandComposer,

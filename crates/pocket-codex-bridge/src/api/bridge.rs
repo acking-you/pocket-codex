@@ -518,6 +518,8 @@ pub struct ThreadMetaDto {
     /// User-set title, or `None` when the thread was never renamed (the UI
     /// falls back to `preview`).
     pub name: Option<String>,
+    /// App-owned classification, including `pocket-codex-voice`.
+    pub thread_source: Option<String>,
     /// Working directory (the project the thread controls).
     pub cwd: String,
     /// Unix seconds of last update.
@@ -962,6 +964,7 @@ pub fn app_thread_list(service_key: String) -> Result<Vec<ThreadMetaDto>> {
             id: t.id,
             preview: t.preview,
             name: t.name,
+            thread_source: t.thread_source,
             cwd: t.cwd,
             updated_at: t.updated_at,
         })
@@ -983,6 +986,17 @@ pub fn app_model_list(service_key: String) -> Result<Vec<ModelInfoDto>> {
             is_default: m.is_default,
         })
         .collect())
+}
+
+/// Send a thread realtime control request; returns the upstream JSON result.
+/// Accepts the six `thread/realtime/*` methods, `thread/timeline/list`,
+/// and marked voice `thread/start`.
+pub fn app_realtime_request(
+    service_key: String,
+    method: String,
+    params_json: String,
+) -> Result<String> {
+    app_session::realtime_request(&service_key, &method, &params_json)
 }
 
 /// Start a new thread / project. `approval_policy` is one of

@@ -1826,4 +1826,58 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get editMessageDraftHint => '保留当前草稿和附件，编辑后的文字将加在草稿末尾。';
+
+  @override
+  String get voiceStart => '开始语音';
+
+  @override
+  String get voiceStartHint => '与当前项目实时语音交流。语音可以驱动 Codex 执行任务，权限设置与普通对话一致。';
+
+  @override
+  String get voiceUnavailable => '语音暂不可用';
+
+  @override
+  String get voiceVoice => '音色';
+
+  @override
+  String get voiceModel => '语音模型';
+
+  @override
+  String get voiceModelHint => '留空使用主机默认模型';
+
+  @override
+  String get voiceConnecting => '正在连接语音…';
+
+  @override
+  String get voiceListening => '语音已连接 · 正在聆听';
+
+  @override
+  String get voiceMuted => '麦克风已静音';
+
+  @override
+  String get voiceStopping => '正在结束语音…';
+
+  @override
+  String get voiceStop => '结束语音';
+
+  @override
+  String get voiceMute => '静音';
+
+  @override
+  String get voiceUnmute => '取消静音';
+
+  @override
+  String get voiceHistory => '语音记录';
+
+  @override
+  String get voiceHistoryEmpty => '这一页暂无语音记录';
+
+  @override
+  String get voiceHistoryMore => '加载后续记录';
+
+  @override
+  String get voiceErrorDetails => '查看错误详情';
+
+  @override
+  String get voiceNewSession => '新建语音会话';
 }

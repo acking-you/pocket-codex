@@ -63,6 +63,9 @@ pub struct ThreadMeta {
     /// User-set title, or `None` when the thread was never renamed (callers
     /// fall back to [`Self::preview`]).
     pub name: Option<String>,
+    /// App-owned classification persisted by Codex, independent of the title.
+    #[serde(default)]
+    pub thread_source: Option<String>,
     /// Working directory (the "project" the thread controls).
     pub cwd: String,
     /// Unix seconds of last update.
@@ -1183,6 +1186,10 @@ fn parse_thread_meta(t: &Value) -> Option<ThreadMeta> {
     let id = t.get("id")?.as_str()?.to_string();
     Some(ThreadMeta {
         id,
+        thread_source: t
+            .get("threadSource")
+            .and_then(Value::as_str)
+            .map(str::to_string),
         preview: t
             .get("preview")
             .and_then(Value::as_str)
@@ -2649,6 +2656,50 @@ pub fn set_thread_name(service_key: &str, thread_id: &str, name: &str) -> Result
     runtime::runtime().block_on(
         client.request("thread/name/set", json!({ "threadId": thread_id, "name": name })),
     )?;
+    Ok(())
+}
+
+/// Forward a realtime control request over the existing initialized connection.
+/// Audio media uses client-owned WebRTC; only signaling crosses the bridge.
+pub fn realtime_request(service_key: &str, method: &str, params_json: &str) -> Result<String> {
+    let params: Value = serde_json::from_str(params_json)?;
+    validate_realtime_request(method, &params)?;
+    let client = client_for(service_key)?;
+    let res = runtime::runtime().block_on(client.request(method, params))?;
+    if method == "thread/start" {
+        if let Some(id) = res.pointer("/thread/id").and_then(Value::as_str) {
+            record_runtime_config(service_key, id, &res);
+        }
+    }
+    Ok(res.to_string())
+}
+
+fn validate_realtime_request(method: &str, params: &Value) -> Result<()> {
+    anyhow::ensure!(params.is_object(), "realtime params must be an object");
+    match method {
+        "thread/timeline/list"
+        | "thread/realtime/start"
+        | "thread/realtime/stop"
+        | "thread/realtime/appendAudio"
+        | "thread/realtime/appendText"
+        | "thread/realtime/appendSpeech" => {
+            anyhow::ensure!(
+                params
+                    .get("threadId")
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| !id.is_empty()),
+                "realtime request requires threadId"
+            );
+        },
+        "thread/realtime/listVoices" => {},
+        "thread/start" => {
+            anyhow::ensure!(
+                params.get("threadSource").and_then(Value::as_str) == Some("pocket-codex-voice"),
+                "voice thread requires its source marker"
+            );
+        },
+        _ => anyhow::bail!("unsupported realtime method: {method}"),
+    }
     Ok(())
 }
 

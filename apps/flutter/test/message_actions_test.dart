@@ -104,7 +104,7 @@ void main() {
     expect(alpha(), 0);
     final press = await t.startGesture(t.getCenter(find.text(_prompt)));
     await t.pump(const Duration(milliseconds: 120));
-    expect(alpha(), greaterThan(0));
+    expect(alpha(), 0);
     await t.pump(const Duration(milliseconds: 600));
     await press.up();
     await t.pumpAndSettle();
@@ -118,6 +118,27 @@ void main() {
     await cancelled.cancel();
     await t.pumpAndSettle();
     expect(alpha(), 0);
+    expect(_copy, findsNothing);
+  });
+  testWidgets('scrolling a message never activates long-press feedback', (
+    t,
+  ) async {
+    await _mount(t);
+    final feedback = find.byKey(const Key('message-press-feedback'));
+    final drag = await t.startGesture(t.getCenter(find.text(_prompt)));
+    await t.pump(const Duration(milliseconds: 80));
+    await drag.moveBy(const Offset(0, -60));
+    await t.pump(const Duration(milliseconds: 600));
+    expect(
+      (t.widget<AnimatedContainer>(feedback).foregroundDecoration
+              as BoxDecoration)
+          .color!
+          .a,
+      0,
+    );
+    expect(_copy, findsNothing);
+    await drag.up();
+    await t.pumpAndSettle();
     expect(_copy, findsNothing);
   });
   final clipboard = <String>[];

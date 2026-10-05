@@ -202,3 +202,31 @@ fn native_image_capture_maps_live_and_restored_artifacts() {
     }
     assert!(started && completed, "both native lifecycle edges must be captured");
 }
+
+#[test]
+fn voice_classification_and_signaling_survive_the_bridge() {
+    let meta = parse_thread_meta(&json!({"id": "voice", "threadSource": "pocket-codex-voice"}))
+        .expect("voice metadata");
+    assert_eq!(meta.thread_source.as_deref(), Some("pocket-codex-voice"));
+    let cached = serde_json::to_value(&meta).expect("cache metadata");
+    let restored: ThreadMeta = serde_json::from_value(cached).expect("restore metadata");
+    assert_eq!(restored.thread_source, meta.thread_source);
+    let event = map_event(Inbound {
+        method: "thread/realtime/sdp".into(),
+        params: Some(json!({"threadId": "voice", "sdp": "answer"})),
+        request_id: None,
+    });
+    assert_eq!(event.thread_id.as_deref(), Some("voice"));
+    assert_eq!(serde_json::from_str::<Value>(&event.raw).expect("event JSON")["sdp"], "answer");
+    assert!(
+        validate_realtime_request("thread/realtime/start", &json!({"threadId":"voice"})).is_ok()
+    );
+    assert!(validate_realtime_request("thread/realtime/start", &json!({})).is_err());
+    assert!(validate_realtime_request(
+        "thread/start",
+        &json!({"threadSource":"pocket-codex-voice"})
+    )
+    .is_ok());
+    assert!(validate_realtime_request("thread/start", &json!({})).is_err());
+    assert!(validate_realtime_request("command/exec", &json!({})).is_err());
+}

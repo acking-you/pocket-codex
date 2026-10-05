@@ -37,6 +37,7 @@ dependencies:
   pocket_codex_bridge:
     path: rust_builder
   flutter_riverpod: ^2.6.1
+  flutter_webrtc: 1.6.2+hotfix.3
   go_router: ^14.6.2
   path_provider: ^2.1.5
   # Renders agent replies as Markdown documents (headings, code, lists,

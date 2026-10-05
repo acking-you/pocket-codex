@@ -458,6 +458,17 @@ this file's roadmap so the source of truth stays in sync.
     directory. Mobile message press feedback remains until menu dismissal and
     respects reduced motion. See `docs/session-cache-sync.md`.
 
+18. **Live voice controls (2026-10-05).** Voice threads persist the upstream
+    `threadSource: pocket-codex-voice` classification independently of their title.
+    Client-owned WebRTC carries microphone/output audio; the existing bridge
+    carries app-server signaling, with upstream V3 and its V1 voice catalog.
+    Keep backend handoffs and approvals on the ordinary Codex path. End capture
+    on call stop, navigation, backgrounding, failure and disposal; never silently
+    restart it. Read canonical speech history through bounded `thread/timeline/list`
+    pages. No standalone dictation, system speech or extra speech provider is
+    implemented. Touch message feedback starts only when long press wins over
+    scrolling. See `docs/live-voice.md`.
+
 ### UI and history maintenance (2026-09-13)
 
 - Keep shared colors, typography, and control shapes in `theme.dart` /

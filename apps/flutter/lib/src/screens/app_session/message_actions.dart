@@ -174,10 +174,14 @@ class _MessageActionsState extends State<MessageActions> {
         PointerDeviceKind.stylus,
         PointerDeviceKind.invertedStylus,
       },
-      onLongPressDown: (_) => _setPressed(true),
       onLongPressCancel: () => _setPressed(false),
       onLongPressEnd: (_) => _setPressed(false),
-      onLongPressStart: (details) => _open(details.globalPosition),
+      // Pointer-down also begins scrolling. Show feedback only after the
+      // long-press recognizer wins the gesture arena.
+      onLongPressStart: (details) {
+        _setPressed(true);
+        _open(details.globalPosition);
+      },
       child: AnimatedScale(
         scale: _pressed || _menuOpen ? 0.985 : 1,
         duration: MediaQuery.disableAnimationsOf(context)

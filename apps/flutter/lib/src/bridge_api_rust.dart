@@ -417,12 +417,24 @@ class RustBridgeApi implements BridgeApi {
             id: t.id,
             preview: t.preview,
             name: t.name,
+            threadSource: t.threadSource,
             cwd: t.cwd,
             updatedAt: t.updatedAt.toInt(),
           ),
         )
         .toList();
   }
+
+  @override
+  Future<String> appRealtimeRequest(
+    String serviceKey,
+    String method,
+    String paramsJson,
+  ) => frb.appRealtimeRequest(
+    serviceKey: serviceKey,
+    method: method,
+    paramsJson: paramsJson,
+  );
 
   @override
   Future<List<ModelInfo>> appModelList(String serviceKey) async {

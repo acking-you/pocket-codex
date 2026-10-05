@@ -1888,4 +1888,59 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get editMessageDraftHint =>
       'Your existing draft and attachments will be kept. This text will be added below.';
+
+  @override
+  String get voiceStart => 'Start voice';
+
+  @override
+  String get voiceStartHint =>
+      'Talk about the current project. Voice can ask Codex to perform tasks using the same permissions as text conversations.';
+
+  @override
+  String get voiceUnavailable => 'Voice unavailable';
+
+  @override
+  String get voiceVoice => 'Voice';
+
+  @override
+  String get voiceModel => 'Voice model';
+
+  @override
+  String get voiceModelHint => 'Leave empty to use the host default';
+
+  @override
+  String get voiceConnecting => 'Connecting voice…';
+
+  @override
+  String get voiceListening => 'Connected · Listening';
+
+  @override
+  String get voiceMuted => 'Microphone muted';
+
+  @override
+  String get voiceStopping => 'Ending voice…';
+
+  @override
+  String get voiceStop => 'End voice';
+
+  @override
+  String get voiceMute => 'Mute';
+
+  @override
+  String get voiceUnmute => 'Unmute';
+
+  @override
+  String get voiceHistory => 'Voice transcript';
+
+  @override
+  String get voiceHistoryEmpty => 'No voice transcript on this page';
+
+  @override
+  String get voiceHistoryMore => 'Load more';
+
+  @override
+  String get voiceErrorDetails => 'Error details';
+
+  @override
+  String get voiceNewSession => 'New voice conversation';
 }

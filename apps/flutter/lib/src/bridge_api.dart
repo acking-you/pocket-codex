@@ -405,6 +405,7 @@ class ThreadMeta {
     required this.cwd,
     required this.updatedAt,
     this.name,
+    this.threadSource,
   });
 
   /// Thread id.
@@ -415,6 +416,12 @@ class ThreadMeta {
 
   /// User-set title, or null when the conversation was never renamed.
   final String? name;
+
+  /// Persisted app-owned classification, independent of the editable title.
+  final String? threadSource;
+
+  /// True for conversations created through the live voice entry point.
+  bool get isVoice => threadSource == 'pocket-codex-voice';
 
   /// Working directory — the project this thread controls.
   final String cwd;
@@ -435,6 +442,7 @@ class ThreadMeta {
     id: id,
     preview: preview,
     name: name,
+    threadSource: threadSource,
     cwd: cwd,
     updatedAt: updatedAt,
   );
@@ -1310,6 +1318,13 @@ abstract interface class BridgeApi {
 
   /// Live event stream for [serviceKey] (turn/item notifications).
   Stream<AppEvent> appEvents(String serviceKey);
+
+  /// Upstream realtime controls and marked voice thread creation.
+  Future<String> appRealtimeRequest(
+    String serviceKey,
+    String method,
+    String paramsJson,
+  );
 
   /// Captured `tracing` events for the in-app log viewer: retained recent
   /// history (oldest first) followed by every new event live.

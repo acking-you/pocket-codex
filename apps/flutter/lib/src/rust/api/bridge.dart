@@ -6,7 +6,7 @@
 import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `history_dto`, `holder_dto`, `item_dto`, `meta_follow_update_dto`, `meta_holder_dto`, `meta_liveness_dto`, `meta_thread_item_dto`, `project_config_dto`, `thread_config_dto`, `thread_config_from_dto`, `to_log_dto`, `turn_page_dto`
+// These functions are ignored because they are not marked as `pub`: `forward_app_events`, `forward_retained_requests`, `history_dto`, `holder_dto`, `item_dto`, `meta_follow_update_dto`, `meta_holder_dto`, `meta_liveness_dto`, `meta_thread_item_dto`, `project_config_dto`, `thread_config_dto`, `thread_config_from_dto`, `to_log_dto`, `turn_page_dto`
 
 /// Initialise the engine with the platform app-support dir (from Dart's
 /// path_provider). Must be called once after `RustLib.init()`.
@@ -290,7 +290,7 @@ Stream<RetryProgressDto> metaRetryEvents() =>
 
 /// Stream live app-server events (turn/item notifications) for `service_key`.
 /// The Dart side receives one [`AppEventDto`] per notification until the
-/// session is disconnected.
+/// session is disconnected or the feed lags and requires history recovery.
 Stream<AppEventDto> appEvents({required String serviceKey}) =>
     RustLib.instance.api.crateApiBridgeAppEvents(serviceKey: serviceKey);
 
@@ -301,6 +301,19 @@ Future<List<ThreadMetaDto>> appThreadList({required String serviceKey}) =>
 /// List the models the app-server offers.
 Future<List<ModelInfoDto>> appModelList({required String serviceKey}) =>
     RustLib.instance.api.crateApiBridgeAppModelList(serviceKey: serviceKey);
+
+/// Send a thread realtime control request; returns the upstream JSON result.
+/// Accepts the six `thread/realtime/*` methods, `thread/timeline/list`,
+/// and marked voice `thread/start`.
+Future<String> appRealtimeRequest({
+  required String serviceKey,
+  required String method,
+  required String paramsJson,
+}) => RustLib.instance.api.crateApiBridgeAppRealtimeRequest(
+  serviceKey: serviceKey,
+  method: method,
+  paramsJson: paramsJson,
+);
 
 /// Start a new thread / project. `approval_policy` is one of
 /// `untrusted` / `on-failure` / `on-request` / `never`; `sandbox` is one of
@@ -2339,6 +2352,9 @@ class ThreadMetaDto {
   /// falls back to `preview`).
   final String? name;
 
+  /// App-owned classification, including `pocket-codex-voice`.
+  final String? threadSource;
+
   /// Working directory (the project the thread controls).
   final String cwd;
 
@@ -2349,6 +2365,7 @@ class ThreadMetaDto {
     required this.id,
     required this.preview,
     this.name,
+    this.threadSource,
     required this.cwd,
     required this.updatedAt,
   });
@@ -2358,6 +2375,7 @@ class ThreadMetaDto {
       id.hashCode ^
       preview.hashCode ^
       name.hashCode ^
+      threadSource.hashCode ^
       cwd.hashCode ^
       updatedAt.hashCode;
 
@@ -2369,6 +2387,7 @@ class ThreadMetaDto {
           id == other.id &&
           preview == other.preview &&
           name == other.name &&
+          threadSource == other.threadSource &&
           cwd == other.cwd &&
           updatedAt == other.updatedAt;
 }

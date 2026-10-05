@@ -3463,6 +3463,114 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Your existing draft and attachments will be kept. This text will be added below.'**
   String get editMessageDraftHint;
+
+  /// No description provided for @voiceStart.
+  ///
+  /// In en, this message translates to:
+  /// **'Start voice'**
+  String get voiceStart;
+
+  /// No description provided for @voiceStartHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Talk about the current project. Voice can ask Codex to perform tasks using the same permissions as text conversations.'**
+  String get voiceStartHint;
+
+  /// No description provided for @voiceUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice unavailable'**
+  String get voiceUnavailable;
+
+  /// No description provided for @voiceVoice.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice'**
+  String get voiceVoice;
+
+  /// No description provided for @voiceModel.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice model'**
+  String get voiceModel;
+
+  /// No description provided for @voiceModelHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Leave empty to use the host default'**
+  String get voiceModelHint;
+
+  /// No description provided for @voiceConnecting.
+  ///
+  /// In en, this message translates to:
+  /// **'Connecting voice…'**
+  String get voiceConnecting;
+
+  /// No description provided for @voiceListening.
+  ///
+  /// In en, this message translates to:
+  /// **'Connected · Listening'**
+  String get voiceListening;
+
+  /// No description provided for @voiceMuted.
+  ///
+  /// In en, this message translates to:
+  /// **'Microphone muted'**
+  String get voiceMuted;
+
+  /// No description provided for @voiceStopping.
+  ///
+  /// In en, this message translates to:
+  /// **'Ending voice…'**
+  String get voiceStopping;
+
+  /// No description provided for @voiceStop.
+  ///
+  /// In en, this message translates to:
+  /// **'End voice'**
+  String get voiceStop;
+
+  /// No description provided for @voiceMute.
+  ///
+  /// In en, this message translates to:
+  /// **'Mute'**
+  String get voiceMute;
+
+  /// No description provided for @voiceUnmute.
+  ///
+  /// In en, this message translates to:
+  /// **'Unmute'**
+  String get voiceUnmute;
+
+  /// No description provided for @voiceHistory.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice transcript'**
+  String get voiceHistory;
+
+  /// No description provided for @voiceHistoryEmpty.
+  ///
+  /// In en, this message translates to:
+  /// **'No voice transcript on this page'**
+  String get voiceHistoryEmpty;
+
+  /// No description provided for @voiceHistoryMore.
+  ///
+  /// In en, this message translates to:
+  /// **'Load more'**
+  String get voiceHistoryMore;
+
+  /// No description provided for @voiceErrorDetails.
+  ///
+  /// In en, this message translates to:
+  /// **'Error details'**
+  String get voiceErrorDetails;
+
+  /// No description provided for @voiceNewSession.
+  ///
+  /// In en, this message translates to:
+  /// **'New voice conversation'**
+  String get voiceNewSession;
 }
 
 class _AppLocalizationsDelegate
