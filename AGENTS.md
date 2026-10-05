@@ -469,6 +469,17 @@ this file's roadmap so the source of truth stays in sync.
     implemented. Touch message feedback starts only when long press wins over
     scrolling. See `docs/live-voice.md`.
 
+19. **Recovery and cache boundaries (2026-10-05).** Scope CLI watchdog stops to
+    their own listener; retain pending meta registrations across startup outages.
+    Credential refresh tasks follow account/backend/deadline changes and stop on
+    logout. Mobile reconnects discard obsolete completions, recover on foreground
+    return and restore optional metadata separately; sends wait for settings.
+    Live transcript tails have independent item/thread/byte bounds and indexed
+    updates. Cache byte accounting is invalidated under the cross-process lock
+    before mutations; atomic data/manifest writes and quota reservations remain.
+    Worker transition history survives worker exit, and controller recovery stages
+    appear in the existing exportable logs.
+
 ### UI and history maintenance (2026-09-13)
 
 - Keep shared colors, typography, and control shapes in `theme.dart` /

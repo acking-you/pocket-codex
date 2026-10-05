@@ -696,5 +696,6 @@
   "voiceHistoryEmpty": "这一页暂无语音记录",
   "voiceHistoryMore": "加载后续记录",
   "voiceErrorDetails": "查看错误详情",
-  "voiceNewSession": "新建语音会话"
+  "voiceNewSession": "新建语音会话",
+  "restoringSessionSettings": "正在恢复会话设置…"
 }

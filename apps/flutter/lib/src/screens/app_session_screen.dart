@@ -29,6 +29,7 @@ import 'package:pocket_codex/src/git_diff.dart';
 import 'package:pocket_codex/src/ide_context.dart';
 import 'package:pocket_codex/src/image_attachments.dart';
 import 'package:pocket_codex/src/providers.dart';
+import 'package:pocket_codex/src/log_manager.dart';
 import 'package:pocket_codex/src/voice/voice_controller.dart';
 import 'package:pocket_codex/src/voice/voice_widgets.dart';
 import 'package:pocket_codex/src/service_key.dart';
@@ -517,7 +518,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   bool _historySyncing = false;
   bool _showingCachedHistory = false;
   bool _reconnecting = false;
-  DateTime? _lastReconnectAt; // debounce rapid retriggers (flapping socket)
+  Stopwatch? _lastReconnectAt;
+  int _reconnectEpoch = 0;
+  bool _foreground = true;
+  bool _restoringSettings = false;
   Timer? _healthTimer;
   String? _lastUserText;
   // Images (data URLs) sent with the last user message, kept alongside
@@ -722,7 +726,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     // engine reports a dead socket via appIsConnected; the keepalive ping
     // surfaces it promptly).
     _healthTimer = Timer.periodic(const Duration(seconds: 12), (_) {
-      if (!mounted || _reconnecting) return;
+      if (!mounted || !_foreground || _reconnecting) return;
       if (_connectionLost ||
           !ref.read(bridgeApiProvider).appIsConnected(widget.serviceKey)) {
         _onStreamClosed();
@@ -732,6 +736,23 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.inactive) return;
+    _foreground = state == AppLifecycleState.resumed;
+    if (_foreground) {
+      _lastReconnectAt = null;
+      if (_connectionLost ||
+          !ref.read(bridgeApiProvider).appIsConnected(widget.serviceKey)) {
+        unawaited(_autoReconnect());
+      }
+    } else {
+      ++_reconnectEpoch;
+      if (_reconnecting) {
+        setState(() {
+          _reconnecting = false;
+          _connectionLost = true;
+        });
+      }
+    }
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.hidden ||
         state == AppLifecycleState.detached) {
@@ -1231,6 +1252,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       // Show the loading skeleton while the opened thread's history loads (no-op
       // for a brand-new conversation, which has nothing to fetch).
       _loading = tid != null;
+      _restoringSettings = false;
       _error = null;
       _retry = null;
       _planActive = false;
@@ -1316,6 +1338,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
 
   @override
   void dispose() {
+    ++_reconnectEpoch;
     _voice.dispose();
     _healthTimer?.cancel();
     _externalHistoryTimer?.cancel();
@@ -1997,9 +2020,11 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     setState(() {
       _loading = _items.isEmpty;
       _historySyncing = true;
+      _restoringSettings = true;
       _error = null;
       _retry = null;
     });
+    var restoringMetadata = false;
     final startTid = _threadId!;
     final generation = ++_threadLoadGeneration;
     final turnStateRevision = _turnStateRevision;
@@ -2151,29 +2176,46 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       // events that would normally flush it were missed during the drop).
       final settingsRevision = _settingsRevision;
       final runtimeAt = _runtimeAt;
-      final persisted = await persistedFuture;
-      if (!current()) return;
-      // Restore the model from the server's own report first (the resume
-      // response says what the thread actually runs with); fall back to the
-      // persisted pick for older servers that don't report one. Resolve the id
-      // against this service's model list.
-      final restoredModelId = history.model ?? persisted.model;
-      ModelInfo? restoredModel;
-      if (restoredModelId != null) {
+      restoringMetadata = true;
+      // Connection/history recovery is complete. Optional metadata has its own
+      // deadline and generation; sending still waits for settings restoration.
+      unawaited(() async {
         try {
-          final models = await _ensureModels();
-          restoredModel = models
-              .where((m) => m.id == restoredModelId)
-              .firstOrNull;
-        } catch (_) {
-          // Model list unavailable — leave the model unchanged.
+          final persisted = await persistedFuture.timeout(
+            const Duration(seconds: 10),
+            onTimeout: () => const ThreadConfig(),
+          );
+          if (!current()) return;
+          // Restore the model from the server's own report first (the resume
+          // response says what the thread actually runs with); fall back to the
+          // persisted pick for older servers that don't report one. Resolve the id
+          // against this service's model list.
+          final restoredModelId = history.model ?? persisted.model;
+          ModelInfo? restoredModel;
+          if (restoredModelId != null) {
+            try {
+              final models = await _ensureModels().timeout(
+                const Duration(seconds: 10),
+              );
+              restoredModel = models
+                  .where((m) => m.id == restoredModelId)
+                  .firstOrNull;
+            } catch (_) {
+              // Model list unavailable — leave the model unchanged.
+            }
+          }
+          if (!current()) return;
+          if (_settingsRevision == settingsRevision &&
+              _runtimeAt == runtimeAt) {
+            _restoreHistorySettings(history, persisted, restoredModel);
+          }
+        } finally {
+          if (current()) {
+            setState(() => _restoringSettings = false);
+            _maybeFlushQueue();
+          }
         }
-      }
-      if (!current()) return;
-      if (_settingsRevision == settingsRevision && _runtimeAt == runtimeAt) {
-        _restoreHistorySettings(history, persisted, restoredModel);
-      }
-      _maybeFlushQueue();
+      }());
     } catch (e) {
       if (!current()) return;
       _historySyncing = false;
@@ -2188,6 +2230,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       });
       if (propagateErrors) rethrow;
     } finally {
+      if (current() && !restoringMetadata) {
+        setState(() => _restoringSettings = false);
+      }
       if (identical(_historyLiveItems, liveItems)) {
         _historyLiveItems = null;
         _historyPartialItems = null;
@@ -2999,6 +3044,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         _sending ||
         _reconnecting ||
         _historySyncing ||
+        _restoringSettings ||
         _showingCachedHistory) {
       return;
     }
@@ -3354,6 +3400,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// draining), otherwise send now.
   void _submit() {
     if (_historySyncing ||
+        _restoringSettings ||
         _showingCachedHistory ||
         _reconnecting ||
         _connectionLost) {
@@ -3377,6 +3424,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     final tid = _threadId;
     if (tid == null ||
         !_streaming ||
+        _restoringSettings ||
         _sending ||
         _attachments.any((a) => !a.ready)) {
       return;
@@ -3488,6 +3536,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         _reconnecting ||
         _connectionLost ||
         _historySyncing ||
+        _restoringSettings ||
         _showingCachedHistory) {
       return;
     }
@@ -3870,8 +3919,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     final current = notifier.state;
     final has = current.contains(widget.serviceKey);
     if (down == has) return;
-    notifier.state = down ? {...current, widget.serviceKey} : {...current}
-      ..remove(widget.serviceKey);
+    notifier.state = down
+        ? {...current, widget.serviceKey}
+        : ({...current}..remove(widget.serviceKey));
     // The cached probe answered before the link changed, so it would otherwise
     // keep reporting the stale verdict for as long as the cache lives.
     ref.invalidate(appReachableProvider(widget.serviceKey));
@@ -3886,15 +3936,27 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// so the just-added optimistic message and a pending plan toggle survive for
   /// the retry.
   Future<void> _autoReconnect({bool reload = true}) async {
-    if (_reconnecting) return;
+    if (!mounted || !_foreground || _reconnecting) return;
     // Debounce: a flapping socket (connect succeeds then drops) could otherwise
     // spin reconnect attempts. The periodic health check is the backstop.
-    final now = DateTime.now();
     if (_lastReconnectAt != null &&
-        now.difference(_lastReconnectAt!) < const Duration(seconds: 3)) {
+        _lastReconnectAt!.elapsed < const Duration(seconds: 3)) {
       return;
     }
-    _lastReconnectAt = now;
+    _lastReconnectAt = Stopwatch()..start();
+    final epoch = ++_reconnectEpoch;
+    final elapsed = Stopwatch()..start();
+    bool current() => mounted && _foreground && epoch == _reconnectEpoch;
+    void record(String stage, int attempt, [Object? error]) {
+      final detail = error == null ? '' : ' error=${friendlyError(error)}';
+      LogManager.instance.record(
+        'controller.recovery',
+        'service=${widget.serviceKey} stage=$stage attempt=$attempt '
+            'elapsed_ms=${elapsed.elapsedMilliseconds}${detail.substring(0, math.min(512, detail.length))}',
+        level: error == null ? 'INFO' : 'WARN',
+      );
+    }
+
     if (mounted) {
       setState(() {
         _reconnecting = true;
@@ -3906,10 +3968,12 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     }
     final api = ref.read(bridgeApiProvider);
     for (var attempt = 0; attempt < 4; attempt++) {
-      if (!mounted) return;
+      if (!current()) return;
       try {
+        record('connect', attempt + 1);
         // Let the bridge retain a live socket if only its event subscription ended.
         await api.appConnect(widget.serviceKey, appLocalPort);
+        if (!current()) return;
         _connectionLost = false;
         _subscribe();
         if (reload && _threadId != null) {
@@ -3920,6 +3984,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
             await _resumeAndLoad(propagateErrors: true);
           }
         }
+        if (!current()) return;
+        record('history-ready', attempt + 1);
         // Re-list too, not just the open transcript. `_loadThreads` runs once at
         // initState and is best-effort: if the host wasn't reachable then (it
         // restarted, or the app opened first), the failure was swallowed and
@@ -3958,13 +4024,20 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           });
           _publishLinkState(down: false);
         }
+        record('ready', attempt + 1);
+        _maybeFlushQueue();
         return;
-      } catch (_) {
-        await Future<void>.delayed(Duration(seconds: 1 << attempt)); // 1/2/4/8s
+      } catch (error) {
+        if (!current()) return;
+        record('retry', attempt + 1, error);
+        if (attempt < 3) {
+          await Future<void>.delayed(Duration(seconds: 1 << attempt));
+        }
       }
     }
     // Out of retries: fall back to the manual banner.
-    if (mounted) {
+    if (current()) {
+      record('exhausted', 4);
       setState(() {
         _reconnecting = false;
         _connectionLost = true;
@@ -9241,13 +9314,16 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           !_reconnecting &&
           !_connectionLost &&
           !_historySyncing &&
+          !_restoringSettings &&
           !_showingCachedHistory &&
           !_attachments.any((a) => !a.ready) &&
           hasDraft;
       return IconButton.filled(
         key: const Key('send-btn'),
         onPressed: canSend ? _submit : null,
-        tooltip: _streaming
+        tooltip: _restoringSettings
+            ? l10n.restoringSessionSettings
+            : _streaming
             ? (_supplement ? l10n.steerMessage : l10n.queueNextTurn)
             : l10n.send,
         icon: Icon(

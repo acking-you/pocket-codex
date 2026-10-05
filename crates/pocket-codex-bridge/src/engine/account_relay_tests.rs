@@ -2,7 +2,7 @@ use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
     sync::Notify,
 };
@@ -204,4 +204,105 @@ async fn an_account_switch_during_renewal_discards_the_response() {
     assert!(error.to_string().contains("account changed"));
     server.await.expect("backend task");
     assert!(cache.credential(&account.0, false).await.is_err());
+}
+
+async fn login_backend(web: bool, login: &str) -> (String, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("login listener");
+    let url = format!("http://{}", listener.local_addr().expect("login address"));
+    let cred = serde_json::json!({
+        "token": "new-token", "refresh_token": "new-refresh", "expires_in_secs": 3600,
+        "login": login, "account_id": login,
+    });
+    let body = if web {
+        serde_json::json!({"credential": cred})
+    } else {
+        serde_json::json!({"status": "authorized", "credential": cred})
+    }
+    .to_string();
+    let task = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.expect("login request");
+        let mut reader = tokio::io::BufReader::new(socket);
+        let mut line = String::new();
+        reader.read_line(&mut line).await.expect("request line");
+        let path = if web { "/auth/web/exchange" } else { "/auth/device/poll" };
+        assert!(line.starts_with(&format!("POST {path} ")));
+        let mut length = 0;
+        loop {
+            line.clear();
+            assert!(reader.read_line(&mut line).await.expect("header") > 0);
+            if line == "\r\n" {
+                break;
+            }
+            if let Some((name, value)) = line.split_once(':') {
+                if name.eq_ignore_ascii_case("content-length") {
+                    length = value.trim().parse::<usize>().expect("content length");
+                }
+            }
+        }
+        reader
+            .read_exact(&mut vec![0; length])
+            .await
+            .expect("request body");
+        reader
+            .get_mut()
+            .write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: \
+                     {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .as_bytes(),
+            )
+            .await
+            .expect("login response");
+    });
+    (url, task)
+}
+
+#[tokio::test]
+async fn successful_login_retires_obsolete_refresher_without_resolving_a_tunnel() {
+    struct ResetRefresher;
+    impl Drop for ResetRefresher {
+        fn drop(&mut self) {
+            stop_credential_refresh();
+        }
+    }
+    let _reset = ResetRefresher;
+    for web in [false, true] {
+        for (login, change_backend) in [("bob", false), ("alice", true), ("alice", false)] {
+            let (url, server) = login_backend(web, login).await;
+            let account =
+                TestAccount::new(if change_backend { "https://old.example" } else { &url });
+            start_credential_refresh(&account.0, unix_now() as u64 + 86400)
+                .expect("start old refresher");
+            let old = credential_refresh()
+                .lock()
+                .expect("refresher lock")
+                .current
+                .as_ref()
+                .expect("old task")
+                .3
+                .abort_handle();
+            let outcome = if web {
+                web_login_exchange(&account.0, &url, "exchange".into(), "verifier".into()).await
+            } else {
+                device_poll(&account.0, &url, "poll".into()).await
+            }
+            .expect("successful login");
+            assert!(matches!(outcome, PollOutcome::Authorized { .. }));
+            server.await.expect("login backend task");
+            tokio::task::yield_now().await;
+            assert_eq!(
+                old.is_finished(),
+                login != "alice" || change_backend,
+                "login must retire only obsolete tasks without waiting for another tunnel"
+            );
+            let config = load_config(&account.0).expect("new account");
+            assert_eq!(config.account_login(), Some(login));
+            assert_eq!(config.account_backend(), Some(url.as_str()));
+            stop_credential_refresh();
+        }
+    }
 }

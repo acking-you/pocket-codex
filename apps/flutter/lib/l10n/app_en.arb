@@ -798,5 +798,6 @@
   "voiceHistoryEmpty": "No voice transcript on this page",
   "voiceHistoryMore": "Load more",
   "voiceErrorDetails": "Error details",
-  "voiceNewSession": "New voice conversation"
+  "voiceNewSession": "New voice conversation",
+  "restoringSessionSettings": "Restoring session settings…"
 }

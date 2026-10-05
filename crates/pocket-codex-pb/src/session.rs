@@ -316,6 +316,30 @@ pub fn parse_relay_addr(addr: &str) -> Result<()> {
 mod tests {
     use super::*;
 
+    #[tokio::test(start_paused = true)]
+    async fn pending_registration_retains_worker_after_startup_deadline() {
+        let reservation = std::net::TcpListener::bind("127.0.0.1:0").expect("port");
+        let addr = reservation.local_addr().expect("address");
+        drop(reservation);
+        let session = RelaySession::for_test(addr.to_string());
+        let (registration, ready) = register_pending(&session, RegisterOptions {
+            key: "meta-offline".into(),
+            local_addr: "127.0.0.1:9".into(),
+            codec: false,
+        })
+        .await
+        .expect("pending handle");
+        assert!(ready.is_err());
+        assert!(!matches!(
+            registration.status(),
+            pb_mapper::TunnelStatus::Stopped | pb_mapper::TunnelStatus::Failed(_)
+        ));
+        registration
+            .stop()
+            .await
+            .expect("stop pending registration");
+    }
+
     #[tokio::test]
     async fn offline_background_handles_remain_owned_after_readiness_times_out() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("port");

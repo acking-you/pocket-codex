@@ -442,10 +442,12 @@ class FakeBridgeApi implements BridgeApi {
 
   /// Number of [appConnect] calls (asserts a reconnect actually happened).
   int appConnectCount = 0;
+  Future<void>? appConnectGate;
 
   @override
   Future<void> appConnect(String serviceKey, int localPort) async {
     appConnectCount++;
+    await appConnectGate;
     _appConnected.add(serviceKey);
     _appEvents.putIfAbsent(serviceKey, StreamController<AppEvent>.broadcast);
   }

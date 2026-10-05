@@ -43,3 +43,30 @@ Protocol/source verification does not upgrade an already-running process. In
 particular, a deployment that must preserve a Codex app-server mapping must leave
 its worker and host untouched, report their old/unknown runtime SDK honestly,
 and upgrade them only during a separately authorized maintenance window.
+
+## Host and controller recovery
+
+The account-mode CLI host retains its meta registration even when the initial
+30-second readiness wait expires. The SDK continues retrying transient outages;
+permanent relay rejection remains a failure. The Codex watchdog stops only the
+process matching its own listener, even when another host last updated the shared
+runtime record.
+
+The App owns its credential renewal task by support directory, account and backend.
+A changed issued expiry replaces the schedule; logout or self-host transport stops
+it. Unchanged expiries outside the renewal margin are normal. Failed renewals retry
+after one minute, and shortened deadlines are honored.
+
+Controller reconnect checks cancellation after network awaits and on navigation or
+backgrounding. Foreground return checks the connection immediately. History and
+transport can be ready while optional metadata is still loading; sending waits for
+settings restoration. Optional config and model waits each have a ten-second bound.
+The Logs page includes `controller.recovery` stages, attempts, elapsed monotonic
+milliseconds and failure details, and its existing Copy action exports them.
+
+CLI diagnostics also include `events`: the last 32 state transitions across worker
+restarts, with process identity, UTC epoch milliseconds and elapsed milliseconds
+within that process. They are stored beside the worker log as `*.events.json` with
+private permissions and retained after worker exit. Repeated heartbeat snapshots
+do not add duplicate transitions. Event history does not assert current liveness;
+only the fresh, identity-checked `runtime` snapshot does.

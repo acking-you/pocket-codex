@@ -12,7 +12,8 @@
 //! engine runtime.
 
 use std::{
-    path::Path,
+    path::{Path, PathBuf},
+    sync::Mutex,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -182,7 +183,7 @@ pub async fn device_poll(
                 cred.account_id.clone(),
             );
             config.set_account_backend(backend);
-            save_config(support_dir, &config)?;
+            persist_login(support_dir, &config)?;
             Ok(PollOutcome::Authorized {
                 login: cred.login,
                 account_id: cred.account_id,
@@ -275,11 +276,29 @@ pub async fn web_login_exchange(
         cred.account_id.clone(),
     );
     config.set_account_backend(backend);
-    save_config(support_dir, &config)?;
+    persist_login(support_dir, &config)?;
     Ok(PollOutcome::Authorized {
         login: cred.login,
         account_id: cred.account_id,
     })
+}
+
+fn persist_login(support_dir: &Path, config: &Config) -> Result<()> {
+    // Serialize persistence with refresher creation so an old owner cannot
+    // start a new task between saving the replacement account and cancellation.
+    let mut refresh = credential_refresh()
+        .lock()
+        .map_err(|_| anyhow!("credential refresher poisoned"))?;
+    save_config(support_dir, config)?;
+    let owner = CacheOwner::of(config);
+    if refresh
+        .current
+        .as_ref()
+        .is_some_and(|(path, current, _, _)| path == support_dir && current != &owner)
+    {
+        refresh.stop();
+    }
+    Ok(())
 }
 
 /// The signed-in identity.
@@ -318,6 +337,7 @@ pub async fn current_user(support_dir: &Path) -> Result<Option<AccountUser>> {
 
 /// Revoke the refresh token (best effort) and clear the local session.
 pub async fn logout(support_dir: &Path) -> Result<()> {
+    stop_credential_refresh();
     let mut config = load_config(support_dir)?;
     let backend = backend_base(&config);
     if let Some(refresh_token) = config.account_refresh_token() {
@@ -480,6 +500,7 @@ pub async fn relay_credential(support_dir: &Path) -> Result<RelayCredentialRespo
 
 /// Discard the cached relay credential, so the next call re-fetches.
 pub async fn forget_relay_credential() {
+    stop_credential_refresh();
     *relay_cache().current.lock().await = None;
 }
 
@@ -598,23 +619,77 @@ pub async fn relay_session(support_dir: &Path) -> Result<(RelaySession, u64)> {
     Ok((RelaySession::new(relay.relay_addr, relay.credential), relay.expires_at))
 }
 
-/// Start the background task that keeps this account's credential renewed.
-///
-/// Call it alongside anything that holds a tunnel open: the relay cancels a
-/// credential's tunnels when it lapses, so a host that registered once and
-/// never asked again would stop serving at the TTL with nothing having gone
-/// wrong. Idempotent — one refresher per process is enough, since devices on an
-/// account share one credential.
-pub fn start_credential_refresh(support_dir: &Path, expires_at: u64) {
-    static STARTED: OnceCell<()> = OnceCell::new();
-    if STARTED.set(()).is_err() {
-        return;
+#[derive(Default)]
+struct CredentialRefresh {
+    current: Option<(PathBuf, CacheOwner, u64, tokio::task::JoinHandle<()>)>,
+}
+
+impl CredentialRefresh {
+    fn start(
+        &mut self,
+        support: &Path,
+        owner: CacheOwner,
+        expires_at: u64,
+        spawn: impl FnOnce() -> tokio::task::JoinHandle<()>,
+    ) {
+        if self
+            .current
+            .as_ref()
+            .is_some_and(|(path, current, expiry, task)| {
+                path == support && current == &owner && *expiry == expires_at && !task.is_finished()
+            })
+        {
+            return;
+        }
+        self.stop();
+        self.current = Some((support.into(), owner, expires_at, spawn()));
     }
+
+    fn stop(&mut self) {
+        if let Some((_, _, _, task)) = self.current.take() {
+            task.abort();
+        }
+    }
+}
+
+impl Drop for CredentialRefresh {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+fn credential_refresh() -> &'static Mutex<CredentialRefresh> {
+    static REFRESH: OnceCell<Mutex<CredentialRefresh>> = OnceCell::new();
+    REFRESH.get_or_init(Default::default)
+}
+
+pub(super) fn stop_credential_refresh() {
+    if let Ok(mut refresh) = credential_refresh().lock() {
+        refresh.stop();
+    }
+}
+
+/// Keep the current account's credential renewed, replacing an obsolete task
+/// when its account, backend, support directory or issued deadline changes.
+pub fn start_credential_refresh(support_dir: &Path, expires_at: u64) -> Result<()> {
+    let mut refresh = credential_refresh()
+        .lock()
+        .map_err(|_| anyhow!("credential refresher poisoned"))?;
+    let owner = CacheOwner::of(&load_config(support_dir)?);
     let support = support_dir.to_path_buf();
-    pocket_codex_pb::keep_credential_alive(expires_at, move || {
-        let support = support.clone();
-        async move { Ok(relay_cache().credential(&support, true).await?.expires_at) }
+    refresh.start(support_dir, owner.clone(), expires_at, || {
+        pocket_codex_pb::keep_credential_alive(expires_at, move || {
+            let support = support.clone();
+            let owner = owner.clone();
+            async move {
+                if CacheOwner::of(&load_config(&support)?) != owner {
+                    bail!("credential refresher belongs to a previous account");
+                }
+                Ok(relay_cache().credential(&support, true).await?.expires_at)
+            }
+        })
     });
+    Ok(())
 }
 
 #[cfg(test)]
@@ -624,6 +699,39 @@ mod relay_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn credential_refresh_replaces_accounts_deadlines_and_stopped_tasks() {
+        let support = Path::new("support");
+        let owner = CacheOwner {
+            backend: "https://one".into(),
+            account_id: Some("a".into()),
+            login: Some("alice".into()),
+        };
+        let mut refresh = CredentialRefresh::default();
+        let mut tasks = Vec::new();
+        let mut spawn = || {
+            let task = tokio::spawn(std::future::pending::<()>());
+            tasks.push(task.abort_handle());
+            task
+        };
+        refresh.start(support, owner.clone(), 10_000, &mut spawn);
+        refresh.start(support, owner.clone(), 10_000, || {
+            panic!("same live owner must reuse its task")
+        });
+        let mut other = owner.clone();
+        other.account_id = Some("b".into());
+        refresh.start(support, other.clone(), 100, &mut spawn);
+        refresh.start(support, other, 50, &mut spawn);
+        refresh.stop();
+        refresh.start(support, owner, 200, &mut spawn);
+        tokio::task::yield_now().await;
+        assert!(tasks[..3].iter().all(tokio::task::AbortHandle::is_finished));
+        assert!(!tasks[3].is_finished());
+        drop(refresh);
+        tokio::task::yield_now().await;
+        assert!(tasks[3].is_finished());
+    }
 
     #[test]
     fn a_different_signed_in_account_is_a_different_cache_owner() {

@@ -3571,6 +3571,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'New voice conversation'**
   String get voiceNewSession;
+
+  /// No description provided for @restoringSessionSettings.
+  ///
+  /// In en, this message translates to:
+  /// **'Restoring session settings…'**
+  String get restoringSessionSettings;
 }
 
 class _AppLocalizationsDelegate

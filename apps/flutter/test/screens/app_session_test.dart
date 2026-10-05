@@ -1947,6 +1947,114 @@ void main() {
     },
   );
 
+  testWidgets(
+    'disconnect publishes status and disposed reconnect cannot subscribe',
+    (t) async {
+      const service = 'pcx:lb7666:app:default';
+      final api = FakeBridgeApi(
+        config: const ConfigInfo(relay: 'relay:7666', hasKey: true),
+      );
+      await api.appConnect(service, 28080);
+      await t.pumpWidget(
+        host(const AppSessionScreen(serviceKey: service), api),
+      );
+      await t.pumpAndSettle();
+      final container = ProviderScope.containerOf(
+        t.element(find.byType(AppSessionScreen)),
+      );
+      final gate = Completer<void>();
+      api.appConnectGate = gate.future;
+      await api.appDisconnect(service);
+      await t.pump();
+      expect(container.read(observedDisconnectedProvider), contains(service));
+      await t.pumpWidget(const SizedBox());
+      gate.complete();
+      await t.pump();
+      await t.pump(const Duration(seconds: 10));
+      expect(t.takeException(), isNull);
+      expect(api.appConnectCount, 2);
+    },
+  );
+
+  testWidgets(
+    'reconnect becomes ready before metadata but sending waits for settings',
+    (t) async {
+      const service = 'pcx:lb7666:app:default';
+      final api = FakeBridgeApi(
+        config: const ConfigInfo(relay: 'relay:7666', hasKey: true),
+      );
+      await api.appConnect(service, 28080);
+      await t.pumpWidget(
+        host(const AppSessionScreen(serviceKey: service, threadId: 't1'), api),
+      );
+      await t.pumpAndSettle();
+      final gate = Completer<void>();
+      api.configReadGate = gate;
+      await api.appDisconnect(service);
+      await t.pump();
+      await t.pumpAndSettle();
+      expect(find.text('就绪'), findsOneWidget);
+      expect(gate.isCompleted, isFalse);
+      final container = ProviderScope.containerOf(
+        t.element(find.byType(AppSessionScreen)),
+      );
+      expect(
+        container.read(observedDisconnectedProvider),
+        isNot(contains(service)),
+      );
+      await t.enterText(
+        find.byKey(const Key('composer-input')),
+        'Wait for permissions',
+      );
+      await t.pump();
+      expect(
+        t.widget<IconButton>(find.byKey(const Key('send-btn'))).onPressed,
+        isNull,
+      );
+      gate.complete();
+      await t.pumpAndSettle();
+      expect(
+        t.widget<IconButton>(find.byKey(const Key('send-btn'))).onPressed,
+        isNotNull,
+      );
+      await t.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets(
+    'background recovery waits until foreground then reconnects immediately',
+    (t) async {
+      const service = 'pcx:lb7666:app:default';
+      final api = FakeBridgeApi(
+        config: const ConfigInfo(relay: 'relay:7666', hasKey: true),
+      );
+      await api.appConnect(service, 28080);
+      await t.pumpWidget(
+        host(const AppSessionScreen(serviceKey: service), api),
+      );
+      await t.pumpAndSettle();
+      t.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      await api.appDisconnect(service);
+      await t.pump(const Duration(seconds: 13));
+      expect(api.appConnectCount, 1);
+      final gate = Completer<void>();
+      api.appConnectGate = gate.future;
+      t.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+      t.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      t.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await t.pump();
+      expect(api.appConnectCount, 2);
+      t.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      gate.complete();
+      await t.pumpAndSettle();
+      t.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await t.pumpAndSettle();
+      expect(find.text('就绪'), findsOneWidget);
+      expect(api.appConnectCount, 2);
+      await t.pumpWidget(const SizedBox());
+    },
+  );
+
   testWidgets('A reconnect stays disconnected when the first RPC times out', (
     t,
   ) async {

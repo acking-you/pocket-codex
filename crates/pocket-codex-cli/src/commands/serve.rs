@@ -36,9 +36,7 @@
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
-use pocket_codex_codex::{
-    spawn_ready, stop, ListenSpec, SpawnOptions, SpawnReadyError, READY_TIMEOUT,
-};
+use pocket_codex_codex::{spawn_ready, ListenSpec, SpawnOptions, SpawnReadyError, READY_TIMEOUT};
 use pocket_codex_core::{
     config::Config,
     process::{find_codex_app_server, force_kill, send_sigterm, wait_for_port_closed},
@@ -174,18 +172,21 @@ async fn serve_account_foreground(
     // and this is a second listener.
     let meta = match spawn_meta_service(local).await {
         Ok(meta_local) => {
-            pocket_codex_pb::register(&transport.session, pocket_codex_pb::RegisterOptions {
-                key: transport.key(&ServiceId::new(device, ServiceKind::Meta, name)),
-                local_addr: meta_local.to_string(),
-                codec: false,
-            })
+            pocket_codex_pb::session::register_pending(
+                &transport.session,
+                pocket_codex_pb::RegisterOptions {
+                    key: transport.key(&ServiceId::new(device, ServiceKind::Meta, name)),
+                    local_addr: meta_local.to_string(),
+                    codec: false,
+                },
+            )
             .await
-            .map(Some)
         },
         Err(e) => Err(e),
     };
     match &meta {
-        Ok(_) => ui::field("meta", &format!("{device}/meta/{name}")),
+        Ok((_, Ok(()))) => ui::field("meta", &format!("{device}/meta/{name}")),
+        Ok((_, Err(e))) => ui::warn(&format!("host meta service not ready: {e:#}")),
         Err(e) => ui::warn(&format!("host meta service unavailable: {e:#}")),
     }
 
@@ -211,7 +212,7 @@ async fn serve_account_foreground(
     ui::headline(ui::Tone::Change, "stopping");
     // Awaited rather than dropped, so the relay frees the meta key now instead of
     // at its next lease sweep.
-    if let Ok(Some(registration)) = meta {
+    if let Ok((registration, _)) = meta {
         let _ = registration.stop().await;
     }
     let stopped = managed_pb::stop_matching(managed_pb::StopFilter {
@@ -401,7 +402,9 @@ async fn codex_health_watchdog(local_addr: String, spawn_opts: SpawnOptions) {
 async fn restart_codex(spawn_opts: SpawnOptions) -> Result<()> {
     tokio::task::spawn_blocking(move || -> Result<()> {
         let listen_url = spawn_opts.listen.to_listen_url();
-        stop().context("stopping the wedged codex app-server")?;
+        if let Some(addr) = spawn_opts.listen.as_socket_addr() {
+            stop_codex_at(&addr.to_string());
+        }
         // Wait for the listen port to free; otherwise spawn() would adopt the
         // dying process instead of starting a clean one.
         if let Some(addr) = spawn_opts.listen.as_socket_addr() {
@@ -452,6 +455,117 @@ async fn restart_codex(spawn_opts: SpawnOptions) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn watchdog_restart_is_scoped_to_its_listener() {
+        use std::{
+            fs,
+            net::TcpListener,
+            process::{Child, Command},
+            time::Instant,
+        };
+
+        use pocket_codex_core::state::{CodexProcessInfo, RuntimeState};
+        const CHILD: &str = "PCX_WATCHDOG_TEST_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let root = std::env::temp_dir().join(format!("pcx-watchdog-{}", std::process::id()));
+            fs::create_dir_all(&root).expect("test fixture");
+            let result = Command::new(std::env::current_exe().expect("test fixture"))
+                .args([
+                    "--exact",
+                    "commands::serve::tests::watchdog_restart_is_scoped_to_its_listener",
+                    "--nocapture",
+                ])
+                .env(CHILD, &root)
+                .env("XDG_STATE_HOME", root.join("state"))
+                .env("XDG_CONFIG_HOME", root.join("config"))
+                .status();
+            let _ = fs::remove_dir_all(root);
+            assert!(result.expect("test fixture").success());
+            return;
+        }
+        struct Children(Vec<Child>);
+        impl Drop for Children {
+            fn drop(&mut self) {
+                for child in &mut self.0 {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                }
+            }
+        }
+        let root = std::path::PathBuf::from(std::env::var_os(CHILD).expect("test fixture"));
+        let binary = root.join("codex");
+        fs::copy("/usr/bin/python3", &binary).expect("test fixture");
+        let mut children = Children(Vec::new());
+        let mut addresses = Vec::new();
+        for _ in 0..2 {
+            let port = TcpListener::bind("127.0.0.1:0")
+                .expect("test fixture")
+                .local_addr()
+                .expect("test fixture");
+            let url = format!("ws://{port}");
+            children.0.push(
+                Command::new(&binary)
+                    .args([
+                        "-c",
+                        "import socket,sys,time; s=socket.socket(); \
+                         s.bind(('127.0.0.1',int(sys.argv[-1].rsplit(':',1)[1]))); s.listen(); \
+                         time.sleep(60)",
+                        "app-server",
+                        "--listen",
+                        &url,
+                    ])
+                    .spawn()
+                    .expect("test fixture"),
+            );
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while std::net::TcpStream::connect(port).is_err() {
+                assert!(Instant::now() < deadline, "fixture did not bind");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            addresses.push(port);
+        }
+        let second = children.0[1].id();
+        RuntimeState {
+            codex: Some(CodexProcessInfo {
+                pid: second,
+                listen: format!("ws://{}", addresses[1]),
+                log_file: root.join("second.log"),
+                started_at: "2026-10-05T00:00:00Z".into(),
+            }),
+            ..Default::default()
+        }
+        .save()
+        .expect("test fixture");
+        let result = tokio::runtime::Runtime::new()
+            .expect("test fixture")
+            .block_on(restart_codex(SpawnOptions {
+                binary: Some(root.join("missing-replacement")),
+                listen: ListenSpec::WebSocket {
+                    host: "127.0.0.1".into(),
+                    port: addresses[0].port(),
+                },
+                extra_args: Vec::new(),
+                log_file: None,
+                proxy: None,
+            }));
+        assert!(result.is_err(), "replacement deliberately cannot start");
+        assert!(
+            children.0[1].try_wait().expect("test fixture").is_none(),
+            "another host was killed"
+        );
+        assert!(std::net::TcpStream::connect(addresses[1]).is_ok());
+        assert!(std::net::TcpStream::connect(addresses[0]).is_err());
+        assert_eq!(
+            RuntimeState::load()
+                .expect("test fixture")
+                .codex
+                .expect("test fixture")
+                .pid,
+            second
+        );
+    }
 
     #[test]
     fn websocket_listen_addr_extracts_tcp_addr() {

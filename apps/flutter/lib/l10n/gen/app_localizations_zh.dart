@@ -1880,4 +1880,7 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get voiceNewSession => '新建语音会话';
+
+  @override
+  String get restoringSessionSettings => '正在恢复会话设置…';
 }

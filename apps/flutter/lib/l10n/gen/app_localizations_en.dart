@@ -1943,4 +1943,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get voiceNewSession => 'New voice conversation';
+
+  @override
+  String get restoringSessionSettings => 'Restoring session settings…';
 }

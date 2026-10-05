@@ -34,12 +34,13 @@ pub async fn resolve() -> Result<Transport> {
         // A registration outlives the call that made it, and the relay cancels a
         // lapsed credential's tunnels — so the refresher has to be running for
         // hosting to survive its TTL. Idempotent, hence unconditional here.
-        account::start_credential_refresh(&support, expires_at);
+        account::start_credential_refresh(&support, expires_at)?;
         return Ok(Transport {
             session,
             namespace: Some(account::relay_credential(&support).await?.namespace),
         });
     }
+    account::stop_credential_refresh();
     let relay = config
         .relay()
         .ok_or_else(|| anyhow!("no relay configured"))?
