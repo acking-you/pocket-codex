@@ -14,10 +14,14 @@ links. Parents have an expand control; children remain below their parent across
 activity and project groups. Search and status filters retain matching children's
 ancestors. Missing parents and malformed cycles leave sessions visible at the
 root rather than hiding them.
+Ancestors of running sessions expand automatically in both lists, so the actual
+active child and its status remain visible.
 
 Guardian reviewer sessions open through read-only history and monitoring, with a
 link back to the parent. They cannot be resumed or taken over, including through
 host force-resume routes. Automatic home selection chooses a normal root session.
+The Rust resume boundary checks authoritative metadata too; direct FRB callers
+cannot bypass read-only mode, and failed metadata reads never proceed to resume.
 
 ## Data flow
 

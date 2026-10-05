@@ -6607,6 +6607,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     final reveal = tree.withAncestors([?_threadId])..remove(_threadId);
     final expandedParents = {
       ..._expandedSessionParents,
+      ...activeParents,
       ...reveal,
       if (q.isNotEmpty) ...matchingIds,
     };

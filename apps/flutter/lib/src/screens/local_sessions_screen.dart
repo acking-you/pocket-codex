@@ -338,13 +338,14 @@ class _LocalSessionsState extends ConsumerState<LocalSessionsScreen> {
       (s) => s.parentThreadId,
     );
     final filtered = tree.roots;
-    final expanded = {
-      ..._expandedParents,
-      if (q.isNotEmpty || _filter != _SessionViewFilter.all) ...included,
-    };
     final activeParents = tree.withAncestors(
       _sessions.where((s) => s.safety == 'ownedRunning').map((s) => s.threadId),
     );
+    final expanded = {
+      ..._expandedParents,
+      ...activeParents,
+      if (q.isNotEmpty || _filter != _SessionViewFilter.all) ...included,
+    };
     // Group by activity time, mirroring the conversation list: actively-running
     // first, then today, then earlier. The source list is already sorted
     // newest-first (scan_sessions orders by Reverse(updated_at)).

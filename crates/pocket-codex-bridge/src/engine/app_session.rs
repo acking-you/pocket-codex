@@ -1227,6 +1227,10 @@ fn thread_list_remote(service_key: &str) -> Result<Vec<ThreadMeta>> {
 /// Inspect a thread's classification and parent without attaching a writer.
 pub fn thread_metadata(service_key: &str, thread_id: &str) -> Result<ThreadMeta> {
     let client = client_for(service_key)?;
+    read_thread_metadata(&client, thread_id)
+}
+
+fn read_thread_metadata(client: &Arc<AppClient>, thread_id: &str) -> Result<ThreadMeta> {
     let response = runtime::runtime().block_on(
         client.request("thread/read", json!({"threadId": thread_id, "includeTurns": false})),
     )?;
@@ -1522,6 +1526,11 @@ fn track_pending_approval(pending: &Mutex<HashMap<String, Value>>, inbound: &Inb
 /// view's gists are what break first.
 pub fn thread_resume(service_key: &str, thread_id: &str) -> Result<()> {
     let client = client_for(service_key)?;
+    let metadata = read_thread_metadata(&client, thread_id)?;
+    anyhow::ensure!(
+        metadata.thread_source.as_deref() != Some("guardian_review"),
+        "Guardian approval sessions are read-only; open their parent session"
+    );
     let res = runtime::runtime().block_on(
         client.request("thread/resume", json!({ "threadId": thread_id, "excludeTurns": true })),
     )?;

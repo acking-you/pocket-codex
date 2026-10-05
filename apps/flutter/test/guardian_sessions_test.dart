@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
 import 'package:pocket_codex/src/screens/app_session/approval_review_card.dart';
 import 'package:pocket_codex/src/screens/app_session_screen.dart';
+import 'package:pocket_codex/src/screens/local_sessions_screen.dart';
 import 'package:pocket_codex/src/session_tree.dart';
 
 import 'fake_bridge_api.dart';
@@ -47,6 +48,93 @@ String review(String id, String status) => jsonEncode({
 
 void main() {
   setUp(AppSessionScreen.debugResetThreadMemory);
+
+  testWidgets('an unopened running descendant reveals every ancestor', (
+    t,
+  ) async {
+    t.view.physicalSize = const Size(1280, 900);
+    t.view.devicePixelRatio = 1;
+    addTearDown(t.view.reset);
+    const worker = ThreadMeta(
+      id: 'worker',
+      preview: 'Nested work',
+      cwd: '/repo',
+      updatedAt: 4,
+      parentThreadId: 'reviewer',
+    );
+    final api = FakeBridgeApi()
+      ..appThreads.clear()
+      ..appThreads.addAll([worker, reviewer, parent]);
+    await api.appConnect(service, 28080);
+    await t.pumpWidget(
+      host(
+        const AppSessionScreen(
+          serviceKey: service,
+          threadId: 'parent',
+          home: true,
+        ),
+        api,
+      ),
+    );
+    await frames(t);
+    expect(find.byKey(const Key('session-tree-reviewer')), findsNothing);
+    api.pushEvent(
+      service,
+      const AppEvent(
+        kind: 'turn/started',
+        threadId: 'worker',
+        raw: '{"turn":{"id":"turn"}}',
+      ),
+    );
+    await frames(t);
+    expect(find.byKey(const Key('session-tree-reviewer')), findsOneWidget);
+    expect(find.byKey(const Key('session-tree-worker')), findsOneWidget);
+    expect(find.text('进行中'), findsOneWidget);
+    expect(t.takeException(), isNull);
+    await t.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('default host inventory reveals a running child', (t) async {
+    final api = FakeBridgeApi()
+      ..localSessions = const [
+        LocalSession(
+          threadId: 'parent',
+          cwd: '/repo',
+          preview: 'Main work',
+          updatedAt: 1,
+          turnState: 'completed',
+          heldOpen: false,
+          safety: 'resumable',
+          allowsResume: true,
+          requiresTakeover: false,
+        ),
+        LocalSession(
+          threadId: 'reviewer',
+          cwd: '/repo',
+          preview: 'Approval review',
+          updatedAt: 3,
+          parentThreadId: 'parent',
+          threadSource: 'guardian_review',
+          turnState: 'incomplete',
+          heldOpen: true,
+          safety: 'ownedRunning',
+          allowsResume: false,
+          requiresTakeover: false,
+        ),
+      ];
+    await t.pumpWidget(
+      host(
+        const LocalSessionsScreen(source: SessionSource.remote(service)),
+        api,
+      ),
+    );
+    await frames(t);
+    expect(find.byKey(const Key('session-tree-parent')), findsOneWidget);
+    expect(find.byKey(const Key('session-tree-reviewer')), findsOneWidget);
+    expect(find.text('进行中'), findsOneWidget);
+    expect(t.takeException(), isNull);
+    await t.pumpWidget(const SizedBox());
+  });
 
   test(
     'trees retain explicit ancestry, orphans and cycles without duplicates',
