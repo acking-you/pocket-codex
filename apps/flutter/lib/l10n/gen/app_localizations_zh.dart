@@ -1883,4 +1883,30 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get restoringSessionSettings => '正在恢复会话设置…';
+
+  @override
+  String get reviewInProgress => '模型审核中';
+
+  @override
+  String get reviewTimedOut => '审核超时';
+
+  @override
+  String get reviewAborted => '审核已中止';
+
+  @override
+  String get guardianSession => '模型审批';
+
+  @override
+  String get childSession => '子会话';
+
+  @override
+  String childSessions(int count) {
+    return '子会话（$count）';
+  }
+
+  @override
+  String get guardianReadOnly => '模型审批会话 · 只读';
+
+  @override
+  String get parentSession => '打开父会话';
 }

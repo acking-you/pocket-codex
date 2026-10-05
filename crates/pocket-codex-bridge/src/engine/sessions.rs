@@ -34,6 +34,10 @@ pub struct LocalSession {
     pub preview: String,
     /// Originating client (`cli` / `vscode` / …), when recorded.
     pub source: Option<String>,
+    /// Parent thread, when this session is a spawned child.
+    pub parent_thread_id: Option<String>,
+    /// Persisted thread classification.
+    pub thread_source: Option<String>,
     /// Last-modified time of the rollout, unix seconds.
     pub updated_at: i64,
     /// Most-recent-turn state tag (`empty`/`completed`/`aborted`/`incomplete`).
@@ -133,17 +137,20 @@ pub fn list_local_sessions() -> Result<Vec<LocalSession>> {
     for info in sessions {
         let held_open = held.contains(&info.rollout_path);
         let safety = takeover::classify(&info.turn_state, held_open);
+        let guardian = info.thread_source.as_deref() == Some("guardian_review");
         out.push(LocalSession {
             thread_id: info.thread_id,
             cwd: info.cwd,
             preview: info.preview,
             source: info.source,
+            parent_thread_id: info.parent_thread_id,
+            thread_source: info.thread_source,
             updated_at: info.updated_at,
             turn_state: info.turn_state.tag().to_string(),
             held_open,
             safety: safety.tag().to_string(),
-            allows_resume: safety.allows_resume(),
-            requires_takeover: safety.requires_takeover(),
+            allows_resume: !guardian && safety.allows_resume(),
+            requires_takeover: !guardian && safety.requires_takeover(),
         });
     }
     Ok(out)
@@ -155,6 +162,8 @@ pub fn session_liveness(thread_id: &str) -> Result<SessionLivenessView> {
     let path = rollout::rollout_path_for_thread(thread_id)
         .map_err(|e| anyhow!("locating rollout: {e}"))?
         .ok_or_else(|| anyhow!("no rollout found for thread {thread_id}"))?;
+    let guardian =
+        rollout::read_session_info(&path)?.thread_source.as_deref() == Some("guardian_review");
     let live = takeover::inspect(&path).map_err(|e| anyhow!("inspecting rollout: {e}"))?;
     let protected = protected_pids();
     let holders = live
@@ -167,8 +176,8 @@ pub fn session_liveness(thread_id: &str) -> Result<SessionLivenessView> {
         turn_state: live.turn_state.tag().to_string(),
         held_open: live.held_open,
         safety: live.safety.tag().to_string(),
-        allows_resume: live.safety.allows_resume(),
-        requires_takeover: live.safety.requires_takeover(),
+        allows_resume: !guardian && live.safety.allows_resume(),
+        requires_takeover: !guardian && live.safety.requires_takeover(),
         holders,
     })
 }
@@ -207,6 +216,9 @@ pub fn force_resume(service_key: &str, thread_id: &str) -> Result<ForceResumeOut
     // reach here directly. Never resume a rollout whose turn is running right
     // now — that would make two writers append to one file. Only
     // Resumable / ResumableUnfinished / (confirmed) OwnedIdle proceed.
+    if rollout::read_session_info(&path)?.thread_source.as_deref() == Some("guardian_review") {
+        return Err(anyhow!("Guardian approval sessions are read-only; open their parent session"));
+    }
     let live = takeover::inspect(&path).map_err(|e| anyhow!("inspecting rollout: {e}"))?;
     if matches!(live.safety, takeover::ResumeSafety::OwnedRunning) {
         return Err(anyhow!(

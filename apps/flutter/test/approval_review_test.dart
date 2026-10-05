@@ -75,6 +75,48 @@ void main() {
   );
 
   for (final dark in [false, true]) {
+    testWidgets('native approval states fit a phone, dark=$dark', (t) async {
+      t.view.physicalSize = const Size(390, 844);
+      t.view.devicePixelRatio = 1;
+      addTearDown(t.view.resetPhysicalSize);
+      addTearDown(t.view.resetDevicePixelRatio);
+      for (final status in [
+        'inProgress',
+        'approved',
+        'denied',
+        'timedOut',
+        'aborted',
+      ]) {
+        final raw = jsonEncode({
+          'reviewId': 'review',
+          'review': {
+            'status': status,
+            'riskLevel': null,
+            'userAuthorization': null,
+            'rationale': status == 'inProgress' ? null : 'Assessment finished.',
+          },
+          'action': {'type': 'command', 'command': 'cargo test'},
+        });
+        final parsed = AutoApprovalReview.parse(raw)!;
+        await t.pumpWidget(
+          host(
+            ApprovalReviewCard(
+              raw: raw,
+              request: parsed.request,
+              result: parsed.result,
+              status: parsed.status,
+            ),
+            dark: dark,
+          ),
+        );
+        await t.pump();
+        expect(find.text('cargo test'), findsOneWidget);
+        expect(parsed.result == null, status == 'inProgress');
+        expect(find.byType(FilledButton), findsNothing);
+        expect(t.takeException(), isNull);
+      }
+    });
+
     testWidgets(
       'review request and result use compact historical cards, dark=$dark',
       (t) async {

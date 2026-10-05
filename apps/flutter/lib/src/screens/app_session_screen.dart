@@ -21,6 +21,8 @@ import 'package:intl/intl.dart' show DateFormat;
 import 'package:super_sliver_list/super_sliver_list.dart';
 import 'package:window_manager/window_manager.dart' show DragToMoveArea;
 import 'package:pocket_codex/src/bridge_api.dart';
+import 'package:pocket_codex/src/session_tree.dart';
+import 'package:pocket_codex/src/widgets/session_tree_row.dart';
 import 'package:pocket_codex/src/context_status.dart';
 import 'package:pocket_codex/src/desktop_theme.dart';
 import 'package:pocket_codex/src/error_format.dart';
@@ -454,6 +456,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   // A thread held by another app-server stays inside this chat surface. Its
   // rollout follows one host-meta stream until it becomes resumable.
   bool _externalWriterMode = false;
+  bool _guardianReadOnly = false;
+  String? _parentThreadId;
+  final Set<String> _expandedSessionParents = {};
   SessionLiveness? _externalWriterLiveness;
   StreamSubscription<SessionFollowUpdate>? _externalWriterSub;
   Timer? _externalWriterReconnect;
@@ -713,6 +718,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           _discoveredThreads[session.threadId] = ThreadMeta(
             id: session.threadId,
             preview: session.preview,
+            threadSource: session.threadSource,
+            parentThreadId: session.parentThreadId,
             cwd: session.cwd ?? '',
             updatedAt: session.updatedAt,
           );
@@ -920,6 +927,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                   preview: localPreview[t.id]!,
                   name: t.name,
                   threadSource: t.threadSource,
+                  parentThreadId: t.parentThreadId,
                   cwd: t.cwd,
                   updatedAt: t.updatedAt,
                 )
@@ -1213,6 +1221,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       _historyEpoch = null;
       _cwd = cwd;
       _externalWriterMode = false;
+      _guardianReadOnly = false;
+      _parentThreadId = null;
       _externalWriterLiveness = null;
       _takingOver = false;
       // An open rename belongs to the thread being left, so drop it rather
@@ -2067,6 +2077,15 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       }
       await api.appHistorySyncPrepare(widget.serviceKey);
       if (!current()) return;
+      final metadata = await api.appThreadMetadata(widget.serviceKey, startTid);
+      if (!current()) return;
+      _parentThreadId = metadata?.parentThreadId;
+      if (metadata != null) _discoveredThreads[metadata.id] = metadata;
+      if (metadata?.isGuardian ?? false) {
+        _guardianReadOnly = true;
+        _enterExternalWriterMode(startTid);
+        return;
+      }
       await api.appThreadResume(widget.serviceKey, startTid);
       // An obsolete resume must not fan out into more history/config requests.
       if (!current()) return;
@@ -2624,6 +2643,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   }
 
   Future<void> _takeOverExternalWriter() async {
+    if (_guardianReadOnly) return;
     final threadId = _threadId;
     final liveness = _externalWriterLiveness;
     if (threadId == null ||
@@ -3040,7 +3060,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     final text = appendFileRefs(typed, filePaths);
     // Block sends while reconnecting — a reconnect reloads history and would
     // wipe an optimistic message added mid-flight.
-    if ((text.isEmpty && images.isEmpty) ||
+    if (_externalWriterMode ||
+        (text.isEmpty && images.isEmpty) ||
         _sending ||
         _reconnecting ||
         _historySyncing ||
@@ -3399,7 +3420,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// Composer send: queue while a turn is in flight (or a backlog is still
   /// draining), otherwise send now.
   void _submit() {
-    if (_historySyncing ||
+    if (_externalWriterMode ||
+        _historySyncing ||
         _restoringSettings ||
         _showingCachedHistory ||
         _reconnecting ||
@@ -3423,6 +3445,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   Future<void> _sendSupplement() async {
     final tid = _threadId;
     if (tid == null ||
+        _externalWriterMode ||
         !_streaming ||
         _restoringSettings ||
         _sending ||
@@ -3868,6 +3891,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
 
   /// Manually compact the conversation after a confirm.
   Future<void> _compact() async {
+    if (_guardianReadOnly) return;
     final tid = _threadId;
     if (tid == null) return;
     final l10n = AppLocalizations.of(context);
@@ -5529,6 +5553,14 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     AppLocalizations l10n,
   ) {
     final scheme = Theme.of(context).colorScheme;
+    if (_guardianReadOnly) {
+      return (
+        color: scheme.primary,
+        label: l10n.guardianReadOnly,
+        icon: Icons.policy_outlined,
+        nominal: false,
+      );
+    }
     if (_externalWriterMode) {
       final resumable = _externalWriterLiveness?.allowsResume ?? false;
       return (
@@ -6259,6 +6291,37 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   }
 
   Widget _externalWriterAction(AppLocalizations l10n) {
+    if (_guardianReadOnly) {
+      return SafeArea(
+        top: false,
+        child: Padding(
+          key: const Key('guardian-read-only'),
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(l10n.guardianReadOnly),
+              if (_parentThreadId case final parent?)
+                TextButton.icon(
+                  key: const Key('open-parent-session'),
+                  onPressed: () => _openThread(
+                    parent,
+                    _discoveredThreads[parent]?.cwd ??
+                        _threads
+                            .where((t) => t.id == parent)
+                            .firstOrNull
+                            ?.cwd ??
+                        _cwd,
+                  ),
+                  icon: const Icon(Icons.subdirectory_arrow_left),
+                  label: Text(l10n.parentSession),
+                ),
+            ],
+          ),
+        ),
+      );
+    }
+
     final scheme = Theme.of(context).colorScheme;
     final liveness = _externalWriterLiveness;
     final canResume = liveness?.allowsResume ?? false;
@@ -6513,7 +6576,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     }
     final conversations = known.values.toList()
       ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
-    final filtered = q.isEmpty
+    final matches = q.isEmpty
         ? conversations
         : conversations
               .where(
@@ -6528,12 +6591,31 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                     (widget.home && t.cwd.toLowerCase().contains(q)),
               )
               .toList(growable: false);
+    final allTree = SessionTree(
+      conversations,
+      (ThreadMeta t) => t.id,
+      (t) => t.parentThreadId,
+    );
+    final matchingIds = allTree.withAncestors(matches.map((t) => t.id));
+    final tree = SessionTree(
+      conversations.where((t) => matchingIds.contains(t.id)),
+      (ThreadMeta t) => t.id,
+      (t) => t.parentThreadId,
+    );
+    final filtered = tree.roots;
+    final activeParents = tree.withAncestors(running);
+    final reveal = tree.withAncestors([?_threadId])..remove(_threadId);
+    final expandedParents = {
+      ..._expandedSessionParents,
+      ...reveal,
+      if (q.isNotEmpty) ...matchingIds,
+    };
     final now = DateTime.now();
     final active = <ThreadMeta>[];
     final today = <ThreadMeta>[];
     final earlier = <ThreadMeta>[];
     for (final t in filtered) {
-      if (running.contains(t.id)) {
+      if (activeParents.contains(t.id)) {
         active.add(t);
       } else if (_isSameDay(t.updatedAt, now)) {
         today.add(t);
@@ -6572,6 +6654,29 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
             if (t.id != _threadId) _openThread(t.id, t.cwd);
           },
         );
+        Widget hierarchyRow(
+          ({ThreadMeta item, int depth}) row, {
+          bool showProject = false,
+        }) {
+          final t = row.item;
+          return SessionTreeRow(
+            id: t.id,
+            depth: row.depth,
+            childCount: tree.children[t.id]?.length ?? 0,
+            childSession: t.parentThreadId != null,
+            guardian: t.isGuardian,
+            expanded: expandedParents.contains(t.id),
+            onToggle: () => setState(() {
+              if (!_expandedSessionParents.remove(t.id)) {
+                _expandedSessionParents.add(t.id);
+              }
+            }),
+            child: _activityView
+                ? activityTile(t)
+                : tile(t, showProject: showProject),
+          );
+        }
+
         // Row BUILDERS, not built rows. The activity view's tiles each read a
         // thread summary (a full `thread/read` server-side) while building, so a
         // pre-built list would fire one per conversation the moment the view is
@@ -6590,11 +6695,12 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
             // Whichever view is on, one list means one row shape — an Active
             // group in compact rows above summarized ones would read as two
             // lists stapled together.
-            items.map(
-              (t) => _activityView
-                  ? () => activityTile(t)
-                  : () => tile(t, showProject: showProject),
-            ),
+            items
+                .expand((t) => tree.visible(t, expandedParents))
+                .map(
+                  (row) =>
+                      () => hierarchyRow(row, showProject: showProject),
+                ),
           );
         }
 
@@ -6619,7 +6725,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           final searching = q.isNotEmpty;
           for (final p in _byProject(filtered)) {
             final idle = p.threads
-                .where((t) => !running.contains(t.id))
+                .where((t) => !activeParents.contains(t.id))
                 .toList();
             rows.add(
               () => _projectSectionLabel(
@@ -6640,15 +6746,20 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
             // sidebar would show no selection at all, and the user loses where
             // they are. It's the newest rows that are worth previewing, so keep
             // them and append the open one rather than reordering.
-            if (!expanded && !shown.any((t) => t.id == _threadId)) {
-              final open = idle.where((t) => t.id == _threadId);
+            if (!expanded &&
+                !shown.any((t) => t.id == _threadId || reveal.contains(t.id))) {
+              final open = idle.where(
+                (t) => t.id == _threadId || reveal.contains(t.id),
+              );
               if (open.isNotEmpty) shown = [...shown, open.first];
             }
             rows.addAll(
-              shown.map(
-                (t) =>
-                    () => tile(t, showProject: false),
-              ),
+              shown
+                  .expand((t) => tree.visible(t, expandedParents))
+                  .map(
+                    (row) =>
+                        () => hierarchyRow(row),
+                  ),
             );
             final hidden = idle.length - shown.length;
             if (!searching && (hidden > 0 || expanded)) {

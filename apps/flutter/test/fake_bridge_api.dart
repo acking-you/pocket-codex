@@ -538,6 +538,17 @@ class FakeBridgeApi implements BridgeApi {
   Future<void>? threadListGate;
 
   @override
+  Future<ThreadMeta?> appThreadMetadata(
+    String serviceKey,
+    String threadId,
+  ) async {
+    for (final thread in appThreads) {
+      if (thread.id == threadId) return thread;
+    }
+    return null;
+  }
+
+  @override
   Future<List<ThreadMeta>> appThreadList(String serviceKey) async {
     if (threadListGate != null) await threadListGate;
     if (disconnectOnThreadList) {

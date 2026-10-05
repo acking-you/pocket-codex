@@ -3,6 +3,10 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
+import 'app_session/activity_cards.dart';
+import 'app_session/approval_review.dart';
+import 'app_session/approval_review_card.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/app_modes.dart';
@@ -45,6 +49,8 @@ class LocalSessionViewScreen extends ConsumerStatefulWidget {
     this.cwd,
     this.preview,
     this.serviceKey,
+    this.guardian = false,
+    this.parentThreadId,
   });
 
   /// The session/thread to view.
@@ -60,6 +66,8 @@ class LocalSessionViewScreen extends ConsumerStatefulWidget {
   /// The app-server key of the host that owns this session, when viewing a
   /// (possibly remote) host over its meta tunnel; null for the local machine.
   final String? serviceKey;
+  final bool guardian;
+  final String? parentThreadId;
 
   @override
   ConsumerState<LocalSessionViewScreen> createState() =>
@@ -221,7 +229,7 @@ class _LocalSessionViewState extends ConsumerState<LocalSessionViewScreen> {
 
   Future<void> _resume() async {
     final live = _live;
-    if (live == null || !live.allowsResume) return;
+    if (widget.guardian || live == null || !live.allowsResume) return;
     // Pause polling while the takeover runs so a mid-flight re-probe can't race
     // the eviction; resumeLocalSession navigates away on success.
     _poll?.cancel();
@@ -267,6 +275,21 @@ class _LocalSessionViewState extends ConsumerState<LocalSessionViewScreen> {
           route: '/sessions',
         ),
         actions: [
+          if (widget.parentThreadId case final parent?)
+            IconButton(
+              tooltip: l10n.parentSession,
+              icon: const Icon(Icons.subdirectory_arrow_left),
+              onPressed: () => context.push(
+                Uri(
+                  path: '/sessions/view',
+                  queryParameters: {
+                    'tid': parent,
+                    if (widget.serviceKey != null) 'svc': widget.serviceKey!,
+                    if (widget.cwd != null) 'cwd': widget.cwd!,
+                  },
+                ).toString(),
+              ),
+            ),
           IconButton(
             key: const Key('local-view-refresh'),
             icon: const Icon(Icons.refresh),
@@ -385,7 +408,7 @@ class _LocalSessionViewState extends ConsumerState<LocalSessionViewScreen> {
       top: false,
       child: Padding(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-        child: live.allowsResume
+        child: live.allowsResume && !widget.guardian
             ? FilledButton.icon(
                 key: const Key('view-resume'),
                 onPressed: _resume,
@@ -444,6 +467,29 @@ class _TranscriptRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    if (item.itemType == 'autoApprovalReview') {
+      return activityRow(
+        TranscriptItem(
+          id: item.id,
+          type: item.itemType,
+          title: item.title,
+          text: item.text,
+        ),
+      );
+    }
+    final request = item.itemType == 'userMessage'
+        ? ApprovalReviewRequest.parse(item.text)
+        : null;
+    final result = item.itemType == 'agentMessage'
+        ? ApprovalReviewResult.parse(item.text)
+        : null;
+    if (request != null || result != null) {
+      return ApprovalReviewCard(
+        raw: item.text,
+        request: request,
+        result: result,
+      );
+    }
     switch (item.itemType) {
       case 'userMessage' when parseRealtimeDelegation(item.text) != null:
         // A Live voice handoff: spoken turns, not a typed message.

@@ -4,6 +4,8 @@ import 'package:go_router/go_router.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/attachment_refs.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
+import 'package:pocket_codex/src/session_tree.dart';
+import 'package:pocket_codex/src/widgets/session_tree_row.dart';
 import 'package:pocket_codex/src/desktop_theme.dart';
 import 'package:pocket_codex/src/error_format.dart';
 import 'package:pocket_codex/src/fonts.dart';
@@ -91,6 +93,7 @@ class _LocalSessionsState extends ConsumerState<LocalSessionsScreen> {
   String? _error;
   List<LocalSession> _sessions = const [];
   String _query = '';
+  final Set<String> _expandedParents = {};
   _SessionViewFilter _filter = _SessionViewFilter.all;
 
   bool get _localUnavailable => !widget.source.isRemote && !isDesktop;
@@ -129,6 +132,7 @@ class _LocalSessionsState extends ConsumerState<LocalSessionsScreen> {
   }
 
   Future<void> _onResume(LocalSession session) async {
+    if (session.isGuardian) return;
     // A finished-but-held session needs the holder-listing confirm; pre-fetch
     // the current holders so the dialog can name them.
     var holders = const <Holder>[];
@@ -315,13 +319,32 @@ class _LocalSessionsState extends ConsumerState<LocalSessionsScreen> {
       _SessionViewFilter.takeover => session.requiresTakeover,
     };
 
-    final filtered = _sessions
+    final matched = _sessions
         .where(
           (session) =>
               (q.isEmpty || matches(session)) && matchesFilter(session),
         )
         .toList();
 
+    final allTree = SessionTree(
+      _sessions,
+      (LocalSession s) => s.threadId,
+      (s) => s.parentThreadId,
+    );
+    final included = allTree.withAncestors(matched.map((s) => s.threadId));
+    final tree = SessionTree(
+      _sessions.where((s) => included.contains(s.threadId)),
+      (LocalSession s) => s.threadId,
+      (s) => s.parentThreadId,
+    );
+    final filtered = tree.roots;
+    final expanded = {
+      ..._expandedParents,
+      if (q.isNotEmpty || _filter != _SessionViewFilter.all) ...included,
+    };
+    final activeParents = tree.withAncestors(
+      _sessions.where((s) => s.safety == 'ownedRunning').map((s) => s.threadId),
+    );
     // Group by activity time, mirroring the conversation list: actively-running
     // first, then today, then earlier. The source list is already sorted
     // newest-first (scan_sessions orders by Reverse(updated_at)).
@@ -329,7 +352,7 @@ class _LocalSessionsState extends ConsumerState<LocalSessionsScreen> {
     final today = <LocalSession>[];
     final earlier = <LocalSession>[];
     for (final s in filtered) {
-      if (s.safety == 'ownedRunning') {
+      if (activeParents.contains(s.threadId)) {
         active.add(s);
       } else if (isSameDay(s.updatedAt, now)) {
         today.add(s);
@@ -343,14 +366,28 @@ class _LocalSessionsState extends ConsumerState<LocalSessionsScreen> {
       if (items.isEmpty) return;
       rows.add(_sectionLabel(label));
       rows.addAll(
-        items.map(
-          (s) => _SessionRow(
-            session: s,
-            now: now,
-            onResume: _onResume,
-            serviceKey: widget.source.serviceKey,
-          ),
-        ),
+        items.expand((s) => tree.visible(s, expanded)).map((row) {
+          final s = row.item;
+          return SessionTreeRow(
+            id: s.threadId,
+            depth: row.depth,
+            childCount: tree.children[s.threadId]?.length ?? 0,
+            expanded: expanded.contains(s.threadId),
+            childSession: s.parentThreadId != null,
+            guardian: s.isGuardian,
+            onToggle: () => setState(() {
+              if (!_expandedParents.remove(s.threadId)) {
+                _expandedParents.add(s.threadId);
+              }
+            }),
+            child: _SessionRow(
+              session: s,
+              now: now,
+              onResume: _onResume,
+              serviceKey: widget.source.serviceKey,
+            ),
+          );
+        }),
       );
     }
 
@@ -514,6 +551,9 @@ class _SessionRow extends StatelessWidget {
           onTap: () {
             final q = <String>[
               'tid=${Uri.encodeComponent(session.threadId)}',
+              if (session.isGuardian) 'guardian=true',
+              if (session.parentThreadId != null)
+                'parent=${Uri.encodeComponent(session.parentThreadId!)}',
               if (session.cwd != null && session.cwd!.trim().isNotEmpty)
                 'cwd=${Uri.encodeComponent(session.cwd!.trim())}',
               if (preview.isNotEmpty) 'preview=${Uri.encodeComponent(preview)}',
@@ -561,7 +601,7 @@ class _SessionRow extends StatelessWidget {
                 ),
                 const SizedBox(width: 8),
                 _safetyChip(context, l10n),
-                if (session.allowsResume) ...[
+                if (session.allowsResume && !session.isGuardian) ...[
                   const SizedBox(width: 6),
                   TextButton(
                     key: Key('resume-${session.threadId}'),

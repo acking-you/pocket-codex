@@ -115,10 +115,11 @@ fn thread_turn_page_inner(
     let stamp = turn_stamp(&state.turn_stamps, turn_id);
     let items: Vec<_> = entries
         .iter()
-        .filter_map(|entry| {
+        .flat_map(|entry| {
             entry
                 .get("item")
-                .and_then(|item| parse_turn_item(item, &stamp))
+                .map(|item| parse_turn_items(item, &stamp))
+                .unwrap_or_default()
         })
         .collect();
     let next = response

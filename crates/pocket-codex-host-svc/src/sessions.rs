@@ -47,6 +47,12 @@ pub struct LocalSession {
     pub preview: String,
     /// Originating client (`cli` / `vscode` / …), when recorded.
     pub source: Option<String>,
+    /// Parent thread, when this session is a spawned child.
+    #[serde(default)]
+    pub parent_thread_id: Option<String>,
+    /// Persisted thread classification.
+    #[serde(default)]
+    pub thread_source: Option<String>,
     /// Last-modified time of the rollout, unix seconds.
     pub updated_at: i64,
     /// Most-recent-turn state tag (`empty`/`completed`/`aborted`/`incomplete`).
@@ -145,17 +151,20 @@ pub fn list() -> Result<Vec<LocalSession>> {
     for info in sessions {
         let held_open = held.contains(&info.rollout_path);
         let safety = takeover::classify(&info.turn_state, held_open);
+        let guardian = info.thread_source.as_deref() == Some("guardian_review");
         out.push(LocalSession {
             thread_id: info.thread_id,
             cwd: info.cwd,
             preview: info.preview,
             source: info.source,
+            parent_thread_id: info.parent_thread_id,
+            thread_source: info.thread_source,
             updated_at: info.updated_at,
             turn_state: info.turn_state.tag().to_string(),
             held_open,
             safety: safety.tag().to_string(),
-            allows_resume: safety.allows_resume(),
-            requires_takeover: safety.requires_takeover(),
+            allows_resume: !guardian && safety.allows_resume(),
+            requires_takeover: !guardian && safety.requires_takeover(),
         });
     }
     Ok(out)
@@ -184,6 +193,8 @@ fn running_at(paths: &[PathBuf]) -> Vec<LocalSession> {
             cwd: info.cwd,
             preview: info.preview,
             source: info.source,
+            parent_thread_id: info.parent_thread_id,
+            thread_source: info.thread_source,
             updated_at: info.updated_at,
             turn_state: "incomplete".into(),
             held_open: true,
@@ -200,6 +211,8 @@ fn running_at(paths: &[PathBuf]) -> Vec<LocalSession> {
 /// server we resume into + this process) from the listed takeover targets.
 pub fn liveness(thread_id: &str, protected: &[u32]) -> Result<SessionLiveness> {
     let path = rollout_path(thread_id)?;
+    let guardian =
+        rollout::read_session_info(&path)?.thread_source.as_deref() == Some("guardian_review");
     let live = takeover::inspect(&path).map_err(|e| anyhow!("inspecting rollout: {e}"))?;
     let holders = live
         .holders
@@ -212,8 +225,8 @@ pub fn liveness(thread_id: &str, protected: &[u32]) -> Result<SessionLiveness> {
         turn_state: live.turn_state.tag().to_string(),
         held_open: live.held_open,
         safety: live.safety.tag().to_string(),
-        allows_resume: live.safety.allows_resume(),
-        requires_takeover: live.safety.requires_takeover(),
+        allows_resume: !guardian && live.safety.allows_resume(),
+        requires_takeover: !guardian && live.safety.requires_takeover(),
         holders,
     })
 }

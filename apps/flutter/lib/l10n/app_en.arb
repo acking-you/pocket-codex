@@ -799,5 +799,20 @@
   "voiceHistoryMore": "Load more",
   "voiceErrorDetails": "Error details",
   "voiceNewSession": "New voice conversation",
-  "restoringSessionSettings": "Restoring session settings…"
+  "restoringSessionSettings": "Restoring session settings…",
+  "reviewInProgress": "Model review in progress",
+  "reviewTimedOut": "Review timed out",
+  "reviewAborted": "Review aborted",
+  "guardianSession": "Model approval",
+  "childSession": "Child session",
+  "childSessions": "Child sessions ({count})",
+  "guardianReadOnly": "Model approval session · Read only",
+  "parentSession": "Open parent session",
+  "@childSessions": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  }
 }

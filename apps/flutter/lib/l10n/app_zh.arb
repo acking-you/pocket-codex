@@ -697,5 +697,20 @@
   "voiceHistoryMore": "加载后续记录",
   "voiceErrorDetails": "查看错误详情",
   "voiceNewSession": "新建语音会话",
-  "restoringSessionSettings": "正在恢复会话设置…"
+  "restoringSessionSettings": "正在恢复会话设置…",
+  "reviewInProgress": "模型审核中",
+  "reviewTimedOut": "审核超时",
+  "reviewAborted": "审核已中止",
+  "guardianSession": "模型审批",
+  "childSession": "子会话",
+  "childSessions": "子会话（{count}）",
+  "guardianReadOnly": "模型审批会话 · 只读",
+  "parentSession": "打开父会话",
+  "@childSessions": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  }
 }

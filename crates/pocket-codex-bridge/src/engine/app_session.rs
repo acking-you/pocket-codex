@@ -70,6 +70,9 @@ pub struct ThreadMeta {
     /// App-owned classification persisted by Codex, independent of the title.
     #[serde(default)]
     pub thread_source: Option<String>,
+    /// Parent thread, when this is a spawned child.
+    #[serde(default)]
+    pub parent_thread_id: Option<String>,
     /// Working directory (the "project" the thread controls).
     pub cwd: String,
     /// Unix seconds of last update.
@@ -376,7 +379,10 @@ fn establish(service_key: String, local_addr: &str) -> Result<()> {
                     .is_none_or(|at| at.elapsed() >= Duration::from_secs(1));
                 if due
                     || replaces_history
-                    || matches!(inbound.method.as_str(), "turn/completed" | "turn/failed")
+                    || matches!(
+                        inbound.method.as_str(),
+                        "turn/completed" | "turn/failed" | "item/autoApprovalReview/completed"
+                    )
                 {
                     if checkpoints.len() >= 128 {
                         checkpoints.clear();
@@ -440,6 +446,37 @@ fn establish(service_key: String, local_addr: &str) -> Result<()> {
 fn plan_item_id(params: &Value) -> String {
     let turn_id = params.get("turnId").and_then(Value::as_str).unwrap_or("");
     format!("plan-{turn_id}")
+}
+
+fn approval_review_item(params: &Value) -> Option<ThreadItem> {
+    let id = params
+        .get("reviewId")?
+        .as_str()
+        .filter(|id| !id.is_empty())?;
+    let review = params.get("review")?.as_object()?;
+    Some(ThreadItem {
+        id: format!("auto-review:{id}"),
+        item_type: "autoApprovalReview".into(),
+        title: review
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .into(),
+        text: params.to_string(),
+        questions_json: None,
+        images: Vec::new(),
+        turn_id: params
+            .get("turnId")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .into(),
+        turn_completed_at: None,
+        turn_duration_ms: None,
+    })
+}
+
+fn is_approval_review(method: &str) -> bool {
+    matches!(method, "item/autoApprovalReview/started" | "item/autoApprovalReview/completed")
 }
 
 /// Retain streamed text and full item snapshots by id for resume and durable
@@ -510,7 +547,10 @@ fn buffer_item(transcript: &Mutex<LiveTranscript>, inbound: &Inbound) {
         }
         return;
     }
-    let mut parsed = if inbound.method == "turn/plan/updated" {
+    let mut parsed = if is_approval_review(&inbound.method) {
+        let Some(item) = approval_review_item(params) else { return };
+        item
+    } else if inbound.method == "turn/plan/updated" {
         ThreadItem {
             id: plan_item_id(params),
             item_type: "plan".to_string(),
@@ -616,11 +656,11 @@ pub fn thread_older_page(service_key: &str, thread_id: &str) -> Result<OlderPage
             .and_then(Value::as_str)
             .unwrap_or_default();
         let stamp = turn_stamp(&state.turn_stamps, turn_id);
-        if let Some(parsed) = parse_turn_item(item, &stamp) {
+        if parse_turn_item(item, &stamp).is_some() {
             if !state.loaded_turns.iter().any(|id| id == turn_id) {
                 state.loaded_turns.insert(0, turn_id.to_string());
             }
-            items.push(parsed);
+            items.extend(parse_turn_items(item, &stamp));
         }
     }
     let next = page
@@ -668,6 +708,7 @@ pub fn thread_turn_items(
         .map_err(|_| anyhow!("history request lock poisoned"))?;
     let mut state = ensure_pagination(service_key, thread_id);
     let mut newest_first = Vec::new();
+    let mut seen_items = HashSet::new();
     let mut cursor: Option<String> = None;
     let mut seen = HashSet::new();
     let stamp = turn_stamp(&state.turn_stamps, turn_id);
@@ -692,8 +733,13 @@ pub fn thread_turn_items(
             break;
         }
         for entry in &entries {
-            if let Some(parsed) = entry.get("item").and_then(|i| parse_turn_item(i, &stamp)) {
-                newest_first.push(parsed);
+            if let Some(item) = entry.get("item") {
+                newest_first.extend(
+                    parse_turn_items(item, &stamp)
+                        .into_iter()
+                        .rev()
+                        .filter(|item| seen_items.insert(item.id.clone())),
+                );
             }
         }
         let next = page
@@ -1150,6 +1196,10 @@ fn thread_list_remote(service_key: &str) -> Result<Vec<ThreadMeta>> {
         let mut params = serde_json::Map::new();
         params.insert("limit".into(), json!(PAGE_LIMIT));
         params.insert("sortKey".into(), json!("updated_at"));
+        params.insert(
+            "sourceKinds".into(),
+            json!(["cli", "vscode", "appServer", "exec", "subAgent", "unknown"]),
+        );
         if let Some(c) = &cursor {
             params.insert("cursor".into(), json!(c));
         }
@@ -1174,15 +1224,25 @@ fn thread_list_remote(service_key: &str) -> Result<Vec<ThreadMeta>> {
     Ok(out)
 }
 
+/// Inspect a thread's classification and parent without attaching a writer.
+pub fn thread_metadata(service_key: &str, thread_id: &str) -> Result<ThreadMeta> {
+    let client = client_for(service_key)?;
+    let response = runtime::runtime().block_on(
+        client.request("thread/read", json!({"threadId": thread_id, "includeTurns": false})),
+    )?;
+    response
+        .get("thread")
+        .and_then(parse_thread_meta)
+        .context("missing thread metadata")
+}
+
 /// Parse one `thread/list` entry into [`ThreadMeta`]; skips entries with no id.
 fn parse_thread_meta(t: &Value) -> Option<ThreadMeta> {
     let id = t.get("id")?.as_str()?.to_string();
     Some(ThreadMeta {
         id,
-        thread_source: t
-            .get("threadSource")
-            .and_then(Value::as_str)
-            .map(str::to_string),
+        thread_source: pocket_codex_codex::rollout::thread_source(t),
+        parent_thread_id: pocket_codex_codex::rollout::parent_thread_id(t),
         preview: t
             .get("preview")
             .and_then(Value::as_str)
@@ -1717,9 +1777,7 @@ fn flatten_turns(turns: &[Value]) -> Vec<ThreadItem> {
         };
         let stamp = TurnStamp::of(turn);
         for item in turn_items {
-            if let Some(parsed) = parse_turn_item(item, &stamp) {
-                items.push(parsed);
-            }
+            items.extend(parse_turn_items(item, &stamp));
         }
     }
     items
@@ -1897,7 +1955,7 @@ fn load_paginated_window(
             if parsed.item_type == "userMessage" && !loaded_turns.iter().any(|id| id == turn_id) {
                 loaded_turns.push(turn_id.to_string());
             }
-            items.push(parsed);
+            items.extend(parse_turn_items(item, &stamp));
         }
     }
 
@@ -2155,7 +2213,13 @@ fn thread_read_inner(
             .collect();
         for buffered in buffered_items(service_key, thread_id) {
             if let Some(index) = positions.get(&buffered.id) {
-                items[*index].questions_json = buffered.questions_json;
+                if buffered.item_type == "autoApprovalReview"
+                    && (items[*index].title == "inProgress" || buffered.title != "inProgress")
+                {
+                    items[*index] = buffered;
+                } else {
+                    items[*index].questions_json = buffered.questions_json;
+                }
             } else {
                 items.push(buffered);
             }
@@ -2920,6 +2984,24 @@ pub fn turn_interrupt(service_key: &str, thread_id: &str, turn_id: Option<String
 /// Map an inbound server message to a flattened [`AppEvent`].
 fn map_event(inbound: Inbound) -> AppEvent {
     let mut params = inbound.params.unwrap_or(Value::Null);
+    if is_approval_review(&inbound.method) {
+        if let Some(item) = approval_review_item(&params) {
+            return AppEvent {
+                kind: inbound.method,
+                thread_id: params
+                    .get("threadId")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                item_id: Some(item.id),
+                item_type: Some(item.item_type),
+                title: Some(item.title),
+                text: Some(item.text),
+                images: Vec::new(),
+                request_id: None,
+                raw: params.to_string(),
+            };
+        }
+    }
     // v2 streams the evolving plan via a top-level notification (`params.plan`),
     // not as a thread item, so the generic item path below never sees it.
     // Synthesize a per-turn singleton `plan` item (stable id keyed on the turn)
@@ -3098,6 +3180,25 @@ impl TurnStamp {
             duration_ms: turn.get("durationMs").and_then(Value::as_i64),
         }
     }
+}
+
+fn parse_turn_items(item: &Value, turn: &TurnStamp) -> Vec<ThreadItem> {
+    let mut reviews = item
+        .get("autoApprovalReviews")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(approval_review_item)
+        .filter(|review| review.turn_id == turn.id)
+        .collect::<Vec<_>>();
+    if let Some(parsed) = parse_turn_item(item, turn) {
+        if parsed.item_type == "userMessage" {
+            reviews.insert(0, parsed);
+        } else {
+            reviews.push(parsed);
+        }
+    }
+    reviews
 }
 
 fn parse_turn_item(item: &Value, turn: &TurnStamp) -> Option<ThreadItem> {
@@ -4170,7 +4271,7 @@ pub(super) fn parse_prefetched_items(response: &Value) -> Vec<ThreadItem> {
         .into_iter()
         .flatten()
         .rev()
-        .filter_map(|entry| {
+        .flat_map(|entry| {
             let stamp = turn_stamp(
                 &stamps,
                 entry
@@ -4178,7 +4279,10 @@ pub(super) fn parse_prefetched_items(response: &Value) -> Vec<ThreadItem> {
                     .and_then(Value::as_str)
                     .unwrap_or_default(),
             );
-            parse_turn_item(entry.get("item")?, &stamp)
+            entry
+                .get("item")
+                .map(|item| parse_turn_items(item, &stamp))
+                .unwrap_or_default()
         })
         .collect()
 }

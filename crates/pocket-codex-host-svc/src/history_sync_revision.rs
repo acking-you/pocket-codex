@@ -1,6 +1,7 @@
 //! Persist small append-scan checkpoints, never a second transcript copy.
 
 use std::{
+    collections::{BTreeMap, HashSet},
     fs::{self, File, Metadata, OpenOptions},
     io::{BufRead, BufReader, Read, Seek, SeekFrom, Write},
     path::Path,
@@ -12,11 +13,81 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Default, Serialize, Deserialize)]
 struct Index {
+    #[serde(default)]
+    version: u8,
+    #[serde(default)]
+    reviews: BTreeMap<String, ReviewOffset>,
     identity: String,
     offset: u64,
     length: u64,
     modified: String,
     generation: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct ReviewOffset {
+    turn: String,
+    target: Option<String>,
+    offset: u64,
+    length: u64,
+}
+
+/// Add assessments only to their explicit target item (or the turn's user row
+/// for reviews without an available target). Page cursors and document counts
+/// stay intact; stable review ids also deduplicate overlapping page anchors.
+pub(super) fn attach_reviews(
+    path: &Path,
+    directory: &Path,
+    entries: &mut [serde_json::Value],
+) -> Result<()> {
+    fs::create_dir_all(directory)?;
+    let lock = private_file(&directory.join("index.lock"), false)?;
+    lock.lock()?;
+    let file = File::open(path)?;
+    let stat = file.metadata()?;
+    let index = scan_snapshot_index(path, directory, file, stat)?;
+    let mut file = File::open(path)?;
+    let targets: HashSet<_> = entries
+        .iter()
+        .filter_map(|entry| {
+            Some((entry["turnId"].as_str()?.to_owned(), entry["item"]["id"].as_str()?.to_owned()))
+        })
+        .collect();
+    let mut attached = HashSet::new();
+    for entry in entries {
+        let Some(turn) = entry["turnId"].as_str() else { continue };
+        let Some(id) = entry["item"]["id"].as_str() else { continue };
+        let is_user = entry["item"]["type"] == "userMessage";
+        let mut reviews = Vec::new();
+        let mut offsets = index
+            .reviews
+            .values()
+            .filter(|r| {
+                r.turn == turn
+                    && r.target.as_deref().map_or(is_user, |target| {
+                        target == id
+                            || (is_user && !targets.contains(&(turn.to_owned(), target.to_owned())))
+                    })
+            })
+            .collect::<Vec<_>>();
+        offsets.sort_by_key(|r| r.offset);
+        for review in offsets {
+            if !attached.insert(review.offset) {
+                continue;
+            }
+            ensure!(review.length <= 8 * 1024 * 1024, "approval review exceeds history size limit");
+            file.seek(SeekFrom::Start(review.offset))?;
+            let value: serde_json::Value =
+                serde_json::from_reader(Read::by_ref(&mut file).take(review.length))?;
+            if let Some(review) = pocket_codex_codex::rollout::guardian_review(&value["payload"]) {
+                reviews.push(review);
+            }
+        }
+        if !reviews.is_empty() {
+            entry["item"]["autoApprovalReviews"] = serde_json::json!(reviews);
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn generation(session: &str) -> Result<String> {
@@ -37,6 +108,10 @@ pub(super) fn scan(path: &Path, directory: &Path) -> Result<String> {
 // The caller holds index.lock. Stat and the file handle describe the prefix
 // this scan may consume, even if the writer appends before parsing begins.
 fn scan_snapshot(path: &Path, directory: &Path, file: File, stat: Metadata) -> Result<String> {
+    Ok(scan_snapshot_index(path, directory, file, stat)?.generation)
+}
+
+fn scan_snapshot_index(path: &Path, directory: &Path, file: File, stat: Metadata) -> Result<Index> {
     let key = digest_bytes(path.as_os_str().as_encoded_bytes());
     let index_path = directory.join(format!("{key}.json"));
     let mut index: Index = fs::read(&index_path)
@@ -46,14 +121,20 @@ fn scan_snapshot(path: &Path, directory: &Path, file: File, stat: Metadata) -> R
     let mut reader = BufReader::new(file);
     let identity = source_identity(&mut reader, &stat)?;
     let modified = format!("{:?}", stat.modified().ok());
-    if index.identity == identity && index.length == stat.len() && index.modified == modified {
-        return Ok(index.generation);
+    if index.version == 1
+        && index.identity == identity
+        && index.length == stat.len()
+        && index.modified == modified
+    {
+        return Ok(index);
     }
-    if index.identity != identity
+    if index.version != 1
+        || index.identity != identity
         || stat.len() < index.length
         || (stat.len() == index.length && index.modified != modified)
     {
         index = Index {
+            version: 1,
             identity: identity.clone(),
             generation: digest_bytes(format!("{identity}:{modified}").as_bytes()),
             ..Index::default()
@@ -74,7 +155,24 @@ fn scan_snapshot(path: &Path, directory: &Path, file: File, stat: Metadata) -> R
             Err(error) if error.is_eof() => break,
             Err(error) => return Err(error.into()),
         };
+        let offset = index.offset;
         index.offset = start + records.byte_offset() as u64;
+        if marker.kind == "event_msg" {
+            if let Some(payload) = &marker.payload {
+                if let Some(id) = payload
+                    .id
+                    .as_ref()
+                    .filter(|id| payload.kind == "guardian_assessment" && !id.is_empty())
+                {
+                    index.reviews.insert(id.clone(), ReviewOffset {
+                        turn: payload.turn_id.clone().unwrap_or_default(),
+                        target: payload.target_item_id.clone(),
+                        offset,
+                        length: index.offset - offset,
+                    });
+                }
+            }
+        }
         if marker.destructive() {
             index.generation = digest_bytes(
                 format!("{}:{}:{}", index.generation, index.offset, marker.kind).as_bytes(),
@@ -109,7 +207,7 @@ fn scan_snapshot(path: &Path, directory: &Path, file: File, stat: Metadata) -> R
             let _ = fs::remove_file(entry.path());
         }
     }
-    Ok(index.generation)
+    Ok(index)
 }
 
 fn source_identity(reader: &mut BufReader<File>, stat: &Metadata) -> Result<String> {
@@ -141,6 +239,12 @@ struct RevisionMarker {
 
 #[derive(Deserialize)]
 struct RevisionKind {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    turn_id: Option<String>,
+    #[serde(default)]
+    target_item_id: Option<String>,
     #[serde(rename = "type", default)]
     kind: String,
 }
@@ -173,6 +277,71 @@ fn private_file(path: &Path, truncate: bool) -> Result<File> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn guardian_history_indexes_completion_and_scopes_reviews_to_items() -> Result<()> {
+        use serde_json::json;
+        let temp = tempfile::tempdir()?;
+        let path = temp.path().join("session.jsonl");
+        let directory = temp.path().join("index");
+        let event = |id: &str, target: Option<&str>, status: &str| {
+            json!({"type":"event_msg", "payload":{
+            "type":"guardian_assessment", "id":id, "turn_id":"turn", "target_item_id":target,
+            "status":status, "rationale":"Authorized", "action":{"type":"command", "command":"true"}}})
+        };
+        fs::write(
+            &path,
+            format!(
+                "{}\n{}\n{}\n{}\n",
+                json!({"type":"session_meta","payload":{"id":"parent"}}),
+                json!({"type":"response_item", "payload":{"type":"message", "id":null, "turn_id":null}}),
+                event("command-review", Some("cmd"), "in_progress"),
+                event("network-review", None, "approved")
+            ),
+        )?;
+        let page = || {
+            vec![
+                json!({"turnId":"turn", "item":{"type":"commandExecution", "id":"cmd"}}),
+                json!({"turnId":"turn", "item":{"type":"userMessage", "id":"user"}}),
+                json!({"turnId":"other", "item":{"type":"commandExecution", "id":"cmd"}}),
+                json!({"turnId":"turn", "item":{"type":"userMessage", "id":"supplement"}}),
+            ]
+        };
+        let mut first = page();
+        attach_reviews(&path, &directory, &mut first)?;
+        assert_eq!(first[0]["item"]["autoApprovalReviews"][0]["review"]["status"], "inProgress");
+        assert_eq!(first[1]["item"]["autoApprovalReviews"][0]["reviewId"], "network-review");
+        assert!(first[2]["item"].get("autoApprovalReviews").is_none());
+        assert!(first[3]["item"].get("autoApprovalReviews").is_none());
+        let mut missing_target = vec![page()[1].clone()];
+        attach_reviews(&path, &directory, &mut missing_target)?;
+        assert_eq!(
+            missing_target[0]["item"]["autoApprovalReviews"]
+                .as_array()
+                .expect("reviews")
+                .len(),
+            2
+        );
+        let mut writer = OpenOptions::new().append(true).open(&path)?;
+        writeln!(writer, "{}", event("command-review", Some("cmd"), "denied"))?;
+        let mut second = page();
+        attach_reviews(&path, &directory, &mut second)?;
+        let reviews = second[0]["item"]["autoApprovalReviews"]
+            .as_array()
+            .expect("reviews");
+        assert_eq!(reviews.len(), 1);
+        assert_eq!(reviews[0]["review"]["status"], "denied");
+        fs::write(
+            &path,
+            format!("{}\n", json!({"type":"session_meta","payload":{"id":"replacement"}})),
+        )?;
+        let mut replaced = page();
+        attach_reviews(&path, &directory, &mut replaced)?;
+        assert!(replaced
+            .iter()
+            .all(|entry| entry["item"].get("autoApprovalReviews").is_none()));
+        Ok(())
+    }
 
     fn scan_after_change(
         path: &Path,

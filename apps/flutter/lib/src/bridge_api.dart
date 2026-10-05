@@ -406,6 +406,7 @@ class ThreadMeta {
     required this.updatedAt,
     this.name,
     this.threadSource,
+    this.parentThreadId,
   });
 
   /// Thread id.
@@ -419,6 +420,11 @@ class ThreadMeta {
 
   /// Persisted app-owned classification, independent of the editable title.
   final String? threadSource;
+
+  /// Explicit spawning parent, independent of project and session titles.
+  final String? parentThreadId;
+
+  bool get isGuardian => threadSource == 'guardian_review';
 
   /// True for conversations created through the live voice entry point.
   bool get isVoice => threadSource == 'pocket-codex-voice';
@@ -443,6 +449,7 @@ class ThreadMeta {
     preview: preview,
     name: name,
     threadSource: threadSource,
+    parentThreadId: parentThreadId,
     cwd: cwd,
     updatedAt: updatedAt,
   );
@@ -765,6 +772,8 @@ class LocalSession {
     this.cwd,
     required this.preview,
     this.source,
+    this.parentThreadId,
+    this.threadSource,
     required this.updatedAt,
     required this.turnState,
     required this.heldOpen,
@@ -784,6 +793,11 @@ class LocalSession {
 
   /// Originating client (`cli` / `vscode` / …), when recorded.
   final String? source;
+
+  /// Explicit spawning parent and persisted classification.
+  final String? parentThreadId;
+  final String? threadSource;
+  bool get isGuardian => threadSource == 'guardian_review';
 
   /// Last-modified time of the rollout, unix seconds.
   final int updatedAt;
@@ -1337,6 +1351,9 @@ abstract interface class BridgeApi {
 
   /// List threads known to the app-server.
   Future<List<ThreadMeta>> appThreadList(String serviceKey);
+
+  /// Inspect metadata before deciding whether a thread can be controlled.
+  Future<ThreadMeta?> appThreadMetadata(String serviceKey, String threadId);
 
   /// List the models the app-server offers.
   Future<List<ModelInfo>> appModelList(String serviceKey);

@@ -57,6 +57,26 @@ requires_openai_auth = false
     )?;
     write_turn(&mut file, "turn-one", &"a".repeat(1_000_000))?;
     file.sync_all()?;
+    let guardian_id = "2cdc7067-9830-423c-823c-5591bfd605f7";
+    let mut guardian = std::fs::File::create(
+        sessions.join(format!("rollout-2026-09-25T00-00-01-{guardian_id}.jsonl")),
+    )?;
+    writeln!(
+        guardian,
+        "{}",
+        line(
+            "session_meta",
+            json!({
+                "id": guardian_id, "session_id": id, "parent_thread_id": id,
+                "thread_source": "guardian_review", "source": {"subagent": {"other": "guardian"}},
+                "timestamp": "2026-09-25T00:00:01Z", "cwd": temporary.path(), "originator": "codex",
+                "cli_version": "0.0.0", "model_provider": "fixture", "history_mode": "legacy",
+                "selected_capability_roots": []
+            })
+        )
+    )?;
+    write_turn(&mut guardian, "review-turn", "Review fixture")?;
+    guardian.sync_all()?;
     let reserved = std::net::TcpListener::bind("127.0.0.1:0")?;
     let address = reserved.local_addr()?;
     drop(reserved);
@@ -85,6 +105,32 @@ requires_openai_auth = false
     controller
         .initialize("pocket-codex-isolated-history-test", true)
         .await?;
+    let metadata = controller
+        .request(
+            "thread/read",
+            json!({
+                "threadId": guardian_id, "includeTurns": false
+            }),
+        )
+        .await?;
+    ensure!(metadata["thread"]["parentThreadId"] == id, "reviewer parent was lost");
+    ensure!(
+        pocket_codex_codex::rollout::thread_source(&metadata["thread"]).as_deref()
+            == Some("guardian_review"),
+        "reviewer classification was lost: {}",
+        metadata["thread"]
+    );
+    let inventory = controller.request("thread/list", json!({
+        "limit": 100, "sourceKinds": ["cli", "vscode", "appServer", "exec", "subAgent", "unknown"]
+    })).await?;
+    ensure!(
+        inventory["data"]
+            .as_array()
+            .context("session inventory")?
+            .iter()
+            .any(|t| t["id"] == guardian_id),
+        "reviewer missing from explicitly requested subagent inventory"
+    );
     let query = WindowQuery {
         session: id.clone(),
         collection: "items".into(),
@@ -138,6 +184,18 @@ requires_openai_auth = false
             );
         }
         let retained = wire::apply(retained.as_ref(), &delta)?;
+        let reviews: Vec<_> = retained
+            .documents
+            .values()
+            .filter_map(|entry| entry["item"]["autoApprovalReviews"].as_array())
+            .flatten()
+            .collect();
+        ensure!(
+            reviews.iter().any(|r| r["reviewId"] == "review-turn-one"
+                && r["review"]["status"] == "approved"
+                && r["review"]["rationale"] == "Fixture authorization"),
+            "Guardian result was lost through native history or meta restart"
+        );
         std::fs::write(&cache_file, serde_json::to_vec(&retained)?)?;
         if restart == 1 {
             let mut file = std::fs::OpenOptions::new().append(true).open(&rollout)?;
@@ -199,6 +257,14 @@ fn write_turn(file: &mut std::fs::File, turn: &str, text: &str) -> Result<()> {
             json!({"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": text}]}),
         ),
         line("event_msg", json!({"type": "agent_message", "message": text})),
+        line(
+            "event_msg",
+            json!({"type":"guardian_assessment", "id":format!("review-{turn}"),
+            "turn_id":turn, "status":"approved", "risk_level":"low", "user_authorization":"high",
+            "rationale":"Fixture authorization", "decision_source":"agent",
+            "action":{"type":"network_access", "target":"example.com:443", "host":"example.com",
+                "protocol":"https", "port":443}}),
+        ),
         line(
             "event_msg",
             json!({"type": "task_complete", "turn_id": turn, "last_agent_message": text}),

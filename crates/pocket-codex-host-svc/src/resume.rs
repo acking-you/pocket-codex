@@ -61,6 +61,11 @@ pub async fn force_resume(app_ws_addr: SocketAddr, thread_id: &str) -> Result<Fo
         let path = rollout::rollout_path_for_thread(&tid)
             .map_err(|e| anyhow!("locating rollout: {e}"))?
             .ok_or_else(|| anyhow!("no rollout found for thread {tid}"))?;
+        if rollout::read_session_info(&path)?.thread_source.as_deref() == Some("guardian_review") {
+            return Err(anyhow!(
+                "Guardian approval sessions are read-only; open their parent session"
+            ));
+        }
         let live = takeover::inspect(&path).map_err(|e| anyhow!("inspecting rollout: {e}"))?;
         if matches!(live.safety, takeover::ResumeSafety::OwnedRunning) {
             return Err(anyhow!(

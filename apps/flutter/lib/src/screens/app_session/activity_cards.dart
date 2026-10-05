@@ -9,6 +9,8 @@
 library;
 
 import 'package:flutter/material.dart';
+import 'approval_review.dart';
+import 'approval_review_card.dart';
 import 'dart:math' as math;
 import 'package:flutter/services.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
@@ -54,6 +56,7 @@ final _planStepPattern = RegExp(r'^\s*-\s*\[(.)\]\s?(.*)$');
 /// other — a compaction shown as a bare tool row inside the fold is exactly how
 /// that went wrong once.
 Widget activityRow(TranscriptItem item) => switch (item.type) {
+  'autoApprovalReview' => _autoApprovalReview(item),
   'fileChange' => FileChangeCard(key: ValueKey(item.id), item: item),
   'plan' => PlanCard(key: ValueKey(item.id), item: item),
   'contextCompaction' => _CompactionNotice(key: ValueKey(item.id), item: item),
@@ -64,6 +67,18 @@ Widget activityRow(TranscriptItem item) => switch (item.type) {
   'agentMessage' => _PreambleProse(key: ValueKey(item.id), item: item),
   _ => ActivityCard(key: ValueKey(item.id), item: item),
 };
+
+Widget _autoApprovalReview(TranscriptItem item) {
+  final review = AutoApprovalReview.parse(item.text);
+  if (review == null) return ActivityCard(key: ValueKey(item.id), item: item);
+  return ApprovalReviewCard(
+    key: ValueKey(item.id),
+    raw: item.text,
+    request: review.request,
+    result: review.result,
+    status: review.status,
+  );
+}
 
 /// Agent prose inside a turn's fold: the narration before a batch of work.
 ///

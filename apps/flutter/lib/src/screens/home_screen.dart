@@ -390,6 +390,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     } catch (_) {
       // A failed list just means we open a new conversation.
     }
+    threads = threads
+        .where((t) => !t.isGuardian && t.parentThreadId == null)
+        .toList();
     final last = prefs.lastThreadByService[serviceKey];
     for (final t in threads) {
       if (t.id == last) return t;

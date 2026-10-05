@@ -1946,4 +1946,30 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get restoringSessionSettings => 'Restoring session settings…';
+
+  @override
+  String get reviewInProgress => 'Model review in progress';
+
+  @override
+  String get reviewTimedOut => 'Review timed out';
+
+  @override
+  String get reviewAborted => 'Review aborted';
+
+  @override
+  String get guardianSession => 'Model approval';
+
+  @override
+  String get childSession => 'Child session';
+
+  @override
+  String childSessions(int count) {
+    return 'Child sessions ($count)';
+  }
+
+  @override
+  String get guardianReadOnly => 'Model approval session · Read only';
+
+  @override
+  String get parentSession => 'Open parent session';
 }
