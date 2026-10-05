@@ -298,6 +298,15 @@ Stream<AppEventDto> appEvents({required String serviceKey}) =>
 Future<List<ThreadMetaDto>> appThreadList({required String serviceKey}) =>
     RustLib.instance.api.crateApiBridgeAppThreadList(serviceKey: serviceKey);
 
+/// Inspect one thread without resuming it or taking ownership.
+Future<ThreadMetaDto> appThreadMetadata({
+  required String serviceKey,
+  required String threadId,
+}) => RustLib.instance.api.crateApiBridgeAppThreadMetadata(
+  serviceKey: serviceKey,
+  threadId: threadId,
+);
+
 /// List the models the app-server offers.
 Future<List<ModelInfoDto>> appModelList({required String serviceKey}) =>
     RustLib.instance.api.crateApiBridgeAppModelList(serviceKey: serviceKey);
@@ -1676,6 +1685,12 @@ class LocalSessionDto {
   /// Originating client (`cli` / `vscode` / …), when recorded.
   final String? source;
 
+  /// Parent thread for a spawned child.
+  final String? parentThreadId;
+
+  /// Persisted thread classification.
+  final String? threadSource;
+
   /// Last-modified time of the rollout, unix seconds.
   final PlatformInt64 updatedAt;
 
@@ -1702,6 +1717,8 @@ class LocalSessionDto {
     this.cwd,
     required this.preview,
     this.source,
+    this.parentThreadId,
+    this.threadSource,
     required this.updatedAt,
     required this.turnState,
     required this.heldOpen,
@@ -1716,6 +1733,8 @@ class LocalSessionDto {
       cwd.hashCode ^
       preview.hashCode ^
       source.hashCode ^
+      parentThreadId.hashCode ^
+      threadSource.hashCode ^
       updatedAt.hashCode ^
       turnState.hashCode ^
       heldOpen.hashCode ^
@@ -1732,6 +1751,8 @@ class LocalSessionDto {
           cwd == other.cwd &&
           preview == other.preview &&
           source == other.source &&
+          parentThreadId == other.parentThreadId &&
+          threadSource == other.threadSource &&
           updatedAt == other.updatedAt &&
           turnState == other.turnState &&
           heldOpen == other.heldOpen &&
@@ -2355,6 +2376,9 @@ class ThreadMetaDto {
   /// App-owned classification, including `pocket-codex-voice`.
   final String? threadSource;
 
+  /// Parent thread for a spawned child.
+  final String? parentThreadId;
+
   /// Working directory (the project the thread controls).
   final String cwd;
 
@@ -2366,6 +2390,7 @@ class ThreadMetaDto {
     required this.preview,
     this.name,
     this.threadSource,
+    this.parentThreadId,
     required this.cwd,
     required this.updatedAt,
   });
@@ -2376,6 +2401,7 @@ class ThreadMetaDto {
       preview.hashCode ^
       name.hashCode ^
       threadSource.hashCode ^
+      parentThreadId.hashCode ^
       cwd.hashCode ^
       updatedAt.hashCode;
 
@@ -2388,6 +2414,7 @@ class ThreadMetaDto {
           preview == other.preview &&
           name == other.name &&
           threadSource == other.threadSource &&
+          parentThreadId == other.parentThreadId &&
           cwd == other.cwd &&
           updatedAt == other.updatedAt;
 }

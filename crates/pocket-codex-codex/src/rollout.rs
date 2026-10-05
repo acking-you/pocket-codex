@@ -103,6 +103,10 @@ pub struct SessionMeta {
     /// Client that created the session (`cli` / `vscode` / …), when
     /// recorded. Useful for badging "from desktop app" in the UI.
     pub source: Option<String>,
+    /// Parent thread recorded by Codex for spawned sessions.
+    pub parent_thread_id: Option<String>,
+    /// Persisted thread classification, including Guardian reviewers.
+    pub thread_source: Option<String>,
     /// The recorded `originator` string, when present.
     pub originator: Option<String>,
 }
@@ -119,6 +123,10 @@ pub struct SessionInfo {
     pub cwd: Option<String>,
     /// Client that created the session, when recorded.
     pub source: Option<String>,
+    /// Parent thread recorded by Codex for spawned sessions.
+    pub parent_thread_id: Option<String>,
+    /// Persisted thread classification, including Guardian reviewers.
+    pub thread_source: Option<String>,
     /// Best-effort one-line preview (the first user message text).
     pub preview: String,
     /// Last-modified time of the rollout file, in unix seconds.
@@ -220,6 +228,8 @@ pub fn read_session_info(path: &Path) -> Result<SessionInfo> {
         rollout_path: path.to_path_buf(),
         cwd: meta.as_ref().and_then(|m| m.cwd.clone()),
         source: meta.as_ref().and_then(|m| m.source.clone()),
+        parent_thread_id: meta.as_ref().and_then(|m| m.parent_thread_id.clone()),
+        thread_source: meta.as_ref().and_then(|m| m.thread_source.clone()),
         preview,
         updated_at,
         turn_state,
@@ -286,6 +296,7 @@ pub fn read_transcript(path: &Path) -> Result<Vec<TranscriptItem>> {
     // The agent can update the same plan several times during one turn. Keep
     // the latest snapshot in one row, matching the live app-server behavior.
     let mut plans: HashMap<String, usize> = HashMap::new();
+    let mut reviews: HashMap<String, usize> = HashMap::new();
     for (idx, line) in reader.lines().enumerate() {
         let line = line?;
         if line.trim().is_empty() {
@@ -318,6 +329,27 @@ pub fn read_transcript(path: &Path) -> Result<Vec<TranscriptItem>> {
             continue;
         }
         if line_type == Some("event_msg") {
+            if let Some(review) = guardian_review(payload) {
+                let review_id =
+                    format!("auto-review:{}", review["reviewId"].as_str().unwrap_or_default());
+                let item = TranscriptItem {
+                    id: review_id.clone(),
+                    item_type: "autoApprovalReview".into(),
+                    title: review["review"]["status"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .into(),
+                    text: review.to_string(),
+                    images: Vec::new(),
+                };
+                if let Some(index) = reviews.get(&review_id) {
+                    out[*index] = item;
+                } else {
+                    reviews.insert(review_id, out.len());
+                    out.push(item);
+                }
+                continue;
+            }
             let event_type = payload.get("type").and_then(Value::as_str);
             if let Some(item) = payload.get("item") {
                 if item.get("type").and_then(Value::as_str) == Some("ContextCompaction") {
@@ -1222,12 +1254,72 @@ fn parse_session_meta(line: &str) -> Option<SessionMeta> {
             .filter(|s| !s.is_empty())
             .map(str::to_string),
         source: source_label(payload.get("source")),
+        parent_thread_id: parent_thread_id(payload),
+        thread_source: thread_source(payload),
         originator: payload
             .get("originator")
             .and_then(Value::as_str)
             .filter(|s| !s.is_empty())
             .map(str::to_string),
     })
+}
+
+/// Normalize a persisted Guardian lifecycle into the app-server notification
+/// shape. Only explicit Guardian records authorize this display-only
+/// interpretation.
+pub fn guardian_review(payload: &Value) -> Option<Value> {
+    if payload.get("type").and_then(Value::as_str) != Some("guardian_assessment") {
+        return None;
+    }
+    let id = payload.get("id")?.as_str().filter(|id| !id.is_empty())?;
+    let status = match payload.get("status")?.as_str()? {
+        "in_progress" => "inProgress",
+        "timed_out" => "timedOut",
+        other => other,
+    };
+    Some(serde_json::json!({
+        "reviewId": id, "turnId": payload.get("turn_id"),
+        "targetItemId": payload.get("target_item_id"),
+        "startedAtMs": payload.get("started_at_ms"),
+        "completedAtMs": payload.get("completed_at_ms"),
+        "review": {"status": status, "riskLevel": payload.get("risk_level"),
+            "userAuthorization": payload.get("user_authorization"), "rationale": payload.get("rationale")},
+        "action": payload.get("action"),
+    }))
+}
+
+/// Read the explicit parent link, including older thread-spawn headers.
+pub fn parent_thread_id(value: &Value) -> Option<String> {
+    value
+        .get("parentThreadId")
+        .or_else(|| value.get("parent_thread_id"))
+        .and_then(Value::as_str)
+        .or_else(|| {
+            value
+                .pointer("/source/subagent/thread_spawn/parent_thread_id")
+                .or_else(|| value.pointer("/source/subAgent/thread_spawn/parent_thread_id"))
+                .and_then(Value::as_str)
+        })
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned)
+}
+
+/// Read an explicit classification; recognize the legacy Guardian source too.
+pub fn thread_source(value: &Value) -> Option<String> {
+    value
+        .get("threadSource")
+        .or_else(|| value.get("thread_source"))
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+        .or_else(|| {
+            (value
+                .pointer("/source/subagent/other")
+                .or_else(|| value.pointer("/source/subAgent/other"))
+                .and_then(Value::as_str)
+                == Some("guardian"))
+            .then(|| "guardian_review".into())
+        })
 }
 
 /// Reduce a `source` value (a bare string, or an object with a `kind` /
@@ -1473,6 +1565,46 @@ fn collect_jsonl(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn guardian_metadata_and_transcript_keep_parent_and_latest_result() {
+        let header = serde_json::json!({"type":"session_meta","payload":{
+            "id":"child", "parent_thread_id":"parent", "thread_source":"guardian_review",
+            "source":{"subagent":{"other":"guardian"}}}});
+        let meta = parse_session_meta(&header.to_string()).expect("metadata");
+        assert_eq!(meta.parent_thread_id.as_deref(), Some("parent"));
+        assert_eq!(meta.thread_source.as_deref(), Some("guardian_review"));
+        assert_eq!(
+            thread_source(
+                &serde_json::json!({"threadSource":null,"source":{"subAgent":{"other":"guardian"}}})
+            )
+            .as_deref(),
+            Some("guardian_review")
+        );
+        assert_eq!(
+            parent_thread_id(&serde_json::json!({"source":{"subagent":{"thread_spawn":{
+            "parent_thread_id":"older-parent", "depth":1}}}}))
+            .as_deref(),
+            Some("older-parent")
+        );
+        let temp = tempfile::tempdir().expect("directory");
+        let file = temp.path().join("rollout.jsonl");
+        let mut records = vec![header.to_string()];
+        for status in ["in_progress", "approved"] {
+            records.push(
+                serde_json::json!({"type":"event_msg","payload":{
+                "type":"guardian_assessment", "id":"review", "turn_id":"turn", "status":status,
+                "action":{"type":"command","command":"true"}, "risk_level":"low",
+                "user_authorization":"high", "rationale":"User requested it"}})
+                .to_string(),
+            );
+        }
+        std::fs::write(&file, records.join("\n")).expect("rollout");
+        let items = read_transcript(&file).expect("transcript");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].id, "auto-review:review");
+        assert_eq!(items[0].title, "approved");
+    }
 
     fn started(turn: &str) -> String {
         format!(

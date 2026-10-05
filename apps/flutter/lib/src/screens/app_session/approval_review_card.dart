@@ -17,10 +17,12 @@ class ApprovalReviewCard extends StatelessWidget {
     required this.raw,
     this.request,
     this.result,
+    this.status,
   });
   final String raw;
   final ApprovalReviewRequest? request;
   final ApprovalReviewResult? result;
+  final String? status;
 
   @override
   Widget build(BuildContext context) {
@@ -34,7 +36,17 @@ class ApprovalReviewCard extends StatelessWidget {
         : allowed
         ? successColor(scheme)
         : scheme.error;
-    final title = decision == null ? l10n.reviewRequest : l10n.reviewResult;
+    final title = status == 'inProgress'
+        ? l10n.reviewInProgress
+        : decision == null
+        ? l10n.reviewRequest
+        : l10n.reviewResult;
+    final outcome = switch (status) {
+      'inProgress' => l10n.reviewInProgress,
+      'timedOut' => l10n.reviewTimedOut,
+      'aborted' => l10n.reviewAborted,
+      _ => allowed ? l10n.reviewAllowed : l10n.reviewDenied,
+    };
     String level(String value) => switch (value) {
       'low' => l10n.reviewLow,
       'medium' => l10n.reviewMedium,
@@ -84,7 +96,7 @@ class ApprovalReviewCard extends StatelessWidget {
               ),
               if (decision != null)
                 Text(
-                  allowed ? l10n.reviewAllowed : l10n.reviewDenied,
+                  outcome,
                   style: TextStyle(color: color, fontWeight: FontWeight.w600),
                 ),
             ],

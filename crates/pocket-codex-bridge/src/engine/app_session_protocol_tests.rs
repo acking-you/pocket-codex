@@ -230,3 +230,44 @@ fn voice_classification_and_signaling_survive_the_bridge() {
     assert!(validate_realtime_request("thread/start", &json!({})).is_err());
     assert!(validate_realtime_request("command/exec", &json!({})).is_err());
 }
+
+#[test]
+fn guardian_lifecycle_retains_one_display_only_item_and_expands_history() {
+    let transcript = Mutex::new(LiveTranscript::default());
+    for status in ["inProgress", "approved", "denied", "timedOut", "aborted"] {
+        let params = json!({"threadId":"parent", "turnId":"turn", "reviewId":"review",
+            "targetItemId":"command", "review":{"status":status, "riskLevel":"high",
+            "userAuthorization":"high", "rationale":"Explicitly authorized"},
+            "action":{"type":"command", "command":"cargo test", "cwd":"/project"}});
+        let inbound = Inbound {
+            method: if status == "inProgress" {
+                "item/autoApprovalReview/started".into()
+            } else {
+                "item/autoApprovalReview/completed".into()
+            },
+            params: Some(params.clone()),
+            request_id: None,
+        };
+        buffer_item(&transcript, &inbound);
+        let mapped = map_event(inbound);
+        assert_eq!(mapped.item_id.as_deref(), Some("auto-review:review"));
+        assert_eq!(mapped.item_type.as_deref(), Some("autoApprovalReview"));
+        assert_eq!(mapped.thread_id.as_deref(), Some("parent"));
+        assert!(mapped.request_id.is_none());
+        let buffered = transcript.lock().expect("lock").tail("parent", 10);
+        assert_eq!(buffered.len(), 1);
+        assert_eq!(buffered[0].title, status);
+        let page = json!({"data":[{"turnId":"turn", "item":{"type":"commandExecution",
+            "id":"command", "command":"cargo test", "autoApprovalReviews":[params]}}]});
+        let recovered = parse_prefetched_items(&page);
+        assert_eq!(recovered.len(), 2);
+        assert_eq!(recovered[0].id, "auto-review:review");
+        assert_eq!(recovered[0].turn_id, "turn");
+        assert_eq!(recovered[1].id, "command");
+    }
+    let metadata = parse_thread_meta(&json!({"id":"child", "parentThreadId":"parent",
+        "threadSource":null, "source":{"subAgent":{"other":"guardian"}}}))
+    .expect("metadata");
+    assert_eq!(metadata.parent_thread_id.as_deref(), Some("parent"));
+    assert_eq!(metadata.thread_source.as_deref(), Some("guardian_review"));
+}

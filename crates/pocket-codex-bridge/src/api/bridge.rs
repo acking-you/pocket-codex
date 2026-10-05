@@ -520,6 +520,8 @@ pub struct ThreadMetaDto {
     pub name: Option<String>,
     /// App-owned classification, including `pocket-codex-voice`.
     pub thread_source: Option<String>,
+    /// Parent thread for a spawned child.
+    pub parent_thread_id: Option<String>,
     /// Working directory (the project the thread controls).
     pub cwd: String,
     /// Unix seconds of last update.
@@ -965,10 +967,25 @@ pub fn app_thread_list(service_key: String) -> Result<Vec<ThreadMetaDto>> {
             preview: t.preview,
             name: t.name,
             thread_source: t.thread_source,
+            parent_thread_id: t.parent_thread_id,
             cwd: t.cwd,
             updated_at: t.updated_at,
         })
         .collect())
+}
+
+/// Inspect one thread without resuming it or taking ownership.
+pub fn app_thread_metadata(service_key: String, thread_id: String) -> Result<ThreadMetaDto> {
+    let t = app_session::thread_metadata(&service_key, &thread_id)?;
+    Ok(ThreadMetaDto {
+        id: t.id,
+        preview: t.preview,
+        name: t.name,
+        thread_source: t.thread_source,
+        parent_thread_id: t.parent_thread_id,
+        cwd: t.cwd,
+        updated_at: t.updated_at,
+    })
 }
 
 /// List the models the app-server offers.
@@ -1302,6 +1319,10 @@ pub struct LocalSessionDto {
     pub preview: String,
     /// Originating client (`cli` / `vscode` / …), when recorded.
     pub source: Option<String>,
+    /// Parent thread for a spawned child.
+    pub parent_thread_id: Option<String>,
+    /// Persisted thread classification.
+    pub thread_source: Option<String>,
     /// Last-modified time of the rollout, unix seconds.
     pub updated_at: i64,
     /// Most-recent-turn state (`empty`/`completed`/`aborted`/`incomplete`).
@@ -1388,6 +1409,8 @@ pub fn app_local_sessions() -> Result<Vec<LocalSessionDto>> {
             cwd: s.cwd,
             preview: s.preview,
             source: s.source,
+            parent_thread_id: s.parent_thread_id,
+            thread_source: s.thread_source,
             updated_at: s.updated_at,
             turn_state: s.turn_state,
             held_open: s.held_open,
@@ -1571,6 +1594,8 @@ pub fn meta_sessions(
             cwd: s.cwd,
             preview: s.preview,
             source: s.source,
+            parent_thread_id: s.parent_thread_id,
+            thread_source: s.thread_source,
             updated_at: s.updated_at,
             turn_state: s.turn_state,
             held_open: s.held_open,

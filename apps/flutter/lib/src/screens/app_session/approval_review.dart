@@ -108,3 +108,64 @@ Map<String, dynamic>? _object(String raw) {
     return null;
   }
 }
+
+/// Native approval lifecycle, kept separate from actionable user approvals.
+class AutoApprovalReview {
+  const AutoApprovalReview(this.status, this.request, this.result);
+  final String status;
+  final ApprovalReviewRequest? request;
+  final ApprovalReviewResult? result;
+
+  static AutoApprovalReview? parse(String raw) {
+    final value = _object(raw);
+    final review = value?['review'];
+    if (value?['reviewId'] is! String || review is! Map) return null;
+    final status = review['status'];
+    if (!const {
+      'inProgress',
+      'approved',
+      'denied',
+      'timedOut',
+      'aborted',
+    }.contains(status)) {
+      return null;
+    }
+    final action = value?['action'];
+    ApprovalReviewRequest? request;
+    if (action is Map<String, dynamic>) {
+      final type = action['type'] is String ? action['type'] as String : '';
+      final summary =
+          action['command'] ??
+          action['reason'] ??
+          action['host'] ??
+          action['toolName'] ??
+          action['tool_name'];
+      request = ApprovalReviewRequest(
+        tool: type,
+        summary: summary is String
+            ? summary
+            : const JsonEncoder.withIndent('  ').convert(action),
+        details: const JsonEncoder.withIndent('  ').convert(action),
+        cwd: action['cwd'] is String ? action['cwd'] as String : null,
+      );
+    }
+    return AutoApprovalReview(
+      status as String,
+      request,
+      status == 'inProgress'
+          ? null
+          : ApprovalReviewResult(
+              outcome: status == 'approved' ? 'allow' : 'deny',
+              risk: review['riskLevel'] is String
+                  ? review['riskLevel'] as String
+                  : 'unknown',
+              authorization: review['userAuthorization'] is String
+                  ? review['userAuthorization'] as String
+                  : 'unknown',
+              rationale: review['rationale'] is String
+                  ? review['rationale'] as String
+                  : '',
+            ),
+    );
+  }
+}

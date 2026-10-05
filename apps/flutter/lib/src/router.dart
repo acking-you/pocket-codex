@@ -107,6 +107,8 @@ GoRouter buildRouter({
         cwd: s.uri.queryParameters['cwd'],
         preview: s.uri.queryParameters['preview'],
         serviceKey: s.uri.queryParameters['svc'],
+        guardian: s.uri.queryParameters['guardian'] == 'true',
+        parentThreadId: s.uri.queryParameters['parent'],
       ),
     ),
     // A conversation on a specific service. Reached from the session browser's

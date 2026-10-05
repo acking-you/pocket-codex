@@ -122,6 +122,7 @@ class TranscriptItem {
   bool get standsAlone =>
       type == 'turnDuration' ||
       type == 'plan' ||
+      type == 'autoApprovalReview' ||
       type == 'interrupted' ||
       type == 'imageGeneration';
 }

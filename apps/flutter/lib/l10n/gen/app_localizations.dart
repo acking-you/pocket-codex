@@ -3577,6 +3577,54 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Restoring session settings…'**
   String get restoringSessionSettings;
+
+  /// No description provided for @reviewInProgress.
+  ///
+  /// In en, this message translates to:
+  /// **'Model review in progress'**
+  String get reviewInProgress;
+
+  /// No description provided for @reviewTimedOut.
+  ///
+  /// In en, this message translates to:
+  /// **'Review timed out'**
+  String get reviewTimedOut;
+
+  /// No description provided for @reviewAborted.
+  ///
+  /// In en, this message translates to:
+  /// **'Review aborted'**
+  String get reviewAborted;
+
+  /// No description provided for @guardianSession.
+  ///
+  /// In en, this message translates to:
+  /// **'Model approval'**
+  String get guardianSession;
+
+  /// No description provided for @childSession.
+  ///
+  /// In en, this message translates to:
+  /// **'Child session'**
+  String get childSession;
+
+  /// No description provided for @childSessions.
+  ///
+  /// In en, this message translates to:
+  /// **'Child sessions ({count})'**
+  String childSessions(int count);
+
+  /// No description provided for @guardianReadOnly.
+  ///
+  /// In en, this message translates to:
+  /// **'Model approval session · Read only'**
+  String get guardianReadOnly;
+
+  /// No description provided for @parentSession.
+  ///
+  /// In en, this message translates to:
+  /// **'Open parent session'**
+  String get parentSession;
 }
 
 class _AppLocalizationsDelegate

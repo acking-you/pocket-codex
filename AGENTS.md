@@ -480,6 +480,14 @@ this file's roadmap so the source of truth stays in sync.
     Worker transition history survives worker exit, and controller recovery stages
     appear in the existing exportable logs.
 
+20. **Guardian session hierarchy (2026-10-06).** Display native automatic approval
+    progress and results in the parent conversation, keyed by review ID. Restore
+    persisted assessments through the host history adapter without changing Codex
+    page cursors. Preserve explicit parent links in session inventories, with
+    expandable children and ancestors retained during filtering. Open Guardian
+    sessions read-only, with navigation to the parent; never resume or take over
+    a reviewer. See `docs/guardian-sessions.md`.
+
 ### UI and history maintenance (2026-09-13)
 
 - Keep shared colors, typography, and control shapes in `theme.dart` /

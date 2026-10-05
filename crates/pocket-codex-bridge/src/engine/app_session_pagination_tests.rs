@@ -365,14 +365,59 @@ fn pending_summary_yields_on_a_single_async_worker() {
 }
 
 #[test]
+fn public_resume_rejects_guardian_and_unknown_metadata_before_mutating_the_thread() {
+    runtime::init(std::env::temp_dir()).expect("init runtime");
+    for (metadata, expected) in [
+        (json!({"id":"reviewer", "threadSource":"guardian_review"}), "read-only"),
+        (
+            json!({"id":"reviewer", "threadSource":null, "source":{"subAgent":{"other":"guardian"}}}),
+            "read-only",
+        ),
+        (json!({}), "missing thread metadata"),
+    ] {
+        let (client, peer) = mock_client_with_hook(
+            vec![("thread/read", json!({"thread":metadata}))],
+            |_, request| {
+                assert_eq!(request["params"]["threadId"], "reviewer");
+                assert_eq!(request["params"]["includeTurns"], false);
+            },
+        );
+        let session = TestSession::new(client);
+        record_runtime_config(&session.0, "reviewer", &json!({"model":"unchanged"}));
+        let error = crate::api::bridge::app_thread_resume(session.0.clone(), "reviewer".into())
+            .expect_err("read-only boundary");
+        assert!(error.to_string().contains(expected), "{error:#}");
+        assert_eq!(
+            thread_runtime_config(&session.0, "reviewer")
+                .expect("config")
+                .model
+                .as_deref(),
+            Some("unchanged")
+        );
+        runtime::runtime().block_on(async {
+            let mut socket = peer.await.expect("peer");
+            assert!(
+                tokio::time::timeout(Duration::from_millis(50), socket.next())
+                    .await
+                    .is_err(),
+                "rejected resumes must not send another RPC"
+            );
+        });
+    }
+}
+
+#[test]
 fn resume_requests_metadata_and_retains_the_runtime_configuration() {
     runtime::init(std::env::temp_dir()).expect("init runtime");
-    let (client, peer) = mock_client(vec![(
-        "thread/resume",
-        json!({
-            "thread": {"id": "thread"}, "model": "test-model", "reasoningEffort": "high"
-        }),
-    )]);
+    let (client, peer) = mock_client(vec![
+        ("thread/read", json!({"thread": {"id": "thread"}})),
+        (
+            "thread/resume",
+            json!({
+                "thread": {"id": "thread"}, "model": "test-model", "reasoningEffort": "high"
+            }),
+        ),
+    ]);
     let session = TestSession::new(client);
     thread_resume(&session.0, "thread").expect("resume");
     assert_eq!(
@@ -389,9 +434,13 @@ fn resume_requests_metadata_and_retains_the_runtime_configuration() {
 fn resume_refreshes_modes_but_legacy_omission_keeps_the_last_mode() {
     runtime::init(std::env::temp_dir()).expect("init runtime");
     let responses = vec![
+        ("thread/read", json!({"thread": {"id": "thread"}})),
         ("thread/resume", json!({"collaborationMode": {"mode": "plan"}})),
+        ("thread/read", json!({"thread": {"id": "thread"}})),
         ("thread/resume", json!({"collaborationMode": {"mode": "default"}})),
+        ("thread/read", json!({"thread": {"id": "thread"}})),
         ("thread/resume", json!({"thread": {"id": "thread"}})),
+        ("thread/read", json!({"thread": {"id": "thread"}})),
         ("thread/resume", json!({"collaborationMode": null})),
     ];
     let (client, peer) = mock_client(responses);

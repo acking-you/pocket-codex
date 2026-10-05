@@ -133,6 +133,31 @@ impl CodexHistorySource {
         legacy_page(query, history)
     }
 
+    async fn attach_reviews(&self, session: &str, mut raw: Value) -> Result<Value> {
+        let session = session.to_owned();
+        let directories = self.directories.clone();
+        tokio::task::spawn_blocking(move || {
+            let (path, index) = if let Some((home, index)) = directories {
+                (
+                    pocket_codex_codex::rollout::rollout_path_in(&home.join("sessions"), &session)?
+                        .context("history session no longer exists")?,
+                    index,
+                )
+            } else {
+                (
+                    super::sessions::rollout_path(&session)?,
+                    pocket_codex_core::paths::state_dir()?.join("history-source-index-v1"),
+                )
+            };
+            if let Some(entries) = raw.get_mut("data").and_then(Value::as_array_mut) {
+                super::history_sync_revision::attach_reviews(&path, &index, entries)?;
+            }
+            Ok(raw)
+        })
+        .await
+        .context("approval history task")?
+    }
+
     async fn request(&self, method: &str, params: Value) -> Result<Value> {
         let mut connection = self.client.lock().await;
         if !connection.as_ref().is_some_and(|client| client.is_alive()) {
@@ -196,7 +221,10 @@ impl SessionHistorySource for CodexHistorySource {
             _ => bail!("unsupported history collection"),
         };
         let before = self.generation(&query.session).await?;
-        let raw = self.read_codex(query, method, params).await?;
+        let mut raw = self.read_codex(query, method, params).await?;
+        if query.collection == "items" {
+            raw = self.attach_reviews(&query.session, raw).await?;
+        }
         let generation = self.generation(&query.session).await?;
         ensure!(before == generation, "history changed while reading; retry the window");
         from_codex_response(query, raw, generation)
