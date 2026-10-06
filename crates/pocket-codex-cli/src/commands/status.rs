@@ -58,7 +58,7 @@ pub fn run() -> Result<()> {
     }
 
     for session in &state.pb {
-        let alive = pocket_codex_core::process::pid_running(session.pid);
+        let alive = pocket_codex_core::process::pb_worker_identity(session).is_some();
         let health = crate::commands::worker_health::read(session);
         table.add_row(vec![
             Cell::new(format!("pb {}", session.role)),

@@ -119,7 +119,7 @@ fn diagnostics(args: PbWorkerArgs) -> Result<()> {
         "{}",
         serde_json::to_string_pretty(&serde_json::json!({
             "key": session.key, "role": session.role, "pid": session.pid,
-            "alive": pocket_codex_core::process::pid_running(session.pid),
+            "alive": pocket_codex_core::process::pb_worker_identity(session).is_some(),
             "runtime": health,
             "events": crate::commands::worker_health::read_events(session),
         }))?

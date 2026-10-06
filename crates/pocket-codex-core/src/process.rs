@@ -39,7 +39,8 @@ pub fn pid_running(pid: u32) -> bool {
 }
 
 /// Return the start time only if this PID is the exact standalone pb worker.
-/// Host supervisors and Codex processes never match, even if state is stale.
+/// Host supervisors, Codex processes, threads and exited workers never match,
+/// even if state is stale.
 pub fn pb_worker_start_time(session: &crate::state::PbSessionInfo) -> Option<u64> {
     let mut sys = System::new();
     sys.refresh_processes_specifics(
@@ -50,7 +51,9 @@ pub fn pb_worker_start_time(session: &crate::state::PbSessionInfo) -> Option<u64
             .with_exe(UpdateKind::Always),
     );
     let process = sys.process(Pid::from_u32(session.pid))?;
-    if matches!(process.status(), ProcessStatus::Zombie | ProcessStatus::Dead) {
+    if process.thread_kind().is_some()
+        || matches!(process.status(), ProcessStatus::Zombie | ProcessStatus::Dead)
+    {
         return None;
     }
     let exe = process

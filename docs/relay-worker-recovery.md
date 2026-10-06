@@ -25,6 +25,12 @@ worker. `runtime: null` / `unknown` means this worker cannot report fresh diagno
 the installed binary's version is never substituted for the running worker's SDK.
 `pocket-codex status` also displays the running SDK version.
 
+Startup reuse, status, diagnostics and stopping all verify the standalone worker's
+executable, role, key, local endpoint and relay. A PID reused by another process,
+a Linux thread ID or an exited worker is stale. Starting a mapping replaces its
+stale record; stopping it removes only the record without signalling that PID.
+A matching worker remains reusable while offline or without fresh diagnostics.
+
 After installing an updated CLI, replace exactly one network worker:
 
 ```sh

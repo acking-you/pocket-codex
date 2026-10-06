@@ -8,7 +8,7 @@
 //!                              │
 //!              ┌───────────────┼───────────────┐
 //!              ▼               ▼               ▼
-//!       Some + alive    Some + dead          None
+//!       Some + matches  Some + stale         None
 //!              │               │               │
 //!              ▼               ▼               ▼
 //!       EnsureOutcome   remove_pb +      spawn_worker
@@ -40,7 +40,7 @@ use anyhow::{bail, Context, Result};
 use chrono::Utc;
 use pocket_codex_core::{
     paths,
-    process::{pid_alive, send_sigterm},
+    process::{pb_worker_identity, send_sigterm},
     state::{PbRole, PbSessionInfo, RuntimeState},
 };
 
@@ -121,7 +121,7 @@ impl EnsureOutcome {
 pub(crate) enum StopOutcome {
     /// The process existed and was signalled.
     Stopped(PbSessionInfo),
-    /// The state entry existed but the process was already gone.
+    /// The state entry no longer identified a running standalone worker.
     Stale(PbSessionInfo),
 }
 
@@ -149,7 +149,7 @@ pub(crate) async fn restart(role: PbRole, key: &str) -> Result<PbSessionInfo> {
 
     use pocket_codex_core::{
         config::{Config, Mode},
-        process::{pb_worker_identity, pid_running},
+        process::pid_running,
     };
     let existing = RuntimeState::load()?
         .find_pb(role, key)
@@ -230,7 +230,7 @@ pub(crate) async fn restart(role: PbRole, key: &str) -> Result<PbSessionInfo> {
 async fn ensure_with_exe(spec: PbWorkerSpec, exe: PathBuf) -> Result<EnsureOutcome> {
     let mut state = RuntimeState::load()?;
     if let Some(existing) = state.find_pb(spec.role, &spec.key).cloned() {
-        if pid_alive(existing.pid) {
+        if pb_worker_identity(&existing).is_some() {
             return Ok(EnsureOutcome::Reused(existing));
         }
         state.remove_pb(spec.role, &spec.key);
@@ -341,7 +341,7 @@ pub(crate) fn stop_matching(filter: StopFilter) -> Result<Vec<StopOutcome>> {
 
     for session in std::mem::take(&mut state.pb) {
         if matches_filter(&session, &filter) {
-            if pid_alive(session.pid) {
+            if pb_worker_identity(&session).is_some() {
                 send_sigterm(session.pid);
                 outcomes.push(StopOutcome::Stopped(session));
             } else {
