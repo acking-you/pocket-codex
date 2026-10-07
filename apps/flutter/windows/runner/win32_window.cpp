@@ -288,13 +288,15 @@ void Win32Window::UpdateIcons(HWND const window) {
   // Asking LoadImage for the exact size lets it take the matching frame of
   // app_icon.ico (which ships one per common scale) instead of resampling.
   const UINT dpi = FlutterDesktopGetDpiForHWND(window);
-  const int big = MulDiv(32, dpi, 96);
-  const int small = MulDiv(16, dpi, 96);
+  const int big_size = MulDiv(32, dpi, 96);
+  const int small_size = MulDiv(16, dpi, 96);
   const HINSTANCE instance = GetModuleHandle(nullptr);
-  HICON big_icon = static_cast<HICON>(LoadImage(
-      instance, MAKEINTRESOURCE(IDI_APP_ICON), IMAGE_ICON, big, big, 0));
-  HICON small_icon = static_cast<HICON>(LoadImage(
-      instance, MAKEINTRESOURCE(IDI_APP_ICON), IMAGE_ICON, small, small, 0));
+  HICON big_icon = static_cast<HICON>(
+      LoadImage(instance, MAKEINTRESOURCE(IDI_APP_ICON), IMAGE_ICON, big_size,
+                big_size, 0));
+  HICON small_icon = static_cast<HICON>(
+      LoadImage(instance, MAKEINTRESOURCE(IDI_APP_ICON), IMAGE_ICON,
+                small_size, small_size, 0));
   if (big_icon) {
     SendMessage(window, WM_SETICON, ICON_BIG,
                 reinterpret_cast<LPARAM>(big_icon));
