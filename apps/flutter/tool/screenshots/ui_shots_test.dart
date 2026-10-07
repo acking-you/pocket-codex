@@ -212,6 +212,11 @@ final Map<String, Widget> _scenes = {
     threadId: 't1',
     home: true,
   ),
+  'fold': const AppSessionScreen(
+    serviceKey: _service,
+    threadId: 't1',
+    home: true,
+  ),
   'new': const AppSessionScreen(serviceKey: _service, home: true),
   'settings': const SettingsScreen(),
   'services': const ServicesScreen(),
@@ -234,6 +239,11 @@ Future<void> _shoot(
     await api.appConnect(_service, 28080);
     await t.pumpWidget(_app(scene, api, b));
     await t.pumpAndSettle();
+    if (name == 'fold') {
+      // The turn's work, opened: the step cards as a reader sees them.
+      await t.tap(find.byKey(const Key('turn-work-toggle')));
+      await t.pumpAndSettle();
+    }
     await expectLater(
       find.byType(MaterialApp),
       matchesGoldenFile('out/$name-${d.name}-${b.name}.png'),

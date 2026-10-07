@@ -3,13 +3,13 @@ import 'package:pocket_codex/src/desktop_theme.dart';
 import 'package:pocket_codex/src/fonts.dart';
 import 'package:pocket_codex/src/motion.dart';
 
-/// Graphite neutrals, monochrome controls and one violet "signal".
+/// Graphite neutrals, monochrome controls and one blue "signal".
 ///
 /// The neutrals follow the macOS system greys (window, source list, control
 /// background) without a blue cast, so the app sits beside native windows on
 /// every desktop rather than reading as a tinted web page. Controls are drawn
 /// in ink — a filled button, the send action — the way current desktop apps
-/// do. Colour is reserved for meaning: the violet signal (taken from the
+/// do. Colour is reserved for meaning: the blue signal (taken from the
 /// logo's relay arcs) marks what is live, and success / caution / error / info
 /// keep their own hues, so a running turn never looks like a healthy service
 /// or a diff addition.
@@ -21,7 +21,7 @@ import 'package:pocket_codex/src/motion.dart';
 ColorScheme _flowScheme(Brightness brightness) {
   final light = brightness == Brightness.light;
   return ColorScheme.fromSeed(
-    seedColor: const Color(0xFF6E56CF),
+    seedColor: const Color(0xFF2548AE),
     brightness: brightness,
   ).copyWith(
     primary: light ? const Color(0xFF1D1D1F) : const Color(0xFFEDEDEF),
@@ -38,14 +38,14 @@ ColorScheme _flowScheme(Brightness brightness) {
     onSecondaryContainer: light
         ? const Color(0xFF1D1D1F)
         : const Color(0xFFEDEDEF),
-    tertiary: light ? const Color(0xFF6E56CF) : const Color(0xFFB4A7F5),
-    onTertiary: light ? Colors.white : const Color(0xFF261C5E),
+    tertiary: light ? const Color(0xFF2A52C4) : const Color(0xFF93A6F5),
+    onTertiary: light ? Colors.white : const Color(0xFF14245C),
     tertiaryContainer: light
-        ? const Color(0xFFEEEAFC)
-        : const Color(0xFF2E2852),
+        ? const Color(0xFFE7EDFC)
+        : const Color(0xFF212B4C),
     onTertiaryContainer: light
-        ? const Color(0xFF4B3B9E)
-        : const Color(0xFFDDD6FC),
+        ? const Color(0xFF1D3B94)
+        : const Color(0xFFD5DEFC),
     surface: light ? const Color(0xFFFBFBFA) : const Color(0xFF19191B),
     surfaceBright: light ? Colors.white : const Color(0xFF27272A),
     surfaceDim: light ? const Color(0xFFEDEDEB) : const Color(0xFF141416),
@@ -85,7 +85,7 @@ Color onSurfaceDisabled(ColorScheme scheme) =>
 
 /// The live signal: a running turn, a conversation working in the background,
 /// the composer while the agent answers. Nothing else is drawn in it, which is
-/// what lets one violet dot in a sidebar of grey rows say "this is working".
+/// what lets one blue dot in a sidebar of grey rows say "this is working".
 Color signalColor(ColorScheme scheme) => scheme.tertiary;
 
 /// Additions, in a diff or a change count. `+`/`−` is a convention older than
@@ -157,8 +157,8 @@ Color accentWash(ColorScheme scheme, {double strength = 1}) =>
 /// contrast on its wash (light ≈ 6:1, dark ≈ 9.5:1).
 Color inlineCodeColor(ColorScheme scheme) =>
     scheme.brightness == Brightness.light
-    ? const Color(0xFF5B45B8)
-    : const Color(0xFFCFC6FA);
+    ? const Color(0xFF2446A8)
+    : const Color(0xFFC2CEFA);
 
 /// Selected rows carry no outline; kept as a function so call sites that draw
 /// a border can resolve it from one place.

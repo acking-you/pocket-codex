@@ -550,7 +550,7 @@ class _EffortStepsState extends State<EffortSteps> {
   }
 }
 
-/// Paints the effort track: a rounded track, a flat violet fill up to the
+/// Paints the effort track: a rounded track, a flat accent fill up to the
 /// thumb, a stop per level, and a rounded-square thumb centred exactly on
 /// its stop. At the top level the fill gets a scattered "dither" shimmer —
 /// the reference's Ultracode flourish.
@@ -584,7 +584,7 @@ class _EffortPainter extends CustomPainter {
   final Brightness brightness;
 
   /// The flat fill up to the thumb — the theme's accent, so the slider belongs
-  /// to the palette instead of being the one violet thing on screen. Flat, not
+  /// to the palette instead of being the one off-palette thing on screen. Flat, not
   /// a gradient, per the design's rules.
   final Color fill;
 

@@ -621,6 +621,38 @@ class ActivityGroup {
   };
 }
 
+/// The icon hue for an activity [type]: one per kind of work, so a run of
+/// steps can be scanned by colour (commands blue, thinking amber, searches
+/// teal, edits green, tool calls rose) before any label is read. Kinds with
+/// nothing to tell apart stay the quiet secondary ink.
+Color activityTint(String type, ColorScheme scheme) {
+  final light = scheme.brightness == Brightness.light;
+  return switch (type) {
+    'commandExecution' => scheme.tertiary,
+    'reasoning' || 'plan' => cautionColor(scheme),
+    'webSearch' || 'imageView' || 'imageGeneration' =>
+      light ? const Color(0xFF0E7C86) : const Color(0xFF4FC4CC),
+    'fileChange' => additionColor(scheme),
+    'mcpToolCall' ||
+    'dynamicToolCall' ||
+    'collabAgentToolCall' ||
+    'subAgentActivity' =>
+      light ? const Color(0xFFB0306E) : const Color(0xFFF08DBA),
+    _ => scheme.onSurfaceVariant,
+  };
+}
+
+/// The frame every step row shares: a soft card, the same on a phone and a
+/// desktop, so a run of steps reads as a list of things rather than a
+/// timeline hung off decorative rules.
+BoxDecoration stepCardDecoration(ColorScheme scheme) => BoxDecoration(
+  color: scheme.brightness == Brightness.light
+      ? scheme.surfaceContainerLowest
+      : scheme.surfaceContainerLow,
+  border: Border.all(color: scheme.outlineVariant),
+  borderRadius: BorderRadius.circular(12),
+);
+
 /// One glyph in a message's hover action row.
 ///
 /// A washed square on hover rather than a bare icon: the reference app's row of
@@ -874,16 +906,10 @@ class _TurnWorkCardState extends State<TurnWorkCard> {
               !MediaQuery.disableAnimationsOf(context),
           child: !_expanded
               ? const SizedBox(width: double.infinity)
-              : Container(
-                  // A rail on the leading edge ties the steps to their fold
-                  // header, so a long expanded run still reads as one unit.
-                  margin: const EdgeInsets.only(left: 6, bottom: 4),
-                  padding: const EdgeInsets.only(left: 10),
-                  decoration: BoxDecoration(
-                    border: Border(
-                      left: BorderSide(color: scheme.outlineVariant, width: 2),
-                    ),
-                  ),
+              : Padding(
+                  // The step cards themselves group the run; a leading rule
+                  // beside them added a line that meant nothing.
+                  padding: const EdgeInsets.only(bottom: 4),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -1092,20 +1118,21 @@ class _GroupedActivityCardState extends State<GroupedActivityCard> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Container(
-          margin: const EdgeInsets.symmetric(vertical: 2),
-          decoration: BoxDecoration(
-            border: Border.all(color: scheme.outlineVariant, width: 0.5),
-            borderRadius: BorderRadius.circular(12),
-          ),
+          margin: const EdgeInsets.symmetric(vertical: 3),
+          decoration: stepCardDecoration(scheme),
+          clipBehavior: Clip.antiAlias,
           child: InkWell(
             mouseCursor: clickable,
-            borderRadius: BorderRadius.circular(12),
             onTap: () => setState(() => _expanded = !_expanded),
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               child: Row(
                 children: [
-                  Icon(meta.icon, size: 17, color: scheme.primary),
+                  Icon(
+                    meta.icon,
+                    size: 17,
+                    color: activityTint(widget.group.type, scheme),
+                  ),
                   const SizedBox(width: 10),
                   Text(
                     '${meta.label} ×$n',
@@ -1137,7 +1164,7 @@ class _GroupedActivityCardState extends State<GroupedActivityCard> {
         ),
         if (_expanded)
           Padding(
-            padding: const EdgeInsets.only(left: 16, top: 2),
+            padding: const EdgeInsets.only(left: 14, top: 1, bottom: 2),
             child: widget.group.items.length > 40
                 ? _WorkSteps(items: widget.group.items, active: anyStreaming)
                 : Column(
@@ -1197,21 +1224,14 @@ class _ActivityCardState extends State<ActivityCard> {
       if (detail.isNotEmpty) detail,
     ].join('\n\n');
 
-    // Two idioms. A phone gets a soft bordered card — a comfortable tap target
-    // in a list of them. A desktop transcript gets a timeline: the steps of a
-    // turn are rows hanging off one continuous rail, so a dozen tool calls read
-    // as a sequence instead of a dozen boxes.
+    // One idiom on every width: a soft card per step, its icon tinted by the
+    // kind of work. (Desktop used to hang steps off a left rail; next to the
+    // fold that read as stray lines rather than structure.)
     final doc = MediaQuery.sizeOf(context).width >= docLayoutWidth;
     return Container(
-      margin: EdgeInsets.symmetric(vertical: doc ? 0 : 2),
-      padding: doc ? const EdgeInsets.only(left: 12) : EdgeInsets.zero,
-      decoration: BoxDecoration(
-        border: doc
-            ? Border(left: BorderSide(color: scheme.outlineVariant, width: 1.5))
-            : Border.all(color: scheme.outlineVariant, width: 0.5),
-        borderRadius: doc ? null : BorderRadius.circular(12),
-      ),
-      clipBehavior: doc ? Clip.none : Clip.antiAlias,
+      margin: const EdgeInsets.symmetric(vertical: 3),
+      decoration: stepCardDecoration(scheme),
+      clipBehavior: Clip.antiAlias,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1222,21 +1242,21 @@ class _ActivityCardState extends State<ActivityCard> {
                 : null,
             child: Padding(
               padding: EdgeInsets.symmetric(
-                horizontal: doc ? 0 : 12,
-                vertical: doc ? 4 : 10,
+                horizontal: 12,
+                vertical: doc ? 8 : 10,
               ),
               child: Row(
                 children: [
                   Icon(
                     meta.icon,
-                    size: doc ? 15 : 17,
-                    color: doc ? muted : scheme.primary,
+                    size: doc ? 16 : 17,
+                    color: activityTint(item.type, scheme),
                   ),
-                  SizedBox(width: doc ? 8 : 10),
+                  SizedBox(width: doc ? 9 : 10),
                   Text(
                     meta.label,
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: doc ? muted : scheme.onSurface,
+                      color: scheme.onSurface,
                       fontWeight: FontWeight.w500,
                     ),
                   ),
@@ -1280,31 +1300,18 @@ class _ActivityCardState extends State<ActivityCard> {
           ),
           if (_expanded && body.isNotEmpty && !prose)
             Padding(
-              padding: EdgeInsets.fromLTRB(
-                doc ? 0 : 10,
-                0,
-                doc ? 0 : 10,
-                doc ? 4 : 6,
-              ),
+              padding: const EdgeInsets.fromLTRB(10, 0, 10, 6),
               child: StepBody(item: item),
             ),
           if (_expanded && body.isNotEmpty && prose)
             Container(
               width: double.infinity,
-              margin: EdgeInsets.only(bottom: doc ? 6 : 0),
+              margin: const EdgeInsets.fromLTRB(10, 0, 10, 10),
               padding: const EdgeInsets.all(11),
               constraints: const BoxConstraints(maxHeight: 320),
               decoration: BoxDecoration(
-                border: doc
-                    ? null
-                    : Border(
-                        top: BorderSide(
-                          color: scheme.outlineVariant,
-                          width: 0.5,
-                        ),
-                      ),
-                borderRadius: doc ? BorderRadius.circular(8) : null,
-                color: scheme.surfaceContainerLowest,
+                borderRadius: BorderRadius.circular(8),
+                color: scheme.surfaceContainer.withValues(alpha: 0.6),
               ),
               child: SingleChildScrollView(
                 child: MarkdownView(data: body, muted: true),
@@ -1428,11 +1435,8 @@ class _FileChangeCardState extends State<FileChangeCard> {
     final title = widget.item.title.trim();
     final expandable = hasDiff || widget.item.text.trim().isNotEmpty;
     return Container(
-      margin: const EdgeInsets.symmetric(vertical: 2),
-      decoration: BoxDecoration(
-        border: Border.all(color: scheme.outlineVariant, width: 0.5),
-        borderRadius: BorderRadius.circular(12),
-      ),
+      margin: const EdgeInsets.symmetric(vertical: 3),
+      decoration: stepCardDecoration(scheme),
       clipBehavior: Clip.antiAlias,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1446,7 +1450,11 @@ class _FileChangeCardState extends State<FileChangeCard> {
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               child: Row(
                 children: [
-                  Icon(Icons.edit_document, size: 17, color: scheme.primary),
+                  Icon(
+                    Icons.edit_document,
+                    size: 17,
+                    color: activityTint('fileChange', scheme),
+                  ),
                   const SizedBox(width: 10),
                   Text(
                     l10n.toolEdited,
