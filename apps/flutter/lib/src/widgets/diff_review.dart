@@ -352,7 +352,10 @@ class _DiffReviewViewState extends State<DiffReviewView> {
             child: Text(
               lineNo?.toString() ?? '',
               textAlign: TextAlign.right,
-              style: base.copyWith(fontSize: 11, color: scheme.outline),
+              style: base.copyWith(
+                fontSize: 11,
+                color: scheme.onSurfaceVariant,
+              ),
             ),
           ),
           SizedBox(

@@ -218,7 +218,9 @@ class _SettingsState extends ConsumerState<SettingsScreen> {
                   leading: Icon(
                     Icons.circle,
                     size: 12,
-                    color: s.alive ? Colors.green : Colors.red,
+                    color: s.alive
+                        ? successColor(Theme.of(context).colorScheme)
+                        : Theme.of(context).colorScheme.error,
                   ),
                   title: Text(s.key),
                   subtitle: Text(s.localAddr),

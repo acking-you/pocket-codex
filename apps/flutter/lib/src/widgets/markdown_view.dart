@@ -143,7 +143,7 @@ MarkdownStyleSheet _buildMarkdownStyle(BuildContext context, bool muted) {
     blockquoteDecoration: BoxDecoration(
       color: scheme.surfaceContainerHighest,
       borderRadius: BorderRadius.circular(8),
-      border: Border(left: BorderSide(color: scheme.primary, width: 3)),
+      border: Border(left: BorderSide(color: scheme.outline, width: 3)),
     ),
   );
 }

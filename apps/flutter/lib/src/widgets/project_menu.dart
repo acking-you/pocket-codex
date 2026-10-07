@@ -218,7 +218,10 @@ class _ProjectMenuState extends State<ProjectMenu> {
                   padding: const EdgeInsets.fromLTRB(12, 4, 12, 10),
                   child: Text(
                     l10n.noMatchingProjects,
-                    style: TextStyle(fontSize: 12.5, color: scheme.outline),
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      color: scheme.onSurfaceVariant,
+                    ),
                   ),
                 ),
               const Divider(height: 9),

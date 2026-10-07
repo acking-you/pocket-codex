@@ -19,6 +19,7 @@ import 'package:pocket_codex/src/fonts.dart';
 import 'package:pocket_codex/src/git_diff.dart';
 import 'package:pocket_codex/src/screens/app_session/diff_view.dart';
 import 'package:pocket_codex/src/screens/app_session/transcript_model.dart';
+import 'package:pocket_codex/src/motion.dart';
 import 'package:pocket_codex/src/theme.dart';
 import 'package:pocket_codex/src/widgets/app_toast.dart';
 import 'package:pocket_codex/src/widgets/links.dart';
@@ -435,7 +436,7 @@ class _PlanCardState extends State<PlanCard> {
     final scheme = Theme.of(context).colorScheme;
     final (icon, color) = switch (s.status) {
       'completed' => (Icons.check_circle_rounded, additionColor(scheme)),
-      'in_progress' => (Icons.timelapse_rounded, scheme.primary),
+      'in_progress' => (Icons.timelapse_rounded, signalColor(scheme)),
       _ => (Icons.radio_button_unchecked, scheme.onSurfaceVariant),
     };
     return Padding(
@@ -1212,7 +1213,20 @@ class _TypingIndicatorState extends State<TypingIndicator>
   late final AnimationController _c = AnimationController(
     vsync: this,
     duration: const Duration(milliseconds: 1100),
-  )..repeat();
+  );
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Reduced motion: three steady dots still say "working".
+    if (Motion.ambientAllowed(context)) {
+      if (!_c.isAnimating) _c.repeat();
+    } else {
+      _c
+        ..stop()
+        ..value = 0.5;
+    }
+  }
 
   @override
   void dispose() {
@@ -1222,7 +1236,7 @@ class _TypingIndicatorState extends State<TypingIndicator>
 
   @override
   Widget build(BuildContext context) {
-    final color = Theme.of(context).colorScheme.onSurfaceVariant;
+    final color = signalColor(Theme.of(context).colorScheme);
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 14),
       child: Row(

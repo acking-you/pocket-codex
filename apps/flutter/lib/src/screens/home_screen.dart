@@ -699,7 +699,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                 const SizedBox(height: 16),
                 Text(
                   l10n.homeAutoRetryNote,
-                  style: TextStyle(fontSize: 11.5, color: scheme.outline),
+                  style: TextStyle(
+                    fontSize: 11.5,
+                    color: scheme.onSurfaceVariant,
+                  ),
                   textAlign: TextAlign.center,
                 ),
               ],

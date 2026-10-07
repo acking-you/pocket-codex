@@ -12,6 +12,33 @@ bool get isFramelessDesktop =>
     (defaultTargetPlatform == TargetPlatform.macOS ||
         defaultTargetPlatform == TargetPlatform.windows);
 
+/// True on macOS, frameless or not. Read through [defaultTargetPlatform] for
+/// the same test-safety reason as [isFramelessDesktop].
+bool get isMacDesktop =>
+    !kIsWeb && defaultTargetPlatform == TargetPlatform.macOS;
+
+/// Geometry of the window chrome every desktop screen shares, so a sidebar
+/// strip, a content header and a utility page all line up with the native
+/// window buttons instead of each guessing.
+abstract final class WindowChrome {
+  /// Height of the top strip that doubles as the title bar.
+  ///
+  /// macOS: 52 pt, the unified-toolbar height native apps use (Finder, Mail,
+  /// Xcode). The traffic lights are re-centred into it natively (see
+  /// `MainFlutterWindow.swift`), so controls in the strip share their centre
+  /// line. Windows: 44 px, which the 46 px caption buttons fill edge to edge.
+  static double get barHeight => isMacDesktop ? 52 : 44;
+
+  /// Width the macOS traffic lights occupy from the window's leading edge,
+  /// including the native 20 pt inset and the gap after the zoom button.
+  static const double trafficLightsWidth = 78;
+
+  /// Leading inset that keeps content clear of the traffic lights; zero where
+  /// there are none.
+  static double get leadingInset =>
+      isFramelessDesktop && isMacDesktop ? trafficLightsWidth : 0;
+}
+
 /// An [AppBar] replacement for the frameless desktop window.
 ///
 /// The native title bar is hidden (see `desktop_tray.dart`), so this bar sits
@@ -61,12 +88,11 @@ class WindowTitleBar extends StatelessWidget implements PreferredSizeWidget {
   /// Whether to imply a leading widget when none is given, as on [AppBar].
   final bool automaticallyImplyLeading;
 
-  /// Width the macOS traffic lights need reserved at the leading edge.
-  static const double _macLeadingInset = 68;
-
   @override
-  Size get preferredSize =>
-      Size.fromHeight(kToolbarHeight + (bottom?.preferredSize.height ?? 0));
+  Size get preferredSize => Size.fromHeight(
+    (isFramelessDesktop ? WindowChrome.barHeight : kToolbarHeight) +
+        (bottom?.preferredSize.height ?? 0),
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -82,8 +108,9 @@ class WindowTitleBar extends StatelessWidget implements PreferredSizeWidget {
       );
     }
 
-    final isMac = defaultTargetPlatform == TargetPlatform.macOS;
-    final leadInset = isMac ? _macLeadingInset : 0.0;
+    final isMac = isMacDesktop;
+    final leadInset = WindowChrome.leadingInset;
+    final barHeight = WindowChrome.barHeight;
 
     // Materialise the implied back button ourselves: AppBar's own implied
     // leading knows nothing about the traffic lights and would sit under
@@ -107,11 +134,12 @@ class WindowTitleBar extends StatelessWidget implements PreferredSizeWidget {
 
     return AppBar(
       automaticallyImplyLeading: false,
+      toolbarHeight: barHeight,
+      // macOS centres a window's title; Windows leads with it.
+      centerTitle: isMac,
       backgroundColor: backgroundColor,
       foregroundColor: foregroundColor,
-      leadingWidth: effectiveLeading == null
-          ? null
-          : leadInset + kToolbarHeight,
+      leadingWidth: effectiveLeading == null ? null : leadInset + barHeight,
       leading: leadingWidget,
       titleSpacing: effectiveLeading == null
           ? leadInset + NavigationToolbar.kMiddleSpacing
@@ -124,10 +152,45 @@ class WindowTitleBar extends StatelessWidget implements PreferredSizeWidget {
         // the trailing edge.
         if (!isMac) const WindowCaptionButtons(),
       ],
-      // The bar's empty space drags the window; the leading/title/actions sit
-      // above this layer and keep their own taps.
-      flexibleSpace: const DragToMoveArea(child: SizedBox.expand()),
+      // The bar's empty space drags the window (and double-click zooms, as
+      // a native title bar does); the leading/title/actions sit above this
+      // layer and keep their own taps.
+      flexibleSpace: const WindowDragArea(),
       bottom: bottom,
+    );
+  }
+}
+
+/// Empty title-bar space: drags the window, and a double-click zooms it the
+/// way the native title bar would. `DragToMoveArea` covers the drag but not
+/// the double-click, which is the first thing a Mac user tries.
+class WindowDragArea extends StatelessWidget {
+  /// Fills its parent; pass [child] to drag from something visible.
+  const WindowDragArea({super.key, this.child});
+
+  /// Optional content painted inside the drag area.
+  final Widget? child;
+
+  Future<void> _zoom() async {
+    try {
+      if (await windowManager.isMaximized()) {
+        await windowManager.unmaximize();
+      } else {
+        await windowManager.maximize();
+      }
+    } catch (_) {
+      // Best-effort; there is no real window under `flutter test`.
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!isFramelessDesktop) return child ?? const SizedBox.expand();
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onPanStart: (_) => windowManager.startDragging(),
+      onDoubleTap: _zoom,
+      child: child ?? const SizedBox.expand(),
     );
   }
 }

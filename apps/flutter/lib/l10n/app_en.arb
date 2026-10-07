@@ -814,5 +814,7 @@
         "type": "int"
       }
     }
-  }
+  },
+  "hideSidebar": "Hide sidebar",
+  "showSidebar": "Show sidebar"
 }

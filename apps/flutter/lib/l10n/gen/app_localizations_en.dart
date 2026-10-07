@@ -1972,4 +1972,10 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get parentSession => 'Open parent session';
+
+  @override
+  String get hideSidebar => 'Hide sidebar';
+
+  @override
+  String get showSidebar => 'Show sidebar';
 }

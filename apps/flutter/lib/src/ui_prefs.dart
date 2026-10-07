@@ -24,6 +24,8 @@ class UiPrefs {
     this.guideSeen = false,
     this.themeMode,
     this.composerHeight,
+    this.sidebarOpen,
+    this.sidebarWidth,
   });
 
   /// Full relay key of the app service explicitly chosen as the default host.
@@ -53,6 +55,12 @@ class UiPrefs {
   /// Text can grow the input beyond this height without changing the preference.
   final double? composerHeight;
 
+  /// Whether the desktop sidebar was left open; null means the default (open).
+  final bool? sidebarOpen;
+
+  /// The desktop sidebar width the user dragged to; null uses the default.
+  final double? sidebarWidth;
+
   /// Copy with the given fields replaced. `clearAutoHost` removes the
   /// auto-host record; `clearThemeMode` returns to follow-system (a plain
   /// null argument means "keep").
@@ -66,6 +74,8 @@ class UiPrefs {
     String? themeMode,
     bool clearThemeMode = false,
     double? composerHeight,
+    bool? sidebarOpen,
+    double? sidebarWidth,
   }) => UiPrefs(
     preferredAppServiceKey:
         preferredAppServiceKey ?? this.preferredAppServiceKey,
@@ -75,6 +85,8 @@ class UiPrefs {
     guideSeen: guideSeen ?? this.guideSeen,
     themeMode: clearThemeMode ? null : (themeMode ?? this.themeMode),
     composerHeight: composerHeight ?? this.composerHeight,
+    sidebarOpen: sidebarOpen ?? this.sidebarOpen,
+    sidebarWidth: sidebarWidth ?? this.sidebarWidth,
   );
 
   /// Parse from JSON; any shape surprise degrades to defaults.
@@ -106,6 +118,13 @@ class UiPrefs {
         num value when value.isFinite => value.toDouble().clamp(28, 280),
         _ => null,
       },
+      sidebarOpen: json['sidebarOpen'] is bool
+          ? json['sidebarOpen'] as bool
+          : null,
+      sidebarWidth: switch (json['sidebarWidth']) {
+        num value when value.isFinite => value.toDouble().clamp(200, 520),
+        _ => null,
+      },
     );
   }
 
@@ -120,6 +139,8 @@ class UiPrefs {
     if (guideSeen) 'guideSeen': true,
     if (themeMode != null) 'themeMode': themeMode,
     if (composerHeight != null) 'composerHeight': composerHeight,
+    if (sidebarOpen != null) 'sidebarOpen': sidebarOpen,
+    if (sidebarWidth != null) 'sidebarWidth': sidebarWidth,
   };
 }
 
@@ -212,6 +233,8 @@ class UiPrefsStore extends AsyncNotifier<UiPrefs> {
         guideSeen: raced.guideSeen || loaded.guideSeen,
         themeMode: raced.themeMode ?? loaded.themeMode,
         composerHeight: raced.composerHeight ?? loaded.composerHeight,
+        sidebarOpen: raced.sidebarOpen ?? loaded.sidebarOpen,
+        sidebarWidth: raced.sidebarWidth ?? loaded.sidebarWidth,
       );
       _enqueueWrite(merged);
       return merged;
@@ -307,6 +330,22 @@ class UiPrefsStore extends AsyncNotifier<UiPrefs> {
   void setComposerHeight(double height) {
     if (!height.isFinite) return;
     final next = _current.copyWith(composerHeight: height.clamp(28, 280));
+    state = AsyncData(next);
+    _enqueueWrite(next);
+  }
+
+  /// Remember whether the desktop sidebar is open.
+  void setSidebarOpen(bool open) {
+    if (_current.sidebarOpen == open) return;
+    final next = _current.copyWith(sidebarOpen: open);
+    state = AsyncData(next);
+    _enqueueWrite(next);
+  }
+
+  /// Persist the desktop sidebar width within the supported range.
+  void setSidebarWidth(double width) {
+    if (!width.isFinite) return;
+    final next = _current.copyWith(sidebarWidth: width.clamp(200, 520));
     state = AsyncData(next);
     _enqueueWrite(next);
   }

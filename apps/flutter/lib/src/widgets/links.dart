@@ -3,6 +3,7 @@ import 'package:flutter_linkify/flutter_linkify.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
+import 'package:pocket_codex/src/theme.dart';
 import 'package:pocket_codex/src/widgets/app_toast.dart';
 
 /// Session-specific routing for explicit file and host-local web links.
@@ -40,14 +41,15 @@ Future<void> openWebUrl(BuildContext context, String url) async {
   }
 }
 
-/// The style applied to links: the theme's primary color, underlined, so URLs
-/// read as tappable in both markdown and plain text.
+/// The style applied to links: the link blue, with a soft underline, so URLs
+/// read as tappable in both markdown and plain text. Controls are drawn in
+/// ink, so links need a hue of their own to stand out from them.
 TextStyle linkStyleOf(BuildContext context) {
-  final primary = Theme.of(context).colorScheme.primary;
+  final link = infoColor(Theme.of(context).colorScheme);
   return TextStyle(
-    color: primary,
+    color: link,
     decoration: TextDecoration.underline,
-    decorationColor: primary,
+    decorationColor: link.withValues(alpha: 0.45),
   );
 }
 

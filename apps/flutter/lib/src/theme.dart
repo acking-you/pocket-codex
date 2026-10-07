@@ -1,98 +1,126 @@
 import 'package:flutter/material.dart';
 import 'package:pocket_codex/src/desktop_theme.dart';
 import 'package:pocket_codex/src/fonts.dart';
+import 'package:pocket_codex/src/motion.dart';
 
-/// Shared neutral surfaces and a restrained, accessible blue accent.
+/// Graphite neutrals, monochrome controls and one violet "signal".
+///
+/// The neutrals follow the macOS system greys (window, source list, control
+/// background) without a blue cast, so the app sits beside native windows on
+/// every desktop rather than reading as a tinted web page. Controls are drawn
+/// in ink — a filled button, the send action — the way current desktop apps
+/// do. Colour is reserved for meaning: the violet signal (taken from the
+/// logo's relay arcs) marks what is live, and success / caution / error / info
+/// keep their own hues, so a running turn never looks like a healthy service
+/// or a diff addition.
+///
+/// Text roles are tuned for contrast on every ground they sit on:
+/// `onSurfaceVariant` stays above 4.5:1 for small secondary text on the page,
+/// the sidebar and raised panels, while `outline` is a border colour only and
+/// must not carry text.
 ColorScheme _flowScheme(Brightness brightness) {
   final light = brightness == Brightness.light;
   return ColorScheme.fromSeed(
-    seedColor: const Color(0xFF355ACF),
+    seedColor: const Color(0xFF6E56CF),
     brightness: brightness,
   ).copyWith(
-    primary: light ? const Color(0xFF355ACF) : const Color(0xFFA5B8FF),
-    onPrimary: light ? Colors.white : const Color(0xFF162352),
-    primaryContainer: light ? const Color(0xFFE8EDFF) : const Color(0xFF263459),
+    primary: light ? const Color(0xFF1D1D1F) : const Color(0xFFEDEDEF),
+    onPrimary: light ? Colors.white : const Color(0xFF1D1D1F),
+    primaryContainer: light ? const Color(0xFFE6E6E4) : const Color(0xFF36363B),
     onPrimaryContainer: light
-        ? const Color(0xFF2343A1)
-        : const Color(0xFFDCE4FF),
-    secondary: light ? const Color(0xFF586174) : const Color(0xFFB2BCCF),
+        ? const Color(0xFF1D1D1F)
+        : const Color(0xFFEDEDEF),
+    secondary: light ? const Color(0xFF5E5E63) : const Color(0xFFA6A6AD),
+    onSecondary: light ? Colors.white : const Color(0xFF1D1D1F),
     secondaryContainer: light
-        ? const Color(0xFFEDF0F5)
-        : const Color(0xFF292E39),
+        ? const Color(0xFFE6E6E4)
+        : const Color(0xFF36363B),
     onSecondaryContainer: light
-        ? const Color(0xFF263044)
-        : const Color(0xFFE6EAF2),
-    surface: light ? const Color(0xFFF7F8FA) : const Color(0xFF111318),
-    surfaceBright: light ? Colors.white : const Color(0xFF1A1D24),
-    onSurface: light ? const Color(0xFF202634) : const Color(0xFFEBEEF5),
-    onSurfaceVariant: light ? const Color(0xFF626C7E) : const Color(0xFFA4AEC1),
-    surfaceContainerLowest: light ? Colors.white : const Color(0xFF14171D),
+        ? const Color(0xFF1D1D1F)
+        : const Color(0xFFEDEDEF),
+    tertiary: light ? const Color(0xFF6E56CF) : const Color(0xFFB4A7F5),
+    onTertiary: light ? Colors.white : const Color(0xFF261C5E),
+    tertiaryContainer: light
+        ? const Color(0xFFEEEAFC)
+        : const Color(0xFF2E2852),
+    onTertiaryContainer: light
+        ? const Color(0xFF4B3B9E)
+        : const Color(0xFFDDD6FC),
+    surface: light ? const Color(0xFFFBFBFA) : const Color(0xFF19191B),
+    surfaceBright: light ? Colors.white : const Color(0xFF27272A),
+    surfaceDim: light ? const Color(0xFFEDEDEB) : const Color(0xFF141416),
+    onSurface: light ? const Color(0xFF1D1D1F) : const Color(0xFFEDEDEF),
+    onSurfaceVariant: light ? const Color(0xFF5E5E63) : const Color(0xFFA6A6AD),
+    surfaceContainerLowest: light ? Colors.white : const Color(0xFF141416),
     surfaceContainerLow: light
-        ? const Color(0xFFF1F3F7)
-        : const Color(0xFF1B1F28),
-    surfaceContainer: light ? const Color(0xFFEBEEF3) : const Color(0xFF222732),
+        ? const Color(0xFFF3F3F1)
+        : const Color(0xFF202023),
+    surfaceContainer: light ? const Color(0xFFEDEDEB) : const Color(0xFF27272A),
     surfaceContainerHigh: light
-        ? const Color(0xFFE4E8F0)
-        : const Color(0xFF2B3140),
+        ? const Color(0xFFE6E6E4)
+        : const Color(0xFF2F2F33),
     surfaceContainerHighest: light
-        ? const Color(0xFFDDE3ED)
-        : const Color(0xFF353D4D),
-    outline: light ? const Color(0xFFCBD2DF) : const Color(0xFF465063),
-    outlineVariant: light ? const Color(0xFFE3E7EF) : const Color(0xFF2C3341),
-    error: light ? const Color(0xFFBE3245) : const Color(0xFFFF8B97),
-    errorContainer: light ? const Color(0xFFFFEDEF) : const Color(0xFF48232C),
-    onErrorContainer: light ? const Color(0xFF8D2030) : const Color(0xFFFFD9DE),
+        ? const Color(0xFFDEDEDC)
+        : const Color(0xFF39393E),
+    outline: light ? const Color(0xFFC8C8CB) : const Color(0xFF4B4B51),
+    outlineVariant: light ? const Color(0xFFE4E4E2) : const Color(0xFF323236),
+    inverseSurface: light ? const Color(0xFF2B2B2E) : const Color(0xFFE6E6E8),
+    onInverseSurface: light ? const Color(0xFFF2F2F2) : const Color(0xFF1D1D1F),
+    error: light ? const Color(0xFFC4323F) : const Color(0xFFFF8A8F),
+    onError: light ? Colors.white : const Color(0xFF4A0D12),
+    errorContainer: light ? const Color(0xFFFCE9EA) : const Color(0xFF47201F),
+    onErrorContainer: light ? const Color(0xFF8C1F2A) : const Color(0xFFFFD7D8),
   );
 }
 
-/// Ink at 50% — muted chrome: placeholders, carets, secondary glyphs. The
-/// design draws content at three levels and `ColorScheme` names only two, so
-/// this third one is a helper rather than a role.
+/// Ink for secondary chrome glyphs: placeholders, carets, quiet icons. Text
+/// that must be read uses `onSurfaceVariant` instead, which keeps contrast on
+/// the raised panels too.
 Color onSurfaceMuted(ColorScheme scheme) =>
-    scheme.onSurface.withValues(alpha: 0.5);
+    scheme.onSurface.withValues(alpha: 0.55);
 
 /// Ink at 30% — disabled content, like a send button that can't send.
 Color onSurfaceDisabled(ColorScheme scheme) =>
     scheme.onSurface.withValues(alpha: 0.3);
 
-/// Additions, in a diff or a change count. The design names no success role,
-/// but `+`/`−` is a convention older than any palette — a diff whose additions
-/// aren't green reads wrong. Pitched deeper and warmer than Material's stock
-/// green so it sits with the warm neutrals instead of glowing against them; the
+/// The live signal: a running turn, a conversation working in the background,
+/// the composer while the agent answers. Nothing else is drawn in it, which is
+/// what lets one violet dot in a sidebar of grey rows say "this is working".
+Color signalColor(ColorScheme scheme) => scheme.tertiary;
+
+/// Additions, in a diff or a change count. `+`/`−` is a convention older than
+/// any palette — a diff whose additions aren't green reads wrong. Its
 /// counterpart is `ColorScheme.error`.
 Color additionColor(ColorScheme scheme) => scheme.brightness == Brightness.light
-    ? const Color(0xFF0E7264)
-    : const Color(0xFF5BC4AF);
+    ? const Color(0xFF1A7F37)
+    : const Color(0xFF57C27A);
 
 /// Caution — degraded but not failed: reconnecting, plan mode, a risky
-/// permission, a quota running low. The design names no warning role either;
-/// this is the syntax palette's `type` amber, which is already tuned to sit
-/// with the warm neutrals. Genuine failure uses `ColorScheme.error`.
+/// permission, a quota running low. Genuine failure uses `ColorScheme.error`.
 Color cautionColor(ColorScheme scheme) => scheme.brightness == Brightness.light
-    ? const Color(0xFF96540A)
-    : const Color(0xFFD9A054);
+    ? const Color(0xFF9A5B00)
+    : const Color(0xFFE0A647);
 
-/// Healthy — a service online, a subscription alive, a host running. The design
-/// names no success role, so this follows [additionColor] and takes the syntax
-/// palette's `string` green, at the same value: both mean "good" and the hue is
-/// already tuned to the warm neutrals. Kept a separate function rather than
-/// calling [additionColor] at the status sites, because a diff's additions and a
-/// service's health are different meanings — retuning one must not move the
-/// other.
+/// Healthy — a service online, a subscription alive, a host running. Kept a
+/// separate function rather than calling [additionColor] at the status sites,
+/// because a diff's additions and a service's health are different meanings —
+/// retuning one must not move the other.
 Color successColor(ColorScheme scheme) => additionColor(scheme);
 
-/// Informational — a log line that is neither a problem nor a result. The syntax
-/// palette's `number` blue; the only status level that isn't already named.
+/// Informational — a log line that is neither a problem nor a result.
 Color infoColor(ColorScheme scheme) => scheme.brightness == Brightness.light
     ? const Color(0xFF1F63BC)
     : const Color(0xFF74A9EC);
 
-/// A thin, rounded scrollbar shared by both themes — closer to a modern web
-/// chat than the default chunky Material scrollbar. Combined with full-width
-/// scroll areas it sits flush at the window edge.
+/// A thin, rounded scrollbar shared by both themes — the macOS overlay style
+/// rather than Material's chunky default.
 final _scrollbarTheme = ScrollbarThemeData(
-  thickness: WidgetStateProperty.all(6.0),
-  radius: const Radius.circular(3),
+  thickness: WidgetStateProperty.resolveWith(
+    (states) => states.contains(WidgetState.hovered) ? 8.0 : 6.0,
+  ),
+  radius: const Radius.circular(4),
+  crossAxisMargin: 2,
+  mainAxisMargin: 2,
 );
 
 /// The window/scaffold background: the page itself, opaque in both themes.
@@ -101,14 +129,16 @@ Color surfaceBackground(ColorScheme scheme) => scheme.surface;
 /// An opaque raised panel shared by cards, sheets, menus and the composer.
 Color surfacePanel(ColorScheme scheme) => scheme.surfaceBright;
 
-/// Opaque selection tint, shared by both sidebar views without dimming text.
-Color surfaceSelection(ColorScheme scheme) => scheme.primaryContainer;
+/// The sidebar ground: a step off the page, like a macOS source list.
+Color surfaceSidebar(ColorScheme scheme) => scheme.surfaceContainerLow;
 
-/// A stable outline separates selection from transient hover highlights.
-Color selectionBorder(ColorScheme scheme) => Color.alphaBlend(
-  scheme.primary.withValues(alpha: 0.26),
-  surfaceSelection(scheme),
-);
+/// Selected row in a list: a neutral plate, not a coloured one — selection is
+/// position, not status, and colour stays free for status.
+Color surfaceSelection(ColorScheme scheme) => scheme.surfaceContainerHigh;
+
+/// Selected rows carry no outline; kept as a function so call sites that draw
+/// a border can resolve it from one place.
+Color selectionBorder(ColorScheme scheme) => Colors.transparent;
 
 /// Floating previews need a stronger elevation step over the transcript.
 Color surfacePreview(ColorScheme scheme) =>
@@ -116,34 +146,35 @@ Color surfacePreview(ColorScheme scheme) =>
     ? scheme.surfaceBright
     : scheme.surfaceContainer;
 
-/// The design's type scale, mapped onto Material's roles.
+/// The type scale, mapped onto Material's roles.
 ///
+/// Five steps do nearly all the work — 11 (captions), 12 (secondary), 13
+/// (controls and rows), 14 (reading), 15 (the composer) — with titles above.
 /// Paragraphs use generous line height; single-line controls stay compact.
 ///
-/// The `label` roles are deliberately left at Material's defaults. In the design
-/// they are 16/14/12 at w400, but there control text is baked per widget; here
-/// `labelLarge` is what every Material button renders its text in, and widening
-/// it to 16 lays out buttons the button themes were never measured for.
+/// The `label` roles are deliberately left at Material's defaults: `labelLarge`
+/// is what every Material button renders its text in, and the button themes
+/// are measured for it.
 TextTheme _textTheme(ColorScheme scheme) {
-  TextStyle t(double size, double height) =>
-      TextStyle(fontSize: size, height: height, fontWeight: FontWeight.w400);
+  TextStyle t(double size, double height, [FontWeight w = FontWeight.w400]) =>
+      TextStyle(fontSize: size, height: height, fontWeight: w);
 
   return TextTheme(
-    displayLarge: t(52, 1.15),
-    displayMedium: t(46, 1.15),
-    displaySmall: t(40, 1.15),
-    headlineLarge: t(36, 1.2),
-    headlineMedium: t(32, 1.2),
-    headlineSmall: t(28, 1.2),
-    titleLarge: t(22, 1.3),
-    titleMedium: t(18, 1.4),
-    titleSmall: t(14, 1.4),
-    bodyLarge: t(16, 1.6),
-    bodyMedium: t(14, 1.5),
-    bodySmall: t(12, 1.5),
+    displayLarge: t(48, 1.12),
+    displayMedium: t(40, 1.15),
+    displaySmall: t(34, 1.18),
+    headlineLarge: t(30, 1.2, FontWeight.w600),
+    headlineMedium: t(26, 1.22, FontWeight.w600),
+    headlineSmall: t(22, 1.25, FontWeight.w600),
+    titleLarge: t(19, 1.3, FontWeight.w600),
+    titleMedium: t(16, 1.35, FontWeight.w600),
+    titleSmall: t(13, 1.4, FontWeight.w600),
+    bodyLarge: t(15, 1.6),
+    bodyMedium: t(14, 1.55),
+    bodySmall: t(12, 1.45),
   ).apply(
-    fontFamily: appFontFamily,
-    fontFamilyFallback: cjkFontFallback,
+    fontFamily: uiFontFamily,
+    fontFamilyFallback: uiCjkFallback,
     bodyColor: scheme.onSurface,
     displayColor: scheme.onSurface,
   );
@@ -159,16 +190,18 @@ ThemeData _base(ColorScheme scheme) {
     fontSize: 12,
     fontWeight: weight,
     color: color,
-    fontFamily: appFontFamily,
-    fontFamilyFallback: cjkFontFallback,
+    fontFamily: uiFontFamily,
+    fontFamilyFallback: uiCjkFallback,
   );
   return ThemeData(
     colorScheme: scheme,
     useMaterial3: true,
-    fontFamily: appFontFamily,
-    fontFamilyFallback: cjkFontFallback,
+    fontFamily: uiFontFamily,
+    fontFamilyFallback: uiCjkFallback,
     textTheme: _textTheme(scheme),
     scaffoldBackgroundColor: background,
+    canvasColor: background,
+    pageTransitionsTheme: appPageTransitions,
     dividerTheme: DividerThemeData(
       color: scheme.outlineVariant,
       thickness: 1,
@@ -186,6 +219,7 @@ ThemeData _base(ColorScheme scheme) {
     outlinedButtonTheme: OutlinedButtonThemeData(
       style: OutlinedButton.styleFrom(
         minimumSize: const Size(48, 48),
+        foregroundColor: scheme.onSurface,
         side: BorderSide(color: scheme.outline),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(kControlRadius),
@@ -195,6 +229,7 @@ ThemeData _base(ColorScheme scheme) {
     textButtonTheme: TextButtonThemeData(
       style: TextButton.styleFrom(
         minimumSize: const Size(48, 44),
+        foregroundColor: scheme.onSurface,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(kControlRadius),
         ),
@@ -203,29 +238,55 @@ ThemeData _base(ColorScheme scheme) {
     iconButtonTheme: IconButtonThemeData(
       style: IconButton.styleFrom(
         minimumSize: const Size(44, 44),
+        foregroundColor: scheme.onSurfaceVariant,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(kControlRadius),
         ),
       ),
     ),
+    chipTheme: ChipThemeData(
+      backgroundColor: Colors.transparent,
+      selectedColor: scheme.tertiaryContainer,
+      checkmarkColor: scheme.onTertiaryContainer,
+      side: BorderSide(color: scheme.outlineVariant),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(kControlRadius),
+      ),
+      labelStyle: TextStyle(fontSize: 12.5, color: scheme.onSurface),
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+    ),
     inputDecorationTheme: InputDecorationTheme(
       border: OutlineInputBorder(
         borderRadius: BorderRadius.circular(kControlRadius),
+        borderSide: BorderSide(color: scheme.outline),
       ),
+      // Only `border`: a field that opts out with `InputBorder.none` (the
+      // composer, inline renames) must not get an enabled/focused outline
+      // back from the theme.
       contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
       hintStyle: TextStyle(color: scheme.onSurfaceVariant, fontSize: 14),
+    ),
+    progressIndicatorTheme: ProgressIndicatorThemeData(
+      color: scheme.onSurfaceVariant,
+      linearTrackColor: scheme.surfaceContainerHighest,
+    ),
+    switchTheme: SwitchThemeData(
+      trackOutlineColor: WidgetStatePropertyAll(scheme.outline),
     ),
     dialogTheme: DialogThemeData(
       backgroundColor: panel,
       surfaceTintColor: Colors.transparent,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(kDialogRadius),
+      ),
     ),
     bottomSheetTheme: BottomSheetThemeData(
       backgroundColor: panel,
       surfaceTintColor: Colors.transparent,
       showDragHandle: true,
+      dragHandleColor: scheme.outline,
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
       ),
     ),
     scrollbarTheme: _scrollbarTheme,
@@ -234,9 +295,17 @@ ThemeData _base(ColorScheme scheme) {
     // bar hidden on desktop, the app bar reads as part of the window itself.
     appBarTheme: AppBarTheme(
       backgroundColor: background,
+      foregroundColor: scheme.onSurface,
       surfaceTintColor: Colors.transparent,
       elevation: 0,
       scrolledUnderElevation: 0,
+      titleTextStyle: TextStyle(
+        fontSize: 15,
+        fontWeight: FontWeight.w600,
+        color: scheme.onSurface,
+        fontFamily: uiFontFamily,
+        fontFamilyFallback: uiCjkFallback,
+      ),
     ),
     // Panels over tone: cards are a lighter layer on the background with a
     // barely-there outline, not a border-drawn box.
@@ -249,6 +318,10 @@ ThemeData _base(ColorScheme scheme) {
         borderRadius: radius,
         side: BorderSide(color: scheme.outlineVariant),
       ),
+    ),
+    drawerTheme: DrawerThemeData(
+      backgroundColor: surfaceSidebar(scheme),
+      surfaceTintColor: Colors.transparent,
     ),
     navigationRailTheme: NavigationRailThemeData(
       backgroundColor: Colors.transparent,

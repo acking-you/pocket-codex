@@ -23,6 +23,22 @@ import 'package:flutter/foundation.dart';
 /// The design system's prose face, bundled on every platform. Latin only.
 const appFontFamily = 'Figtree';
 
+/// Flutter's proxy for the Apple system text face (SF Pro), resolved by the
+/// engine on macOS / iOS and ignored elsewhere.
+const appleSystemFontFamily = 'CupertinoSystemText';
+
+/// The UI face actually in use: the system font on Apple platforms, where an
+/// app that doesn't speak SF Pro reads as a port, and the bundled Figtree
+/// everywhere else, where the system faces (Segoe UI, Roboto) vary too much to
+/// design against. Resolved from [defaultTargetPlatform], so tests — forced to
+/// android — keep rendering Figtree.
+String get uiFontFamily =>
+    !kIsWeb &&
+        (defaultTargetPlatform == TargetPlatform.macOS ||
+            defaultTargetPlatform == TargetPlatform.iOS)
+    ? appleSystemFontFamily
+    : appFontFamily;
+
 /// The design system's code face, bundled on every platform. Latin only.
 const monoFontFamily = 'GeistMono';
 
@@ -55,6 +71,16 @@ const cjkFontFallback = [
   'Noto Sans CJK SC',
   'Microsoft YaHei',
 ];
+
+/// The CJK chain behind [uiFontFamily]. On Apple platforms PingFang SC leads:
+/// it is the face SF Pro is designed to sit beside, and the bundled Noto Sans
+/// SC exists to fix Windows, not to override a Mac's own Chinese font.
+List<String> get uiCjkFallback =>
+    !kIsWeb &&
+        (defaultTargetPlatform == TargetPlatform.macOS ||
+            defaultTargetPlatform == TargetPlatform.iOS)
+    ? const ['PingFang SC', desktopFontFamily, 'Noto Sans CJK SC']
+    : cjkFontFallback;
 
 /// CJK fallback for mono styles (command output, diffs, file paths, code
 /// blocks). Geist Mono has no Han glyphs either, so Chinese in code resolves

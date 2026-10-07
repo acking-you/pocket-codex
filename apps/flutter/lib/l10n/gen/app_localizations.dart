@@ -3625,6 +3625,18 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Open parent session'**
   String get parentSession;
+
+  /// No description provided for @hideSidebar.
+  ///
+  /// In en, this message translates to:
+  /// **'Hide sidebar'**
+  String get hideSidebar;
+
+  /// No description provided for @showSidebar.
+  ///
+  /// In en, this message translates to:
+  /// **'Show sidebar'**
+  String get showSidebar;
 }
 
 class _AppLocalizationsDelegate

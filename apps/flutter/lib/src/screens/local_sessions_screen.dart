@@ -411,7 +411,7 @@ class _LocalSessionsState extends ConsumerState<LocalSessionsScreen> {
                   key: const ValueKey('local-no-match'),
                   child: Text(
                     l10n.noMatchingThreads,
-                    style: TextStyle(color: scheme.outline),
+                    style: TextStyle(color: scheme.onSurfaceVariant),
                   ),
                 )
               : desktop

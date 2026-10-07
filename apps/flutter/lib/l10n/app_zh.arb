@@ -712,5 +712,7 @@
         "type": "int"
       }
     }
-  }
+  },
+  "hideSidebar": "隐藏侧边栏",
+  "showSidebar": "显示侧边栏"
 }

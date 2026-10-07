@@ -1909,4 +1909,10 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get parentSession => '打开父会话';
+
+  @override
+  String get hideSidebar => '隐藏侧边栏';
+
+  @override
+  String get showSidebar => '显示侧边栏';
 }

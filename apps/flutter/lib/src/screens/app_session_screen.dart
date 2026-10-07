@@ -19,7 +19,6 @@ import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart' show DateFormat;
 import 'package:super_sliver_list/super_sliver_list.dart';
-import 'package:window_manager/window_manager.dart' show DragToMoveArea;
 import 'package:pocket_codex/src/bridge_api.dart';
 import 'package:pocket_codex/src/session_tree.dart';
 import 'package:pocket_codex/src/widgets/session_tree_row.dart';
@@ -45,6 +44,7 @@ import 'package:pocket_codex/src/screens/app_session/generated_image_card.dart';
 import 'package:pocket_codex/src/screens/app_session/history_merge.dart';
 import 'package:pocket_codex/src/screens/app_session/history_rows.dart';
 import 'package:pocket_codex/src/screens/app_session/transcript_view.dart';
+import 'package:pocket_codex/src/motion.dart';
 import 'package:pocket_codex/src/theme.dart';
 import 'package:pocket_codex/src/ui_prefs.dart';
 import 'package:pocket_codex/src/widgets/adaptive_sheet.dart';
@@ -371,9 +371,15 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   // Desktop layout: left = this project's sessions, right = the diff-review
   // split (a file tree + one file's diff). Both collapsible AND drag-resizable;
   // the chat stays centered regardless. _threads backs the left pane.
+  // The sidebar's open state and width start from the saved preference and
+  // are written back when the user changes them (see [_setLeftOpen] and the
+  // splitter's drag end), so a restart reopens the window as it was left.
   bool _leftOpen = true;
   bool _reviewOpen = false; // the right-hand review split is showing
-  double _leftWidth = 304;
+  double _leftWidth = 280;
+  bool _paneDragging = false;
+  bool _sidebarClosing = false;
+  bool _layoutRestored = false;
   double? _composerHeight;
   int _settingsRevision = 0;
   double _reviewWidth = 760; // width of the whole review split (diff + tree)
@@ -661,6 +667,12 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   @override
   void initState() {
     super.initState();
+    final layout = ref.read(uiPrefsProvider).valueOrNull;
+    if (layout != null) {
+      _layoutRestored = true;
+      _leftOpen = layout.sidebarOpen ?? true;
+      _leftWidth = layout.sidebarWidth ?? _leftWidth;
+    }
     _voice = VoiceController(
       api: ref.read(bridgeApiProvider),
       serviceKey: widget.serviceKey,
@@ -5109,6 +5121,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
 
   Widget _buildSession(BuildContext context) {
     ref.watch(_composerDraftsProvider(widget.serviceKey));
+    ref.listen(uiPrefsProvider, (_, next) => _restoreLayout(next.valueOrNull));
     final l10n = AppLocalizations.of(context);
     final scheme = Theme.of(context).colorScheme;
     final width = MediaQuery.of(context).size.width;
@@ -5191,21 +5204,58 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     // the panes give up width before the chat does.
     final maxLeft = ((width - 420) / 2).clamp(200.0, 520.0);
     final maxReview = (width - 360).clamp(400.0, 1200.0);
+    final sidebarWidth = _leftWidth.clamp(200.0, maxLeft);
     return Scaffold(
       body: Row(
         children: [
-          if (_leftOpen) ...[
-            SizedBox(
-              width: _leftWidth.clamp(200, maxLeft),
-              child: _sidebar(l10n),
-            ),
-            _splitter(
-              key: const Key('left-splitter'),
-              onDrag: (dx) => setState(
-                () => _leftWidth = (_leftWidth + dx).clamp(200, 520),
+          // The sidebar slides rather than snapping: the chat column visibly
+          // takes over the space, so the user sees where the list went. The
+          // content keeps its open width and is clipped while it slides, so
+          // rows never reflow mid-animation. A drag resizes without easing.
+          ClipRect(
+            child: AnimatedContainer(
+              duration: _paneDragging
+                  ? Duration.zero
+                  : Motion.of(context, Motion.medium),
+              curve: Motion.move,
+              width: _leftOpen ? sidebarWidth + 5 : 0,
+              onEnd: () {
+                if (_sidebarClosing && mounted) {
+                  setState(() => _sidebarClosing = false);
+                }
+              },
+              child: OverflowBox(
+                alignment: Alignment.centerRight,
+                minWidth: sidebarWidth + 5,
+                maxWidth: sidebarWidth + 5,
+                child: _leftOpen || _sidebarClosing
+                    ? Row(
+                        children: [
+                          SizedBox(width: sidebarWidth, child: _sidebar(l10n)),
+                          _splitter(
+                            key: const Key('left-splitter'),
+                            ground: surfaceSidebar(scheme),
+                            onDragStart: () =>
+                                setState(() => _paneDragging = true),
+                            onDrag: (dx) => setState(
+                              () => _leftWidth = (_leftWidth + dx).clamp(
+                                200,
+                                maxLeft,
+                              ),
+                            ),
+                            onDragEnd: () {
+                              setState(() => _paneDragging = false);
+                              ref
+                                  .read(uiPrefsProvider.notifier)
+                                  .setSidebarWidth(_leftWidth);
+                            },
+                          ),
+                        ],
+                      )
+                    : const SizedBox.shrink(),
               ),
             ),
-          ],
+          ),
           Expanded(
             child: Column(
               children: [
@@ -5250,46 +5300,61 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// strip also drags the window.
   Widget _sidebar(AppLocalizations l10n) {
     final scheme = Theme.of(context).colorScheme;
-    final isMac = defaultTargetPlatform == TargetPlatform.macOS;
+    final mac = isFramelessDesktop && isMacDesktop;
+    // The strip shares the content header's height, so the collapse control,
+    // the traffic lights and the title all sit on one centre line. On macOS
+    // the lights own the leading corner, so the brand moves out of the strip
+    // (the window title already names the app) and only the controls remain,
+    // pushed to the trailing edge the way Finder and Mail lay out a sidebar.
     final strip = SizedBox(
-      height: 56,
+      height: WindowChrome.barHeight,
       child: Stack(
+        alignment: Alignment.centerLeft,
         children: [
-          if (isFramelessDesktop)
-            const Positioned.fill(
-              child: DragToMoveArea(child: SizedBox.expand()),
-            ),
+          const Positioned.fill(child: WindowDragArea()),
           Row(
             children: [
-              SizedBox(width: isFramelessDesktop && isMac ? 76 : 16),
-              const BrandLogo(size: 18),
-              const SizedBox(width: 7),
-              Expanded(
-                child: Text(
-                  l10n.appTitle,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 13.5,
-                    fontWeight: FontWeight.w600,
+              if (mac)
+                const SizedBox(width: WindowChrome.trafficLightsWidth)
+              else ...[
+                const SizedBox(width: 14),
+                const BrandLogo(size: 18),
+                const SizedBox(width: 8),
+                Flexible(
+                  child: Text(
+                    l10n.appTitle,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                 ),
+              ],
+              const Spacer(),
+              _chromeButton(
+                key: const Key('sidebar-collapse-btn'),
+                tooltip: l10n.hideSidebar,
+                icon: Icons.view_sidebar_outlined,
+                onPressed: () => _setLeftOpen(false),
               ),
-              IconButton(
-                tooltip: l10n.conversationsSection,
-                icon: const Icon(Icons.menu_open, size: 20),
-                onPressed: () => setState(() => _leftOpen = false),
+              _chromeButton(
+                key: const Key('sidebar-new-conversation-btn'),
+                tooltip: l10n.newConversation,
+                icon: Icons.edit_square,
+                onPressed: () => _newConversationInProject(_cwd, context),
               ),
-              const SizedBox(width: 4),
+              const SizedBox(width: 8),
             ],
           ),
         ],
       ),
     );
     return Material(
-      // A wash over the page rather than the page itself, so the rail reads as
-      // a distinct column; the splitter's hairline carries the actual edge.
-      color: scheme.surfaceContainerLow,
+      // A step off the page, like a macOS source list; the splitter's hairline
+      // carries the actual edge.
+      color: surfaceSidebar(scheme),
       child: Column(
         children: [
           strip,
@@ -5299,39 +5364,104 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     );
   }
 
+  /// Show or hide the desktop sidebar, remembering the choice.
+  void _setLeftOpen(bool open) {
+    _layoutRestored = true;
+    setState(() {
+      // Keep the list built while it slides out; the animation's end drops
+      // it. With reduced motion there is no slide, so nothing to keep.
+      _sidebarClosing =
+          !open && Motion.of(context, Motion.medium) > Duration.zero;
+      _leftOpen = open;
+    });
+    ref.read(uiPrefsProvider.notifier).setSidebarOpen(open);
+  }
+
+  /// Adopt the saved sidebar layout once the prefs file has loaded, unless
+  /// the user already changed it in this session.
+  void _restoreLayout(UiPrefs? prefs) {
+    if (_layoutRestored || prefs == null) return;
+    _layoutRestored = true;
+    final open = prefs.sidebarOpen ?? true;
+    final width = prefs.sidebarWidth ?? _leftWidth;
+    if (open == _leftOpen && width == _leftWidth) return;
+    setState(() {
+      _leftOpen = open;
+      _leftWidth = width;
+    });
+  }
+
+  /// A quiet 30 px icon button for the window strips, sized to sit on the
+  /// traffic lights' centre line.
+  Widget _chromeButton({
+    Key? key,
+    required String tooltip,
+    required IconData icon,
+    required VoidCallback? onPressed,
+  }) {
+    final scheme = Theme.of(context).colorScheme;
+    return IconButton(
+      key: key,
+      tooltip: tooltip,
+      onPressed: onPressed,
+      style: IconButton.styleFrom(
+        minimumSize: const Size(30, 30),
+        fixedSize: const Size(30, 30),
+        padding: EdgeInsets.zero,
+        foregroundColor: scheme.onSurfaceVariant,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(kRowRadius),
+        ),
+      ),
+      icon: Icon(icon, size: 18),
+    );
+  }
+
   /// The content pane's slim header (the desktop window has no full-width app
   /// bar): the conversation title and the few session actions, over a
   /// drag-to-move area. When the sidebar is collapsed it also carries the
   /// expand control and — on macOS — the traffic-light inset; on frameless
   /// Windows it draws the caption buttons at the trailing edge.
   Widget _contentTopBar(AppLocalizations l10n, double width) {
-    final isMac = defaultTargetPlatform == TargetPlatform.macOS;
-    return SizedBox(
-      height: 56,
+    final isMac = isMacDesktop;
+    final scheme = Theme.of(context).colorScheme;
+    // No rule under the header: the status line below it continues the same
+    // block (title, then its facts) and carries the one hairline.
+    return Container(
+      height: WindowChrome.barHeight,
+      color: surfaceBackground(scheme),
       child: Stack(
+        // Centre the row on the strip, so every control shares the traffic
+        // lights' centre line.
+        alignment: Alignment.centerLeft,
         children: [
-          if (isFramelessDesktop)
-            const Positioned.fill(
-              child: DragToMoveArea(child: SizedBox.expand()),
-            ),
+          const Positioned.fill(child: WindowDragArea()),
           Row(
             children: [
-              SizedBox(
-                width: !_leftOpen && isFramelessDesktop && isMac ? 76 : 8,
-              ),
-              if (!_leftOpen)
-                IconButton(
-                  tooltip: l10n.conversationsSection,
-                  icon: const Icon(Icons.menu, size: 20),
-                  onPressed: () => setState(() => _leftOpen = true),
+              // With the sidebar hidden this strip owns the leading corner, so
+              // it clears the traffic lights itself.
+              SizedBox(width: _leftOpen ? 10 : 8 + WindowChrome.leadingInset),
+              if (!_leftOpen) ...[
+                _chromeButton(
+                  key: const Key('sidebar-expand-btn'),
+                  tooltip: l10n.showSidebar,
+                  icon: Icons.view_sidebar_outlined,
+                  onPressed: () => _setLeftOpen(true),
                 ),
+                _chromeButton(
+                  tooltip: l10n.newConversation,
+                  icon: Icons.edit_square,
+                  onPressed: () => _newConversationInProject(_cwd, context),
+                ),
+                const SizedBox(width: 4),
+              ],
               if (!widget.home)
-                IconButton(
+                _chromeButton(
                   tooltip: l10n.backToSessions,
-                  icon: const Icon(Icons.arrow_back, size: 20),
+                  icon: Icons.arrow_back,
                   onPressed: _backToSessions,
                 ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 6),
               // The title is a label, not a banner: cap it well short of the
               // bar so a long conversation preview truncates and the rest of
               // the strip stays empty (and draggable).
@@ -5361,6 +5491,16 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
               if (_threadId != null)
                 PopupMenuButton<String>(
                   tooltip: l10n.moreActions,
+                  icon: Icon(
+                    Icons.more_horiz,
+                    size: 18,
+                    color: scheme.onSurfaceVariant,
+                  ),
+                  style: IconButton.styleFrom(
+                    minimumSize: const Size(30, 30),
+                    fixedSize: const Size(30, 30),
+                    padding: EdgeInsets.zero,
+                  ),
                   onSelected: (v) {
                     if (v == 'compact') _compact();
                     if (v == 'rename') _beginTitleEdit();
@@ -5373,10 +5513,11 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                     PopupMenuItem(value: 'compact', child: Text(l10n.compact)),
                   ],
                 ),
-              if (isFramelessDesktop && !isMac)
-                const WindowCaptionButtons()
-              else
-                const SizedBox(width: 8),
+              if (isFramelessDesktop && !isMac) ...[
+                const SizedBox(width: 6),
+                const WindowCaptionButtons(),
+              ] else
+                const SizedBox(width: 10),
             ],
           ),
         ],
@@ -5523,24 +5664,31 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// the pointer is over it: a wider invisible hit area (a 1 px target is
   /// unhittable) plus a resize cursor, so the affordance appears on hover the
   /// way a desktop splitter should.
+  ///
+  /// The hairline sits on the trailing edge of a 5 px target painted in the
+  /// left neighbour's ground, so the seam reads as one line, not a gutter.
   Widget _splitter({
     required Key key,
     required ValueChanged<double> onDrag,
+    VoidCallback? onDragStart,
+    VoidCallback? onDragEnd,
+    Color? ground,
   }) => MouseRegion(
     key: key,
     cursor: SystemMouseCursors.resizeLeftRight,
     child: GestureDetector(
-      behavior: HitTestBehavior.translucent,
+      behavior: HitTestBehavior.opaque,
+      onHorizontalDragStart: (_) => onDragStart?.call(),
       onHorizontalDragUpdate: (d) => onDrag(d.delta.dx),
-      child: SizedBox(
-        width: 7,
-        child: Center(
-          // The firmer hairline, not outlineVariant: this separates two
-          // near-identical grounds, so the faint one disappears between them.
-          child: VerticalDivider(
-            width: 1,
-            color: Theme.of(context).colorScheme.outline,
-          ),
+      onHorizontalDragEnd: (_) => onDragEnd?.call(),
+      onHorizontalDragCancel: () => onDragEnd?.call(),
+      child: Container(
+        width: 5,
+        color: ground,
+        alignment: Alignment.centerRight,
+        child: VerticalDivider(
+          width: 1,
+          color: Theme.of(context).colorScheme.outlineVariant,
         ),
       ),
     ),
@@ -5555,7 +5703,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     final scheme = Theme.of(context).colorScheme;
     if (_guardianReadOnly) {
       return (
-        color: scheme.primary,
+        color: infoColor(scheme),
         label: l10n.guardianReadOnly,
         icon: Icons.policy_outlined,
         nominal: false,
@@ -5590,7 +5738,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     }
     if (_streaming) {
       return (
-        color: scheme.primary,
+        color: signalColor(scheme),
         label: _planActive ? l10n.statePlanning : l10n.stateWorking,
         icon: Icons.autorenew,
         nominal: false,
@@ -5652,25 +5800,32 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     final d = _diff;
     final activeModel = _activeModelStatus();
     final running = _streaming || _externalWriterRunning;
-    return Container(
+    return AnimatedContainer(
+      duration: Motion.of(context, Motion.medium),
+      curve: Motion.move,
       width: double.infinity,
-      // At rest the bar is part of the page — a faint ink wash under a hairline,
-      // like any other chrome. A state that needs attention tints the whole
-      // strip, so colour arriving here means something actually changed.
+      // At rest the bar is part of the page — the header's ground under one
+      // hairline. A state that needs attention tints the whole strip, so
+      // colour arriving here means something actually changed.
       decoration: BoxDecoration(
         color: st.nominal
-            ? scheme.surfaceContainerLowest
-            : st.color.withValues(alpha: 0.10),
+            ? surfaceBackground(scheme)
+            : Color.alphaBlend(
+                st.color.withValues(alpha: 0.08),
+                surfaceBackground(scheme),
+              ),
         border: Border(bottom: BorderSide(color: scheme.outlineVariant)),
       ),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
+      padding: EdgeInsets.fromLTRB(isDesktop ? 18 : 14, 3, 14, 5),
       child: Row(
         children: [
-          if (_externalWriterRunning)
+          if (_externalWriterRunning || (_streaming && !st.nominal))
             PulsingDot(
-              key: const Key('chat-status-running-pulse'),
+              key: _externalWriterRunning
+                  ? const Key('chat-status-running-pulse')
+                  : null,
               color: st.color,
-              size: 8,
+              size: 7,
             )
           else
             Icon(st.icon, size: 13, color: st.color),
@@ -6826,10 +6981,70 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
             // Home only: which host this chat runs on, switchable when several
             // app services are available.
             if (widget.home) _serviceSwitcher(l10n),
-            // Header: title + a circular "new conversation" button (echoes the
-            // composer's send button).
+            // The primary action of a conversation list, as a row rather than
+            // a coloured disc: it reads as the first entry of the list it
+            // creates into, and keeps the accent free for live state.
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 14, 12, 2),
+              padding: const EdgeInsets.fromLTRB(8, 4, 8, 0),
+              child: _sidebarAction(
+                key: const Key('new-conversation-btn'),
+                icon: Icons.edit_square,
+                label: l10n.newConversation,
+                onTap: () => _newConversationInProject(_cwd, ctx),
+              ),
+            ),
+            // Quick filter — shown once there are enough conversations to scan.
+            if (_threads.length > 6)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(8, 4, 8, 0),
+                child: SizedBox(
+                  height: 32,
+                  child: TextField(
+                    key: const Key('conv-search'),
+                    onChanged: (v) => setState(() => _convQuery = v),
+                    style: const TextStyle(fontSize: 13),
+                    textAlignVertical: TextAlignVertical.center,
+                    decoration: InputDecoration(
+                      isDense: true,
+                      prefixIcon: Icon(
+                        Icons.search,
+                        size: 16,
+                        color: scheme.onSurfaceVariant,
+                      ),
+                      prefixIconConstraints: const BoxConstraints(
+                        minWidth: 32,
+                        minHeight: 32,
+                      ),
+                      hintText: l10n.searchConversations,
+                      hintStyle: TextStyle(
+                        fontSize: 13,
+                        color: scheme.onSurfaceVariant,
+                      ),
+                      filled: true,
+                      fillColor: scheme.onSurface.withValues(alpha: 0.05),
+                      contentPadding: EdgeInsets.zero,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(kRowRadius + 1),
+                        borderSide: BorderSide.none,
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(kRowRadius + 1),
+                        borderSide: BorderSide.none,
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(kRowRadius + 1),
+                        borderSide: BorderSide(color: scheme.outline),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            // List heading: what the list is grouped by, with the toggle that
+            // regroups it. Group by project, or by when it happened — two ways
+            // of asking "what was I doing", so it's a toggle rather than a
+            // replacement.
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 14, 8, 2),
               child: Row(
                 children: [
                   Expanded(
@@ -6837,118 +7052,88 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                       _activityView
                           ? l10n.activityView
                           : l10n.conversationsSection,
-                      style: Theme.of(context).textTheme.titleSmall,
-                    ),
-                  ),
-                  // Group by project, or by when it happened. Two ways of
-                  // asking "what was I doing", so it's a toggle rather than a
-                  // replacement — the project tree answers "where", this
-                  // answers "when".
-                  IconButton(
-                    key: const Key('activity-view-btn'),
-                    icon: Icon(
-                      _activityView
-                          ? Icons.folder_outlined
-                          : Icons.history_toggle_off,
-                      size: 18,
-                    ),
-                    tooltip: _activityView
-                        ? l10n.conversationsSection
-                        : l10n.activityView,
-                    visualDensity: VisualDensity.compact,
-                    onPressed: () =>
-                        setState(() => _activityView = !_activityView),
-                  ),
-                  const SizedBox(width: 2),
-                  Material(
-                    color: scheme.primary,
-                    shape: const CircleBorder(),
-                    child: InkWell(
-                      mouseCursor: clickable,
-                      key: const Key('new-conversation-btn'),
-                      customBorder: const CircleBorder(),
-                      onTap: () => _newConversationInProject(_cwd, ctx),
-                      child: Tooltip(
-                        message: l10n.newConversation,
-                        child: Padding(
-                          padding: const EdgeInsets.all(6),
-                          child: Icon(
-                            Icons.add,
-                            size: 18,
-                            color: scheme.onPrimary,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            // Current project context.
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-              child: Row(
-                children: [
-                  Icon(
-                    Icons.folder_outlined,
-                    size: 13,
-                    color: scheme.onSurfaceVariant,
-                  ),
-                  const SizedBox(width: 5),
-                  Expanded(
-                    child: Text(
-                      _projectName(),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         fontSize: 12,
+                        fontWeight: FontWeight.w600,
                         color: scheme.onSurfaceVariant,
                       ),
+                    ),
+                  ),
+                  SizedBox(
+                    width: 26,
+                    height: 26,
+                    child: IconButton(
+                      key: const Key('activity-view-btn'),
+                      padding: EdgeInsets.zero,
+                      style: IconButton.styleFrom(
+                        minimumSize: const Size(26, 26),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(kRowRadius),
+                        ),
+                      ),
+                      icon: Icon(
+                        _activityView
+                            ? Icons.folder_outlined
+                            : Icons.history_toggle_off,
+                        size: 15,
+                        color: scheme.onSurfaceVariant,
+                      ),
+                      tooltip: _activityView
+                          ? l10n.conversationsSection
+                          : l10n.activityView,
+                      onPressed: () =>
+                          setState(() => _activityView = !_activityView),
                     ),
                   ),
                 ],
               ),
             ),
-            // Quick filter — shown once there are enough conversations to scan.
-            if (_threads.length > 6)
+            // A project-scoped pane names its one project; the home pane lists
+            // every project as headings instead.
+            if (!widget.home)
               Padding(
-                padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
-                child: TextField(
-                  key: const Key('conv-search'),
-                  onChanged: (v) => setState(() => _convQuery = v),
-                  style: const TextStyle(fontSize: 13),
-                  decoration: InputDecoration(
-                    isDense: true,
-                    prefixIcon: const Icon(Icons.search, size: 18),
-                    prefixIconConstraints: const BoxConstraints(
-                      minWidth: 34,
-                      minHeight: 34,
-                    ),
-                    hintText: l10n.searchConversations,
-                    hintStyle: TextStyle(
-                      fontSize: 13,
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.folder_outlined,
+                      size: 13,
                       color: scheme.onSurfaceVariant,
                     ),
-                    filled: true,
-                    fillColor: scheme.surfaceContainerHighest,
-                    contentPadding: const EdgeInsets.symmetric(vertical: 9),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(kControlRadius),
-                      borderSide: BorderSide.none,
+                    const SizedBox(width: 5),
+                    Expanded(
+                      child: Text(
+                        _projectName(),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
                     ),
-                  ),
+                  ],
                 ),
               ),
             Expanded(
               child: filtered.isEmpty
                   ? Center(
-                      child: Text(
-                        q.isEmpty ? l10n.noThreads : l10n.noMatchingThreads,
-                        style: TextStyle(color: scheme.outline),
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Text(
+                          q.isEmpty ? l10n.noThreads : l10n.noMatchingThreads,
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: 12.5,
+                            color: scheme.onSurfaceVariant,
+                          ),
+                        ),
                       ),
                     )
                   : ListView.builder(
-                      padding: const EdgeInsets.fromLTRB(8, 2, 8, 8),
+                      padding: const EdgeInsets.fromLTRB(8, 0, 8, 10),
                       itemCount: rows.length,
                       itemBuilder: (_, i) => rows[i](),
                     ),
@@ -6963,7 +7148,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
             if (widget.home) ...[
               const Divider(height: 1),
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
                 // Each button keeps its own share of the row instead of its
                 // intrinsic width: the sidebar drags down to 200 px, where a
                 // fixed-width row of five (manage / sessions / logs / theme /
@@ -7046,7 +7231,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         ? scheme.error
         : w.fraction >= 0.75
         ? cautionColor(scheme)
-        : scheme.primary;
+        : scheme.onSurfaceVariant;
     final reset = _resetText(w, l10n);
     return InkWell(
       mouseCursor: clickable,
@@ -7100,7 +7285,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
               reset.isEmpty ? label : '$label · $reset',
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: TextStyle(fontSize: 10.5, color: scheme.outline),
+              style: TextStyle(fontSize: 10.5, color: scheme.onSurfaceVariant),
             ),
           ],
         ),
@@ -7126,14 +7311,65 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     required String route,
   }) => IconButton(
     key: Key(key),
-    icon: Icon(icon, size: 20),
+    icon: Icon(icon, size: 18),
     tooltip: tooltip,
-    visualDensity: VisualDensity.compact,
+    style: IconButton.styleFrom(
+      minimumSize: const Size(32, 32),
+      foregroundColor: Theme.of(context).colorScheme.onSurfaceVariant,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(kRowRadius),
+      ),
+    ),
     onPressed: () {
       if (Scaffold.maybeOf(ctx)?.isDrawerOpen ?? false) Navigator.pop(ctx);
       context.push(route);
     },
   );
+
+  /// A labelled action row in the sidebar, drawn like a conversation row so
+  /// the list reads as one column. Touch layouts grow it to a 44 px target.
+  Widget _sidebarAction({
+    required Key key,
+    required IconData icon,
+    required String label,
+    required VoidCallback onTap,
+  }) {
+    final scheme = Theme.of(context).colorScheme;
+    return Material(
+      color: Colors.transparent,
+      borderRadius: BorderRadius.circular(kRowRadius),
+      child: InkWell(
+        key: key,
+        mouseCursor: clickable,
+        borderRadius: BorderRadius.circular(kRowRadius),
+        onTap: onTap,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(minHeight: isDesktop ? 32 : 44),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: Row(
+              children: [
+                Icon(icon, size: 16, color: scheme.onSurface),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                      color: scheme.onSurface,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 
   /// Home-pane header row: the host currently serving this chat. Renders a
   /// dropdown when more than one app service is connectable, else a static
@@ -7149,10 +7385,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         ? _serviceLabelFromKey(widget.serviceKey)
         : labelOf(current.first);
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 10, 12, 0),
+      padding: const EdgeInsets.fromLTRB(16, 4, 12, 4),
       child: Row(
         children: [
-          Icon(Icons.computer, size: 16, color: scheme.primary),
+          Icon(Icons.laptop_mac, size: 15, color: scheme.onSurfaceVariant),
           const SizedBox(width: 8),
           Expanded(
             child: multiple
@@ -7333,16 +7569,16 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   }) {
     final scheme = Theme.of(context).colorScheme;
     return Padding(
-      padding: const EdgeInsets.only(left: 22, bottom: 2),
+      padding: const EdgeInsets.only(left: 16, bottom: 2),
       child: Align(
         alignment: Alignment.centerLeft,
         child: Material(
           color: Colors.transparent,
-          borderRadius: BorderRadius.circular(6),
+          borderRadius: BorderRadius.circular(kRowRadius),
           child: InkWell(
             mouseCursor: clickable,
             key: Key('project-peek-$cwd'),
-            borderRadius: BorderRadius.circular(6),
+            borderRadius: BorderRadius.circular(kRowRadius),
             onTap: () => setState(() {
               if (!_expandedProjects.remove(cwd)) _expandedProjects.add(cwd);
             }),
@@ -7364,11 +7600,12 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
 
   /// A muted section header for the conversations pane (Active / Today / …).
   Widget _sectionLabel(String text) => Padding(
-    padding: const EdgeInsets.fromLTRB(8, 10, 8, 4),
+    padding: const EdgeInsets.fromLTRB(8, 12, 8, 4),
     child: Text(
       text,
       style: TextStyle(
         fontSize: 11.5,
+        fontWeight: FontWeight.w600,
         color: Theme.of(context).colorScheme.onSurfaceVariant,
       ),
     ),
@@ -7405,81 +7642,103 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         thread.title ?? (cleaned.isEmpty ? l10n.untitledThread : cleaned);
     // Cross-project pane rows show "project · time" so the user always knows
     // where a conversation lives.
-    final subtitle = [
+    // Facts about the row, ahead of the time: what is waiting in it, and where
+    // it lives when no project heading above says so.
+    final facts = [
       if (thread.isVoice) l10n.voiceLive,
       if (_drafts.hasDraft(thread.id)) l10n.draft,
       if (_drafts.queuedCount(thread.id) > 0)
         l10n.queuedCount(_drafts.queuedCount(thread.id)),
       if (project != null && project.isNotEmpty) project,
-      if (when.isNotEmpty) when,
-    ].join(' · ');
-    return Padding(
-      // Rows under a project heading are indented, so the folder reads as
-      // their parent rather than as a sibling label.
-      padding: EdgeInsets.only(
-        top: 1,
-        bottom: 1,
-        left: project == null && widget.home ? 8 : 0,
+    ];
+    final signal = signalColor(scheme);
+    // Desktop rows are one line — title, then the time at the trailing edge —
+    // the way a source list sits: twice as many conversations per screen, and
+    // the eye scans titles without a second line breaking the column. Touch
+    // keeps two lines, where the row height is a target and not a cost.
+    final dense = isDesktop;
+    final titleText = Text(
+      title,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: TextStyle(
+        fontSize: dense ? 13 : 14,
+        fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+        color: fg,
       ),
+    );
+    final factsText = facts.isEmpty
+        ? null
+        : Text(
+            facts.join(' · '),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(fontSize: 11.5, color: muted),
+          );
+    final trailing = running
+        ? Semantics(
+            label: l10n.running,
+            child: PulsingDot(color: signal, size: 7),
+          )
+        : when.isEmpty
+        ? null
+        : Text(
+            when,
+            maxLines: 1,
+            style: TextStyle(
+              fontSize: 11.5,
+              color: muted,
+              fontFeatures: const [FontFeature.tabularFigures()],
+            ),
+          );
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 0.5),
       child: Material(
         key: Key('conv-tile-${thread.id}'),
         color: selected ? surfaceSelection(scheme) : Colors.transparent,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(kControlRadius),
-          side: BorderSide(
-            color: selected ? selectionBorder(scheme) : Colors.transparent,
-          ),
-        ),
+        borderRadius: BorderRadius.circular(kRowRadius),
         child: InkWell(
           mouseCursor: clickable,
-          borderRadius: BorderRadius.circular(kControlRadius),
+          borderRadius: BorderRadius.circular(kRowRadius),
           onTap: onTap,
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+            padding: EdgeInsets.fromLTRB(
+              // Rows under a project heading line up with its name, so the
+              // folder reads as their parent.
+              project == null && widget.home ? 28 : 10,
+              dense ? 6 : 10,
+              10,
+              dense ? 6 : 10,
+            ),
             child: Row(
               children: [
                 if (thread.isVoice) ...[
-                  Icon(Icons.graphic_eq, size: 18, color: scheme.primary),
-                  const SizedBox(width: 8),
+                  Icon(Icons.graphic_eq, size: 15, color: muted),
+                  const SizedBox(width: 6),
                 ],
-                // No leading glyph: every row is a conversation, so an icon per
-                // row was a column of identical noise. The project heading's
-                // chevron is the only icon the tree needs.
                 Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        title,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 13.5,
-                          fontWeight: selected
-                              ? FontWeight.w600
-                              : FontWeight.w400,
-                          color: fg,
+                  child: dense
+                      ? Row(
+                          children: [
+                            Flexible(child: titleText),
+                            if (factsText != null) ...[
+                              const SizedBox(width: 6),
+                              Flexible(child: factsText),
+                            ],
+                          ],
+                        )
+                      : Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            titleText,
+                            if (factsText != null) ...[
+                              const SizedBox(height: 2),
+                              factsText,
+                            ],
+                          ],
                         ),
-                      ),
-                      if (subtitle.isNotEmpty) ...[
-                        const SizedBox(height: 2),
-                        Text(
-                          subtitle,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 11.5,
-                            color: running ? scheme.primary : muted,
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
                 ),
-                if (running) ...[
-                  const SizedBox(width: 8),
-                  PulsingDot(color: scheme.primary, size: 7),
-                ],
+                if (trailing != null) ...[const SizedBox(width: 8), trailing],
               ],
             ),
           ),
@@ -7587,7 +7846,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                             fontSize: 11,
-                            color: running ? scheme.primary : muted,
+                            color: running ? signalColor(scheme) : muted,
                           ),
                         ),
                       ],
@@ -7596,7 +7855,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                 ),
                 if (running) ...[
                   const SizedBox(width: 8),
-                  PulsingDot(color: scheme.primary, size: 7),
+                  PulsingDot(color: signalColor(scheme), size: 7),
                 ],
               ],
             ),
@@ -7701,7 +7960,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                       )
                     : Text(
                         l10n.noChanges,
-                        style: TextStyle(fontSize: 12, color: scheme.outline),
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: scheme.onSurfaceVariant,
+                        ),
                       ),
               ),
               line(Icons.computer, _hostLabel(l10n)),
@@ -7810,10 +8072,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           ),
         ),
       ],
-      builder: (ctx, ctrl, _) => IconButton(
+      builder: (ctx, ctrl, _) => _chromeButton(
         key: const Key('env-panel-btn'),
         tooltip: l10n.envTitle,
-        icon: Icon(_reviewOpen ? Icons.difference : Icons.difference_outlined),
+        icon: _reviewOpen ? Icons.difference : Icons.difference_outlined,
         onPressed: () {
           if (ctrl.isOpen) {
             ctrl.close();
@@ -7894,7 +8156,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
               ? Center(
                   child: Text(
                     l10n.reviewNoFiles,
-                    style: TextStyle(color: scheme.outline),
+                    style: TextStyle(color: scheme.onSurfaceVariant),
                   ),
                 )
               : Row(
@@ -7904,7 +8166,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                           ? Center(
                               child: Text(
                                 l10n.reviewPickFile,
-                                style: TextStyle(color: scheme.outline),
+                                style: TextStyle(
+                                  color: scheme.onSurfaceVariant,
+                                ),
                               ),
                             )
                           : DiffReviewView(
@@ -8615,280 +8879,419 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       }
     }
 
-    // A 24 px pill is a phone control. On desktop the composer is a field in a
-    // window, so it squares up and sits tighter against the transcript.
     final doc = MediaQuery.sizeOf(context).width >= docLayoutWidth;
-    return SafeArea(
-      top: false,
-      child: Padding(
-        padding: doc
-            ? const EdgeInsets.fromLTRB(16, 4, 16, 14)
-            : const EdgeInsets.fromLTRB(12, 6, 12, 12),
-        // The card IS the input, so all of it takes a text cursor and focuses
-        // the field on click — the padding and the slack beside a short line
-        // shouldn't behave like dead chrome. The buttons inside sit deeper in
-        // the tree, so they keep their own click cursor and their own taps.
-        child: MouseRegion(
-          cursor: SystemMouseCursors.text,
-          child: GestureDetector(
-            behavior: HitTestBehavior.translucent,
-            onTap: () => _inputFocus.requestFocus(),
-            // The raised card: opaque so it lifts off the page, a hairline to
-            // hold the edge, and the design's soft offsetless shadow instead of
-            // a Material elevation.
-            child: Container(
-              decoration: BoxDecoration(
-                color: scheme.surfaceBright,
-                borderRadius: BorderRadius.circular(kComposerRadius),
-                border: Border.all(color: scheme.outline),
-                boxShadow: panelShadow(scheme),
-              ),
-              padding: const EdgeInsets.fromLTRB(16, 0, 12, 8),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Semantics(
-                          label: l10n.resizeComposer,
-                          value: '${inputHeight.round()}',
-                          increasedValue:
-                              '${(inputHeight + 24).clamp(minHeight, maxHeight).round()}',
-                          decreasedValue:
-                              '${(inputHeight - 24).clamp(minHeight, maxHeight).round()}',
-                          onIncrease: () =>
-                              resize(inputHeight + 24, save: true),
-                          onDecrease: () =>
-                              resize(inputHeight - 24, save: true),
-                          child: MouseRegion(
-                            cursor: SystemMouseCursors.resizeUpDown,
-                            child: GestureDetector(
-                              key: const Key('composer-resize-handle'),
-                              behavior: HitTestBehavior.opaque,
-                              onVerticalDragUpdate: (details) =>
-                                  resize(inputHeight - details.delta.dy),
-                              onVerticalDragEnd: (_) => ref
-                                  .read(uiPrefsProvider.notifier)
-                                  .setComposerHeight(
-                                    _composerHeight ?? inputHeight,
-                                  ),
-                              onDoubleTap: () =>
-                                  resize(defaultHeight, save: true),
-                              child: Tooltip(
-                                message: l10n.resizeComposer,
-                                child: SizedBox(
-                                  height: 44,
-                                  width: double.infinity,
-                                  child: Center(
-                                    child: Container(
-                                      width: 28,
-                                      height: 3,
-                                      decoration: BoxDecoration(
-                                        color: scheme.outline,
-                                        borderRadius: BorderRadius.circular(2),
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ),
+    final touch = !isDesktop;
+    final grown =
+        (_composerHeight ?? prefs?.composerHeight ?? defaultHeight) >
+        defaultHeight;
+
+    // Fast and Supplement change how THIS turn is sent, so they sit with the
+    // other per-turn controls. FilterChips, compact, and only while relevant.
+    Widget turnChip({
+      required Key key,
+      required String tooltip,
+      required String label,
+      required bool selected,
+      required ValueChanged<bool>? onSelected,
+      IconData? icon,
+    }) => Tooltip(
+      message: tooltip,
+      child: FilterChip(
+        key: key,
+        avatar: icon == null ? null : Icon(icon, size: 15),
+        label: Text(label),
+        selected: selected,
+        showCheckmark: false,
+        visualDensity: VisualDensity.compact,
+        materialTapTargetSize: touch
+            ? MaterialTapTargetSize.padded
+            : MaterialTapTargetSize.shrinkWrap,
+        labelStyle: TextStyle(
+          fontSize: 12.5,
+          color: selected
+              ? scheme.onTertiaryContainer
+              : scheme.onSurfaceVariant,
+        ),
+        onSelected: onSelected,
+      ),
+    );
+    final modeChips = [
+      if (_effectiveModel?.supportsFast == true)
+        turnChip(
+          key: const Key('fast-mode-btn'),
+          tooltip: l10n.fastModeHint,
+          label: l10n.fastMode,
+          icon: Icons.bolt,
+          selected: _effectiveServiceTier == 'priority',
+          onSelected: _sending
+              ? null
+              : (enabled) {
+                  setState(() {
+                    _serviceTier = enabled ? 'priority' : 'default';
+                    _serviceTierPickPending = true;
+                  });
+                  _rememberDefaults();
+                  _persistThreadConfig();
+                },
+        ),
+      if (_streaming)
+        turnChip(
+          key: const Key('supplement-toggle'),
+          tooltip: l10n.steerMessageHint,
+          label: l10n.steerMessage,
+          selected: _supplement,
+          onSelected: _sending
+              ? null
+              : (selected) => setState(() => _supplement = selected),
+        ),
+    ];
+
+    // The top edge of the card is the resize handle: a desktop user finds it
+    // by the cursor, the way a pane edge is found; touch gets a visible grip.
+    // Double-click / double-tap returns to the compact height.
+    final resizeEdge = Semantics(
+      label: l10n.resizeComposer,
+      value: '${inputHeight.round()}',
+      increasedValue:
+          '${(inputHeight + 24).clamp(minHeight, maxHeight).round()}',
+      decreasedValue:
+          '${(inputHeight - 24).clamp(minHeight, maxHeight).round()}',
+      onIncrease: () => resize(inputHeight + 24, save: true),
+      onDecrease: () => resize(inputHeight - 24, save: true),
+      child: MouseRegion(
+        cursor: SystemMouseCursors.resizeUpDown,
+        child: GestureDetector(
+          key: const Key('composer-resize-handle'),
+          behavior: HitTestBehavior.opaque,
+          onVerticalDragUpdate: (details) =>
+              resize(inputHeight - details.delta.dy),
+          onVerticalDragEnd: (_) => ref
+              .read(uiPrefsProvider.notifier)
+              .setComposerHeight(_composerHeight ?? inputHeight),
+          onDoubleTap: () => resize(defaultHeight, save: true),
+          child: Tooltip(
+            message: l10n.resizeComposer,
+            waitDuration: const Duration(milliseconds: 900),
+            child: SizedBox(
+              height: touch ? 18 : 12,
+              width: double.infinity,
+              child: touch
+                  ? Center(
+                      child: Container(
+                        width: 32,
+                        height: 4,
+                        decoration: BoxDecoration(
+                          color: scheme.outlineVariant,
+                          borderRadius: BorderRadius.circular(2),
                         ),
                       ),
-                      if (_streaming)
-                        IconButton.outlined(
-                          key: const Key('stop-btn'),
-                          onPressed: _interrupt,
-                          tooltip: l10n.stop,
-                          constraints: const BoxConstraints(
-                            minWidth: 44,
-                            minHeight: 44,
-                          ),
-                          icon: const Icon(Icons.stop_rounded, size: 20),
-                        ),
-                      if ((_composerHeight ??
-                              prefs?.composerHeight ??
-                              defaultHeight) >
-                          defaultHeight)
-                        IconButton(
-                          key: const Key('composer-reset-height'),
-                          tooltip: l10n.resetComposerHeight,
-                          constraints: const BoxConstraints(
-                            minWidth: 44,
-                            minHeight: 44,
-                          ),
-                          icon: const Icon(Icons.unfold_less, size: 18),
-                          onPressed: () => resize(defaultHeight, save: true),
-                        ),
-                      IconButton(
-                        key: const Key('voice-start'),
-                        tooltip: _isVoiceThread
-                            ? l10n.voiceStart
-                            : l10n.voiceNewSession,
-                        onPressed: _canStartVoice ? _startVoice : null,
-                        icon: const Icon(Icons.graphic_eq),
-                      ),
-                      IconButton(
-                        key: const Key('composer-expand'),
-                        tooltip: l10n.expandComposer,
-                        constraints: const BoxConstraints(
-                          minWidth: 44,
-                          minHeight: 44,
-                        ),
-                        icon: const Icon(Icons.open_in_full, size: 18),
-                        onPressed: _expandComposer,
-                      ),
-                    ],
-                  ),
-                  if (_queue.isNotEmpty) ...[
-                    _queuedStrip(l10n),
-                    const SizedBox(height: 8),
-                  ],
-                  if (_attachments.isNotEmpty) ...[
-                    _attachmentStrip(l10n),
-                    const SizedBox(height: 8),
-                  ],
-                  // Desktop: where this turn will land — project, host, branch —
-                  // sits above the field the turn is typed into. A phone has no
-                  // room for it and shows the same facts in the status bar.
-                  if (doc) ...[
-                    _composerContext(l10n),
-                    const SizedBox(height: 8),
-                  ],
-                  // The saved height is a floor; Flutter measures wrapped text
-                  // and scrolls internally only after reaching the screen cap.
-                  NotificationListener<SizeChangedLayoutNotification>(
-                    onNotification: _composerSizeChanged,
-                    child: SizeChangedLayoutNotifier(
-                      child: ConstrainedBox(
-                        key: const Key('composer-input-area'),
-                        constraints: BoxConstraints(
-                          minHeight: inputHeight,
-                          maxHeight: maxHeight,
-                        ),
-                        child: TextField(
-                          key: const Key('composer-input'),
-                          controller: _input,
-                          focusNode: _inputFocus,
-                          readOnly: _editorOpen,
-                          minLines: 1,
-                          maxLines: null,
-                          keyboardType: TextInputType.multiline,
-                          textInputAction: TextInputAction.newline,
-                          onSubmitted: _isDesktop
-                              ? (_) {
-                                  if (!_input.value.composing.isValid ||
-                                      _input.value.composing.isCollapsed) {
-                                    _submit();
-                                  }
-                                }
-                              : null,
-                          style: inputStyle,
-                          decoration: InputDecoration(
-                            filled: false,
-                            hintText: l10n.messageHint,
-                            border: InputBorder.none,
-                            isCollapsed: true,
-                            // Override the shared form-field padding inside this compact card.
-                            contentPadding: EdgeInsets.zero,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                  if (_effectiveModel?.supportsFast == true || _streaming) ...[
-                    const SizedBox(height: 4),
-                    Wrap(
-                      spacing: 8,
-                      children: [
-                        if (_effectiveModel?.supportsFast == true)
-                          Tooltip(
-                            message: l10n.fastModeHint,
-                            child: FilterChip(
-                              key: const Key('fast-mode-btn'),
-                              avatar: const Icon(Icons.bolt, size: 18),
-                              label: Text(l10n.fastMode),
-                              selected: _effectiveServiceTier == 'priority',
-                              onSelected: _sending
-                                  ? null
-                                  : (enabled) {
-                                      setState(() {
-                                        _serviceTier = enabled
-                                            ? 'priority'
-                                            : 'default';
-                                        _serviceTierPickPending = true;
-                                      });
-                                      _rememberDefaults();
-                                      _persistThreadConfig();
-                                    },
-                            ),
-                          ),
-                        if (_streaming)
-                          Tooltip(
-                            message: l10n.steerMessageHint,
-                            child: FilterChip(
-                              key: const Key('supplement-toggle'),
-                              label: Text(l10n.steerMessage),
-                              selected: _supplement,
-                              onSelected: _sending
-                                  ? null
-                                  : (selected) =>
-                                        setState(() => _supplement = selected),
-                            ),
-                          ),
-                      ],
-                    ),
-                  ],
-                  const SizedBox(height: 8),
-                  // One row at every width. Attachments collapse into a single `+`
-                  // menu and the five wrapping config pills collapse into two
-                  // chips, so a 360 px phone lays out exactly like the desktop —
-                  // no wrapping, no expand/collapse mode to get stuck in.
-                  LayoutBuilder(
-                    builder: (context, constraints) => Row(
-                      children: [
-                        _attachMenu(l10n),
-                        const SizedBox(width: 2),
-                        // Bound long permission labels while leaving the model
-                        // control the remaining space up to the send button.
-                        ConstrainedBox(
-                          constraints: BoxConstraints(
-                            maxWidth: constraints.maxWidth * 0.34,
-                          ),
-                          child: _permissionChip(l10n),
-                        ),
-                        const SizedBox(width: 6),
-                        // Right-aligned next to send, and Flexible so a long model
-                        // name ellipsizes instead of pushing the row into overflow.
-                        Expanded(
-                          child: Align(
-                            alignment: Alignment.centerRight,
-                            child: _modelChip(l10n),
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                        _sendButton(),
-                      ],
-                    ),
-                  ),
-                  if (_isDesktop)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 4),
-                      child: Text(
-                        l10n.composerKeyboardHint,
-                        style: theme.textTheme.labelSmall?.copyWith(
-                          color: scheme.onSurfaceVariant,
-                        ),
-                      ),
-                    ),
-                ],
-              ),
+                    )
+                  : null,
             ),
           ),
         ),
       ),
+    );
+
+    // Small square tools beside the field: expand to the full editor, and
+    // return to the compact height once the user has grown it.
+    Widget fieldTool({
+      required Key key,
+      required String tooltip,
+      required IconData icon,
+      required VoidCallback onPressed,
+    }) => IconButton(
+      key: key,
+      tooltip: tooltip,
+      onPressed: onPressed,
+      icon: Icon(icon, size: 16),
+      style: IconButton.styleFrom(
+        minimumSize: touch ? const Size(44, 44) : const Size(28, 28),
+        fixedSize: touch ? null : const Size(28, 28),
+        padding: EdgeInsets.zero,
+        foregroundColor: scheme.onSurfaceVariant,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(kRowRadius),
+        ),
+      ),
+    );
+
+    final field = NotificationListener<SizeChangedLayoutNotification>(
+      onNotification: _composerSizeChanged,
+      child: SizeChangedLayoutNotifier(
+        child: ConstrainedBox(
+          key: const Key('composer-input-area'),
+          constraints: BoxConstraints(
+            minHeight: inputHeight,
+            maxHeight: maxHeight,
+          ),
+          child: TextField(
+            key: const Key('composer-input'),
+            controller: _input,
+            focusNode: _inputFocus,
+            readOnly: _editorOpen,
+            minLines: 1,
+            maxLines: null,
+            keyboardType: TextInputType.multiline,
+            textInputAction: TextInputAction.newline,
+            onSubmitted: _isDesktop
+                ? (_) {
+                    if (!_input.value.composing.isValid ||
+                        _input.value.composing.isCollapsed) {
+                      _submit();
+                    }
+                  }
+                : null,
+            style: inputStyle,
+            cursorColor: scheme.onSurface,
+            decoration: InputDecoration(
+              filled: false,
+              hintText: _streaming
+                  ? (_supplement ? l10n.steerMessage : l10n.queueNextTurn)
+                  : l10n.messageHint,
+              hintStyle: inputStyle.copyWith(color: scheme.onSurfaceVariant),
+              border: InputBorder.none,
+              isCollapsed: true,
+              // Override the shared form-field padding inside this compact card.
+              contentPadding: EdgeInsets.zero,
+            ),
+          ),
+        ),
+      ),
+    );
+
+    // The turn-mode chips ride in the toolbar only where the card has room for
+    // them beside the permission and model pills (~180 px each); narrower
+    // cards give them their own line above.
+    Widget composerBody(bool inlineModes) {
+      final toolbar = LayoutBuilder(
+        // One row at every width. Attachments collapse into a single `+` menu
+        // and the config pills into two chips, so a 360 px phone lays out like
+        // the desktop — no wrapping, no expand/collapse mode to get stuck in.
+        builder: (context, constraints) => Row(
+          children: [
+            _attachMenu(l10n),
+            const SizedBox(width: 2),
+            // Permission and model share what is left; both ellipsize, so a
+            // narrow card (the review pane open) shortens labels instead of
+            // overflowing. Permission gets the smaller share and a cap.
+            Flexible(
+              flex: 2,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxWidth: constraints.maxWidth * 0.34,
+                ),
+                child: _permissionChip(l10n),
+              ),
+            ),
+            if (inlineModes)
+              for (final chip in modeChips) ...[const SizedBox(width: 4), chip],
+            const SizedBox(width: 4),
+            // Right-aligned next to send.
+            Expanded(
+              flex: 3,
+              child: Align(
+                alignment: Alignment.centerRight,
+                child: _modelChip(l10n),
+              ),
+            ),
+            IconButton(
+              key: const Key('voice-start'),
+              tooltip: _isVoiceThread ? l10n.voiceStart : l10n.voiceNewSession,
+              onPressed: _canStartVoice ? _startVoice : null,
+              icon: Icon(Icons.graphic_eq, size: touch ? 22 : 18),
+              style: touch
+                  ? null
+                  : IconButton.styleFrom(
+                      minimumSize: const Size(32, 32),
+                      fixedSize: const Size(32, 32),
+                      padding: EdgeInsets.zero,
+                    ),
+            ),
+            const SizedBox(width: 4),
+            if (_streaming) ...[_stopButton(l10n), const SizedBox(width: 6)],
+            _sendButton(),
+          ],
+        ),
+      );
+
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          resizeEdge,
+          Padding(
+            padding: EdgeInsets.fromLTRB(
+              touch ? 12 : 14,
+              0,
+              touch ? 8 : 10,
+              touch ? 6 : 8,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (_queue.isNotEmpty) ...[
+                  _queuedStrip(l10n),
+                  const SizedBox(height: 8),
+                ],
+                if (_attachments.isNotEmpty) ...[
+                  _attachmentStrip(l10n),
+                  const SizedBox(height: 8),
+                ],
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Padding(
+                        padding: EdgeInsets.only(
+                          left: touch ? 4 : 2,
+                          top: touch ? 2 : 0,
+                        ),
+                        child: field,
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    // Pinned to the field's first line, so it never moves as
+                    // the draft grows.
+                    Transform.translate(
+                      offset: Offset(0, touch ? -10 : -4),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          fieldTool(
+                            key: const Key('composer-expand'),
+                            tooltip: l10n.expandComposer,
+                            icon: Icons.open_in_full,
+                            onPressed: _expandComposer,
+                          ),
+                          if (grown)
+                            fieldTool(
+                              key: const Key('composer-reset-height'),
+                              tooltip: l10n.resetComposerHeight,
+                              icon: Icons.unfold_less,
+                              onPressed: () =>
+                                  resize(defaultHeight, save: true),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                if (!inlineModes && modeChips.isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  Wrap(spacing: 6, runSpacing: 4, children: modeChips),
+                ],
+                SizedBox(height: touch ? 4 : 8),
+                toolbar,
+              ],
+            ),
+          ),
+        ],
+      );
+    }
+
+    final card = ListenableBuilder(
+      listenable: _inputFocus,
+      builder: (context, child) {
+        // The edge says what the composer is doing: firmer while focused, the
+        // live signal while the agent is answering (anything sent now queues).
+        final edge = _streaming
+            ? signalColor(scheme).withValues(alpha: 0.55)
+            : _inputFocus.hasFocus
+            ? scheme.outline
+            : scheme.outlineVariant;
+        return AnimatedContainer(
+          duration: Motion.of(context, Motion.fast),
+          curve: Motion.move,
+          decoration: BoxDecoration(
+            color: surfacePanel(scheme),
+            borderRadius: BorderRadius.circular(kComposerRadius),
+            border: Border.all(color: edge),
+            boxShadow: panelShadow(scheme, blur: 16),
+          ),
+          child: child,
+        );
+      },
+      child: LayoutBuilder(
+        builder: (context, box) =>
+            composerBody(doc && modeChips.isNotEmpty && box.maxWidth >= 640),
+      ),
+    );
+
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: doc
+            ? const EdgeInsets.fromLTRB(16, 4, 16, 10)
+            : const EdgeInsets.fromLTRB(10, 4, 10, 10),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // The card IS the input, so all of it takes a text cursor and
+            // focuses the field on click — the padding beside a short line
+            // shouldn't behave like dead chrome. The buttons inside sit deeper
+            // in the tree, so they keep their own click cursor and taps.
+            MouseRegion(
+              cursor: SystemMouseCursors.text,
+              child: GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onTap: () => _inputFocus.requestFocus(),
+                child: card,
+              ),
+            ),
+            // Desktop: where this turn will land — host, branch — and how to
+            // send it, as a footnote under the card rather than chrome inside
+            // it. A phone shows the same facts in the status bar.
+            if (doc)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(6, 6, 6, 0),
+                // The keyboard hint is the first thing to go when the column
+                // narrows (the review pane is open); the context facts shrink
+                // after it and ellipsize rather than overflow.
+                child: LayoutBuilder(
+                  builder: (context, box) => Row(
+                    children: [
+                      Expanded(child: _composerContext(l10n)),
+                      if (_isDesktop && box.maxWidth >= 520) ...[
+                        const SizedBox(width: 12),
+                        Text(
+                          l10n.composerKeyboardHint,
+                          maxLines: 1,
+                          style: TextStyle(
+                            fontSize: 11.5,
+                            color: scheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Interrupt the running turn. An ink square, the shape every player and
+  /// recorder uses for stop, so it can't be mistaken for send beside it.
+  Widget _stopButton(AppLocalizations l10n) {
+    final scheme = Theme.of(context).colorScheme;
+    final touch = !isDesktop;
+    return IconButton.filled(
+      key: const Key('stop-btn'),
+      onPressed: _interrupt,
+      tooltip: l10n.stop,
+      style: IconButton.styleFrom(
+        minimumSize: touch ? const Size(40, 40) : const Size(32, 32),
+        fixedSize: touch ? const Size(40, 40) : const Size(32, 32),
+        padding: EdgeInsets.zero,
+        backgroundColor: scheme.surfaceContainerHighest,
+        foregroundColor: scheme.onSurface,
+      ),
+      icon: const Icon(Icons.stop_rounded, size: 18),
     );
   }
 
@@ -8915,7 +9318,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
               height: 13,
               child: CircularProgressIndicator(
                 strokeWidth: 1.6,
-                color: scheme.primary,
+                color: scheme.onSurfaceVariant,
               ),
             )
           else
@@ -8965,7 +9368,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
 
     return Row(
       children: [
-        chip(Icons.computer, _hostLabel(l10n)),
+        Flexible(child: chip(Icons.computer, _hostLabel(l10n))),
         if (_branch != null) ...[
           const SizedBox(width: 10),
           Flexible(
@@ -9006,9 +9409,19 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     key: const Key('attach-menu-btn'),
     tooltip: l10n.addAttachment,
     enabled: !_sending,
+    style: isDesktop
+        ? IconButton.styleFrom(
+            minimumSize: const Size(30, 30),
+            fixedSize: const Size(30, 30),
+            padding: EdgeInsets.zero,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(kControlRadius),
+            ),
+          )
+        : null,
     icon: Icon(
       Icons.add,
-      size: 22,
+      size: isDesktop ? 19 : 22,
       color: Theme.of(context).colorScheme.onSurfaceVariant,
     ),
     // `_` on purpose: an item's `onTap` fires *after* `Navigator.pop`, so the
@@ -9038,7 +9451,11 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
 
   Widget _menuRow(IconData icon, String label) => Row(
     children: [
-      Icon(icon, size: 19, color: Theme.of(context).colorScheme.primary),
+      Icon(
+        icon,
+        size: 17,
+        color: Theme.of(context).colorScheme.onSurfaceVariant,
+      ),
       const SizedBox(width: 12),
       Text(label),
     ],
@@ -9131,7 +9548,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
               padding: const EdgeInsets.fromLTRB(14, 2, 14, 8),
               child: Text(
                 l10n.modelDefault,
-                style: TextStyle(fontSize: 12.5, color: scheme.outline),
+                style: TextStyle(
+                  fontSize: 12.5,
+                  color: scheme.onSurfaceVariant,
+                ),
               ),
             )
           else
@@ -9430,17 +9850,38 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           !_showingCachedHistory &&
           !_attachments.any((a) => !a.ready) &&
           hasDraft;
-      return IconButton.filled(
-        key: const Key('send-btn'),
-        onPressed: canSend ? _submit : null,
-        tooltip: _restoringSettings
-            ? l10n.restoringSessionSettings
-            : _streaming
-            ? (_supplement ? l10n.steerMessage : l10n.queueNextTurn)
-            : l10n.send,
-        icon: Icon(
-          _streaming && !_supplement ? Icons.playlist_add : Icons.arrow_upward,
-          size: 20,
+      final scheme = Theme.of(context).colorScheme;
+      final touch = !isDesktop;
+      final side = touch ? 40.0 : 32.0;
+      // Ink on the panel when there is something to send; a quiet plate
+      // otherwise, so an empty composer doesn't hold a loud button.
+      return AnimatedScale(
+        scale: hasDraft ? 1 : 0.94,
+        duration: Motion.of(context, Motion.fast),
+        curve: Motion.enter,
+        child: IconButton.filled(
+          key: const Key('send-btn'),
+          onPressed: canSend ? _submit : null,
+          tooltip: _restoringSettings
+              ? l10n.restoringSessionSettings
+              : _streaming
+              ? (_supplement ? l10n.steerMessage : l10n.queueNextTurn)
+              : l10n.send,
+          style: IconButton.styleFrom(
+            minimumSize: Size(side, side),
+            fixedSize: Size(side, side),
+            padding: EdgeInsets.zero,
+            backgroundColor: scheme.onSurface,
+            foregroundColor: scheme.surface,
+            disabledBackgroundColor: scheme.onSurface.withValues(alpha: 0.08),
+            disabledForegroundColor: onSurfaceDisabled(scheme),
+          ),
+          icon: Icon(
+            _streaming && !_supplement
+                ? Icons.playlist_add
+                : Icons.arrow_upward_rounded,
+            size: touch ? 20 : 18,
+          ),
         ),
       );
     },
@@ -9464,13 +9905,13 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     final scheme = Theme.of(context).colorScheme;
     final enabled = onTap != null;
     final fg = active
-        ? scheme.onPrimaryContainer
+        ? scheme.onTertiaryContainer
         : enabled
         ? scheme.onSurfaceVariant
         : scheme.onSurfaceVariant.withValues(alpha: 0.5);
     final touch = !isDesktop;
     return Material(
-      color: active ? scheme.primaryContainer : Colors.transparent,
+      color: active ? scheme.tertiaryContainer : Colors.transparent,
       borderRadius: BorderRadius.circular(kControlRadius),
       child: InkWell(
         mouseCursor: clickable,
@@ -9478,11 +9919,11 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         borderRadius: BorderRadius.circular(kControlRadius),
         onTap: onTap,
         child: ConstrainedBox(
-          constraints: BoxConstraints(minHeight: touch ? 44 : 0),
+          constraints: BoxConstraints(minHeight: touch ? 44 : 30),
           child: Padding(
             padding: EdgeInsets.symmetric(
-              horizontal: touch ? 13 : 11,
-              vertical: 6,
+              horizontal: touch ? 10 : 8,
+              vertical: 5,
             ),
             child: Row(
               mainAxisSize: MainAxisSize.min,
