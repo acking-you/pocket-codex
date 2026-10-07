@@ -43,10 +43,9 @@ class _DraggableNavigationState extends State<DraggableNavigation> {
           // Start from where the control actually is (it may sit at its
           // default corner with no offset yet), then follow the pointer 1:1.
           onPanStart: (_) => _offset.value = _position.actual,
-          onPanUpdate: (details) =>
-              _offset.value = _position.clamp(
-                (_offset.value ?? _position.actual) + details.delta,
-              ),
+          onPanUpdate: (details) => _offset.value = _position.clamp(
+            (_offset.value ?? _position.actual) + details.delta,
+          ),
           // Its own layer: moving it then composites one small picture
           // instead of repainting the transcript underneath every frame.
           child: RepaintBoundary(child: widget.child),

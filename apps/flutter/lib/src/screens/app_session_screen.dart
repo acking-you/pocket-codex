@@ -783,9 +783,16 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         });
       }
     }
-    if (state == AppLifecycleState.paused ||
-        state == AppLifecycleState.hidden ||
-        state == AppLifecycleState.detached) {
+    // A phone backgrounding the app loses the microphone anyway, so the call
+    // ends. A desktop window that loses focus, is covered or is minimised is
+    // still the user's live call — they switched to their editor to keep
+    // talking — so only the process going away ends it there.
+    final ends = isDesktop
+        ? state == AppLifecycleState.detached
+        : state == AppLifecycleState.paused ||
+              state == AppLifecycleState.hidden ||
+              state == AppLifecycleState.detached;
+    if (ends) {
       ++_voiceIntentGeneration;
       unawaited(_voice.stop());
     }
@@ -876,6 +883,32 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         serviceKey: widget.serviceKey,
         threadId: id,
       ),
+    );
+  }
+
+  /// The live call's pinned status entry (sidebar, or the window strip when
+  /// the sidebar is collapsed). Names the conversation the call belongs to
+  /// and, when that is not the one on screen, taps through to it.
+  Widget _voiceStatus(AppLocalizations l10n, {bool compact = false}) {
+    final id = _voice.threadId;
+    final thread = id == null
+        ? null
+        : _threads.where((t) => t.id == id).firstOrNull ??
+              _discoveredThreads[id];
+    final title = thread == null
+        ? null
+        : (thread.title?.trim().isNotEmpty ?? false)
+        ? thread.title!.trim()
+        : thread.preview.trim().isNotEmpty
+        ? thread.preview.trim().split('\n').first
+        : l10n.voiceLive;
+    return VoiceStatusEntry(
+      controller: _voice,
+      compact: compact,
+      title: title,
+      onOpen: id == null || id == _threadId
+          ? null
+          : () => _openThread(id, thread?.cwd ?? _cwd),
     );
   }
 
@@ -1238,7 +1271,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// Switch the screen to another conversation (or a new one when [tid] is
   /// null) in place, resetting per-thread state. Used by the left sessions pane.
   void _openThread(String? tid, String? cwd) {
-    unawaited(_voice.stop());
+    // A live call belongs to its own conversation, not to whichever one is on
+    // screen: browsing another conversation keeps it talking, and the
+    // sidebar's voice entry stays the way back to it and to hang up.
     unawaited(
       ref
           .read(bridgeApiProvider)
@@ -5196,7 +5231,14 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
             ),
           ),
           surfaceTintColor: Colors.transparent,
-          child: SafeArea(child: _sessionsPane(l10n, inDrawer: true)),
+          child: SafeArea(
+            child: Column(
+              children: [
+                _voiceStatus(l10n),
+                Expanded(child: _sessionsPane(l10n, inDrawer: true)),
+              ],
+            ),
+          ),
         ),
         // Widen the edge-swipe-to-open zone (default ~20px). The narrow
         // default sits under Android's system back-gesture strip, so a
@@ -5408,6 +5450,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       child: Column(
         children: [
           strip,
+          // Pinned above the list, outside its scroll and its search filter:
+          // a live call is always one glance and one tap away.
+          _voiceStatus(l10n),
           Expanded(child: _sessionsPane(l10n)),
         ],
       ),
@@ -5553,6 +5598,12 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                   ),
                 ),
               ),
+              // With the sidebar hidden, the call's status and hang-up move
+              // into the window strip rather than disappearing with it.
+              if (!_leftOpen) ...[
+                _voiceStatus(l10n, compact: true),
+                const SizedBox(width: 6),
+              ],
               if (_ctx != null)
                 ContextGauge(
                   status: _ctx!,
@@ -6478,7 +6529,13 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         // restart since it's derived from the trailing plan item).
         if (!_externalWriterMode && _planReady) _implementBar(l10n),
         if (_error != null) _errorBanner(l10n),
-        if (_isVoiceThread) _voiceBar(l10n),
+        if (_isVoiceThread)
+          _voiceBar(l10n)
+        // A call running in another conversation stays reachable from here in
+        // the narrow layout, where the sidebar is a closed drawer.
+        else if (MediaQuery.sizeOf(context).width < 720 &&
+            _voice.threadId != _threadId)
+          _voiceStatus(l10n),
         if (_externalWriterMode)
           _externalWriterAction(l10n)
         else

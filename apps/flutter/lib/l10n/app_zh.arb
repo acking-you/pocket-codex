@@ -715,5 +715,19 @@
   },
   "hideSidebar": "隐藏侧边栏",
   "showSidebar": "显示侧边栏",
-  "locateConversation": "定位到当前会话"
+  "locateConversation": "定位到当前会话",
+  "voiceReconnecting": "语音重连中…",
+  "voiceSpeaking": "助手正在回复",
+  "voiceUserSpeaking": "你正在说话",
+  "voiceInterrupted": "已打断",
+  "voiceEndedByUser": "语音通话已结束",
+  "voiceEndedReason": "语音通话已结束：{reason}",
+  "voiceFailedShort": "语音连接已断开",
+  "voiceOpenCall": "回到语音会话",
+  "voiceHangUp": "挂断",
+  "voiceModelDefault": "主机默认",
+  "voiceModelFrameless": "gpt-live-1-codex（低延迟）",
+  "voiceModelCustom": "自定义…",
+  "voiceModelCustomLabel": "模型 ID",
+  "voiceTaskContinues": "挂断不会取消语音已交给 Codex 的任务。"
 }

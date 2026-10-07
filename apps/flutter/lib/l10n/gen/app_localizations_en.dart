@@ -1981,4 +1981,49 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get locateConversation => 'Show current conversation';
+
+  @override
+  String get voiceReconnecting => 'Voice reconnecting…';
+
+  @override
+  String get voiceSpeaking => 'Assistant speaking';
+
+  @override
+  String get voiceUserSpeaking => 'You\'re speaking';
+
+  @override
+  String get voiceInterrupted => 'Interrupted';
+
+  @override
+  String get voiceEndedByUser => 'Voice call ended';
+
+  @override
+  String voiceEndedReason(String reason) {
+    return 'Voice call ended: $reason';
+  }
+
+  @override
+  String get voiceFailedShort => 'Voice call dropped';
+
+  @override
+  String get voiceOpenCall => 'Go to the voice conversation';
+
+  @override
+  String get voiceHangUp => 'Hang up';
+
+  @override
+  String get voiceModelDefault => 'Host default';
+
+  @override
+  String get voiceModelFrameless => 'gpt-live-1-codex (low latency)';
+
+  @override
+  String get voiceModelCustom => 'Custom…';
+
+  @override
+  String get voiceModelCustomLabel => 'Model id';
+
+  @override
+  String get voiceTaskContinues =>
+      'Tasks the voice handed to Codex keep running after you hang up.';
 }

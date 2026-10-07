@@ -3643,6 +3643,90 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Show current conversation'**
   String get locateConversation;
+
+  /// No description provided for @voiceReconnecting.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice reconnecting…'**
+  String get voiceReconnecting;
+
+  /// No description provided for @voiceSpeaking.
+  ///
+  /// In en, this message translates to:
+  /// **'Assistant speaking'**
+  String get voiceSpeaking;
+
+  /// No description provided for @voiceUserSpeaking.
+  ///
+  /// In en, this message translates to:
+  /// **'You\'re speaking'**
+  String get voiceUserSpeaking;
+
+  /// No description provided for @voiceInterrupted.
+  ///
+  /// In en, this message translates to:
+  /// **'Interrupted'**
+  String get voiceInterrupted;
+
+  /// No description provided for @voiceEndedByUser.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice call ended'**
+  String get voiceEndedByUser;
+
+  /// No description provided for @voiceEndedReason.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice call ended: {reason}'**
+  String voiceEndedReason(String reason);
+
+  /// No description provided for @voiceFailedShort.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice call dropped'**
+  String get voiceFailedShort;
+
+  /// No description provided for @voiceOpenCall.
+  ///
+  /// In en, this message translates to:
+  /// **'Go to the voice conversation'**
+  String get voiceOpenCall;
+
+  /// No description provided for @voiceHangUp.
+  ///
+  /// In en, this message translates to:
+  /// **'Hang up'**
+  String get voiceHangUp;
+
+  /// No description provided for @voiceModelDefault.
+  ///
+  /// In en, this message translates to:
+  /// **'Host default'**
+  String get voiceModelDefault;
+
+  /// No description provided for @voiceModelFrameless.
+  ///
+  /// In en, this message translates to:
+  /// **'gpt-live-1-codex (low latency)'**
+  String get voiceModelFrameless;
+
+  /// No description provided for @voiceModelCustom.
+  ///
+  /// In en, this message translates to:
+  /// **'Custom…'**
+  String get voiceModelCustom;
+
+  /// No description provided for @voiceModelCustomLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Model id'**
+  String get voiceModelCustomLabel;
+
+  /// No description provided for @voiceTaskContinues.
+  ///
+  /// In en, this message translates to:
+  /// **'Tasks the voice handed to Codex keep running after you hang up.'**
+  String get voiceTaskContinues;
 }
 
 class _AppLocalizationsDelegate

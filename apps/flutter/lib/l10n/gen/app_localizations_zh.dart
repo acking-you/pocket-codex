@@ -1918,4 +1918,48 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get locateConversation => '定位到当前会话';
+
+  @override
+  String get voiceReconnecting => '语音重连中…';
+
+  @override
+  String get voiceSpeaking => '助手正在回复';
+
+  @override
+  String get voiceUserSpeaking => '你正在说话';
+
+  @override
+  String get voiceInterrupted => '已打断';
+
+  @override
+  String get voiceEndedByUser => '语音通话已结束';
+
+  @override
+  String voiceEndedReason(String reason) {
+    return '语音通话已结束：$reason';
+  }
+
+  @override
+  String get voiceFailedShort => '语音连接已断开';
+
+  @override
+  String get voiceOpenCall => '回到语音会话';
+
+  @override
+  String get voiceHangUp => '挂断';
+
+  @override
+  String get voiceModelDefault => '主机默认';
+
+  @override
+  String get voiceModelFrameless => 'gpt-live-1-codex（低延迟）';
+
+  @override
+  String get voiceModelCustom => '自定义…';
+
+  @override
+  String get voiceModelCustomLabel => '模型 ID';
+
+  @override
+  String get voiceTaskContinues => '挂断不会取消语音已交给 Codex 的任务。';
 }
