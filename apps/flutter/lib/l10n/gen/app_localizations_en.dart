@@ -2026,4 +2026,13 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get voiceTaskContinues =>
       'Tasks the voice handed to Codex keep running after you hang up.';
+
+  @override
+  String get stepOutput => 'output';
+
+  @override
+  String get previewRendered => 'Preview';
+
+  @override
+  String get previewSource => 'Source';
 }

@@ -19,6 +19,7 @@ import 'package:pocket_codex/src/desktop_theme.dart';
 import 'package:pocket_codex/src/fonts.dart';
 import 'package:pocket_codex/src/git_diff.dart';
 import 'package:pocket_codex/src/screens/app_session/diff_view.dart';
+import 'package:pocket_codex/src/screens/app_session/step_body.dart';
 import 'package:pocket_codex/src/screens/app_session/transcript_model.dart';
 import 'package:pocket_codex/src/motion.dart';
 import 'package:pocket_codex/src/theme.dart';
@@ -1277,7 +1278,17 @@ class _ActivityCardState extends State<ActivityCard> {
               ),
             ),
           ),
-          if (_expanded && body.isNotEmpty)
+          if (_expanded && body.isNotEmpty && !prose)
+            Padding(
+              padding: EdgeInsets.fromLTRB(
+                doc ? 0 : 10,
+                0,
+                doc ? 0 : 10,
+                doc ? 4 : 6,
+              ),
+              child: StepBody(item: item),
+            ),
+          if (_expanded && body.isNotEmpty && prose)
             Container(
               width: double.infinity,
               margin: EdgeInsets.only(bottom: doc ? 6 : 0),
@@ -1296,18 +1307,7 @@ class _ActivityCardState extends State<ActivityCard> {
                 color: scheme.surfaceContainerLowest,
               ),
               child: SingleChildScrollView(
-                child: prose
-                    ? MarkdownView(data: body, muted: true)
-                    : linkifyText(
-                        context,
-                        body,
-                        selectable: true,
-                        style: const TextStyle(
-                          fontFamily: monoFontFamily,
-                          fontFamilyFallback: monoCjkFallback,
-                          fontSize: 12,
-                        ),
-                      ),
+                child: MarkdownView(data: body, muted: true),
               ),
             ),
         ],

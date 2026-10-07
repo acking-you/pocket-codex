@@ -834,5 +834,8 @@
   "voiceModelFrameless": "gpt-live-1-codex (low latency)",
   "voiceModelCustom": "Custom…",
   "voiceModelCustomLabel": "Model id",
-  "voiceTaskContinues": "Tasks the voice handed to Codex keep running after you hang up."
+  "voiceTaskContinues": "Tasks the voice handed to Codex keep running after you hang up.",
+  "stepOutput": "output",
+  "previewRendered": "Preview",
+  "previewSource": "Source"
 }

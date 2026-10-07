@@ -3727,6 +3727,24 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Tasks the voice handed to Codex keep running after you hang up.'**
   String get voiceTaskContinues;
+
+  /// No description provided for @stepOutput.
+  ///
+  /// In en, this message translates to:
+  /// **'output'**
+  String get stepOutput;
+
+  /// No description provided for @previewRendered.
+  ///
+  /// In en, this message translates to:
+  /// **'Preview'**
+  String get previewRendered;
+
+  /// No description provided for @previewSource.
+  ///
+  /// In en, this message translates to:
+  /// **'Source'**
+  String get previewSource;
 }
 
 class _AppLocalizationsDelegate

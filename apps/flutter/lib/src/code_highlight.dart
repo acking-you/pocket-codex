@@ -226,8 +226,7 @@ TextSpan _upright(TextSpan span) => TextSpan(
 );
 
 /// The registered grammar name for a fence info string, or null when we have
-/// no grammar for it. Exposed for tests.
-@visibleForTesting
+/// no grammar for it — so a caller can tell whether highlighting will apply.
 String? resolveLanguage(String info) {
   // A fence may carry more than the name (```dart title="x"), and casing is
   // whatever the model felt like.

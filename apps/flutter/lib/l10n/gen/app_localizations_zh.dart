@@ -1962,4 +1962,13 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get voiceTaskContinues => '挂断不会取消语音已交给 Codex 的任务。';
+
+  @override
+  String get stepOutput => '输出';
+
+  @override
+  String get previewRendered => '预览';
+
+  @override
+  String get previewSource => '源码';
 }
