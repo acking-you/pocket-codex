@@ -381,6 +381,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   bool _sidebarClosing = false;
   bool _layoutRestored = false;
   double? _composerHeight;
+  // Live height while the resize edge is dragged. Only the input box listens,
+  // so a drag re-lays out the composer instead of rebuilding the screen on
+  // every pointer move — which is what made the edge lag the cursor.
+  final ValueNotifier<double?> _composerDragHeight = ValueNotifier(null);
   int _settingsRevision = 0;
   double _reviewWidth = 760; // width of the whole review split (diff + tree)
   double _treeWidth = 250; // the tree sub-pane inside the review
@@ -1405,6 +1409,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     _inputFocus.removeListener(_onComposerFocus);
     _inputFocus.dispose();
     _convSearchFocus.dispose();
+    _composerDragHeight.dispose();
     _convScroll.dispose();
     _convListCtl.dispose();
     if (_isDesktop) HardwareKeyboard.instance.removeHandler(_onHardwareKey);
@@ -9200,11 +9205,20 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         child: GestureDetector(
           key: const Key('composer-resize-handle'),
           behavior: HitTestBehavior.opaque,
-          onVerticalDragUpdate: (details) =>
-              resize(inputHeight - details.delta.dy),
-          onVerticalDragEnd: (_) => ref
-              .read(uiPrefsProvider.notifier)
-              .setComposerHeight(_composerHeight ?? inputHeight),
+          onVerticalDragStart: (_) => _composerDragHeight.value = inputHeight,
+          onVerticalDragUpdate: (details) => _composerDragHeight.value =
+              ((_composerDragHeight.value ?? inputHeight) - details.delta.dy)
+                  .clamp(minHeight, maxHeight),
+          onVerticalDragEnd: (_) {
+            final dragged = _composerDragHeight.value;
+            _composerDragHeight.value = null;
+            if (dragged != null) resize(dragged, save: true);
+          },
+          onVerticalDragCancel: () {
+            final dragged = _composerDragHeight.value;
+            _composerDragHeight.value = null;
+            if (dragged != null) resize(dragged, save: true);
+          },
           onDoubleTap: () => resize(defaultHeight, save: true),
           child: Tooltip(
             message: l10n.resizeComposer,
@@ -9256,11 +9270,15 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     final field = NotificationListener<SizeChangedLayoutNotification>(
       onNotification: _composerSizeChanged,
       child: SizeChangedLayoutNotifier(
-        child: ConstrainedBox(
-          key: const Key('composer-input-area'),
-          constraints: BoxConstraints(
-            minHeight: inputHeight,
-            maxHeight: maxHeight,
+        child: ValueListenableBuilder<double?>(
+          valueListenable: _composerDragHeight,
+          builder: (context, dragged, input) => ConstrainedBox(
+            key: const Key('composer-input-area'),
+            constraints: BoxConstraints(
+              minHeight: dragged ?? inputHeight,
+              maxHeight: math.max(dragged ?? 0, maxHeight),
+            ),
+            child: input,
           ),
           child: TextField(
             key: const Key('composer-input'),

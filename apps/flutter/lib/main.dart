@@ -12,6 +12,7 @@ import 'package:pocket_codex/src/log_manager.dart';
 import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/router.dart';
 import 'package:pocket_codex/src/theme.dart';
+import 'package:pocket_codex/src/theme_transition.dart';
 import 'package:pocket_codex/src/ui_prefs.dart';
 import 'package:pocket_codex/src/rust/api/bridge.dart' as frb;
 import 'package:pocket_codex/src/rust/frb_generated.dart';
@@ -161,7 +162,9 @@ class _PocketCodexAppState extends ConsumerState<PocketCodexApp> {
             ),
           );
         }
-        return child ?? const SizedBox.shrink();
+        // The light/dark cross-fade captures this subtree; see
+        // ThemeTransition.
+        return ThemeTransitionHost(child: child ?? const SizedBox.shrink());
       },
       routerConfig: _router,
     );

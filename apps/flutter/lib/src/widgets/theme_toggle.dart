@@ -4,6 +4,7 @@ import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/desktop_theme.dart';
 import 'package:pocket_codex/src/fonts.dart';
 import 'package:pocket_codex/src/motion.dart';
+import 'package:pocket_codex/src/theme_transition.dart';
 import 'package:pocket_codex/src/ui_prefs.dart';
 
 /// The light/dark toggle, for a window's own controls.
@@ -55,7 +56,10 @@ class ThemeToggle extends ConsumerWidget {
               ),
             )
           : null,
-      onPressed: () => ref.read(uiPrefsProvider.notifier).setThemeMode(next),
+      onPressed: () => ThemeTransition.run(
+        context,
+        () => ref.read(uiPrefsProvider.notifier).setThemeMode(next),
+      ),
     );
   }
 }

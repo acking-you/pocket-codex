@@ -8,6 +8,7 @@ import 'package:pocket_codex/src/fonts.dart';
 import 'package:pocket_codex/src/desktop_theme.dart';
 import 'package:pocket_codex/src/widgets/brand_logo.dart';
 import 'package:pocket_codex/src/theme.dart';
+import 'package:pocket_codex/src/theme_transition.dart';
 import 'package:pocket_codex/src/ui_prefs.dart';
 import 'package:pocket_codex/src/widgets/window_title_bar.dart';
 
@@ -403,9 +404,12 @@ class UtilityPageTitleBar extends ConsumerWidget
           onSelected: (value) {
             if (value == _themeValue) {
               final dark = Theme.of(context).brightness == Brightness.dark;
-              ref
-                  .read(uiPrefsProvider.notifier)
-                  .setThemeMode(dark ? 'light' : 'dark');
+              ThemeTransition.run(
+                context,
+                () => ref
+                    .read(uiPrefsProvider.notifier)
+                    .setThemeMode(dark ? 'light' : 'dark'),
+              );
               return;
             }
             _openUtilityRoute(context, route, value);

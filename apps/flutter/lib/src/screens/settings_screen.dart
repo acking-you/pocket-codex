@@ -10,6 +10,7 @@ import 'package:pocket_codex/src/fonts.dart';
 import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/motion.dart';
 import 'package:pocket_codex/src/theme.dart';
+import 'package:pocket_codex/src/theme_transition.dart';
 import 'package:pocket_codex/src/ui_prefs.dart';
 import 'package:pocket_codex/src/widgets/app_toast.dart';
 import 'package:pocket_codex/src/widgets/github_avatar.dart';
@@ -306,9 +307,12 @@ class _SettingsState extends ConsumerState<SettingsScreen> {
                                       icon: Icons.brightness_auto_outlined,
                                       label: l10n.appearanceSystem,
                                       selected: themeMode == null,
-                                      onTap: () => ref
-                                          .read(uiPrefsProvider.notifier)
-                                          .setThemeMode(null),
+                                      onTap: () => ThemeTransition.run(
+                                        context,
+                                        () => ref
+                                            .read(uiPrefsProvider.notifier)
+                                            .setThemeMode(null),
+                                      ),
                                     ),
                                   ),
                                   const SizedBox(width: 2),
@@ -318,9 +322,12 @@ class _SettingsState extends ConsumerState<SettingsScreen> {
                                       icon: Icons.light_mode_outlined,
                                       label: l10n.appearanceLight,
                                       selected: themeMode == 'light',
-                                      onTap: () => ref
-                                          .read(uiPrefsProvider.notifier)
-                                          .setThemeMode('light'),
+                                      onTap: () => ThemeTransition.run(
+                                        context,
+                                        () => ref
+                                            .read(uiPrefsProvider.notifier)
+                                            .setThemeMode('light'),
+                                      ),
                                     ),
                                   ),
                                   const SizedBox(width: 2),
@@ -330,9 +337,12 @@ class _SettingsState extends ConsumerState<SettingsScreen> {
                                       icon: Icons.dark_mode_outlined,
                                       label: l10n.appearanceDark,
                                       selected: themeMode == 'dark',
-                                      onTap: () => ref
-                                          .read(uiPrefsProvider.notifier)
-                                          .setThemeMode('dark'),
+                                      onTap: () => ThemeTransition.run(
+                                        context,
+                                        () => ref
+                                            .read(uiPrefsProvider.notifier)
+                                            .setThemeMode('dark'),
+                                      ),
                                     ),
                                   ),
                                 ],
@@ -544,10 +554,13 @@ class _SettingsState extends ConsumerState<SettingsScreen> {
         ],
       ),
     );
-    if (choice == null) return;
-    ref
-        .read(uiPrefsProvider.notifier)
-        .setThemeMode(choice == 'system' ? null : choice);
+    if (choice == null || !mounted) return;
+    ThemeTransition.run(
+      context,
+      () => ref
+          .read(uiPrefsProvider.notifier)
+          .setThemeMode(choice == 'system' ? null : choice),
+    );
   }
 
   Future<void> _pickLanguage(BridgeApi api) async {
