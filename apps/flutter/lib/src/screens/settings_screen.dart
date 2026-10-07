@@ -8,6 +8,7 @@ import 'package:pocket_codex/src/desktop_theme.dart';
 import 'package:pocket_codex/src/error_format.dart';
 import 'package:pocket_codex/src/fonts.dart';
 import 'package:pocket_codex/src/providers.dart';
+import 'package:pocket_codex/src/motion.dart';
 import 'package:pocket_codex/src/theme.dart';
 import 'package:pocket_codex/src/ui_prefs.dart';
 import 'package:pocket_codex/src/widgets/app_toast.dart';
@@ -296,44 +297,46 @@ class _SettingsState extends ConsumerState<SettingsScreen> {
                               ),
                             ),
                             const SizedBox(height: 10),
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: _ThemeChoice(
-                                    key: const Key('theme-system'),
-                                    icon: Icons.brightness_auto_outlined,
-                                    label: l10n.appearanceSystem,
-                                    selected: themeMode == null,
-                                    onTap: () => ref
-                                        .read(uiPrefsProvider.notifier)
-                                        .setThemeMode(null),
+                            _SegmentTrack(
+                              child: Row(
+                                children: [
+                                  Expanded(
+                                    child: _ThemeChoice(
+                                      key: const Key('theme-system'),
+                                      icon: Icons.brightness_auto_outlined,
+                                      label: l10n.appearanceSystem,
+                                      selected: themeMode == null,
+                                      onTap: () => ref
+                                          .read(uiPrefsProvider.notifier)
+                                          .setThemeMode(null),
+                                    ),
                                   ),
-                                ),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  child: _ThemeChoice(
-                                    key: const Key('theme-light'),
-                                    icon: Icons.light_mode_outlined,
-                                    label: l10n.appearanceLight,
-                                    selected: themeMode == 'light',
-                                    onTap: () => ref
-                                        .read(uiPrefsProvider.notifier)
-                                        .setThemeMode('light'),
+                                  const SizedBox(width: 2),
+                                  Expanded(
+                                    child: _ThemeChoice(
+                                      key: const Key('theme-light'),
+                                      icon: Icons.light_mode_outlined,
+                                      label: l10n.appearanceLight,
+                                      selected: themeMode == 'light',
+                                      onTap: () => ref
+                                          .read(uiPrefsProvider.notifier)
+                                          .setThemeMode('light'),
+                                    ),
                                   ),
-                                ),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  child: _ThemeChoice(
-                                    key: const Key('theme-dark'),
-                                    icon: Icons.dark_mode_outlined,
-                                    label: l10n.appearanceDark,
-                                    selected: themeMode == 'dark',
-                                    onTap: () => ref
-                                        .read(uiPrefsProvider.notifier)
-                                        .setThemeMode('dark'),
+                                  const SizedBox(width: 2),
+                                  Expanded(
+                                    child: _ThemeChoice(
+                                      key: const Key('theme-dark'),
+                                      icon: Icons.dark_mode_outlined,
+                                      label: l10n.appearanceDark,
+                                      selected: themeMode == 'dark',
+                                      onTap: () => ref
+                                          .read(uiPrefsProvider.notifier)
+                                          .setThemeMode('dark'),
+                                    ),
                                   ),
-                                ),
-                              ],
+                                ],
+                              ),
                             ),
                           ],
                         ),
@@ -778,50 +781,93 @@ class _ThemeChoice extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Material(
-      color: selected ? scheme.primaryContainer : Colors.transparent,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(kControlRadius),
-        side: BorderSide(color: selected ? scheme.primary : scheme.outline),
-      ),
-      child: InkWell(
-        mouseCursor: clickable,
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(kControlRadius),
-        child: SizedBox(
-          height: 48,
-          child: Stack(
-            children: [
-              Center(
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final radius = BorderRadius.circular(kControlRadius - 2);
+    // One segment of a segmented control: the selected one is a raised chip
+    // on the track, the rest are bare labels — no borders, no check mark.
+    return Semantics(
+      selected: selected,
+      child: AnimatedContainer(
+        duration: Motion.of(context, Motion.fast),
+        curve: Motion.enter,
+        decoration: BoxDecoration(
+          color: selected
+              ? (dark ? scheme.surfaceContainerHighest : scheme.surfaceBright)
+              : Colors.transparent,
+          borderRadius: radius,
+          boxShadow: selected && !dark
+              ? [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.08),
+                    blurRadius: 3,
+                    offset: const Offset(0, 1),
+                  ),
+                ]
+              : null,
+        ),
+        child: Material(
+          type: MaterialType.transparency,
+          child: InkWell(
+            mouseCursor: clickable,
+            onTap: selected ? null : onTap,
+            borderRadius: radius,
+            child: SizedBox(
+              height: 32,
+              child: Center(
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Icon(
                       icon,
-                      size: 18,
+                      size: 16,
                       color: selected
-                          ? scheme.onPrimaryContainer
+                          ? scheme.onSurface
                           : scheme.onSurfaceVariant,
                     ),
-                    const SizedBox(width: 7),
-                    Text(label),
+                    const SizedBox(width: 6),
+                    Flexible(
+                      child: Text(
+                        label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: selected
+                              ? FontWeight.w600
+                              : FontWeight.w400,
+                          color: selected
+                              ? scheme.onSurface
+                              : scheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ),
                   ],
                 ),
               ),
-              if (selected)
-                Positioned(
-                  top: 6,
-                  right: 6,
-                  child: Icon(
-                    Icons.check,
-                    size: 13,
-                    color: scheme.onPrimaryContainer,
-                  ),
-                ),
-            ],
+            ),
           ),
         ),
       ),
+    );
+  }
+}
+
+/// The recessed track a row of [_ThemeChoice] segments sits in.
+class _SegmentTrack extends StatelessWidget {
+  const _SegmentTrack({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.all(2),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHigh,
+        borderRadius: BorderRadius.circular(kControlRadius),
+      ),
+      child: child,
     );
   }
 }

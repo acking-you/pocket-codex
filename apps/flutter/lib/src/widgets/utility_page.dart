@@ -114,19 +114,19 @@ class _WorkspaceNavigation extends StatelessWidget {
         child: Tooltip(
           message: entry.$3,
           child: Material(
-            color: selected ? scheme.primaryContainer : Colors.transparent,
-            borderRadius: BorderRadius.circular(kControlRadius),
+            color: selected ? surfaceSelection(scheme) : Colors.transparent,
+            borderRadius: BorderRadius.circular(kRowRadius),
             child: InkWell(
               key: Key('workspace-nav-${entry.$1}'),
               mouseCursor: clickable,
-              borderRadius: BorderRadius.circular(kControlRadius),
+              borderRadius: BorderRadius.circular(kRowRadius),
               onTap: selected
                   ? null
                   : () => _openUtilityRoute(context, route, entry.$1),
               child: Padding(
                 padding: EdgeInsets.symmetric(
-                  horizontal: compact ? 8 : 12,
-                  vertical: 13,
+                  horizontal: compact ? 8 : 10,
+                  vertical: compact ? 12 : 8,
                 ),
                 child: Row(
                   mainAxisAlignment: compact
@@ -135,13 +135,13 @@ class _WorkspaceNavigation extends StatelessWidget {
                   children: [
                     Icon(
                       entry.$2,
-                      size: 21,
+                      size: compact ? 21 : 18,
                       color: selected
-                          ? scheme.onPrimaryContainer
+                          ? scheme.onSurface
                           : scheme.onSurfaceVariant,
                     ),
                     if (!compact) ...[
-                      const SizedBox(width: 12),
+                      const SizedBox(width: 10),
                       Expanded(
                         child: Text(
                           entry.$3,
@@ -153,7 +153,7 @@ class _WorkspaceNavigation extends StatelessWidget {
                                 ? FontWeight.w600
                                 : FontWeight.w400,
                             color: selected
-                                ? scheme.onPrimaryContainer
+                                ? scheme.onSurface
                                 : scheme.onSurfaceVariant,
                           ),
                         ),
@@ -173,7 +173,7 @@ class _WorkspaceNavigation extends StatelessWidget {
       child: SafeArea(
         top: false,
         child: Padding(
-          padding: EdgeInsets.all(compact ? 8 : 16),
+          padding: EdgeInsets.all(compact ? 8 : 10),
           child: compact
               ? Row(
                   children: [
@@ -185,10 +185,10 @@ class _WorkspaceNavigation extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     Padding(
-                      padding: const EdgeInsets.fromLTRB(10, 10, 10, 28),
+                      padding: const EdgeInsets.fromLTRB(8, 10, 8, 18),
                       child: Row(
                         children: [
-                          const BrandLogo(size: 24),
+                          const BrandLogo(size: 20),
                           const SizedBox(width: 10),
                           Expanded(
                             child: Text(
@@ -196,7 +196,7 @@ class _WorkspaceNavigation extends StatelessWidget {
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: const TextStyle(
-                                fontSize: 15,
+                                fontSize: 13.5,
                                 fontWeight: FontWeight.w600,
                               ),
                             ),
@@ -206,7 +206,7 @@ class _WorkspaceNavigation extends StatelessWidget {
                     ),
                     for (final entry in entries) ...[
                       destination(entry),
-                      const SizedBox(height: 6),
+                      const SizedBox(height: 2),
                     ],
                   ],
                 ),
@@ -285,8 +285,10 @@ class UtilityPageTitleBar extends ConsumerWidget
   final List<Widget> actions;
 
   @override
-  Size get preferredSize =>
-      Size.fromHeight(kToolbarHeight + (isDesktop ? 1 : 0));
+  Size get preferredSize => Size.fromHeight(
+    (isFramelessDesktop ? WindowChrome.barHeight : kToolbarHeight) +
+        (isDesktop ? 1 : 0),
+  );
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -298,26 +300,29 @@ class UtilityPageTitleBar extends ConsumerWidget
     final compact = MediaQuery.sizeOf(context).width < 620;
     return WindowTitleBar(
       automaticallyImplyLeading: false,
-      backgroundColor: surfacePanel(scheme),
+      // A breadcrumb reads from the leading edge, so it is not centred even on
+      // macOS; it starts clear of the traffic lights instead.
+      centerTitle: false,
+      backgroundColor: surfaceBackground(scheme),
       title: compact
           ? Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                IconButton.outlined(
+                IconButton(
                   key: const Key('utility-chat-origin'),
                   tooltip: l10n.utilityChat,
                   onPressed: () => _openUtilityRoute(context, route, '/'),
-                  icon: const Icon(Icons.chat_bubble_outline, size: 16),
+                  icon: const Icon(Icons.chevron_left_rounded, size: 20),
                   constraints: const BoxConstraints.tightFor(
-                    width: 32,
-                    height: 32,
+                    width: 30,
+                    height: 30,
                   ),
                   padding: EdgeInsets.zero,
                   style: IconButton.styleFrom(
                     foregroundColor: scheme.onSurfaceVariant,
-                    backgroundColor: scheme.surfaceContainerLow,
-                    side: BorderSide(color: scheme.outline),
-                    visualDensity: VisualDensity.compact,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(kControlRadius),
+                    ),
                   ),
                 ),
                 const SizedBox(width: 7),
@@ -347,20 +352,25 @@ class UtilityPageTitleBar extends ConsumerWidget
           : Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                OutlinedButton.icon(
+                // The way back to the conversation: a quiet back-chevron text
+                // button, the same weight as the breadcrumb it heads.
+                TextButton.icon(
                   key: const Key('utility-chat-origin'),
                   onPressed: () => _openUtilityRoute(context, route, '/'),
-                  icon: const Icon(Icons.chat_bubble_outline, size: 17),
+                  icon: const Icon(Icons.chevron_left_rounded, size: 20),
                   label: Text(l10n.utilityChat),
-                  style: OutlinedButton.styleFrom(
+                  style: TextButton.styleFrom(
                     foregroundColor: scheme.onSurfaceVariant,
-                    backgroundColor: scheme.surfaceContainerLow,
-                    side: BorderSide(color: scheme.outline),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 9,
-                      vertical: 7,
+                    // From the theme, so the CJK fallback chain comes along.
+                    textStyle: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      fontWeight: FontWeight.w400,
                     ),
-                    visualDensity: VisualDensity.compact,
+                    padding: const EdgeInsets.fromLTRB(4, 6, 10, 6),
+                    minimumSize: const Size(0, 30),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(kControlRadius),
+                    ),
                   ),
                 ),
                 _breadcrumbSeparator(scheme),
@@ -579,7 +589,7 @@ class _PageMenuRow extends StatelessWidget {
           Icon(
             icon,
             size: 18,
-            color: selected ? scheme.primary : scheme.onSurfaceVariant,
+            color: selected ? scheme.onSurface : scheme.onSurfaceVariant,
           ),
           const SizedBox(width: 11),
           Expanded(

@@ -64,7 +64,12 @@ class WindowTitleBar extends StatelessWidget implements PreferredSizeWidget {
     this.automaticallyImplyLeading = true,
     this.backgroundColor,
     this.foregroundColor,
+    this.centerTitle,
   });
+
+  /// Whether to centre the title; null follows the platform (centred on
+  /// macOS, leading elsewhere).
+  final bool? centerTitle;
 
   /// Overrides the themed bar colour — for a surface that isn't the page, like
   /// the black image viewer. Null keeps the theme's flat app-bar colour.
@@ -136,7 +141,7 @@ class WindowTitleBar extends StatelessWidget implements PreferredSizeWidget {
       automaticallyImplyLeading: false,
       toolbarHeight: barHeight,
       // macOS centres a window's title; Windows leads with it.
-      centerTitle: isMac,
+      centerTitle: centerTitle ?? isMac,
       backgroundColor: backgroundColor,
       foregroundColor: foregroundColor,
       leadingWidth: effectiveLeading == null ? null : leadInset + barHeight,

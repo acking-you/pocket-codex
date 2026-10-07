@@ -408,6 +408,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   List<String> _allProjects = const [];
   // Live filter text for the conversations pane search box.
   String _convQuery = '';
+  // The search box, so ⌘K / Ctrl+K can reach it from anywhere.
+  final FocusNode _convSearchFocus = FocusNode();
+  // Conversations in the order the sidebar last listed them, for Ctrl+Tab.
+  List<ThreadMeta> _visibleConversationOrder = const [];
 
   // Top-bar title rename: true while the title is a text field (click to
   // enter, Enter/blur to commit, Esc to cancel).
@@ -1379,6 +1383,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     WidgetsBinding.instance.removeObserver(this);
     _inputFocus.removeListener(_onComposerFocus);
     _inputFocus.dispose();
+    _convSearchFocus.dispose();
     if (_isDesktop) HardwareKeyboard.instance.removeHandler(_onHardwareKey);
     _scroll.removeListener(_onScroll);
     _scroll.dispose();
@@ -5335,13 +5340,13 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
               const Spacer(),
               _chromeButton(
                 key: const Key('sidebar-collapse-btn'),
-                tooltip: l10n.hideSidebar,
+                tooltip: _withShortcut(l10n.hideSidebar, 'B'),
                 icon: Icons.view_sidebar_outlined,
                 onPressed: () => _setLeftOpen(false),
               ),
               _chromeButton(
                 key: const Key('sidebar-new-conversation-btn'),
-                tooltip: l10n.newConversation,
+                tooltip: _withShortcut(l10n.newConversation, 'N'),
                 icon: Icons.edit_square,
                 onPressed: () => _newConversationInProject(_cwd, context),
               ),
@@ -5362,6 +5367,13 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         ],
       ),
     );
+  }
+
+  /// [label] followed by its window shortcut in the platform's notation
+  /// (`⌘B` on macOS, `Ctrl+B` elsewhere), for a tooltip.
+  String _withShortcut(String label, String key) {
+    final mac = defaultTargetPlatform == TargetPlatform.macOS;
+    return '$label  ${mac ? '⌘$key' : 'Ctrl+$key'}';
   }
 
   /// Show or hide the desktop sidebar, remembering the choice.
@@ -5444,12 +5456,12 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
               if (!_leftOpen) ...[
                 _chromeButton(
                   key: const Key('sidebar-expand-btn'),
-                  tooltip: l10n.showSidebar,
+                  tooltip: _withShortcut(l10n.showSidebar, 'B'),
                   icon: Icons.view_sidebar_outlined,
                   onPressed: () => _setLeftOpen(true),
                 ),
                 _chromeButton(
-                  tooltip: l10n.newConversation,
+                  tooltip: _withShortcut(l10n.newConversation, 'N'),
                   icon: Icons.edit_square,
                   onPressed: () => _newConversationInProject(_cwd, context),
                 ),
@@ -6840,6 +6852,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         // Deferring construction lets `ListView.builder` create only the rows it
         // actually shows, which is what makes the lazy fetch lazy.
         final rows = <Widget Function()>[];
+        // The thread rows in display order, for Ctrl+Tab. A plain field, not
+        // state: it only has to be current by the time a key is pressed.
+        final order = <ThreadMeta>[];
         void group(
           String label,
           List<ThreadMeta> items, {
@@ -6847,16 +6862,18 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         }) {
           if (items.isEmpty) return;
           rows.add(() => _sectionLabel(label));
+          final visible = items
+              .expand((t) => tree.visible(t, expandedParents))
+              .toList(growable: false);
+          order.addAll(visible.map((row) => row.item));
           rows.addAll(
             // Whichever view is on, one list means one row shape — an Active
             // group in compact rows above summarized ones would read as two
             // lists stapled together.
-            items
-                .expand((t) => tree.visible(t, expandedParents))
-                .map(
-                  (row) =>
-                      () => hierarchyRow(row, showProject: showProject),
-                ),
+            visible.map(
+              (row) =>
+                  () => hierarchyRow(row, showProject: showProject),
+            ),
           );
         }
 
@@ -6909,13 +6926,15 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
               );
               if (open.isNotEmpty) shown = [...shown, open.first];
             }
+            final visible = shown
+                .expand((t) => tree.visible(t, expandedParents))
+                .toList(growable: false);
+            order.addAll(visible.map((row) => row.item));
             rows.addAll(
-              shown
-                  .expand((t) => tree.visible(t, expandedParents))
-                  .map(
-                    (row) =>
-                        () => hierarchyRow(row),
-                  ),
+              visible.map(
+                (row) =>
+                    () => hierarchyRow(row),
+              ),
             );
             final hidden = idle.length - shown.length;
             if (!searching && (hidden > 0 || expanded)) {
@@ -6935,6 +6954,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           group(l10n.groupToday, today);
           group(l10n.groupEarlier, earlier);
         }
+        _visibleConversationOrder = order;
 
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -7001,6 +7021,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                   height: 32,
                   child: TextField(
                     key: const Key('conv-search'),
+                    focusNode: _convSearchFocus,
                     onChanged: (v) => setState(() => _convQuery = v),
                     style: const TextStyle(fontSize: 13),
                     textAlignVertical: TextAlignVertical.center,
@@ -8482,24 +8503,24 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   Widget _dropOverlay(AppLocalizations l10n) {
     final scheme = Theme.of(context).colorScheme;
     return Container(
-      color: scheme.primary.withValues(alpha: 0.07),
+      color: signalColor(scheme).withValues(alpha: 0.07),
       alignment: Alignment.center,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
         decoration: BoxDecoration(
-          color: scheme.surfaceContainerHighest,
+          color: surfacePanel(scheme),
           borderRadius: BorderRadius.circular(kPanelRadius),
-          border: Border.all(color: scheme.primary, width: 2),
+          border: Border.all(color: signalColor(scheme), width: 2),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.file_download_outlined, color: scheme.primary),
+            Icon(Icons.file_download_outlined, color: signalColor(scheme)),
             const SizedBox(width: 10),
             Text(
               l10n.dropToAttach,
               style: TextStyle(
-                color: scheme.primary,
+                color: signalColor(scheme),
                 fontWeight: FontWeight.w600,
               ),
             ),
@@ -8571,6 +8592,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// Gating on composer focus keeps Esc from firing while a dialog/picker is
   /// open (those steal focus), so their own Esc-to-dismiss still works.
   bool _onHardwareKey(KeyEvent e) {
+    if (e is KeyDownEvent && _onWindowShortcut(e.logicalKey)) return true;
     if (e is! KeyDownEvent ||
         (!_inputFocus.hasFocus && !_expandedInputFocus.hasFocus)) {
       return false;
@@ -8595,6 +8617,75 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       return _onEscape();
     }
     return false;
+  }
+
+  /// Window-level desktop shortcuts, live wherever focus is while this screen
+  /// is the top route (a dialog or a pushed page above it silences them):
+  ///
+  /// - ⌘N / Ctrl+N: new conversation in the current project
+  /// - ⌘B / Ctrl+B (and ⌃⌘S, the macOS sidebar chord): toggle the sidebar
+  /// - ⌘L / Ctrl+L: focus the composer
+  /// - ⌘K / Ctrl+K: search conversations (opens the sidebar if hidden)
+  /// - Ctrl+Tab / Ctrl+Shift+Tab: next / previous conversation in the list
+  ///
+  /// Returns whether the key was consumed.
+  bool _onWindowShortcut(LogicalKeyboardKey key) {
+    if (!mounted || !(ModalRoute.of(context)?.isCurrent ?? true)) return false;
+    final keyboard = HardwareKeyboard.instance;
+    final mac = defaultTargetPlatform == TargetPlatform.macOS;
+    final primary = mac ? keyboard.isMetaPressed : keyboard.isControlPressed;
+    // Ctrl+Tab cycles on both platforms, as in browsers and editors.
+    if (key == LogicalKeyboardKey.tab &&
+        keyboard.isControlPressed &&
+        !keyboard.isAltPressed) {
+      return _stepConversation(keyboard.isShiftPressed ? -1 : 1);
+    }
+    if (mac &&
+        key == LogicalKeyboardKey.keyS &&
+        keyboard.isMetaPressed &&
+        keyboard.isControlPressed) {
+      _setLeftOpen(!_leftOpen);
+      return true;
+    }
+    if (!primary || keyboard.isAltPressed || keyboard.isShiftPressed) {
+      return false;
+    }
+    if (key == LogicalKeyboardKey.keyN) {
+      _newConversationInProject(_cwd, context);
+      return true;
+    }
+    if (key == LogicalKeyboardKey.keyB) {
+      _setLeftOpen(!_leftOpen);
+      return true;
+    }
+    if (key == LogicalKeyboardKey.keyL) {
+      (_editorOpen ? _expandedInputFocus : _inputFocus).requestFocus();
+      return true;
+    }
+    if (key == LogicalKeyboardKey.keyK) {
+      if (!_leftOpen) _setLeftOpen(true);
+      // The field mounts with the sidebar; focus it once it is built.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _convSearchFocus.requestFocus();
+      });
+      return true;
+    }
+    return false;
+  }
+
+  /// Open the conversation [delta] rows away from the current one, in the
+  /// order the sidebar lists them. False when there is nowhere to go.
+  bool _stepConversation(int delta) {
+    final order = _visibleConversationOrder;
+    if (order.isEmpty) return false;
+    final at = order.indexWhere((t) => t.id == _threadId);
+    final next = at < 0
+        ? (delta > 0 ? 0 : order.length - 1)
+        : (at + delta) % order.length;
+    final target = order[next];
+    if (target.id == _threadId) return false;
+    _openThread(target.id, target.cwd);
+    return true;
   }
 
   /// Whether a Ctrl (Win/Linux) or Cmd (macOS) modifier is currently held.
@@ -9064,6 +9155,14 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     // them beside the permission and model pills (~180 px each); narrower
     // cards give them their own line above.
     Widget composerBody(bool inlineModes) {
+      // The toolbar's fixed-width members — attach, voice, send, the stop
+      // button while streaming — plus the gaps between them.
+      final fixedToolbarWidth =
+          (touch ? 48.0 : 30.0) +
+          (touch ? 48.0 : 32.0) +
+          (touch ? 48.0 : 32.0) +
+          (_streaming ? (touch ? 48.0 : 32.0) + 6 : 0) +
+          10;
       final toolbar = LayoutBuilder(
         // One row at every width. Attachments collapse into a single `+` menu
         // and the config pills into two chips, so a 360 px phone lays out like
@@ -9072,24 +9171,27 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           children: [
             _attachMenu(l10n),
             const SizedBox(width: 2),
-            // Permission and model share what is left; both ellipsize, so a
-            // narrow card (the review pane open) shortens labels instead of
-            // overflowing. Permission gets the smaller share and a cap.
-            Flexible(
-              flex: 2,
-              child: ConstrainedBox(
-                constraints: BoxConstraints(
-                  maxWidth: constraints.maxWidth * 0.34,
+            // Bound long permission labels, and never so wide that the model
+            // pill is left less than its icon-and-chevron minimum: on a narrow
+            // card (the review pane open) both ellipsize instead of
+            // overflowing.
+            ConstrainedBox(
+              constraints: BoxConstraints(
+                maxWidth: math.max(
+                  touch ? 44.0 : 34.0,
+                  math.min(
+                    constraints.maxWidth * 0.34,
+                    constraints.maxWidth - fixedToolbarWidth - 96,
+                  ),
                 ),
-                child: _permissionChip(l10n),
               ),
+              child: _permissionChip(l10n),
             ),
             if (inlineModes)
               for (final chip in modeChips) ...[const SizedBox(width: 4), chip],
             const SizedBox(width: 4),
-            // Right-aligned next to send.
+            // Right-aligned next to send, taking whatever is left.
             Expanded(
-              flex: 3,
               child: Align(
                 alignment: Alignment.centerRight,
                 child: _modelChip(l10n),
@@ -9290,6 +9392,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         padding: EdgeInsets.zero,
         backgroundColor: scheme.surfaceContainerHighest,
         foregroundColor: scheme.onSurface,
+        shape: const CircleBorder(),
       ),
       icon: const Icon(Icons.stop_rounded, size: 18),
     );
@@ -9875,6 +9978,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
             foregroundColor: scheme.surface,
             disabledBackgroundColor: scheme.onSurface.withValues(alpha: 0.08),
             disabledForegroundColor: onSurfaceDisabled(scheme),
+            shape: const CircleBorder(),
           ),
           icon: Icon(
             _streaming && !_supplement
@@ -10048,7 +10152,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       padding: const EdgeInsets.symmetric(vertical: 2),
       child: Material(
         color: selected ? scheme.primaryContainer : Colors.transparent,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(kControlRadius),
         child: InkWell(
           mouseCursor: clickable,
           // Stable handle for tests: the label is localised and, for the turn

@@ -133,15 +133,16 @@ MarkdownStyleSheet _buildMarkdownStyle(BuildContext context, bool muted) {
     code: theme.textTheme.bodyMedium?.copyWith(
       fontFamily: monoFontFamily,
       fontFamilyFallback: monoCjkFallback,
-      backgroundColor: scheme.surfaceContainerHighest,
+      backgroundColor: scheme.onSurface.withValues(alpha: 0.06),
+      fontSize: (theme.textTheme.bodyMedium?.fontSize ?? 14) - 1,
     ),
     codeblockDecoration: BoxDecoration(
-      color: scheme.surfaceContainerHighest,
+      color: scheme.surfaceContainerLow,
       borderRadius: BorderRadius.circular(10),
     ),
     codeblockPadding: const EdgeInsets.all(14),
     blockquoteDecoration: BoxDecoration(
-      color: scheme.surfaceContainerHighest,
+      color: scheme.surfaceContainerLow,
       borderRadius: BorderRadius.circular(8),
       border: Border(left: BorderSide(color: scheme.outline, width: 3)),
     ),
@@ -185,9 +186,9 @@ class _CodeBlockBuilder extends MarkdownElementBuilder {
       width: double.infinity,
       margin: const EdgeInsets.symmetric(vertical: 6),
       decoration: BoxDecoration(
-        color: scheme.surfaceContainerHighest,
+        color: scheme.surfaceContainerLow,
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: scheme.outlineVariant, width: 0.5),
+        border: Border.all(color: scheme.outlineVariant),
       ),
       clipBehavior: Clip.antiAlias,
       child: Column(

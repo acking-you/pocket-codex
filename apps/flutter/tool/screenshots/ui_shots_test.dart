@@ -22,6 +22,8 @@ import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
 import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/screens/app_session_screen.dart';
+import 'package:pocket_codex/src/screens/services_screen.dart';
+import 'package:pocket_codex/src/screens/settings_screen.dart';
 import 'package:pocket_codex/src/theme.dart';
 
 import '../../test/fake_bridge_api.dart';
@@ -195,6 +197,8 @@ final Map<String, Widget> _scenes = {
     home: true,
   ),
   'new': const AppSessionScreen(serviceKey: _service, home: true),
+  'settings': const SettingsScreen(),
+  'services': const ServicesScreen(),
 };
 
 Future<void> _shoot(
@@ -228,6 +232,7 @@ Future<void> _shoot(
 
 void main() {
   setUpAll(_loadFonts);
+  drawerShots();
 
   for (final MapEntry(key: name, value: scene) in _scenes.entries) {
     for (final d in _devices) {
@@ -238,5 +243,34 @@ void main() {
         );
       }
     }
+  }
+}
+
+/// The phone's conversation drawer, opened over the session.
+void drawerShots() {
+  for (final b in Brightness.values) {
+    testWidgets('drawer phone-${b.name}', (t) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+      try {
+        AppSessionScreen.debugResetThreadMemory();
+        t.view.devicePixelRatio = 2.0;
+        t.view.physicalSize = _devices.last.size * 2.0;
+        addTearDown(t.view.reset);
+        final api = _api();
+        await api.appConnect(_service, 28080);
+        await t.pumpWidget(_app(_scenes['session']!, api, b));
+        await t.pumpAndSettle();
+        final state = t.state<ScaffoldState>(find.byType(Scaffold).first);
+        state.openDrawer();
+        await t.pumpAndSettle();
+        await expectLater(
+          find.byType(MaterialApp),
+          matchesGoldenFile('out/drawer-phone-${b.name}.png'),
+        );
+        await t.pumpWidget(const SizedBox());
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+      }
+    });
   }
 }
