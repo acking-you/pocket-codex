@@ -83,6 +83,30 @@ void main() {
     expect(find.text('exit 101'), findsOneWidget);
   });
 
+  testWidgets(
+    'a bounded block on desktop does not borrow the page scrollbar',
+    (t) async {
+      // Desktop gives every page a PrimaryScrollController; a block's bare
+      // Scrollbar used to latch onto it and throw once it was detached.
+      await pumpStep(
+        t,
+        TranscriptItem(
+          id: 'c2',
+          type: 'commandExecution',
+          title: 'ls',
+          text: List.generate(80, (i) => 'line $i').join('\n'),
+        ),
+      );
+      // Scrolling the block is what makes its scrollbar resolve a controller.
+      await t.drag(find.byKey(const Key('step-output')), const Offset(0, -120));
+      await t.pump(const Duration(milliseconds: 400));
+      expect(t.takeException(), isNull);
+      await t.pumpWidget(const SizedBox());
+      expect(t.takeException(), isNull);
+    },
+    variant: TargetPlatformVariant.only(TargetPlatform.windows),
+  );
+
   testWidgets('a tool call splits into its fields, JSON highlighted', (
     t,
   ) async {

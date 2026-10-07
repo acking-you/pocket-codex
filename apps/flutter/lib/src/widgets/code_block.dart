@@ -59,6 +59,10 @@ class CodeBlock extends StatelessWidget {
       color: scheme.onSurface,
     );
     final body = SingleChildScrollView(
+      // Never the primary controller: a block sits inside the transcript's
+      // scroll view, and borrowing its controller would tie both scrollbars
+      // to one position.
+      primary: false,
       scrollDirection: Axis.horizontal,
       padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
       child: Text.rich(
@@ -113,15 +117,43 @@ class CodeBlock extends StatelessWidget {
                 ? body
                 : ConstrainedBox(
                     constraints: BoxConstraints(maxHeight: maxHeight!),
-                    child: Scrollbar(
-                      child: SingleChildScrollView(primary: false, child: body),
-                    ),
+                    child: _BoundedBody(child: body),
                   ),
           ),
         ],
       ),
     );
   }
+}
+
+/// A vertically scrolling body with a scrollbar that owns its controller.
+///
+/// A bare `Scrollbar` falls back to the PrimaryScrollController — on desktop,
+/// the transcript's — and when that controller is detached (the page between
+/// routes, a fold collapsing) every block threw "The Scrollbar's
+/// ScrollController has no ScrollPosition attached".
+class _BoundedBody extends StatefulWidget {
+  const _BoundedBody({required this.child});
+  final Widget child;
+
+  @override
+  State<_BoundedBody> createState() => _BoundedBodyState();
+}
+
+class _BoundedBodyState extends State<_BoundedBody> {
+  final _controller = ScrollController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => Scrollbar(
+    controller: _controller,
+    child: SingleChildScrollView(controller: _controller, child: widget.child),
+  );
 }
 
 /// Copies [text] and confirms it, without stealing focus.
