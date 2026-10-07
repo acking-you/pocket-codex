@@ -104,6 +104,9 @@ List<String> get uiCjkFallback {
       'Microsoft YaHei UI',
       'Microsoft YaHei',
       desktopFontFamily,
+      // Bundled and always present: if a stripped-down install lacks Segoe
+      // UI, Latin text still lands on a real face instead of tofu.
+      appFontFamily,
     ],
     _ => cjkFontFallback,
   };

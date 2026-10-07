@@ -69,6 +69,18 @@ Future<void> _loadFonts() async {
         : sfLike,
   );
   await _loadFont('PingFang SC', ['$fonts/NotoSansSC-VariableFont_wght.ttf']);
+  // Windows UI faces. The test engine only sees fonts registered here, so
+  // register the installed Segoe UI under its own name, and stand in for
+  // Microsoft YaHei UI (a .ttc the loader cannot split) with Noto Sans SC.
+  await _loadFont(
+    'Segoe UI',
+    sfLike.isEmpty
+        ? [for (final w in ['Regular', 'SemiBold']) '$fonts/Figtree-$w.ttf']
+        : sfLike,
+  );
+  await _loadFont('Microsoft YaHei UI', [
+    '$fonts/NotoSansSC-VariableFont_wght.ttf',
+  ]);
   // The icon font ships with the SDK, not the app.
   final sdk =
       Platform.environment['FLUTTER_ROOT'] ??
