@@ -3416,7 +3416,10 @@ fn summarize_item(item: &Value) -> (String, String, String) {
                 "agentsStates",
             ]),
         ),
-        "subAgentActivity" => (s("kind"), selected_json(item, &["agentPath", "agentThreadId"])),
+        "subAgentActivity" => (
+            s("kind"),
+            selected_json(item, &["agentPath", "agentThreadId", "model", "reasoningEffort"]),
+        ),
         "imageView" => (s("path"), String::new()),
         "sleep" => {
             let duration = item.get("durationMs").and_then(Value::as_u64).unwrap_or(0);

@@ -858,10 +858,12 @@ fn completed_activity_item(item: &Value, fallback_id: String) -> Option<Transcri
             id,
             item_type: "subAgentActivity".to_string(),
             title: event_string(item, &["kind"]),
-            text: rollout_selected_json(item, &[&["agent_path", "agentPath"], &[
-                "agent_thread_id",
-                "agentThreadId",
-            ]]),
+            text: rollout_selected_json(item, &[
+                &["agent_path", "agentPath"],
+                &["agent_thread_id", "agentThreadId"],
+                &["model"],
+                &["reasoning_effort", "reasoningEffort"],
+            ]),
             images: Vec::new(),
         }),
         Some("WebSearch") => Some(TranscriptItem {
