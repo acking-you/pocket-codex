@@ -3637,6 +3637,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Show sidebar'**
   String get showSidebar;
+
+  /// No description provided for @locateConversation.
+  ///
+  /// In en, this message translates to:
+  /// **'Show current conversation'**
+  String get locateConversation;
 }
 
 class _AppLocalizationsDelegate

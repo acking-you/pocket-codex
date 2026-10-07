@@ -30,7 +30,7 @@ ColorScheme _flowScheme(Brightness brightness) {
     onPrimaryContainer: light
         ? const Color(0xFF1D1D1F)
         : const Color(0xFFEDEDEF),
-    secondary: light ? const Color(0xFF5E5E63) : const Color(0xFFA6A6AD),
+    secondary: light ? const Color(0xFF4A4A50) : const Color(0xFFB8B8C0),
     onSecondary: light ? Colors.white : const Color(0xFF1D1D1F),
     secondaryContainer: light
         ? const Color(0xFFE6E6E4)
@@ -50,7 +50,7 @@ ColorScheme _flowScheme(Brightness brightness) {
     surfaceBright: light ? Colors.white : const Color(0xFF27272A),
     surfaceDim: light ? const Color(0xFFEDEDEB) : const Color(0xFF141416),
     onSurface: light ? const Color(0xFF1D1D1F) : const Color(0xFFEDEDEF),
-    onSurfaceVariant: light ? const Color(0xFF5E5E63) : const Color(0xFFA6A6AD),
+    onSurfaceVariant: light ? const Color(0xFF4A4A50) : const Color(0xFFB8B8C0),
     surfaceContainerLowest: light ? Colors.white : const Color(0xFF141416),
     surfaceContainerLow: light
         ? const Color(0xFFF3F3F1)
@@ -135,6 +135,30 @@ Color surfaceSidebar(ColorScheme scheme) => scheme.surfaceContainerLow;
 /// Selected row in a list: a neutral plate, not a coloured one — selection is
 /// position, not status, and colour stays free for status.
 Color surfaceSelection(ColorScheme scheme) => scheme.surfaceContainerHigh;
+
+/// The open conversation in the sidebar: a wash of the accent, so the one row
+/// that says "you are here" can be found in a long list without reading it.
+/// Plain list selection elsewhere stays the neutral [surfaceSelection].
+Color selectedRowColor(ColorScheme scheme) => Color.alphaBlend(
+  scheme.tertiary.withValues(
+    alpha: scheme.brightness == Brightness.light ? 0.11 : 0.20,
+  ),
+  surfaceSidebar(scheme),
+);
+
+/// A faint accent wash behind the user's own messages and inline code, so the
+/// two voices in a transcript, and code inside prose, separate at a glance.
+Color accentWash(ColorScheme scheme, {double strength = 1}) =>
+    scheme.tertiary.withValues(
+      alpha: (scheme.brightness == Brightness.light ? 0.08 : 0.16) * strength,
+    );
+
+/// Ink for inline code in prose: the accent, deepened so it holds body-text
+/// contrast on its wash (light ≈ 6:1, dark ≈ 9.5:1).
+Color inlineCodeColor(ColorScheme scheme) =>
+    scheme.brightness == Brightness.light
+    ? const Color(0xFF5B45B8)
+    : const Color(0xFFCFC6FA);
 
 /// Selected rows carry no outline; kept as a function so call sites that draw
 /// a border can resolve it from one place.

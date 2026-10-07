@@ -816,5 +816,6 @@
     }
   },
   "hideSidebar": "Hide sidebar",
-  "showSidebar": "Show sidebar"
+  "showSidebar": "Show sidebar",
+  "locateConversation": "Show current conversation"
 }

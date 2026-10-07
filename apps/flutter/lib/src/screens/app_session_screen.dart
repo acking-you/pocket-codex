@@ -410,6 +410,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   String _convQuery = '';
   // The search box, so ⌘K / Ctrl+K can reach it from anywhere.
   final FocusNode _convSearchFocus = FocusNode();
+  // The conversation list's scroll, so "locate" can bring the open row back.
+  final ScrollController _convScroll = ScrollController();
+  final ListController _convListCtl = ListController();
   // Conversations in the order the sidebar last listed them, for Ctrl+Tab.
   List<ThreadMeta> _visibleConversationOrder = const [];
 
@@ -823,7 +826,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         // for thread id …"); going through `_openThread` would fire exactly
         // those and surface the refusal as an error banner.
         _drafts.adoptThread(_draft, newId);
-        ref.read(uiPrefsProvider.notifier).setLastThread(widget.serviceKey, newId);
+        ref
+            .read(uiPrefsProvider.notifier)
+            .setLastThread(widget.serviceKey, newId);
         unawaited(
           api.appHistoryFocus(widget.serviceKey, newId).catchError((_) {}),
         );
@@ -1400,6 +1405,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     _inputFocus.removeListener(_onComposerFocus);
     _inputFocus.dispose();
     _convSearchFocus.dispose();
+    _convScroll.dispose();
+    _convListCtl.dispose();
     if (_isDesktop) HardwareKeyboard.instance.removeHandler(_onHardwareKey);
     _scroll.removeListener(_onScroll);
     _scroll.dispose();
@@ -5390,6 +5397,28 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     );
   }
 
+  /// Scroll the conversation list so row [index] — the open conversation —
+  /// sits a third of the way down, where the eye lands first.
+  void _revealConversationRow(int index) {
+    if (!_convListCtl.isAttached || !_convScroll.hasClients) return;
+    final duration = Motion.of(context, Motion.medium);
+    if (duration == Duration.zero) {
+      _convListCtl.jumpToItem(
+        index: index,
+        scrollController: _convScroll,
+        alignment: 0.33,
+      );
+      return;
+    }
+    _convListCtl.animateToItem(
+      index: index,
+      scrollController: _convScroll,
+      alignment: 0.33,
+      duration: (_) => duration,
+      curve: (_) => Motion.move,
+    );
+  }
+
   /// [label] followed by its window shortcut in the platform's notation
   /// (`⌘B` on macOS, `Ctrl+B` elsewhere), for a tooltip.
   String _withShortcut(String label, String key) {
@@ -6901,6 +6930,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         // The thread rows in display order, for Ctrl+Tab. A plain field, not
         // state: it only has to be current by the time a key is pressed.
         final order = <ThreadMeta>[];
+        // Index in [rows] of the open conversation, for the locate button.
+        int? selectedRow;
         void group(
           String label,
           List<ThreadMeta> items, {
@@ -6911,6 +6942,11 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           final visible = items
               .expand((t) => tree.visible(t, expandedParents))
               .toList(growable: false);
+          for (final row in visible) {
+            if (row.item.id == _threadId) {
+              selectedRow = rows.length + visible.indexOf(row);
+            }
+          }
           order.addAll(visible.map((row) => row.item));
           rows.addAll(
             // Whichever view is on, one list means one row shape — an Active
@@ -6975,6 +7011,11 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
             final visible = shown
                 .expand((t) => tree.visible(t, expandedParents))
                 .toList(growable: false);
+            for (final row in visible) {
+              if (row.item.id == _threadId) {
+                selectedRow = rows.length + visible.indexOf(row);
+              }
+            }
             order.addAll(visible.map((row) => row.item));
             rows.addAll(
               visible.map(
@@ -7128,6 +7169,30 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                       ),
                     ),
                   ),
+                  // Scroll the list back to the open conversation, wherever
+                  // the user has wandered off to.
+                  if (selectedRow != null)
+                    SizedBox(
+                      width: 26,
+                      height: 26,
+                      child: IconButton(
+                        key: const Key('locate-conversation-btn'),
+                        padding: EdgeInsets.zero,
+                        style: IconButton.styleFrom(
+                          minimumSize: const Size(26, 26),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(kRowRadius),
+                          ),
+                        ),
+                        icon: Icon(
+                          Icons.my_location_rounded,
+                          size: 15,
+                          color: signalColor(scheme),
+                        ),
+                        tooltip: l10n.locateConversation,
+                        onPressed: () => _revealConversationRow(selectedRow!),
+                      ),
+                    ),
                   SizedBox(
                     width: 26,
                     height: 26,
@@ -7199,7 +7264,11 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                         ),
                       ),
                     )
-                  : ListView.builder(
+                  // SuperListView so the locate button can reach a row that
+                  // has never been built (a long list lays rows out lazily).
+                  : SuperListView.builder(
+                      listController: _convListCtl,
+                      controller: _convScroll,
                       padding: const EdgeInsets.fromLTRB(8, 0, 8, 10),
                       itemCount: rows.length,
                       itemBuilder: (_, i) => rows[i](),
@@ -7762,51 +7831,66 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       padding: const EdgeInsets.symmetric(vertical: 0.5),
       child: Material(
         key: Key('conv-tile-${thread.id}'),
-        color: selected ? surfaceSelection(scheme) : Colors.transparent,
-        borderRadius: BorderRadius.circular(kRowRadius),
-        child: InkWell(
-          mouseCursor: clickable,
-          borderRadius: BorderRadius.circular(kRowRadius),
-          onTap: onTap,
-          child: Padding(
-            padding: EdgeInsets.fromLTRB(
-              // Rows under a project heading line up with its name, so the
-              // folder reads as their parent.
-              project == null && widget.home ? 28 : 10,
-              dense ? 6 : 10,
-              10,
-              dense ? 6 : 10,
-            ),
-            child: Row(
-              children: [
-                if (thread.isVoice) ...[
-                  Icon(Icons.graphic_eq, size: 15, color: muted),
-                  const SizedBox(width: 6),
+        // The open conversation carries the accent, so "where am I" is
+        // answerable at a glance in a long list: a tinted row with a short
+        // bar on its leading edge, like a macOS source list's selection.
+        color: selected ? selectedRowColor(scheme) : Colors.transparent,
+        shape: selected
+            ? RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(kRowRadius),
+                side: BorderSide.none,
+              )
+            : RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(kRowRadius),
+              ),
+        clipBehavior: Clip.antiAlias,
+        child: _SelectionBar(
+          visible: selected,
+          color: signalColor(scheme),
+          child: InkWell(
+            mouseCursor: clickable,
+            borderRadius: BorderRadius.circular(kRowRadius),
+            onTap: onTap,
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(
+                // Rows under a project heading line up with its name, so the
+                // folder reads as their parent.
+                project == null && widget.home ? 28 : 10,
+                dense ? 6 : 10,
+                10,
+                dense ? 6 : 10,
+              ),
+              child: Row(
+                children: [
+                  if (thread.isVoice) ...[
+                    Icon(Icons.graphic_eq, size: 15, color: muted),
+                    const SizedBox(width: 6),
+                  ],
+                  Expanded(
+                    child: dense
+                        ? Row(
+                            children: [
+                              Flexible(child: titleText),
+                              if (factsText != null) ...[
+                                const SizedBox(width: 6),
+                                Flexible(child: factsText),
+                              ],
+                            ],
+                          )
+                        : Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              titleText,
+                              if (factsText != null) ...[
+                                const SizedBox(height: 2),
+                                factsText,
+                              ],
+                            ],
+                          ),
+                  ),
+                  if (trailing != null) ...[const SizedBox(width: 8), trailing],
                 ],
-                Expanded(
-                  child: dense
-                      ? Row(
-                          children: [
-                            Flexible(child: titleText),
-                            if (factsText != null) ...[
-                              const SizedBox(width: 6),
-                              Flexible(child: factsText),
-                            ],
-                          ],
-                        )
-                      : Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            titleText,
-                            if (factsText != null) ...[
-                              const SizedBox(height: 2),
-                              factsText,
-                            ],
-                          ],
-                        ),
-                ),
-                if (trailing != null) ...[const SizedBox(width: 8), trailing],
-              ],
+              ),
             ),
           ),
         ),
@@ -10665,4 +10749,46 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
 /// Esc while renaming: leave the title edit without committing.
 class _CancelTitleEditIntent extends Intent {
   const _CancelTitleEditIntent();
+}
+
+/// Paints a short accent bar on the leading edge of a selected row, centred
+/// vertically, without changing the row's layout.
+class _SelectionBar extends StatelessWidget {
+  const _SelectionBar({
+    required this.visible,
+    required this.color,
+    required this.child,
+  });
+
+  final bool visible;
+  final Color color;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!visible) return child;
+    return Stack(
+      alignment: Alignment.centerLeft,
+      children: [
+        child,
+        Positioned(
+          left: 0,
+          top: 0,
+          bottom: 0,
+          child: Center(
+            child: Container(
+              width: 3,
+              height: 16,
+              decoration: BoxDecoration(
+                color: color,
+                borderRadius: const BorderRadius.horizontal(
+                  right: Radius.circular(2),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
 }

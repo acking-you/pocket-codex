@@ -1915,4 +1915,7 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get showSidebar => '显示侧边栏';
+
+  @override
+  String get locateConversation => '定位到当前会话';
 }

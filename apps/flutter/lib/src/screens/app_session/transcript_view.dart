@@ -258,7 +258,10 @@ class _MessageViewState extends State<MessageView> {
                   // speaker's side, so the user's turns read as theirs
                   // without a colour of their own.
                   decoration: BoxDecoration(
-                    color: scheme.surfaceContainer,
+                    color: Color.alphaBlend(
+                      accentWash(scheme, strength: 0.8),
+                      scheme.surfaceContainer,
+                    ),
                     borderRadius: const BorderRadius.only(
                       topLeft: Radius.circular(kComposerRadius),
                       topRight: Radius.circular(kComposerRadius),

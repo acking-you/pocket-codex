@@ -32,12 +32,23 @@ const appleSystemFontFamily = 'CupertinoSystemText';
 /// everywhere else, where the system faces (Segoe UI, Roboto) vary too much to
 /// design against. Resolved from [defaultTargetPlatform], so tests — forced to
 /// android — keep rendering Figtree.
-String get uiFontFamily =>
-    !kIsWeb &&
-        (defaultTargetPlatform == TargetPlatform.macOS ||
-            defaultTargetPlatform == TargetPlatform.iOS)
-    ? appleSystemFontFamily
-    : appFontFamily;
+///
+/// Windows uses its own UI face too. Figtree is a geometric display-leaning
+/// sans with thin joins; Flutter renders text with grayscale antialiasing
+/// rather than ClearType, and at 13–15 px on a 100%/125% display those joins
+/// smear. Segoe UI is drawn and hinted for exactly those sizes, and is on
+/// every Windows install since Vista.
+String get uiFontFamily {
+  if (kIsWeb) return appFontFamily;
+  return switch (defaultTargetPlatform) {
+    TargetPlatform.macOS || TargetPlatform.iOS => appleSystemFontFamily,
+    TargetPlatform.windows => windowsUiFontFamily,
+    _ => appFontFamily,
+  };
+}
+
+/// The Windows system UI face. See [uiFontFamily].
+const windowsUiFontFamily = 'Segoe UI';
 
 /// The design system's code face, bundled on every platform. Latin only.
 const monoFontFamily = 'GeistMono';
@@ -75,12 +86,28 @@ const cjkFontFallback = [
 /// The CJK chain behind [uiFontFamily]. On Apple platforms PingFang SC leads:
 /// it is the face SF Pro is designed to sit beside, and the bundled Noto Sans
 /// SC exists to fix Windows, not to override a Mac's own Chinese font.
-List<String> get uiCjkFallback =>
-    !kIsWeb &&
-        (defaultTargetPlatform == TargetPlatform.macOS ||
-            defaultTargetPlatform == TargetPlatform.iOS)
-    ? const ['PingFang SC', desktopFontFamily, 'Noto Sans CJK SC']
-    : cjkFontFallback;
+///
+/// On Windows, Microsoft YaHei UI leads: Segoe UI's designed companion, hinted
+/// for screen sizes, and present on every Chinese and international install.
+/// Declaring it explicitly is what avoids the per-glyph-run OS guessing the
+/// bundled Noto Sans SC was added to fix; Noto stays behind it for the rare
+/// install without YaHei.
+List<String> get uiCjkFallback {
+  if (kIsWeb) return cjkFontFallback;
+  return switch (defaultTargetPlatform) {
+    TargetPlatform.macOS || TargetPlatform.iOS => const [
+      'PingFang SC',
+      desktopFontFamily,
+      'Noto Sans CJK SC',
+    ],
+    TargetPlatform.windows => const [
+      'Microsoft YaHei UI',
+      'Microsoft YaHei',
+      desktopFontFamily,
+    ],
+    _ => cjkFontFallback,
+  };
+}
 
 /// CJK fallback for mono styles (command output, diffs, file paths, code
 /// blocks). Geist Mono has no Han glyphs either, so Chinese in code resolves

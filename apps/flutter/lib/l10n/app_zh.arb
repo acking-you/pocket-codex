@@ -714,5 +714,6 @@
     }
   },
   "hideSidebar": "隐藏侧边栏",
-  "showSidebar": "显示侧边栏"
+  "showSidebar": "显示侧边栏",
+  "locateConversation": "定位到当前会话"
 }

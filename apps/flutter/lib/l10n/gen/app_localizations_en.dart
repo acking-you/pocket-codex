@@ -1978,4 +1978,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get showSidebar => 'Show sidebar';
+
+  @override
+  String get locateConversation => 'Show current conversation';
 }

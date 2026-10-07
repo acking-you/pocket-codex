@@ -9,6 +9,7 @@ import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/code_highlight.dart';
 import 'package:pocket_codex/src/fonts.dart';
 import 'package:pocket_codex/src/markdown_cjk.dart';
+import 'package:pocket_codex/src/theme.dart';
 import 'package:pocket_codex/src/widgets/app_toast.dart';
 import 'package:pocket_codex/src/widgets/links.dart';
 
@@ -113,6 +114,10 @@ MarkdownStyleSheet _buildMarkdownStyle(BuildContext context, bool muted) {
     h3Padding: const EdgeInsets.only(top: 8, bottom: 4),
     listBulletPadding: const EdgeInsets.only(right: 6),
     blockSpacing: 10,
+    h1: theme.textTheme.titleLarge,
+    h2: theme.textTheme.titleMedium?.copyWith(fontSize: 17),
+    h3: theme.textTheme.titleMedium,
+    h4: theme.textTheme.titleSmall?.copyWith(fontSize: 14),
     // `IntrinsicColumnWidth` is load-bearing, not cosmetic: flutter_markdown_plus
     // only wraps a table in a horizontal scroll view for intrinsic/fixed column
     // widths. With the default `FlexColumnWidth` a wide table is squeezed into
@@ -133,7 +138,10 @@ MarkdownStyleSheet _buildMarkdownStyle(BuildContext context, bool muted) {
     code: theme.textTheme.bodyMedium?.copyWith(
       fontFamily: monoFontFamily,
       fontFamilyFallback: monoCjkFallback,
-      backgroundColor: scheme.onSurface.withValues(alpha: 0.06),
+      // Accent-tinted ink on a matching wash: an identifier in prose reads
+      // as code from across the screen, not as a grey smudge.
+      color: inlineCodeColor(scheme),
+      backgroundColor: accentWash(scheme),
       fontSize: (theme.textTheme.bodyMedium?.fontSize ?? 14) - 1,
     ),
     // `_CodeBlockBuilder` draws the block's own card; the stylesheet's
@@ -143,7 +151,12 @@ MarkdownStyleSheet _buildMarkdownStyle(BuildContext context, bool muted) {
     blockquoteDecoration: BoxDecoration(
       color: scheme.surfaceContainerLow,
       borderRadius: BorderRadius.circular(8),
-      border: Border(left: BorderSide(color: scheme.outline, width: 3)),
+      border: Border(
+        left: BorderSide(
+          color: signalColor(scheme).withValues(alpha: 0.6),
+          width: 3,
+        ),
+      ),
     ),
   );
 }
