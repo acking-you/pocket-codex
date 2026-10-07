@@ -91,6 +91,10 @@ dependencies:
   desktop_drop: ^0.7.1
   pasteboard: ^0.5.0
   re_highlight: ^0.0.3
+  # Renders an .svg the agent produced in the file preview (pure Dart, the
+  # Flutter team's package). Pinned exactly: a renderer bump can change
+  # what a preview looks like.
+  flutter_svg: 2.3.0
 
 dev_dependencies:
   flutter_test:
