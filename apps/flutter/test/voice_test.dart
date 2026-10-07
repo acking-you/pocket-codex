@@ -353,6 +353,11 @@ void main() {
         await t.pumpAndSettle();
         expect(find.text('cove'), findsOneWidget);
         expect(find.text('marin'), findsNothing);
+        // The app-server rejects resume/read of a thread whose rollout has
+        // not been written yet, which is every freshly started voice thread.
+        api.appThreadResumeError = StateError(
+          'no rollout found for thread id voice',
+        );
         await t.tap(find.byKey(const Key('voice-start-confirm')));
         await t.pumpAndSettle();
         expect(
@@ -361,6 +366,10 @@ void main() {
               .$2['threadSource'],
           'pocket-codex-voice',
         );
+        expect(api.lastResumed, isNull);
+        expect(find.textContaining('no rollout found'), findsNothing);
+        // Once the session has spoken, the rollout exists and resume works.
+        api.appThreadResumeError = null;
         api.event('sdp', {'sdp': 'answer'});
         await t.pumpAndSettle();
         expect(find.byKey(const Key('voice-mute')), findsOneWidget);

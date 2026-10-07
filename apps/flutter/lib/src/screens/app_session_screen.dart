@@ -813,19 +813,35 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           'sandbox': _mode.sandbox,
         });
         final thread = result['thread'] as Map;
-        id = thread['id'] as String;
+        final newId = thread['id'] as String;
+        id = newId;
         if (!current()) return;
-        _threads = [
-          ThreadMeta(
-            id: id,
-            preview: '',
-            cwd: thread['cwd'] as String? ?? _cwd ?? '',
-            updatedAt: 0,
-            threadSource: 'pocket-codex-voice',
-          ),
-          ..._threads,
-        ];
-        _openThread(id, thread['cwd'] as String? ?? _cwd);
+        final cwd = thread['cwd'] as String? ?? _cwd;
+        // Adopt the new thread in place, the way a first text send does. It
+        // has no rollout until the first user turn lands, so the app-server
+        // rejects `thread/resume` and `thread/read` for it ("no rollout found
+        // for thread id …"); going through `_openThread` would fire exactly
+        // those and surface the refusal as an error banner.
+        _drafts.adoptThread(_draft, newId);
+        ref.read(uiPrefsProvider.notifier).setLastThread(widget.serviceKey, newId);
+        unawaited(
+          api.appHistoryFocus(widget.serviceKey, newId).catchError((_) {}),
+        );
+        setState(() {
+          _threads = [
+            ThreadMeta(
+              id: newId,
+              preview: '',
+              cwd: cwd ?? '',
+              updatedAt: 0,
+              threadSource: 'pocket-codex-voice',
+            ),
+            ..._threads,
+          ];
+          _threadId = newId;
+          _cwd = cwd;
+        });
+        _persistThreadConfig();
       }
       await _voice.start(id, model: settings.model, voice: settings.voice);
       if (mounted) unawaited(_loadThreads());
