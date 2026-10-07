@@ -21,7 +21,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
 import 'package:pocket_codex/src/providers.dart';
+import 'package:pocket_codex/src/screens/app_session/step_body.dart';
+import 'package:pocket_codex/src/screens/app_session/transcript_model.dart';
 import 'package:pocket_codex/src/screens/app_session_screen.dart';
+import 'package:pocket_codex/src/widgets/file_preview.dart';
 import 'package:pocket_codex/src/screens/home_screen.dart';
 import 'package:pocket_codex/src/screens/services_screen.dart';
 import 'package:pocket_codex/src/screens/settings_screen.dart';
@@ -247,6 +250,7 @@ void main() {
   setUpAll(_loadFonts);
   drawerShots();
   heroShots();
+  stepShots();
 
   for (final MapEntry(key: name, value: scene) in _scenes.entries) {
     for (final d in _devices) {
@@ -280,6 +284,74 @@ void drawerShots() {
         await expectLater(
           find.byType(MaterialApp),
           matchesGoldenFile('out/drawer-phone-${b.name}.png'),
+        );
+        await t.pumpWidget(const SizedBox());
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+      }
+    });
+  }
+}
+
+/// Expanded step bodies and a rendered file preview, on their own.
+void stepShots() {
+  final items = [
+    TranscriptItem(
+      id: 'c1',
+      type: 'commandExecution',
+      title: 'cargo test -p pocket-codex-bridge session_sync',
+      text:
+          'running 4 tests\n'
+          'test retained_serves_current_generation ... ok\n'
+          'test stale_generation_misses ... FAILED\n\n'
+          'failures:\n    stale_generation_misses\n[exit 101]',
+    ),
+    TranscriptItem(
+      id: 'm1',
+      type: 'mcpToolCall',
+      title: 'docs.search',
+      text:
+          '{"arguments":{"query":"flutter AnimatedSwitcher","limit":3},'
+          '"result":{"content":[{"type":"text","text":'
+          '"{\\"hits\\":[{\\"title\\":\\"AnimatedSwitcher class\\",'
+          '\\"score\\":0.92}]}"}]}}',
+    ),
+  ];
+  for (final b in Brightness.values) {
+    testWidgets('steps win-${b.name}', (t) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      try {
+        t.view.devicePixelRatio = 2.0;
+        t.view.physicalSize = const Size(760, 860) * 2.0;
+        addTearDown(t.view.reset);
+        await t.pumpWidget(
+          _app(
+            Scaffold(
+              body: ListView(
+                padding: const EdgeInsets.all(20),
+                children: [
+                  for (final i in items) StepBody(item: i),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    height: 260,
+                    child: FilePreview(
+                      name: 'scores.csv',
+                      bytes: Uint8List(0),
+                      text: 'name,score,notes\nada,3,"fast, careful"\nlin,5,',
+                      truncated: false,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            FakeBridgeApi(),
+            b,
+          ),
+        );
+        await t.pumpAndSettle();
+        await expectLater(
+          find.byType(MaterialApp),
+          matchesGoldenFile('out/steps-win-${b.name}.png'),
         );
         await t.pumpWidget(const SizedBox());
       } finally {

@@ -177,6 +177,13 @@ class _FilePreviewState extends State<FilePreview> {
     final showSource = _source || !renderable;
     final body = AnimatedSwitcher(
       duration: Motion.of(context, Motion.fast),
+      // Fill the pane, top-left: the default centres a loosened child, which
+      // floats a narrow table mid-dialog.
+      layoutBuilder: (current, previous) => Stack(
+        fit: StackFit.expand,
+        alignment: AlignmentDirectional.topStart,
+        children: [...previous, ?current],
+      ),
       child: KeyedSubtree(
         key: ValueKey(showSource),
         child: showSource
@@ -192,6 +199,9 @@ class _FilePreviewState extends State<FilePreview> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Row(
+          mainAxisAlignment: renderable
+              ? MainAxisAlignment.spaceBetween
+              : MainAxisAlignment.end,
           children: [
             if (renderable)
               Flexible(
@@ -213,7 +223,6 @@ class _FilePreviewState extends State<FilePreview> {
                   onSelectionChanged: (s) => setState(() => _source = s.first),
                 ),
               ),
-            const Spacer(),
             CopyTextButton(text: text),
           ],
         ),
