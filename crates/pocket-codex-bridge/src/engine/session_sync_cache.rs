@@ -93,7 +93,7 @@ fn read_page(
     read_query(cache, owner, generation, &query)
 }
 
-fn read_query(
+pub(super) fn read_query(
     cache: &DiskCache,
     owner: &str,
     generation: &str,
@@ -546,6 +546,35 @@ mod tests {
         assert!(read_turns(&cache, "owner", "session", "replaced", &turns, &[])
             .unwrap()
             .is_empty());
+    }
+
+    #[test]
+    fn a_retained_older_page_answers_its_exact_query_for_its_generation_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = DiskCache::new(dir.path().into(), 1_000_000);
+        page(&cache, Some("200"), 100..200, Some("100"), "one");
+        let query = |cursor: &str| {
+            query_for(
+                "thread/items/list",
+                &json!({
+                    "threadId": "session", "sortDirection": "desc", "cursor": cursor, "limit": 100,
+                }),
+            )
+            .unwrap()
+        };
+        let hit = read_query(&cache, "owner", "one", &query("200"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(hit["data"].as_array().unwrap().len(), 100);
+        assert_eq!(hit["nextCursor"], "100");
+        // Another cursor, or a source rewritten since, is a miss: the caller
+        // then reads through the network.
+        assert!(read_query(&cache, "owner", "one", &query("100"))
+            .unwrap()
+            .is_none());
+        assert!(read_query(&cache, "owner", "two", &query("200"))
+            .unwrap()
+            .is_none());
     }
 
     #[test]

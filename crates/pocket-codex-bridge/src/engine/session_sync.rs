@@ -176,6 +176,37 @@ pub fn request(
     pocket_codex_host_svc::history_sync::codex_response(&window, &query)
 }
 
+/// Answer a history page from disk, with no network round trip, when the
+/// identical window is retained for the session's current source generation.
+///
+/// Only for windows that cannot change within a generation: pages behind the
+/// live tail and turns that have completed. The generation itself is
+/// refreshed whenever a session opens (its tail is always synchronized), and
+/// a change there invalidates every retained window, so a hit can never
+/// predate a destructive rewrite the controller already knows about. `None`
+/// on a miss, an unnegotiated host, or an unknown generation; the caller
+/// then reads through [`request`].
+pub(super) fn retained(service: &str, method: &str, params: &Value) -> Option<Value> {
+    if !enabled(service) {
+        return None;
+    }
+    let read = || -> Result<Option<Value>> {
+        let owner = namespace(service)?;
+        let query = query_for(method, params)?;
+        let Some(generation) = source_generation(service, &query.session) else {
+            return Ok(None);
+        };
+        cache_restore::read_query(&application_cache()?, &owner, &generation, &query)
+    };
+    match read() {
+        Ok(hit) => hit,
+        Err(error) => {
+            tracing::debug!(%error, "retained history window unavailable");
+            None
+        },
+    }
+}
+
 fn query_for(method: &str, params: &Value) -> Result<WindowQuery> {
     let collection = match method {
         "thread/read" => "metadata",

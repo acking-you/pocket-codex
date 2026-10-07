@@ -631,14 +631,8 @@ pub fn thread_older_page(service_key: &str, thread_id: &str) -> Result<OlderPage
     let Some(cursor) = state.next_item_cursor.clone() else {
         return Ok(empty());
     };
-    let page = fetch_item_page(
-        service_key,
-        &client,
-        thread_id,
-        None,
-        Some(cursor.as_str()),
-        ITEM_PAGE_LIMIT,
-    )?;
+    let page =
+        fetch_older_item_page(service_key, &client, thread_id, &cursor, ITEM_PAGE_LIMIT)?;
     let entries = page
         .get("data")
         .and_then(Value::as_array)
@@ -1837,6 +1831,27 @@ fn fetch_item_page(
         params["cursor"] = json!(cursor);
     }
     super::session_sync::request(service_key, client, "thread/items/list", params)
+}
+
+/// [`fetch_item_page`] for a page behind the live tail: such a page is fixed
+/// within a source generation, so a retained copy answers it from disk.
+fn fetch_older_item_page(
+    service_key: &str,
+    client: &Arc<AppClient>,
+    thread_id: &str,
+    cursor: &str,
+    limit: u32,
+) -> Result<Value> {
+    let params = json!({
+        "threadId": thread_id,
+        "limit": limit,
+        "sortDirection": "desc",
+        "cursor": cursor,
+    });
+    if let Some(page) = super::session_sync::retained(service_key, "thread/items/list", &params) {
+        return Ok(page);
+    }
+    fetch_item_page(service_key, client, thread_id, None, Some(cursor), limit)
 }
 
 /// Every turn in the thread, oldest first, as rail summaries.

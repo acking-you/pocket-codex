@@ -1451,9 +1451,21 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           }
         }
       }
+      // Prefetch while the reader still has a screen or so of history above
+      // them, so the next page is usually in place before they reach the top
+      // and the "load older" row is never something they have to press. The
+      // anchor capture keeps the reading position put when it lands.
+      final prefetchBand = math.max(
+        600.0,
+        _scroll.position.viewportDimension * 1.5,
+      );
+      final nearTop =
+          _scroll.position.pixels <=
+              _scroll.position.minScrollExtent + prefetchBand ||
+          (range != null && range.$1 <= 3);
       if (!_startsAtBeginning &&
           _scroll.position.userScrollDirection == ScrollDirection.forward &&
-          _scroll.position.pixels <= _scroll.position.minScrollExtent + 200) {
+          nearTop) {
         _loadAtTop();
       }
     }
