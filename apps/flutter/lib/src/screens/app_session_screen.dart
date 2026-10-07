@@ -46,6 +46,7 @@ import 'package:pocket_codex/src/screens/app_session/history_rows.dart';
 import 'package:pocket_codex/src/screens/app_session/transcript_view.dart';
 import 'package:pocket_codex/src/motion.dart';
 import 'package:pocket_codex/src/theme.dart';
+import 'package:pocket_codex/src/widgets/animated_label.dart';
 import 'package:pocket_codex/src/ui_prefs.dart';
 import 'package:pocket_codex/src/widgets/adaptive_sheet.dart';
 import 'package:pocket_codex/src/widgets/app_toast.dart';
@@ -9895,28 +9896,35 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                         mouseCursor: clickable,
                         key: Key('model-menu-item-${m.id}'),
                         onTap: () => _applyModel(m),
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 14,
-                            vertical: 8,
-                          ),
-                          child: Row(
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  m.displayName,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(fontSize: 13),
+                        child: AnimatedContainer(
+                          duration: Motion.of(context, Motion.medium),
+                          curve: Motion.move,
+                          color: m.id == selectedId
+                              ? accentWash(scheme)
+                              : accentWash(scheme).withValues(alpha: 0),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 14,
+                              vertical: 8,
+                            ),
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    m.displayName,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(fontSize: 13),
+                                  ),
                                 ),
-                              ),
-                              if (m.id == selectedId)
-                                Icon(
-                                  Icons.check,
-                                  size: 16,
-                                  color: scheme.primary,
-                                ),
-                            ],
+                                if (m.id == selectedId)
+                                  Icon(
+                                    Icons.check,
+                                    size: 16,
+                                    color: scheme.tertiary,
+                                  ),
+                              ],
+                            ),
                           ),
                         ),
                       ),
@@ -9982,11 +9990,11 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
               // widen — the panel as the level changes.
               SizedBox(
                 width: 52,
-                child: Text(
+                child: AnimatedLabel(
                   current?.label(l10n) ?? l10n.runtimeEffortModelDefault,
                   textAlign: TextAlign.right,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+                  alignment: AlignmentDirectional.centerEnd,
+                  resize: false,
                   style: TextStyle(
                     fontSize: 12.5,
                     fontWeight: FontWeight.w600,
@@ -10235,41 +10243,48 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         ? scheme.onSurfaceVariant
         : scheme.onSurfaceVariant.withValues(alpha: 0.5);
     final touch = !isDesktop;
-    return Material(
-      color: active ? scheme.tertiaryContainer : Colors.transparent,
-      borderRadius: BorderRadius.circular(kControlRadius),
-      child: InkWell(
-        mouseCursor: clickable,
-        key: pillKey,
+    // The tint fades in and out (plan mode on/off) rather than snapping.
+    return AnimatedContainer(
+      duration: Motion.of(context, Motion.medium),
+      curve: Motion.move,
+      decoration: BoxDecoration(
+        color: active
+            ? scheme.tertiaryContainer
+            : scheme.tertiaryContainer.withValues(alpha: 0),
         borderRadius: BorderRadius.circular(kControlRadius),
-        onTap: onTap,
-        child: ConstrainedBox(
-          constraints: BoxConstraints(minHeight: touch ? 44 : 30),
-          child: Padding(
-            padding: EdgeInsets.symmetric(
-              horizontal: touch ? 10 : 8,
-              vertical: 5,
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(icon, size: 15, color: warn ? cautionColor(scheme) : fg),
-                const SizedBox(width: 5),
-                Flexible(
-                  child: Text(
-                    label,
-                    textWidthBasis: TextWidthBasis.longestLine,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    softWrap: false,
-                    style: TextStyle(fontSize: 12.5, color: fg),
+      ),
+      child: Material(
+        type: MaterialType.transparency,
+        borderRadius: BorderRadius.circular(kControlRadius),
+        child: InkWell(
+          mouseCursor: clickable,
+          key: pillKey,
+          borderRadius: BorderRadius.circular(kControlRadius),
+          onTap: onTap,
+          child: ConstrainedBox(
+            constraints: BoxConstraints(minHeight: touch ? 44 : 30),
+            child: Padding(
+              padding: EdgeInsets.symmetric(
+                horizontal: touch ? 10 : 8,
+                vertical: 5,
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(icon, size: 15, color: warn ? cautionColor(scheme) : fg),
+                  const SizedBox(width: 5),
+                  Flexible(
+                    child: AnimatedLabel(
+                      label,
+                      style: TextStyle(fontSize: 12.5, color: fg),
+                    ),
                   ),
-                ),
-                if (trailing != null) ...[
-                  const SizedBox(width: 2),
-                  Icon(trailing, size: 16, color: fg),
+                  if (trailing != null) ...[
+                    const SizedBox(width: 2),
+                    Icon(trailing, size: 16, color: fg),
+                  ],
                 ],
-              ],
+              ),
             ),
           ),
         ),
@@ -10368,72 +10383,92 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// One soft option row inside [_optionSheet].
   Widget _optionRow<T>(_PickerOption<T> o, bool selected, VoidCallback onTap) {
     final scheme = Theme.of(context).colorScheme;
-    final fg = selected ? scheme.onPrimaryContainer : scheme.onSurface;
+    final fg = scheme.onSurface;
+    final accent = scheme.tertiary;
+    final duration = Motion.of(context, Motion.medium);
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 2),
-      child: Material(
-        color: selected ? scheme.primaryContainer : Colors.transparent,
-        borderRadius: BorderRadius.circular(kControlRadius),
-        child: InkWell(
-          mouseCursor: clickable,
-          // Stable handle for tests: the label is localised and, for the turn
-          // settings, repeated by the chip that opened the sheet. Values that
-          // are not scalars fall back to the label — a model row's DTO has no
-          // `toString`, so keying on it would give every model the same key.
-          key: ValueKey(
-            'opt-${switch (o.value) {
-              final String s => s,
-              final Enum e => e.name,
-              _ => o.label,
-            }}',
-          ),
-          borderRadius: BorderRadius.circular(12),
-          onTap: onTap,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
-            child: Row(
-              children: [
-                Icon(
-                  o.icon,
-                  size: 20,
-                  color: selected ? scheme.onPrimaryContainer : scheme.primary,
-                ),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        o.label,
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w500,
-                          color: fg,
-                        ),
-                      ),
-                      if (o.description != null &&
-                          o.description!.isNotEmpty) ...[
-                        const SizedBox(height: 2),
+      child: AnimatedContainer(
+        duration: duration,
+        curve: Motion.move,
+        decoration: BoxDecoration(
+          color: selected
+              ? selectedRowColor(scheme)
+              : selectedRowColor(scheme).withValues(alpha: 0),
+          borderRadius: BorderRadius.circular(kControlRadius),
+        ),
+        child: Material(
+          type: MaterialType.transparency,
+          borderRadius: BorderRadius.circular(kControlRadius),
+          child: InkWell(
+            mouseCursor: clickable,
+            // Stable handle for tests: the label is localised and, for the turn
+            // settings, repeated by the chip that opened the sheet. Values that
+            // are not scalars fall back to the label — a model row's DTO has no
+            // `toString`, so keying on it would give every model the same key.
+            key: ValueKey(
+              'opt-${switch (o.value) {
+                final String s => s,
+                final Enum e => e.name,
+                _ => o.label,
+              }}',
+            ),
+            borderRadius: BorderRadius.circular(12),
+            onTap: onTap,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+              child: Row(
+                children: [
+                  TweenAnimationBuilder<Color?>(
+                    tween: ColorTween(
+                      end: selected ? accent : scheme.onSurfaceVariant,
+                    ),
+                    duration: duration,
+                    builder: (_, color, _) =>
+                        Icon(o.icon, size: 20, color: color),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
                         Text(
-                          o.description!,
+                          o.label,
                           style: TextStyle(
-                            fontSize: 12,
-                            color: selected
-                                ? scheme.onPrimaryContainer.withValues(
-                                    alpha: 0.75,
-                                  )
-                                : scheme.onSurfaceVariant,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w500,
+                            color: fg,
                           ),
                         ),
+                        if (o.description != null &&
+                            o.description!.isNotEmpty) ...[
+                          const SizedBox(height: 2),
+                          Text(
+                            o.description!,
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: scheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
                       ],
-                    ],
+                    ),
                   ),
-                ),
-                if (selected) ...[
+                  // Always laid out, so picking a row doesn't shift its text;
+                  // the check grows in on the new row as it fades from the old.
                   const SizedBox(width: 8),
-                  Icon(Icons.check, size: 18, color: scheme.onPrimaryContainer),
+                  AnimatedScale(
+                    scale: selected ? 1 : 0.6,
+                    duration: duration,
+                    curve: Motion.enter,
+                    child: AnimatedOpacity(
+                      opacity: selected ? 1 : 0,
+                      duration: duration,
+                      child: Icon(Icons.check, size: 18, color: accent),
+                    ),
+                  ),
                 ],
-              ],
+              ),
             ),
           ),
         ),
