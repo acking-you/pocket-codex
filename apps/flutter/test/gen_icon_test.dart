@@ -37,6 +37,7 @@
 // `flutter_native_splash.color` / `color_dark` in pubspec.yaml in sync with
 // them so the splash tile melts seamlessly into the splash background.
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
@@ -270,6 +271,117 @@ Uint8List glyphPng(img.Image image, int size) => img.encodePng(
   ),
 );
 
+/// Draws the brand mark as vectors at exactly [px] pixels: a blue tile with
+/// the white cloud, `>_` prompt and relay arcs.
+///
+/// Desktop chrome shows the icon at 16-48 px, where downscaling the 1254 px
+/// raster masters leaves sub-pixel strokes that blur into a smudge. Drawn per
+/// size instead, every stroke can be held at a legible width (optical sizing:
+/// thicker, relative to the tile, the smaller the icon), the tile edge lands on
+/// whole pixels, and the smallest sizes drop the detail they cannot carry.
+///
+/// Geometry is in tile units (0..1), traced from `icon/logo_dark.png`.
+Future<img.Image> renderMark(int px, {double margin = 0}) async {
+  final recorder = ui.PictureRecorder();
+  final canvas = Canvas(recorder);
+  final inset = margin.roundToDouble();
+  final side = px - inset * 2;
+  final tile = Rect.fromLTWH(inset, inset, side, side);
+  canvas.drawRRect(
+    RRect.fromRectAndRadius(tile, Radius.circular(side * 0.23)),
+    Paint()
+      ..shader = ui.Gradient.linear(tile.topLeft, tile.bottomRight, const [
+        Color(0xFF4F7DF2),
+        Color(0xFF2443B0),
+      ]),
+  );
+
+  // The glyph is drawn slightly larger in a small tile, where the margin it
+  // gets at full size would cost pixels the strokes need.
+  final zoom = switch (side) {
+    <= 18 => 1.30,
+    <= 26 => 1.18,
+    <= 40 => 1.08,
+    _ => 1.0,
+  };
+  Offset p(double x, double y) {
+    const cx = 0.53, cy = 0.51;
+    return Offset(
+      tile.left + ((x - cx) * zoom + 0.5) * side,
+      tile.top + ((y - cy) * zoom + 0.5) * side,
+    );
+  }
+
+  double len(double v) => v * zoom * side;
+  // Never thinner than ~1.45 px, or a stroke turns into a grey haze.
+  double stroke(double v) => math.max(len(v), 1.45);
+
+  final ink = Paint()
+    ..color = Colors.white
+    ..style = PaintingStyle.stroke
+    ..strokeCap = StrokeCap.round
+    ..strokeJoin = StrokeJoin.round
+    ..isAntiAlias = true;
+
+  // Cloud: three lobes and the flat base, open at the top right where the
+  // signal leaves it.
+  final cloud = Path();
+  void arc(double cx, double cy, double r, double fromDeg, double sweepDeg) {
+    cloud.addArc(
+      Rect.fromCircle(center: p(cx, cy), radius: len(r)),
+      fromDeg * math.pi / 180,
+      sweepDeg * math.pi / 180,
+    );
+  }
+
+  arc(0.347, 0.613, 0.164, 255, -165); // left lobe, down to the base
+  arc(0.466, 0.509, 0.176, 198, 112); // top lobe, up and over
+  arc(0.642, 0.613, 0.168, -29, 119); // right lobe, down to the base
+  cloud
+    ..moveTo(p(0.347, 0.777).dx, p(0.347, 0.777).dy)
+    ..lineTo(p(0.642, 0.781).dx, p(0.642, 0.781).dy);
+  canvas.drawPath(cloud, ink..strokeWidth = stroke(0.050));
+
+  // The prompt. At 16 px there is room for the caret or the underscore,
+  // not both legibly; the caret is the one that says "terminal".
+  final prompt = Path()
+    ..moveTo(p(0.383, 0.530).dx, p(0.383, 0.530).dy)
+    ..lineTo(p(0.452, 0.604).dx, p(0.452, 0.604).dy)
+    ..lineTo(p(0.383, 0.678).dx, p(0.383, 0.678).dy);
+  if (side > 18) {
+    prompt
+      ..moveTo(p(0.515, 0.678).dx, p(0.515, 0.678).dy)
+      ..lineTo(p(0.612, 0.678).dx, p(0.612, 0.678).dy);
+  }
+  canvas.drawPath(prompt, ink..strokeWidth = stroke(0.042));
+
+  // Relay arcs, a pale blue so the cloud stays the subject. One arc below
+  // 24 px: two would merge into a single blot.
+  final signal = Paint()
+    ..color = const Color(0xFFCFDDFF)
+    ..style = PaintingStyle.stroke
+    ..strokeCap = StrokeCap.round
+    ..strokeWidth = stroke(0.050);
+  final centre = p(0.651, 0.452);
+  for (final r in side < 24 ? const [0.150] : const [0.114, 0.222]) {
+    canvas.drawArc(
+      Rect.fromCircle(center: centre, radius: len(r)),
+      -math.pi / 2,
+      math.pi / 2 * 0.94,
+      false,
+      signal,
+    );
+  }
+
+  final image = await recorder.endRecording().toImage(px, px);
+  final png = await image.toByteData(format: ui.ImageByteFormat.png);
+  return img.decodePng(png!.buffer.asUint8List())!;
+}
+
+/// Frame sizes for a Windows `.ico`: every size the shell asks for at the
+/// common display scales (100/125/150/175/200/250%), so none is a resample.
+const _icoSizes = [16, 20, 24, 30, 32, 36, 40, 48, 60, 64, 72, 96, 128, 256];
+
 String _hex(Color c) =>
     '#${(c.r * 255).round().toRadixString(16).padLeft(2, '0')}'
             '${(c.g * 255).round().toRadixString(16).padLeft(2, '0')}'
@@ -353,15 +465,18 @@ void main() {
     // So the launcher icon is rendered per size and packed like the tray icon
     // below, which has always done this. Written AFTER `flutter_launcher_icons`
     // runs, since that tool would otherwise overwrite it.
-    final dark = await loadMaster('icon/logo_dark.png');
-    final frames = <img.Image>[];
-    // The sizes Windows actually asks for: 16 title bar / Alt-Tab, 20 and 24 at
-    // fractional DPI scaling, 32 taskbar, 48 large icons, 64 for 150% desktop,
-    // 128 and 256 for the extra-large views and Explorer's tile mode.
-    for (final s in [16, 20, 24, 32, 48, 64, 128, 256]) {
-      final png = await compose(dark, size: s.toDouble(), fraction: 0.9);
-      frames.add(img.decodePng(png)!);
-    }
+    //
+    // Each frame is DRAWN at its size ([renderMark]), not resampled from the
+    // master: at 24-32 px a downscaled master leaves 1 px strokes smeared over
+    // two. And it is the blue tile, not the ink one, which vanished against
+    // Windows' dark taskbar beside every other app's bright tile.
+    //
+    // The margin matches the shell's own icons (≈1/16 of the frame, never
+    // under 1 px), so the tile sits the same size as its neighbours.
+    final frames = <img.Image>[
+      for (final s in _icoSizes)
+        await renderMark(s, margin: math.max(1, s / 16)),
+    ];
     await File(
       'windows/runner/resources/app_icon.ico',
     ).writeAsBytes(img.IcoEncoder().encodeImages(frames));
@@ -370,12 +485,13 @@ void main() {
   }, skip: skip);
 
   test('derive tray assets (png + template + multi-size ico)', () async {
-    final dark = await loadMaster('icon/logo_dark.png');
     Directory('assets/tray').createSync(recursive: true);
 
-    // Linux loads the icon as a PNG; a 256 source scales down cleanly to the
-    // ~18-22 px the tray actually shows.
-    await writePng('assets/tray/tray.png', await compose(dark, size: 256));
+    // Linux loads the icon as a PNG and scales it to the ~22 px the panel
+    // shows; 64 px keeps that downscale small and its strokes intact.
+    await File(
+      'assets/tray/tray.png',
+    ).writeAsBytes(img.encodePng(await renderMark(64)));
 
     // macOS wants a TEMPLATE image (black + alpha; the menu bar tints it to
     // match light/dark mode and highlight state). tray_manager loads the
@@ -399,24 +515,14 @@ void main() {
     // tray wants a monochrome TEMPLATE it tints itself, which is why the file
     // above is black-on-alpha. Do not carry that convention over here.)
     //
-    // The small frames zoom the artwork instead. The glyph is only ~72% of the
-    // tile, so a 16 px frame gave it ~10 px — the cloud outline and the `>_`
-    // prompt landed on too few pixels and read as a smudge. Zooming trades the
-    // master's own padding for glyph pixels, most aggressively where pixels are
-    // scarcest; past 48 px there are enough to render the mark as drawn.
-    // Bounded at 1.25: past that the glyph starts touching the tile's rounded
-    // corners, which looks cramped rather than crisp.
-    double zoomFor(int px) => switch (px) {
-      <= 24 => 1.25,
-      <= 32 => 1.18,
-      <= 48 => 1.10,
-      _ => 1.0,
-    };
-    final frames = <img.Image>[];
-    for (final s in [16, 20, 24, 32, 48, 64, 256]) {
-      final png = await compose(dark, size: s.toDouble(), zoom: zoomFor(s));
-      frames.add(img.decodePng(png)!);
-    }
+    // Drawn per size like the launcher icon ([renderMark]), edge to edge: the
+    // notification area gives an icon 16 px at 100% and every pixel of margin
+    // is a pixel the cloud loses. The vector mark holds its strokes at a
+    // legible width and drops the second arc and the underscore where they
+    // would merge, which no amount of zooming a raster could do.
+    final frames = <img.Image>[
+      for (final s in _icoSizes.where((s) => s <= 64)) await renderMark(s),
+    ];
     final ico = img.IcoEncoder().encodeImages(frames);
     await File('assets/tray/tray.ico').writeAsBytes(ico);
 

@@ -145,6 +145,7 @@ bool Win32Window::Create(const std::wstring& title,
   }
 
   UpdateTheme(window);
+  UpdateIcons(window);
 
   return OnCreate();
 }
@@ -194,6 +195,8 @@ Win32Window::MessageHandler(HWND hwnd,
 
       SetWindowPos(hwnd, nullptr, newRectSize->left, newRectSize->top, newWidth,
                    newHeight, SWP_NOZORDER | SWP_NOACTIVATE);
+      // The icon sizes changed with the monitor: pick the matching frames.
+      UpdateIcons(hwnd);
 
       return 0;
     }
@@ -227,6 +230,14 @@ void Win32Window::Destroy() {
   if (window_handle_) {
     DestroyWindow(window_handle_);
     window_handle_ = nullptr;
+  }
+  if (big_icon_) {
+    DestroyIcon(big_icon_);
+    big_icon_ = nullptr;
+  }
+  if (small_icon_) {
+    DestroyIcon(small_icon_);
+    small_icon_ = nullptr;
   }
   if (g_active_window_count == 0) {
     WindowClassRegistrar::GetInstance()->UnregisterWindowClass();
@@ -270,6 +281,32 @@ bool Win32Window::OnCreate() {
 
 void Win32Window::OnDestroy() {
   // No-op; provided for subclasses.
+}
+
+void Win32Window::UpdateIcons(HWND const window) {
+  // SM_CXICON / SM_CXSMICON are 32 and 16 px at 96 DPI and scale with it.
+  // Asking LoadImage for the exact size lets it take the matching frame of
+  // app_icon.ico (which ships one per common scale) instead of resampling.
+  const UINT dpi = FlutterDesktopGetDpiForHWND(window);
+  const int big = MulDiv(32, dpi, 96);
+  const int small = MulDiv(16, dpi, 96);
+  const HINSTANCE instance = GetModuleHandle(nullptr);
+  HICON big_icon = static_cast<HICON>(LoadImage(
+      instance, MAKEINTRESOURCE(IDI_APP_ICON), IMAGE_ICON, big, big, 0));
+  HICON small_icon = static_cast<HICON>(LoadImage(
+      instance, MAKEINTRESOURCE(IDI_APP_ICON), IMAGE_ICON, small, small, 0));
+  if (big_icon) {
+    SendMessage(window, WM_SETICON, ICON_BIG,
+                reinterpret_cast<LPARAM>(big_icon));
+    if (big_icon_) DestroyIcon(big_icon_);
+    big_icon_ = big_icon;
+  }
+  if (small_icon) {
+    SendMessage(window, WM_SETICON, ICON_SMALL,
+                reinterpret_cast<LPARAM>(small_icon));
+    if (small_icon_) DestroyIcon(small_icon_);
+    small_icon_ = small_icon;
+  }
 }
 
 void Win32Window::UpdateTheme(HWND const window) {
