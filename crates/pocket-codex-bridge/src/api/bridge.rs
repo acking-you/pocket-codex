@@ -1846,6 +1846,28 @@ pub fn meta_write_file(
     Ok(meta::write_file(&service_key, &dir, &file_name, bytes)?.path)
 }
 
+/// Transcribe a dictation recording through the host behind `service_key`,
+/// returning the recognised text (empty when nothing was said).
+///
+/// `mime` is the audio's type, `file_name` its name with the format's
+/// extension, and `language` an optional BCP-47 hint. The host's API proxy
+/// signs the upload with its own Codex login; this app never sees it.
+pub fn dictation_transcribe(
+    service_key: String,
+    audio: Vec<u8>,
+    mime: String,
+    file_name: String,
+    language: Option<String>,
+) -> Result<String> {
+    crate::engine::dictation::transcribe(
+        &service_key,
+        audio,
+        &mime,
+        &file_name,
+        language.as_deref(),
+    )
+}
+
 // ---------------------------------------------------------------------------
 // Hosted account (GitHub device-flow login)
 // ---------------------------------------------------------------------------

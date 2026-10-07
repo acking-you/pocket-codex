@@ -43,7 +43,7 @@ use axum::{
     body::Body,
     extract::{
         ws::{Message as AxumMessage, WebSocket, WebSocketUpgrade},
-        State,
+        DefaultBodyLimit, State,
     },
     http::{HeaderMap, Method, StatusCode},
     response::{IntoResponse, Response},
@@ -70,11 +70,17 @@ use url::Url;
 
 const CHATGPT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
 
+/// The ChatGPT backend root; dictation's `/transcribe` lives here, beside
+/// (not under) the Codex Responses endpoint.
+const CHATGPT_BACKEND_BASE_URL: &str = "https://chatgpt.com/backend-api";
+
 #[derive(Clone)]
 struct ProxyState {
     client: Client,
     auth_headers: HeaderMap,
     http_upstream_url: String,
+    /// Where `/v1/transcribe` uploads go.
+    transcribe_upstream_url: String,
     ws_upstream_url: String,
     proxy: Option<UpstreamProxy>,
 }
@@ -134,6 +140,7 @@ pub async fn serve(listener: TcpListener, proxy: Option<String>) -> Result<()> {
             .context("building API proxy HTTP client")?,
         auth_headers,
         http_upstream_url: format!("{}/responses", CHATGPT_CODEX_BASE_URL.trim_end_matches('/')),
+        transcribe_upstream_url: format!("{CHATGPT_BACKEND_BASE_URL}/transcribe"),
         ws_upstream_url: format!(
             "wss://{}/responses",
             CHATGPT_CODEX_BASE_URL
@@ -150,8 +157,164 @@ pub async fn serve(listener: TcpListener, proxy: Option<String>) -> Result<()> {
 fn proxy_router(state: ProxyState) -> Router {
     Router::new()
         .route("/v1/responses", post(forward_http).get(forward_ws))
+        // Dictation: one recording in, its transcript out. The body is the raw
+        // audio, so the default 2 MB cap would cut a minute of speech short.
+        .route(
+            "/v1/transcribe",
+            post(forward_transcribe).layer(DefaultBodyLimit::max(TRANSCRIBE_BODY_LIMIT)),
+        )
         .fallback(proxy_forbidden)
         .with_state(Arc::new(state))
+}
+
+/// Largest recording accepted for dictation: ten minutes of 48 kbps AAC is
+/// ~3.6 MB and of 16 kHz PCM WAV ~19 MB, so this admits either with room.
+const TRANSCRIBE_BODY_LIMIT: usize = 25 * 1024 * 1024;
+
+/// Query of a `/v1/transcribe` request; the body is the audio itself.
+#[derive(Debug, Default)]
+struct TranscribeQuery {
+    /// File name sent upstream; its extension tells the backend the format.
+    filename: Option<String>,
+    /// BCP-47 language hint; omitted lets the backend detect it.
+    language: Option<String>,
+}
+
+impl TranscribeQuery {
+    fn parse(raw: &str) -> Self {
+        let mut query = Self::default();
+        for (key, value) in url::form_urlencoded::parse(raw.as_bytes()) {
+            match key.as_ref() {
+                "filename" => query.filename = Some(value.into_owned()),
+                "language" => query.language = Some(value.into_owned()),
+                _ => {},
+            }
+        }
+        query
+    }
+}
+
+/// Turn one recording into text through ChatGPT's dictation endpoint (the one
+/// the Codex desktop app's composer microphone uses), authenticated as the
+/// host's own Codex login. The controller never sees the credential.
+async fn forward_transcribe(
+    State(state): State<Arc<ProxyState>>,
+    axum::extract::RawQuery(raw): axum::extract::RawQuery,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let query = TranscribeQuery::parse(raw.as_deref().unwrap_or(""));
+    match forward_transcribe_inner(state, query, headers, body).await {
+        Ok(response) => response,
+        Err(err) => Response::builder()
+            .status(StatusCode::BAD_GATEWAY)
+            .body(Body::from(format!("API proxy error: {err:#}")))
+            .unwrap_or_else(|_| Response::new(Body::empty())),
+    }
+}
+
+async fn forward_transcribe_inner(
+    state: Arc<ProxyState>,
+    query: TranscribeQuery,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response> {
+    if body.is_empty() {
+        return Ok((StatusCode::BAD_REQUEST, "empty recording").into_response());
+    }
+    let content_type = headers
+        .get(http::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| value.starts_with("audio/"))
+        .unwrap_or("application/octet-stream")
+        .to_string();
+    let filename = sanitized_audio_name(query.filename.as_deref());
+    let language = query
+        .language
+        .as_deref()
+        .map(str::trim)
+        .filter(|lang| !lang.is_empty() && lang.len() <= 16)
+        .filter(|lang| lang.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'));
+    let (boundary, multipart) = transcribe_form(&body, &filename, &content_type, language);
+
+    let mut upstream_headers = HeaderMap::new();
+    merge_auth_headers(&mut upstream_headers, &state.auth_headers);
+    upstream_headers.insert(
+        http::header::CONTENT_TYPE,
+        HeaderValue::from_str(&format!("multipart/form-data; boundary={boundary}"))
+            .context("building multipart content type")?,
+    );
+    let upstream = state
+        .client
+        .request(Method::POST, &state.transcribe_upstream_url)
+        .headers(upstream_headers)
+        .body(multipart)
+        .send()
+        .await
+        .context("forwarding recording to the dictation endpoint")?;
+    let status = upstream.status();
+    let headers = response_headers(upstream.headers());
+    let bytes = upstream
+        .bytes()
+        .await
+        .context("reading the dictation response")?;
+    let mut response = Response::new(Body::from(bytes));
+    *response.status_mut() = status;
+    *response.headers_mut() = headers;
+    Ok(response)
+}
+
+/// A safe upload name: the client's extension when it is a known audio one,
+/// under a fixed stem, so nothing the client sends reaches the form header
+/// unescaped.
+fn sanitized_audio_name(requested: Option<&str>) -> String {
+    let ext = requested
+        .and_then(|name| name.rsplit_once('.'))
+        .map(|(_, ext)| ext.to_ascii_lowercase())
+        .filter(|ext| matches!(ext.as_str(), "m4a" | "mp4" | "webm" | "wav" | "ogg" | "mp3" | "flac"))
+        .unwrap_or_else(|| "wav".to_string());
+    format!("codex.{ext}")
+}
+
+/// A `multipart/form-data` body with the recording as `file` and the optional
+/// `language`. Built by hand (as the desktop app does) rather than pulling in
+/// reqwest's multipart support for one form. Returns `(boundary, body)`.
+fn transcribe_form(
+    audio: &[u8],
+    filename: &str,
+    content_type: &str,
+    language: Option<&str>,
+) -> (String, Vec<u8>) {
+    // A boundary must not occur in the payload; widen it until it does not.
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or_default();
+    let mut boundary = format!("----pocket-codex-{stamp:x}");
+    while audio
+        .windows(boundary.len())
+        .any(|window| window == boundary.as_bytes())
+    {
+        boundary.push('x');
+    }
+    let mut body = Vec::with_capacity(audio.len() + 512);
+    if let Some(language) = language {
+        body.extend_from_slice(
+            format!(
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"language\"\r\n\r\n{language}\r\n"
+            )
+            .as_bytes(),
+        );
+    }
+    body.extend_from_slice(
+        format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\nContent-Type: {content_type}\r\n\r\n"
+        )
+        .as_bytes(),
+    );
+    body.extend_from_slice(audio);
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    (boundary, body)
 }
 
 async fn load_auth_headers() -> Result<HeaderMap> {
@@ -689,9 +852,70 @@ mod tests {
             auth_headers: bearer_headers("test-host-token", Some("test-account".into()), false)
                 .expect("test credentials"),
             http_upstream_url: format!("http://{upstream}/responses"),
+            transcribe_upstream_url: format!("http://{upstream}/transcribe"),
             ws_upstream_url: format!("ws://{upstream}/responses"),
             proxy: None,
         })
+    }
+
+    #[tokio::test]
+    async fn transcribe_uploads_multipart_with_host_auth_only() {
+        let upstream = Router::new().route(
+            "/transcribe",
+            post(|headers: HeaderMap, body: Bytes| async move {
+                assert_eq!(headers[AUTHORIZATION], "Bearer test-host-token");
+                assert_eq!(headers["chatgpt-account-id"], "test-account");
+                // The controller's own headers are not forwarded at all.
+                assert!(headers.get("x-client-marker").is_none());
+                let content_type = headers[http::header::CONTENT_TYPE].to_str().unwrap();
+                let boundary = content_type
+                    .strip_prefix("multipart/form-data; boundary=")
+                    .expect("multipart content type");
+                let text = String::from_utf8_lossy(&body);
+                assert!(text.starts_with(&format!("--{boundary}\r\n")));
+                assert!(text.contains("name=\"language\"\r\n\r\nzh\r\n"));
+                assert!(text.contains(
+                    "name=\"file\"; filename=\"codex.m4a\"\r\nContent-Type: audio/mp4\r\n\r\nAUDIO\r\n"
+                ));
+                assert!(text.ends_with(&format!("--{boundary}--\r\n")));
+                Response::builder()
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"text":"你好"}"#))
+                    .unwrap()
+            }),
+        );
+        let (upstream_addr, upstream_task) = test_server(upstream).await;
+        let (proxy_addr, proxy_task) = test_server(test_proxy(upstream_addr)).await;
+        let client = Client::builder().no_proxy().build().unwrap();
+        let response = client
+            .post(format!(
+                "http://{proxy_addr}/v1/transcribe?filename=../evil\"name.m4a&language=zh"
+            ))
+            .bearer_auth("downstream-token-must-not-reach-upstream")
+            .header("x-client-marker", "dropped")
+            .header("content-type", "audio/mp4")
+            .body("AUDIO")
+            .send()
+            .await
+            .expect("transcribe request");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.text().await.unwrap(), r#"{"text":"你好"}"#);
+        let empty = client
+            .post(format!("http://{proxy_addr}/v1/transcribe"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(empty.status(), StatusCode::BAD_REQUEST);
+        proxy_task.abort();
+        upstream_task.abort();
+    }
+
+    #[test]
+    fn audio_names_keep_only_known_extensions() {
+        assert_eq!(sanitized_audio_name(Some("x.WAV")), "codex.wav");
+        assert_eq!(sanitized_audio_name(Some("a\"b.m4a")), "codex.m4a");
+        assert_eq!(sanitized_audio_name(Some("payload.exe")), "codex.wav");
+        assert_eq!(sanitized_audio_name(None), "codex.wav");
     }
 
     fn assert_upstream_headers(headers: &HeaderMap) {
