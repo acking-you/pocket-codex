@@ -9,6 +9,7 @@
 library;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show RenderAbstractViewport;
 import 'approval_review.dart';
 import 'approval_review_card.dart';
 import 'dart:math' as math;
@@ -735,12 +736,7 @@ class _TurnWorkCardState extends State<TurnWorkCard> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final header = _headerKey.currentContext;
       if (header == null || !header.mounted) return;
-      Scrollable.ensureVisible(
-        header,
-        duration: Motion.of(header, Motion.fast),
-        alignment: 0.2,
-        alignmentPolicy: ScrollPositionAlignmentPolicy.keepVisibleAtStart,
-      );
+      _revealInTranscript(header, alignment: 0.2);
     });
   }
 
@@ -956,13 +952,7 @@ class _WorkStepsState extends State<_WorkSteps> {
     // A new page starts at its first step: bring the pager back into view
     // rather than leaving the reader at the old page's tail.
     final pager = _pagerKey.currentContext;
-    if (pager != null) {
-      Scrollable.ensureVisible(
-        pager,
-        duration: Motion.of(context, Motion.fast),
-        alignmentPolicy: ScrollPositionAlignmentPolicy.keepVisibleAtStart,
-      );
-    }
+    if (pager != null) _revealInTranscript(pager);
   }
 
   Future<void> _choose() async {
@@ -1669,5 +1659,47 @@ class _CollapseRow extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+/// Scroll the transcript (the nearest *vertical* scrollable) so [target] is
+/// in view, without moving any horizontal scroller in between — a code block
+/// or table scrolls sideways, and `Scrollable.ensureVisible` would otherwise
+/// drive those too and assert when the target is wider than them.
+void _revealInTranscript(BuildContext target, {double alignment = 0}) {
+  final box = target.findRenderObject();
+  if (box is! RenderBox || !box.attached) return;
+  ScrollableState? vertical;
+  target.visitAncestorElements((element) {
+    if (element is StatefulElement && element.state is ScrollableState) {
+      final state = element.state as ScrollableState;
+      if (state.axisDirection == AxisDirection.down ||
+          state.axisDirection == AxisDirection.up) {
+        vertical = state;
+        return false;
+      }
+    }
+    return true;
+  });
+  final scrollable = vertical;
+  if (scrollable == null) return;
+  final position = scrollable.position;
+  final viewport = RenderAbstractViewport.maybeOf(box);
+  if (viewport == null) return;
+  // A target taller than the viewport cannot be "made visible"; align its
+  // top instead, which is where the reader wants to land anyway.
+  final reveal = viewport.getOffsetToReveal(
+    box,
+    box.size.height > position.viewportDimension ? 0 : alignment,
+  );
+  final offset = reveal.offset.clamp(
+    position.minScrollExtent,
+    position.maxScrollExtent,
+  );
+  final duration = Motion.of(target, Motion.fast);
+  if (duration == Duration.zero) {
+    position.jumpTo(offset);
+  } else {
+    position.animateTo(offset, duration: duration, curve: Motion.move);
   }
 }

@@ -119,4 +119,59 @@ void main() {
       expect(t.takeException(), isNull);
     },
   );
+
+  testWidgets(
+    'a long expanded fold collapses from its foot and returns to its header',
+    (t) async {
+      t.view.physicalSize = const Size(390, 844);
+      t.view.devicePixelRatio = 1;
+      addTearDown(t.view.resetPhysicalSize);
+      addTearDown(t.view.resetDevicePixelRatio);
+      final steps = List.generate(
+        30,
+        (i) => TranscriptItem(
+          id: 's-$i',
+          // Agent prose renders Markdown, so a fenced block puts a sideways
+          // scroller between the fold and the page, the case that tripped
+          // ensureVisible's size assertion.
+          type: i.isEven ? 'commandExecution' : 'agentMessage',
+          title: 'step $i',
+          text: i.isEven ? '/project' : '```\n${'x' * 400}\n```',
+          turnId: 'turn',
+        ),
+      );
+      final scroll = ScrollController();
+      addTearDown(scroll.dispose);
+      await t.pumpWidget(
+        host(
+          SingleChildScrollView(
+            controller: scroll,
+            child: Column(
+              children: [
+                TurnWorkCard(work: TurnWork(steps)),
+                const SizedBox(height: 2000),
+              ],
+            ),
+          ),
+        ),
+      );
+      await t.tap(find.byKey(const Key('turn-work-toggle')));
+      await t.pumpAndSettle();
+      final collapse = find.byKey(const Key('turn-work-collapse'));
+      await t.scrollUntilVisible(
+        collapse,
+        300,
+        scrollable: find.byType(Scrollable).first,
+      );
+      expect(scroll.offset, greaterThan(0));
+      await t.tap(collapse);
+      await t.pumpAndSettle();
+      expect(collapse, findsNothing);
+      // Back at the header, not stranded somewhere below where the steps were.
+      final header = t.getRect(find.byKey(const Key('turn-work-toggle')));
+      expect(header.top, greaterThanOrEqualTo(0));
+      expect(header.bottom, lessThanOrEqualTo(844));
+      expect(t.takeException(), isNull);
+    },
+  );
 }
