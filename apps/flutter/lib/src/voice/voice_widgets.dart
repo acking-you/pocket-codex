@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
 import 'package:pocket_codex/src/voice/voice_controller.dart';
+import 'package:pocket_codex/src/voice/waveform.dart';
 
 /// Session-only speech settings; an empty model preserves the host default.
 class VoiceSettings {
@@ -373,11 +374,16 @@ class _VoiceStatusEntryState extends State<VoiceStatusEntry> {
           onPressed: () => setState(() => _showEnded = false),
         ),
     ];
-    final indicator = _VoiceLevel(
-      color: tone,
-      active: live && !c.muted,
-      speaking: c.turn != VoiceTurn.listening,
-    );
+    final indicator = live
+        ? CallWaveform(
+            controller: c,
+            color: tone,
+            bars: widget.compact ? 7 : 12,
+            height: 16,
+            barWidth: 2,
+            gap: 1.5,
+          )
+        : _VoiceLevel(color: tone, active: false, speaking: false);
     if (widget.compact) {
       return Tooltip(
         message: [label, ?widget.title].join('\n'),
@@ -452,8 +458,86 @@ class _VoiceStatusEntryState extends State<VoiceStatusEntry> {
   }
 }
 
-/// Three bars that breathe while the call is listening and move faster while
-/// someone is speaking; still when muted, connecting or ended.
+/// A call's live waveform: the louder of the microphone and the assistant,
+/// so the bars move with whoever is talking. Flat while muted.
+class CallWaveform extends StatefulWidget {
+  /// Draws [controller]'s levels.
+  const CallWaveform({
+    super.key,
+    required this.controller,
+    required this.color,
+    this.bars = 12,
+    this.height = 16,
+    this.barWidth = 2,
+    this.gap = 1.5,
+  });
+
+  /// The call.
+  final VoiceController controller;
+
+  /// Bar colour.
+  final Color color;
+
+  /// Bars of history.
+  final int bars;
+
+  /// Height of the tallest bar.
+  final double height;
+
+  /// Width of a bar.
+  final double barWidth;
+
+  /// Gap between bars.
+  final double gap;
+
+  @override
+  State<CallWaveform> createState() => _CallWaveformState();
+}
+
+class _CallWaveformState extends State<CallWaveform> {
+  final _level = ValueNotifier<double>(0);
+
+  @override
+  void initState() {
+    super.initState();
+    widget.controller.levels.addListener(_sync);
+  }
+
+  @override
+  void didUpdateWidget(CallWaveform old) {
+    super.didUpdateWidget(old);
+    if (old.controller != widget.controller) {
+      old.controller.levels.removeListener(_sync);
+      widget.controller.levels.addListener(_sync);
+    }
+  }
+
+  void _sync() {
+    final l = widget.controller.levels.value;
+    _level.value = math.max(l.input, l.output);
+  }
+
+  @override
+  void dispose() {
+    widget.controller.levels.removeListener(_sync);
+    _level.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => Waveform(
+    key: const Key('voice-waveform'),
+    level: _level,
+    color: widget.color,
+    bars: widget.bars,
+    height: widget.height,
+    barWidth: widget.barWidth,
+    gap: widget.gap,
+    active: !widget.controller.muted,
+  );
+}
+
+/// Three still bars for a call that is not live (connecting, ended).
 class _VoiceLevel extends StatefulWidget {
   const _VoiceLevel({
     required this.color,

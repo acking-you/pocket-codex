@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
@@ -123,6 +124,55 @@ class VoiceController extends ChangeNotifier {
   bool get interrupting => _speakerSuppressed;
 
   Map<String, String> get partial => Map.unmodifiable(_partial);
+
+  /// Live sound levels while a call is up: the microphone and the assistant,
+  /// each 0..1, smoothed. A separate notifier so a waveform redraws at audio
+  /// rate without rebuilding everything that listens to the call state.
+  final ValueNotifier<AudioLevels> levels = ValueNotifier((
+    input: 0,
+    output: 0,
+  ));
+  Timer? _levelPoll;
+
+  /// How often the media link is asked for levels; ~16 Hz reads as live
+  /// without flooding the platform channel.
+  static const levelInterval = Duration(milliseconds: 60);
+
+  void _startLevels(VoiceTransport transport, int generation) {
+    _levelPoll?.cancel();
+    var reading = false;
+    _levelPoll = Timer.periodic(levelInterval, (_) async {
+      if (reading || generation != _generation || _disposed) return;
+      reading = true;
+      try {
+        final raw = await transport.levels();
+        if (raw == null || generation != _generation || _disposed) return;
+        // WebRTC's audioLevel is linear amplitude; speech sits around
+        // 0.02-0.3. A square root spreads that across the bar height.
+        double shape(double v) => math.sqrt(v.clamp(0.0, 1.0));
+        final prev = levels.value;
+        // Fast attack, slower release: bars jump with a syllable and settle
+        // rather than flicker between frames.
+        double ease(double from, double to) =>
+            to > from ? from + (to - from) * 0.7 : from + (to - from) * 0.3;
+        levels.value = (
+          // A muted microphone sends nothing; show it flat, not noise.
+          input: muted ? 0 : ease(prev.input, shape(raw.input)),
+          output: _speakerSuppressed
+              ? 0
+              : ease(prev.output, shape(raw.output)),
+        );
+      } finally {
+        reading = false;
+      }
+    });
+  }
+
+  void _stopLevels() {
+    _levelPoll?.cancel();
+    _levelPoll = null;
+    levels.value = (input: 0, output: 0);
+  }
   void _changed() {
     if (!_disposed) notifyListeners();
   }
@@ -204,6 +254,7 @@ class VoiceController extends ChangeNotifier {
           if (!current()) return;
           _timeout?.cancel();
           phase = VoicePhase.active;
+          _startLevels(transport, generation);
           _changed();
         },
         onInterrupted: () {
@@ -409,6 +460,7 @@ class VoiceController extends ChangeNotifier {
   Future<void> _stop(bool failed) async {
     ++_generation;
     _timeout?.cancel();
+    _stopLevels();
     _resetFloor();
     final transport = _transport;
     final events = _events;
@@ -435,8 +487,10 @@ class VoiceController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _levelPoll?.cancel();
     _resetFloor();
     unawaited(stop());
+    levels.dispose();
     super.dispose();
   }
 }

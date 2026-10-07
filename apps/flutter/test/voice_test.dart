@@ -1,9 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:fake_async/fake_async.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_webrtc/flutter_webrtc.dart' show StatsReport;
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
 import 'package:pocket_codex/src/providers.dart';
@@ -132,6 +134,12 @@ class _Media implements VoiceTransport {
     suppressions.add(value);
   }
 
+  /// What [levels] reports; null until a test sets it.
+  AudioLevels? level;
+
+  @override
+  Future<AudioLevels?> levels() async => level;
+
   @override
   Future<void> close() async {
     closed = true;
@@ -188,6 +196,50 @@ void main() {
       c.dispose();
     },
   );
+  test('audioLevelsFromStats reads the microphone and the remote audio', () {
+    StatsReport r(String type, Map<String, dynamic> v) =>
+        StatsReport('id', type, 0, v);
+    expect(
+      audioLevelsFromStats([
+        r('media-source', {'kind': 'audio', 'audioLevel': 0.25}),
+        r('inbound-rtp', {'kind': 'audio', 'audioLevel': 0.04}),
+        r('inbound-rtp', {'kind': 'video', 'audioLevel': 0.9}),
+        r('candidate-pair', {'bytesSent': 10}),
+      ]),
+      (input: 0.25, output: 0.04),
+    );
+    expect(audioLevelsFromStats([r('transport', {})]), isNull);
+  });
+
+  test('a live call polls levels; muting flattens the microphone', () {
+    fakeAsync((async) {
+      final api = _VoiceApi();
+      final media = _Media()..level = (input: 0.25, output: 0);
+      final c = VoiceController(
+        api: api,
+        serviceKey: _service,
+        createTransport: () => media,
+      );
+      c.start('voice');
+      async.flushMicrotasks();
+      // Nothing is polled before audio flows.
+      async.elapse(const Duration(milliseconds: 300));
+      expect(c.levels.value.input, 0);
+      media.connected();
+      async.elapse(const Duration(milliseconds: 600));
+      // sqrt(0.25) = 0.5, reached through the attack smoothing.
+      expect(c.levels.value.input, closeTo(0.5, 0.01));
+      c.toggleMuted();
+      async.elapse(const Duration(milliseconds: 200));
+      expect(c.levels.value.input, 0);
+      c.stop();
+      async.flushMicrotasks();
+      expect(c.levels.value, (input: 0.0, output: 0.0));
+      c.dispose();
+      async.flushMicrotasks();
+    });
+  });
+
   group('barge-in', () {
     late _VoiceApi api;
     late _Media media;

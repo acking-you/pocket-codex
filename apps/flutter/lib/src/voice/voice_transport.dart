@@ -25,8 +25,31 @@ abstract interface class VoiceTransport {
   /// Used to cut a stale reply the moment the user talks over it.
   void setSpeakerSuppressed(bool suppressed);
 
+  /// The current sound levels, each 0..1: what the microphone picks up and
+  /// what the assistant is playing. Null before audio flows.
+  Future<AudioLevels?> levels();
+
   /// Release microphone, data channel and peer connection, including startup.
   Future<void> close();
+}
+
+/// Sound levels read from the media link, linear 0..1 (WebRTC `audioLevel`).
+typedef AudioLevels = ({double input, double output});
+
+/// The levels in a WebRTC stats [reports]: `media-source` is the local
+/// microphone after capture processing, `inbound-rtp` the remote audio.
+AudioLevels? audioLevelsFromStats(Iterable<StatsReport> reports) {
+  double? input, output;
+  for (final r in reports) {
+    final level = r.values['audioLevel'];
+    if (level is! num) continue;
+    final kind = r.values['kind'] ?? r.values['mediaType'];
+    if (kind != null && kind != 'audio') continue;
+    if (r.type == 'media-source') input = level.toDouble();
+    if (r.type == 'inbound-rtp') output = level.toDouble();
+  }
+  if (input == null && output == null) return null;
+  return (input: input ?? 0, output: output ?? 0);
 }
 
 /// WebRTC supplies audio encoding, playback and echo cancellation natively.
@@ -175,6 +198,18 @@ class WebRtcVoiceTransport implements VoiceTransport {
     // for the old reply is dropped instead of queued behind the new one.
     for (final track in _remoteAudio) {
       track.enabled = !suppressed;
+    }
+  }
+
+  @override
+  Future<AudioLevels?> levels() async {
+    final peer = _peer;
+    if (peer == null || _closed) return null;
+    try {
+      return audioLevelsFromStats(await peer.getStats());
+    } catch (_) {
+      // A peer torn down mid-read has no stats; the next poll sees null.
+      return null;
     }
   }
 
