@@ -22,6 +22,7 @@ import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
 import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/screens/app_session_screen.dart';
+import 'package:pocket_codex/src/screens/home_screen.dart';
 import 'package:pocket_codex/src/screens/services_screen.dart';
 import 'package:pocket_codex/src/screens/settings_screen.dart';
 import 'package:pocket_codex/src/theme.dart';
@@ -233,6 +234,7 @@ Future<void> _shoot(
 void main() {
   setUpAll(_loadFonts);
   drawerShots();
+  heroShots();
 
   for (final MapEntry(key: name, value: scene) in _scenes.entries) {
     for (final d in _devices) {
@@ -272,5 +274,33 @@ void drawerShots() {
         debugDefaultTargetPlatformOverride = null;
       }
     });
+  }
+}
+
+/// First launch: no services discovered yet, so home shows its hero.
+void heroShots() {
+  for (final d in _devices) {
+    for (final b in Brightness.values) {
+      testWidgets('hero ${d.name}-${b.name}', (t) async {
+        debugDefaultTargetPlatformOverride = d.platform;
+        try {
+          t.view.devicePixelRatio = 2.0;
+          t.view.physicalSize = d.size * 2.0;
+          addTearDown(t.view.reset);
+          final api = FakeBridgeApi(
+            config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
+          );
+          await t.pumpWidget(_app(const HomeScreen(), api, b));
+          await t.pumpAndSettle();
+          await expectLater(
+            find.byType(MaterialApp),
+            matchesGoldenFile('out/hero-${d.name}-${b.name}.png'),
+          );
+          await t.pumpWidget(const SizedBox());
+        } finally {
+          debugDefaultTargetPlatformOverride = null;
+        }
+      });
+    }
   }
 }
