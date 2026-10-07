@@ -3745,6 +3745,66 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Source'**
   String get previewSource;
+
+  /// No description provided for @dictate.
+  ///
+  /// In en, this message translates to:
+  /// **'Dictate'**
+  String get dictate;
+
+  /// No description provided for @dictationStop.
+  ///
+  /// In en, this message translates to:
+  /// **'Stop and insert text'**
+  String get dictationStop;
+
+  /// No description provided for @dictationCancel.
+  ///
+  /// In en, this message translates to:
+  /// **'Discard recording'**
+  String get dictationCancel;
+
+  /// No description provided for @dictationStarting.
+  ///
+  /// In en, this message translates to:
+  /// **'Starting microphone…'**
+  String get dictationStarting;
+
+  /// No description provided for @dictationTranscribing.
+  ///
+  /// In en, this message translates to:
+  /// **'Transcribing…'**
+  String get dictationTranscribing;
+
+  /// No description provided for @dictationTooShort.
+  ///
+  /// In en, this message translates to:
+  /// **'Recording was too short'**
+  String get dictationTooShort;
+
+  /// No description provided for @dictationPermission.
+  ///
+  /// In en, this message translates to:
+  /// **'Microphone access was denied'**
+  String get dictationPermission;
+
+  /// No description provided for @dictationMicrophone.
+  ///
+  /// In en, this message translates to:
+  /// **'Could not open the microphone'**
+  String get dictationMicrophone;
+
+  /// No description provided for @dictationFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Transcription failed'**
+  String get dictationFailed;
+
+  /// No description provided for @dictationEmpty.
+  ///
+  /// In en, this message translates to:
+  /// **'No speech was recognised'**
+  String get dictationEmpty;
 }
 
 class _AppLocalizationsDelegate

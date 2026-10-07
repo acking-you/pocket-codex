@@ -1971,4 +1971,34 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get previewSource => '源码';
+
+  @override
+  String get dictate => '语音输入';
+
+  @override
+  String get dictationStop => '停止并插入文字';
+
+  @override
+  String get dictationCancel => '放弃录音';
+
+  @override
+  String get dictationStarting => '正在打开麦克风…';
+
+  @override
+  String get dictationTranscribing => '正在转写…';
+
+  @override
+  String get dictationTooShort => '录音太短';
+
+  @override
+  String get dictationPermission => '麦克风权限被拒绝';
+
+  @override
+  String get dictationMicrophone => '无法打开麦克风';
+
+  @override
+  String get dictationFailed => '转写失败';
+
+  @override
+  String get dictationEmpty => '没有识别到语音';
 }

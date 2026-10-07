@@ -1213,6 +1213,30 @@ class FakeBridgeApi implements BridgeApi {
   Future<Uint8List> metaReadFile(String serviceKey, String path) async =>
       fileBytes[path] ?? Uint8List(0);
 
+  /// Recordings sent for transcription: (mime, fileName, language, bytes).
+  final List<(String, String, String?, int)> dictations = [];
+
+  /// What the next transcription returns, or throws when it is an error.
+  Object dictationResult = 'transcribed text';
+
+  /// Completes a pending transcription when set (to hold it in flight).
+  Completer<void>? dictationGate;
+
+  @override
+  Future<String> dictationTranscribe(
+    String serviceKey,
+    Uint8List audio, {
+    required String mime,
+    required String fileName,
+    String? language,
+  }) async {
+    dictations.add((mime, fileName, language, audio.length));
+    await dictationGate?.future;
+    final result = dictationResult;
+    if (result is String) return result;
+    throw result;
+  }
+
   bool hostIsLocal = false;
   final List<String> filePreviewRequests = [];
   @override

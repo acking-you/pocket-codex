@@ -10,10 +10,16 @@ import 'package:pocket_codex/src/voice/waveform.dart';
 
 /// Session-only speech settings; an empty model preserves the host default.
 class VoiceSettings {
-  const VoiceSettings({this.model, this.voice});
+  const VoiceSettings({this.model, this.voice, this.version = 'v3'});
   final String? model;
   final String? voice;
+
+  /// Realtime protocol version the model speaks (`v1` or `v3` over WebRTC).
+  final String version;
 }
+
+/// A realtime model the setup dialog offers, and the protocol it needs.
+typedef VoiceModel = ({String id, String version});
 
 /// Loads the host's actual catalog, keeping unsupported hosts retryable.
 class VoiceSetupDialog extends StatefulWidget {
@@ -28,14 +34,24 @@ class VoiceSetupDialog extends StatefulWidget {
   State<VoiceSetupDialog> createState() => _VoiceSetupDialogState();
 }
 
-/// Realtime models offered in the setup dialog.
+/// Realtime models offered in the setup dialog, with the protocol each runs.
 ///
-/// The app-server has no model catalogue for realtime (only voices), so this
-/// is the list the protocol itself names for the version Pocket-Codex speaks
-/// (V3, `gpt-live-1-codex` is its built-in default). "Host default" sends no
-/// model and lets the host's `experimental_realtime_ws_model` decide; a custom
-/// id stays available for a host configured with something else.
-const voiceModels = <String>['gpt-live-1-codex'];
+/// The app-server has no realtime model catalogue (only voices), so these are
+/// the ids Codex itself names:
+/// - `gpt-live-1-codex`: app-server's V3 (frameless) default, also what the
+///   Codex desktop app uses when it opens a call itself.
+/// - `gpt-live-1-boulder-alpha`: the desktop app's remote-config default.
+/// - `gpt-realtime-1.5`: app-server's V1/V2 default. Over WebRTC that means
+///   V1 (app-server rejects V2 there).
+///
+/// "Host default" sends no model and lets the host's
+/// `experimental_realtime_ws_model` decide; a custom id stays available for a
+/// host configured with something else.
+const voiceModels = <VoiceModel>[
+  (id: 'gpt-live-1-codex', version: 'v3'),
+  (id: 'gpt-live-1-boulder-alpha', version: 'v3'),
+  (id: 'gpt-realtime-1.5', version: 'v1'),
+];
 
 /// Sentinel for the "custom model id" entry in the model dropdown.
 const _customModel = '__custom__';
@@ -132,11 +148,11 @@ class _VoiceSetupDialogState extends State<VoiceSetupDialog> {
                     DropdownMenuItem(child: Text(l.voiceModelDefault)),
                     for (final model in voiceModels)
                       DropdownMenuItem(
-                        value: model,
+                        value: model.id,
                         child: Text(
-                          model == 'gpt-live-1-codex'
+                          model.id == 'gpt-live-1-codex'
                               ? l.voiceModelFrameless
-                              : model,
+                              : model.id,
                         ),
                       ),
                     DropdownMenuItem(
@@ -188,6 +204,14 @@ class _VoiceSetupDialogState extends State<VoiceSetupDialog> {
                       final choice => choice,
                     },
                     voice: _voice,
+                    // A listed model carries its protocol; the host default
+                    // and a custom id keep V3, Codex's WebRTC default here.
+                    version:
+                        voiceModels
+                            .where((m) => m.id == _modelChoice)
+                            .firstOrNull
+                            ?.version ??
+                        'v3',
                   ),
                 ),
           child: Text(l.voiceStart),

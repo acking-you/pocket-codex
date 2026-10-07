@@ -65,11 +65,16 @@ class AnimatedLabel extends StatelessWidget {
       ),
     );
     if (!resize) return switcher;
-    return AnimatedSize(
-      duration: duration,
-      curve: Motion.move,
-      alignment: alignment,
-      child: switcher,
+    // AnimatedSize reports its animated width even when the slot it sits in
+    // is narrower, which overflows a squeezed chip. Clip to the incoming
+    // constraints so the label can still ellipsize while it eases.
+    return ClipRect(
+      child: AnimatedSize(
+        duration: duration,
+        curve: Motion.move,
+        alignment: alignment,
+        child: switcher,
+      ),
     );
   }
 }

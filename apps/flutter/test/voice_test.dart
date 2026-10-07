@@ -149,6 +149,7 @@ class _Media implements VoiceTransport {
 Future<void> _tick() => Future<void>.delayed(Duration.zero);
 
 void main() {
+  _modelDialogTests();
   test('voice source survives renaming', () {
     const t = ThreadMeta(
       id: 'v',
@@ -694,5 +695,41 @@ void main() {
     );
     await t.pumpAndSettle();
     expect(find.text('Saved spoken request'), findsOneWidget);
+  });
+}
+
+void _modelDialogTests() {
+  testWidgets('picking a realtime model sends its protocol version', (t) async {
+    final api = _VoiceApi();
+    VoiceSettings? picked;
+    await t.pumpWidget(
+      MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        locale: const Locale('en'),
+        home: Builder(
+          builder: (context) => TextButton(
+            onPressed: () async => picked = await showDialog<VoiceSettings>(
+              context: context,
+              builder: (_) => VoiceSetupDialog(api: api, serviceKey: _service),
+            ),
+            child: const Text('open'),
+          ),
+        ),
+      ),
+    );
+    await t.tap(find.text('open'));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('voice-model')));
+    await t.pumpAndSettle();
+    // Every model Codex names is offered.
+    expect(find.text('gpt-live-1-boulder-alpha').hitTestable(), findsOneWidget);
+    await t.tap(find.text('gpt-realtime-1.5').hitTestable());
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('voice-start-confirm')));
+    await t.pumpAndSettle();
+    expect(picked?.model, 'gpt-realtime-1.5');
+    // WebRTC cannot carry V2, so the V1/V2 model runs as V1.
+    expect(picked?.version, 'v1');
   });
 }

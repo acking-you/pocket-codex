@@ -1058,6 +1058,21 @@ class RustBridgeApi implements BridgeApi {
       frb.metaHostIsLocal(serviceKey: serviceKey);
 
   @override
+  Future<String> dictationTranscribe(
+    String serviceKey,
+    Uint8List audio, {
+    required String mime,
+    required String fileName,
+    String? language,
+  }) => frb.dictationTranscribe(
+    serviceKey: serviceKey,
+    audio: audio,
+    mime: mime,
+    fileName: fileName,
+    language: language,
+  );
+
+  @override
   Future<FilePreviewData> metaFilePreview(
     String serviceKey,
     String? threadId,
