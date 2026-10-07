@@ -136,11 +136,10 @@ MarkdownStyleSheet _buildMarkdownStyle(BuildContext context, bool muted) {
       backgroundColor: scheme.onSurface.withValues(alpha: 0.06),
       fontSize: (theme.textTheme.bodyMedium?.fontSize ?? 14) - 1,
     ),
-    codeblockDecoration: BoxDecoration(
-      color: scheme.surfaceContainerLow,
-      borderRadius: BorderRadius.circular(10),
-    ),
-    codeblockPadding: const EdgeInsets.all(14),
+    // `_CodeBlockBuilder` draws the block's own card; the stylesheet's
+    // wrapper stays invisible so there is one outline, not two.
+    codeblockDecoration: const BoxDecoration(),
+    codeblockPadding: EdgeInsets.zero,
     blockquoteDecoration: BoxDecoration(
       color: scheme.surfaceContainerLow,
       borderRadius: BorderRadius.circular(8),

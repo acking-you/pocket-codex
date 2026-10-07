@@ -230,7 +230,7 @@ class _TurnProgressTrackerState extends State<TurnProgressTracker> {
                         height: 13,
                         child: CircularProgressIndicator(
                           strokeWidth: 1.8,
-                          color: scheme.primary,
+                          color: signalColor(scheme),
                         ),
                       ),
                       const SizedBox(width: 7),
@@ -316,7 +316,7 @@ class _TurnProgressTrackerState extends State<TurnProgressTracker> {
         height: 15,
         child: CircularProgressIndicator(
           strokeWidth: 1.8,
-          color: scheme.primary,
+          color: signalColor(scheme),
         ),
       ),
       _ => Icon(Icons.circle_outlined, size: 15, color: muted),

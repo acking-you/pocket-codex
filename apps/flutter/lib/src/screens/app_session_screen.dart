@@ -5143,12 +5143,17 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           if (generation != null) _focusNewComposer(generation);
         },
         drawer: Drawer(
-          // The scheme's container colours are translucent washes. A drawer
-          // floats above a scrim, so resolve the wash onto its opaque ground
-          // instead of letting the chat show through the sessions pane.
+          // The same ground as the desktop sidebar, so the list looks like one
+          // component on every form factor. Composited onto the page surface
+          // so it stays opaque over the scrim whatever the scheme's alpha.
           backgroundColor: Color.alphaBlend(
-            scheme.surfaceContainer,
+            surfaceSidebar(scheme),
             scheme.surface,
+          ),
+          shape: const RoundedRectangleBorder(
+            borderRadius: BorderRadius.horizontal(
+              right: Radius.circular(kDialogRadius),
+            ),
           ),
           surfaceTintColor: Colors.transparent,
           child: SafeArea(child: _sessionsPane(l10n, inDrawer: true)),
@@ -5953,7 +5958,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                           height: 12,
                           child: CircularProgressIndicator(
                             strokeWidth: 1.6,
-                            color: scheme.primary,
+                            color: signalColor(scheme),
                           ),
                         )
                       else
@@ -6591,14 +6596,39 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         padding: const EdgeInsets.all(24),
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 460),
-          child: _projectSwitcher(
-            l10n,
-            label: (_cwd?.isNotEmpty ?? false)
-                ? _projectName()
-                : l10n.workOutsideProject,
-            style: Theme.of(
-              context,
-            ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w500),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // The mark anchors the empty view so the switcher below reads
+              // as "where this conversation runs", not a stray dropdown.
+              const BrandLogo(size: 36),
+              const SizedBox(height: 14),
+              _projectSwitcher(
+                l10n,
+                label: (_cwd?.isNotEmpty ?? false)
+                    ? _projectName()
+                    : l10n.workOutsideProject,
+                style: Theme.of(
+                  context,
+                ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w500),
+              ),
+              if (_cwd?.trim().isNotEmpty ?? false) ...[
+                const SizedBox(height: 4),
+                Text(
+                  _cwd!.trim(),
+                  key: const Key('new-session-cwd'),
+                  textAlign: TextAlign.center,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontFamily: monoFontFamily,
+                    fontFamilyFallback: monoCjkFallback,
+                    fontSize: 12,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ],
           ),
         ),
       ),
@@ -6980,7 +7010,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
             // strip already carries it).
             if (inDrawer && widget.home)
               Padding(
-                padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 10),
                 child: Row(
                   children: [
                     const BrandLogo(size: 20),
@@ -8148,7 +8178,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                     height: 15,
                     child: CircularProgressIndicator(
                       strokeWidth: 1.6,
-                      color: scheme.primary,
+                      color: signalColor(scheme),
                     ),
                   ),
                   tooltip: l10n.cancelDiffLoad,
@@ -8227,19 +8257,23 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       decoration: BoxDecoration(
-        color: scheme.primaryContainer,
+        color: scheme.tertiaryContainer,
         borderRadius: BorderRadius.circular(kPanelRadius),
       ),
       padding: const EdgeInsets.fromLTRB(16, 10, 12, 10),
       child: Row(
         children: [
-          Icon(Icons.checklist_rtl, size: 18, color: scheme.onPrimaryContainer),
+          Icon(
+            Icons.checklist_rtl,
+            size: 18,
+            color: scheme.onTertiaryContainer,
+          ),
           const SizedBox(width: 10),
           Expanded(
             child: Text(
               l10n.planReadyTitle,
               style: TextStyle(
-                color: scheme.onPrimaryContainer,
+                color: scheme.onTertiaryContainer,
                 fontWeight: FontWeight.w500,
               ),
             ),
