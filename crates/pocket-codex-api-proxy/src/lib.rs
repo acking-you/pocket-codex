@@ -239,6 +239,7 @@ async fn forward_transcribe_inner(
 
     let mut upstream_headers = HeaderMap::new();
     merge_auth_headers(&mut upstream_headers, &state.auth_headers);
+    upstream_headers.insert(http::header::ACCEPT, HeaderValue::from_static("application/json"));
     upstream_headers.insert(
         http::header::CONTENT_TYPE,
         HeaderValue::from_str(&format!("multipart/form-data; boundary={boundary}"))
@@ -258,10 +259,31 @@ async fn forward_transcribe_inner(
         .bytes()
         .await
         .context("reading the dictation response")?;
+    // An HTML challenge is useless to the controller and would read as "this
+    // host has no such route". Say what happened instead.
+    if is_edge_challenge(status, &bytes) {
+        tracing::warn!("chatgpt.com answered the dictation upload with a challenge page");
+        return Ok((
+            StatusCode::BAD_GATEWAY,
+            "chatgpt.com blocked the upload with a Cloudflare challenge (cf-mitigated); its \
+             dictation endpoint only accepts the official Codex desktop app",
+        )
+            .into_response());
+    }
     let mut response = Response::new(Body::from(bytes));
     *response.status_mut() = status;
     *response.headers_mut() = headers;
     Ok(response)
+}
+
+/// Whether an upstream body is Cloudflare's challenge page rather than an
+/// answer from the backend. ChatGPT's `/transcribe` and `/dictation/stream`
+/// sit behind a bot challenge that only the official desktop app's browser
+/// session passes, so a host-side caller gets this page, not a transcript.
+fn is_edge_challenge(status: StatusCode, body: &[u8]) -> bool {
+    status == StatusCode::FORBIDDEN
+        && body.len() < 64 * 1024
+        && String::from_utf8_lossy(body).contains("challenge")
 }
 
 /// A safe upload name: the client's extension when it is a known audio one,
@@ -908,6 +930,14 @@ mod tests {
         assert_eq!(empty.status(), StatusCode::BAD_REQUEST);
         proxy_task.abort();
         upstream_task.abort();
+    }
+
+    #[test]
+    fn cloudflare_challenge_is_recognised() {
+        let page = b"<html><span id=\"challenge-error-text\">Enable JavaScript</span></html>";
+        assert!(is_edge_challenge(StatusCode::FORBIDDEN, page));
+        assert!(!is_edge_challenge(StatusCode::OK, page));
+        assert!(!is_edge_challenge(StatusCode::FORBIDDEN, b"{\"detail\":\"forbidden\"}"));
     }
 
     #[test]
