@@ -120,6 +120,241 @@ void main() {
     },
   );
 
+  group('a running fold follows its newest step', () {
+    const viewHeight = 844.0;
+    late List<TranscriptItem> steps;
+    late ScrollController scroll;
+
+    TranscriptItem step(int i) => TranscriptItem(
+      id: 's-$i',
+      type: 'commandExecution',
+      title: 'pwd $i',
+      text: '/project',
+      turnId: 'turn',
+    );
+
+    Future<void> render(WidgetTester t, {bool active = true}) async {
+      // A fresh list each time, as the transcript rebuilds its rows.
+      await t.pumpWidget(
+        host(
+          SingleChildScrollView(
+            controller: scroll,
+            child: Column(
+              children: [
+                const SizedBox(height: 600),
+                TurnWorkCard(work: TurnWork([...steps]), active: active),
+              ],
+            ),
+          ),
+        ),
+      );
+      await t.pumpAndSettle();
+    }
+
+    Future<void> append(WidgetTester t, {int count = 1, bool active = true}) {
+      for (var i = 0; i < count; i++) {
+        steps.add(step(steps.length));
+      }
+      return render(t, active: active);
+    }
+
+    // The pager sits above a page taller than the screen: a reader scrolls up
+    // to reach it, which on its own already steps away from the newest step.
+    Future<void> tapPager(WidgetTester t, Finder control) async {
+      await t.ensureVisible(control);
+      await t.pumpAndSettle();
+      await t.tap(control);
+    }
+
+    Rect newest(WidgetTester t) =>
+        t.getRect(find.byKey(ValueKey('work-step-s-${steps.length - 1}')));
+
+    void expectNewestVisible(WidgetTester t) {
+      final rect = newest(t);
+      expect(rect.top, greaterThanOrEqualTo(0));
+      expect(rect.bottom, lessThanOrEqualTo(viewHeight));
+    }
+
+    Future<void> openAtTail(WidgetTester t) async {
+      t.view.physicalSize = const Size(390, viewHeight);
+      t.view.devicePixelRatio = 1;
+      addTearDown(t.view.resetPhysicalSize);
+      addTearDown(t.view.resetDevicePixelRatio);
+      steps = List.generate(150, step);
+      scroll = ScrollController();
+      addTearDown(scroll.dispose);
+      await render(t);
+      await t.tap(find.byKey(const Key('turn-work-toggle')));
+      await t.pumpAndSettle();
+      expect(find.text('Steps 126–150 of 150'), findsOneWidget);
+      // The transcript keeps a follower pinned to its end.
+      scroll.jumpTo(scroll.position.maxScrollExtent);
+      await t.pump();
+      expectNewestVisible(t);
+    }
+
+    testWidgets('continuous appends advance the page and stay on screen', (
+      t,
+    ) async {
+      await openAtTail(t);
+      for (var n = 151; n <= 180; n++) {
+        await append(t);
+        expect(find.text('Steps ${n - 24}–$n of $n'), findsOneWidget);
+        expectNewestVisible(t);
+        expect(t.widgetList(find.byType(ActivityCard)).length, 25);
+      }
+      // A burst between two frames lands on the newest step too.
+      await append(t, count: 7);
+      expect(find.text('Steps 163–187 of 187'), findsOneWidget);
+      expectNewestVisible(t);
+      expect(t.takeException(), isNull);
+    });
+
+    testWidgets('an earlier page holds while steps arrive', (t) async {
+      await openAtTail(t);
+      await tapPager(t, find.byTooltip('Previous steps'));
+      await t.pumpAndSettle();
+      expect(find.text('Steps 101–125 of 150'), findsOneWidget);
+      final offset = scroll.offset;
+      await append(t, count: 3);
+      expect(find.text('Steps 101–125 of 153'), findsOneWidget);
+      expect(scroll.offset, offset);
+      expect(t.takeException(), isNull);
+    });
+
+    testWidgets('a chosen old step holds while steps arrive', (t) async {
+      await openAtTail(t);
+      await tapPager(t, find.byKey(const Key('work-step-picker')));
+      await t.pumpAndSettle();
+      await t.enterText(find.byType(TextFormField), '10');
+      await t.tap(find.text('OK'));
+      await t.pumpAndSettle();
+      expect(find.text('Steps 10–34 of 150'), findsOneWidget);
+      final offset = scroll.offset;
+      await append(t, count: 3);
+      expect(find.text('Steps 10–34 of 153'), findsOneWidget);
+      expect(find.byKey(const ValueKey('work-step-s-9')), findsOneWidget);
+      expect(scroll.offset, offset);
+      expect(t.takeException(), isNull);
+    });
+
+    testWidgets('scrolling up pauses; latest steps resumes for good', (
+      t,
+    ) async {
+      await openAtTail(t);
+      await t.drag(find.byType(Scrollable).first, const Offset(0, 400));
+      await t.pumpAndSettle();
+      final offset = scroll.offset;
+      await append(t, count: 2);
+      // The reader's page and place both hold.
+      expect(find.text('Steps 126–150 of 152'), findsOneWidget);
+      expect(scroll.offset, offset);
+
+      await tapPager(t, find.text('Latest steps'));
+      await t.pumpAndSettle();
+      expect(find.text('Steps 128–152 of 152'), findsOneWidget);
+      expectNewestVisible(t);
+      for (var n = 153; n <= 160; n++) {
+        await append(t);
+        expect(find.text('Steps ${n - 24}–$n of $n'), findsOneWidget);
+        expectNewestVisible(t);
+      }
+      expect(t.takeException(), isNull);
+    });
+
+    testWidgets('latest steps from an old page shows the newest step', (
+      t,
+    ) async {
+      await openAtTail(t);
+      await tapPager(t, find.byTooltip('Previous steps'));
+      await t.pumpAndSettle();
+      await tapPager(t, find.byTooltip('Previous steps'));
+      await t.pumpAndSettle();
+      expect(find.text('Steps 76–100 of 150'), findsOneWidget);
+      await tapPager(t, find.text('Latest steps'));
+      await t.pumpAndSettle();
+      expect(find.text('Steps 126–150 of 150'), findsOneWidget);
+      expectNewestVisible(t);
+      await append(t);
+      expect(find.text('Steps 127–151 of 151'), findsOneWidget);
+      expectNewestVisible(t);
+      expect(t.takeException(), isNull);
+    });
+
+    testWidgets('completion shows a follower the final step, then holds', (
+      t,
+    ) async {
+      await openAtTail(t);
+      await append(t, count: 2, active: false);
+      expect(find.text('Steps 128–152 of 152'), findsOneWidget);
+      expectNewestVisible(t);
+      // A settled turn's history refresh does not move the page.
+      await append(t, active: false);
+      expect(find.text('Steps 128–152 of 153'), findsOneWidget);
+      expect(t.takeException(), isNull);
+    });
+
+    testWidgets('completion keeps the reader where they are', (t) async {
+      await openAtTail(t);
+      await tapPager(t, find.byTooltip('Previous steps'));
+      await t.pumpAndSettle();
+      final offset = scroll.offset;
+      // The final step and the end of the turn arrive together.
+      await append(t, active: false);
+      expect(find.text('Steps 101–125 of 151'), findsOneWidget);
+      expect(scroll.offset, offset);
+      expect(t.takeException(), isNull);
+    });
+  });
+
+  testWidgets('a fold that outgrows inline rows opens on its newest page', (
+    t,
+  ) async {
+    t.view.physicalSize = const Size(390, 844);
+    t.view.devicePixelRatio = 1;
+    addTearDown(t.view.resetPhysicalSize);
+    addTearDown(t.view.resetDevicePixelRatio);
+    final steps = List.generate(
+      40,
+      (i) => TranscriptItem(
+        id: 's-$i',
+        // Alternating types keep every step its own row below the threshold.
+        type: i.isEven ? 'commandExecution' : 'webSearch',
+        title: 'step $i',
+        text: '/project',
+        turnId: 'turn',
+      ),
+    );
+    Future<void> render() async {
+      await t.pumpWidget(
+        host(
+          SingleChildScrollView(
+            child: TurnWorkCard(work: TurnWork([...steps]), active: true),
+          ),
+        ),
+      );
+      await t.pumpAndSettle();
+    }
+
+    await render();
+    await t.tap(find.byKey(const Key('turn-work-toggle')));
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('work-step-picker')), findsNothing);
+    steps.add(
+      TranscriptItem(
+        id: 's-40',
+        type: 'commandExecution',
+        title: 'step 40',
+        text: '/project',
+        turnId: 'turn',
+      ),
+    );
+    await render();
+    expect(find.text('Steps 17–41 of 41'), findsOneWidget);
+    expect(find.byKey(const ValueKey('work-step-s-40')), findsOneWidget);
+    expect(t.takeException(), isNull);
+  });
+
   testWidgets(
     'a long expanded fold collapses from its foot and returns to its header',
     (t) async {

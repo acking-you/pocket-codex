@@ -966,20 +966,99 @@ class _WorkSteps extends StatefulWidget {
 
 class _WorkStepsState extends State<_WorkSteps> {
   static const _pageSize = 25;
-  late int _start = widget.active
-      ? math.max(0, widget.items.length - _pageSize)
-      : 0;
+
+  /// How far the newest step may sit below the screen's edge and still count
+  /// as being watched: about one collapsed step row.
+  static const _followSlack = 48.0;
+
+  late int _start = widget.active ? _tailStart : 0;
+
+  /// The reader picked a range (a page, a step number), which new steps must
+  /// not move. Only "Latest steps" — or paging onto the latest page — clears it.
+  bool _pinned = false;
+
+  /// Whether the bottom of the step list is on screen. Scrolling up to read
+  /// older steps pauses following without pinning: coming back resumes it.
+  bool _tailInView = true;
+
+  ScrollPosition? _position;
   final _pagerKey = GlobalKey();
+  final _listKey = GlobalKey();
+
+  int get _tailStart => math.max(0, widget.items.length - _pageSize);
+
+  @override
+  void initState() {
+    super.initState();
+    // Opened by hand above the fold's end, the tail starts out of view.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _trackTail();
+    });
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final position = Scrollable.maybeOf(context, axis: Axis.vertical)?.position;
+    if (identical(position, _position)) return;
+    _position?.removeListener(_trackTail);
+    _position = position?..addListener(_trackTail);
+  }
+
+  @override
+  void dispose() {
+    _position?.removeListener(_trackTail);
+    super.dispose();
+  }
+
+  void _trackTail() {
+    final list = _listKey.currentContext;
+    final below = list == null ? null : _belowViewport(list);
+    if (below != null) _tailInView = below <= _followSlack;
+  }
+
+  @override
+  void didUpdateWidget(_WorkSteps old) {
+    super.didUpdateWidget(old);
+    // Only a running turn is followed; the update that ends it still counts,
+    // so its final steps reach a reader who was watching. A history refresh
+    // of a settled turn leaves the page alone.
+    final running = widget.active || old.active;
+    if (!running || _pinned || !_tailInView || _start == _tailStart) return;
+    _start = _tailStart;
+    // The page now ends on the newest step; keep it on screen, not just in
+    // the page range. The transcript's own follow has already run by then.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final list = _listKey.currentContext;
+      if (mounted && list != null) _revealBottomInTranscript(list);
+    });
+  }
 
   void _go(int start) {
-    setState(
-      () =>
-          _start = start.clamp(0, math.max(0, widget.items.length - 1)).toInt(),
-    );
+    setState(() {
+      _start = start.clamp(0, math.max(0, widget.items.length - 1)).toInt();
+      _pinned = _start != _tailStart;
+    });
     // A new page starts at its first step: bring the pager back into view
     // rather than leaving the reader at the old page's tail.
     final pager = _pagerKey.currentContext;
     if (pager != null) _revealInTranscript(pager);
+  }
+
+  /// Resume following: show the latest page and land on its newest step.
+  void _latest() {
+    setState(() {
+      _start = _tailStart;
+      _pinned = false;
+      // Steps that land while the reveal below animates follow too.
+      _tailInView = true;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final list = _listKey.currentContext;
+      if (mounted && list != null) {
+        _revealBottomInTranscript(list, animate: true);
+      }
+    });
   }
 
   Future<void> _choose() async {
@@ -1047,11 +1126,7 @@ class _WorkStepsState extends State<_WorkSteps> {
               icon: const Icon(Icons.chevron_right),
               onPressed: end == widget.items.length ? null : () => _go(end),
             ),
-            TextButton(
-              onPressed: () =>
-                  _go(math.max(0, widget.items.length - _pageSize)),
-              child: Text(l10n.latestSteps),
-            ),
+            TextButton(onPressed: _latest, child: Text(l10n.latestSteps)),
           ],
         ),
         // Laid out inline, not in a nested scroll viewport. A bounded inner
@@ -1059,37 +1134,39 @@ class _WorkStepsState extends State<_WorkSteps> {
         // scrolled steps instead of the page and could reach neither the
         // fold above nor the reply below. A page is at most [_pageSize] rows,
         // so building them all is cheap.
-        Column(
-          key: const Key('work-step-list'),
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            for (var i = start; i < end; i++)
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  SizedBox(
-                    width: 36,
-                    child: Padding(
-                      padding: const EdgeInsets.only(top: 13),
-                      child: Text(
-                        '${i + 1}',
-                        style: Theme.of(context).textTheme.labelSmall,
-                      ),
-                    ),
-                  ),
-                  Expanded(
-                    child: KeyedSubtree(
-                      key: ValueKey('work-step-${widget.items[i].id}'),
-                      child: activityRow(widget.items[i]),
-                    ),
-                  ),
-                ],
-              ),
-          ],
-        ),
+        KeyedSubtree(key: _listKey, child: _stepList(context, start, end)),
       ],
     );
   }
+
+  Widget _stepList(BuildContext context, int start, int end) => Column(
+    key: const Key('work-step-list'),
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      for (var i = start; i < end; i++)
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(
+              width: 36,
+              child: Padding(
+                padding: const EdgeInsets.only(top: 13),
+                child: Text(
+                  '${i + 1}',
+                  style: Theme.of(context).textTheme.labelSmall,
+                ),
+              ),
+            ),
+            Expanded(
+              child: KeyedSubtree(
+                key: ValueKey('work-step-${widget.items[i].id}'),
+                child: activityRow(widget.items[i]),
+              ),
+            ),
+          ],
+        ),
+    ],
+  );
 }
 
 /// Collapses a run of same-type tool calls (e.g. several shell commands) into a
@@ -1677,6 +1754,63 @@ class _CollapseRow extends StatelessWidget {
 void _revealInTranscript(BuildContext target, {double alignment = 0}) {
   final box = target.findRenderObject();
   if (box is! RenderBox || !box.attached) return;
+  final position = _transcriptPosition(target);
+  if (position == null) return;
+  final viewport = RenderAbstractViewport.maybeOf(box);
+  if (viewport == null) return;
+  // A target taller than the viewport cannot be "made visible"; align its
+  // top instead, which is where the reader wants to land anyway.
+  final reveal = viewport.getOffsetToReveal(
+    box,
+    box.size.height > position.viewportDimension ? 0 : alignment,
+  );
+  _scrollTranscript(target, position, reveal.offset);
+}
+
+/// Scroll the transcript just far enough that [target]'s bottom edge is on
+/// screen — the newest step of a followed page — and never backwards.
+void _revealBottomInTranscript(BuildContext target, {bool animate = false}) {
+  final position = _transcriptPosition(target);
+  final below = _belowViewport(target);
+  if (position == null || below == null || below <= 0) return;
+  final offset = position.pixels + below;
+  if (animate) {
+    _scrollTranscript(target, position, offset);
+  } else {
+    position.jumpTo(
+      offset.clamp(position.minScrollExtent, position.maxScrollExtent),
+    );
+  }
+}
+
+/// How far [target]'s bottom edge lies below the transcript viewport's bottom
+/// (negative when it is above it), or null when it is not laid out in one.
+double? _belowViewport(BuildContext target) {
+  final box = target.findRenderObject();
+  if (box is! RenderBox || !box.attached || !box.hasSize) return null;
+  final position = _transcriptPosition(target);
+  final viewport = RenderAbstractViewport.maybeOf(box);
+  if (position == null || viewport == null) return null;
+  final bottom = viewport.getOffsetToReveal(box, 1).offset;
+  return bottom - position.pixels;
+}
+
+void _scrollTranscript(
+  BuildContext target,
+  ScrollPosition position,
+  double to,
+) {
+  final offset = to.clamp(position.minScrollExtent, position.maxScrollExtent);
+  final duration = Motion.of(target, Motion.fast);
+  if (duration == Duration.zero) {
+    position.jumpTo(offset);
+  } else {
+    position.animateTo(offset, duration: duration, curve: Motion.move);
+  }
+}
+
+/// The nearest vertical scroll position above [target]: the transcript.
+ScrollPosition? _transcriptPosition(BuildContext target) {
   ScrollableState? vertical;
   target.visitAncestorElements((element) {
     if (element is StatefulElement && element.state is ScrollableState) {
@@ -1690,24 +1824,7 @@ void _revealInTranscript(BuildContext target, {double alignment = 0}) {
     return true;
   });
   final scrollable = vertical;
-  if (scrollable == null) return;
-  final position = scrollable.position;
-  final viewport = RenderAbstractViewport.maybeOf(box);
-  if (viewport == null) return;
-  // A target taller than the viewport cannot be "made visible"; align its
-  // top instead, which is where the reader wants to land anyway.
-  final reveal = viewport.getOffsetToReveal(
-    box,
-    box.size.height > position.viewportDimension ? 0 : alignment,
-  );
-  final offset = reveal.offset.clamp(
-    position.minScrollExtent,
-    position.maxScrollExtent,
-  );
-  final duration = Motion.of(target, Motion.fast);
-  if (duration == Duration.zero) {
-    position.jumpTo(offset);
-  } else {
-    position.animateTo(offset, duration: duration, curve: Motion.move);
-  }
+  return scrollable != null && scrollable.position.hasPixels
+      ? scrollable.position
+      : null;
 }
