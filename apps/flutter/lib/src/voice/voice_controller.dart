@@ -158,9 +158,7 @@ class VoiceController extends ChangeNotifier {
         levels.value = (
           // A muted microphone sends nothing; show it flat, not noise.
           input: muted ? 0 : ease(prev.input, shape(raw.input)),
-          output: _speakerSuppressed
-              ? 0
-              : ease(prev.output, shape(raw.output)),
+          output: _speakerSuppressed ? 0 : ease(prev.output, shape(raw.output)),
         );
       } finally {
         reading = false;
@@ -173,6 +171,7 @@ class VoiceController extends ChangeNotifier {
     _levelPoll = null;
     levels.value = (input: 0, output: 0);
   }
+
   void _changed() {
     if (!_disposed) notifyListeners();
   }

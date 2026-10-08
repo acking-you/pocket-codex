@@ -26,8 +26,10 @@ const _jsonSteps = {
 /// The highlighter grammar for a command line: PowerShell when the host ran
 /// one, a POSIX shell otherwise.
 String commandLanguage(String command) =>
-    RegExp(r'\b(powershell|pwsh)(\.exe)?\b', caseSensitive: false)
-        .hasMatch(command)
+    RegExp(
+      r'\b(powershell|pwsh)(\.exe)?\b',
+      caseSensitive: false,
+    ).hasMatch(command)
     ? 'powershell'
     : 'bash';
 
@@ -88,7 +90,9 @@ class StepBody extends StatelessWidget {
     final children = switch (item.type) {
       'commandExecution' => _command(context, title, detail),
       final t when _jsonSteps.contains(t) => _tool(context, title, detail),
-      _ => [_plain(context, [title, detail].where((s) => s.isNotEmpty))],
+      _ => [
+        _plain(context, [title, detail].where((s) => s.isNotEmpty)),
+      ],
     };
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,

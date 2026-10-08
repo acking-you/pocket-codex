@@ -631,8 +631,7 @@ pub fn thread_older_page(service_key: &str, thread_id: &str) -> Result<OlderPage
     let Some(cursor) = state.next_item_cursor.clone() else {
         return Ok(empty());
     };
-    let page =
-        fetch_older_item_page(service_key, &client, thread_id, &cursor, ITEM_PAGE_LIMIT)?;
+    let page = fetch_older_item_page(service_key, &client, thread_id, &cursor, ITEM_PAGE_LIMIT)?;
     let entries = page
         .get("data")
         .and_then(Value::as_array)
