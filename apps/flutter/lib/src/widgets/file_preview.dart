@@ -45,12 +45,23 @@ enum PreviewKind {
   unsupported,
 }
 
+/// Cells a table preview may build. One very wide row (a file of separators)
+/// would otherwise cost a widget per separator on every retained row; past
+/// this bound the file shows as source instead.
+const _tableCellLimit = 6000;
+
+/// Columns a table preview may show; wider files show as source.
+const _tableColumnLimit = 64;
+
 /// The way to show [name]'s [bytes] (of which [truncated] says whether
-/// there are more on the host).
+/// there are more on the host). [textTruncated], which defaults to
+/// [truncated], says whether the decoded text stops short of the bytes:
+/// pictures are drawn from the bytes, documents parsed from the text.
 PreviewKind previewKindFor(
   String name,
   Uint8List bytes, {
   required bool truncated,
+  bool? textTruncated,
 }) {
   final ext = _extension(name);
   if (previewImageExtensions.contains(ext)) {
@@ -63,10 +74,17 @@ PreviewKind previewKindFor(
   return switch (ext) {
     'svg' when !truncated => PreviewKind.svg,
     'md' || 'markdown' || 'mdx' => PreviewKind.markdown,
-    'json' when !truncated => PreviewKind.json,
+    'json' when !(textTruncated ?? truncated) => PreviewKind.json,
     'csv' || 'tsv' => PreviewKind.table,
     _ => PreviewKind.source,
   };
+}
+
+/// Whether [rows] fit the table preview's widget budget.
+bool tableFits(List<List<String>> rows) {
+  final columns = rows.fold<int>(0, (m, r) => r.length > m ? r.length : m);
+  return columns <= _tableColumnLimit &&
+      rows.length * columns <= _tableCellLimit;
 }
 
 String _extension(String name) {
@@ -131,7 +149,8 @@ class FilePreview extends StatefulWidget {
     required this.bytes,
     required this.text,
     required this.truncated,
-  });
+    bool? textTruncated,
+  }) : textTruncated = textTruncated ?? truncated;
 
   /// File name, for its extension.
   final String name;
@@ -145,6 +164,10 @@ class FilePreview extends StatefulWidget {
   /// Only the start of the file was read.
   final bool truncated;
 
+  /// [text] holds only the start of the file: [truncated], or more bytes
+  /// were read than are decoded as text.
+  final bool textTruncated;
+
   @override
   State<FilePreview> createState() => _FilePreviewState();
 }
@@ -155,12 +178,21 @@ class _FilePreviewState extends State<FilePreview> {
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
-    final kind = previewKindFor(
+    var kind = previewKindFor(
       widget.name,
       widget.bytes,
       truncated: widget.truncated,
+      textTruncated: widget.textTruncated,
     );
     final text = widget.text;
+    List<List<String>>? rows;
+    if (kind == PreviewKind.table && text != null) {
+      rows = parseDelimited(
+        text,
+        separator: _extension(widget.name) == 'tsv' ? '\t' : ',',
+      );
+      if (!tableFits(rows)) kind = PreviewKind.source;
+    }
     if (kind == PreviewKind.image) {
       return InteractiveViewer(
         child: Image.memory(
@@ -192,7 +224,7 @@ class _FilePreviewState extends State<FilePreview> {
                 text: text,
                 language: languageHintForPath(widget.name),
               )
-            : _rendered(context, kind, text),
+            : _rendered(context, kind, text, rows),
       ),
     );
     return Column(
@@ -226,7 +258,7 @@ class _FilePreviewState extends State<FilePreview> {
             CopyTextButton(text: text),
           ],
         ),
-        if (widget.truncated)
+        if (widget.textTruncated)
           Padding(
             padding: const EdgeInsets.only(top: 4),
             child: Text(
@@ -242,7 +274,12 @@ class _FilePreviewState extends State<FilePreview> {
     );
   }
 
-  Widget _rendered(BuildContext context, PreviewKind kind, String text) {
+  Widget _rendered(
+    BuildContext context,
+    PreviewKind kind,
+    String text,
+    List<List<String>>? rows,
+  ) {
     final l10n = AppLocalizations.of(context);
     return switch (kind) {
       PreviewKind.markdown => SingleChildScrollView(
@@ -256,10 +293,7 @@ class _FilePreviewState extends State<FilePreview> {
       ),
       PreviewKind.table => _DelimitedTable(
         key: const Key('file-preview-table'),
-        rows: parseDelimited(
-          text,
-          separator: _extension(widget.name) == 'tsv' ? '\t' : ',',
-        ),
+        rows: rows ?? const [],
       ),
       PreviewKind.svg => InteractiveViewer(
         key: const Key('file-preview-svg'),

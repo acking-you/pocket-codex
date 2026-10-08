@@ -43,12 +43,15 @@ String painted(WidgetTester t) => t
 
 void main() {
   test('previewKindFor picks a renderer by type and completeness', () {
-    PreviewKind kind(String name, {bool truncated = false, String body = 'x'}) =>
-        previewKindFor(
-          name,
-          Uint8List.fromList(utf8.encode(body)),
-          truncated: truncated,
-        );
+    PreviewKind kind(
+      String name, {
+      bool truncated = false,
+      String body = 'x',
+    }) => previewKindFor(
+      name,
+      Uint8List.fromList(utf8.encode(body)),
+      truncated: truncated,
+    );
     expect(kind('README.md'), PreviewKind.markdown);
     expect(kind('a.json'), PreviewKind.json);
     // Half a JSON document does not parse; show it as source.
@@ -94,6 +97,47 @@ void main() {
     expect(find.byKey(const Key('file-preview-table')), findsOneWidget);
     expect(find.text('score'), findsOneWidget);
     expect(find.text('lin'), findsOneWidget);
+  });
+
+  test('a complete picture past the text limit is still a picture', () {
+    final bytes = Uint8List.fromList(utf8.encode('<svg/>'));
+    expect(
+      previewKindFor('shot.png', bytes, truncated: false, textTruncated: true),
+      PreviewKind.image,
+    );
+    expect(
+      previewKindFor('logo.svg', bytes, truncated: false, textTruncated: true),
+      PreviewKind.svg,
+    );
+    // Documents parse from the decoded text, which stops short.
+    expect(
+      previewKindFor('a.json', bytes, truncated: false, textTruncated: true),
+      PreviewKind.source,
+    );
+    expect(
+      previewKindFor('shot.png', bytes, truncated: true),
+      PreviewKind.unsupported,
+    );
+  });
+
+  testWidgets('a very wide csv shows as source, not a grid of cells', (
+    t,
+  ) async {
+    // One row of a hundred thousand cells, then a few more rows.
+    final wide = '${List.filled(100000, 'x').join(',')}\n1,2\n3,4';
+    await pumpPreview(t, 'wide.csv', wide);
+    expect(find.byKey(const Key('file-preview-table')), findsNothing);
+    expect(find.byKey(const Key('file-preview-mode')), findsNothing);
+    expect(find.byKey(const Key('file-preview-source')), findsOneWidget);
+    expect(t.widgetList(find.byType(Text)).length, lessThan(200));
+    expect(t.takeException(), isNull);
+  });
+
+  test('tableFits bounds columns and total cells', () {
+    expect(tableFits([List.filled(64, 'a')]), isTrue);
+    expect(tableFits([List.filled(65, 'a')]), isFalse);
+    expect(tableFits(List.filled(300, List.filled(20, 'a'))), isTrue);
+    expect(tableFits(List.filled(300, List.filled(21, 'a'))), isFalse);
   });
 
   testWidgets('svg is drawn', (t) async {

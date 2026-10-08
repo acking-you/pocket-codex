@@ -225,12 +225,15 @@ class _FileLinkDialogState extends State<_FileLinkDialog> {
   }
 
   Widget _content(FilePreviewData preview) {
-    final truncated = preview.truncated || preview.bytes.length > _textLimit;
+    // The text limit is for decoding only: a complete picture past it is
+    // still complete, and must still be drawn.
+    final textTruncated =
+        preview.truncated || preview.bytes.length > _textLimit;
     String? text;
     try {
       text = utf8.decode(
         preview.bytes.take(_textLimit).toList(),
-        allowMalformed: truncated,
+        allowMalformed: textTruncated,
       );
     } on FormatException {
       text = null;
@@ -241,7 +244,8 @@ class _FileLinkDialogState extends State<_FileLinkDialog> {
       // refused by FilePreview rather than drawn half.
       bytes: preview.bytes,
       text: text,
-      truncated: truncated,
+      truncated: preview.truncated,
+      textTruncated: textTruncated,
     );
   }
 
