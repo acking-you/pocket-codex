@@ -100,6 +100,10 @@ dependencies:
   desktop_drop: ^0.7.1
   pasteboard: ^0.5.0
   re_highlight: ^0.0.3
+  # Renders an .svg the agent produced in the file preview (pure Dart, the
+  # Flutter team's package). Pinned exactly: a renderer bump can change
+  # what a preview looks like.
+  flutter_svg: 2.3.0
 
 dev_dependencies:
   flutter_test:
@@ -115,6 +119,7 @@ dev_dependencies:
   plugin_platform_interface: ^2.1.8
   flutter_launcher_icons: ^0.14.2
   flutter_native_splash: ^2.4.3
+  fake_async: 1.3.3
 
 flutter:
   uses-material-design: true
@@ -162,12 +167,12 @@ flutter:
         - asset: assets/fonts/NotoSansSC-VariableFont_wght.ttf
 
 flutter_launcher_icons:
-  # All launcher icons derive from icon/logo_dark.png (the ink tile reads on
-  # light AND dark docks); test/gen_icon_test.dart generates:
+  # All launcher icons are the blue brand tile drawn by test/gen_icon_test.dart
+  # (one vector source for every platform); it generates:
   #   icon_glyph.png        rounded tile + ~10% margin (desktop / web)
   #   icon_mobile.png       full-bleed opaque tile (iOS + Android legacy)
-  #   icon_adaptive_bg.png  solid tile colour (Android adaptive background)
-  #   icon_adaptive_fg.png  tile shrunk into the safe zone (adaptive fg)
+  #   icon_adaptive_bg.png  the tile gradient (Android adaptive background)
+  #   icon_adaptive_fg.png  glyph inside the safe zone (adaptive fg)
   image_path: "icon/icon_glyph.png"
   # iOS: full-bleed opaque tile; remove_alpha is a harmless safety net.
   ios: true
@@ -187,7 +192,7 @@ flutter_launcher_icons:
     generate: true
     image_path: "icon/icon_glyph.png"
     background_color: "#FFFFFF"
-    theme_color: "#355ACF"
+    theme_color: "#2A52C4"
   # Windows: emits runner/resources/app_icon.ico (window + taskbar).
   windows:
     generate: true
@@ -200,15 +205,15 @@ flutter_launcher_icons:
     image_path: "icon/icon_glyph.png"
 
 # Theme-matched splash: each mark is its theme's tile, and the background
-# colour equals that tile's interior (sampled + printed by gen_icon_test.dart),
+# colour equals that tile (MarkStyle.light / .dark in gen_icon_test.dart),
 # so the tile melts into the splash and only the cloud glyph shows.
 flutter_native_splash:
   image: assets/logo/mark_light.png
   image_dark: assets/logo/mark_dark.png
-  color: "#FDFDFD"
-  color_dark: "#1A1D24"
+  color: "#FBFBFA"
+  color_dark: "#19191B"
   android_12:
     image: assets/logo/mark_light.png
     image_dark: assets/logo/mark_dark.png
-    color: "#FDFDFD"
-    color_dark: "#1A1D24"
+    color: "#FBFBFA"
+    color_dark: "#19191B"

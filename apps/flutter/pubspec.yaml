@@ -159,12 +159,12 @@ flutter:
           weight: 600
 
 flutter_launcher_icons:
-  # All launcher icons derive from icon/logo_dark.png (the ink tile reads on
-  # light AND dark docks); test/gen_icon_test.dart generates:
+  # All launcher icons are the blue brand tile drawn by test/gen_icon_test.dart
+  # (one vector source for every platform); it generates:
   #   icon_glyph.png        rounded tile + ~10% margin (desktop / web)
   #   icon_mobile.png       full-bleed opaque tile (iOS + Android legacy)
-  #   icon_adaptive_bg.png  solid tile colour (Android adaptive background)
-  #   icon_adaptive_fg.png  tile shrunk into the safe zone (adaptive fg)
+  #   icon_adaptive_bg.png  the tile gradient (Android adaptive background)
+  #   icon_adaptive_fg.png  glyph inside the safe zone (adaptive fg)
   image_path: "icon/icon_glyph.png"
   # iOS: full-bleed opaque tile; remove_alpha is a harmless safety net.
   ios: true
@@ -184,7 +184,7 @@ flutter_launcher_icons:
     generate: true
     image_path: "icon/icon_glyph.png"
     background_color: "#FFFFFF"
-    theme_color: "#355ACF"
+    theme_color: "#2A52C4"
   # Windows: NOT generated here. This tool writes a single-frame .ico (one size,
   # whatever `icon_size` says), and Windows then downscales that one raster for
   # the taskbar at 32 px and the title bar at 16 px — a detailed mark reduced 8:1
@@ -203,15 +203,15 @@ flutter_launcher_icons:
     image_path: "icon/icon_glyph.png"
 
 # Theme-matched splash: each mark is its theme's tile, and the background
-# colour equals that tile's interior (sampled + printed by gen_icon_test.dart),
+# colour equals that tile (MarkStyle.light / .dark in gen_icon_test.dart),
 # so the tile melts into the splash and only the cloud glyph shows.
 flutter_native_splash:
   image: assets/logo/mark_light.png
   image_dark: assets/logo/mark_dark.png
-  color: "#FDFDFD"
-  color_dark: "#1A1D24"
+  color: "#FBFBFA"
+  color_dark: "#19191B"
   android_12:
     image: assets/logo/mark_light.png
     image_dark: assets/logo/mark_dark.png
-    color: "#FDFDFD"
-    color_dark: "#1A1D24"
+    color: "#FBFBFA"
+    color_dark: "#19191B"
