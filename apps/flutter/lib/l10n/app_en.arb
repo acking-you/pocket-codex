@@ -837,15 +837,5 @@
   "voiceTaskContinues": "Tasks the voice handed to Codex keep running after you hang up.",
   "stepOutput": "output",
   "previewRendered": "Preview",
-  "previewSource": "Source",
-  "dictate": "Dictate",
-  "dictationStop": "Stop and insert text",
-  "dictationCancel": "Discard recording",
-  "dictationStarting": "Starting microphone…",
-  "dictationTranscribing": "Transcribing…",
-  "dictationTooShort": "Recording was too short",
-  "dictationPermission": "Microphone access was denied",
-  "dictationMicrophone": "Could not open the microphone",
-  "dictationFailed": "Transcription failed",
-  "dictationEmpty": "No speech was recognised"
+  "previewSource": "Source"
 }

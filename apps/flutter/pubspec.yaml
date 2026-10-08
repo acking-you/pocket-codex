@@ -95,11 +95,6 @@ dependencies:
   # Flutter team's package). Pinned exactly: a renderer bump can change
   # what a preview looks like.
   flutter_svg: 2.3.0
-  # Dictation: records the composer microphone to a file (AAC, or WAV where
-  # AAC has no encoder) and reports its amplitude for the live waveform.
-  # Every desktop and mobile target; Linux needs `parecord` + `ffmpeg` on the
-  # PATH. Pinned exactly, like the other media plugins.
-  record: 7.1.1
 
 dev_dependencies:
   flutter_test:

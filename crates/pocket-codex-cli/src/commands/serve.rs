@@ -190,33 +190,6 @@ async fn serve_account_foreground(
         Err(e) => ui::warn(&format!("host meta service unavailable: {e:#}")),
     }
 
-    // And the API proxy, as the in-app host publishes it: controllers reach
-    // ChatGPT through it with this host's Codex login — dictation's
-    // `/v1/transcribe` among them. Without it a controller's dictation
-    // waited on an `api` key nobody registered until the relay timed out.
-    // In-process for the same reason as meta; best-effort for the same
-    // reason too.
-    let api = match spawn_api_proxy(spawn_opts.proxy.clone()).await {
-        Ok(api_local) => {
-            pocket_codex_pb::session::register_pending(
-                &transport.session,
-                pocket_codex_pb::RegisterOptions {
-                    key: transport.key(&ServiceId::new(device, ServiceKind::Api, name)),
-                    local_addr: api_local.to_string(),
-                    // Same codec choice as the in-app host's api tunnel.
-                    codec: true,
-                },
-            )
-            .await
-        },
-        Err(e) => Err(e),
-    };
-    match &api {
-        Ok((_, Ok(()))) => ui::field("api", &format!("{device}/api/{name}")),
-        Ok((_, Err(e))) => ui::warn(&format!("host API proxy not ready: {e:#}")),
-        Err(e) => ui::warn(&format!("host API proxy unavailable: {e:#}")),
-    }
-
     // Pin the watchdog's respawn to the *resolved* listen address so a restart
     // always rebinds the same port the register worker forwards to (robust even
     // if the operator asked for `--port 0`).
@@ -240,9 +213,6 @@ async fn serve_account_foreground(
     // Awaited rather than dropped, so the relay frees the meta key now instead of
     // at its next lease sweep.
     if let Ok((registration, _)) = meta {
-        let _ = registration.stop().await;
-    }
-    if let Ok((registration, _)) = api {
         let _ = registration.stop().await;
     }
     let stopped = managed_pb::stop_matching(managed_pb::StopFilter {
@@ -275,29 +245,6 @@ fn stop_codex_at(listen_addr: &str) -> Option<u32> {
         force_kill(pid);
     }
     Some(pid)
-}
-
-/// Bind a loopback listener for the Responses API proxy and run it in-process
-/// on this host's Codex login, returning its address for the `api:` tunnel.
-///
-/// Checks the login first, so a host with no credential says so here rather
-/// than publishing a key whose proxy exits on its first request.
-async fn spawn_api_proxy(proxy: Option<String>) -> Result<SocketAddr> {
-    pocket_codex_api_proxy::check_auth()
-        .await
-        .context("the host's Codex login is not usable by the API proxy")?;
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .context("binding the host API proxy listener")?;
-    let addr = listener
-        .local_addr()
-        .context("reading the API proxy listener address")?;
-    tokio::spawn(async move {
-        if let Err(e) = pocket_codex_api_proxy::serve(listener, proxy).await {
-            ui::warn(&format!("host API proxy exited: {e:#}"));
-        }
-    });
-    Ok(addr)
 }
 
 /// Bind a loopback listener for the host meta service, start it (resuming into

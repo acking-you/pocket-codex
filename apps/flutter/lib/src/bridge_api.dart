@@ -1623,18 +1623,6 @@ abstract interface class BridgeApi {
   /// Verify that the selected host shares this device's filesystem.
   Future<bool> metaHostIsLocal(String serviceKey);
 
-  /// Turn a dictation recording into text through the host's API proxy
-  /// (ChatGPT's `/transcribe`, signed with the host's own Codex login).
-  /// [mime] is the audio type, [fileName] carries the format's extension, and
-  /// [language] is an optional BCP-47 hint. Returns the recognised text.
-  Future<String> dictationTranscribe(
-    String serviceKey,
-    Uint8List audio, {
-    required String mime,
-    required String fileName,
-    String? language,
-  });
-
   /// Read up to 8 MiB after an explicit Preview action.
   Future<FilePreviewData> metaFilePreview(
     String serviceKey,

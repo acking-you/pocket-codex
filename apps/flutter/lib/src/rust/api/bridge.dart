@@ -802,26 +802,6 @@ Future<String> metaWriteFile({
   bytes: bytes,
 );
 
-/// Transcribe a dictation recording through the host behind `service_key`,
-/// returning the recognised text (empty when nothing was said).
-///
-/// `mime` is the audio's type, `file_name` its name with the format's
-/// extension, and `language` an optional BCP-47 hint. The host's API proxy
-/// signs the upload with its own Codex login; this app never sees it.
-Future<String> dictationTranscribe({
-  required String serviceKey,
-  required List<int> audio,
-  required String mime,
-  required String fileName,
-  String? language,
-}) => RustLib.instance.api.crateApiBridgeDictationTranscribe(
-  serviceKey: serviceKey,
-  audio: audio,
-  mime: mime,
-  fileName: fileName,
-  language: language,
-);
-
 /// Begin a GitHub device-flow login. `backend` overrides the configured /
 /// default backend (and is remembered on success).
 Future<DeviceCodeDto> accountLoginStart({String? backend}) =>

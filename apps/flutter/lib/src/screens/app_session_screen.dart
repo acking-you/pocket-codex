@@ -31,8 +31,6 @@ import 'package:pocket_codex/src/ide_context.dart';
 import 'package:pocket_codex/src/image_attachments.dart';
 import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/log_manager.dart';
-import 'package:pocket_codex/src/voice/dictation.dart';
-import 'package:pocket_codex/src/voice/dictation_widgets.dart';
 import 'package:pocket_codex/src/voice/voice_controller.dart';
 import 'package:pocket_codex/src/voice/voice_widgets.dart';
 import 'package:pocket_codex/src/service_key.dart';
@@ -247,71 +245,6 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
 
   String? _threadId;
   late final VoiceController _voice;
-
-  /// The composer microphone: speech to text, inserted at the cursor.
-  late final DictationController _dictation;
-  DictationPhase _dictationPhase = DictationPhase.idle;
-
-  /// Rebuild the composer when a take starts or ends (the field and the
-  /// strip swap), and say why a take produced nothing.
-  void _onDictationChanged() {
-    final d = _dictation;
-    if (d.phase != _dictationPhase && mounted) {
-      setState(() => _dictationPhase = d.phase);
-    }
-    final failure = d.failure;
-    if (failure != null && mounted) {
-      final l10n = AppLocalizations.of(context);
-      final message = switch (failure) {
-        DictationFailure.permission => l10n.dictationPermission,
-        DictationFailure.tooShort => l10n.dictationTooShort,
-        DictationFailure.microphone => l10n.dictationMicrophone,
-        DictationFailure.transcription => l10n.dictationFailed,
-      };
-      d.failure = null;
-      final detail = d.error;
-      showToastError(context, detail == null ? message : '$message: $detail');
-    }
-  }
-
-  /// Stop the take and put its text where the cursor was.
-  Future<void> _finishDictation() async {
-    final text = await _dictation.finish();
-    if (!mounted || text == null) return;
-    if (text.isEmpty) {
-      showToastError(context, AppLocalizations.of(context).dictationEmpty);
-      return;
-    }
-    _insertDictated(text);
-  }
-
-  /// Insert [text] at the composer's selection (or its end), spaced from its
-  /// neighbours the way typed words would be.
-  void _insertDictated(String text) {
-    final value = _input.value;
-    final draft = value.text;
-    final sel = value.selection;
-    final start = sel.isValid ? sel.start : draft.length;
-    final end = sel.isValid ? sel.end : draft.length;
-    final before = draft.substring(0, start);
-    final after = draft.substring(end);
-    // A space only between two Latin words; CJK runs together.
-    bool latin(String s) => RegExp(r'[A-Za-z0-9.,!?;:]$').hasMatch(s);
-    bool latinStart(String s) => RegExp(r'^[A-Za-z0-9]').hasMatch(s);
-    final lead = before.isNotEmpty && latin(before) && latinStart(text)
-        ? ' '
-        : '';
-    final trail = after.isNotEmpty && latinStart(after) && latin(text)
-        ? ' '
-        : '';
-    final inserted = '$lead$text$trail';
-    _input.value = TextEditingValue(
-      text: '$before$inserted$after',
-      selection: TextSelection.collapsed(offset: start + inserted.length),
-    );
-    _inputFocus.requestFocus();
-  }
-
   bool _voiceStarting = false;
   int _voiceIntentGeneration = 0;
 
@@ -757,11 +690,6 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       serviceKey: widget.serviceKey,
       createTransport: ref.read(voiceTransportFactoryProvider),
     );
-    _dictation = DictationController(
-      api: ref.read(bridgeApiProvider),
-      serviceKey: widget.serviceKey,
-      createRecorder: ref.read(dictationRecorderFactoryProvider),
-    )..addListener(_onDictationChanged);
     _threadId = widget.threadId;
     _cwd = widget.cwd;
     _drafts = ref.read(_composerDraftsProvider(widget.serviceKey));
@@ -932,12 +860,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         });
         _persistThreadConfig();
       }
-      await _voice.start(
-        id,
-        model: settings.model,
-        voice: settings.voice,
-        version: settings.version,
-      );
+      await _voice.start(id, model: settings.model, voice: settings.voice);
       if (mounted) unawaited(_loadThreads());
     } catch (e) {
       if (mounted) {
@@ -1504,9 +1427,6 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   void dispose() {
     ++_reconnectEpoch;
     _voice.dispose();
-    _dictation
-      ..removeListener(_onDictationChanged)
-      ..dispose();
     _healthTimer?.cancel();
     _externalHistoryTimer?.cancel();
     _externalWriterReconnect?.cancel();
@@ -9457,12 +9377,11 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     // them beside the permission and model pills (~180 px each); narrower
     // cards give them their own line above.
     Widget composerBody(bool inlineModes) {
-      // The toolbar's fixed-width members — attach, dictate (when inline),
-      // voice, send, the stop button while streaming — plus the gaps between.
-      double fixedToolbarWidth(bool dictateInline) =>
+      // The toolbar's fixed-width members — attach, voice, send, the stop
+      // button while streaming — plus the gaps between them.
+      final fixedToolbarWidth =
           (touch ? 48.0 : 30.0) +
-          (dictateInline ? (touch ? 40.0 : 32.0) : 0) +
-          (touch ? 40.0 : 32.0) +
+          (touch ? 48.0 : 32.0) +
           (touch ? 48.0 : 32.0) +
           (_streaming ? (touch ? 48.0 : 32.0) + 6 : 0) +
           10;
@@ -9470,78 +9389,54 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         // One row at every width. Attachments collapse into a single `+` menu
         // and the config pills into two chips, so a 360 px phone lays out like
         // the desktop — no wrapping, no expand/collapse mode to get stuck in.
-        builder: (context, constraints) {
-          final dictateInline =
-              constraints.maxWidth >= _dictationInlineWidth ||
-              _dictationPhase != DictationPhase.idle;
-          final fixed = fixedToolbarWidth(dictateInline);
-          return Row(
-            children: [
-              _attachMenu(l10n),
-              const SizedBox(width: 2),
-              // Bound long permission labels, and never so wide that the model
-              // pill is left less than its icon-and-chevron minimum: on a narrow
-              // card (the review pane open) both ellipsize instead of
-              // overflowing.
-              ConstrainedBox(
-                constraints: BoxConstraints(
-                  maxWidth: math.max(
-                    touch ? 44.0 : 34.0,
-                    math.min(
-                      constraints.maxWidth * 0.34,
-                      constraints.maxWidth - fixed - 96,
-                    ),
+        builder: (context, constraints) => Row(
+          children: [
+            _attachMenu(l10n),
+            const SizedBox(width: 2),
+            // Bound long permission labels, and never so wide that the model
+            // pill is left less than its icon-and-chevron minimum: on a narrow
+            // card (the review pane open) both ellipsize instead of
+            // overflowing.
+            ConstrainedBox(
+              constraints: BoxConstraints(
+                maxWidth: math.max(
+                  touch ? 44.0 : 34.0,
+                  math.min(
+                    constraints.maxWidth * 0.34,
+                    constraints.maxWidth - fixedToolbarWidth - 96,
                   ),
                 ),
-                child: _permissionChip(l10n),
               ),
-              if (inlineModes)
-                for (final chip in modeChips) ...[
-                  const SizedBox(width: 4),
-                  chip,
-                ],
-              const SizedBox(width: 4),
-              // Right-aligned next to send, taking whatever is left.
-              Expanded(
-                child: Align(
-                  alignment: Alignment.centerRight,
-                  child: _modelChip(l10n),
-                ),
+              child: _permissionChip(l10n),
+            ),
+            if (inlineModes)
+              for (final chip in modeChips) ...[const SizedBox(width: 4), chip],
+            const SizedBox(width: 4),
+            // Right-aligned next to send, taking whatever is left.
+            Expanded(
+              child: Align(
+                alignment: Alignment.centerRight,
+                child: _modelChip(l10n),
               ),
-              // Speech to text into the draft, beside the live-voice call. On a
-              // card too narrow for it next to the pills (a 320 px phone, the
-              // review pane open) it moves into the `+` menu; while a take is
-              // running it always shows, since it is the stop button.
-              if (dictateInline)
-                DictationButton(
-                  controller: _dictation,
-                  onFinish: _finishDictation,
-                  // A live call already owns the microphone.
-                  enabled: !_voice.busy,
-                  size: touch ? 40 : 32,
-                  iconSize: touch ? 22 : 18,
-                ),
-              IconButton(
-                key: const Key('voice-start'),
-                tooltip: _isVoiceThread
-                    ? l10n.voiceStart
-                    : l10n.voiceNewSession,
-                onPressed: _canStartVoice ? _startVoice : null,
-                icon: Icon(Icons.graphic_eq, size: touch ? 22 : 18),
-                // 40 px on touch: two microphones beside send must still leave
-                // the model pill room on a 320 px phone.
-                style: IconButton.styleFrom(
-                  minimumSize: Size.square(touch ? 40 : 32),
-                  fixedSize: Size.square(touch ? 40 : 32),
-                  padding: EdgeInsets.zero,
-                ),
-              ),
-              const SizedBox(width: 4),
-              if (_streaming) ...[_stopButton(l10n), const SizedBox(width: 6)],
-              _sendButton(),
-            ],
-          );
-        },
+            ),
+            IconButton(
+              key: const Key('voice-start'),
+              tooltip: _isVoiceThread ? l10n.voiceStart : l10n.voiceNewSession,
+              onPressed: _canStartVoice ? _startVoice : null,
+              icon: Icon(Icons.graphic_eq, size: touch ? 22 : 18),
+              style: touch
+                  ? null
+                  : IconButton.styleFrom(
+                      minimumSize: const Size(32, 32),
+                      fixedSize: const Size(32, 32),
+                      padding: EdgeInsets.zero,
+                    ),
+            ),
+            const SizedBox(width: 4),
+            if (_streaming) ...[_stopButton(l10n), const SizedBox(width: 6)],
+            _sendButton(),
+          ],
+        ),
       );
 
       return Column(
@@ -9577,30 +9472,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                           left: touch ? 4 : 2,
                           top: touch ? 2 : 0,
                         ),
-                        // While a take records, its waveform stands where
-                        // the text will go. The field stays mounted beneath,
-                        // so the draft, its cursor and the height survive.
-                        child: Stack(
-                          children: [
-                            Visibility(
-                              visible: _dictationPhase == DictationPhase.idle,
-                              maintainState: true,
-                              maintainAnimation: true,
-                              maintainSize: true,
-                              child: field,
-                            ),
-                            if (_dictationPhase != DictationPhase.idle)
-                              Positioned.fill(
-                                child: Align(
-                                  alignment: Alignment.topLeft,
-                                  child: DictationStrip(
-                                    controller: _dictation,
-                                    onFinish: _finishDictation,
-                                  ),
-                                ),
-                              ),
-                          ],
-                        ),
+                        child: field,
                       ),
                     ),
                     const SizedBox(width: 4),
@@ -9899,20 +9771,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           onTap: () => showFileBrowser(context, serviceKey: widget.serviceKey),
           child: _menuRow(Icons.folder_open_outlined, l10n.hostFiles),
         ),
-      // Always offered here too, so a card too narrow for the inline
-      // microphone still has dictation.
-      PopupMenuItem<void>(
-        key: const Key('dictate-menu'),
-        enabled: !_voice.busy && !_dictation.busy,
-        onTap: _dictation.start,
-        child: _menuRow(Icons.mic_none_rounded, l10n.dictate),
-      ),
     ],
   );
-
-  /// Narrowest composer card that keeps the dictation microphone inline;
-  /// below it the `+` menu carries it instead.
-  static const _dictationInlineWidth = 460.0;
 
   Widget _menuRow(IconData icon, String label) => Row(
     children: [

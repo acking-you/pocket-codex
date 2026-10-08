@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:pocket_codex/src/voice/dictation.dart';
 import 'package:pocket_codex/src/voice/voice_transport.dart';
 
 import 'package:flutter/foundation.dart';
@@ -15,12 +14,6 @@ import 'package:pocket_codex/src/web_authenticator.dart';
 final voiceTransportFactoryProvider = Provider<VoiceTransport Function()>(
   (ref) => WebRtcVoiceTransport.new,
 );
-
-/// Dictation's microphone; tests supply an in-memory recorder.
-final dictationRecorderFactoryProvider =
-    Provider<DictationRecorder Function()>(
-      (ref) => PlatformDictationRecorder.new,
-    );
 
 /// The engine API. Overridden with a FakeBridgeApi in tests.
 final bridgeApiProvider = Provider<BridgeApi>((ref) => const RustBridgeApi());

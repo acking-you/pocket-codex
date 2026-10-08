@@ -3,7 +3,6 @@
 pub mod account;
 pub mod app_session;
 pub mod config;
-pub mod dictation;
 pub mod discovery;
 pub mod logging;
 pub mod meta;

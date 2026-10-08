@@ -732,15 +732,5 @@
   "voiceTaskContinues": "挂断不会取消语音已交给 Codex 的任务。",
   "stepOutput": "输出",
   "previewRendered": "预览",
-  "previewSource": "源码",
-  "dictate": "语音输入",
-  "dictationStop": "停止并插入文字",
-  "dictationCancel": "放弃录音",
-  "dictationStarting": "正在打开麦克风…",
-  "dictationTranscribing": "正在转写…",
-  "dictationTooShort": "录音太短",
-  "dictationPermission": "麦克风权限被拒绝",
-  "dictationMicrophone": "无法打开麦克风",
-  "dictationFailed": "转写失败",
-  "dictationEmpty": "没有识别到语音"
+  "previewSource": "源码"
 }

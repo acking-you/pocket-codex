@@ -2035,34 +2035,4 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get previewSource => 'Source';
-
-  @override
-  String get dictate => 'Dictate';
-
-  @override
-  String get dictationStop => 'Stop and insert text';
-
-  @override
-  String get dictationCancel => 'Discard recording';
-
-  @override
-  String get dictationStarting => 'Starting microphone…';
-
-  @override
-  String get dictationTranscribing => 'Transcribing…';
-
-  @override
-  String get dictationTooShort => 'Recording was too short';
-
-  @override
-  String get dictationPermission => 'Microphone access was denied';
-
-  @override
-  String get dictationMicrophone => 'Could not open the microphone';
-
-  @override
-  String get dictationFailed => 'Transcription failed';
-
-  @override
-  String get dictationEmpty => 'No speech was recognised';
 }

@@ -158,7 +158,9 @@ class VoiceController extends ChangeNotifier {
         levels.value = (
           // A muted microphone sends nothing; show it flat, not noise.
           input: muted ? 0 : ease(prev.input, shape(raw.input)),
-          output: _speakerSuppressed ? 0 : ease(prev.output, shape(raw.output)),
+          output: _speakerSuppressed
+              ? 0
+              : ease(prev.output, shape(raw.output)),
         );
       } finally {
         reading = false;
@@ -171,7 +173,6 @@ class VoiceController extends ChangeNotifier {
     _levelPoll = null;
     levels.value = (input: 0, output: 0);
   }
-
   void _changed() {
     if (!_disposed) notifyListeners();
   }
@@ -188,14 +189,9 @@ class VoiceController extends ChangeNotifier {
     return jsonDecode(raw) as Map<String, dynamic>;
   }
 
-  Future<void> start(
-    String id, {
-    String? model,
-    String? voice,
-    String version = 'v3',
-  }) async {
+  Future<void> start(String id, {String? model, String? voice}) async {
     if (_starting != null || _stopping != null || busy || _disposed) return;
-    final operation = _start(id, model: model, voice: voice, version: version);
+    final operation = _start(id, model: model, voice: voice);
     _starting = operation;
     try {
       await operation;
@@ -215,12 +211,7 @@ class VoiceController extends ChangeNotifier {
     _resumeFallback?.cancel();
   }
 
-  Future<void> _start(
-    String id, {
-    String? model,
-    String? voice,
-    String version = 'v3',
-  }) async {
+  Future<void> _start(String id, {String? model, String? voice}) async {
     if (_disposed) return;
     final generation = ++_generation;
     bool current() => !_disposed && generation == _generation;
@@ -279,7 +270,7 @@ class VoiceController extends ChangeNotifier {
       await request('thread/realtime/start', {
         'threadId': id,
         'outputModality': 'audio',
-        'version': version,
+        'version': 'v3',
         'transport': {'type': 'webrtc', 'sdp': sdp},
         'clientManagedHandoffs': false,
         if (model != null && model.trim().isNotEmpty) 'model': model.trim(),

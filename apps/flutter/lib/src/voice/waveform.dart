@@ -116,9 +116,7 @@ class _WaveformState extends State<Waveform>
       _phase -= _phase.floorToDouble();
       // A touch of jitter keeps a held vowel from drawing as a flat block.
       final v = widget.level.value;
-      final jitter = v > 0.02
-          ? (math.Random().nextDouble() - 0.5) * 0.18 * v
-          : 0;
+      final jitter = v > 0.02 ? (math.Random().nextDouble() - 0.5) * 0.18 * v : 0;
       _history = [..._history.skip(1), (v + jitter).clamp(0.0, 1.0)];
     }
     setState(() {});

@@ -928,15 +928,6 @@ pub fn serve_status() -> Vec<ServeStatus> {
     out
 }
 
-/// This process's own API proxy listener for the host serving `service_key`,
-/// so a controller that is also the host skips the relay hop.
-pub(super) fn local_api_endpoint(service_key: &str) -> Option<SocketAddr> {
-    hosts_locked()
-        .values()
-        .find(|host| host.app_key == service_key)
-        .map(|host| host.api_local)
-}
-
 /// Resolve this process's own app and meta listeners without relay probes.
 pub(super) fn local_endpoints(service_key: &str) -> Option<(String, String)> {
     hosts_locked()
