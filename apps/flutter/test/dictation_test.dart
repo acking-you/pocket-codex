@@ -485,6 +485,65 @@ void main() {
       variant: TargetPlatformVariant.only(TargetPlatform.linux),
     );
 
+    testWidgets('a take that cannot start leaves a selection untouched', (
+      t,
+    ) async {
+      final (_, media) = await pump(t);
+      media.denyMicrophone = true;
+      await t.enterText(find.byKey(const Key('composer-input')), 'fix the bug');
+      await t.pump();
+      field(t).selection = const TextSelection(baseOffset: 4, extentOffset: 7);
+      await t.pump();
+      await t.tap(find.byKey(const Key('dictate')));
+      await t.pump();
+      await t.pump();
+      expect(media.micOpen, isFalse);
+      expect(field(t).text, 'fix the bug');
+      expect(
+        field(t).selection,
+        const TextSelection(baseOffset: 4, extentOffset: 7),
+      );
+      await t.pumpWidget(const SizedBox());
+      await t.pump(const Duration(seconds: 1));
+    });
+
+    testWidgets(
+      'speech replaces a selection, and a discard puts it back',
+      (t) async {
+        final (api, _) = await pump(t);
+        await t.enterText(
+          find.byKey(const Key('composer-input')),
+          'fix the bug',
+        );
+        await t.pump();
+        field(t).selection = const TextSelection(
+          baseOffset: 4,
+          extentOffset: 7,
+        );
+        await t.pump();
+        await t.tap(find.byKey(const Key('dictate')));
+        await t.pump();
+        await t.pump();
+        // Listening alone changes nothing.
+        expect(field(t).text, 'fix the bug');
+        api.said('a');
+        await t.pump();
+        expect(field(t).text, 'fix a bug');
+        await t.tap(find.byKey(const Key('composer-input')));
+        await t.sendKeyEvent(LogicalKeyboardKey.escape);
+        await t.pump();
+        await t.pump(const Duration(milliseconds: 300));
+        expect(field(t).text, 'fix the bug');
+        expect(
+          field(t).selection,
+          const TextSelection(baseOffset: 4, extentOffset: 7),
+        );
+        await t.pumpWidget(const SizedBox());
+        await t.pump(const Duration(seconds: 1));
+      },
+      variant: TargetPlatformVariant.only(TargetPlatform.linux),
+    );
+
     testWidgets(
       'Enter during a take finishes it instead of sending',
       (t) async {

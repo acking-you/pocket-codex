@@ -659,13 +659,6 @@ void main() {
     await t.pump();
     await t.pump(const Duration(milliseconds: 300));
     expect(find.byKey(const Key('voice-status')), findsOneWidget);
-    // Opening another conversation leaves the call running and its entry
-    // pinned; nothing was torn down.
-    await t.tap(find.text('another conversation'));
-    await t.pump();
-    await t.pump(const Duration(milliseconds: 300));
-    expect(media.closed, isFalse);
-    expect(find.byKey(const Key('voice-status')), findsOneWidget);
     // Collapsing the sidebar moves the entry into the window strip.
     await t.tap(find.byKey(const Key('sidebar-collapse-btn')));
     await t.pump();
@@ -677,6 +670,60 @@ void main() {
     await t.pump(const Duration(milliseconds: 300));
     expect(media.closed, isTrue);
     expect(api.calls.last.$1, 'thread/realtime/stop');
+    await t.pumpWidget(const SizedBox());
+    await t.pump(const Duration(seconds: 7));
+  });
+  testWidgets('opening another conversation ends the call and its capture', (
+    t,
+  ) async {
+    AppSessionScreen.debugResetThreadMemory();
+    t.view.devicePixelRatio = 1;
+    t.view.physicalSize = const Size(1280, 900);
+    addTearDown(t.view.reset);
+    final api = _VoiceApi();
+    api.appThreads.add(
+      const ThreadMeta(
+        id: 'other',
+        preview: 'another conversation',
+        cwd: '/repo',
+        updatedAt: 0,
+      ),
+    );
+    final media = _Media();
+    await t.pumpWidget(
+      ProviderScope(
+        overrides: [
+          bridgeApiProvider.overrideWithValue(api),
+          voiceTransportFactoryProvider.overrideWithValue(() => media),
+        ],
+        child: MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          theme: lightTheme(),
+          home: const AppSessionScreen(
+            serviceKey: _service,
+            cwd: '/repo',
+            home: true,
+          ),
+        ),
+      ),
+    );
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('voice-start')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('voice-start-confirm')));
+    await t.pump();
+    await t.pump(const Duration(milliseconds: 300));
+    api.event('sdp', {'sdp': 'answer'});
+    await t.pump();
+    await t.pump(const Duration(milliseconds: 300));
+    expect(media.closed, isFalse);
+    await t.tap(find.text('another conversation'));
+    await t.pump();
+    await t.runAsync(_tick);
+    await t.pump(const Duration(milliseconds: 300));
+    expect(media.closed, isTrue);
+    expect(api.calls.map((c) => c.$1), contains('thread/realtime/stop'));
     await t.pumpWidget(const SizedBox());
     await t.pump(const Duration(seconds: 7));
   });

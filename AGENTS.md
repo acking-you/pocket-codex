@@ -445,7 +445,10 @@ this file's roadmap so the source of truth stays in sync.
     markers and future error variants retain their existing display behavior;
     interrupted turns may carry an explicit error. Native app-server tracking
     excludes Linux thread IDs and recognizes replaced executables; worker identity
-    survives boot-time clock corrections. See `docs/app-server-protocol-sync.md`.
+    survives boot-time clock corrections. On 2026-10-08 `deps/codex` moved to
+    `b360f3350`, a clean merge of upstream main `b38942ce7`; the app-server wire
+    surface is unchanged apart from optional fields. See
+    `docs/app-server-protocol-sync.md`.
 
 16. **Cached history and touch feedback (2026-10-04).** Local session lists
     explain mobile filesystem unavailability, empty desktop history and retryable
@@ -465,9 +468,18 @@ this file's roadmap so the source of truth stays in sync.
     Keep backend handoffs and approvals on the ordinary Codex path. End capture
     on call stop, navigation, backgrounding, failure and disposal; never silently
     restart it. Read canonical speech history through bounded `thread/timeline/list`
-    pages. No standalone dictation, system speech or extra speech provider is
-    implemented. Touch message feedback starts only when long press wins over
-    scrolling. See `docs/live-voice.md`.
+    pages. No system speech or extra speech provider is implemented. Touch message
+    feedback starts only when long press wins over scrolling. See
+    `docs/live-voice.md`.
+
+21. **Composer dictation (2026-10-08).** The composer microphone runs on the
+    same upstream V3 realtime path as live voice: an ephemeral
+    `pocket-codex-dictation` thread, kept open in the background with no
+    microphone until a take attaches one, then transcript deltas typed at the
+    cursor. It uses only the host's default realtime model and never speaks.
+    It yields to a live call, ends its take on navigation, and never sends.
+    chatgpt.com's transcription endpoints are not used (Cloudflare refuses
+    non-official clients). See `docs/live-voice.md` › Composer dictation.
 
 19. **Recovery and cache boundaries (2026-10-05).** Scope CLI watchdog stops to
     their own listener; retain pending meta registrations across startup outages.
@@ -540,9 +552,15 @@ this file's roadmap so the source of truth stays in sync.
   inserts a newline; desktop Enter sends and Shift+Enter inserts a newline, while
   IME composition must never submit. The expanded editor shares the draft and
   returns focus and selection to the compact input.
-- Branding uses the same blue/neutral palette as the UI. When changing it,
-  update the brand masters and regenerate launcher, tray, and splash assets
-  for every platform; keep both README posters and logo copies in sync.
+- Branding uses the same blue/neutral palette as the UI. The mark has one
+  source: the vector drawing and `MarkStyle` palettes in
+  `apps/flutter/test/gen_icon_test.dart` (blue tile for launchers, tray and
+  README art; theme surfaces for splash and the in-app glyph). When changing
+  it, run `REGEN_ICONS=1 fvm flutter test test/gen_icon_test.dart`, then
+  `fvm dart run flutter_launcher_icons` and
+  `fvm dart run flutter_native_splash:create`, for every platform; keep both
+  README posters and logo copies in sync and the splash colours equal to the
+  `MarkStyle` tiles.
 - Transcript rows must remain lazy and keyed. Preserve the visible message
   when prepending history, and do not rescan the rest of a turn per item when
   grouping rows. Pagination failures require an explicit retry instead of a

@@ -289,17 +289,22 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     final sel = value.selection;
     final start = sel.isValid ? sel.start : value.text.length;
     final end = sel.isValid ? sel.end : value.text.length;
-    // A selection is replaced by what is said, as typing would.
-    if (start != end) {
-      _input.value = TextEditingValue(
-        text: value.text.replaceRange(start, end, ''),
-        selection: TextSelection.collapsed(offset: start),
-      );
-    }
+    // A selection is replaced by what is said, as typing would — but only
+    // once something is said: a take that never starts (no microphone, no
+    // line) must leave the draft exactly as it was.
     _dictationSpan = (draft: _draft, start: start, end: start);
+    _dictationReplaces = start == end ? null : (start: start, end: end);
     _inputFocus.requestFocus();
     unawaited(_dictation.startTake());
   }
+
+  /// The selection the current take replaces, removed when its first words
+  /// arrive. Null when there is none, or once it has been replaced.
+  ({int start, int end})? _dictationReplaces;
+
+  /// The text the current take's words replaced, restored if it is
+  /// discarded. Empty when they replaced nothing.
+  String _dictationReplaced = '';
 
   /// Words arriving for the current take go in at the end of its span.
   void _onDictationDelta(int take, String delta) {
@@ -310,7 +315,20 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         !identical(span.draft, _draft)) {
       return;
     }
-    final value = _input.value;
+    var value = _input.value;
+    // The first words replace the selection the take was started on; what
+    // they replaced is kept so a discard can put it back.
+    final replaces = _dictationReplaces;
+    if (replaces != null && delta.trim().isNotEmpty) {
+      _dictationReplaces = null;
+      final start = replaces.start.clamp(0, value.text.length);
+      final end = replaces.end.clamp(start, value.text.length);
+      _dictationReplaced = value.text.substring(start, end);
+      value = TextEditingValue(
+        text: value.text.replaceRange(start, end, ''),
+        selection: TextSelection.collapsed(offset: start),
+      );
+    }
     final text = value.text;
     // The user may have edited the draft meanwhile; keep the span inside it.
     final at = span.end.clamp(0, text.length);
@@ -345,17 +363,26 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
 
   void _onDictationEnded(int take, {required bool cancelled}) {
     final span = _dictationSpan;
+    final replaced = _dictationReplaced;
     _dictationSpan = null;
+    _dictationReplaces = null;
+    _dictationReplaced = '';
     if (!mounted || span == null || !cancelled) return;
     if (!identical(span.draft, _draft)) return;
-    // Discard: take out exactly what this take put in.
+    // Discard: take out exactly what this take put in, and put back the
+    // selection it replaced. A take that heard nothing changed nothing.
     final text = _input.text;
     final start = span.start.clamp(0, text.length);
     final end = span.end.clamp(start, text.length);
-    if (end > start) {
+    if (end > start || replaced.isNotEmpty) {
       _input.value = TextEditingValue(
-        text: text.replaceRange(start, end, ''),
-        selection: TextSelection.collapsed(offset: start),
+        text: text.replaceRange(start, end, replaced),
+        selection: replaced.isEmpty
+            ? TextSelection.collapsed(offset: start)
+            : TextSelection(
+                baseOffset: start,
+                extentOffset: start + replaced.length,
+              ),
       );
     }
   }
@@ -1428,9 +1455,11 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// Switch the screen to another conversation (or a new one when [tid] is
   /// null) in place, resetting per-thread state. Used by the left sessions pane.
   void _openThread(String? tid, String? cwd) {
-    // A live call belongs to its own conversation, not to whichever one is on
-    // screen: browsing another conversation keeps it talking, and the
-    // sidebar's voice entry stays the way back to it and to hang up.
+    // Leaving the call's conversation ends the call: capture never outlives
+    // the conversation it was started in (AGENTS.md, live voice controls).
+    if (_voice.threadId != null && _voice.threadId != tid) {
+      unawaited(_voice.stop());
+    }
     unawaited(
       ref
           .read(bridgeApiProvider)
@@ -1449,6 +1478,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     // so no later words land in the new one).
     if (_dictation.taking) unawaited(_dictation.finishTake());
     _dictationSpan = null;
+    _dictationReplaces = null;
+    _dictationReplaced = '';
     _threadLoadGeneration++;
     _historyLiveItems = null;
     _historyPartialItems = null;
