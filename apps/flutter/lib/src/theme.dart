@@ -88,6 +88,20 @@ Color onSurfaceDisabled(ColorScheme scheme) =>
 /// what lets one blue dot in a sidebar of grey rows say "this is working".
 Color signalColor(ColorScheme scheme) => scheme.tertiary;
 
+/// Dictation: the microphone turning speech into the draft. Teal, apart from
+/// the blue of a live voice call, so the two never read as the same thing
+/// when both are on screen.
+Color dictationColor(ColorScheme scheme) =>
+    scheme.brightness == Brightness.light
+    ? const Color(0xFF0B7A83)
+    : const Color(0xFF52C6CE);
+
+/// Ink on [dictationColor].
+Color onDictationColor(ColorScheme scheme) =>
+    scheme.brightness == Brightness.light
+    ? Colors.white
+    : const Color(0xFF00363A);
+
 /// Additions, in a diff or a change count. `+`/`−` is a convention older than
 /// any palette — a diff whose additions aren't green reads wrong. Its
 /// counterpart is `ColorScheme.error`.

@@ -2773,10 +2773,25 @@ fn validate_realtime_request(method: &str, params: &Value) -> Result<()> {
             );
         },
         "thread/realtime/listVoices" => {},
-        "thread/start" => {
+        "thread/start" => match params.get("threadSource").and_then(Value::as_str) {
+            Some("pocket-codex-voice") => {},
+            // The composer's dictation line: a realtime session that only
+            // transcribes. It must never become a conversation of its own, so
+            // only an ephemeral thread (no rollout, not listed) is allowed.
+            Some("pocket-codex-dictation") => anyhow::ensure!(
+                params.get("ephemeral").and_then(Value::as_bool) == Some(true),
+                "dictation thread must be ephemeral"
+            ),
+            _ => anyhow::bail!("voice thread requires its source marker"),
+        },
+        // Lets the dictation line release its ephemeral thread on close.
+        "thread/unsubscribe" => {
             anyhow::ensure!(
-                params.get("threadSource").and_then(Value::as_str) == Some("pocket-codex-voice"),
-                "voice thread requires its source marker"
+                params
+                    .get("threadId")
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| !id.is_empty()),
+                "unsubscribe requires threadId"
             );
         },
         _ => anyhow::bail!("unsupported realtime method: {method}"),

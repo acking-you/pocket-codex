@@ -31,6 +31,8 @@ import 'package:pocket_codex/src/ide_context.dart';
 import 'package:pocket_codex/src/image_attachments.dart';
 import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/log_manager.dart';
+import 'package:pocket_codex/src/voice/dictation.dart';
+import 'package:pocket_codex/src/voice/dictation_widgets.dart';
 import 'package:pocket_codex/src/voice/voice_controller.dart';
 import 'package:pocket_codex/src/voice/voice_widgets.dart';
 import 'package:pocket_codex/src/service_key.dart';
@@ -245,6 +247,145 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
 
   String? _threadId;
   late final VoiceController _voice;
+
+  /// The composer microphone: a background realtime session, paused until a
+  /// take attaches the microphone, whose transcript lands at the cursor.
+  late final DictationLine _dictation;
+  DictationTake _dictationTake = DictationTake.idle;
+
+  /// Where the current take writes: the draft it belongs to, and the span
+  /// of the field its words occupy so far. Deltas extend the span; a
+  /// discard removes exactly it. Null outside a take.
+  ({Object draft, int start, int end})? _dictationSpan;
+
+  void _onDictationChanged() {
+    final d = _dictation;
+    if (d.take != _dictationTake && mounted) {
+      setState(() => _dictationTake = d.take);
+    }
+    final failure = d.failure;
+    if (failure != null && mounted) {
+      d.failure = null;
+      final l10n = AppLocalizations.of(context);
+      showToastError(context, switch (failure) {
+        DictationFailure.permission => l10n.dictationPermission,
+        DictationFailure.interrupted => l10n.dictationInterrupted,
+        DictationFailure.unavailable =>
+          d.error == null
+              ? l10n.dictationUnavailable
+              : '${l10n.dictationUnavailable}: ${d.error}',
+      });
+    }
+  }
+
+  /// Start a take where the cursor is.
+  void _startDictation() {
+    if (_voice.busy) {
+      showToastError(context, AppLocalizations.of(context).dictationVoiceBusy);
+      return;
+    }
+    if (_dictation.taking) return;
+    final value = _input.value;
+    final sel = value.selection;
+    final start = sel.isValid ? sel.start : value.text.length;
+    final end = sel.isValid ? sel.end : value.text.length;
+    // A selection is replaced by what is said, as typing would.
+    if (start != end) {
+      _input.value = TextEditingValue(
+        text: value.text.replaceRange(start, end, ''),
+        selection: TextSelection.collapsed(offset: start),
+      );
+    }
+    _dictationSpan = (draft: _draft, start: start, end: start);
+    _inputFocus.requestFocus();
+    unawaited(_dictation.startTake());
+  }
+
+  /// Words arriving for the current take go in at the end of its span.
+  void _onDictationDelta(int take, String delta) {
+    final span = _dictationSpan;
+    if (!mounted ||
+        span == null ||
+        take != _dictation.takeId ||
+        !identical(span.draft, _draft)) {
+      return;
+    }
+    final value = _input.value;
+    final text = value.text;
+    // The user may have edited the draft meanwhile; keep the span inside it.
+    final at = span.end.clamp(0, text.length);
+    final before = text.substring(0, at);
+    var piece = delta;
+    if (at == span.start) {
+      // First words of the take: no leading space at the start of a line,
+      // one between two Latin words, none before CJK.
+      piece = piece.trimLeft();
+      final latinBefore = RegExp(r'[A-Za-z0-9.,!?;:)\]]$').hasMatch(before);
+      final latinStart = RegExp(r'^[A-Za-z0-9(\[]').hasMatch(piece);
+      if (latinBefore && latinStart) piece = ' $piece';
+    }
+    if (piece.isEmpty) return;
+    final caretInSpan =
+        !value.selection.isValid ||
+        (value.selection.isCollapsed &&
+            value.selection.baseOffset >= span.start &&
+            value.selection.baseOffset <= at);
+    _input.value = TextEditingValue(
+      text: text.replaceRange(at, at, piece),
+      selection: caretInSpan
+          ? TextSelection.collapsed(offset: at + piece.length)
+          : value.selection,
+    );
+    _dictationSpan = (
+      draft: span.draft,
+      start: span.start,
+      end: at + piece.length,
+    );
+  }
+
+  void _onDictationEnded(int take, {required bool cancelled}) {
+    final span = _dictationSpan;
+    _dictationSpan = null;
+    if (!mounted || span == null || !cancelled) return;
+    if (!identical(span.draft, _draft)) return;
+    // Discard: take out exactly what this take put in.
+    final text = _input.text;
+    final start = span.start.clamp(0, text.length);
+    final end = span.end.clamp(start, text.length);
+    if (end > start) {
+      _input.value = TextEditingValue(
+        text: text.replaceRange(start, end, ''),
+        selection: TextSelection.collapsed(offset: start),
+      );
+    }
+  }
+
+  bool _voiceWasBusy = false;
+  void _onVoiceForDictation() {
+    final busy = _voice.busy;
+    if (busy == _voiceWasBusy) return;
+    _voiceWasBusy = busy;
+    if (busy) {
+      // A take in progress keeps what it heard; the line closes so the
+      // call has the microphone and the realtime quota to itself.
+      unawaited(_dictation.close());
+    } else {
+      _warmDictation();
+    }
+  }
+
+  void _finishDictation() => unawaited(_dictation.finishTake());
+
+  void _cancelDictation() => unawaited(_dictation.cancelTake());
+
+  /// Open the line ahead of use, while the composer is in front and no call
+  /// holds the microphone. Opening only negotiates the session; the
+  /// microphone stays closed until a take.
+  void _warmDictation() {
+    if (!mounted || !_foreground || _voice.busy || !_voiceAvailable) return;
+    unawaited(_dictation.warm());
+  }
+
   bool _voiceStarting = false;
   int _voiceIntentGeneration = 0;
 
@@ -690,6 +831,18 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       serviceKey: widget.serviceKey,
       createTransport: ref.read(voiceTransportFactoryProvider),
     );
+    _dictation =
+        DictationLine(
+            api: ref.read(bridgeApiProvider),
+            serviceKey: widget.serviceKey,
+            createTransport: ref.read(dictationTransportFactoryProvider),
+          )
+          ..onDelta = _onDictationDelta
+          ..onTakeEnded = _onDictationEnded
+          ..addListener(_onDictationChanged);
+    // A call starting takes the microphone; the dictation line steps aside
+    // so the two never fight over it, and comes back once the call ends.
+    _voice.addListener(_onVoiceForDictation);
     _threadId = widget.threadId;
     _cwd = widget.cwd;
     _drafts = ref.read(_composerDraftsProvider(widget.serviceKey));
@@ -796,6 +949,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     if (ends) {
       ++_voiceIntentGeneration;
       unawaited(_voice.stop());
+      // Same rule for the dictation line: a phone in the background has no
+      // microphone, and a held session would only idle against the quota.
+      unawaited(_dictation.close());
     }
   }
 
@@ -1288,6 +1444,11 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       ref.read(uiPrefsProvider.notifier).setLastThread(widget.serviceKey, tid);
     }
     _cancelExternalWriterSubscription();
+    // A take belongs to the draft it was started in. Leaving that draft ends
+    // the take; what it heard stays there (the span is tied to that draft,
+    // so no later words land in the new one).
+    if (_dictation.taking) unawaited(_dictation.finishTake());
+    _dictationSpan = null;
     _threadLoadGeneration++;
     _historyLiveItems = null;
     _historyPartialItems = null;
@@ -1426,7 +1587,14 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   @override
   void dispose() {
     ++_reconnectEpoch;
-    _voice.dispose();
+    _voice
+      ..removeListener(_onVoiceForDictation)
+      ..dispose();
+    _dictation
+      ..removeListener(_onDictationChanged)
+      ..onDelta = null
+      ..onTakeEnded = null
+      ..dispose();
     _healthTimer?.cancel();
     _externalHistoryTimer?.cancel();
     _externalWriterReconnect?.cancel();
@@ -1556,7 +1724,11 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// Keep the tail of the conversation visible when the soft keyboard opens.
   /// Only when the user was already at the bottom — pulling someone back down
   /// while they're reading history would be worse than the keyboard.
-  void _onComposerFocus() => _repinForKeyboard();
+  void _onComposerFocus() {
+    _repinForKeyboard();
+    // Someone about to type may well dictate instead: have the line ready.
+    if (_inputFocus.hasFocus) _warmDictation();
+  }
 
   void _saveDraft() {
     _draft.value = _input.value;
@@ -8807,6 +8979,19 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       return false;
     }
     final key = e.logicalKey;
+    // During a take the keys answer the take: Enter is done (the draft is
+    // reviewed before it is sent), Esc discards what the take wrote.
+    if (_dictation.taking) {
+      if (key == LogicalKeyboardKey.enter ||
+          key == LogicalKeyboardKey.numpadEnter) {
+        _finishDictation();
+        return true;
+      }
+      if (key == LogicalKeyboardKey.escape) {
+        _cancelDictation();
+        return true;
+      }
+    }
     if (key == LogicalKeyboardKey.keyV && _isCtrlOrCmdDown()) {
       unawaited(_onClipboardPaste());
       return false; // never consume — text paste must still fire
@@ -8854,6 +9039,21 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         keyboard.isMetaPressed &&
         keyboard.isControlPressed) {
       _setLeftOpen(!_leftOpen);
+      return true;
+    }
+    // Ctrl+Shift+Space (Cmd+Shift+Space on macOS) toggles dictation from
+    // anywhere in the window, like a push-to-talk key.
+    if (key == LogicalKeyboardKey.space &&
+        primary &&
+        keyboard.isShiftPressed &&
+        !keyboard.isAltPressed &&
+        !_externalWriterMode &&
+        !_editorOpen) {
+      if (_dictation.take == DictationTake.listening) {
+        _finishDictation();
+      } else if (!_dictation.taking) {
+        _startDictation();
+      }
       return true;
     }
     if (!primary || keyboard.isAltPressed || keyboard.isShiftPressed) {
@@ -9359,7 +9559,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
             cursorColor: scheme.onSurface,
             decoration: InputDecoration(
               filled: false,
-              hintText: _streaming
+              hintText: _dictationTake != DictationTake.idle
+                  ? l10n.dictationListening
+                  : _streaming
                   ? (_supplement ? l10n.steerMessage : l10n.queueNextTurn)
                   : l10n.messageHint,
               hintStyle: inputStyle.copyWith(color: scheme.onSurfaceVariant),
@@ -9377,11 +9579,12 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     // them beside the permission and model pills (~180 px each); narrower
     // cards give them their own line above.
     Widget composerBody(bool inlineModes) {
-      // The toolbar's fixed-width members — attach, voice, send, the stop
-      // button while streaming — plus the gaps between them.
-      final fixedToolbarWidth =
+      // The toolbar's fixed-width members — attach, dictate, voice, send, the
+      // stop button while streaming — plus the gaps between them.
+      double fixedToolbarWidth(bool dictateInline) =>
           (touch ? 48.0 : 30.0) +
-          (touch ? 48.0 : 32.0) +
+          (dictateInline ? (touch ? 40.0 : 32.0) + 2 : 0) +
+          (touch ? 40.0 : 32.0) +
           (touch ? 48.0 : 32.0) +
           (_streaming ? (touch ? 48.0 : 32.0) + 6 : 0) +
           10;
@@ -9389,54 +9592,86 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         // One row at every width. Attachments collapse into a single `+` menu
         // and the config pills into two chips, so a 360 px phone lays out like
         // the desktop — no wrapping, no expand/collapse mode to get stuck in.
-        builder: (context, constraints) => Row(
-          children: [
-            _attachMenu(l10n),
-            const SizedBox(width: 2),
-            // Bound long permission labels, and never so wide that the model
-            // pill is left less than its icon-and-chevron minimum: on a narrow
-            // card (the review pane open) both ellipsize instead of
-            // overflowing.
-            ConstrainedBox(
-              constraints: BoxConstraints(
-                maxWidth: math.max(
-                  touch ? 44.0 : 34.0,
-                  math.min(
-                    constraints.maxWidth * 0.34,
-                    constraints.maxWidth - fixedToolbarWidth - 96,
+        builder: (context, constraints) {
+          // On a card too narrow for it beside the pills (a phone, the review
+          // pane open) the microphone lives in the `+` menu; during a take it
+          // always shows, since it is the done button.
+          final dictateInline =
+              constraints.maxWidth >= _dictationInlineWidth ||
+              _dictationTake != DictationTake.idle;
+          final fixed = fixedToolbarWidth(dictateInline);
+          return Row(
+            children: [
+              _attachMenu(l10n),
+              const SizedBox(width: 2),
+              // Bound long permission labels, and never so wide that the model
+              // pill is left less than its icon-and-chevron minimum: on a narrow
+              // card (the review pane open) both ellipsize instead of
+              // overflowing.
+              ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxWidth: math.max(
+                    touch ? 44.0 : 34.0,
+                    math.min(
+                      constraints.maxWidth * 0.34,
+                      constraints.maxWidth - fixed - 96,
+                    ),
                   ),
                 ),
+                child: _permissionChip(l10n),
               ),
-              child: _permissionChip(l10n),
-            ),
-            if (inlineModes)
-              for (final chip in modeChips) ...[const SizedBox(width: 4), chip],
-            const SizedBox(width: 4),
-            // Right-aligned next to send, taking whatever is left.
-            Expanded(
-              child: Align(
-                alignment: Alignment.centerRight,
-                child: _modelChip(l10n),
+              if (inlineModes)
+                for (final chip in modeChips) ...[
+                  const SizedBox(width: 4),
+                  chip,
+                ],
+              const SizedBox(width: 4),
+              // Right-aligned next to send, taking whatever is left.
+              Expanded(
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  child: _modelChip(l10n),
+                ),
               ),
-            ),
-            IconButton(
-              key: const Key('voice-start'),
-              tooltip: _isVoiceThread ? l10n.voiceStart : l10n.voiceNewSession,
-              onPressed: _canStartVoice ? _startVoice : null,
-              icon: Icon(Icons.graphic_eq, size: touch ? 22 : 18),
-              style: touch
-                  ? null
-                  : IconButton.styleFrom(
-                      minimumSize: const Size(32, 32),
-                      fixedSize: const Size(32, 32),
-                      padding: EdgeInsets.zero,
-                    ),
-            ),
-            const SizedBox(width: 4),
-            if (_streaming) ...[_stopButton(l10n), const SizedBox(width: 6)],
-            _sendButton(),
-          ],
-        ),
+              // Speech to text into the draft. Teal and a microphone, where the
+              // live voice call beside it is the blue waveform: two different
+              // things, and they look it.
+              if (dictateInline) ...[
+                DictationButton(
+                  line: _dictation,
+                  onStart: _startDictation,
+                  onFinish: _finishDictation,
+                  // A live call already holds the microphone.
+                  enabled: !_voice.busy && !_externalWriterMode,
+                  size: touch ? 40 : 32,
+                  iconSize: touch ? 22 : 18,
+                ),
+                const SizedBox(width: 2),
+              ],
+              IconButton(
+                key: const Key('voice-start'),
+                tooltip: _isVoiceThread
+                    ? l10n.voiceStart
+                    : l10n.voiceNewSession,
+                // A take in progress finishes first; the call needs the mic.
+                onPressed: _canStartVoice && !_dictation.taking
+                    ? _startVoice
+                    : null,
+                icon: Icon(Icons.graphic_eq, size: touch ? 22 : 18),
+                // 40 px on touch: two buttons beside send must still leave
+                // the model pill room on a 320 px phone.
+                style: IconButton.styleFrom(
+                  minimumSize: Size.square(touch ? 40 : 32),
+                  fixedSize: Size.square(touch ? 40 : 32),
+                  padding: EdgeInsets.zero,
+                ),
+              ),
+              const SizedBox(width: 4),
+              if (_streaming) ...[_stopButton(l10n), const SizedBox(width: 6)],
+              _sendButton(),
+            ],
+          );
+        },
       );
 
       return Column(
@@ -9463,6 +9698,24 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                   _attachmentStrip(l10n),
                   const SizedBox(height: 8),
                 ],
+                // A take's strip: the field stays editable below it, and the
+                // words appear in the field itself as they are spoken.
+                AnimatedSize(
+                  duration: Motion.of(context, Motion.fast),
+                  curve: Motion.move,
+                  alignment: Alignment.topCenter,
+                  child: _dictationTake == DictationTake.idle
+                      ? const SizedBox(width: double.infinity)
+                      : Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: DictationBar(
+                            line: _dictation,
+                            onFinish: _finishDictation,
+                            onCancel: _cancelDictation,
+                            showKeys: _isDesktop,
+                          ),
+                        ),
+                ),
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -9520,7 +9773,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       builder: (context, child) {
         // The edge says what the composer is doing: firmer while focused, the
         // live signal while the agent is answering (anything sent now queues).
-        final edge = _streaming
+        // A take outranks everything: the card is where the voice is going.
+        final edge = _dictationTake != DictationTake.idle
+            ? dictationColor(scheme).withValues(alpha: 0.7)
+            : _streaming
             ? signalColor(scheme).withValues(alpha: 0.55)
             : _inputFocus.hasFocus
             ? scheme.outline
@@ -9771,8 +10027,20 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           onTap: () => showFileBrowser(context, serviceKey: widget.serviceKey),
           child: _menuRow(Icons.folder_open_outlined, l10n.hostFiles),
         ),
+      // Always here too, so a card too narrow for the inline microphone
+      // still has dictation.
+      PopupMenuItem<void>(
+        key: const Key('dictate-menu'),
+        enabled: !_voice.busy && !_dictation.taking && !_externalWriterMode,
+        onTap: _startDictation,
+        child: _menuRow(Icons.mic_none_rounded, l10n.dictate),
+      ),
     ],
   );
+
+  /// Narrowest composer card that keeps the dictation microphone inline;
+  /// below it the `+` menu carries it.
+  static const _dictationInlineWidth = 440.0;
 
   Widget _menuRow(IconData icon, String label) => Row(
     children: [

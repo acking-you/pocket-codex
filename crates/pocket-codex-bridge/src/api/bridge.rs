@@ -1007,7 +1007,8 @@ pub fn app_model_list(service_key: String) -> Result<Vec<ModelInfoDto>> {
 
 /// Send a thread realtime control request; returns the upstream JSON result.
 /// Accepts the six `thread/realtime/*` methods, `thread/timeline/list`,
-/// and marked voice `thread/start`.
+/// marked voice `thread/start` (and ephemeral dictation `thread/start`), and
+/// `thread/unsubscribe`.
 pub fn app_realtime_request(
     service_key: String,
     method: String,

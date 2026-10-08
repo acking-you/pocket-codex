@@ -3745,6 +3745,84 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Source'**
   String get previewSource;
+
+  /// No description provided for @dictate.
+  ///
+  /// In en, this message translates to:
+  /// **'Dictate'**
+  String get dictate;
+
+  /// No description provided for @dictationReady.
+  ///
+  /// In en, this message translates to:
+  /// **'ready'**
+  String get dictationReady;
+
+  /// No description provided for @dictationConnecting.
+  ///
+  /// In en, this message translates to:
+  /// **'Connecting dictation…'**
+  String get dictationConnecting;
+
+  /// No description provided for @dictationListening.
+  ///
+  /// In en, this message translates to:
+  /// **'Listening'**
+  String get dictationListening;
+
+  /// No description provided for @dictationFinishing.
+  ///
+  /// In en, this message translates to:
+  /// **'Finishing…'**
+  String get dictationFinishing;
+
+  /// No description provided for @dictationStop.
+  ///
+  /// In en, this message translates to:
+  /// **'Done (Enter)'**
+  String get dictationStop;
+
+  /// No description provided for @dictationCancel.
+  ///
+  /// In en, this message translates to:
+  /// **'Discard (Esc)'**
+  String get dictationCancel;
+
+  /// No description provided for @dictationKeys.
+  ///
+  /// In en, this message translates to:
+  /// **'Enter done · Esc discard'**
+  String get dictationKeys;
+
+  /// No description provided for @dictationPermission.
+  ///
+  /// In en, this message translates to:
+  /// **'Microphone access was denied'**
+  String get dictationPermission;
+
+  /// No description provided for @dictationUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Dictation is unavailable on this host'**
+  String get dictationUnavailable;
+
+  /// No description provided for @dictationInterrupted.
+  ///
+  /// In en, this message translates to:
+  /// **'Dictation dropped; what was heard is kept'**
+  String get dictationInterrupted;
+
+  /// No description provided for @dictationVoiceBusy.
+  ///
+  /// In en, this message translates to:
+  /// **'The live voice call is using the microphone'**
+  String get dictationVoiceBusy;
+
+  /// No description provided for @dictationShortcut.
+  ///
+  /// In en, this message translates to:
+  /// **'Dictate (Ctrl+Shift+Space)'**
+  String get dictationShortcut;
 }
 
 class _AppLocalizationsDelegate

@@ -837,5 +837,18 @@
   "voiceTaskContinues": "Tasks the voice handed to Codex keep running after you hang up.",
   "stepOutput": "output",
   "previewRendered": "Preview",
-  "previewSource": "Source"
+  "previewSource": "Source",
+  "dictate": "Dictate",
+  "dictationReady": "ready",
+  "dictationConnecting": "Connecting dictation…",
+  "dictationListening": "Listening",
+  "dictationFinishing": "Finishing…",
+  "dictationStop": "Done (Enter)",
+  "dictationCancel": "Discard (Esc)",
+  "dictationKeys": "Enter done · Esc discard",
+  "dictationPermission": "Microphone access was denied",
+  "dictationUnavailable": "Dictation is unavailable on this host",
+  "dictationInterrupted": "Dictation dropped; what was heard is kept",
+  "dictationVoiceBusy": "The live voice call is using the microphone",
+  "dictationShortcut": "Dictate (Ctrl+Shift+Space)"
 }

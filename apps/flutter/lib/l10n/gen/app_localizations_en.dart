@@ -2035,4 +2035,45 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get previewSource => 'Source';
+
+  @override
+  String get dictate => 'Dictate';
+
+  @override
+  String get dictationReady => 'ready';
+
+  @override
+  String get dictationConnecting => 'Connecting dictation…';
+
+  @override
+  String get dictationListening => 'Listening';
+
+  @override
+  String get dictationFinishing => 'Finishing…';
+
+  @override
+  String get dictationStop => 'Done (Enter)';
+
+  @override
+  String get dictationCancel => 'Discard (Esc)';
+
+  @override
+  String get dictationKeys => 'Enter done · Esc discard';
+
+  @override
+  String get dictationPermission => 'Microphone access was denied';
+
+  @override
+  String get dictationUnavailable => 'Dictation is unavailable on this host';
+
+  @override
+  String get dictationInterrupted =>
+      'Dictation dropped; what was heard is kept';
+
+  @override
+  String get dictationVoiceBusy =>
+      'The live voice call is using the microphone';
+
+  @override
+  String get dictationShortcut => 'Dictate (Ctrl+Shift+Space)';
 }
