@@ -289,10 +289,19 @@ void main() {
           ),
         );
         await frames(t);
+        // The review lives in the turn's fold next to the step it approves;
+        // the fold header counts it even while closed.
+        expect(find.byKey(const Key('turn-work-reviews')), findsOneWidget);
+        await openTurnWork(t);
         expect(find.byType(ApprovalReviewCard), findsOneWidget);
         expect(
           t.widget<ApprovalReviewCard>(find.byType(ApprovalReviewCard)).status,
           status,
+        );
+        // What was approved is shown, not just that something was.
+        expect(
+          t.widget<Text>(find.byKey(const Key('approval-review-action'))).data,
+          'cargo test',
         );
       }
       api.pushEvent(
@@ -307,6 +316,7 @@ void main() {
         ),
       );
       await frames(t);
+      await openTurnWork(t);
       expect(find.byType(ApprovalReviewCard), findsOneWidget);
       expect(api.turnStartCount, 0);
       await t.pumpWidget(const SizedBox());

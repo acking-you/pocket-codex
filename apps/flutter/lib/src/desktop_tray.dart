@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:pocket_codex/src/bridge_api_rust.dart';
+import 'package:pocket_codex/src/window_geometry.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
 
@@ -97,6 +98,10 @@ class DesktopTray with TrayListener, WindowListener {
         );
       } catch (_) {}
     }
+    // Restore the last window frame and set the minimum size; on macOS this
+    // also centres the traffic lights in the app's title strip, which the
+    // style change above has just reset.
+    await WindowGeometry.instance.attach();
     // Intercept the window close button: hide to tray instead of terminating.
     // onWindowClose (below) then hides the window; only the tray "Quit" exits.
     await windowManager.setPreventClose(true);

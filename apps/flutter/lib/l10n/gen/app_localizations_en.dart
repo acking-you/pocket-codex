@@ -1972,4 +1972,108 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get parentSession => 'Open parent session';
+
+  @override
+  String get hideSidebar => 'Hide sidebar';
+
+  @override
+  String get showSidebar => 'Show sidebar';
+
+  @override
+  String get locateConversation => 'Show current conversation';
+
+  @override
+  String get voiceReconnecting => 'Voice reconnecting…';
+
+  @override
+  String get voiceSpeaking => 'Assistant speaking';
+
+  @override
+  String get voiceUserSpeaking => 'You\'re speaking';
+
+  @override
+  String get voiceInterrupted => 'Interrupted';
+
+  @override
+  String get voiceEndedByUser => 'Voice call ended';
+
+  @override
+  String voiceEndedReason(String reason) {
+    return 'Voice call ended: $reason';
+  }
+
+  @override
+  String get voiceFailedShort => 'Voice call dropped';
+
+  @override
+  String get voiceOpenCall => 'Go to the voice conversation';
+
+  @override
+  String get voiceHangUp => 'Hang up';
+
+  @override
+  String get voiceModelDefault => 'Host default';
+
+  @override
+  String get voiceModelFrameless => 'gpt-live-1-codex (low latency)';
+
+  @override
+  String get voiceModelCustom => 'Custom…';
+
+  @override
+  String get voiceModelCustomLabel => 'Model id';
+
+  @override
+  String get voiceTaskContinues =>
+      'Tasks the voice handed to Codex keep running after you hang up.';
+
+  @override
+  String get stepOutput => 'output';
+
+  @override
+  String get previewRendered => 'Preview';
+
+  @override
+  String get previewSource => 'Source';
+
+  @override
+  String get dictate => 'Dictate';
+
+  @override
+  String get dictationReady => 'ready';
+
+  @override
+  String get dictationConnecting => 'Connecting dictation…';
+
+  @override
+  String get dictationListening => 'Listening';
+
+  @override
+  String get dictationFinishing => 'Finishing…';
+
+  @override
+  String get dictationStop => 'Done (Enter)';
+
+  @override
+  String get dictationCancel => 'Discard (Esc)';
+
+  @override
+  String get dictationKeys => 'Enter done · Esc discard';
+
+  @override
+  String get dictationPermission => 'Microphone access was denied';
+
+  @override
+  String get dictationUnavailable => 'Dictation is unavailable on this host';
+
+  @override
+  String get dictationInterrupted =>
+      'Dictation dropped; what was heard is kept';
+
+  @override
+  String get dictationVoiceBusy =>
+      'The live voice call is using the microphone';
+
+  @override
+  String get dictationShortcut => 'Dictate (Ctrl+Shift+Space)';
 }

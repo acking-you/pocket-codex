@@ -70,12 +70,32 @@ not selected by this UI.
 ## STT and TTS boundary
 
 The user's requested scope is **app-server-supported voice only**. Live voice
-transcription is displayed, but it is not independent composer dictation.
+transcription is displayed in the call's conversation.
 
 The protocol has no standalone recording-to-text RPC. Its V2 transcription
 configuration is not a complete controller dictation contract: `appendAudio`
 appends audio, while the app-server surface does not expose an audio-buffer commit
 operation. We do not infer a supported dictation workflow from those types alone.
+
+### Composer dictation
+
+Composer dictation is built from the same upstream V3 WebRTC realtime path, not
+from a transcription RPC (`apps/flutter/lib/src/voice/dictation.dart`):
+
+- Focusing the composer warms a background realtime session on an ephemeral
+  `pocket-codex-dictation` thread, with no microphone attached and a silent,
+  never-speaking prompt. It closes itself after an idle timeout and releases its
+  thread.
+- A take attaches the microphone; the session's input-transcript deltas are
+  inserted at the cursor of the draft the take started in. Finishing detaches the
+  microphone and waits briefly for the tail; discarding removes exactly what the
+  take inserted and restores any selection it replaced. Nothing is sent.
+- Only the host's default realtime model is used; an explicit `model` and V1 over
+  WebRTC are refused by the host.
+- A live call takes precedence: dictation closes its line while a call runs.
+  Leaving the draft's conversation ends the take.
+- chatgpt.com's `/backend-api/transcribe` and dictation stream are not used: they
+  answer non-official clients with a Cloudflare challenge.
 
 `appendSpeech` submits speakable text inside an existing realtime session; it is
 not a standalone TTS endpoint. No reply-read-aloud UI, OS speech plugin, external

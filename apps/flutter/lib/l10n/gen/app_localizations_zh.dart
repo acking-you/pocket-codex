@@ -1909,4 +1909,105 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get parentSession => '打开父会话';
+
+  @override
+  String get hideSidebar => '隐藏侧边栏';
+
+  @override
+  String get showSidebar => '显示侧边栏';
+
+  @override
+  String get locateConversation => '定位到当前会话';
+
+  @override
+  String get voiceReconnecting => '语音重连中…';
+
+  @override
+  String get voiceSpeaking => '助手正在回复';
+
+  @override
+  String get voiceUserSpeaking => '你正在说话';
+
+  @override
+  String get voiceInterrupted => '已打断';
+
+  @override
+  String get voiceEndedByUser => '语音通话已结束';
+
+  @override
+  String voiceEndedReason(String reason) {
+    return '语音通话已结束：$reason';
+  }
+
+  @override
+  String get voiceFailedShort => '语音连接已断开';
+
+  @override
+  String get voiceOpenCall => '回到语音会话';
+
+  @override
+  String get voiceHangUp => '挂断';
+
+  @override
+  String get voiceModelDefault => '主机默认';
+
+  @override
+  String get voiceModelFrameless => 'gpt-live-1-codex（低延迟）';
+
+  @override
+  String get voiceModelCustom => '自定义…';
+
+  @override
+  String get voiceModelCustomLabel => '模型 ID';
+
+  @override
+  String get voiceTaskContinues => '挂断不会取消语音已交给 Codex 的任务。';
+
+  @override
+  String get stepOutput => '输出';
+
+  @override
+  String get previewRendered => '预览';
+
+  @override
+  String get previewSource => '源码';
+
+  @override
+  String get dictate => '语音输入';
+
+  @override
+  String get dictationReady => '已就绪';
+
+  @override
+  String get dictationConnecting => '正在连接语音输入…';
+
+  @override
+  String get dictationListening => '正在听写';
+
+  @override
+  String get dictationFinishing => '正在收尾…';
+
+  @override
+  String get dictationStop => '完成（Enter）';
+
+  @override
+  String get dictationCancel => '放弃（Esc）';
+
+  @override
+  String get dictationKeys => 'Enter 完成 · Esc 放弃';
+
+  @override
+  String get dictationPermission => '麦克风权限被拒绝';
+
+  @override
+  String get dictationUnavailable => '此主机暂不能语音输入';
+
+  @override
+  String get dictationInterrupted => '语音输入中断，已保留听到的内容';
+
+  @override
+  String get dictationVoiceBusy => '实时语音通话正在使用麦克风';
+
+  @override
+  String get dictationShortcut => '语音输入（Ctrl+Shift+Space）';
 }

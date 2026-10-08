@@ -1,6 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
+import 'package:pocket_codex/src/desktop_theme.dart';
+import 'package:pocket_codex/src/fonts.dart';
+import 'package:pocket_codex/src/motion.dart';
+import 'package:pocket_codex/src/theme_transition.dart';
 import 'package:pocket_codex/src/ui_prefs.dart';
 
 /// The light/dark toggle, for a window's own controls.
@@ -27,7 +31,7 @@ class ThemeToggle extends ConsumerWidget {
       // transition for 200 ms, so an icon that jumped would be the one thing
       // in the window that didn't move.
       icon: AnimatedSwitcher(
-        duration: const Duration(milliseconds: 250),
+        duration: Motion.of(context, Motion.medium),
         transitionBuilder: (child, animation) => RotationTransition(
           turns: Tween(begin: 0.75, end: 1.0).animate(animation),
           child: FadeTransition(opacity: animation, child: child),
@@ -37,12 +41,25 @@ class ThemeToggle extends ConsumerWidget {
           // The key is what makes the switcher animate: same type + no key
           // reads as the same widget and swaps silently.
           key: ValueKey(dark),
-          size: 20,
+          size: isDesktop ? 18 : 20,
         ),
       ),
       tooltip: dark ? l10n.appearanceLight : l10n.appearanceDark,
-      visualDensity: VisualDensity.compact,
-      onPressed: () => ref.read(uiPrefsProvider.notifier).setThemeMode(next),
+      // Sized with the other window-strip controls on desktop.
+      style: isDesktop
+          ? IconButton.styleFrom(
+              minimumSize: const Size(30, 30),
+              fixedSize: const Size(30, 30),
+              padding: EdgeInsets.zero,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(kRowRadius),
+              ),
+            )
+          : null,
+      onPressed: () => ThemeTransition.run(
+        context,
+        () => ref.read(uiPrefsProvider.notifier).setThemeMode(next),
+      ),
     );
   }
 }

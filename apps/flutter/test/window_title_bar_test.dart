@@ -18,6 +18,7 @@ void main() {
     await tester.pumpWidget(_wrap(const WindowTitleBar(title: Text('Title'))));
     expect(find.byType(AppBar), findsOneWidget);
     expect(find.byType(DragToMoveArea), findsNothing);
+    expect(find.byType(WindowDragArea), findsNothing);
     expect(find.text('Title'), findsOneWidget);
   });
 
@@ -36,7 +37,7 @@ void main() {
         ),
       );
       // The empty bar space drags the window; the title/leading/actions remain.
-      expect(find.byType(DragToMoveArea), findsOneWidget);
+      expect(find.byType(WindowDragArea), findsOneWidget);
       expect(find.text('Title'), findsOneWidget);
       expect(find.byIcon(Icons.menu), findsOneWidget);
       expect(find.byIcon(Icons.settings), findsOneWidget);
@@ -66,7 +67,7 @@ void main() {
       expect(find.byIcon(Icons.crop_square), findsOneWidget); // maximize
       expect(find.byIcon(Icons.close), findsOneWidget); // close
       expect(find.byIcon(Icons.settings), findsOneWidget);
-      expect(find.byType(DragToMoveArea), findsOneWidget);
+      expect(find.byType(WindowDragArea), findsOneWidget);
     } finally {
       debugDefaultTargetPlatformOverride = null;
     }

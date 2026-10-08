@@ -3625,6 +3625,204 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Open parent session'**
   String get parentSession;
+
+  /// No description provided for @hideSidebar.
+  ///
+  /// In en, this message translates to:
+  /// **'Hide sidebar'**
+  String get hideSidebar;
+
+  /// No description provided for @showSidebar.
+  ///
+  /// In en, this message translates to:
+  /// **'Show sidebar'**
+  String get showSidebar;
+
+  /// No description provided for @locateConversation.
+  ///
+  /// In en, this message translates to:
+  /// **'Show current conversation'**
+  String get locateConversation;
+
+  /// No description provided for @voiceReconnecting.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice reconnecting…'**
+  String get voiceReconnecting;
+
+  /// No description provided for @voiceSpeaking.
+  ///
+  /// In en, this message translates to:
+  /// **'Assistant speaking'**
+  String get voiceSpeaking;
+
+  /// No description provided for @voiceUserSpeaking.
+  ///
+  /// In en, this message translates to:
+  /// **'You\'re speaking'**
+  String get voiceUserSpeaking;
+
+  /// No description provided for @voiceInterrupted.
+  ///
+  /// In en, this message translates to:
+  /// **'Interrupted'**
+  String get voiceInterrupted;
+
+  /// No description provided for @voiceEndedByUser.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice call ended'**
+  String get voiceEndedByUser;
+
+  /// No description provided for @voiceEndedReason.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice call ended: {reason}'**
+  String voiceEndedReason(String reason);
+
+  /// No description provided for @voiceFailedShort.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice call dropped'**
+  String get voiceFailedShort;
+
+  /// No description provided for @voiceOpenCall.
+  ///
+  /// In en, this message translates to:
+  /// **'Go to the voice conversation'**
+  String get voiceOpenCall;
+
+  /// No description provided for @voiceHangUp.
+  ///
+  /// In en, this message translates to:
+  /// **'Hang up'**
+  String get voiceHangUp;
+
+  /// No description provided for @voiceModelDefault.
+  ///
+  /// In en, this message translates to:
+  /// **'Host default'**
+  String get voiceModelDefault;
+
+  /// No description provided for @voiceModelFrameless.
+  ///
+  /// In en, this message translates to:
+  /// **'gpt-live-1-codex (low latency)'**
+  String get voiceModelFrameless;
+
+  /// No description provided for @voiceModelCustom.
+  ///
+  /// In en, this message translates to:
+  /// **'Custom…'**
+  String get voiceModelCustom;
+
+  /// No description provided for @voiceModelCustomLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Model id'**
+  String get voiceModelCustomLabel;
+
+  /// No description provided for @voiceTaskContinues.
+  ///
+  /// In en, this message translates to:
+  /// **'Tasks the voice handed to Codex keep running after you hang up.'**
+  String get voiceTaskContinues;
+
+  /// No description provided for @stepOutput.
+  ///
+  /// In en, this message translates to:
+  /// **'output'**
+  String get stepOutput;
+
+  /// No description provided for @previewRendered.
+  ///
+  /// In en, this message translates to:
+  /// **'Preview'**
+  String get previewRendered;
+
+  /// No description provided for @previewSource.
+  ///
+  /// In en, this message translates to:
+  /// **'Source'**
+  String get previewSource;
+
+  /// No description provided for @dictate.
+  ///
+  /// In en, this message translates to:
+  /// **'Dictate'**
+  String get dictate;
+
+  /// No description provided for @dictationReady.
+  ///
+  /// In en, this message translates to:
+  /// **'ready'**
+  String get dictationReady;
+
+  /// No description provided for @dictationConnecting.
+  ///
+  /// In en, this message translates to:
+  /// **'Connecting dictation…'**
+  String get dictationConnecting;
+
+  /// No description provided for @dictationListening.
+  ///
+  /// In en, this message translates to:
+  /// **'Listening'**
+  String get dictationListening;
+
+  /// No description provided for @dictationFinishing.
+  ///
+  /// In en, this message translates to:
+  /// **'Finishing…'**
+  String get dictationFinishing;
+
+  /// No description provided for @dictationStop.
+  ///
+  /// In en, this message translates to:
+  /// **'Done (Enter)'**
+  String get dictationStop;
+
+  /// No description provided for @dictationCancel.
+  ///
+  /// In en, this message translates to:
+  /// **'Discard (Esc)'**
+  String get dictationCancel;
+
+  /// No description provided for @dictationKeys.
+  ///
+  /// In en, this message translates to:
+  /// **'Enter done · Esc discard'**
+  String get dictationKeys;
+
+  /// No description provided for @dictationPermission.
+  ///
+  /// In en, this message translates to:
+  /// **'Microphone access was denied'**
+  String get dictationPermission;
+
+  /// No description provided for @dictationUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Dictation is unavailable on this host'**
+  String get dictationUnavailable;
+
+  /// No description provided for @dictationInterrupted.
+  ///
+  /// In en, this message translates to:
+  /// **'Dictation dropped; what was heard is kept'**
+  String get dictationInterrupted;
+
+  /// No description provided for @dictationVoiceBusy.
+  ///
+  /// In en, this message translates to:
+  /// **'The live voice call is using the microphone'**
+  String get dictationVoiceBusy;
+
+  /// No description provided for @dictationShortcut.
+  ///
+  /// In en, this message translates to:
+  /// **'Dictate (Ctrl+Shift+Space)'**
+  String get dictationShortcut;
 }
 
 class _AppLocalizationsDelegate

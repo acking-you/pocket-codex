@@ -631,14 +631,7 @@ pub fn thread_older_page(service_key: &str, thread_id: &str) -> Result<OlderPage
     let Some(cursor) = state.next_item_cursor.clone() else {
         return Ok(empty());
     };
-    let page = fetch_item_page(
-        service_key,
-        &client,
-        thread_id,
-        None,
-        Some(cursor.as_str()),
-        ITEM_PAGE_LIMIT,
-    )?;
+    let page = fetch_older_item_page(service_key, &client, thread_id, &cursor, ITEM_PAGE_LIMIT)?;
     let entries = page
         .get("data")
         .and_then(Value::as_array)
@@ -1839,6 +1832,27 @@ fn fetch_item_page(
     super::session_sync::request(service_key, client, "thread/items/list", params)
 }
 
+/// [`fetch_item_page`] for a page behind the live tail: such a page is fixed
+/// within a source generation, so a retained copy answers it from disk.
+fn fetch_older_item_page(
+    service_key: &str,
+    client: &Arc<AppClient>,
+    thread_id: &str,
+    cursor: &str,
+    limit: u32,
+) -> Result<Value> {
+    let params = json!({
+        "threadId": thread_id,
+        "limit": limit,
+        "sortDirection": "desc",
+        "cursor": cursor,
+    });
+    if let Some(page) = super::session_sync::retained(service_key, "thread/items/list", &params) {
+        return Ok(page);
+    }
+    fetch_item_page(service_key, client, thread_id, None, Some(cursor), limit)
+}
+
 /// Every turn in the thread, oldest first, as rail summaries.
 ///
 /// Walks `thread/turns/list` backwards with a summary view, which the store
@@ -2758,10 +2772,25 @@ fn validate_realtime_request(method: &str, params: &Value) -> Result<()> {
             );
         },
         "thread/realtime/listVoices" => {},
-        "thread/start" => {
+        "thread/start" => match params.get("threadSource").and_then(Value::as_str) {
+            Some("pocket-codex-voice") => {},
+            // The composer's dictation line: a realtime session that only
+            // transcribes. It must never become a conversation of its own, so
+            // only an ephemeral thread (no rollout, not listed) is allowed.
+            Some("pocket-codex-dictation") => anyhow::ensure!(
+                params.get("ephemeral").and_then(Value::as_bool) == Some(true),
+                "dictation thread must be ephemeral"
+            ),
+            _ => anyhow::bail!("voice thread requires its source marker"),
+        },
+        // Lets the dictation line release its ephemeral thread on close.
+        "thread/unsubscribe" => {
             anyhow::ensure!(
-                params.get("threadSource").and_then(Value::as_str) == Some("pocket-codex-voice"),
-                "voice thread requires its source marker"
+                params
+                    .get("threadId")
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| !id.is_empty()),
+                "unsubscribe requires threadId"
             );
         },
         _ => anyhow::bail!("unsupported realtime method: {method}"),
@@ -3401,7 +3430,10 @@ fn summarize_item(item: &Value) -> (String, String, String) {
                 "agentsStates",
             ]),
         ),
-        "subAgentActivity" => (s("kind"), selected_json(item, &["agentPath", "agentThreadId"])),
+        "subAgentActivity" => (
+            s("kind"),
+            selected_json(item, &["agentPath", "agentThreadId", "model", "reasoningEffort"]),
+        ),
         "imageView" => (s("path"), String::new()),
         "sleep" => {
             let duration = item.get("durationMs").and_then(Value::as_u64).unwrap_or(0);

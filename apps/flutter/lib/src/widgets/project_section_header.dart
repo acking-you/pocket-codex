@@ -4,6 +4,8 @@ import 'package:flutter/semantics.dart';
 import 'package:flutter/services.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/desktop_theme.dart';
+import 'package:pocket_codex/src/fonts.dart';
+import 'package:pocket_codex/src/motion.dart';
 import 'package:pocket_codex/src/widgets/app_toast.dart';
 
 /// A quiet project heading with pointer, keyboard and touch actions.
@@ -166,8 +168,10 @@ class _ProjectSectionHeaderState extends State<ProjectSectionHeader> {
             FocusManager.instance.highlightMode ==
                 FocusHighlightMode.traditional);
     final createLabel = l10n.newConversationInProject(widget.name);
+    // Desktop headings are a 30 px source-list group; touch keeps 48 px.
+    final dense = isDesktop;
     return Padding(
-      padding: const EdgeInsets.only(top: 6, bottom: 2),
+      padding: EdgeInsets.only(top: dense ? 8 : 6, bottom: dense ? 1 : 2),
       child: Focus(
         skipTraversal: true,
         onFocusChange: (focused) => setState(() => _focused = focused),
@@ -207,43 +211,66 @@ class _ProjectSectionHeaderState extends State<ProjectSectionHeader> {
                       child: InkWell(
                         key: Key('project-header-${widget.path}'),
                         mouseCursor: clickable,
-                        borderRadius: BorderRadius.circular(8),
+                        borderRadius: BorderRadius.circular(kRowRadius),
                         onTap: widget.onToggle,
                         onLongPress: () => _showActions(),
                         onSecondaryTapUp: (event) =>
                             _showActions(position: event.globalPosition),
                         child: ConstrainedBox(
-                          constraints: const BoxConstraints(minHeight: 48),
+                          constraints: BoxConstraints(
+                            minHeight: dense ? 30 : 48,
+                          ),
                           child: Padding(
-                            padding: const EdgeInsets.only(left: 8),
+                            padding: const EdgeInsets.only(left: 6, right: 4),
                             child: Row(
                               children: [
+                                // The folder is the heading's identity; the
+                                // chevron after the name says it folds. Rows
+                                // below indent to the name, under the folder.
                                 Icon(
                                   widget.collapsed
-                                      ? Icons.keyboard_arrow_right
-                                      : Icons.keyboard_arrow_down,
-                                  size: 18,
+                                      ? Icons.folder_outlined
+                                      : Icons.folder_open_outlined,
+                                  size: 15,
                                   color: scheme.onSurfaceVariant,
                                 ),
-                                const SizedBox(width: 3),
-                                Expanded(
+                                const SizedBox(width: 7),
+                                Flexible(
                                   child: Text(
                                     widget.name,
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
                                     style: TextStyle(
-                                      fontSize: 14,
+                                      fontSize: dense ? 12.5 : 14,
                                       fontWeight: FontWeight.w600,
-                                      color: scheme.onSurface,
+                                      color: scheme.onSurfaceVariant,
                                     ),
                                   ),
                                 ),
+                                const SizedBox(width: 2),
+                                // One glyph that turns, so the fold reads as
+                                // a motion; with motion off it still lands on
+                                // the right direction.
+                                AnimatedRotation(
+                                  turns: widget.collapsed ? 0 : 0.25,
+                                  duration: Motion.of(context, Motion.fast),
+                                  curve: Motion.move,
+                                  child: Icon(
+                                    Icons.keyboard_arrow_right,
+                                    size: 15,
+                                    color: scheme.onSurfaceVariant,
+                                  ),
+                                ),
+                                const Spacer(),
                                 if (widget.collapsed)
                                   Text(
                                     '${widget.count}',
                                     style: TextStyle(
-                                      fontSize: 11,
+                                      fontSize: 11.5,
                                       color: scheme.onSurfaceVariant,
+                                      fontFeatures: const [
+                                        FontFeature.tabularFigures(),
+                                      ],
                                     ),
                                   ),
                               ],
@@ -260,13 +287,25 @@ class _ProjectSectionHeaderState extends State<ProjectSectionHeader> {
                       ignoring: !visible,
                       child: AnimatedOpacity(
                         opacity: visible ? 1 : 0,
-                        duration: const Duration(milliseconds: 100),
+                        duration: Motion.of(context, Motion.fast),
                         child: IconButton(
                           key: Key('project-new-${widget.path}'),
                           mouseCursor: clickable,
                           tooltip: createLabel,
-                          icon: const Icon(Icons.add, size: 18),
+                          icon: const Icon(Icons.add, size: 16),
                           color: scheme.onSurfaceVariant,
+                          style: dense
+                              ? IconButton.styleFrom(
+                                  minimumSize: const Size(26, 26),
+                                  fixedSize: const Size(26, 26),
+                                  padding: EdgeInsets.zero,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(
+                                      kRowRadius,
+                                    ),
+                                  ),
+                                )
+                              : null,
                           onPressed: widget.onNewConversation,
                         ),
                       ),

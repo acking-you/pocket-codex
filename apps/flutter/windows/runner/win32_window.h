@@ -90,6 +90,16 @@ class Win32Window {
   // Update the window frame's theme to match the system theme.
   static void UpdateTheme(HWND const window);
 
+  // Load the large (taskbar, Alt-Tab) and small (title bar) icons at the
+  // window's current DPI and assign them. The class icon is loaded once at
+  // the default size, so without this the shell rescales a single frame on
+  // every high-DPI display and the icon comes out soft.
+  void UpdateIcons(HWND const window);
+
+  // Icons owned by this window (from UpdateIcons); released on Destroy.
+  HICON big_icon_ = nullptr;
+  HICON small_icon_ = nullptr;
+
   bool quit_on_close_ = false;
 
   // window handle for top level window.

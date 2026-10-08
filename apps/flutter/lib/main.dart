@@ -12,6 +12,7 @@ import 'package:pocket_codex/src/log_manager.dart';
 import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/router.dart';
 import 'package:pocket_codex/src/theme.dart';
+import 'package:pocket_codex/src/theme_transition.dart';
 import 'package:pocket_codex/src/ui_prefs.dart';
 import 'package:pocket_codex/src/rust/api/bridge.dart' as frb;
 import 'package:pocket_codex/src/rust/frb_generated.dart';
@@ -25,7 +26,17 @@ Future<void> main() async {
   // dispatcher unhandled, which is fatal on desktop. Log and swallow them — the
   // affected screen already surfaces its own error / reconnect UI.
   PlatformDispatcher.instance.onError = (error, stack) {
-    debugPrint('Uncaught async error (ignored, app kept alive): $error');
+    // Without the frames from our own code, a framework assertion logged here
+    // cannot be traced back to the call that tripped it.
+    final frames = stack.toString().split('\n');
+    final mine = frames.where((l) => l.contains('package:pocket_codex/'));
+    // Framework-only stacks (a selection auto-scroll, say) still name the
+    // widget that started it in their first frames.
+    final ours = (mine.isEmpty ? frames : mine).take(6).join('\n');
+    debugPrint(
+      'Uncaught async error (ignored, app kept alive): $error'
+      '${ours.isEmpty ? '' : '\n$ours'}',
+    );
     return true;
   };
 
@@ -161,7 +172,9 @@ class _PocketCodexAppState extends ConsumerState<PocketCodexApp> {
             ),
           );
         }
-        return child ?? const SizedBox.shrink();
+        // The light/dark cross-fade captures this subtree; see
+        // ThemeTransition.
+        return ThemeTransitionHost(child: child ?? const SizedBox.shrink());
       },
       routerConfig: _router,
     );

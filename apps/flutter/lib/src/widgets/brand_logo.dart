@@ -2,10 +2,10 @@ import 'package:flutter/material.dart';
 
 /// The Pocket-Codex brand mark: the bare "cloud terminal" glyph.
 ///
-/// Two theme-matched variants ship in the bundle (extracted from the tile
-/// masters in `icon/` by `test/gen_icon_test.dart`): `glyph_light.png` (ink
-/// cloud, blue arcs) for light themes and `glyph_dark.png` (white cloud,
-/// pale blue arcs) for dark themes. The glyph carries no tile — a rounded launcher
+/// Two theme-matched variants ship in the bundle (drawn from the vector mark
+/// by `test/gen_icon_test.dart`): `glyph_light.png` (ink cloud, blue arcs) for
+/// light themes and `glyph_dark.png` (white cloud, pale blue arcs) for dark
+/// themes. The glyph carries no tile — a rounded launcher
 /// tile dropped into a page reads as a pasted app icon, while the bare glyph
 /// sits on any surface like an ordinary illustration.
 class BrandLogo extends StatelessWidget {

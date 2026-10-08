@@ -1707,16 +1707,22 @@ void main() {
     );
     await t.pumpAndSettle();
 
-    // The project is the tree's top level, so its label is genuinely larger
-    // than the conversation titles — not merely bolder.
+    // The project is the tree's top level: a bold group heading above
+    // regular-weight rows, which indent beneath its name.
     final heading = t.widget<Text>(find.text('alpha'));
     final row = t.widget<Text>(find.text('a conversation'));
-    expect(heading.style!.fontSize!, greaterThan(row.style!.fontSize!));
+    expect(heading.style!.fontWeight, FontWeight.w600);
+    expect(row.style!.fontWeight, FontWeight.w400);
+    expect(
+      t.getTopLeft(find.text('a conversation')).dx,
+      greaterThanOrEqualTo(t.getTopLeft(find.text('alpha')).dx),
+    );
 
-    // Rows carry no leading glyph of their own; the heading's chevron is the
-    // tree's only icon.
+    // Rows carry no leading glyph of their own; the heading's folder and fold
+    // chevron are the tree's only icons.
     expect(find.byIcon(Icons.chat_bubble_outline), findsNothing);
-    expect(find.byIcon(Icons.keyboard_arrow_down), findsOneWidget);
+    expect(find.byIcon(Icons.folder_open_outlined), findsOneWidget);
+    expect(find.byIcon(Icons.keyboard_arrow_right), findsOneWidget);
   });
 
   testWidgets('Clicking a project folder collapses its conversations', (
@@ -2560,11 +2566,10 @@ void main() {
     expect(t.widget<MouseRegion>(card).cursor, SystemMouseCursors.text);
 
     expect(t.widget<TextField>(field).focusNode!.hasFocus, isFalse);
-    // Tap the card's own padding, clear of the field and the button row.
-    final box = t.getRect(
-      find.ancestor(of: field, matching: find.byType(Container)).first,
-    );
-    await t.tapAt(Offset(box.right - 4, box.top + 4));
+    // Tap the card's own padding below the field, clear of the field, the
+    // resize edge along the top and the button row.
+    final area = t.getRect(find.byKey(const Key('composer-input-area')));
+    await t.tapAt(Offset(area.center.dx, area.bottom + 3));
     await t.pumpAndSettle();
     expect(t.widget<TextField>(field).focusNode!.hasFocus, isTrue);
   });
@@ -4681,7 +4686,7 @@ void main() {
     await t.pumpAndSettle();
 
     // No gauge until a token-usage event arrives.
-    expect(find.text('10'), findsNothing);
+    expect(find.text('10%'), findsNothing);
     api.pushEvent(
       'pcx:lb7666:app:default',
       const AppEvent(
@@ -4693,12 +4698,12 @@ void main() {
     );
     await t.pumpAndSettle();
     // 20000 / 200000 = 10%.
-    expect(find.text('10'), findsOneWidget);
+    expect(find.text('10%'), findsOneWidget);
 
     // Tapping the gauge opens the context/quota detail sheet.
     api.rateLimitsJson =
         '{"rateLimits":{"primary":{"usedPercent":42,"windowDurationMins":300}}}';
-    await t.tap(find.text('10'));
+    await t.tap(find.text('10%'));
     await t.pumpAndSettle();
     expect(find.text('上下文与用量'), findsOneWidget); // contextUsageTitle (zh)
     // Scoped to the sheet: the same window label also names the always-visible
@@ -4868,7 +4873,7 @@ void main() {
 
     // It lives with the window's controls, not in the sessions pane, so
     // collapsing the sidebar must not take appearance away with it.
-    await t.tap(find.byIcon(Icons.menu_open));
+    await t.tap(find.byKey(const Key('sidebar-collapse-btn')));
     await t.pumpAndSettle();
     expect(btn, findsOneWidget);
   });

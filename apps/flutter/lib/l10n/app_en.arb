@@ -814,5 +814,41 @@
         "type": "int"
       }
     }
-  }
+  },
+  "hideSidebar": "Hide sidebar",
+  "showSidebar": "Show sidebar",
+  "locateConversation": "Show current conversation",
+  "voiceReconnecting": "Voice reconnecting…",
+  "voiceSpeaking": "Assistant speaking",
+  "voiceUserSpeaking": "You're speaking",
+  "voiceInterrupted": "Interrupted",
+  "voiceEndedByUser": "Voice call ended",
+  "voiceEndedReason": "Voice call ended: {reason}",
+  "@voiceEndedReason": {
+    "placeholders": { "reason": { "type": "String" } }
+  },
+  "voiceFailedShort": "Voice call dropped",
+  "voiceOpenCall": "Go to the voice conversation",
+  "voiceHangUp": "Hang up",
+  "voiceModelDefault": "Host default",
+  "voiceModelFrameless": "gpt-live-1-codex (low latency)",
+  "voiceModelCustom": "Custom…",
+  "voiceModelCustomLabel": "Model id",
+  "voiceTaskContinues": "Tasks the voice handed to Codex keep running after you hang up.",
+  "stepOutput": "output",
+  "previewRendered": "Preview",
+  "previewSource": "Source",
+  "dictate": "Dictate",
+  "dictationReady": "ready",
+  "dictationConnecting": "Connecting dictation…",
+  "dictationListening": "Listening",
+  "dictationFinishing": "Finishing…",
+  "dictationStop": "Done (Enter)",
+  "dictationCancel": "Discard (Esc)",
+  "dictationKeys": "Enter done · Esc discard",
+  "dictationPermission": "Microphone access was denied",
+  "dictationUnavailable": "Dictation is unavailable on this host",
+  "dictationInterrupted": "Dictation dropped; what was heard is kept",
+  "dictationVoiceBusy": "The live voice call is using the microphone",
+  "dictationShortcut": "Dictate (Ctrl+Shift+Space)"
 }

@@ -254,9 +254,20 @@ class _MessageViewState extends State<MessageView> {
                     horizontal: 16,
                     vertical: 10,
                   ),
+                  // One step above the page, with a tighter corner on the
+                  // speaker's side, so the user's turns read as theirs
+                  // without a colour of their own.
                   decoration: BoxDecoration(
-                    color: scheme.surfaceContainerLow,
-                    borderRadius: BorderRadius.circular(kPanelRadius),
+                    color: Color.alphaBlend(
+                      accentWash(scheme, strength: 0.8),
+                      scheme.surfaceContainer,
+                    ),
+                    borderRadius: const BorderRadius.only(
+                      topLeft: Radius.circular(kComposerRadius),
+                      topRight: Radius.circular(kComposerRadius),
+                      bottomLeft: Radius.circular(kComposerRadius),
+                      bottomRight: Radius.circular(kRowRadius),
+                    ),
                   ),
                   // The tighter 1.3 line: a bubble is a transcription of one
                   // utterance, not a paragraph to read down.

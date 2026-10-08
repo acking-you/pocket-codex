@@ -642,7 +642,7 @@ class _TurnPreviewCard extends StatelessWidget {
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
                 fontWeight: FontWeight.w600,
-                fontFamilyFallback: cjkFontFallback,
+                fontFamilyFallback: uiCjkFallback,
                 color: scheme.onSurface,
               ),
             ),
@@ -655,7 +655,7 @@ class _TurnPreviewCard extends StatelessWidget {
               style: theme.textTheme.bodySmall?.copyWith(
                 color: scheme.onSurfaceVariant,
                 height: 1.4,
-                fontFamilyFallback: cjkFontFallback,
+                fontFamilyFallback: uiCjkFallback,
               ),
             ),
           ],

@@ -103,7 +103,9 @@ void main() {
         id: 'message',
         itemType: 'agentMessage',
         title: '',
-        text: '[report](${file.path})',
+        // A file URI, so the link is valid Markdown on every OS: a Windows
+        // temp path's backslashes are not a link target.
+        text: '[report](${file.uri})',
       ),
     ];
     await t.pumpWidget(host(api, service: null));

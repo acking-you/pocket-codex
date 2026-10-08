@@ -22,10 +22,16 @@ import 'package:flutter/material.dart';
 const double kPanelRadius = 12.0;
 
 /// The composer card and other large raised frames.
-const double kComposerRadius = 20.0;
+const double kComposerRadius = 16.0;
 
 /// Small controls: chips, pills, suggestion rows, hover chips.
-const double kControlRadius = 10.0;
+const double kControlRadius = 8.0;
+
+/// Sidebar rows and other list selections — the macOS source-list radius.
+const double kRowRadius = 6.0;
+
+/// Dialogs and modal panels.
+const double kDialogRadius = 14.0;
 
 /// The desktop corner radius. Follows the design's control radius so a
 /// desktop-tuned button and a chat-surface chip round the same amount.
@@ -35,7 +41,13 @@ const double kDesktopRadius = kControlRadius;
 /// alpha — there is no Material `elevation` anywhere. A wider blur is for
 /// content that floats over scrolling material.
 List<BoxShadow> panelShadow(ColorScheme scheme, {double blur = 12}) => [
-  BoxShadow(color: scheme.onSurface.withValues(alpha: 0.02), blurRadius: blur),
+  BoxShadow(
+    color: Colors.black.withValues(
+      alpha: scheme.brightness == Brightness.light ? 0.05 : 0.28,
+    ),
+    blurRadius: blur,
+    offset: const Offset(0, 2),
+  ),
 ];
 
 /// Values a desktop-flavored widget reads to stay in step with the theme. Only
@@ -69,7 +81,7 @@ class DesktopTokens extends ThemeExtension<DesktopTokens> {
     radius: kDesktopRadius,
     panel: s.surfaceBright,
     border: s.outlineVariant,
-    hover: s.surfaceContainer,
+    hover: s.onSurface.withValues(alpha: 0.05),
   );
 
   @override
@@ -133,9 +145,13 @@ ThemeData desktopize(ThemeData base) {
   final menuColor = scheme.surfaceBright;
   // A menu's hairline is a step firmer than a panel's, for the same reason.
   final menuShape = RoundedRectangleBorder(
-    borderRadius: BorderRadius.circular(kPanelRadius),
-    side: BorderSide(color: scheme.outline),
+    borderRadius: BorderRadius.circular(kControlRadius + 2),
+    side: BorderSide(color: scheme.outlineVariant),
   );
+  // Menus and dialogs float, so they get the one real shadow in the app.
+  final floatShadow = scheme.brightness == Brightness.light
+      ? Colors.black.withValues(alpha: 0.16)
+      : Colors.black.withValues(alpha: 0.5);
 
   return base.copyWith(
     // Denser rows, buttons, list tiles — desktop packs more per screen.
@@ -144,8 +160,11 @@ ThemeData desktopize(ThemeData base) {
     // Both are ink washes off the container ladder, so they composite correctly
     // on the page and on a raised card alike.
     splashFactory: NoSplash.splashFactory,
-    hoverColor: scheme.surfaceContainer,
-    highlightColor: scheme.surfaceContainerHigh,
+    // Ink washes rather than opaque steps, so a hover reads the same over the
+    // page, the sidebar and a raised card.
+    hoverColor: scheme.onSurface.withValues(alpha: 0.05),
+    highlightColor: scheme.onSurface.withValues(alpha: 0.08),
+    focusColor: scheme.onSurface.withValues(alpha: 0.08),
     // A pointing hand over anything clickable. Flutter's default for ink
     // widgets (`WidgetStateMouseCursor.adaptiveClickable`) resolves to a click
     // cursor ONLY on web — on a native desktop build it returns `basic`, so
@@ -177,33 +196,40 @@ ThemeData desktopize(ThemeData base) {
     // Cards keep the base theme's panel look (raised card + panel radius);
     // the lift is a soft shadow, not a Material elevation, on desktop too.
     dialogTheme: base.dialogTheme.copyWith(
-      elevation: 0,
+      elevation: 24,
+      shadowColor: floatShadow,
       backgroundColor: scheme.surfaceBright,
       surfaceTintColor: Colors.transparent,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(kPanelRadius),
-        side: BorderSide(color: scheme.outline),
+        borderRadius: BorderRadius.circular(kDialogRadius),
+        side: BorderSide(color: scheme.outlineVariant),
       ),
     ),
     popupMenuTheme: base.popupMenuTheme.copyWith(
-      elevation: 0,
+      elevation: 8,
+      shadowColor: floatShadow,
       color: menuColor,
       surfaceTintColor: Colors.transparent,
       shape: menuShape,
+      menuPadding: const EdgeInsets.symmetric(vertical: 4),
+      textStyle: TextStyle(fontSize: 13, color: scheme.onSurface),
     ),
     menuTheme: MenuThemeData(
       style: MenuStyle(
-        elevation: const WidgetStatePropertyAll(0),
+        elevation: const WidgetStatePropertyAll(8),
+        shadowColor: WidgetStatePropertyAll(floatShadow),
         surfaceTintColor: const WidgetStatePropertyAll(Colors.transparent),
         backgroundColor: WidgetStatePropertyAll(menuColor),
         shape: WidgetStatePropertyAll(menuShape),
+        padding: const WidgetStatePropertyAll(EdgeInsets.all(4)),
       ),
     ),
     // A quick, quiet tooltip — no long delay, no heavy chrome.
     tooltipTheme: base.tooltipTheme.copyWith(
-      waitDuration: const Duration(milliseconds: 400),
+      waitDuration: const Duration(milliseconds: 500),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
       decoration: BoxDecoration(
-        color: scheme.inverseSurface.withValues(alpha: 0.92),
+        color: scheme.inverseSurface,
         borderRadius: BorderRadius.circular(6),
       ),
       textStyle: TextStyle(color: scheme.onInverseSurface, fontSize: 12),

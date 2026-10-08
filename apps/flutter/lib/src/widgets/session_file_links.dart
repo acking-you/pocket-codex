@@ -9,6 +9,7 @@ import 'package:pocket_codex/src/bridge_api.dart';
 import 'package:pocket_codex/src/file_exports.dart';
 import 'package:pocket_codex/src/file_links.dart';
 import 'package:pocket_codex/src/widgets/app_toast.dart';
+import 'package:pocket_codex/src/widgets/file_preview.dart';
 import 'package:pocket_codex/src/widgets/links.dart';
 
 const _previewLimit = 8 * 1024 * 1024;
@@ -224,56 +225,27 @@ class _FileLinkDialogState extends State<_FileLinkDialog> {
   }
 
   Widget _content(FilePreviewData preview) {
-    final l10n = AppLocalizations.of(context);
-    final ext = widget.link.name.split('.').last.toLowerCase();
-    final image = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'].contains(ext);
-    if (image && !preview.truncated) {
-      return InteractiveViewer(
-        child: Image.memory(
-          preview.bytes,
-          fit: BoxFit.contain,
-          errorBuilder: (_, _, _) => Text(l10n.fileLinkUnsupported),
-        ),
-      );
-    }
-    if (image ||
-        preview.bytes.take(8192).contains(0) ||
-        ['pdf', 'doc', 'docx', 'xlsx', 'pptx', 'zip'].contains(ext)) {
-      return Text(l10n.fileLinkUnsupported);
-    }
-    String text;
+    // The text limit is for decoding only: a complete picture past it is
+    // still complete, and must still be drawn.
+    final textTruncated =
+        preview.truncated || preview.bytes.length > _textLimit;
+    String? text;
     try {
       text = utf8.decode(
         preview.bytes.take(_textLimit).toList(),
-        allowMalformed: preview.truncated || preview.bytes.length > _textLimit,
+        allowMalformed: textTruncated,
       );
     } on FormatException {
-      {
-        return Text(l10n.fileLinkUnsupported);
-      }
+      text = null;
     }
-    final lines = text.split('\n');
-    final truncated = preview.truncated || preview.bytes.length > _textLimit;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        if (truncated)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: Text(l10n.fileLinkTruncated),
-          ),
-        Expanded(
-          child: SelectionArea(
-            child: ListView.builder(
-              itemCount: lines.length,
-              itemBuilder: (context, index) => Text(
-                lines[index],
-                style: const TextStyle(fontFamily: 'monospace', fontSize: 13),
-              ),
-            ),
-          ),
-        ),
-      ],
+    return FilePreview(
+      name: widget.link.name,
+      // Images and SVGs decode from what was read; a truncated one is
+      // refused by FilePreview rather than drawn half.
+      bytes: preview.bytes,
+      text: text,
+      truncated: preview.truncated,
+      textTruncated: textTruncated,
     );
   }
 

@@ -65,6 +65,21 @@ An executable replaced by npm can remain alive as `codex (deleted)`. Status
 recognizes it until a deliberate restart loads the replacement. Listener
 matching uses an exact `--listen` argument, not a URL substring.
 
+## Follow-up sync: 2026-10-08
+
+`deps/codex` now points at `b360f3350bf0b6ee5b11e94b09122b570e84f0d3`, a clean
+merge of upstream `openai/codex` main `b38942ce7ce73a5cee7981f1f1b6f1a3d2c5a5c0`
+(139 commits after `afb436df8b`) into the `pocket-codex` branch, keeping its
+Windows console-suppression fixes. The branch was fast-forwarded on the fork so
+CI can fetch the pointer.
+
+No app-server method or notification was added, removed or renamed, and
+`thread/realtime/*` is byte-identical. New optional request fields
+(`parentTurnId`, `rootTurnId`, `excludedThreadIds`) are not sent; new response
+fields are ignored by local parsing. `subAgentActivity` gained `model` and
+`reasoningEffort`, which the step card shows live and from rollouts. The
+resolved workspace graph still contains no Codex runtime crate.
+
 ## Verification
 
 Run the full first-party gates in `AGENTS.md`, including Flutter lifecycle

@@ -228,6 +228,19 @@ fn voice_classification_and_signaling_survive_the_bridge() {
     )
     .is_ok());
     assert!(validate_realtime_request("thread/start", &json!({})).is_err());
+    assert!(validate_realtime_request(
+        "thread/start",
+        &json!({"threadSource":"pocket-codex-dictation","ephemeral":true})
+    )
+    .is_ok());
+    // A dictation thread that would persist is refused.
+    assert!(validate_realtime_request(
+        "thread/start",
+        &json!({"threadSource":"pocket-codex-dictation"})
+    )
+    .is_err());
+    assert!(validate_realtime_request("thread/unsubscribe", &json!({"threadId":"d"})).is_ok());
+    assert!(validate_realtime_request("thread/unsubscribe", &json!({})).is_err());
     assert!(validate_realtime_request("command/exec", &json!({})).is_err());
 }
 

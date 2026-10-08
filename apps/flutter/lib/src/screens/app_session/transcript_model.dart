@@ -118,11 +118,13 @@ class TranscriptItem {
   ///
   /// `contextCompaction` is deliberately NOT here: compaction happens *during* a
   /// turn, so leaving it out split one turn's work into several folds that each
-  /// reported the same duration.
+  /// reported the same duration. `autoApprovalReview` is not here either: a
+  /// review is part of the step it approves, so it sits inside the fold next
+  /// to that step, showing what was approved — standing alone split a turn
+  /// into one fold per review.
   bool get standsAlone =>
       type == 'turnDuration' ||
       type == 'plan' ||
-      type == 'autoApprovalReview' ||
       type == 'interrupted' ||
       type == 'imageGeneration';
 }
