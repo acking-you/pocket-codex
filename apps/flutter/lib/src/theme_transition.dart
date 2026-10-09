@@ -1,5 +1,6 @@
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 
@@ -25,22 +26,21 @@ abstract final class ThemeTransition {
   /// Falls back to a plain [apply] when there is nothing to capture or motion
   /// is reduced.
   static void run(BuildContext context, VoidCallback apply) {
-    final boundary =
-        _boundary.currentContext?.findRenderObject() as RenderRepaintBoundary?;
-    final animate = Motion.of(context, Motion.slow) > Duration.zero;
-    if (!animate || boundary == null || boundary.debugNeedsPaint) {
-      apply();
-      return;
-    }
     try {
+      final boundary = _boundary.currentContext?.findRenderObject();
+      final animate = Motion.of(context, Motion.slow) > Duration.zero;
+      if (!animate || boundary is! RenderRepaintBoundary) return;
+      // Flutter's debugNeedsPaint getter throws when assertions are disabled.
+      if (kDebugMode && boundary.debugNeedsPaint) return;
       final ratio = MediaQuery.devicePixelRatioOf(context);
       final image = boundary.toImageSync(pixelRatio: ratio);
       _snapshot.value?.dispose();
       _snapshot.value = image;
     } catch (_) {
-      // A platform without image capture still switches, just without the fade.
+      // Image capture is optional; it must never prevent the preference change.
+    } finally {
+      apply();
     }
-    apply();
   }
 }
 

@@ -500,6 +500,13 @@ this file's roadmap so the source of truth stays in sync.
     sessions read-only, with navigation to the parent; never resume or take over
     a reviewer. See `docs/guardian-sessions.md`.
 
+22. **macOS distribution and theme switching (2026-10-09).** Release app jobs
+    require Developer ID signatures and accepted, stapled Apple notarization
+    for DMG and ZIP downloads. Never fall back to unsigned publication. Keep
+    signing credentials out of source and build steps. Theme snapshot capture
+    is optional; applying the preference must survive capture failures and
+    release builds without debug-only render getters. See `docs/macos-release.md`.
+
 ### UI and history maintenance (2026-09-13)
 
 - Keep shared colors, typography, and control shapes in `theme.dart` /

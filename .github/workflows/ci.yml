@@ -42,6 +42,43 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: python3 scripts/ci_affected.py detect
 
+  macos-packaging-tests:
+    name: macOS packaging safety checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 -m unittest discover -s scripts -p 'test_package_macos.py'
+
+  theme-native:
+    name: Theme toggle without debug assertions (macOS)
+    needs: changes
+    if: needs.changes.outputs.flutter == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-06-01
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: theme-native
+      - name: Exercise the real theme toggle with assertions disabled
+        working-directory: apps/flutter
+        env:
+          FLUTTER_XCODE_ARCHS: arm64
+          FLUTTER_XCODE_ONLY_ACTIVE_ARCH: "YES"
+        run: |
+          flutter pub get
+          flutter drive --profile -d macos \
+            --driver=test_driver/integration_test.dart \
+            --target=integration_test/theme_toggle_native_test.dart
+
   fmt:
     name: rust fmt
     needs: changes
