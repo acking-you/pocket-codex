@@ -16,6 +16,10 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use super::{config, runtime};
 
+#[path = "session_cache_accounting.rs"]
+mod accounting;
+use accounting::Guard;
+
 /// Maximum single cached allocation. Oversized pages remain usable online.
 pub const MAX_ENTRY_BYTES: u64 = 32 * 1024 * 1024;
 
@@ -87,11 +91,13 @@ pub fn application_cache() -> Result<DiskCache> {
 pub fn set_limit(support_dir: &Path, limit_mb: u32) -> Result<()> {
     ensure!(limit_mb <= 64_000, "cache limit must be between 0 and 64000 MB");
     let cache = DiskCache::for_app(support_dir.into());
-    let _lock = cache.lock()?;
+    let mut lock = cache.lock()?;
     let mut cfg = config::load_config(support_dir)?;
     cfg.history_cache.disk_limit_mb = limit_mb;
     config::save_config(support_dir, &cfg)?;
-    cache.trim_locked(u64::from(limit_mb) * 1_000_000, 0)
+    cache
+        .trim_locked(&mut lock, u64::from(limit_mb) * 1_000_000, 0)
+        .map(|_| ())
 }
 
 enum CacheLimit {
@@ -109,7 +115,7 @@ pub struct DiskCache {
 impl DiskCache {
     /// Construct a cache with an exact byte budget; no filesystem side effects.
     #[cfg(test)]
-    fn new(root: PathBuf, limit: u64) -> Self {
+    pub(super) fn new(root: PathBuf, limit: u64) -> Self {
         Self {
             root,
             limit: CacheLimit::Fixed(limit),
@@ -133,7 +139,7 @@ impl DiskCache {
         }
     }
 
-    fn lock(&self) -> Result<File> {
+    fn lock(&self) -> Result<Guard> {
         fs::create_dir_all(&self.root)?;
         #[cfg(unix)]
         {
@@ -141,8 +147,7 @@ impl DiskCache {
             fs::set_permissions(&self.root, fs::Permissions::from_mode(0o700))?;
         }
         let file = private_file(&self.root.join("cache.lock"), false)?;
-        file.lock()?;
-        Ok(file)
+        Guard::new(file, &self.root)
     }
 
     fn path(&self, owner: &str, session: &str, key: &str) -> PathBuf {
@@ -158,7 +163,7 @@ impl DiskCache {
         if !self.root.exists() {
             return Ok(None);
         }
-        let _lock = self.lock()?;
+        let mut lock = self.lock()?;
         let limit = self.limit_locked()?;
         if limit == 0 {
             return Ok(None);
@@ -192,6 +197,7 @@ impl DiskCache {
                 Ok(Some(data))
             },
             Err(_) => {
+                lock.invalidate()?;
                 let _ = fs::remove_file(path);
                 Ok(None)
             },
@@ -223,7 +229,7 @@ impl DiskCache {
         if data.len() as u64 > MAX_ENTRY_BYTES {
             return Ok(false);
         }
-        let _lock = self.lock()?;
+        let mut lock = self.lock()?;
         let limit = self.limit_locked()?;
         if limit == 0 {
             return Ok(false);
@@ -244,7 +250,9 @@ impl DiskCache {
         let path = self.path(owner, session, key);
         // Reserve for both old and staged versions before writing: temporary
         // file lengths count toward the same quota, including crash leftovers.
-        self.trim_locked(limit, bytes)?;
+        let used = self.trim_locked(&mut lock, limit, bytes)?;
+        let old_bytes = fs::metadata(&path).map_or(0, |m| m.len());
+        lock.invalidate()?;
         let temporary = path.with_extension("tmp");
         let mut file = private_file(&temporary, true)?;
         file.write_all(&encoded)?;
@@ -253,6 +261,7 @@ impl DiskCache {
         fs::rename(&temporary, &path)?;
         #[cfg(unix)]
         File::open(&self.root)?.sync_all()?;
+        lock.used = Some(used.saturating_sub(old_bytes) + bytes);
         Ok(true)
     }
 
@@ -268,13 +277,32 @@ impl DiskCache {
         self.write(owner, session, key, &serde_json::to_vec(value)?, running)
     }
 
+    /// Remove one display checkpoint after publishing a newer snapshot.
+    pub(super) fn remove(&self, owner: &str, session: &str, key: &str) -> Result<()> {
+        let mut lock = self.lock()?;
+        lock.invalidate()?;
+        match fs::remove_file(self.path(owner, session, key)) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    /// Whether a display entry exists, without parsing a potentially large
+    /// view. Concurrent quota eviction can still turn a subsequent read
+    /// into a miss.
+    pub(super) fn contains(&self, owner: &str, session: &str, key: &str) -> bool {
+        self.path(owner, session, key).is_file()
+    }
+
     /// Invalidate one source session after a provider generation change.
     pub fn invalidate_session(&self, owner: &str, session: &str) -> Result<()> {
         if !self.root.exists() {
             return Ok(());
         }
-        let _lock = self.lock()?;
+        let mut lock = self.lock()?;
         let session = digest_bytes(session.as_bytes());
+        lock.invalidate()?;
         for entry in fs::read_dir(&self.root)?.filter_map(Result::ok) {
             if entry.path().extension().is_none_or(|s| s != "entry") {
                 continue;
@@ -296,56 +324,69 @@ impl DiskCache {
         if !self.root.exists() {
             return Ok(0);
         }
-        let _lock = self.lock()?;
-        self.trim_locked(self.limit_locked()?, 0)?;
-        Ok(fs::read_dir(&self.root)?
-            .filter_map(Result::ok)
-            .filter_map(|e| e.metadata().ok())
-            .map(|m| m.len())
-            .sum())
+        let mut lock = self.lock()?;
+        // Explicit diagnostics reconcile external edits too, including in-place
+        // corruption that did not change the directory's modification time.
+        lock.used = None;
+        self.trim_locked(&mut lock, self.limit_locked()?, 0)
     }
 
-    fn trim_locked(&self, limit: u64, reserve: u64) -> Result<()> {
-        let focused = focus().lock().ok().and_then(|f| f.clone());
+    fn trim_locked(&self, lock: &mut Guard, limit: u64, reserve: u64) -> Result<u64> {
+        if let Some(used) = lock.used {
+            if used.saturating_add(reserve) <= limit {
+                return Ok(used);
+            }
+        }
         let mut entries = Vec::new();
         let mut used = 0;
         for entry in fs::read_dir(&self.root)?.filter_map(Result::ok) {
             let path = entry.path();
             if path.extension().is_some_and(|s| s == "tmp") {
+                lock.invalidate()?;
                 fs::remove_file(path)?;
                 continue;
             }
-            if path.extension().is_none_or(|s| s != "entry") {
-                continue;
+            if path.extension().is_some_and(|s| s == "entry") {
+                let metadata = entry.metadata()?;
+                used += metadata.len();
+                entries.push((path, metadata));
             }
-            let metadata = entry.metadata()?;
-            let header = File::open(&path)
-                .ok()
-                .and_then(|file| read_header(&mut BufReader::new(file)).ok());
-            let priority = header.as_ref().map_or(0, |h| {
-                if focused
-                    .as_ref()
-                    .is_some_and(|(o, s)| o == &h.owner && s == &h.session)
-                {
-                    3
-                } else if h.hot_until >= now() {
-                    h.priority
-                } else {
-                    1
+        }
+        if used.saturating_add(reserve) > limit {
+            let focused = focus().lock().ok().and_then(|f| f.clone());
+            let mut eviction: Vec<_> = entries
+                .into_iter()
+                .map(|(path, metadata)| {
+                    let header = File::open(&path)
+                        .ok()
+                        .and_then(|file| read_header(&mut BufReader::new(file)).ok());
+                    let priority = header.as_ref().map_or(0, |h| {
+                        if focused
+                            .as_ref()
+                            .is_some_and(|(o, s)| o == &h.owner && s == &h.session)
+                        {
+                            3
+                        } else if h.hot_until >= now() {
+                            h.priority
+                        } else {
+                            1
+                        }
+                    });
+                    (priority, metadata.modified().ok(), metadata.len(), path)
+                })
+                .collect();
+            eviction.sort_by_key(|a| (a.0, a.1));
+            lock.invalidate()?;
+            for (_, _, size, path) in eviction {
+                if used.saturating_add(reserve) <= limit {
+                    break;
                 }
-            });
-            used += metadata.len();
-            entries.push((priority, metadata.modified().ok(), metadata.len(), path));
-        }
-        entries.sort_by_key(|a| (a.0, a.1));
-        for (_, _, size, path) in entries {
-            if used.saturating_add(reserve) <= limit {
-                break;
+                fs::remove_file(path)?;
+                used = used.saturating_sub(size);
             }
-            fs::remove_file(path)?;
-            used = used.saturating_sub(size);
         }
-        Ok(())
+        lock.used = Some(used);
+        Ok(used)
     }
 }
 
@@ -380,6 +421,62 @@ fn private_file(path: &Path, truncate: bool) -> Result<File> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stale_accounting_is_invalidated_by_another_writer_and_crash_leftovers() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let cache = DiskCache::new(dir.path().into(), 5000);
+        cache.write("h", "t", "one", &vec![1; 1200], false)?;
+        // Simulate a separate process: change the lock revision without updating
+        // this process's counter, then publish a file while holding the OS lock.
+        let mut lock = private_file(&dir.path().join("cache.lock"), false)?;
+        lock.lock()?;
+        use std::io::{Seek, SeekFrom};
+        lock.seek(SeekFrom::Start(0))?;
+        lock.write_all(&99_u64.to_le_bytes())?;
+        // Growing an existing file leaves directory mtime unchanged, so only
+        // the revision can invalidate this process's old byte count.
+        OpenOptions::new()
+            .append(true)
+            .open(cache.path("h", "t", "one"))?
+            .write_all(&vec![1; 2000])?;
+        drop(lock);
+        cache.write("h", "t", "two", &vec![2; 2300], true)?;
+        let actual: u64 = fs::read_dir(dir.path())?
+            .filter_map(Result::ok)
+            .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "entry"))
+            .map(|entry| entry.metadata().expect("entry metadata").len())
+            .sum();
+        assert!(actual <= 5000, "revision must prevent stale under-accounting");
+        fs::write(dir.path().join("orphan.tmp"), vec![1; 300])?;
+        cache.write("h", "t", "two", &vec![2; 2300], true)?;
+        assert!(!dir.path().join("orphan.tmp").exists());
+        assert!(cache.usage()? <= 5000);
+        assert_eq!(cache.read("h", "t", "two")?, Some(vec![2; 2300]));
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "manual filesystem benchmark"]
+    fn benchmark_cache_rewrites() -> Result<()> {
+        for count in [100, 1000] {
+            let dir = tempfile::tempdir()?;
+            let cache = DiskCache::new(dir.path().into(), 64 * 1024 * 1024);
+            let data = vec![b'x'; 1024];
+            for i in 0..count {
+                cache.write("host", "thread", &i.to_string(), &data, false)?;
+            }
+            let started = std::time::Instant::now();
+            for _ in 0..50 {
+                cache.write("host", "thread", "0", &data, true)?;
+            }
+            eprintln!(
+                "cache_rewrite entries={count} mean_us={}",
+                started.elapsed().as_micros() / 50
+            );
+        }
+        Ok(())
+    }
 
     #[test]
     fn hits_refresh_timestamps_without_rewriting_the_entry() -> Result<()> {

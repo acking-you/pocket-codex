@@ -579,6 +579,10 @@ pub struct ThreadMetaDto {
     /// User-set title, or `None` when the thread was never renamed (the UI
     /// falls back to `preview`).
     pub name: Option<String>,
+    /// App-owned classification, including `pocket-codex-voice`.
+    pub thread_source: Option<String>,
+    /// Parent thread for a spawned child.
+    pub parent_thread_id: Option<String>,
     /// Working directory (the project the thread controls).
     pub cwd: String,
     /// Unix seconds of last update.
@@ -946,7 +950,7 @@ pub fn meta_retry_events(sink: StreamSink<RetryProgressDto>) -> Result<()> {
 
 /// Stream live app-server events (turn/item notifications) for `service_key`.
 /// The Dart side receives one [`AppEventDto`] per notification until the
-/// session is disconnected.
+/// session is disconnected or the feed lags and requires history recovery.
 pub fn app_events(service_key: String, sink: StreamSink<AppEventDto>) -> Result<()> {
     // Subscribe *inside* the task and always return `Ok` at setup. If the service
     // isn't connected, the task returns immediately and dropping `sink` closes the
@@ -961,38 +965,78 @@ pub fn app_events(service_key: String, sink: StreamSink<AppEventDto>) -> Result<
         } else {
             app_session::subscribe_events(&service_key)
         };
-        let mut rx = match subscribed {
+        let rx = match subscribed {
             Ok(rx) => rx,
             // Not connected: close the stream so Dart sees `onDone`.
             Err(_) => return,
         };
-        loop {
-            match rx.recv().await {
-                Ok(ev) => {
-                    let dto = AppEventDto {
-                        kind: ev.kind,
-                        thread_id: ev.thread_id,
-                        item_id: ev.item_id,
-                        item_type: ev.item_type,
-                        title: ev.title,
-                        text: ev.text,
-                        images: ev.images,
-                        request_id: ev.request_id,
-                        raw: ev.raw,
-                    };
-                    // Dart dropped the stream: stop forwarding.
-                    if sink.add(dto).is_err() {
-                        break;
-                    }
-                },
-                // Slow consumer dropped some events; keep going.
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-            }
-        }
+        forward_app_events(rx, |ev| {
+            sink.add(AppEventDto {
+                kind: ev.kind,
+                thread_id: ev.thread_id,
+                item_id: ev.item_id,
+                item_type: ev.item_type,
+                title: ev.title,
+                text: ev.text,
+                images: ev.images,
+                request_id: ev.request_id,
+                raw: ev.raw,
+            })
+            .is_ok()
+        })
+        .await;
     });
     Ok(())
 }
+
+async fn forward_app_events(
+    mut rx: tokio::sync::broadcast::Receiver<app_session::AppEvent>,
+    mut send: impl FnMut(app_session::AppEvent) -> bool,
+) {
+    use tokio::sync::broadcast::error::RecvError;
+
+    loop {
+        match rx.recv().await {
+            Ok(event) => {
+                if !send(event) {
+                    break;
+                }
+            },
+            Err(RecvError::Lagged(skipped)) => {
+                // Missing final items or turn/completed cannot be recovered by
+                // later deltas. Close only this feed so Dart reloads history.
+                tracing::warn!(skipped, "app event feed lagged; closing for history recovery");
+                forward_retained_requests(&mut rx, &mut send);
+                break;
+            },
+            Err(RecvError::Closed) => break,
+        }
+    }
+}
+
+fn forward_retained_requests(
+    rx: &mut tokio::sync::broadcast::Receiver<app_session::AppEvent>,
+    send: &mut impl FnMut(app_session::AppEvent) -> bool,
+) {
+    // History cannot reconstruct request IDs. Preserve prompts in the retained
+    // tail before closing, without waiting for new data or chasing new events.
+    let retained = rx.len();
+    for _ in 0..retained {
+        match rx.try_recv() {
+            Ok(event) => {
+                if event.request_id.is_some() && !send(event) {
+                    return;
+                }
+            },
+            Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => {},
+            Err(_) => break,
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "bridge_events_tests.rs"]
+mod bridge_events_tests;
 
 /// List threads known to the app-server.
 pub fn app_thread_list(service_key: String) -> Result<Vec<ThreadMetaDto>> {
@@ -1007,10 +1051,26 @@ pub fn app_thread_list(service_key: String) -> Result<Vec<ThreadMetaDto>> {
             id: t.id,
             preview: t.preview,
             name: t.name,
+            thread_source: t.thread_source,
+            parent_thread_id: t.parent_thread_id,
             cwd: t.cwd,
             updated_at: t.updated_at,
         })
         .collect())
+}
+
+/// Inspect one thread without resuming it or taking ownership.
+pub fn app_thread_metadata(service_key: String, thread_id: String) -> Result<ThreadMetaDto> {
+    let t = app_session::thread_metadata(&service_key, &thread_id)?;
+    Ok(ThreadMetaDto {
+        id: t.id,
+        preview: t.preview,
+        name: t.name,
+        thread_source: t.thread_source,
+        parent_thread_id: t.parent_thread_id,
+        cwd: t.cwd,
+        updated_at: t.updated_at,
+    })
 }
 
 /// List the models the app-server offers.
@@ -1033,6 +1093,18 @@ pub fn app_model_list(service_key: String) -> Result<Vec<ModelInfoDto>> {
             is_default: m.is_default,
         })
         .collect())
+}
+
+/// Send a thread realtime control request; returns the upstream JSON result.
+/// Accepts the six `thread/realtime/*` methods, `thread/timeline/list`,
+/// marked voice `thread/start` (and ephemeral dictation `thread/start`), and
+/// `thread/unsubscribe`.
+pub fn app_realtime_request(
+    service_key: String,
+    method: String,
+    params_json: String,
+) -> Result<String> {
+    app_session::realtime_request(&service_key, &method, &params_json)
 }
 
 /// Start a new thread / project. `approval_policy` is one of
@@ -1458,6 +1530,10 @@ pub struct LocalSessionDto {
     pub preview: String,
     /// Originating client (`cli` / `vscode` / …), when recorded.
     pub source: Option<String>,
+    /// Parent thread for a spawned child.
+    pub parent_thread_id: Option<String>,
+    /// Persisted thread classification.
+    pub thread_source: Option<String>,
     /// Last-modified time of the rollout, unix seconds.
     pub updated_at: i64,
     /// Most-recent-turn state (`empty`/`completed`/`aborted`/`incomplete`).
@@ -1544,6 +1620,8 @@ pub fn app_local_sessions() -> Result<Vec<LocalSessionDto>> {
             cwd: s.cwd,
             preview: s.preview,
             source: s.source,
+            parent_thread_id: s.parent_thread_id,
+            thread_source: s.thread_source,
             updated_at: s.updated_at,
             turn_state: s.turn_state,
             held_open: s.held_open,
@@ -1730,6 +1808,8 @@ pub fn meta_sessions(
             cwd: s.cwd,
             preview: s.preview,
             source: s.source,
+            parent_thread_id: s.parent_thread_id,
+            thread_source: s.thread_source,
             updated_at: s.updated_at,
             turn_state: s.turn_state,
             held_open: s.held_open,

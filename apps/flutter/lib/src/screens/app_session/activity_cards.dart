@@ -11,6 +11,9 @@ library;
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show RenderAbstractViewport;
+import 'approval_review.dart';
+import 'approval_review_card.dart';
 import 'dart:math' as math;
 import 'package:flutter/services.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
@@ -18,7 +21,9 @@ import 'package:pocket_codex/src/desktop_theme.dart';
 import 'package:pocket_codex/src/fonts.dart';
 import 'package:pocket_codex/src/git_diff.dart';
 import 'package:pocket_codex/src/screens/app_session/diff_view.dart';
+import 'package:pocket_codex/src/screens/app_session/step_body.dart';
 import 'package:pocket_codex/src/screens/app_session/transcript_model.dart';
+import 'package:pocket_codex/src/motion.dart';
 import 'package:pocket_codex/src/theme.dart';
 import 'package:pocket_codex/src/widgets/app_toast.dart';
 import 'package:pocket_codex/src/widgets/links.dart';
@@ -97,6 +102,7 @@ final _planStepPattern = RegExp(r'^\s*-\s*\[(.)\]\s?(.*)$');
 /// other — a compaction shown as a bare tool row inside the fold is exactly how
 /// that went wrong once.
 Widget activityRow(TranscriptItem item) => switch (item.type) {
+  'autoApprovalReview' => _autoApprovalReview(item),
   'fileChange' => FileChangeCard(key: ValueKey(item.id), item: item),
   'plan' => PlanCard(key: ValueKey(item.id), item: item),
   'contextCompaction' => _CompactionNotice(key: ValueKey(item.id), item: item),
@@ -107,6 +113,19 @@ Widget activityRow(TranscriptItem item) => switch (item.type) {
   'agentMessage' => _PreambleProse(key: ValueKey(item.id), item: item),
   _ => ActivityCard(key: ValueKey(item.id), item: item),
 };
+
+Widget _autoApprovalReview(TranscriptItem item) {
+  final review = AutoApprovalReview.parse(item.text);
+  if (review == null) return ActivityCard(key: ValueKey(item.id), item: item);
+  return ApprovalReviewCard(
+    key: ValueKey(item.id),
+    raw: item.text,
+    request: review.request,
+    result: review.result,
+    status: review.status,
+    compact: true,
+  );
+}
 
 /// Agent prose inside a turn's fold: the narration before a batch of work.
 ///
@@ -257,7 +276,7 @@ class _TurnProgressTrackerState extends State<TurnProgressTracker> {
                         height: 13,
                         child: CircularProgressIndicator(
                           strokeWidth: 1.8,
-                          color: scheme.primary,
+                          color: signalColor(scheme),
                         ),
                       ),
                       const SizedBox(width: 7),
@@ -343,7 +362,7 @@ class _TurnProgressTrackerState extends State<TurnProgressTracker> {
         height: 15,
         child: CircularProgressIndicator(
           strokeWidth: 1.8,
-          color: scheme.primary,
+          color: signalColor(scheme),
         ),
       ),
       _ => Icon(Icons.circle_outlined, size: 15, color: muted),
@@ -463,7 +482,7 @@ class _PlanCardState extends State<PlanCard> {
     final scheme = Theme.of(context).colorScheme;
     final (icon, color) = switch (s.status) {
       'completed' => (Icons.check_circle_rounded, additionColor(scheme)),
-      'in_progress' => (Icons.timelapse_rounded, scheme.primary),
+      'in_progress' => (Icons.timelapse_rounded, signalColor(scheme)),
       _ => (Icons.radio_button_unchecked, scheme.onSurfaceVariant),
     };
     return Padding(
@@ -530,7 +549,28 @@ class TurnWork {
   ///   the context was squeezed twice, not one thing done twice over.
   /// * `agentMessage` — prose. A "×2" header would hide what it says, which is
   ///   the one thing about a preamble worth reading.
-  static const _neverGrouped = {'contextCompaction', 'agentMessage'};
+  // A review is about the step it follows, so it stays next to that step
+  // rather than merging with other reviews into a "×N" group.
+  static const _neverGrouped = {
+    'contextCompaction',
+    'agentMessage',
+    'autoApprovalReview',
+  };
+
+  /// Reviews the model made on the user's behalf in this run, and how many of
+  /// them refused — surfaced on the fold header so a denial is not hidden.
+  ({int total, int refused}) get reviews {
+    var total = 0, refused = 0;
+    for (final item in items) {
+      if (item.type != 'autoApprovalReview') continue;
+      total++;
+      final status = AutoApprovalReview.parse(item.text)?.status;
+      if (status == 'denied' || status == 'timedOut' || status == 'aborted') {
+        refused++;
+      }
+    }
+    return (total: total, refused: refused);
+  }
 
   /// The sub-runs, same-type neighbours merged — the second level of the fold.
   ///
@@ -623,6 +663,38 @@ class ActivityGroup {
     _ => (icon: Icons.bolt, label: l10n.toolActivity),
   };
 }
+
+/// The icon hue for an activity [type]: one per kind of work, so a run of
+/// steps can be scanned by colour (commands blue, thinking amber, searches
+/// teal, edits green, tool calls rose) before any label is read. Kinds with
+/// nothing to tell apart stay the quiet secondary ink.
+Color activityTint(String type, ColorScheme scheme) {
+  final light = scheme.brightness == Brightness.light;
+  return switch (type) {
+    'commandExecution' => scheme.tertiary,
+    'reasoning' || 'plan' => cautionColor(scheme),
+    'webSearch' || 'imageView' || 'imageGeneration' =>
+      light ? const Color(0xFF0E7C86) : const Color(0xFF4FC4CC),
+    'fileChange' => additionColor(scheme),
+    'mcpToolCall' ||
+    'dynamicToolCall' ||
+    'collabAgentToolCall' ||
+    'subAgentActivity' =>
+      light ? const Color(0xFFB0306E) : const Color(0xFFF08DBA),
+    _ => scheme.onSurfaceVariant,
+  };
+}
+
+/// The frame every step row shares: a soft card, the same on a phone and a
+/// desktop, so a run of steps reads as a list of things rather than a
+/// timeline hung off decorative rules.
+BoxDecoration stepCardDecoration(ColorScheme scheme) => BoxDecoration(
+  color: scheme.brightness == Brightness.light
+      ? scheme.surfaceContainerLowest
+      : scheme.surfaceContainerLow,
+  border: Border.all(color: scheme.outlineVariant),
+  borderRadius: BorderRadius.circular(12),
+);
 
 /// One glyph in a message's hover action row.
 ///
@@ -731,6 +803,19 @@ class _TurnWorkCardState extends State<TurnWorkCard> {
 
   bool get _expanded => _userExpanded ?? widget.work.streaming;
 
+  final _headerKey = GlobalKey();
+
+  /// Fold from the bottom control: shut, then bring the header back into view
+  /// so the reader lands where the fold now is, not in the reply below it.
+  void _collapseFromBottom() {
+    setState(() => _userExpanded = false);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final header = _headerKey.currentContext;
+      if (header == null || !header.mounted) return;
+      _revealInTranscript(header, alignment: 0.2);
+    });
+  }
+
   /// The turn's duration, or null where the server did not report one.
   String? _duration(AppLocalizations l10n) {
     final ms = widget.work.durationMs;
@@ -751,43 +836,110 @@ class _TurnWorkCardState extends State<TurnWorkCard> {
       final d? => l10n.turnProcessed(d),
       _ => l10n.turnActivityCount(widget.work.items.length),
     };
+    final running = widget.active && widget.work.streaming;
+    final touch = !isDesktop;
+    final reviews = widget.work.reviews;
+    void toggle() => setState(() => _userExpanded = !_expanded);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        InkWell(
-          key: const Key('turn-work-toggle'),
-          mouseCursor: clickable,
-          borderRadius: BorderRadius.circular(kControlRadius),
-          onTap: () => setState(() => _userExpanded = !_expanded),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
-            child: Row(
-              children: [
-                Text(
-                  label,
-                  style: Theme.of(
-                    context,
-                  ).textTheme.bodySmall?.copyWith(color: muted),
+        // The fold header: a small pill with an icon, so "the agent did work
+        // here" is a recognisable object rather than a grey caption. It turns
+        // the accent while the turn runs.
+        Padding(
+          key: _headerKey,
+          padding: const EdgeInsets.symmetric(vertical: 4),
+          child: Material(
+            color: running
+                ? accentWash(scheme)
+                : scheme.surfaceContainer.withValues(alpha: 0.7),
+            borderRadius: BorderRadius.circular(kControlRadius),
+            child: InkWell(
+              key: const Key('turn-work-toggle'),
+              mouseCursor: clickable,
+              borderRadius: BorderRadius.circular(kControlRadius),
+              onTap: toggle,
+              child: Padding(
+                padding: EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: touch ? 9 : 6,
                 ),
-                const SizedBox(width: 4),
-                if (widget.active && widget.work.streaming)
-                  SizedBox(
-                    width: 11,
-                    height: 11,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 1.6,
-                      color: muted,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (running)
+                      SizedBox(
+                        width: 12,
+                        height: 12,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 1.6,
+                          color: signalColor(scheme),
+                        ),
+                      )
+                    else
+                      Icon(Icons.construction_rounded, size: 14, color: muted),
+                    const SizedBox(width: 7),
+                    Flexible(
+                      child: Text(
+                        label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: running
+                              ? signalColor(scheme)
+                              : scheme.onSurface,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
                     ),
-                  )
-                else
-                  Icon(
-                    _expanded
-                        ? Icons.keyboard_arrow_down
-                        : Icons.keyboard_arrow_right,
-                    size: 16,
-                    color: muted.withValues(alpha: 0.7),
-                  ),
-              ],
+                    if (reviews.total > 0) ...[
+                      const SizedBox(width: 8),
+                      // Reviews made on the user's behalf are visible from
+                      // the closed fold; a refusal turns the mark red.
+                      Tooltip(
+                        message: l10n.reviewResult,
+                        child: Row(
+                          key: const Key('turn-work-reviews'),
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              reviews.refused > 0
+                                  ? Icons.gpp_bad_outlined
+                                  : Icons.verified_user_outlined,
+                              size: 13,
+                              color: reviews.refused > 0 ? scheme.error : muted,
+                            ),
+                            const SizedBox(width: 2),
+                            Text(
+                              '${reviews.total}',
+                              style: Theme.of(context).textTheme.bodySmall
+                                  ?.copyWith(
+                                    color: reviews.refused > 0
+                                        ? scheme.error
+                                        : muted,
+                                    fontFeatures: const [
+                                      FontFeature.tabularFigures(),
+                                    ],
+                                  ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                    const SizedBox(width: 4),
+                    AnimatedRotation(
+                      turns: _expanded ? 0.25 : 0,
+                      duration: Motion.of(context, Motion.fast),
+                      curve: Motion.move,
+                      child: Icon(
+                        Icons.keyboard_arrow_right_rounded,
+                        size: 16,
+                        color: muted,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ),
           ),
         ),
@@ -798,28 +950,40 @@ class _TurnWorkCardState extends State<TurnWorkCard> {
           child: !_expanded
               ? const SizedBox(width: double.infinity)
               : Padding(
-                  padding: const EdgeInsets.only(left: 8, bottom: 4),
-                  child: widget.work.items.length > 40
-                      ? _WorkSteps(
+                  // The step cards themselves group the run; a leading rule
+                  // beside them added a line that meant nothing.
+                  padding: const EdgeInsets.only(bottom: 4),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (widget.work.items.length > 40)
+                        _WorkSteps(
                           items: widget.work.items,
                           active: widget.active,
                         )
-                      : Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            for (final row in widget.work.groups)
-                              if (row is ActivityGroup)
-                                GroupedActivityCard(
-                                  key: ValueKey('wg:${row.items.first.id}'),
-                                  group: row,
-                                )
-                              else
-                                activityRow(row as TranscriptItem),
-                          ],
+                      else
+                        for (final row in widget.work.groups)
+                          if (row is ActivityGroup)
+                            GroupedActivityCard(
+                              key: ValueKey('wg:${row.items.first.id}'),
+                              group: row,
+                            )
+                          else
+                            activityRow(row as TranscriptItem),
+                      // Fold from the bottom too: after reading a long run
+                      // the header is a screen or more away, and on a phone
+                      // reaching it means a long swipe back up.
+                      if (widget.work.items.length > 3)
+                        _CollapseRow(
+                          key: const Key('turn-work-collapse'),
+                          label: l10n.showLess,
+                          touch: touch,
+                          onTap: _collapseFromBottom,
                         ),
+                    ],
+                  ),
                 ),
         ),
-        Divider(height: 1, thickness: 1, color: scheme.outlineVariant),
       ],
     );
   }
@@ -845,22 +1009,99 @@ class _WorkSteps extends StatefulWidget {
 
 class _WorkStepsState extends State<_WorkSteps> {
   static const _pageSize = 25;
-  late int _start = widget.active
-      ? math.max(0, widget.items.length - _pageSize)
-      : 0;
-  final _scroll = ScrollController();
+
+  /// How far the newest step may sit below the screen's edge and still count
+  /// as being watched: about one collapsed step row.
+  static const _followSlack = 48.0;
+
+  late int _start = widget.active ? _tailStart : 0;
+
+  /// The reader picked a range (a page, a step number), which new steps must
+  /// not move. Only "Latest steps" — or paging onto the latest page — clears it.
+  bool _pinned = false;
+
+  /// Whether the bottom of the step list is on screen. Scrolling up to read
+  /// older steps pauses following without pinning: coming back resumes it.
+  bool _tailInView = true;
+
+  ScrollPosition? _position;
+  final _pagerKey = GlobalKey();
+  final _listKey = GlobalKey();
+
+  int get _tailStart => math.max(0, widget.items.length - _pageSize);
+
+  @override
+  void initState() {
+    super.initState();
+    // Opened by hand above the fold's end, the tail starts out of view.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _trackTail();
+    });
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final position = Scrollable.maybeOf(context, axis: Axis.vertical)?.position;
+    if (identical(position, _position)) return;
+    _position?.removeListener(_trackTail);
+    _position = position?..addListener(_trackTail);
+  }
+
   @override
   void dispose() {
-    _scroll.dispose();
+    _position?.removeListener(_trackTail);
     super.dispose();
   }
 
+  void _trackTail() {
+    final list = _listKey.currentContext;
+    final below = list == null ? null : _belowViewport(list);
+    if (below != null) _tailInView = below <= _followSlack;
+  }
+
+  @override
+  void didUpdateWidget(_WorkSteps old) {
+    super.didUpdateWidget(old);
+    // Only a running turn is followed; the update that ends it still counts,
+    // so its final steps reach a reader who was watching. A history refresh
+    // of a settled turn leaves the page alone.
+    final running = widget.active || old.active;
+    if (!running || _pinned || !_tailInView || _start == _tailStart) return;
+    _start = _tailStart;
+    // The page now ends on the newest step; keep it on screen, not just in
+    // the page range. The transcript's own follow has already run by then.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final list = _listKey.currentContext;
+      if (mounted && list != null) _revealBottomInTranscript(list);
+    });
+  }
+
   void _go(int start) {
-    setState(
-      () =>
-          _start = start.clamp(0, math.max(0, widget.items.length - 1)).toInt(),
-    );
-    if (_scroll.hasClients) _scroll.jumpTo(0);
+    setState(() {
+      _start = start.clamp(0, math.max(0, widget.items.length - 1)).toInt();
+      _pinned = _start != _tailStart;
+    });
+    // A new page starts at its first step: bring the pager back into view
+    // rather than leaving the reader at the old page's tail.
+    final pager = _pagerKey.currentContext;
+    if (pager != null) _revealInTranscript(pager);
+  }
+
+  /// Resume following: show the latest page and land on its newest step.
+  void _latest() {
+    setState(() {
+      _start = _tailStart;
+      _pinned = false;
+      // Steps that land while the reveal below animates follow too.
+      _tailInView = true;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final list = _listKey.currentContext;
+      if (mounted && list != null) {
+        _revealBottomInTranscript(list, animate: true);
+      }
+    });
   }
 
   Future<void> _choose() async {
@@ -907,6 +1148,7 @@ class _WorkStepsState extends State<_WorkSteps> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Wrap(
+          key: _pagerKey,
           crossAxisAlignment: WrapCrossAlignment.center,
           spacing: 2,
           children: [
@@ -927,49 +1169,47 @@ class _WorkStepsState extends State<_WorkSteps> {
               icon: const Icon(Icons.chevron_right),
               onPressed: end == widget.items.length ? null : () => _go(end),
             ),
-            TextButton(
-              onPressed: () =>
-                  _go(math.max(0, widget.items.length - _pageSize)),
-              child: Text(l10n.latestSteps),
-            ),
+            TextButton(onPressed: _latest, child: Text(l10n.latestSteps)),
           ],
         ),
-        SizedBox(
-          height: math.min(360, MediaQuery.sizeOf(context).height * .45),
-          child: ListView.builder(
-            key: const Key('work-step-list'),
-            primary: false,
-            controller: _scroll,
-            itemCount: end - start,
-            itemBuilder: (_, offset) {
-              final i = start + offset;
-              return Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  SizedBox(
-                    width: 36,
-                    child: Padding(
-                      padding: const EdgeInsets.only(top: 13),
-                      child: Text(
-                        '${i + 1}',
-                        style: Theme.of(context).textTheme.labelSmall,
-                      ),
-                    ),
-                  ),
-                  Expanded(
-                    child: KeyedSubtree(
-                      key: ValueKey('work-step-${widget.items[i].id}'),
-                      child: activityRow(widget.items[i]),
-                    ),
-                  ),
-                ],
-              );
-            },
-          ),
-        ),
+        // Laid out inline, not in a nested scroll viewport. A bounded inner
+        // list captured the drag on touch, so a reader who swiped inside it
+        // scrolled steps instead of the page and could reach neither the
+        // fold above nor the reply below. A page is at most [_pageSize] rows,
+        // so building them all is cheap.
+        KeyedSubtree(key: _listKey, child: _stepList(context, start, end)),
       ],
     );
   }
+
+  Widget _stepList(BuildContext context, int start, int end) => Column(
+    key: const Key('work-step-list'),
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      for (var i = start; i < end; i++)
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(
+              width: 36,
+              child: Padding(
+                padding: const EdgeInsets.only(top: 13),
+                child: Text(
+                  '${i + 1}',
+                  style: Theme.of(context).textTheme.labelSmall,
+                ),
+              ),
+            ),
+            Expanded(
+              child: KeyedSubtree(
+                key: ValueKey('work-step-${widget.items[i].id}'),
+                child: activityRow(widget.items[i]),
+              ),
+            ),
+          ],
+        ),
+    ],
+  );
 }
 
 /// Collapses a run of same-type tool calls (e.g. several shell commands) into a
@@ -998,20 +1238,21 @@ class _GroupedActivityCardState extends State<GroupedActivityCard> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Container(
-          margin: const EdgeInsets.symmetric(vertical: 2),
-          decoration: BoxDecoration(
-            border: Border.all(color: scheme.outlineVariant, width: 0.5),
-            borderRadius: BorderRadius.circular(12),
-          ),
+          margin: const EdgeInsets.symmetric(vertical: 3),
+          decoration: stepCardDecoration(scheme),
+          clipBehavior: Clip.antiAlias,
           child: InkWell(
             mouseCursor: clickable,
-            borderRadius: BorderRadius.circular(12),
             onTap: () => setState(() => _expanded = !_expanded),
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               child: Row(
                 children: [
-                  Icon(meta.icon, size: 17, color: scheme.primary),
+                  Icon(
+                    meta.icon,
+                    size: 17,
+                    color: activityTint(widget.group.type, scheme),
+                  ),
                   const SizedBox(width: 10),
                   Text(
                     '${meta.label} ×$n',
@@ -1043,7 +1284,7 @@ class _GroupedActivityCardState extends State<GroupedActivityCard> {
         ),
         if (_expanded)
           Padding(
-            padding: const EdgeInsets.only(left: 16, top: 2),
+            padding: const EdgeInsets.only(left: 14, top: 1, bottom: 2),
             child: widget.group.items.length > 40
                 ? _WorkSteps(items: widget.group.items, active: anyStreaming)
                 : Column(
@@ -1103,21 +1344,14 @@ class _ActivityCardState extends State<ActivityCard> {
       if (detail.isNotEmpty) detail,
     ].join('\n\n');
 
-    // Two idioms. A phone gets a soft bordered card — a comfortable tap target
-    // in a list of them. A desktop transcript gets a timeline: the steps of a
-    // turn are rows hanging off one continuous rail, so a dozen tool calls read
-    // as a sequence instead of a dozen boxes.
+    // One idiom on every width: a soft card per step, its icon tinted by the
+    // kind of work. (Desktop used to hang steps off a left rail; next to the
+    // fold that read as stray lines rather than structure.)
     final doc = MediaQuery.sizeOf(context).width >= docLayoutWidth;
     return Container(
-      margin: EdgeInsets.symmetric(vertical: doc ? 0 : 2),
-      padding: doc ? const EdgeInsets.only(left: 12) : EdgeInsets.zero,
-      decoration: BoxDecoration(
-        border: doc
-            ? Border(left: BorderSide(color: scheme.outlineVariant, width: 1.5))
-            : Border.all(color: scheme.outlineVariant, width: 0.5),
-        borderRadius: doc ? null : BorderRadius.circular(12),
-      ),
-      clipBehavior: doc ? Clip.none : Clip.antiAlias,
+      margin: const EdgeInsets.symmetric(vertical: 3),
+      decoration: stepCardDecoration(scheme),
+      clipBehavior: Clip.antiAlias,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1128,21 +1362,21 @@ class _ActivityCardState extends State<ActivityCard> {
                 : null,
             child: Padding(
               padding: EdgeInsets.symmetric(
-                horizontal: doc ? 0 : 12,
-                vertical: doc ? 4 : 10,
+                horizontal: 12,
+                vertical: doc ? 8 : 10,
               ),
               child: Row(
                 children: [
                   Icon(
                     meta.icon,
-                    size: doc ? 15 : 17,
-                    color: doc ? muted : scheme.primary,
+                    size: doc ? 16 : 17,
+                    color: activityTint(item.type, scheme),
                   ),
-                  SizedBox(width: doc ? 8 : 10),
+                  SizedBox(width: doc ? 9 : 10),
                   Text(
                     meta.label,
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: doc ? muted : scheme.onSurface,
+                      color: scheme.onSurface,
                       fontWeight: FontWeight.w500,
                     ),
                   ),
@@ -1198,37 +1432,23 @@ class _ActivityCardState extends State<ActivityCard> {
                 label: Text(l10n.viewSubSession),
               ),
             ),
-          if (_expanded && body.isNotEmpty)
+          if (_expanded && body.isNotEmpty && !prose)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(10, 0, 10, 6),
+              child: StepBody(item: item),
+            ),
+          if (_expanded && body.isNotEmpty && prose)
             Container(
               width: double.infinity,
-              margin: EdgeInsets.only(bottom: doc ? 6 : 0),
+              margin: const EdgeInsets.fromLTRB(10, 0, 10, 10),
               padding: const EdgeInsets.all(11),
               constraints: const BoxConstraints(maxHeight: 320),
               decoration: BoxDecoration(
-                border: doc
-                    ? null
-                    : Border(
-                        top: BorderSide(
-                          color: scheme.outlineVariant,
-                          width: 0.5,
-                        ),
-                      ),
-                borderRadius: doc ? BorderRadius.circular(8) : null,
-                color: scheme.surfaceContainerLowest,
+                borderRadius: BorderRadius.circular(8),
+                color: scheme.surfaceContainer.withValues(alpha: 0.6),
               ),
               child: SingleChildScrollView(
-                child: prose
-                    ? MarkdownView(data: body, muted: true)
-                    : linkifyText(
-                        context,
-                        body,
-                        selectable: true,
-                        style: const TextStyle(
-                          fontFamily: monoFontFamily,
-                          fontFamilyFallback: monoCjkFallback,
-                          fontSize: 12,
-                        ),
-                      ),
+                child: MarkdownView(data: body, muted: true),
               ),
             ),
         ],
@@ -1254,7 +1474,20 @@ class _TypingIndicatorState extends State<TypingIndicator>
   late final AnimationController _c = AnimationController(
     vsync: this,
     duration: const Duration(milliseconds: 1100),
-  )..repeat();
+  );
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Reduced motion: three steady dots still say "working".
+    if (Motion.ambientAllowed(context)) {
+      if (!_c.isAnimating) _c.repeat();
+    } else {
+      _c
+        ..stop()
+        ..value = 0.5;
+    }
+  }
 
   @override
   void dispose() {
@@ -1264,7 +1497,7 @@ class _TypingIndicatorState extends State<TypingIndicator>
 
   @override
   Widget build(BuildContext context) {
-    final color = Theme.of(context).colorScheme.onSurfaceVariant;
+    final color = signalColor(Theme.of(context).colorScheme);
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 14),
       child: Row(
@@ -1336,11 +1569,8 @@ class _FileChangeCardState extends State<FileChangeCard> {
     final title = widget.item.title.trim();
     final expandable = hasDiff || widget.item.text.trim().isNotEmpty;
     return Container(
-      margin: const EdgeInsets.symmetric(vertical: 2),
-      decoration: BoxDecoration(
-        border: Border.all(color: scheme.outlineVariant, width: 0.5),
-        borderRadius: BorderRadius.circular(12),
-      ),
+      margin: const EdgeInsets.symmetric(vertical: 3),
+      decoration: stepCardDecoration(scheme),
       clipBehavior: Clip.antiAlias,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1354,7 +1584,11 @@ class _FileChangeCardState extends State<FileChangeCard> {
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               child: Row(
                 children: [
-                  Icon(Icons.edit_document, size: 17, color: scheme.primary),
+                  Icon(
+                    Icons.edit_document,
+                    size: 17,
+                    color: activityTint('fileChange', scheme),
+                  ),
                   const SizedBox(width: 10),
                   Text(
                     l10n.toolEdited,
@@ -1532,4 +1766,122 @@ class SystemNotice extends StatelessWidget {
       ),
     );
   }
+}
+
+/// "Collapse" at the foot of an expanded fold.
+class _CollapseRow extends StatelessWidget {
+  const _CollapseRow({
+    super.key,
+    required this.label,
+    required this.touch,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool touch;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(top: 4),
+      child: TextButton.icon(
+        onPressed: onTap,
+        icon: const Icon(Icons.keyboard_arrow_up_rounded, size: 18),
+        label: Text(label),
+        style: TextButton.styleFrom(
+          foregroundColor: scheme.onSurfaceVariant,
+          // A full touch target on phones, where this is the control that
+          // matters; compact on desktop.
+          minimumSize: Size(0, touch ? 44 : 30),
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          textStyle: Theme.of(context).textTheme.bodySmall,
+        ),
+      ),
+    );
+  }
+}
+
+/// Scroll the transcript (the nearest *vertical* scrollable) so [target] is
+/// in view, without moving any horizontal scroller in between — a code block
+/// or table scrolls sideways, and `Scrollable.ensureVisible` would otherwise
+/// drive those too and assert when the target is wider than them.
+void _revealInTranscript(BuildContext target, {double alignment = 0}) {
+  final box = target.findRenderObject();
+  if (box is! RenderBox || !box.attached) return;
+  final position = _transcriptPosition(target);
+  if (position == null) return;
+  final viewport = RenderAbstractViewport.maybeOf(box);
+  if (viewport == null) return;
+  // A target taller than the viewport cannot be "made visible"; align its
+  // top instead, which is where the reader wants to land anyway.
+  final reveal = viewport.getOffsetToReveal(
+    box,
+    box.size.height > position.viewportDimension ? 0 : alignment,
+  );
+  _scrollTranscript(target, position, reveal.offset);
+}
+
+/// Scroll the transcript just far enough that [target]'s bottom edge is on
+/// screen — the newest step of a followed page — and never backwards.
+void _revealBottomInTranscript(BuildContext target, {bool animate = false}) {
+  final position = _transcriptPosition(target);
+  final below = _belowViewport(target);
+  if (position == null || below == null || below <= 0) return;
+  final offset = position.pixels + below;
+  if (animate) {
+    _scrollTranscript(target, position, offset);
+  } else {
+    position.jumpTo(
+      offset.clamp(position.minScrollExtent, position.maxScrollExtent),
+    );
+  }
+}
+
+/// How far [target]'s bottom edge lies below the transcript viewport's bottom
+/// (negative when it is above it), or null when it is not laid out in one.
+double? _belowViewport(BuildContext target) {
+  final box = target.findRenderObject();
+  if (box is! RenderBox || !box.attached || !box.hasSize) return null;
+  final position = _transcriptPosition(target);
+  final viewport = RenderAbstractViewport.maybeOf(box);
+  if (position == null || viewport == null) return null;
+  final bottom = viewport.getOffsetToReveal(box, 1).offset;
+  return bottom - position.pixels;
+}
+
+void _scrollTranscript(
+  BuildContext target,
+  ScrollPosition position,
+  double to,
+) {
+  final offset = to.clamp(position.minScrollExtent, position.maxScrollExtent);
+  final duration = Motion.of(target, Motion.fast);
+  if (duration == Duration.zero) {
+    position.jumpTo(offset);
+  } else {
+    position.animateTo(offset, duration: duration, curve: Motion.move);
+  }
+}
+
+/// The nearest vertical scroll position above [target]: the transcript.
+ScrollPosition? _transcriptPosition(BuildContext target) {
+  ScrollableState? vertical;
+  target.visitAncestorElements((element) {
+    if (element is StatefulElement && element.state is ScrollableState) {
+      final state = element.state as ScrollableState;
+      if (state.axisDirection == AxisDirection.down ||
+          state.axisDirection == AxisDirection.up) {
+        vertical = state;
+        return false;
+      }
+    }
+    return true;
+  });
+  final scrollable = vertical;
+  return scrollable != null && scrollable.position.hasPixels
+      ? scrollable.position
+      : null;
 }

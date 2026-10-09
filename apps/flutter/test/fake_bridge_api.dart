@@ -535,10 +535,12 @@ class FakeBridgeApi implements BridgeApi {
 
   /// Number of [appConnect] calls (asserts a reconnect actually happened).
   int appConnectCount = 0;
+  Future<void>? appConnectGate;
 
   @override
   Future<void> appConnect(String serviceKey, int localPort) async {
     appConnectCount++;
+    await appConnectGate;
     _appConnected.add(serviceKey);
     _appEvents.putIfAbsent(serviceKey, StreamController<AppEvent>.broadcast);
   }
@@ -623,6 +625,11 @@ class FakeBridgeApi implements BridgeApi {
   void pushEvent(String serviceKey, AppEvent event) =>
       _appEvents[serviceKey]?.add(event);
 
+  /// Closes a lagged event feed while retaining its live app-server socket.
+  Future<void> closeAppEventStream(String serviceKey) async {
+    await _appEvents.remove(serviceKey)?.close();
+  }
+
   /// When true, the next [appThreadList] throws (simulating a stale/closed
   /// socket), then resets — to exercise the picker's reconnect-and-retry path.
   bool failNextThreadList = false;
@@ -630,6 +637,17 @@ class FakeBridgeApi implements BridgeApi {
   /// Simulate a backend whose handshake works but whose first RPC kills the link.
   bool disconnectOnThreadList = false;
   Future<void>? threadListGate;
+
+  @override
+  Future<ThreadMeta?> appThreadMetadata(
+    String serviceKey,
+    String threadId,
+  ) async {
+    for (final thread in appThreads) {
+      if (thread.id == threadId) return thread;
+    }
+    return null;
+  }
 
   @override
   Future<List<ThreadMeta>> appThreadList(String serviceKey) async {
@@ -788,6 +806,13 @@ class FakeBridgeApi implements BridgeApi {
     );
     return id;
   }
+
+  @override
+  Future<String> appRealtimeRequest(
+    String serviceKey,
+    String method,
+    String paramsJson,
+  ) async => '{}';
 
   /// Records the last resumed thread id for assertions.
   String? lastResumed;
@@ -1035,6 +1060,8 @@ class FakeBridgeApi implements BridgeApi {
 
   /// Seedable local sessions returned by [appLocalSessions].
   List<LocalSession> localSessions = const [];
+  int localSessionCalls = 0;
+  Object? localSessionError;
 
   /// Seedable per-thread liveness returned by [appSessionLiveness].
   final Map<String, SessionLiveness> liveness = {};
@@ -1054,7 +1081,11 @@ class FakeBridgeApi implements BridgeApi {
   );
 
   @override
-  Future<List<LocalSession>> appLocalSessions() async => localSessions;
+  Future<List<LocalSession>> appLocalSessions() async {
+    localSessionCalls++;
+    if (localSessionError != null) throw localSessionError!;
+    return localSessions;
+  }
 
   @override
   Future<SessionLiveness> appSessionLiveness(String threadId) async =>

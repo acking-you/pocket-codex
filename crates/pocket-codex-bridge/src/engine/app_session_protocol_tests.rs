@@ -1,6 +1,24 @@
 use super::*;
 
 #[test]
+fn persisted_command_truncation_survives_live_and_restored_items() {
+    let output = "first line\n... command output truncated for persistence ...\nlast line\n";
+    let item = json!({
+        "type": "commandExecution", "id": "command", "command": "cargo test",
+        "status": "completed", "aggregatedOutput": output, "exitCode": 0
+    });
+    let restored = parse_item(&item).expect("command history");
+    let live = map_event(Inbound {
+        method: "item/completed".into(),
+        params: Some(json!({"threadId": "thread", "turnId": "turn", "item": item})),
+        request_id: None,
+    });
+    assert_eq!(restored.text, format!("{output}\n[exit 0]"));
+    assert_eq!(live.text.as_deref(), Some(restored.text.as_str()));
+    assert_eq!(live.title.as_deref(), Some("cargo test"));
+}
+
+#[test]
 fn resume_reads_collaboration_mode_and_tolerates_legacy_responses() {
     for (mode, expected) in [
         (json!({"mode": "plan", "settings": {"model": "current-model"}}), Some("plan")),
@@ -76,7 +94,7 @@ fn async_questions_survive_live_buffering_but_history_does_not_reopen_them() {
         "questions": questions,
     });
     let history = flatten_turns(&[json!({"id": "turn-1", "items": [item.clone()]})]);
-    let transcript = Mutex::new(HashMap::new());
+    let transcript = Mutex::new(LiveTranscript::default());
     buffer_item(&transcript, &Inbound {
         method: "item/completed".into(),
         params: Some(json!({"threadId": "thread-1", "turnId": "turn-1", "item": item})),
@@ -84,7 +102,7 @@ fn async_questions_survive_live_buffering_but_history_does_not_reopen_them() {
     });
     let buffered = transcript.lock().expect("transcript lock");
     assert_eq!(history[0].questions_json, None);
-    assert_eq!(buffered["thread-1"][0].questions_json, Some(questions.to_string()));
+    assert_eq!(buffered.tail("thread-1", 100)[0].questions_json, Some(questions.to_string()));
 }
 
 #[test]
@@ -183,4 +201,86 @@ fn native_image_capture_maps_live_and_restored_artifacts() {
         }
     }
     assert!(started && completed, "both native lifecycle edges must be captured");
+}
+
+#[test]
+fn voice_classification_and_signaling_survive_the_bridge() {
+    let meta = parse_thread_meta(&json!({"id": "voice", "threadSource": "pocket-codex-voice"}))
+        .expect("voice metadata");
+    assert_eq!(meta.thread_source.as_deref(), Some("pocket-codex-voice"));
+    let cached = serde_json::to_value(&meta).expect("cache metadata");
+    let restored: ThreadMeta = serde_json::from_value(cached).expect("restore metadata");
+    assert_eq!(restored.thread_source, meta.thread_source);
+    let event = map_event(Inbound {
+        method: "thread/realtime/sdp".into(),
+        params: Some(json!({"threadId": "voice", "sdp": "answer"})),
+        request_id: None,
+    });
+    assert_eq!(event.thread_id.as_deref(), Some("voice"));
+    assert_eq!(serde_json::from_str::<Value>(&event.raw).expect("event JSON")["sdp"], "answer");
+    assert!(
+        validate_realtime_request("thread/realtime/start", &json!({"threadId":"voice"})).is_ok()
+    );
+    assert!(validate_realtime_request("thread/realtime/start", &json!({})).is_err());
+    assert!(validate_realtime_request(
+        "thread/start",
+        &json!({"threadSource":"pocket-codex-voice"})
+    )
+    .is_ok());
+    assert!(validate_realtime_request("thread/start", &json!({})).is_err());
+    assert!(validate_realtime_request(
+        "thread/start",
+        &json!({"threadSource":"pocket-codex-dictation","ephemeral":true})
+    )
+    .is_ok());
+    // A dictation thread that would persist is refused.
+    assert!(validate_realtime_request(
+        "thread/start",
+        &json!({"threadSource":"pocket-codex-dictation"})
+    )
+    .is_err());
+    assert!(validate_realtime_request("thread/unsubscribe", &json!({"threadId":"d"})).is_ok());
+    assert!(validate_realtime_request("thread/unsubscribe", &json!({})).is_err());
+    assert!(validate_realtime_request("command/exec", &json!({})).is_err());
+}
+
+#[test]
+fn guardian_lifecycle_retains_one_display_only_item_and_expands_history() {
+    let transcript = Mutex::new(LiveTranscript::default());
+    for status in ["inProgress", "approved", "denied", "timedOut", "aborted"] {
+        let params = json!({"threadId":"parent", "turnId":"turn", "reviewId":"review",
+            "targetItemId":"command", "review":{"status":status, "riskLevel":"high",
+            "userAuthorization":"high", "rationale":"Explicitly authorized"},
+            "action":{"type":"command", "command":"cargo test", "cwd":"/project"}});
+        let inbound = Inbound {
+            method: if status == "inProgress" {
+                "item/autoApprovalReview/started".into()
+            } else {
+                "item/autoApprovalReview/completed".into()
+            },
+            params: Some(params.clone()),
+            request_id: None,
+        };
+        buffer_item(&transcript, &inbound);
+        let mapped = map_event(inbound);
+        assert_eq!(mapped.item_id.as_deref(), Some("auto-review:review"));
+        assert_eq!(mapped.item_type.as_deref(), Some("autoApprovalReview"));
+        assert_eq!(mapped.thread_id.as_deref(), Some("parent"));
+        assert!(mapped.request_id.is_none());
+        let buffered = transcript.lock().expect("lock").tail("parent", 10);
+        assert_eq!(buffered.len(), 1);
+        assert_eq!(buffered[0].title, status);
+        let page = json!({"data":[{"turnId":"turn", "item":{"type":"commandExecution",
+            "id":"command", "command":"cargo test", "autoApprovalReviews":[params]}}]});
+        let recovered = parse_prefetched_items(&page);
+        assert_eq!(recovered.len(), 2);
+        assert_eq!(recovered[0].id, "auto-review:review");
+        assert_eq!(recovered[0].turn_id, "turn");
+        assert_eq!(recovered[1].id, "command");
+    }
+    let metadata = parse_thread_meta(&json!({"id":"child", "parentThreadId":"parent",
+        "threadSource":null, "source":{"subAgent":{"other":"guardian"}}}))
+    .expect("metadata");
+    assert_eq!(metadata.parent_thread_id.as_deref(), Some("parent"));
+    assert_eq!(metadata.thread_source.as_deref(), Some("guardian_review"));
 }

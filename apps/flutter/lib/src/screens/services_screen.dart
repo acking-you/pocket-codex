@@ -1016,7 +1016,7 @@ class _DeviceTile extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.only(bottom: 4),
       child: Material(
-        color: selected ? scheme.primaryContainer : Colors.transparent,
+        color: selected ? surfaceSelection(scheme) : Colors.transparent,
         borderRadius: BorderRadius.circular(kControlRadius),
         child: InkWell(
           mouseCursor: clickable,
@@ -1038,7 +1038,7 @@ class _DeviceTile extends StatelessWidget {
                     Icons.dns_outlined,
                     size: 17,
                     color: selected
-                        ? scheme.onPrimaryContainer
+                        ? scheme.onSurface
                         : scheme.onSurfaceVariant,
                   ),
                 ),
@@ -1053,9 +1053,7 @@ class _DeviceTile extends StatelessWidget {
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
                           fontWeight: FontWeight.w600,
-                          color: selected
-                              ? scheme.onPrimaryContainer
-                              : scheme.onSurface,
+                          color: selected ? scheme.onSurface : scheme.onSurface,
                         ),
                       ),
                       const SizedBox(height: 2),
@@ -1104,10 +1102,10 @@ class _DeviceDetailHeader extends StatelessWidget {
             width: 42,
             height: 42,
             decoration: BoxDecoration(
-              color: scheme.primaryContainer,
-              borderRadius: BorderRadius.circular(11),
+              color: scheme.surfaceContainerHigh,
+              borderRadius: BorderRadius.circular(kControlRadius + 2),
             ),
-            child: Icon(Icons.dns_outlined, color: scheme.onPrimaryContainer),
+            child: Icon(Icons.dns_outlined, color: scheme.onSurface),
           ),
           const SizedBox(width: 12),
           Expanded(

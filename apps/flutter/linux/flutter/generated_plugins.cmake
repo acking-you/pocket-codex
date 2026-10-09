@@ -7,6 +7,7 @@ list(APPEND FLUTTER_PLUGIN_LIST
   desktop_webview_window
   file_saver
   file_selector_linux
+  flutter_webrtc
   pasteboard
   screen_retriever_linux
   tray_manager

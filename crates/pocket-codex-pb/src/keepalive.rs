@@ -52,8 +52,8 @@ const RETRY_DELAY: Duration = Duration::from_secs(60);
 /// — returning the new expiry. The credential itself is not returned because
 /// renewal does not change it.
 ///
-/// Dropping the handle stops refreshing; it does not stop the tunnels, which
-/// keep working until the credential actually lapses.
+/// Call `abort()` on the returned task to stop refreshing. As with any Tokio
+/// `JoinHandle`, dropping it detaches the task; it does not stop the tunnels.
 pub fn keep_credential_alive<F, Fut>(expires_at: u64, refresh: F) -> JoinHandle<()>
 where
     F: Fn() -> Fut + Send + 'static,
@@ -61,20 +61,24 @@ where
 {
     tokio::spawn(async move {
         let mut expires_at = expires_at;
+        let mut delay = sleep_until_refresh(expires_at, now_secs());
         loop {
-            tokio::time::sleep(sleep_until_refresh(expires_at, now_secs())).await;
+            tokio::time::sleep(delay).await;
             match refresh().await {
-                Ok(next) if next > expires_at => expires_at = next,
                 Ok(next) => {
-                    // The issuer would not extend it. Nothing here can fix that,
-                    // and retrying in a tight loop would only add noise — so keep
-                    // the schedule and let the next attempt try again.
-                    tracing::warn!(
-                        expires_at,
-                        returned = next,
-                        "the relay credential was not extended; tunnels will drop at expiry"
-                    );
-                    tokio::time::sleep(RETRY_DELAY).await;
+                    let now = now_secs();
+                    if next <= now.saturating_add(REFRESH_MARGIN.as_secs()) {
+                        tracing::warn!(
+                            expires_at = next,
+                            "relay credential remains near expiry; will retry"
+                        );
+                    } else {
+                        tracing::debug!(expires_at = next, "relay credential remains valid");
+                    }
+                    // Issuers may return an unchanged deadline outside their renewal
+                    // window, or shorten it. Always schedule from the returned value.
+                    expires_at = next;
+                    delay = sleep_until_refresh(expires_at, now).max(RETRY_DELAY);
                 },
                 Err(err) => {
                     tracing::warn!(
@@ -82,7 +86,7 @@ where
                         expires_at,
                         "refreshing the relay credential failed; will retry"
                     );
-                    tokio::time::sleep(RETRY_DELAY).await;
+                    delay = RETRY_DELAY;
                 },
             }
         }
@@ -109,6 +113,31 @@ fn now_secs() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn failed_refresh_retries_after_one_minute_without_another_long_sleep() {
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        };
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&attempts);
+        let task = keep_credential_alive(now_secs() + 24 * 60 * 60, move || {
+            let observed = Arc::clone(&observed);
+            async move {
+                observed.fetch_add(1, Ordering::SeqCst);
+                anyhow::bail!("temporary issuer outage")
+            }
+        });
+        tokio::task::yield_now().await;
+        tokio::time::advance(MAX_SLEEP).await;
+        tokio::task::yield_now().await;
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        tokio::time::advance(RETRY_DELAY).await;
+        tokio::task::yield_now().await;
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        task.abort();
+    }
 
     #[test]
     fn refreshes_immediately_once_inside_the_margin() {

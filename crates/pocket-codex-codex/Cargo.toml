@@ -32,5 +32,13 @@ nix = { workspace = true }
 chrono = { workspace = true }
 directories = { workspace = true }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+nix = { workspace = true, features = ["user"] }
+rustix = { version = "1", features = ["process"] }
+tempfile = "3"
+
 [dev-dependencies]
 tempfile = "3"
+
+[target.'cfg(any(target_os = "macos", target_os = "linux"))'.dev-dependencies]
+rustix = { version = "1", features = ["process"] }

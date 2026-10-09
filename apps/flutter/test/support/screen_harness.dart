@@ -239,11 +239,15 @@ Finder convTiles() => find.byWidgetPredicate(
 Future<void> openTurnWork(WidgetTester t) async {
   for (final toggle
       in find.byKey(const Key('turn-work-toggle')).evaluate().toList()) {
-    final chevron = find.descendant(
+    // The header's chevron rotates rather than swapping glyphs, so read the
+    // fold's state from its rotation: a quarter turn means open.
+    final rotation = find.descendant(
       of: find.byWidget(toggle.widget),
-      matching: find.byIcon(Icons.keyboard_arrow_right),
+      matching: find.byType(AnimatedRotation),
     );
-    if (chevron.evaluate().isEmpty) continue; // already open, or still running
+    if (rotation.evaluate().isEmpty) continue; // still running: no chevron
+    final turns = (rotation.evaluate().first.widget as AnimatedRotation).turns;
+    if (turns != 0) continue; // already open
     await t.tap(find.byWidget(toggle.widget));
     if (find.byType(CircularProgressIndicator).evaluate().isEmpty) {
       await t.pumpAndSettle();

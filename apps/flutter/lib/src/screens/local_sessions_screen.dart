@@ -4,6 +4,8 @@ import 'package:go_router/go_router.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/attachment_refs.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
+import 'package:pocket_codex/src/session_tree.dart';
+import 'package:pocket_codex/src/widgets/session_tree_row.dart';
 import 'package:pocket_codex/src/desktop_theme.dart';
 import 'package:pocket_codex/src/error_format.dart';
 import 'package:pocket_codex/src/fonts.dart';
@@ -14,7 +16,6 @@ import 'package:pocket_codex/src/screens/app_session_screen.dart'
 import 'package:pocket_codex/src/theme.dart';
 import 'package:pocket_codex/src/time_ago.dart';
 import 'package:pocket_codex/src/widgets/app_toast.dart';
-import 'package:pocket_codex/src/widgets/error_retry.dart';
 import 'package:pocket_codex/src/widgets/loading.dart';
 import 'package:pocket_codex/src/widgets/search_field.dart';
 import 'package:pocket_codex/src/widgets/status_dots.dart';
@@ -92,7 +93,12 @@ class _LocalSessionsState extends ConsumerState<LocalSessionsScreen> {
   String? _error;
   List<LocalSession> _sessions = const [];
   String _query = '';
+  final Set<String> _expandedParents = {};
+  // Keep explicit folds when a search or status filter reveals ancestors.
+  final Set<String> _collapsedParents = {};
   _SessionViewFilter _filter = _SessionViewFilter.all;
+
+  bool get _localUnavailable => !widget.source.isRemote && !isDesktop;
 
   @override
   void initState() {
@@ -101,6 +107,12 @@ class _LocalSessionsState extends ConsumerState<LocalSessionsScreen> {
   }
 
   Future<void> _load() async {
+    // Mobile controllers do not share a desktop Codex home. Their cached chats
+    // and remote host sessions remain available through their own routes.
+    if (_localUnavailable) {
+      setState(() => _loading = false);
+      return;
+    }
     setState(() {
       _loading = true;
       _error = null;
@@ -122,6 +134,7 @@ class _LocalSessionsState extends ConsumerState<LocalSessionsScreen> {
   }
 
   Future<void> _onResume(LocalSession session) async {
+    if (session.isGuardian) return;
     // A finished-but-held session needs the holder-listing confirm; pre-fetch
     // the current holders so the dialog can name them.
     var holders = const <Holder>[];
@@ -168,42 +181,126 @@ class _LocalSessionsState extends ConsumerState<LocalSessionsScreen> {
       // of the remote list rather than a level above it — the chat origin is
       // the real way out, and the page menu switches between them.
       actions: [
-        IconButton(
-          key: const Key('local-sessions-refresh'),
-          icon: const Icon(Icons.refresh),
-          tooltip: l10n.refreshStatus,
-          onPressed: _loading ? null : _load,
-        ),
+        if (!_localUnavailable)
+          IconButton(
+            key: const Key('local-sessions-refresh'),
+            icon: const Icon(Icons.refresh),
+            tooltip: l10n.refreshStatus,
+            onPressed: _loading ? null : _load,
+          ),
       ],
       body: body,
     );
   }
 
   Widget _buildBody(AppLocalizations l10n) {
+    if (_localUnavailable) {
+      return _emptyState(
+        key: const ValueKey('local-unavailable'),
+        icon: Icons.devices_outlined,
+        title: l10n.localSessionsUnavailable,
+        description: l10n.localSessionsMobileHint,
+      );
+    }
     if (_loading) {
       return const ListLoadingSkeleton(key: ValueKey('local-loading'));
     }
     if (_error != null) {
-      return ErrorRetry(
+      return _emptyState(
         key: const ValueKey('local-error'),
-        errorKey: const Key('local-error-message'),
-        message: _error!,
-        onRetry: _load,
+        icon: Icons.folder_off_outlined,
+        title: l10n.sessionsReadFailed,
+        description: widget.source.isRemote
+            ? l10n.remoteSessionsReadHint
+            : l10n.localSessionsReadHint,
+        retry: true,
+        details: _error,
       );
     }
     if (_sessions.isEmpty) {
-      return RefreshIndicator(
+      return _emptyState(
         key: const ValueKey('local-empty'),
-        onRefresh: _load,
-        child: ListView(
-          children: [
-            const SizedBox(height: 120),
-            Center(child: Text(l10n.noLocalSessions)),
-          ],
-        ),
+        icon: Icons.history_outlined,
+        title: widget.source.isRemote
+            ? l10n.noHostSessions
+            : l10n.noLocalSessions,
+        description: widget.source.isRemote
+            ? l10n.noHostSessionsHint
+            : l10n.noLocalSessionsHint,
+        retry: true,
       );
     }
     return _buildList(l10n);
+  }
+
+  Widget _emptyState({
+    required Key key,
+    required IconData icon,
+    required String title,
+    required String description,
+    bool retry = false,
+    String? details,
+  }) {
+    final l10n = AppLocalizations.of(context);
+    final scheme = Theme.of(context).colorScheme;
+    return Center(
+      key: key,
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(24),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 460),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 40, color: scheme.onSurfaceVariant),
+              const SizedBox(height: 16),
+              Text(
+                title,
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const SizedBox(height: 8),
+              Text(
+                description,
+                textAlign: TextAlign.center,
+                style: TextStyle(color: scheme.onSurfaceVariant),
+              ),
+              const SizedBox(height: 20),
+              Wrap(
+                alignment: WrapAlignment.center,
+                spacing: 12,
+                runSpacing: 8,
+                children: [
+                  if (retry)
+                    OutlinedButton.icon(
+                      onPressed: _load,
+                      icon: const Icon(Icons.refresh),
+                      label: Text(l10n.retry),
+                    ),
+                  if (!widget.source.isRemote)
+                    FilledButton.icon(
+                      key: const Key('local-sessions-services'),
+                      onPressed: () => context.go('/manage'),
+                      icon: const Icon(Icons.devices_outlined),
+                      label: Text(l10n.manageServices),
+                    ),
+                ],
+              ),
+              if (details != null)
+                ExpansionTile(
+                  title: Text(l10n.errorDetails),
+                  children: [
+                    SelectableText(
+                      details,
+                      key: const Key('local-error-message'),
+                    ),
+                  ],
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   Widget _buildList(AppLocalizations l10n) {
@@ -224,13 +321,32 @@ class _LocalSessionsState extends ConsumerState<LocalSessionsScreen> {
       _SessionViewFilter.takeover => session.requiresTakeover,
     };
 
-    final filtered = _sessions
+    final matched = _sessions
         .where(
           (session) =>
               (q.isEmpty || matches(session)) && matchesFilter(session),
         )
         .toList();
 
+    final allTree = SessionTree(
+      _sessions,
+      (LocalSession s) => s.threadId,
+      (s) => s.parentThreadId,
+    );
+    final included = allTree.withAncestors(matched.map((s) => s.threadId));
+    final tree = SessionTree(
+      _sessions.where((s) => included.contains(s.threadId)),
+      (LocalSession s) => s.threadId,
+      (s) => s.parentThreadId,
+    );
+    final filtered = tree.roots;
+    final activeParents = tree.withAncestors(
+      _sessions.where((s) => s.safety == 'ownedRunning').map((s) => s.threadId),
+    );
+    final expanded = {
+      ..._expandedParents,
+      if (q.isNotEmpty || _filter != _SessionViewFilter.all) ...included,
+    }..removeAll(_collapsedParents);
     // Group by activity time, mirroring the conversation list: actively-running
     // first, then today, then earlier. The source list is already sorted
     // newest-first (scan_sessions orders by Reverse(updated_at)).
@@ -238,7 +354,7 @@ class _LocalSessionsState extends ConsumerState<LocalSessionsScreen> {
     final today = <LocalSession>[];
     final earlier = <LocalSession>[];
     for (final s in filtered) {
-      if (s.safety == 'ownedRunning') {
+      if (activeParents.contains(s.threadId)) {
         active.add(s);
       } else if (isSameDay(s.updatedAt, now)) {
         today.add(s);
@@ -252,14 +368,32 @@ class _LocalSessionsState extends ConsumerState<LocalSessionsScreen> {
       if (items.isEmpty) return;
       rows.add(_sectionLabel(label));
       rows.addAll(
-        items.map(
-          (s) => _SessionRow(
-            session: s,
-            now: now,
-            onResume: _onResume,
-            serviceKey: widget.source.serviceKey,
-          ),
-        ),
+        items.expand((s) => tree.visible(s, expanded)).map((row) {
+          final s = row.item;
+          return SessionTreeRow(
+            id: s.threadId,
+            depth: row.depth,
+            childCount: tree.children[s.threadId]?.length ?? 0,
+            expanded: expanded.contains(s.threadId),
+            childSession: s.parentThreadId != null,
+            guardian: s.isGuardian,
+            onToggle: () => setState(() {
+              if (expanded.contains(s.threadId)) {
+                _expandedParents.remove(s.threadId);
+                _collapsedParents.add(s.threadId);
+              } else {
+                _collapsedParents.remove(s.threadId);
+                _expandedParents.add(s.threadId);
+              }
+            }),
+            child: _SessionRow(
+              session: s,
+              now: now,
+              onResume: _onResume,
+              serviceKey: widget.source.serviceKey,
+            ),
+          );
+        }),
       );
     }
 
@@ -282,7 +416,7 @@ class _LocalSessionsState extends ConsumerState<LocalSessionsScreen> {
                   key: const ValueKey('local-no-match'),
                   child: Text(
                     l10n.noMatchingThreads,
-                    style: TextStyle(color: scheme.outline),
+                    style: TextStyle(color: scheme.onSurfaceVariant),
                   ),
                 )
               : desktop
@@ -423,6 +557,9 @@ class _SessionRow extends StatelessWidget {
           onTap: () {
             final q = <String>[
               'tid=${Uri.encodeComponent(session.threadId)}',
+              if (session.isGuardian) 'guardian=true',
+              if (session.parentThreadId != null)
+                'parent=${Uri.encodeComponent(session.parentThreadId!)}',
               if (session.cwd != null && session.cwd!.trim().isNotEmpty)
                 'cwd=${Uri.encodeComponent(session.cwd!.trim())}',
               if (preview.isNotEmpty) 'preview=${Uri.encodeComponent(preview)}',
@@ -470,7 +607,7 @@ class _SessionRow extends StatelessWidget {
                 ),
                 const SizedBox(width: 8),
                 _safetyChip(context, l10n),
-                if (session.allowsResume) ...[
+                if (session.allowsResume && !session.isGuardian) ...[
                   const SizedBox(width: 6),
                   TextButton(
                     key: Key('resume-${session.threadId}'),

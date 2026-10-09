@@ -142,6 +142,91 @@ pub(crate) async fn ensure(spec: PbWorkerSpec) -> Result<EnsureOutcome> {
     ensure_with_exe(spec, std::env::current_exe().context("locating current executable")?).await
 }
 
+/// Replace exactly one verified standalone worker, leaving its local service
+/// running.
+pub(crate) async fn restart(role: PbRole, key: &str) -> Result<PbSessionInfo> {
+    use std::time::Duration;
+
+    use pocket_codex_core::{
+        config::{Config, Mode},
+        process::{pb_worker_identity, pid_running},
+    };
+    let existing = RuntimeState::load()?
+        .find_pb(role, key)
+        .cloned()
+        .context("no recorded network worker for this role and key")?;
+    let identity = pb_worker_identity(&existing).context(
+        "recorded PID is not the matching standalone network worker; refusing to signal it",
+    )?;
+    let config = Config::load()?;
+    // Resolve credentials before signalling. A failed backend lookup must leave
+    // an existing worker untouched, and must never silently change its relay.
+    let session = if config.account_mode() == Mode::Account && key.starts_with("pcxu:") {
+        let transport = crate::commands::transport::resolve_transport(None, None, &config).await?;
+        let namespace = transport.namespace.context("account namespace missing")?;
+        if !key.starts_with(&format!("pcxu:{namespace}:")) {
+            bail!("recorded worker belongs to a different account");
+        }
+        transport.session
+    } else {
+        crate::commands::relay::resolve_session(Some(&existing.relay_addr), &config)?
+    };
+    if session.relay_addr != existing.relay_addr {
+        bail!("configured relay changed; refusing to retarget an existing worker");
+    }
+    let exe = std::env::current_exe().context("locating current executable")?;
+    if pb_worker_identity(&existing) != Some(identity.clone()) {
+        bail!("worker process changed during preflight");
+    }
+    send_sigterm(existing.pid);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while pid_running(existing.pid) {
+            if pb_worker_identity(&existing) != Some(identity.clone()) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .context("worker did not stop; no replacement was started")?;
+    let spec = PbWorkerSpec {
+        role,
+        key: key.to_string(),
+        local_addr: existing.local_addr.clone(),
+        session,
+        codec: existing.codec,
+    };
+    let replacement = spawn_worker(&spec, exe)?;
+    // Reload after the wait so independent sessions saved meanwhile survive.
+    let mut state = RuntimeState::load()?;
+    if state
+        .find_pb(role, key)
+        .is_none_or(|record| record.pid != existing.pid)
+    {
+        send_sigterm(replacement.pid);
+        bail!("worker record changed during restart; replacement stopped");
+    }
+    state.upsert_pb(replacement.clone());
+    if let Err(error) = state.save() {
+        send_sigterm(replacement.pid);
+        return Err(error.into());
+    }
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if !pid_running(replacement.pid) {
+                bail!("replacement worker exited; inspect its log");
+            }
+            if crate::commands::worker_health::read(&replacement).is_some() {
+                return Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .context("replacement is recorded but runtime diagnostics are not ready")??;
+    Ok(replacement)
+}
+
 async fn ensure_with_exe(spec: PbWorkerSpec, exe: PathBuf) -> Result<EnsureOutcome> {
     let mut state = RuntimeState::load()?;
     if let Some(existing) = state.find_pb(spec.role, &spec.key).cloned() {

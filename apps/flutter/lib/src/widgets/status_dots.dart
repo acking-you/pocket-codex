@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:pocket_codex/src/motion.dart';
 
 /// A small solid status dot used to convey availability at a glance (e.g. a
 /// service is online / a subscription is alive). [color] carries the meaning;
@@ -17,17 +18,7 @@ class StatusDot extends StatelessWidget {
   Widget build(BuildContext context) => Container(
     width: size,
     height: size,
-    decoration: BoxDecoration(
-      color: color,
-      shape: BoxShape.circle,
-      boxShadow: [
-        BoxShadow(
-          color: color.withValues(alpha: 0.45),
-          blurRadius: 4,
-          spreadRadius: 0.3,
-        ),
-      ],
-    ),
+    decoration: BoxDecoration(color: color, shape: BoxShape.circle),
   );
 }
 
@@ -52,8 +43,22 @@ class _PulsingDotState extends State<PulsingDot>
     with SingleTickerProviderStateMixin {
   late final AnimationController _c = AnimationController(
     vsync: this,
-    duration: const Duration(milliseconds: 900),
-  )..repeat(reverse: true);
+    duration: const Duration(milliseconds: 1100),
+  );
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Reduced motion keeps the dot (it still says "running") at full
+    // strength, without the pulse.
+    if (Motion.ambientAllowed(context)) {
+      if (!_c.isAnimating) _c.repeat(reverse: true);
+    } else {
+      _c
+        ..stop()
+        ..value = 1;
+    }
+  }
 
   @override
   void dispose() {
@@ -65,22 +70,31 @@ class _PulsingDotState extends State<PulsingDot>
   Widget build(BuildContext context) => AnimatedBuilder(
     animation: _c,
     builder: (context, _) {
+      // A solid core with a soft ring breathing around it — the ring moves,
+      // the dot doesn't, so it reads as "live" without flickering.
       final t = Curves.easeInOut.transform(_c.value);
-      return Container(
+      return SizedBox(
         width: widget.size,
         height: widget.size,
-        decoration: BoxDecoration(
-          color: Color.lerp(
-            widget.color.withValues(alpha: 0.4),
-            widget.color,
-            t,
-          ),
-          shape: BoxShape.circle,
-          boxShadow: [
-            BoxShadow(
-              color: widget.color.withValues(alpha: 0.2 + 0.5 * t),
-              blurRadius: 2 + 5 * t,
-              spreadRadius: 0.4 + t,
+        child: Stack(
+          clipBehavior: Clip.none,
+          alignment: Alignment.center,
+          children: [
+            Container(
+              width: widget.size + 6 * t,
+              height: widget.size + 6 * t,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: widget.color.withValues(alpha: 0.22 * (1 - t) + 0.06),
+              ),
+            ),
+            Container(
+              width: widget.size,
+              height: widget.size,
+              decoration: BoxDecoration(
+                color: widget.color,
+                shape: BoxShape.circle,
+              ),
             ),
           ],
         ),
@@ -122,7 +136,7 @@ class StatusChip extends StatelessWidget {
     // Filled pills speak in the status colour itself (shifted towards the
     // text pole for contrast); the bare dot+label stays muted.
     final labelColor = filled
-        ? Color.lerp(color, isLight ? Colors.black : Colors.white, 0.35)!
+        ? Color.lerp(color, scheme.onSurface, 0.35)!
         : scheme.onSurfaceVariant;
     final row = Row(
       mainAxisSize: MainAxisSize.min,

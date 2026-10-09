@@ -1,5 +1,8 @@
 import 'dart:async';
 
+import 'package:pocket_codex/src/voice/dictation.dart';
+import 'package:pocket_codex/src/voice/voice_transport.dart';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -8,6 +11,17 @@ import 'package:pocket_codex/src/bridge_api.dart';
 import 'package:pocket_codex/src/bridge_api_rust.dart';
 import 'package:pocket_codex/src/service_key.dart';
 import 'package:pocket_codex/src/web_authenticator.dart';
+
+/// Each voice call owns native audio resources; tests supply an in-memory transport.
+final voiceTransportFactoryProvider = Provider<VoiceTransport Function()>(
+  (ref) => WebRtcVoiceTransport.new,
+);
+
+/// The dictation line's media link; tests supply an in-memory one.
+final dictationTransportFactoryProvider =
+    Provider<DictationTransport Function()>(
+      (ref) => WebRtcDictationTransport.new,
+    );
 
 /// The engine API. Overridden with a FakeBridgeApi in tests.
 final bridgeApiProvider = Provider<BridgeApi>((ref) => const RustBridgeApi());

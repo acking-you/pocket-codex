@@ -42,6 +42,43 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: python3 scripts/ci_affected.py detect
 
+  macos-packaging-tests:
+    name: macOS packaging safety checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 -m unittest discover -s scripts -p 'test_package_macos.py'
+
+  theme-native:
+    name: Theme toggle without debug assertions (macOS)
+    needs: changes
+    if: needs.changes.outputs.flutter == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-06-01
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: theme-native
+      - name: Exercise the real theme toggle with assertions disabled
+        working-directory: apps/flutter
+        env:
+          FLUTTER_XCODE_ARCHS: arm64
+          FLUTTER_XCODE_ONLY_ACTIVE_ARCH: "YES"
+        run: |
+          flutter pub get
+          flutter drive --profile -d macos \
+            --driver=test_driver/integration_test.dart \
+            --target=integration_test/theme_toggle_native_test.dart
+
   fmt:
     name: rust fmt
     needs: changes
@@ -178,18 +215,42 @@ jobs:
         working-directory: apps/flutter
         run: flutter test
 
+  macos-host:
+    name: macOS host environment
+    needs: changes
+    if: needs.changes.outputs.rust_mode != 'none' || needs.changes.outputs.flutter == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check native host code
+        run: cargo clippy -p pocket-codex-codex --all-targets --locked -- -D warnings
+
+      - name: Test native host and shell process cleanup
+        run: cargo test -p pocket-codex-codex --locked
+
   # Single required status that reflects the whole run. Always runs, so a
   # skipped Rust/Flutter job (path-filtered out) keeps the gate green, while
   # any real failure or cancellation fails it.
   ci-result:
     name: CI result
-    needs: [changes, fmt, clippy, test, flutter]
+    needs: [changes, fmt, clippy, test, flutter, macos-host, theme-native, macos-packaging-tests]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Verify no required job failed
         run: |
-          results="${{ needs.changes.result }} ${{ needs.fmt.result }} ${{ needs.clippy.result }} ${{ needs.test.result }} ${{ needs.flutter.result }}"
+          results="${{ needs.changes.result }} ${{ needs.fmt.result }} ${{ needs.clippy.result }} ${{ needs.test.result }} ${{ needs.flutter.result }} ${{ needs.macos-host.result }} ${{ needs.theme-native.result }} ${{ needs.macos-packaging-tests.result }}"
           echo "job results: $results"
           for r in $results; do
             if [ "$r" = "failure" ] || [ "$r" = "cancelled" ]; then

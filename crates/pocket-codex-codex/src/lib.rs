@@ -27,6 +27,9 @@ pub mod client;
 /// Spawn / inspect / stop the supervised `codex app-server` process.
 pub mod process;
 
+#[cfg(any(target_os = "macos", all(test, target_os = "linux")))]
+mod shell_environment;
+
 /// Verify a freshly-spawned app-server actually serves (`/readyz`), so
 /// launch commands can fail fast with the real error instead of printing
 /// success for a child that died on boot.

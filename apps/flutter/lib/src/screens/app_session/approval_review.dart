@@ -108,3 +108,110 @@ Map<String, dynamic>? _object(String raw) {
     return null;
   }
 }
+
+/// What a reviewed action actually does, in the words a reader would use:
+/// the command line, the files a patch touches, the host it connects to.
+///
+/// Follows `GuardianApprovalReviewAction` in the app-server protocol. Null for
+/// a shape it does not recognise, so the caller can fall back to the JSON.
+String? reviewActionSummary(Map<String, dynamic> action) {
+  String? str(String key) =>
+      action[key] is String && (action[key] as String).isNotEmpty
+      ? action[key] as String
+      : null;
+  List<String> strings(String key) => [
+    if (action[key] case final List<dynamic> list)
+      for (final v in list)
+        if (v is String && v.isNotEmpty) v,
+  ];
+  switch (action['type']) {
+    case 'command':
+      return str('command');
+    case 'execve':
+      final argv = strings('argv');
+      // argv[0] usually repeats the program; show the line as typed.
+      if (argv.isNotEmpty) return argv.join(' ');
+      return str('program');
+    case 'writeStdin':
+      return str('stdin');
+    case 'applyPatch':
+      final files = strings('files');
+      return files.isEmpty ? null : files.join('\n');
+    case 'networkAccess':
+      final host = str('host') ?? str('target');
+      if (host == null) return null;
+      final port = action['port'];
+      final protocol = str('protocol');
+      return [
+        if (protocol != null) '$protocol://',
+        host,
+        if (port is num) ':${port.toInt()}',
+      ].join();
+    case 'mcpToolCall':
+      final tool = str('toolTitle') ?? str('toolName');
+      final server = str('connectorName') ?? str('server');
+      if (tool == null) return server;
+      return server == null ? tool : '$server › $tool';
+    case 'requestPermissions':
+      return str('reason');
+  }
+  return str('command') ??
+      str('reason') ??
+      str('host') ??
+      str('toolName') ??
+      str('tool_name');
+}
+
+/// Native approval lifecycle, kept separate from actionable user approvals.
+class AutoApprovalReview {
+  const AutoApprovalReview(this.status, this.request, this.result);
+  final String status;
+  final ApprovalReviewRequest? request;
+  final ApprovalReviewResult? result;
+
+  static AutoApprovalReview? parse(String raw) {
+    final value = _object(raw);
+    final review = value?['review'];
+    if (value?['reviewId'] is! String || review is! Map) return null;
+    final status = review['status'];
+    if (!const {
+      'inProgress',
+      'approved',
+      'denied',
+      'timedOut',
+      'aborted',
+    }.contains(status)) {
+      return null;
+    }
+    final action = value?['action'];
+    ApprovalReviewRequest? request;
+    if (action is Map<String, dynamic>) {
+      final type = action['type'] is String ? action['type'] as String : '';
+      final details = const JsonEncoder.withIndent('  ').convert(action);
+      request = ApprovalReviewRequest(
+        tool: type,
+        summary: reviewActionSummary(action) ?? details,
+        details: details,
+        cwd: action['cwd'] is String ? action['cwd'] as String : null,
+      );
+    }
+    return AutoApprovalReview(
+      status as String,
+      request,
+      status == 'inProgress'
+          ? null
+          : ApprovalReviewResult(
+              outcome: status == 'approved' ? 'allow' : 'deny',
+              risk: review['riskLevel'] is String
+                  ? review['riskLevel'] as String
+                  : 'unknown',
+              authorization: review['userAuthorization'] is String
+                  ? review['userAuthorization'] as String
+                  : 'unknown',
+              rationale: review['rationale'] is String
+                  ? review['rationale'] as String
+                  : '',
+            ),
+    );
+  }
+}

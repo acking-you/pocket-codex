@@ -10,6 +10,16 @@ pub(super) struct TurnWindow {
     pub(super) evicted: bool,
 }
 
+impl TurnWindow {
+    pub(super) fn restored(items: Vec<ThreadItem>, next_cursor: Option<String>) -> Self {
+        Self {
+            items: Arc::new(items),
+            next_cursor,
+            ..Self::default()
+        }
+    }
+}
+
 /// A selected turn's items and whether more follow them in that turn.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TurnItemsPage {
@@ -96,19 +106,32 @@ fn thread_turn_page_inner(
     if let Some(cursor) = &window.next_cursor {
         params["cursor"] = json!(cursor);
     }
-    let response =
-        super::super::session_sync::request(service_key, &client, "thread/items/list", params)?;
+    let stamp = turn_stamp(&state.turn_stamps, turn_id);
+    // A completed turn's pages are fixed within a source generation, so a
+    // retained copy (from an earlier jump, in this or a previous launch)
+    // answers it from disk. A running turn still grows: always read it.
+    let retained = stamp
+        .completed_at
+        .is_some()
+        .then(|| super::super::session_sync::retained(service_key, "thread/items/list", &params))
+        .flatten();
+    let response = match retained {
+        Some(page) => page,
+        None => {
+            super::super::session_sync::request(service_key, &client, "thread/items/list", params)?
+        },
+    };
     let entries = response
         .get("data")
         .and_then(Value::as_array)
         .ok_or_else(|| anyhow!("history page missing data"))?;
-    let stamp = turn_stamp(&state.turn_stamps, turn_id);
     let items: Vec<_> = entries
         .iter()
-        .filter_map(|entry| {
+        .flat_map(|entry| {
             entry
                 .get("item")
-                .and_then(|item| parse_turn_item(item, &stamp))
+                .map(|item| parse_turn_items(item, &stamp))
+                .unwrap_or_default()
         })
         .collect();
     let next = response

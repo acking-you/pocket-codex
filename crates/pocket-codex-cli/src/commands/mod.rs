@@ -28,6 +28,7 @@ mod transport;
 mod ui;
 mod version;
 mod worker;
+mod worker_health;
 
 /// Dispatch a parsed [`Cli`] invocation to the matching subcommand.
 pub async fn dispatch(cli: Cli) -> Result<()> {

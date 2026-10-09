@@ -2,7 +2,7 @@ name: pocket_codex
 description: "PocketCodex Flutter front-end. Drives codex app-server through flutter_rust_bridge."
 publish_to: 'none'
 
-version: 0.2.5+25
+version: 0.2.10+32
 
 # Flutter SDK is locked at the project level via FVM (`.fvmrc`) and at
 # the language level via `environment.flutter`. CI uses
@@ -28,6 +28,7 @@ dependencies:
   pocket_codex_bridge:
     path: rust_builder
   flutter_riverpod: ^2.6.1
+  flutter_webrtc: 1.6.2+hotfix.3
   go_router: ^14.6.2
   path_provider: ^2.1.5
   # Renders agent replies as Markdown documents (headings, code, lists,
@@ -75,6 +76,7 @@ dependencies:
   file_selector: ^1.1.0
   # Native mobile Save As dialogs; 0.5+ needs a newer SDK-pinned meta package.
   file_saver: ^0.4.0
+  share_plus: ^13.2.1
   path: ^1.9.1
   # Message image attachments: pick from the photo library on Android/iOS
   # (PHPicker / system Photo Picker — no runtime permission needed) and a
@@ -89,6 +91,10 @@ dependencies:
   desktop_drop: ^0.7.1
   pasteboard: ^0.5.0
   re_highlight: ^0.0.3
+  # Renders an .svg the agent produced in the file preview (pure Dart, the
+  # Flutter team's package). Pinned exactly: a renderer bump can change
+  # what a preview looks like.
+  flutter_svg: 2.3.0
 
 dev_dependencies:
   flutter_test:
@@ -104,6 +110,7 @@ dev_dependencies:
   plugin_platform_interface: ^2.1.8
   flutter_launcher_icons: ^0.14.2
   flutter_native_splash: ^2.4.3
+  fake_async: 1.3.3
 
 flutter:
   uses-material-design: true
@@ -121,7 +128,6 @@ flutter:
     - assets/logo/glyph_light.png
     - assets/logo/glyph_dark.png
     - assets/tray/tray.png
-    - assets/tray/tray_template@2x.png
     - assets/tray/tray.ico
   # The design system's typefaces (SIL OFL, see assets/fonts/OFL-*.txt): Figtree
   # for prose, Geist Mono for code. Static instances rather than the variable
@@ -152,12 +158,12 @@ flutter:
           weight: 600
 
 flutter_launcher_icons:
-  # All launcher icons derive from icon/logo_dark.png (the ink tile reads on
-  # light AND dark docks); test/gen_icon_test.dart generates:
+  # All launcher icons are the blue brand tile drawn by test/gen_icon_test.dart
+  # (one vector source for every platform); it generates:
   #   icon_glyph.png        rounded tile + ~10% margin (desktop / web)
   #   icon_mobile.png       full-bleed opaque tile (iOS + Android legacy)
-  #   icon_adaptive_bg.png  solid tile colour (Android adaptive background)
-  #   icon_adaptive_fg.png  tile shrunk into the safe zone (adaptive fg)
+  #   icon_adaptive_bg.png  the tile gradient (Android adaptive background)
+  #   icon_adaptive_fg.png  glyph inside the safe zone (adaptive fg)
   image_path: "icon/icon_glyph.png"
   # iOS: full-bleed opaque tile; remove_alpha is a harmless safety net.
   ios: true
@@ -177,7 +183,7 @@ flutter_launcher_icons:
     generate: true
     image_path: "icon/icon_glyph.png"
     background_color: "#FFFFFF"
-    theme_color: "#355ACF"
+    theme_color: "#2A52C4"
   # Windows: NOT generated here. This tool writes a single-frame .ico (one size,
   # whatever `icon_size` says), and Windows then downscales that one raster for
   # the taskbar at 32 px and the title bar at 16 px — a detailed mark reduced 8:1
@@ -195,16 +201,16 @@ flutter_launcher_icons:
     generate: true
     image_path: "icon/icon_glyph.png"
 
-# Theme-matched splash: each mark is its theme's tile, and the background
-# colour equals that tile's interior (sampled + printed by gen_icon_test.dart),
-# so the tile melts into the splash and only the cloud glyph shows.
+# Theme-matched splash: each mark is its theme's bare glyph, sized to sit in
+# Android 12's circle crop, on the theme surface (MarkStyle.light / .dark in
+# gen_icon_test.dart). Keep these colours equal to those tiles.
 flutter_native_splash:
   image: assets/logo/mark_light.png
   image_dark: assets/logo/mark_dark.png
-  color: "#FDFDFD"
-  color_dark: "#1A1D24"
+  color: "#FBFBFA"
+  color_dark: "#19191B"
   android_12:
     image: assets/logo/mark_light.png
     image_dark: assets/logo/mark_dark.png
-    color: "#FDFDFD"
-    color_dark: "#1A1D24"
+    color: "#FBFBFA"
+    color_dark: "#19191B"

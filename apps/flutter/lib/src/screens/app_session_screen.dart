@@ -19,8 +19,9 @@ import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart' show DateFormat;
 import 'package:super_sliver_list/super_sliver_list.dart';
-import 'package:window_manager/window_manager.dart' show DragToMoveArea;
 import 'package:pocket_codex/src/bridge_api.dart';
+import 'package:pocket_codex/src/session_tree.dart';
+import 'package:pocket_codex/src/widgets/session_tree_row.dart';
 import 'package:pocket_codex/src/context_status.dart';
 import 'package:pocket_codex/src/desktop_theme.dart';
 import 'package:pocket_codex/src/error_format.dart';
@@ -29,21 +30,33 @@ import 'package:pocket_codex/src/git_diff.dart';
 import 'package:pocket_codex/src/ide_context.dart';
 import 'package:pocket_codex/src/image_attachments.dart';
 import 'package:pocket_codex/src/providers.dart';
+import 'package:pocket_codex/src/log_manager.dart';
+import 'package:pocket_codex/src/voice/dictation.dart';
+import 'package:pocket_codex/src/voice/dictation_widgets.dart';
+import 'package:pocket_codex/src/voice/voice_controller.dart';
+import 'package:pocket_codex/src/voice/voice_widgets.dart';
 import 'package:pocket_codex/src/service_key.dart';
 import 'package:pocket_codex/src/screens/app_session/async_questions.dart';
 import 'package:pocket_codex/src/screens/app_session/activity_cards.dart';
 import 'package:pocket_codex/src/screens/app_session/composer_cards.dart';
+import 'package:pocket_codex/src/screens/app_session/expanded_composer.dart';
+import 'package:pocket_codex/src/screens/app_session/message_editor.dart';
 import 'package:pocket_codex/src/screens/app_session/transcript_model.dart';
 import 'package:pocket_codex/src/screens/app_session/generated_image_card.dart';
 import 'package:pocket_codex/src/screens/app_session/history_merge.dart';
 import 'package:pocket_codex/src/screens/app_session/history_rows.dart';
 import 'package:pocket_codex/src/screens/app_session/transcript_view.dart';
+import 'package:pocket_codex/src/motion.dart';
 import 'package:pocket_codex/src/theme.dart';
+import 'package:pocket_codex/src/widgets/animated_label.dart';
 import 'package:pocket_codex/src/ui_prefs.dart';
 import 'package:pocket_codex/src/widgets/adaptive_sheet.dart';
 import 'package:pocket_codex/src/widgets/app_toast.dart';
 import 'package:pocket_codex/src/widgets/brand_logo.dart';
 import 'package:pocket_codex/src/widgets/diff_review.dart';
+import 'package:pocket_codex/src/widgets/draggable_navigation.dart';
+import 'package:pocket_codex/src/widgets/history_arrival.dart';
+import 'package:pocket_codex/src/widgets/host_switcher.dart';
 import 'package:pocket_codex/src/widgets/file_browser_panel.dart';
 import 'package:pocket_codex/src/widgets/folder_tree_picker.dart';
 import 'package:pocket_codex/src/widgets/links.dart';
@@ -51,7 +64,7 @@ import 'package:pocket_codex/src/widgets/loading.dart';
 import 'package:pocket_codex/src/widgets/message_images.dart';
 import 'package:pocket_codex/src/widgets/middle_click_scroll.dart';
 import 'package:pocket_codex/src/widgets/project_menu.dart';
-import 'package:pocket_codex/src/widgets/provider_badge.dart';
+import 'package:pocket_codex/src/widgets/project_section_header.dart';
 import 'package:pocket_codex/src/widgets/status_dots.dart';
 import 'package:pocket_codex/src/widgets/takeover_dialog.dart';
 import 'package:pocket_codex/src/widgets/theme_toggle.dart';
@@ -59,6 +72,8 @@ import 'package:pocket_codex/src/widgets/turn_minimap.dart';
 import 'package:pocket_codex/src/widgets/turn_outline.dart';
 import 'package:pocket_codex/src/screens/app_session/approval_review.dart';
 import 'package:pocket_codex/src/widgets/window_title_bar.dart';
+
+part 'app_session/composer_drafts.dart';
 
 /// Local port for the app-server ws tunnel (shared with the service screen).
 /// `0` is a sentinel: the bridge assigns a free OS port *per service* so several
@@ -96,6 +111,8 @@ class AppSessionScreen extends ConsumerStatefulWidget {
     this.home = false,
     this.services = const [],
     this.onSwitchService,
+    this.hostSwitch,
+    this.onDismissHostSwitch,
   });
 
   /// Full `pcx:<device>:app:<name>` key of the connected service.
@@ -120,6 +137,14 @@ class AppSessionScreen extends ConsumerStatefulWidget {
 
   /// Called when the user picks another service in the home-mode switcher.
   final void Function(String serviceKey)? onSwitchService;
+
+  /// A host switch the home is running or that just failed. Shown in the
+  /// switcher row and as a strip above the conversation. Ignored unless
+  /// [home].
+  final HostSwitch? hostSwitch;
+
+  /// Close a failed switch's notice.
+  final VoidCallback? onDismissHostSwitch;
 
   @override
   ConsumerState<AppSessionScreen> createState() => _AppSessionState();
@@ -149,9 +174,13 @@ class _Attachment {
   final bool isFile;
   ProcessedImage? processed; // image: null while the isolate is still working
   String? hostPath; // file: null while the upload is still in flight
+  XFile? source;
+  Uint8List? sourceBytes;
+  String? error;
 
   /// Whether this attachment is sendable.
-  bool get ready => isFile ? hostPath != null : processed != null;
+  bool get ready =>
+      error == null && (isFile ? hostPath != null : processed != null);
 }
 
 /// A message the user composed while a turn was already running. It isn't sent
@@ -191,6 +220,12 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     with WidgetsBindingObserver {
   final _input = TextEditingController();
   final _inputFocus = FocusNode();
+  int? _newDraftFocusAfterDrawer;
+  int _projectSelectionGeneration = 0;
+  final _expandedInputFocus = FocusNode();
+  late final _ComposerDrafts _drafts;
+  late _ComposerDraft _draft;
+  bool _editorOpen = false;
   final _scroll = ScrollController();
   // Index-based scrolling for the transcript (super_sliver_list): powers the
   // turn minimap and the compact prev/next-turn jumps via `visibleRange` +
@@ -243,6 +278,189 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   int _subscriptionEpoch = 0;
 
   String? _threadId;
+  late final VoiceController _voice;
+
+  /// The composer microphone: a background realtime session, paused until a
+  /// take attaches the microphone, whose transcript lands at the cursor.
+  late final DictationLine _dictation;
+  DictationTake _dictationTake = DictationTake.idle;
+
+  /// Where the current take writes: the draft it belongs to, and the span
+  /// of the field its words occupy so far. Deltas extend the span; a
+  /// discard removes exactly it. Null outside a take.
+  ({Object draft, int start, int end})? _dictationSpan;
+
+  void _onDictationChanged() {
+    final d = _dictation;
+    if (d.take != _dictationTake && mounted) {
+      setState(() => _dictationTake = d.take);
+    }
+    final failure = d.failure;
+    if (failure != null && mounted) {
+      d.failure = null;
+      final l10n = AppLocalizations.of(context);
+      showToastError(context, switch (failure) {
+        DictationFailure.permission => l10n.dictationPermission,
+        DictationFailure.interrupted => l10n.dictationInterrupted,
+        DictationFailure.unavailable =>
+          d.error == null
+              ? l10n.dictationUnavailable
+              : '${l10n.dictationUnavailable}: ${d.error}',
+      });
+    }
+  }
+
+  /// Start a take where the cursor is.
+  void _startDictation() {
+    if (_voice.busy) {
+      showToastError(context, AppLocalizations.of(context).dictationVoiceBusy);
+      return;
+    }
+    if (_dictation.taking) return;
+    final value = _input.value;
+    final sel = value.selection;
+    final start = sel.isValid ? sel.start : value.text.length;
+    final end = sel.isValid ? sel.end : value.text.length;
+    // A selection is replaced by what is said, as typing would — but only
+    // once something is said: a take that never starts (no microphone, no
+    // line) must leave the draft exactly as it was.
+    _dictationSpan = (draft: _draft, start: start, end: start);
+    _dictationReplaces = start == end ? null : (start: start, end: end);
+    _inputFocus.requestFocus();
+    unawaited(_dictation.startTake());
+  }
+
+  /// The selection the current take replaces, removed when its first words
+  /// arrive. Null when there is none, or once it has been replaced.
+  ({int start, int end})? _dictationReplaces;
+
+  /// The text the current take's words replaced, restored if it is
+  /// discarded. Empty when they replaced nothing.
+  String _dictationReplaced = '';
+
+  /// Words arriving for the current take go in at the end of its span.
+  void _onDictationDelta(int take, String delta) {
+    final span = _dictationSpan;
+    if (!mounted ||
+        span == null ||
+        take != _dictation.takeId ||
+        !identical(span.draft, _draft)) {
+      return;
+    }
+    var value = _input.value;
+    // The first words replace the selection the take was started on; what
+    // they replaced is kept so a discard can put it back.
+    final replaces = _dictationReplaces;
+    if (replaces != null && delta.trim().isNotEmpty) {
+      _dictationReplaces = null;
+      final start = replaces.start.clamp(0, value.text.length);
+      final end = replaces.end.clamp(start, value.text.length);
+      _dictationReplaced = value.text.substring(start, end);
+      value = TextEditingValue(
+        text: value.text.replaceRange(start, end, ''),
+        selection: TextSelection.collapsed(offset: start),
+      );
+    }
+    final text = value.text;
+    // The user may have edited the draft meanwhile; keep the span inside it.
+    final at = span.end.clamp(0, text.length);
+    final before = text.substring(0, at);
+    var piece = delta;
+    if (at == span.start) {
+      // First words of the take: no leading space at the start of a line,
+      // one between two Latin words, none before CJK.
+      piece = piece.trimLeft();
+      final latinBefore = RegExp(r'[A-Za-z0-9.,!?;:)\]]$').hasMatch(before);
+      final latinStart = RegExp(r'^[A-Za-z0-9(\[]').hasMatch(piece);
+      if (latinBefore && latinStart) piece = ' $piece';
+    }
+    if (piece.isEmpty) return;
+    final caretInSpan =
+        !value.selection.isValid ||
+        (value.selection.isCollapsed &&
+            value.selection.baseOffset >= span.start &&
+            value.selection.baseOffset <= at);
+    _input.value = TextEditingValue(
+      text: text.replaceRange(at, at, piece),
+      selection: caretInSpan
+          ? TextSelection.collapsed(offset: at + piece.length)
+          : value.selection,
+    );
+    _dictationSpan = (
+      draft: span.draft,
+      start: span.start,
+      end: at + piece.length,
+    );
+  }
+
+  void _onDictationEnded(int take, {required bool cancelled}) {
+    final span = _dictationSpan;
+    final replaced = _dictationReplaced;
+    _dictationSpan = null;
+    _dictationReplaces = null;
+    _dictationReplaced = '';
+    if (!mounted || span == null || !cancelled) return;
+    if (!identical(span.draft, _draft)) return;
+    // Discard: take out exactly what this take put in, and put back the
+    // selection it replaced. A take that heard nothing changed nothing.
+    final text = _input.text;
+    final start = span.start.clamp(0, text.length);
+    final end = span.end.clamp(start, text.length);
+    if (end > start || replaced.isNotEmpty) {
+      _input.value = TextEditingValue(
+        text: text.replaceRange(start, end, replaced),
+        selection: replaced.isEmpty
+            ? TextSelection.collapsed(offset: start)
+            : TextSelection(
+                baseOffset: start,
+                extentOffset: start + replaced.length,
+              ),
+      );
+    }
+  }
+
+  bool _voiceWasBusy = false;
+  void _onVoiceForDictation() {
+    final busy = _voice.busy;
+    if (busy == _voiceWasBusy) return;
+    _voiceWasBusy = busy;
+    if (busy) {
+      // A take in progress keeps what it heard; the line closes so the
+      // call has the microphone and the realtime quota to itself.
+      unawaited(_dictation.close());
+    } else {
+      _warmDictation();
+    }
+  }
+
+  void _finishDictation() => unawaited(_dictation.finishTake());
+
+  void _cancelDictation() => unawaited(_dictation.cancelTake());
+
+  /// Open the line ahead of use, while the composer is in front and no call
+  /// holds the microphone. Opening only negotiates the session; the
+  /// microphone stays closed until a take.
+  void _warmDictation() {
+    if (!mounted || !_foreground || _voice.busy || !_voiceAvailable) return;
+    unawaited(_dictation.warm());
+  }
+
+  bool _voiceStarting = false;
+  int _voiceIntentGeneration = 0;
+
+  bool get _isVoiceThread =>
+      _threads.any((t) => t.id == _threadId && t.isVoice);
+  bool get _voiceAvailable =>
+      !_externalWriterMode &&
+      !_loading &&
+      !_historySyncing &&
+      !_showingCachedHistory &&
+      !_connectionLost;
+  bool get _canStartVoice =>
+      _voiceAvailable &&
+      !_voiceStarting &&
+      !_voice.busy &&
+      _voice.phase != VoicePhase.stopping;
   String? _cwd;
   ModelInfo? _model;
   // True while the user holds a model pick that hasn't been sent yet, so a
@@ -253,6 +471,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   bool _serviceTierPickPending = false;
   bool _modePickPending = false;
   bool _supplement = false;
+  Object? _sendRequest;
   Object? _supplementRequest;
   bool _plan = false; // plan mode: the agent plans before implementing
   // Whether the thread is currently in plan mode server-side. Collaboration
@@ -353,10 +572,20 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   // Desktop layout: left = this project's sessions, right = the diff-review
   // split (a file tree + one file's diff). Both collapsible AND drag-resizable;
   // the chat stays centered regardless. _threads backs the left pane.
+  // The sidebar's open state and width start from the saved preference and
+  // are written back when the user changes them (see [_setLeftOpen] and the
+  // splitter's drag end), so a restart reopens the window as it was left.
   bool _leftOpen = true;
   bool _reviewOpen = false; // the right-hand review split is showing
-  double _leftWidth = 304;
+  double _leftWidth = 280;
+  bool _paneDragging = false;
+  bool _sidebarClosing = false;
+  bool _layoutRestored = false;
   double? _composerHeight;
+  // Live height while the resize edge is dragged. Only the input box listens,
+  // so a drag re-lays out the composer instead of rebuilding the screen on
+  // every pointer move — which is what made the edge lag the cursor.
+  final ValueNotifier<double?> _composerDragHeight = ValueNotifier(null);
   int _settingsRevision = 0;
   double _reviewWidth = 760; // width of the whole review split (diff + tree)
   double _treeWidth = 250; // the tree sub-pane inside the review
@@ -384,6 +613,13 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   List<String> _allProjects = const [];
   // Live filter text for the conversations pane search box.
   String _convQuery = '';
+  // The search box, so ⌘K / Ctrl+K can reach it from anywhere.
+  final FocusNode _convSearchFocus = FocusNode();
+  // The conversation list's scroll, so "locate" can bring the open row back.
+  final ScrollController _convScroll = ScrollController();
+  final ListController _convListCtl = ListController();
+  // Conversations in the order the sidebar last listed them, for Ctrl+Tab.
+  List<ThreadMeta> _visibleConversationOrder = const [];
 
   // Top-bar title rename: true while the title is a text field (click to
   // enter, Enter/blur to commit, Esc to cancel).
@@ -416,6 +652,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   bool _activityView = false;
 
   bool _streaming = false;
+  int _turnStateRevision = 0;
+  // Only retain rows changed while the current history snapshot is in flight.
+  Map<String, TranscriptItem>? _historyLiveItems;
+  Set<String>? _historyPartialItems;
   // Current running turn's id, captured from turn/started — required to
   // interrupt it (turn/interrupt rejects a threadId without a turnId).
   String? _turnId;
@@ -434,6 +674,11 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   // A thread held by another app-server stays inside this chat surface. Its
   // rollout follows one host-meta stream until it becomes resumable.
   bool _externalWriterMode = false;
+  bool _guardianReadOnly = false;
+  String? _parentThreadId;
+  final Set<String> _expandedSessionParents = {};
+  // Manual folds also override automatic reveals for search or selection.
+  final Set<String> _collapsedSessionParents = {};
   SessionLiveness? _externalWriterLiveness;
   StreamSubscription<SessionFollowUpdate>? _externalWriterSub;
   Timer? _externalWriterReconnect;
@@ -444,7 +689,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   bool _externalWriterLegacy = false;
   int _externalWriterEpoch = 0;
   bool _takingOver = false;
-  bool _sending = false;
+  bool _localSending = false;
+  // Navigation clears local operations, but cannot unlock a draft's send.
+  bool get _sending => _localSending || _draft.sendPending;
   bool _atBottom = true; // is the list scrolled to the latest message?
   // Every turn of the open thread, oldest first — including turns whose items
   // aren't loaded. The rail shows the conversation's shape, so it reads this
@@ -478,6 +725,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   int _scrollIntent = 0;
   int _settleEpoch = 0;
   bool _historyFromTop = false;
+  Key? _historyArrivalRow;
+  int _historyArrivalRevision = 0;
   Locale? _minimapLocale;
   // True while `_scrollToEnd(force: true)` is re-jumping to the bottom. Those
   // jumps fire scroll events from positions that can look like the top of the
@@ -494,7 +743,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   bool _historySyncing = false;
   bool _showingCachedHistory = false;
   bool _reconnecting = false;
-  DateTime? _lastReconnectAt; // debounce rapid retriggers (flapping socket)
+  Stopwatch? _lastReconnectAt;
+  int _reconnectEpoch = 0;
+  bool _foreground = true;
+  bool _restoringSettings = false;
   Timer? _healthTimer;
   String? _lastUserText;
   // Images (data URLs) sent with the last user message, kept alongside
@@ -503,8 +755,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   List<String> _lastUserImages = const [];
   // Composer attachments not yet sent; an entry with `processed == null` is
   // still being downscaled/re-encoded in a background isolate.
-  final List<_Attachment> _attachments = [];
-  int _attachSeq = 0; // ids for attachment list entries
+  List<_Attachment> get _attachments => _draft.attachments;
   // True while a file is being dragged over the chat (desktop) — shows the
   // "drop to attach" overlay.
   bool _dragging = false;
@@ -512,8 +763,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   // Messages composed while a turn was already in flight. They queue instead of
   // racing the running turn and each flushes as its own turn once the prior one
   // ends (codex-cli parity). Esc pops the most recent back into the composer.
-  final List<_Queued> _queue = [];
-  int _queueSeq = 0; // ids for queue entries
+  List<_Queued> get _queue => _draft.queue;
   // Whether the running turn has produced ANY output yet (reasoning, a tool
   // call, or reply text). Distinguishes "sent, nothing back" — where Esc undoes
   // the send and restores the text — from "output started", where Esc simply
@@ -631,8 +881,35 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   @override
   void initState() {
     super.initState();
+    final layout = ref.read(uiPrefsProvider).valueOrNull;
+    if (layout != null) {
+      _layoutRestored = true;
+      _leftOpen = layout.sidebarOpen ?? true;
+      _leftWidth = layout.sidebarWidth ?? _leftWidth;
+    }
+    _voice = VoiceController(
+      api: ref.read(bridgeApiProvider),
+      serviceKey: widget.serviceKey,
+      createTransport: ref.read(voiceTransportFactoryProvider),
+    );
+    _dictation =
+        DictationLine(
+            api: ref.read(bridgeApiProvider),
+            serviceKey: widget.serviceKey,
+            createTransport: ref.read(dictationTransportFactoryProvider),
+          )
+          ..onDelta = _onDictationDelta
+          ..onTakeEnded = _onDictationEnded
+          ..addListener(_onDictationChanged);
+    // A call starting takes the microphone; the dictation line steps aside
+    // so the two never fight over it, and comes back once the call ends.
+    _voice.addListener(_onVoiceForDictation);
     _threadId = widget.threadId;
     _cwd = widget.cwd;
+    _drafts = ref.read(_composerDraftsProvider(widget.serviceKey));
+    _draft = _drafts.forThread(_threadId, cwd: _cwd);
+    _input.value = _draft.value.copyWith(composing: TextRange.empty);
+    _input.addListener(_saveDraft);
     // Remember where the user is chatting so the next cold start (and the
     // chat-first home) lands right back here. Deferred: provider writes are
     // not allowed while the tree is building. A thread-less mount (fresh
@@ -682,6 +959,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           _discoveredThreads[session.threadId] = ThreadMeta(
             id: session.threadId,
             preview: session.preview,
+            threadSource: session.threadSource,
+            parentThreadId: session.parentThreadId,
             cwd: session.cwd ?? '',
             updatedAt: session.updatedAt,
           );
@@ -695,12 +974,194 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     // engine reports a dead socket via appIsConnected; the keepalive ping
     // surfaces it promptly).
     _healthTimer = Timer.periodic(const Duration(seconds: 12), (_) {
-      if (!mounted || _reconnecting) return;
-      if (!ref.read(bridgeApiProvider).appIsConnected(widget.serviceKey)) {
+      if (!mounted || !_foreground || _reconnecting) return;
+      if (_connectionLost ||
+          !ref.read(bridgeApiProvider).appIsConnected(widget.serviceKey)) {
         _onStreamClosed();
       }
     });
   }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.inactive) return;
+    _foreground = state == AppLifecycleState.resumed;
+    if (_foreground) {
+      _lastReconnectAt = null;
+      if (_connectionLost ||
+          !ref.read(bridgeApiProvider).appIsConnected(widget.serviceKey)) {
+        unawaited(_autoReconnect());
+      }
+    } else {
+      ++_reconnectEpoch;
+      if (_reconnecting) {
+        setState(() {
+          _reconnecting = false;
+          _connectionLost = true;
+        });
+      }
+    }
+    // A phone backgrounding the app loses the microphone anyway, so the call
+    // ends. A desktop window that loses focus, is covered or is minimised is
+    // still the user's live call — they switched to their editor to keep
+    // talking — so only the process going away ends it there.
+    final ends = isDesktop
+        ? state == AppLifecycleState.detached
+        : state == AppLifecycleState.paused ||
+              state == AppLifecycleState.hidden ||
+              state == AppLifecycleState.detached;
+    if (ends) {
+      ++_voiceIntentGeneration;
+      unawaited(_voice.stop());
+      // Same rule for the dictation line: a phone in the background has no
+      // microphone, and a held session would only idle against the quota.
+      unawaited(_dictation.close());
+    }
+  }
+
+  Future<void> _startVoice() async {
+    if (!_canStartVoice) return;
+    final generation = _threadLoadGeneration;
+    final intent = ++_voiceIntentGeneration;
+    bool current() =>
+        mounted &&
+        intent == _voiceIntentGeneration &&
+        generation == _threadLoadGeneration &&
+        _voiceAvailable;
+    setState(() => _voiceStarting = true);
+    try {
+      final api = ref.read(bridgeApiProvider);
+      final settings = await showDialog<VoiceSettings>(
+        context: context,
+        builder: (_) =>
+            VoiceSetupDialog(api: api, serviceKey: widget.serviceKey),
+      );
+      if (!current() || settings == null) return;
+      var id = _isVoiceThread ? _threadId : null;
+      if (id == null) {
+        final result = await _voice.request('thread/start', {
+          'threadSource': 'pocket-codex-voice',
+          if (_cwd != null) 'cwd': _cwd,
+          if (_model != null) 'model': _model!.id,
+          'approvalPolicy': _mode.approval,
+          'approvalsReviewer': _mode.reviewer,
+          'sandbox': _mode.sandbox,
+        });
+        final thread = result['thread'] as Map;
+        final newId = thread['id'] as String;
+        id = newId;
+        if (!current()) return;
+        final cwd = thread['cwd'] as String? ?? _cwd;
+        // Adopt the new thread in place, the way a first text send does. It
+        // has no rollout until the first user turn lands, so the app-server
+        // rejects `thread/resume` and `thread/read` for it ("no rollout found
+        // for thread id …"); going through `_openThread` would fire exactly
+        // those and surface the refusal as an error banner.
+        _drafts.adoptThread(_draft, newId);
+        ref
+            .read(uiPrefsProvider.notifier)
+            .setLastThread(widget.serviceKey, newId);
+        unawaited(
+          api.appHistoryFocus(widget.serviceKey, newId).catchError((_) {}),
+        );
+        setState(() {
+          _threads = [
+            ThreadMeta(
+              id: newId,
+              preview: '',
+              cwd: cwd ?? '',
+              updatedAt: 0,
+              threadSource: 'pocket-codex-voice',
+            ),
+            ..._threads,
+          ];
+          _threadId = newId;
+          _cwd = cwd;
+        });
+        _persistThreadConfig();
+      }
+      await _voice.start(id, model: settings.model, voice: settings.voice);
+      if (mounted) unawaited(_loadThreads());
+    } catch (e) {
+      if (mounted) {
+        showToastError(
+          context,
+          '${AppLocalizations.of(context).voiceUnavailable}: $e',
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _voiceStarting = false);
+    }
+  }
+
+  void _voiceHistory() {
+    final id = _threadId;
+    if (id == null) return;
+    showDialog<void>(
+      context: context,
+      builder: (_) => VoiceHistoryDialog(
+        api: ref.read(bridgeApiProvider),
+        serviceKey: widget.serviceKey,
+        threadId: id,
+      ),
+    );
+  }
+
+  /// The live call's pinned status entry (sidebar, or the window strip when
+  /// the sidebar is collapsed). Names the conversation the call belongs to
+  /// and, when that is not the one on screen, taps through to it.
+  Widget _voiceStatus(AppLocalizations l10n, {bool compact = false}) {
+    final id = _voice.threadId;
+    final thread = id == null
+        ? null
+        : _threads.where((t) => t.id == id).firstOrNull ??
+              _discoveredThreads[id];
+    final title = thread == null
+        ? null
+        : (thread.title?.trim().isNotEmpty ?? false)
+        ? thread.title!.trim()
+        : thread.preview.trim().isNotEmpty
+        ? thread.preview.trim().split('\n').first
+        : l10n.voiceLive;
+    return VoiceStatusEntry(
+      controller: _voice,
+      compact: compact,
+      title: title,
+      onOpen: id == null || id == _threadId
+          ? null
+          : () => _openThread(id, thread?.cwd ?? _cwd),
+    );
+  }
+
+  Widget _voiceBar(AppLocalizations l10n) => AnimatedBuilder(
+    animation: _voice,
+    builder: (context, _) => _voice.threadId == _threadId
+        ? VoicePanel(
+            controller: _voice,
+            onHistory: _voiceHistory,
+            onRetry: _canStartVoice ? _startVoice : null,
+          )
+        : Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Row(
+              children: [
+                const Icon(Icons.graphic_eq),
+                const SizedBox(width: 8),
+                Expanded(child: Text(l10n.voiceLive)),
+                IconButton(
+                  tooltip: l10n.voiceHistory,
+                  onPressed: _voiceHistory,
+                  icon: const Icon(Icons.history),
+                ),
+                IconButton(
+                  tooltip: l10n.voiceStart,
+                  onPressed: _canStartVoice ? _startVoice : null,
+                  icon: const Icon(Icons.play_arrow),
+                ),
+              ],
+            ),
+          ),
+  );
 
   /// Load the conversations for the left sessions pane. As the home screen the
   /// pane lists EVERY conversation on the service (the user asked for "all
@@ -759,6 +1220,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
               ? ThreadMeta(
                   id: t.id,
                   preview: localPreview[t.id]!,
+                  name: t.name,
+                  threadSource: t.threadSource,
+                  parentThreadId: t.parentThreadId,
                   cwd: t.cwd,
                   updatedAt: t.updatedAt,
                 )
@@ -1032,6 +1496,11 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// any other switch leaves the child view entirely.
   void _openThread(String? tid, String? cwd, {bool subSession = false}) {
     if (!subSession) _parentSessions.clear();
+    // Leaving the call's conversation ends the call: capture never outlives
+    // the conversation it was started in (AGENTS.md, live voice controls).
+    if (_voice.threadId != null && _voice.threadId != tid) {
+      unawaited(_voice.stop());
+    }
     unawaited(
       ref
           .read(bridgeApiProvider)
@@ -1045,7 +1514,16 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       ref.read(uiPrefsProvider.notifier).setLastThread(widget.serviceKey, tid);
     }
     _cancelExternalWriterSubscription();
+    // A take belongs to the draft it was started in. Leaving that draft ends
+    // the take; what it heard stays there (the span is tied to that draft,
+    // so no later words land in the new one).
+    if (_dictation.taking) unawaited(_dictation.finishTake());
+    _dictationSpan = null;
+    _dictationReplaces = null;
+    _dictationReplaced = '';
     _threadLoadGeneration++;
+    _historyLiveItems = null;
+    _historyPartialItems = null;
     setState(() {
       _threadId = tid;
       _historySyncing = false;
@@ -1053,6 +1531,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       _historyEpoch = null;
       _cwd = cwd;
       _externalWriterMode = false;
+      _guardianReadOnly = false;
+      _parentThreadId = null;
       _externalWriterLiveness = null;
       _takingOver = false;
       // An open rename belongs to the thread being left, so drop it rather
@@ -1075,6 +1555,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       _navigationLoading = false;
       _historyLoad = null;
       _historyGeneration++;
+      _historyArrivalRow = null;
       _approvals.clear();
       _asyncQuestions.clear();
       _ctx = null;
@@ -1091,6 +1572,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       // Show the loading skeleton while the opened thread's history loads (no-op
       // for a brand-new conversation, which has nothing to fetch).
       _loading = tid != null;
+      _restoringSettings = false;
       _error = null;
       _retry = null;
       _planActive = false;
@@ -1107,8 +1589,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       _serviceTierPickPending = false;
       _modePickPending = false;
       _supplement = false;
+      _sendRequest = null;
       _supplementRequest = null;
-      _sending = false;
+      _localSending = false;
       _plan = false;
       _planToggledByUser = false;
       // Drop the previous thread's effort (pending pick + active) so an unsent
@@ -1126,13 +1609,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       _sentModel = null;
       _sentEffort = null;
       _implementDismissed = false;
-      _input.clear();
-      // Pending attachments are drafts of the previous thread's message —
-      // clear them with the input (and the retry snapshot, which references a
-      // turn on the previous thread).
-      _attachments.clear();
-      // The queue + undo state belong to the previous conversation.
-      _queue.clear();
+      _draft = _drafts.forThread(tid, cwd: cwd);
+      _input.value = _draft.value.copyWith(composing: TextRange.empty);
+      // Undo and retry snapshots belong to the previous conversation.
       _outputStarted = false;
       _undoableDraft = null;
       _suppressStopMarker = false;
@@ -1179,6 +1658,15 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
 
   @override
   void dispose() {
+    ++_reconnectEpoch;
+    _voice
+      ..removeListener(_onVoiceForDictation)
+      ..dispose();
+    _dictation
+      ..removeListener(_onDictationChanged)
+      ..onDelta = null
+      ..onTakeEnded = null
+      ..dispose();
     _healthTimer?.cancel();
     _externalHistoryTimer?.cancel();
     _externalWriterReconnect?.cancel();
@@ -1190,10 +1678,16 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     _threadsRefreshTimer?.cancel();
     _elapsedTicker?.cancel();
     _sub?.cancel();
+    _input.removeListener(_saveDraft);
     _input.dispose();
+    _expandedInputFocus.dispose();
     WidgetsBinding.instance.removeObserver(this);
     _inputFocus.removeListener(_onComposerFocus);
     _inputFocus.dispose();
+    _convSearchFocus.dispose();
+    _composerDragHeight.dispose();
+    _convScroll.dispose();
+    _convListCtl.dispose();
     if (_isDesktop) HardwareKeyboard.instance.removeHandler(_onHardwareKey);
     _scroll.removeListener(_onScroll);
     _scroll.dispose();
@@ -1238,9 +1732,21 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           }
         }
       }
+      // Prefetch while the reader still has a screen or so of history above
+      // them, so the next page is usually in place before they reach the top
+      // and the "load older" row is never something they have to press. The
+      // anchor capture keeps the reading position put when it lands.
+      final prefetchBand = math.max(
+        600.0,
+        _scroll.position.viewportDimension * 1.5,
+      );
+      final nearTop =
+          _scroll.position.pixels <=
+              _scroll.position.minScrollExtent + prefetchBand ||
+          (range != null && range.$1 <= 3);
       if (!_startsAtBeginning &&
           _scroll.position.userScrollDirection == ScrollDirection.forward &&
-          _scroll.position.pixels <= _scroll.position.minScrollExtent + 200) {
+          nearTop) {
         _loadAtTop();
       }
     }
@@ -1290,7 +1796,76 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// Keep the tail of the conversation visible when the soft keyboard opens.
   /// Only when the user was already at the bottom — pulling someone back down
   /// while they're reading history would be worse than the keyboard.
-  void _onComposerFocus() => _repinForKeyboard();
+  void _onComposerFocus() {
+    _repinForKeyboard();
+    // Someone about to type may well dictate instead: have the line ready.
+    if (_inputFocus.hasFocus) _warmDictation();
+  }
+
+  void _saveDraft() {
+    _draft.value = _input.value;
+    _drafts.save(_draft);
+  }
+
+  bool _composerSizeChanged(SizeChangedLayoutNotification notification) {
+    if (_atBottom) {
+      final intent = _scrollIntent;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && intent == _scrollIntent) _scrollToEnd(force: true);
+      });
+    }
+    return false;
+  }
+
+  Future<void> _expandComposer() async {
+    if (_editorOpen) return;
+    final selection = _input.selection;
+    setState(() => _editorOpen = true);
+    _inputFocus.unfocus();
+    _input.selection = selection;
+    await showDialog<void>(
+      context: context,
+      builder: (_) =>
+          ExpandedComposer(controller: _input, focusNode: _expandedInputFocus),
+    );
+    if (!mounted) return;
+    setState(() => _editorOpen = false);
+    _inputFocus.requestFocus();
+  }
+
+  Future<void> _editMessage(String text) async {
+    if (_editorOpen ||
+        _externalWriterMode ||
+        _historySyncing ||
+        _showingCachedHistory) {
+      return;
+    }
+    final draft = _draft;
+    setState(() => _editorOpen = true);
+    _inputFocus.unfocus();
+    final edited = await showDialog<String>(
+      context: context,
+      builder: (_) => MessageEditor(
+        text: text,
+        hasDraft: draft.value.text.isNotEmpty || draft.attachments.isNotEmpty,
+      ),
+    );
+    if (!mounted) return;
+    setState(() => _editorOpen = false);
+    if (edited != null && edited.trim().isNotEmpty) {
+      // Read the latest draft: a queued send or upload may finish while the
+      // editor is open. Keep its attachments and any newer text intact.
+      final previous = draft.value.text;
+      final combined = previous.isEmpty ? edited : '$previous\n\n$edited';
+      draft.value = TextEditingValue(
+        text: combined,
+        selection: TextSelection.collapsed(offset: combined.length),
+      );
+      _drafts.save(draft, changed: true);
+      if (identical(_draft, draft)) _input.value = draft.value;
+    }
+    if (identical(_draft, draft)) _inputFocus.requestFocus();
+  }
 
   /// The keyboard inset animates in over several frames, and each frame shrinks
   /// the transcript viewport a little more. `_scrollToEnd`'s settle loop gives
@@ -1333,8 +1908,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
 
   void _onStreamClosed() {
     if (!mounted) return;
-    // The event stream closing means the socket dropped — recover automatically
-    // rather than leaving the session silently dead.
+    // The socket may still be alive when the bridge closes a lagged event feed.
+    // Both cases need a new subscription and a history read to recover gaps.
     setState(() {
       _streaming = false;
       _connectionLost = true;
@@ -1391,6 +1966,37 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         ),
       );
     }
+  }
+
+  void _mergeHistoryLiveItems(
+    Map<String, TranscriptItem> liveItems,
+    Set<String> partialItems,
+  ) {
+    for (final item in liveItems.values) {
+      final index = _itemIndex[item.id];
+      if (index == null || partialItems.contains(item.id)) continue;
+      final snapshot = _items[index];
+      if (item.turnId.isEmpty) item.turnId = snapshot.turnId;
+      item.turnCompletedAt ??= snapshot.turnCompletedAt;
+      item.turnDurationMs ??= snapshot.turnDurationMs;
+      _items[index] = item;
+    }
+    // A bounded tail may omit earlier live work. Shared IDs anchor that work
+    // before its reply instead of appending it after (and folding the reply).
+    final merged = mergeHistoryItems(
+      _items,
+      liveItems.values.toList(),
+      turnOrder: _turnSummaries.map((turn) => turn.turnId),
+      olderPage: false,
+    );
+    _items
+      ..clear()
+      ..addAll(merged);
+    _itemIndex.clear();
+    for (var i = 0; i < _items.length; i++) {
+      _itemIndex[_items[i].id] = i;
+    }
+    _cachedRows = null;
   }
 
   /// Splice [items] into the transcript by turn order, skipping ids already
@@ -1451,9 +2057,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
 
   /// Fetch the page of history before what's shown, keeping the reading
   /// position: the list corrects its own offset when content is prepended.
-  Future<void> _loadOlder() async {
+  Future<void> _loadOlder({bool reveal = false}) async {
     if (_loadingOlder || !_hasOlder || _threadId == null) return;
-    await _startHistoryLoad(fromTop: true);
+    await _startHistoryLoad(fromTop: true, reveal: reveal);
   }
 
   bool get _startsAtBeginning {
@@ -1480,7 +2086,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     return window != null && window.items.isEmpty && !window.hasMore;
   }
 
-  Future<void> _loadAtTop() async {
+  Future<void> _loadAtTop({bool reveal = false}) async {
     if (_loadingOlder || _startsAtBeginning) return;
     if (_turnWindows.isNotEmpty && _items.isNotEmpty) {
       final first = _turnSummaries.indexWhere(
@@ -1492,16 +2098,24 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         previous--;
       }
       if (previous >= 0) {
-        await _loadTurn(_turnSummaries[previous].turnId, fromTop: true);
+        await _loadTurn(
+          _turnSummaries[previous].turnId,
+          fromTop: true,
+          reveal: reveal,
+        );
         return;
       }
     }
-    await _loadOlder();
+    await _loadOlder(reveal: reveal);
   }
 
-  Future<void> _loadGap(HistoryGap gap) async {
+  Future<void> _loadGap(HistoryGap gap, {bool reveal = false}) async {
     if (_loadingOlder || _threadId == null) return;
-    await _startHistoryLoad(turnId: gap.turnId, loadMore: gap.continuation);
+    await _startHistoryLoad(
+      turnId: gap.turnId,
+      loadMore: gap.continuation,
+      reveal: reveal,
+    );
   }
 
   /// Fetch one turn's items, for jumping to a turn not yet scrolled back to.
@@ -1510,6 +2124,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     bool preserveAnchor = true,
     bool fromTop = false,
     int? navigation,
+    bool reveal = false,
   }) async {
     final generation = _historyGeneration;
     while (_historyLoad != null) {
@@ -1529,6 +2144,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       turnId: turnId,
       preserveAnchor: preserveAnchor,
       fromTop: fromTop,
+      reveal: reveal,
     );
   }
 
@@ -1537,6 +2153,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     bool loadMore = false,
     bool preserveAnchor = true,
     bool fromTop = false,
+    bool reveal = false,
   }) {
     final tid = _threadId!;
     setState(() {
@@ -1551,6 +2168,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       turnId,
       loadMore,
       preserveAnchor,
+      reveal,
+      _scrollIntent,
+      _turnNavigation,
     );
   }
 
@@ -1560,6 +2180,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     String? turnId,
     bool loadMore,
     bool preserveAnchor,
+    bool reveal,
+    int intent,
+    int navigation,
   ) async {
     bool current() => mounted && _historyGeneration == generation;
     try {
@@ -1577,6 +2200,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
             );
       if (!current()) return;
       final items = older?.items ?? turn!.items;
+      final arrived = items
+          .where((item) => !_itemIndex.containsKey(item.id))
+          .map((item) => item.id)
+          .toSet();
       if (turn != null && loadMore) {
         final prefix = _turnWindows[turnId]?.items ?? const <ThreadItem>[];
         final known = prefix.map((item) => item.id).toSet();
@@ -1599,7 +2226,36 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         _cachedRows = null;
         _markTurnsLoaded();
       });
-      if (anchor != null) _restoreHistoryAnchor(anchor, generation);
+      // Explicit load -> reveal the first new row; passive paging -> keep the
+      // current anchor. A new scroll/navigation intent always wins over either.
+      if (reveal && intent == _scrollIntent && navigation == _turnNavigation) {
+        final rowIndex = _rows.indexWhere(
+          (row) => _rowItems(row).any((item) => arrived.contains(item.id)),
+        );
+        if (rowIndex >= 0) {
+          setState(() {
+            _historyArrivalRow = _rowKey(_rows[rowIndex]);
+            _historyArrivalRevision++;
+          });
+          await WidgetsBinding.instance.endOfFrame;
+          if (current() &&
+              intent == _scrollIntent &&
+              navigation == _turnNavigation) {
+            _scrollToRow(rowIndex);
+          }
+        }
+        if (mounted && current() && navigation == _turnNavigation) {
+          final l10n = AppLocalizations.of(context);
+          showToast(
+            context,
+            arrived.isEmpty
+                ? l10n.historyAlreadyVisible
+                : l10n.historyLoaded(arrived.length),
+          );
+        }
+      } else if (anchor != null) {
+        _restoreHistoryAnchor(anchor, generation);
+      }
     } catch (_) {
       if (current()) setState(() => _historyError = true);
     } finally {
@@ -1703,7 +2359,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   }
 
   /// Attach to an existing thread for live events and turns, then load history.
-  Future<void> _resumeAndLoad() async {
+  Future<void> _resumeAndLoad({bool propagateErrors = false}) async {
     // Guard: a stale event (e.g. thread/compacted from a prior thread) can
     // arrive after switching to a new, unsaved conversation — don't `_threadId!`
     // through a null here.
@@ -1711,11 +2367,18 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     setState(() {
       _loading = _items.isEmpty;
       _historySyncing = true;
+      _restoringSettings = true;
       _error = null;
       _retry = null;
     });
+    var restoringMetadata = false;
     final startTid = _threadId!;
     final generation = ++_threadLoadGeneration;
+    final turnStateRevision = _turnStateRevision;
+    final liveItems = <String, TranscriptItem>{};
+    final partialItems = <String>{};
+    _historyLiveItems = liveItems;
+    _historyPartialItems = partialItems;
     bool current() =>
         mounted && _threadId == startTid && generation == _threadLoadGeneration;
     try {
@@ -1727,12 +2390,20 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         final cached = await api.appHistoryCached(widget.serviceKey, startTid);
         if (!current()) return;
         if (cached != null) {
+          final liveQuestions = Map.of(_asyncQuestions);
           setState(() {
             _replaceTranscriptItems(cached.items);
             _turnSummaries = cached.turns;
+            _mergeHistoryLiveItems(liveItems, partialItems);
+            _asyncQuestions.addAll(liveQuestions);
             _hasOlder = cached.hasOlder;
             _firstTurnId = cached.firstTurnId;
             _sequentialHistoryIds.addAll(cached.items.map((item) => item.id));
+            for (final page in cached.turnPages) {
+              _turnWindows[page.turnId] = page;
+              _fetchedTurns.add(page.turnId);
+              _spliceTranscriptItems(page.items, atStart: true);
+            }
             _cwd ??= cached.cwd;
             _loading = false;
             _showingCachedHistory = true;
@@ -1743,6 +2414,15 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       }
       await api.appHistorySyncPrepare(widget.serviceKey);
       if (!current()) return;
+      final metadata = await api.appThreadMetadata(widget.serviceKey, startTid);
+      if (!current()) return;
+      _parentThreadId = metadata?.parentThreadId;
+      if (metadata != null) _discoveredThreads[metadata.id] = metadata;
+      if (metadata?.isGuardian ?? false) {
+        _guardianReadOnly = true;
+        _enterExternalWriterMode(startTid);
+        return;
+      }
       await api.appThreadResume(widget.serviceKey, startTid);
       // An obsolete resume must not fan out into more history/config requests.
       if (!current()) return;
@@ -1753,6 +2433,11 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       final persistedFuture = _loadPersistedConfig(startTid);
       final history = await historyFuture;
       if (!current()) return;
+      final liveTurnChanged = turnStateRevision != _turnStateRevision;
+      final activeTurnId = liveTurnChanged ? _turnId : history.activeTurnId;
+      final liveQuestions = _asyncQuestions.entries
+          .where((entry) => liveItems.containsKey(entry.key))
+          .toList();
       final anchor = _items.isNotEmpty && !_atBottom
           ? _captureHistoryAnchor()
           : null;
@@ -1761,10 +2446,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         _showingCachedHistory = false;
         _historyEpoch = history.historyEpoch;
         _loading = false;
-        _replaceTranscriptItems(
-          history.items,
-          activeTurnId: history.activeTurnId,
-        );
+        _replaceTranscriptItems(history.items, activeTurnId: activeTurnId);
         _turnSummaries = history.turns;
         _hasOlder = history.hasOlder;
         _historyError = false;
@@ -1780,30 +2462,40 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           _spliceTranscriptItems(
             page.items,
             atStart: true,
-            activeTurnId: history.activeTurnId,
+            activeTurnId: activeTurnId,
           );
         }
+        _mergeHistoryLiveItems(liveItems, partialItems);
+        _asyncQuestions.addEntries(liveQuestions);
         _cachedRows = null;
         _loadingOlder = false;
         _historyLoad = null;
         _historyGeneration++;
-        // Restore the "thinking" state if a turn was still running when we
-        // left: live events (delivered after resume) will finish rendering it.
-        _streaming = history.running;
-        // We can't tell whether a resumed turn has already produced output, and
-        // it wasn't sent from this composer, so there's nothing to un-send —
-        // treat it as output-started so Esc interrupts (with a marker) instead.
-        _outputStarted = history.running;
-        // Restore the running turn's live clock + loading animation. Without
-        // this the streaming flag was set but the ticker wasn't, so the bottom
-        // in-progress indicator showed a frozen 0:00 (looked "gone"). We can't
-        // recover the real start time on a cold re-open, so count from now — the
-        // point is to show, live, that the turn is still working.
-        _elapsedTicker?.cancel();
-        _elapsedTicker = null;
-        if (history.running) {
-          _elapsedSecs = 0;
-          _startElapsedTicker();
+        // Events received during the read are newer than its lifecycle snapshot.
+        if (!liveTurnChanged) {
+          final keepClock =
+              _streaming &&
+              history.running &&
+              _turnId == activeTurnId &&
+              _turnStartedAt != null;
+          _streaming = history.running;
+          _turnId = activeTurnId;
+          // A resumed turn has nothing in this composer to un-send with Esc.
+          _outputStarted = history.running;
+          if (!keepClock) {
+            _elapsedTicker?.cancel();
+            _elapsedTicker = null;
+            _turnStartedAt = null;
+            if (_streaming) {
+              _elapsedSecs = 0;
+              _startElapsedTicker();
+            }
+          }
+        }
+        if (!_streaming) {
+          for (final item in _items) {
+            item.streaming = false;
+          }
         }
         // Seed the status gauge + branch chip + cwd from the thread metadata.
         // _cwd may be null if the thread was opened without it (e.g. a default
@@ -1816,6 +2508,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           _ctx = ContextStatus(tokensUsed: tu, contextWindow: cw);
         }
       });
+      if (identical(_historyLiveItems, liveItems)) {
+        _historyLiveItems = null;
+        _historyPartialItems = null;
+      }
       _restoreHistorySettings(
         history,
         const ThreadConfig(),
@@ -1836,29 +2532,46 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       // events that would normally flush it were missed during the drop).
       final settingsRevision = _settingsRevision;
       final runtimeAt = _runtimeAt;
-      final persisted = await persistedFuture;
-      if (!current()) return;
-      // Restore the model from the server's own report first (the resume
-      // response says what the thread actually runs with); fall back to the
-      // persisted pick for older servers that don't report one. Resolve the id
-      // against this service's model list.
-      final restoredModelId = history.model ?? persisted.model;
-      ModelInfo? restoredModel;
-      if (restoredModelId != null) {
+      restoringMetadata = true;
+      // Connection/history recovery is complete. Optional metadata has its own
+      // deadline and generation; sending still waits for settings restoration.
+      unawaited(() async {
         try {
-          final models = await _ensureModels();
-          restoredModel = models
-              .where((m) => m.id == restoredModelId)
-              .firstOrNull;
-        } catch (_) {
-          // Model list unavailable — leave the model unchanged.
+          final persisted = await persistedFuture.timeout(
+            const Duration(seconds: 10),
+            onTimeout: () => const ThreadConfig(),
+          );
+          if (!current()) return;
+          // Restore the model from the server's own report first (the resume
+          // response says what the thread actually runs with); fall back to the
+          // persisted pick for older servers that don't report one. Resolve the id
+          // against this service's model list.
+          final restoredModelId = history.model ?? persisted.model;
+          ModelInfo? restoredModel;
+          if (restoredModelId != null) {
+            try {
+              final models = await _ensureModels().timeout(
+                const Duration(seconds: 10),
+              );
+              restoredModel = models
+                  .where((m) => m.id == restoredModelId)
+                  .firstOrNull;
+            } catch (_) {
+              // Model list unavailable — leave the model unchanged.
+            }
+          }
+          if (!current()) return;
+          if (_settingsRevision == settingsRevision &&
+              _runtimeAt == runtimeAt) {
+            _restoreHistorySettings(history, persisted, restoredModel);
+          }
+        } finally {
+          if (current()) {
+            setState(() => _restoringSettings = false);
+            _maybeFlushQueue();
+          }
         }
-      }
-      if (!current()) return;
-      if (_settingsRevision == settingsRevision && _runtimeAt == runtimeAt) {
-        _restoreHistorySettings(history, persisted, restoredModel);
-      }
-      _maybeFlushQueue();
+      }());
     } catch (e) {
       if (!current()) return;
       _historySyncing = false;
@@ -1871,6 +2584,15 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         _error = friendlyError(e);
         _retry = _resumeAndLoad;
       });
+      if (propagateErrors) rethrow;
+    } finally {
+      if (current() && !restoringMetadata) {
+        setState(() => _restoringSettings = false);
+      }
+      if (identical(_historyLiveItems, liveItems)) {
+        _historyLiveItems = null;
+        _historyPartialItems = null;
+      }
     }
   }
 
@@ -2084,6 +2806,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         _externalHistoryRevision = update.historyRevision;
         _externalHistoryDirty = true;
       }
+      // The host samples rollout revisions and liveness independently. A
+      // completed turn can follow the final revision without another append.
+      if (wasRunning != willRun) _externalHistoryDirty = true;
       if (_externalHistoryDirty) _scheduleExternalHistory(threadId, epoch);
     } else if (followTail) {
       _scrollToEnd(force: true);
@@ -2255,6 +2980,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   }
 
   Future<void> _takeOverExternalWriter() async {
+    if (_guardianReadOnly) return;
     final threadId = _threadId;
     final liveness = _externalWriterLiveness;
     if (threadId == null ||
@@ -2440,6 +3166,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     }
     switch (e.kind) {
       case 'turn/started':
+        _turnStateRevision++;
         // A fresh turn supersedes any prior plan: re-enable the implement
         // prompt so a new plan (if this turn produces one) can offer it again.
         // Capture the turn id so the stop button can interrupt this turn.
@@ -2481,8 +3208,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         _startElapsedTicker();
         _scrollToEnd();
       case 'turn/completed':
-        // v2 reports turn FAILURES here (turn.status == 'failed' + error.message),
-        // not via a separate turn/failed method — surface the error the same way.
+        _turnStateRevision++;
+        // Terminal notifications can carry errors on failed or interrupted turns.
         final failure = _turnFailureText(e.raw);
         setState(() {
           _streaming = false;
@@ -2509,6 +3236,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         // permanently stale for the thread the user is actually working in.
         _invalidateSummary(e.threadId);
       case 'turn/failed':
+        _turnStateRevision++;
         setState(() {
           _streaming = false;
           _supplement = false;
@@ -2547,17 +3275,19 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     return isSandboxHelperFailure(text) ? l10n.sandboxHelperUnavailable : text;
   }
 
-  /// If a `turn/completed` event actually represents a FAILED turn (v2 reports
-  /// failures here with `turn.status == 'failed'`), return its error message —
-  /// or an empty string if it failed without one. Returns null when the turn
-  /// completed successfully (so the caller leaves the transcript untouched).
+  /// Return failed-turn errors and explicit interrupted-turn errors. A normal
+  /// interruption has no error and must not display a failure banner.
   String? _turnFailureText(String raw) {
     try {
       final m = jsonDecode(raw);
       if (m is! Map) return null;
       final turn = m['turn'];
-      if (turn is! Map || turn['status'] != 'failed') return null;
+      if (turn is! Map) return null;
       final err = turn['error'];
+      if (turn['status'] != 'failed' &&
+          !(turn['status'] == 'interrupted' && err != null)) {
+        return null;
+      }
       return (err is Map && err['message'] is String)
           ? err['message'] as String
           : '';
@@ -2604,6 +3334,14 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       // than undoing the send.
       _outputStarted = true;
       final idx = _itemIndex[id];
+      // A pre-existing row can also have missed deltas while disconnected.
+      // Only a full snapshot received during this read establishes its prefix.
+      if (isDelta &&
+          (idx == null || _historyLiveItems?.containsKey(id) == false)) {
+        _historyPartialItems?.add(id);
+      } else if (!isDelta) {
+        _historyPartialItems?.remove(id);
+      }
       if (idx == null) {
         _items.add(
           TranscriptItem(
@@ -2616,13 +3354,14 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
             streaming: type == 'agentMessage' ? true : running,
             // The live turn this item belongs to, so a reply that streams in as
             // several items groups the same way it will after a reload.
-            turnId: _turnId ?? '',
+            turnId: _parseTurnId(e.raw) ?? _turnId ?? '',
           ),
         );
         _itemIndex[id] = _items.length - 1;
       } else {
         final it = _items[idx];
         it.type = type;
+        if (it.turnId.isEmpty) it.turnId = _parseTurnId(e.raw) ?? _turnId ?? '';
         if ((e.title ?? '').isNotEmpty) it.title = e.title!;
         if (isDelta) {
           it.text += e.text ?? '';
@@ -2636,6 +3375,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         }
         if (!it.isAgent) it.streaming = running;
       }
+      _historyLiveItems?[id] = _items[_itemIndex[id]!];
     });
     _scrollToEnd();
   }
@@ -2652,7 +3392,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     // (e.g. "implement the plan") must not consume them, and a retry re-sends
     // the snapshot taken at the original send.
     final ordinary = !retry && overrideText == null;
-    final sendAttachments = queued?.attachments ?? _attachments;
+    final sendAttachments = List<_Attachment>.of(
+      queued?.attachments ?? _attachments,
+    );
     final images = retry
         ? _lastUserImages
         : !ordinary
@@ -2674,10 +3416,12 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     final text = appendFileRefs(typed, filePaths);
     // Block sends while reconnecting — a reconnect reloads history and would
     // wipe an optimistic message added mid-flight.
-    if ((text.isEmpty && images.isEmpty) ||
+    if (_externalWriterMode ||
+        (text.isEmpty && images.isEmpty) ||
         _sending ||
         _reconnecting ||
         _historySyncing ||
+        _restoringSettings ||
         _showingCachedHistory) {
       return;
     }
@@ -2698,6 +3442,23 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     }
     // Take the send lock up front, before the retry probe's await below, so the
     // composer can't start a second send during that round-trip (re-entrancy).
+    final api = ref.read(bridgeApiProvider);
+    final sendingDraft = _draft;
+    final request = Object();
+    _sendRequest = request;
+    bool current() =>
+        mounted &&
+        identical(_sendRequest, request) &&
+        identical(_draft, sendingDraft);
+    var targetThread = _threadId;
+    final targetCwd = _cwd;
+    final isNewThread = targetThread == null;
+    final l10n = AppLocalizations.of(context);
+    final preview = typed.isNotEmpty
+        ? typed
+        : filePaths.isNotEmpty
+        ? l10n.fileOnlyMessage
+        : l10n.imageOnlyMessage;
     _settingsRevision++;
     final mode = _mode;
     // Providers without these controls keep their own configuration: send
@@ -2705,7 +3466,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     final presets = _caps.permissionPresets;
     final tier = _caps.fast ? _requestedServiceTier : null;
     setState(() {
-      _sending = true;
+      _localSending = true;
       if (queued != null) _queue.remove(queued);
     });
     // Retry safety: a send can commit server-side just before the socket drops
@@ -2715,10 +3476,14 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     // that hides the plan-implement choice. So on retry, ask the server first;
     // if this prompt is already the latest user turn, just reload its (possibly
     // in-progress) history instead of sending again.
-    if (retry && await _turnAlreadyCommitted(text, images)) {
-      if (mounted) setState(() => _sending = false);
-      await _resumeAndLoad();
-      return;
+    if (retry) {
+      final committed = await _turnAlreadyCommitted(text, images);
+      if (!current()) return;
+      if (committed) {
+        setState(() => _localSending = false);
+        await _resumeAndLoad();
+        return;
+      }
     }
     setState(() {
       _error = null;
@@ -2747,15 +3512,18 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         // Don't clear the composer for a programmatic send (e.g. "implement
         // the plan") — the user may have text in progress there.
         if (overrideText == null && queued == null) {
-          _input.clear();
           _attachments.clear();
+          _input.clear();
         }
+        _saveDraft();
       }
     });
     _scrollToEnd(force: true);
     var dropped = false;
+    var sent = false;
+    sendingDraft.sendPending = true;
+    _drafts.save(sendingDraft, changed: true);
     try {
-      final api = ref.read(bridgeApiProvider);
       // Collaboration mode for this turn. Send it when the user explicitly
       // toggled the plan chip (so an explicit on/off is always honored, even if
       // our view of the server mode is stale), or when the desired toggle
@@ -2774,7 +3542,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         final models = await api.appModelList(widget.serviceKey);
         if (models.isNotEmpty) {
           modelId = models.first.id;
-          if (mounted) setState(() => _model = models.first);
+          if (current()) setState(() => _model = models.first);
         }
       }
       // The server silently ignores collaborationMode without a concrete model,
@@ -2782,33 +3550,38 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       // flip _planActive below — a silent UI/server divergence. Refuse instead so
       // the switch (enter/leave plan mode) never appears to succeed when it can't.
       if (collab != null && modelId == null) {
-        if (mounted) {
+        if (current()) {
           setState(() {
-            _error = AppLocalizations.of(context).noModelForMode;
+            _error = l10n.noModelForMode;
             _retry = () => _send(retry: true);
           });
+        } else if (ordinary) {
+          _restoreDraft(typed, sendAttachments, into: sendingDraft);
         }
         return;
       }
-      final isNewThread = _threadId == null;
-      _threadId ??= await api.appThreadStart(
+      targetThread ??= await api.appThreadStart(
         widget.serviceKey,
         model: modelId,
-        cwd: _cwd,
+        cwd: targetCwd,
         approvalPolicy: presets ? mode.approval : null,
         approvalsReviewer: presets ? mode.reviewer : null,
         serviceTier: tier,
         sandbox: presets ? mode.sandbox : null,
       );
       if (isNewThread) {
-        // The fresh conversation is now the one to restore on next launch.
-        ref
-            .read(uiPrefsProvider.notifier)
-            .setLastThread(widget.serviceKey, _threadId);
+        _drafts.adoptThread(sendingDraft, targetThread);
+        // The user may have reopened this same draft while thread/start waited.
+        if (mounted && identical(_draft, sendingDraft)) {
+          _threadId = targetThread;
+          ref
+              .read(uiPrefsProvider.notifier)
+              .setLastThread(widget.serviceKey, targetThread);
+        }
         // Surface the new session in the left pane immediately. `thread/list`
         // can lag `thread/start`, so optimistically insert it now (newest
         // first) and let _loadThreads reconcile once the server catches up.
-        final tid = _threadId!;
+        final tid = targetThread;
         if (mounted && !_threads.any((t) => t.id == tid)) {
           setState(() {
             _threads = [
@@ -2816,35 +3589,33 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                 id: tid,
                 // Preview the TYPED text (never the appended file-reference
                 // block); an attachment-only first message gets a placeholder.
-                preview: typed.isNotEmpty
-                    ? typed
-                    : filePaths.isNotEmpty
-                    ? AppLocalizations.of(context).fileOnlyMessage
-                    : AppLocalizations.of(context).imageOnlyMessage,
-                cwd: _cwd ?? '',
+                preview: preview,
+                cwd: targetCwd ?? '',
                 updatedAt: 0,
               ),
               ..._threads,
             ];
           });
         }
-        _loadThreads();
+        if (mounted) _loadThreads();
         // Persist this new thread's config now that it has a server-side id, so
         // it's stored even if the first turn/start below fails.
-        _persistThreadConfig();
+        if (current()) _persistThreadConfig();
       }
       // Record what this turn puts on the wire BEFORE sending: turn/started
       // (and the stamp it takes) can arrive while the await below is still in
       // flight. Turn params override thread defaults, so on servers that never
       // notify settings these ARE the effective values.
-      _sentModel = modelId;
-      _sentEffort = effort?.wire;
+      if (current()) {
+        _sentModel = modelId;
+        _sentEffort = effort?.wire;
+      }
       // Pass the current model + permission + collaboration mode every turn:
       // turn/start overrides apply to this and subsequent turns, so switching
       // works mid-conversation.
       await api.appTurnStart(
         widget.serviceKey,
-        _threadId!,
+        targetThread,
         text,
         images: images,
         model: modelId,
@@ -2859,7 +3630,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         // thread's sticky effort. null only when no effort has ever been set.
         reasoningEffort: effort?.wire,
       );
-      if (mounted) {
+      sent = true;
+      if (current()) {
         setState(() {
           _planActive = _plan;
           _planToggledByUser = false;
@@ -2891,17 +3663,27 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       }
     } catch (e) {
       final msg = friendlyError(e);
-      if (mounted) {
+      if (current()) {
         setState(() {
           _error = msg;
           _retry = () => _send(retry: true);
         });
+      } else if (ordinary) {
+        _restoreDraft(typed, sendAttachments, into: sendingDraft);
       }
-      if (_looksDisconnected(msg)) dropped = true;
+      if (current() && _looksDisconnected(msg)) dropped = true;
     } finally {
-      if (mounted) {
-        setState(() => _sending = false);
-        if (_error == null && !dropped) _maybeFlushQueue();
+      sendingDraft.sendPending = false;
+      _drafts.save(sendingDraft, changed: true);
+      if (current()) {
+        setState(() => _localSending = false);
+      }
+      if (sent &&
+          mounted &&
+          identical(_draft, sendingDraft) &&
+          _error == null &&
+          !dropped) {
+        _maybeFlushQueue();
       }
     }
     // The connection dropped mid-send: recover it in the background so a retry
@@ -2909,11 +3691,11 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     // committed server-side before the socket dropped, and resending would
     // duplicate it; the user retries with one tap instead. `reload: false`
     // keeps the optimistic message visible (and the plan toggle) for that retry.
-    if (dropped) {
+    if (dropped && current()) {
       await _autoReconnect(reload: false);
       // _autoReconnect cleared the error; re-offer the retry now that the
       // connection is back (retry reuses _lastUserText + the existing bubble).
-      if (mounted && !_connectionLost) {
+      if (current() && !_connectionLost) {
         setState(() {
           _error = AppLocalizations.of(context).turnFailed;
           _retry = () => _send(retry: true);
@@ -2999,7 +3781,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// Composer send: queue while a turn is in flight (or a backlog is still
   /// draining), otherwise send now.
   void _submit() {
-    if (_historySyncing ||
+    if (_externalWriterMode ||
+        _historySyncing ||
+        _restoringSettings ||
         _showingCachedHistory ||
         _reconnecting ||
         _connectionLost) {
@@ -3022,11 +3806,14 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   Future<void> _sendSupplement() async {
     final tid = _threadId;
     if (tid == null ||
+        _externalWriterMode ||
         !_streaming ||
+        _restoringSettings ||
         _sending ||
         _attachments.any((a) => !a.ready)) {
       return;
     }
+    final sendingDraft = _draft;
     final draft = _input.text;
     final attachments = List<_Attachment>.of(_attachments);
     if (draft.trim().isEmpty && attachments.isEmpty) return;
@@ -3044,11 +3831,21 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     _supplementRequest = request;
     bool current() =>
         mounted && _threadId == tid && identical(_supplementRequest, request);
-    setState(() => _sending = true);
+    setState(() => _localSending = true);
     try {
       final acceptedTurnId = await ref
           .read(bridgeApiProvider)
           .appTurnSteer(widget.serviceKey, tid, turnId, text, images: images);
+      if (sendingDraft.value.text == draft) {
+        sendingDraft.value = TextEditingValue.empty;
+      }
+      sendingDraft.attachments.removeWhere(
+        (a) => attachments.any((sent) => sent.id == a.id),
+      );
+      if (mounted && identical(_draft, sendingDraft)) {
+        _input.value = sendingDraft.value;
+      }
+      _drafts.save(sendingDraft, changed: true);
       if (!current()) return;
       setState(() {
         final item = TranscriptItem(
@@ -3064,10 +3861,6 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           _itemIndex[item.id] = _items.length;
           _items.add(item);
         }
-        if (_input.text == draft) _input.clear();
-        _attachments.removeWhere(
-          (a) => attachments.any((sent) => sent.id == a.id),
-        );
         _supplement = false;
         _error = null;
         _retry = null;
@@ -3088,7 +3881,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     } finally {
       if (current()) {
         setState(() {
-          _sending = false;
+          _localSending = false;
           _supplementRequest = null;
         });
         _maybeFlushQueue();
@@ -3105,10 +3898,15 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     if (atts.any((a) => !a.ready)) return;
     setState(() {
       _queue.add(
-        _Queued(id: _queueSeq++, text: _input.text, attachments: atts),
+        _Queued(
+          id: _drafts.nextQueueId++,
+          text: _input.text,
+          attachments: atts,
+        ),
       );
-      _input.clear();
       _attachments.clear();
+      _input.clear();
+      _saveDraft();
     });
   }
 
@@ -3122,6 +3920,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         _reconnecting ||
         _connectionLost ||
         _historySyncing ||
+        _restoringSettings ||
         _showingCachedHistory) {
       return;
     }
@@ -3161,28 +3960,39 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     _restoreDraft(q.text, q.attachments);
   }
 
-  void _restoreDraft(String text, List<_Attachment> attachments) {
-    final current = _input.text;
-    _input.text = text.isEmpty
+  void _restoreDraft(
+    String text,
+    List<_Attachment> attachments, {
+    _ComposerDraft? into,
+  }) {
+    final draft = into ?? _draft;
+    final current = draft.value.text;
+    final restored = text.isEmpty
         ? current
         : current.isEmpty
         ? text
         : '$text\n\n$current';
-    setState(() {
-      final ids = _attachments.map((a) => a.id).toSet();
-      _attachments.insertAll(
-        0,
-        attachments.where((a) => ids.add(a.id)).toList(),
-      );
-    });
-    _input.selection = TextSelection.collapsed(offset: _input.text.length);
-    _inputFocus.requestFocus();
+    draft.value = TextEditingValue(
+      text: restored,
+      selection: TextSelection.collapsed(offset: restored.length),
+    );
+    final ids = draft.attachments.map((a) => a.id).toSet();
+    draft.attachments.insertAll(
+      0,
+      attachments.where((a) => ids.add(a.id)).toList(),
+    );
+    _drafts.save(draft, changed: true);
+    if (mounted && identical(_draft, draft)) {
+      _input.value = draft.value;
+      _inputFocus.requestFocus();
+    }
   }
 
   /// Discard a specific queued message (the ✕ on its chip). Unlike Esc, this
   /// drops it rather than restoring it — the user explicitly removed it.
   void _discardQueued(int id) {
     setState(() => _queue.removeWhere((q) => q.id == id));
+    _saveDraft();
   }
 
   /// Esc "undo" for a turn that hasn't produced output yet: interrupt it and
@@ -3237,6 +4047,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     final id = 'local-stopped-${_localSeq++}';
     _itemIndex[id] = _items.length;
     _items.add(TranscriptItem(id: id, type: 'interrupted', text: ''));
+    _historyLiveItems?[id] = _items.last;
   }
 
   /// Begin ticking the running turn's elapsed clock once a second so the status
@@ -3281,6 +4092,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         modelRerouted: _turnRerouted,
       ),
     );
+    _historyLiveItems?[id] = _items.last;
   }
 
   /// Stopwatch-format an elapsed-second count. Shared with the turn-work fold
@@ -3440,6 +4252,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
 
   /// Manually compact the conversation after a confirm.
   Future<void> _compact() async {
+    if (_guardianReadOnly) return;
     final tid = _threadId;
     if (tid == null) return;
     final l10n = AppLocalizations.of(context);
@@ -3491,8 +4304,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     final current = notifier.state;
     final has = current.contains(widget.serviceKey);
     if (down == has) return;
-    notifier.state = down ? {...current, widget.serviceKey} : {...current}
-      ..remove(widget.serviceKey);
+    notifier.state = down
+        ? {...current, widget.serviceKey}
+        : ({...current}..remove(widget.serviceKey));
     // The cached probe answered before the link changed, so it would otherwise
     // keep reporting the stale verdict for as long as the cache lives.
     ref.invalidate(appReachableProvider(widget.serviceKey));
@@ -3507,15 +4321,27 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// so the just-added optimistic message and a pending plan toggle survive for
   /// the retry.
   Future<void> _autoReconnect({bool reload = true}) async {
-    if (_reconnecting) return;
+    if (!mounted || !_foreground || _reconnecting) return;
     // Debounce: a flapping socket (connect succeeds then drops) could otherwise
     // spin reconnect attempts. The periodic health check is the backstop.
-    final now = DateTime.now();
     if (_lastReconnectAt != null &&
-        now.difference(_lastReconnectAt!) < const Duration(seconds: 3)) {
+        _lastReconnectAt!.elapsed < const Duration(seconds: 3)) {
       return;
     }
-    _lastReconnectAt = now;
+    _lastReconnectAt = Stopwatch()..start();
+    final epoch = ++_reconnectEpoch;
+    final elapsed = Stopwatch()..start();
+    bool current() => mounted && _foreground && epoch == _reconnectEpoch;
+    void record(String stage, int attempt, [Object? error]) {
+      final detail = error == null ? '' : ' error=${friendlyError(error)}';
+      LogManager.instance.record(
+        'controller.recovery',
+        'service=${widget.serviceKey} stage=$stage attempt=$attempt '
+            'elapsed_ms=${elapsed.elapsedMilliseconds}${detail.substring(0, math.min(512, detail.length))}',
+        level: error == null ? 'INFO' : 'WARN',
+      );
+    }
+
     if (mounted) {
       setState(() {
         _reconnecting = true;
@@ -3527,19 +4353,24 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     }
     final api = ref.read(bridgeApiProvider);
     for (var attempt = 0; attempt < 4; attempt++) {
-      if (!mounted) return;
+      if (!current()) return;
       try {
+        record('connect', attempt + 1);
         // Let the bridge retain a live socket if only its event subscription ended.
         await api.appConnect(widget.serviceKey, appLocalPort);
+        if (!current()) return;
+        _connectionLost = false;
         _subscribe();
         if (reload && _threadId != null) {
           if (_externalWriterMode) {
             _externalHistoryDirty = true;
             await _refreshExternalHistory(_threadId!, _externalWriterEpoch);
           } else {
-            await _resumeAndLoad();
+            await _resumeAndLoad(propagateErrors: true);
           }
         }
+        if (!current()) return;
+        record('history-ready', attempt + 1);
         // Re-list too, not just the open transcript. `_loadThreads` runs once at
         // initState and is best-effort: if the host wasn't reachable then (it
         // restarted, or the app opened first), the failure was swallowed and
@@ -3567,8 +4398,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         _loadGit(); // the working tree may have moved on while we were away
         // Content loaders retain old data on failure. A timed-out RPC can
         // therefore close this new connection without throwing out of them.
-        if (!api.appIsConnected(widget.serviceKey)) {
-          throw StateError('app-server connection closed during reconnect');
+        if (_connectionLost || !api.appIsConnected(widget.serviceKey)) {
+          throw StateError('app-server event feed closed during reconnect');
         }
         if (mounted) {
           setState(() {
@@ -3578,13 +4409,20 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           });
           _publishLinkState(down: false);
         }
+        record('ready', attempt + 1);
+        _maybeFlushQueue();
         return;
-      } catch (_) {
-        await Future<void>.delayed(Duration(seconds: 1 << attempt)); // 1/2/4/8s
+      } catch (error) {
+        if (!current()) return;
+        record('retry', attempt + 1, error);
+        if (attempt < 3) {
+          await Future<void>.delayed(Duration(seconds: 1 << attempt));
+        }
       }
     }
     // Out of retries: fall back to the manual banner.
-    if (mounted) {
+    if (current()) {
+      record('exhausted', 4);
       setState(() {
         _reconnecting = false;
         _connectionLost = true;
@@ -3655,7 +4493,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       return;
     }
     final text = prompt.answerText(answers);
-    setState(() => _sending = true);
+    setState(() => _localSending = true);
     try {
       final api = ref.read(bridgeApiProvider);
       if (_streaming) {
@@ -3675,7 +4513,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         setState(() => _error = friendlyError(e));
       }
     } finally {
-      if (mounted) setState(() => _sending = false);
+      if (mounted) setState(() => _localSending = false);
     }
   }
 
@@ -3748,35 +4586,39 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   void _gotoAdjacentTurn({required bool next}) {
     if (!_listCtl.isAttached || !_scroll.hasClients) return;
     final rows = _rows;
-    final turnRows = <int>[
-      for (var i = 0; i < rows.length; i++)
-        if (rows[i] is TranscriptItem && (rows[i] as TranscriptItem).isUser) i,
-    ];
-    if (turnRows.isEmpty) return;
-    // Topmost row currently in view (fallback to 0 before the first layout).
+    final turns = _turnMinimapItems(rows);
+    if (rows.isEmpty || turns.isEmpty) return;
     final anchor = _visibleRowRange()?.$1 ?? 0;
-    int? target;
-    if (next) {
-      for (final t in turnRows) {
-        if (t > anchor) {
-          target = t;
-          break;
-        }
-      }
-    } else {
-      for (final t in turnRows) {
-        if (t < anchor) {
-          target = t;
-        } else {
-          break;
-        }
-      }
+    final visibleTurn = _rowItems(
+      rows[anchor.clamp(0, rows.length - 1)],
+    ).firstOrNull?.turnId;
+    var current = turns.indexWhere((turn) => turn.turnId == visibleTurn);
+    if (current < 0) {
+      current = turns.lastIndexWhere(
+        (turn) => turn.rowIndex >= 0 && turn.rowIndex <= anchor,
+      );
     }
-    if (target == null) return;
-    // Same landing as the minimap: the turn's user message at the top of the
-    // viewport, so stepping and jumping never frame a turn differently.
-    _scrollToRow(target);
+    if (current < 0) return;
+    final entry = turns[current];
+    final target = next
+        ? current + 1
+        : entry.rowIndex < 0 || entry.rowIndex < anchor
+        ? current
+        : current - 1;
+    if (target >= 0 && target < turns.length) {
+      _selectTurn(turns[target]);
+    } else if (!next) {
+      _loadAtTop(reveal: true);
+    }
   }
+
+  Iterable<TranscriptItem> _rowItems(Object row) => switch (row) {
+    TranscriptItem() => [row],
+    TurnWork() => row.items,
+    ActivityGroup() => row.items,
+    AgentTurn() => row.items,
+    _ => const [],
+  };
 
   /// One minimap entry per turn: the user's message, and how the turn answered.
   ///
@@ -3893,13 +4735,21 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                 key: _loadingOlder
                     ? null
                     : const Key('chat-older-history-load'),
-                onPressed: _loadingOlder ? null : _loadAtTop,
-                icon: Icon(
-                  _historyError && _historyFromTop
-                      ? Icons.refresh_rounded
-                      : Icons.history_rounded,
-                  size: 16,
-                ),
+                onPressed: _loadingOlder
+                    ? null
+                    : () => _loadAtTop(reveal: true),
+                icon: _loadingOlder && _historyFromTop
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : Icon(
+                        _historyError && _historyFromTop
+                            ? Icons.refresh_rounded
+                            : Icons.history_rounded,
+                        size: 16,
+                      ),
                 label: Text(
                   _loadingOlder && _historyFromTop
                       ? l10n.historyLoading
@@ -4127,13 +4977,14 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
               child: Center(child: _navCluster(showTurnNav: false)),
             )
           else
-            Positioned(
-              right: 12,
-              bottom: 12,
+            Positioned.fill(
               // Two turns is enough for stepping to mean something, which is a
               // lower bar than the rail's: the arrows carry a label and do not
               // need a shape to read.
-              child: _navCluster(showTurnNav: _turnCount >= 2),
+              child: DraggableNavigation(
+                label: AppLocalizations.of(context).moveTurnNavigation,
+                child: _navCluster(showTurnNav: _turnCount >= 2),
+              ),
             ),
         ],
       );
@@ -4185,7 +5036,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           visualDensity: VisualDensity.compact,
           iconSize: 22,
           padding: const EdgeInsets.all(6),
-          constraints: const BoxConstraints(),
+          constraints: BoxConstraints(
+            minWidth: isDesktop ? 34 : 48,
+            minHeight: isDesktop ? 34 : 48,
+          ),
           color: scheme.onSurfaceVariant,
           onPressed: onTap,
           icon: Icon(icon),
@@ -4205,37 +5059,39 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         borderRadius: BorderRadius.circular(24),
         child: Padding(
           padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (showTurnNav) ...[
-                btn(
-                  const Key('nav-turn-outline'),
-                  Icons.format_list_numbered,
-                  l10n.conversationOutline,
-                  _openTurnOutline,
-                ),
-                btn(
-                  const Key('nav-prev-turn'),
-                  Icons.keyboard_arrow_up,
-                  l10n.prevTurn,
-                  () => _gotoAdjacentTurn(next: false),
-                ),
-                btn(
-                  const Key('nav-next-turn'),
-                  Icons.keyboard_arrow_down,
-                  l10n.nextTurn,
-                  () => _gotoAdjacentTurn(next: true),
-                ),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (showTurnNav) ...[
+                  btn(
+                    const Key('nav-turn-outline'),
+                    Icons.format_list_numbered,
+                    l10n.conversationOutline,
+                    _openTurnOutline,
+                  ),
+                  btn(
+                    const Key('nav-prev-turn'),
+                    Icons.keyboard_arrow_up,
+                    l10n.prevTurn,
+                    () => _gotoAdjacentTurn(next: false),
+                  ),
+                  btn(
+                    const Key('nav-next-turn'),
+                    Icons.keyboard_arrow_down,
+                    l10n.nextTurn,
+                    () => _gotoAdjacentTurn(next: true),
+                  ),
+                ],
+                if (!_atBottom)
+                  btn(
+                    const Key('nav-to-bottom'),
+                    Icons.vertical_align_bottom,
+                    l10n.jumpToLatest,
+                    () => _scrollToEnd(force: true),
+                  ),
               ],
-              if (!_atBottom)
-                btn(
-                  const Key('nav-to-bottom'),
-                  Icons.vertical_align_bottom,
-                  l10n.jumpToLatest,
-                  () => _scrollToEnd(force: true),
-                ),
-            ],
+            ),
           ),
         ),
       ),
@@ -4674,6 +5530,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   }
 
   Widget _buildSession(BuildContext context) {
+    ref.watch(_composerDraftsProvider(widget.serviceKey));
+    ref.listen(uiPrefsProvider, (_, next) => _restoreLayout(next.valueOrNull));
     final l10n = AppLocalizations.of(context);
     final scheme = Theme.of(context).colorScheme;
     final width = MediaQuery.of(context).size.width;
@@ -4683,16 +5541,34 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     // bar is a plain AppBar naming the conversation.
     if (width < 720) {
       return Scaffold(
+        onDrawerChanged: (open) {
+          if (open) return;
+          final generation = _newDraftFocusAfterDrawer;
+          _newDraftFocusAfterDrawer = null;
+          if (generation != null) _focusNewComposer(generation);
+        },
         drawer: Drawer(
-          // The scheme's container colours are translucent washes. A drawer
-          // floats above a scrim, so resolve the wash onto its opaque ground
-          // instead of letting the chat show through the sessions pane.
+          // The same ground as the desktop sidebar, so the list looks like one
+          // component on every form factor. Composited onto the page surface
+          // so it stays opaque over the scrim whatever the scheme's alpha.
           backgroundColor: Color.alphaBlend(
-            scheme.surfaceContainer,
+            surfaceSidebar(scheme),
             scheme.surface,
           ),
+          shape: const RoundedRectangleBorder(
+            borderRadius: BorderRadius.horizontal(
+              right: Radius.circular(kDialogRadius),
+            ),
+          ),
           surfaceTintColor: Colors.transparent,
-          child: SafeArea(child: _sessionsPane(l10n, inDrawer: true)),
+          child: SafeArea(
+            child: Column(
+              children: [
+                _voiceStatus(l10n),
+                Expanded(child: _sessionsPane(l10n, inDrawer: true)),
+              ],
+            ),
+          ),
         ),
         // Widen the edge-swipe-to-open zone (default ~20px). The narrow
         // default sits under Android's system back-gesture strip, so a
@@ -4750,21 +5626,58 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     // the panes give up width before the chat does.
     final maxLeft = ((width - 420) / 2).clamp(200.0, 520.0);
     final maxReview = (width - 360).clamp(400.0, 1200.0);
+    final sidebarWidth = _leftWidth.clamp(200.0, maxLeft);
     return Scaffold(
       body: Row(
         children: [
-          if (_leftOpen) ...[
-            SizedBox(
-              width: _leftWidth.clamp(200, maxLeft),
-              child: _sidebar(l10n),
-            ),
-            _splitter(
-              key: const Key('left-splitter'),
-              onDrag: (dx) => setState(
-                () => _leftWidth = (_leftWidth + dx).clamp(200, 520),
+          // The sidebar slides rather than snapping: the chat column visibly
+          // takes over the space, so the user sees where the list went. The
+          // content keeps its open width and is clipped while it slides, so
+          // rows never reflow mid-animation. A drag resizes without easing.
+          ClipRect(
+            child: AnimatedContainer(
+              duration: _paneDragging
+                  ? Duration.zero
+                  : Motion.of(context, Motion.medium),
+              curve: Motion.move,
+              width: _leftOpen ? sidebarWidth + 5 : 0,
+              onEnd: () {
+                if (_sidebarClosing && mounted) {
+                  setState(() => _sidebarClosing = false);
+                }
+              },
+              child: OverflowBox(
+                alignment: Alignment.centerRight,
+                minWidth: sidebarWidth + 5,
+                maxWidth: sidebarWidth + 5,
+                child: _leftOpen || _sidebarClosing
+                    ? Row(
+                        children: [
+                          SizedBox(width: sidebarWidth, child: _sidebar(l10n)),
+                          _splitter(
+                            key: const Key('left-splitter'),
+                            ground: surfaceSidebar(scheme),
+                            onDragStart: () =>
+                                setState(() => _paneDragging = true),
+                            onDrag: (dx) => setState(
+                              () => _leftWidth = (_leftWidth + dx).clamp(
+                                200,
+                                maxLeft,
+                              ),
+                            ),
+                            onDragEnd: () {
+                              setState(() => _paneDragging = false);
+                              ref
+                                  .read(uiPrefsProvider.notifier)
+                                  .setSidebarWidth(_leftWidth);
+                            },
+                          ),
+                        ],
+                      )
+                    : const SizedBox.shrink(),
               ),
             ),
-          ],
+          ),
           Expanded(
             child: Column(
               children: [
@@ -4809,52 +5722,152 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// strip also drags the window.
   Widget _sidebar(AppLocalizations l10n) {
     final scheme = Theme.of(context).colorScheme;
-    final isMac = defaultTargetPlatform == TargetPlatform.macOS;
+    final mac = isFramelessDesktop && isMacDesktop;
+    // The strip shares the content header's height, so the collapse control,
+    // the traffic lights and the title all sit on one centre line. On macOS
+    // the lights own the leading corner, so the brand moves out of the strip
+    // (the window title already names the app) and only the controls remain,
+    // pushed to the trailing edge the way Finder and Mail lay out a sidebar.
     final strip = SizedBox(
-      height: 56,
+      height: WindowChrome.barHeight,
       child: Stack(
+        alignment: Alignment.centerLeft,
         children: [
-          if (isFramelessDesktop)
-            const Positioned.fill(
-              child: DragToMoveArea(child: SizedBox.expand()),
-            ),
+          const Positioned.fill(child: WindowDragArea()),
           Row(
             children: [
-              SizedBox(width: isFramelessDesktop && isMac ? 76 : 16),
-              const BrandLogo(size: 18),
-              const SizedBox(width: 7),
-              Expanded(
-                child: Text(
-                  l10n.appTitle,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 13.5,
-                    fontWeight: FontWeight.w600,
+              if (mac)
+                const SizedBox(width: WindowChrome.trafficLightsWidth)
+              else ...[
+                const SizedBox(width: 14),
+                const BrandLogo(size: 18),
+                const SizedBox(width: 8),
+                Flexible(
+                  child: Text(
+                    l10n.appTitle,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                 ),
+              ],
+              const Spacer(),
+              _chromeButton(
+                key: const Key('sidebar-collapse-btn'),
+                tooltip: _withShortcut(l10n.hideSidebar, 'B'),
+                icon: Icons.view_sidebar_outlined,
+                onPressed: () => _setLeftOpen(false),
               ),
-              IconButton(
-                tooltip: l10n.conversationsSection,
-                icon: const Icon(Icons.menu_open, size: 20),
-                onPressed: () => setState(() => _leftOpen = false),
+              _chromeButton(
+                key: const Key('sidebar-new-conversation-btn'),
+                tooltip: _withShortcut(l10n.newConversation, 'N'),
+                icon: Icons.edit_square,
+                onPressed: () => _newConversationInProject(_cwd, context),
               ),
-              const SizedBox(width: 4),
+              const SizedBox(width: 8),
             ],
           ),
         ],
       ),
     );
     return Material(
-      // A wash over the page rather than the page itself, so the rail reads as
-      // a distinct column; the splitter's hairline carries the actual edge.
-      color: scheme.surfaceContainerLow,
+      // A step off the page, like a macOS source list; the splitter's hairline
+      // carries the actual edge.
+      color: surfaceSidebar(scheme),
       child: Column(
         children: [
           strip,
+          // Pinned above the list, outside its scroll and its search filter:
+          // a live call is always one glance and one tap away.
+          _voiceStatus(l10n),
           Expanded(child: _sessionsPane(l10n)),
         ],
       ),
+    );
+  }
+
+  /// Scroll the conversation list so row [index] — the open conversation —
+  /// sits a third of the way down, where the eye lands first.
+  void _revealConversationRow(int index) {
+    if (!_convListCtl.isAttached || !_convScroll.hasClients) return;
+    final duration = Motion.of(context, Motion.medium);
+    if (duration == Duration.zero) {
+      _convListCtl.jumpToItem(
+        index: index,
+        scrollController: _convScroll,
+        alignment: 0.33,
+      );
+      return;
+    }
+    _convListCtl.animateToItem(
+      index: index,
+      scrollController: _convScroll,
+      alignment: 0.33,
+      duration: (_) => duration,
+      curve: (_) => Motion.move,
+    );
+  }
+
+  /// [label] followed by its window shortcut in the platform's notation
+  /// (`⌘B` on macOS, `Ctrl+B` elsewhere), for a tooltip.
+  String _withShortcut(String label, String key) {
+    final mac = defaultTargetPlatform == TargetPlatform.macOS;
+    return '$label  ${mac ? '⌘$key' : 'Ctrl+$key'}';
+  }
+
+  /// Show or hide the desktop sidebar, remembering the choice.
+  void _setLeftOpen(bool open) {
+    _layoutRestored = true;
+    setState(() {
+      // Keep the list built while it slides out; the animation's end drops
+      // it. With reduced motion there is no slide, so nothing to keep.
+      _sidebarClosing =
+          !open && Motion.of(context, Motion.medium) > Duration.zero;
+      _leftOpen = open;
+    });
+    ref.read(uiPrefsProvider.notifier).setSidebarOpen(open);
+  }
+
+  /// Adopt the saved sidebar layout once the prefs file has loaded, unless
+  /// the user already changed it in this session.
+  void _restoreLayout(UiPrefs? prefs) {
+    if (_layoutRestored || prefs == null) return;
+    _layoutRestored = true;
+    final open = prefs.sidebarOpen ?? true;
+    final width = prefs.sidebarWidth ?? _leftWidth;
+    if (open == _leftOpen && width == _leftWidth) return;
+    setState(() {
+      _leftOpen = open;
+      _leftWidth = width;
+    });
+  }
+
+  /// A quiet 30 px icon button for the window strips, sized to sit on the
+  /// traffic lights' centre line.
+  Widget _chromeButton({
+    Key? key,
+    required String tooltip,
+    required IconData icon,
+    required VoidCallback? onPressed,
+  }) {
+    final scheme = Theme.of(context).colorScheme;
+    return IconButton(
+      key: key,
+      tooltip: tooltip,
+      onPressed: onPressed,
+      style: IconButton.styleFrom(
+        minimumSize: const Size(30, 30),
+        fixedSize: const Size(30, 30),
+        padding: EdgeInsets.zero,
+        foregroundColor: scheme.onSurfaceVariant,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(kRowRadius),
+        ),
+      ),
+      icon: Icon(icon, size: 18),
     );
   }
 
@@ -4864,33 +5877,45 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// expand control and — on macOS — the traffic-light inset; on frameless
   /// Windows it draws the caption buttons at the trailing edge.
   Widget _contentTopBar(AppLocalizations l10n, double width) {
-    final isMac = defaultTargetPlatform == TargetPlatform.macOS;
-    return SizedBox(
-      height: 56,
+    final isMac = isMacDesktop;
+    final scheme = Theme.of(context).colorScheme;
+    // No rule under the header: the status line below it continues the same
+    // block (title, then its facts) and carries the one hairline.
+    return Container(
+      height: WindowChrome.barHeight,
+      color: surfaceBackground(scheme),
       child: Stack(
+        // Centre the row on the strip, so every control shares the traffic
+        // lights' centre line.
+        alignment: Alignment.centerLeft,
         children: [
-          if (isFramelessDesktop)
-            const Positioned.fill(
-              child: DragToMoveArea(child: SizedBox.expand()),
-            ),
+          const Positioned.fill(child: WindowDragArea()),
           Row(
             children: [
-              SizedBox(
-                width: !_leftOpen && isFramelessDesktop && isMac ? 76 : 8,
-              ),
-              if (!_leftOpen)
-                IconButton(
-                  tooltip: l10n.conversationsSection,
-                  icon: const Icon(Icons.menu, size: 20),
-                  onPressed: () => setState(() => _leftOpen = true),
+              // With the sidebar hidden this strip owns the leading corner, so
+              // it clears the traffic lights itself.
+              SizedBox(width: _leftOpen ? 10 : 8 + WindowChrome.leadingInset),
+              if (!_leftOpen) ...[
+                _chromeButton(
+                  key: const Key('sidebar-expand-btn'),
+                  tooltip: _withShortcut(l10n.showSidebar, 'B'),
+                  icon: Icons.view_sidebar_outlined,
+                  onPressed: () => _setLeftOpen(true),
                 ),
+                _chromeButton(
+                  tooltip: _withShortcut(l10n.newConversation, 'N'),
+                  icon: Icons.edit_square,
+                  onPressed: () => _newConversationInProject(_cwd, context),
+                ),
+                const SizedBox(width: 4),
+              ],
               if (!widget.home)
-                IconButton(
+                _chromeButton(
                   tooltip: l10n.backToSessions,
-                  icon: const Icon(Icons.arrow_back, size: 20),
+                  icon: Icons.arrow_back,
                   onPressed: _backToSessions,
                 ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 6),
               // The title is a label, not a banner: cap it well short of the
               // bar so a long conversation preview truncates and the rest of
               // the strip stays empty (and draggable).
@@ -4903,6 +5928,12 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                   ),
                 ),
               ),
+              // With the sidebar hidden, the call's status and hang-up move
+              // into the window strip rather than disappearing with it.
+              if (!_leftOpen) ...[
+                _voiceStatus(l10n, compact: true),
+                const SizedBox(width: 6),
+              ],
               if (_ctx != null)
                 ContextGauge(
                   status: _ctx!,
@@ -4920,6 +5951,16 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
               if (_threadId != null)
                 PopupMenuButton<String>(
                   tooltip: l10n.moreActions,
+                  icon: Icon(
+                    Icons.more_horiz,
+                    size: 18,
+                    color: scheme.onSurfaceVariant,
+                  ),
+                  style: IconButton.styleFrom(
+                    minimumSize: const Size(30, 30),
+                    fixedSize: const Size(30, 30),
+                    padding: EdgeInsets.zero,
+                  ),
                   onSelected: (v) {
                     if (v == 'compact') _compact();
                     if (v == 'rename') _beginTitleEdit();
@@ -4932,10 +5973,11 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                     PopupMenuItem(value: 'compact', child: Text(l10n.compact)),
                   ],
                 ),
-              if (isFramelessDesktop && !isMac)
-                const WindowCaptionButtons()
-              else
-                const SizedBox(width: 8),
+              if (isFramelessDesktop && !isMac) ...[
+                const SizedBox(width: 6),
+                const WindowCaptionButtons(),
+              ] else
+                const SizedBox(width: 10),
             ],
           ),
         ],
@@ -5082,24 +6124,31 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// the pointer is over it: a wider invisible hit area (a 1 px target is
   /// unhittable) plus a resize cursor, so the affordance appears on hover the
   /// way a desktop splitter should.
+  ///
+  /// The hairline sits on the trailing edge of a 5 px target painted in the
+  /// left neighbour's ground, so the seam reads as one line, not a gutter.
   Widget _splitter({
     required Key key,
     required ValueChanged<double> onDrag,
+    VoidCallback? onDragStart,
+    VoidCallback? onDragEnd,
+    Color? ground,
   }) => MouseRegion(
     key: key,
     cursor: SystemMouseCursors.resizeLeftRight,
     child: GestureDetector(
-      behavior: HitTestBehavior.translucent,
+      behavior: HitTestBehavior.opaque,
+      onHorizontalDragStart: (_) => onDragStart?.call(),
       onHorizontalDragUpdate: (d) => onDrag(d.delta.dx),
-      child: SizedBox(
-        width: 7,
-        child: Center(
-          // The firmer hairline, not outlineVariant: this separates two
-          // near-identical grounds, so the faint one disappears between them.
-          child: VerticalDivider(
-            width: 1,
-            color: Theme.of(context).colorScheme.outline,
-          ),
+      onHorizontalDragEnd: (_) => onDragEnd?.call(),
+      onHorizontalDragCancel: () => onDragEnd?.call(),
+      child: Container(
+        width: 5,
+        color: ground,
+        alignment: Alignment.centerRight,
+        child: VerticalDivider(
+          width: 1,
+          color: Theme.of(context).colorScheme.outlineVariant,
         ),
       ),
     ),
@@ -5112,6 +6161,14 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     AppLocalizations l10n,
   ) {
     final scheme = Theme.of(context).colorScheme;
+    if (_guardianReadOnly) {
+      return (
+        color: infoColor(scheme),
+        label: l10n.guardianReadOnly,
+        icon: Icons.policy_outlined,
+        nominal: false,
+      );
+    }
     if (_externalWriterMode) {
       final resumable = _externalWriterLiveness?.allowsResume ?? false;
       return (
@@ -5141,7 +6198,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     }
     if (_streaming) {
       return (
-        color: scheme.primary,
+        color: signalColor(scheme),
         label: _planActive ? l10n.statePlanning : l10n.stateWorking,
         icon: Icons.autorenew,
         nominal: false,
@@ -5203,25 +6260,32 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     final d = _diff;
     final activeModel = _activeModelStatus();
     final running = _streaming || _externalWriterRunning;
-    return Container(
+    return AnimatedContainer(
+      duration: Motion.of(context, Motion.medium),
+      curve: Motion.move,
       width: double.infinity,
-      // At rest the bar is part of the page — a faint ink wash under a hairline,
-      // like any other chrome. A state that needs attention tints the whole
-      // strip, so colour arriving here means something actually changed.
+      // At rest the bar is part of the page — the header's ground under one
+      // hairline. A state that needs attention tints the whole strip, so
+      // colour arriving here means something actually changed.
       decoration: BoxDecoration(
         color: st.nominal
-            ? scheme.surfaceContainerLowest
-            : st.color.withValues(alpha: 0.10),
+            ? surfaceBackground(scheme)
+            : Color.alphaBlend(
+                st.color.withValues(alpha: 0.08),
+                surfaceBackground(scheme),
+              ),
         border: Border(bottom: BorderSide(color: scheme.outlineVariant)),
       ),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
+      padding: EdgeInsets.fromLTRB(isDesktop ? 18 : 14, 3, 14, 5),
       child: Row(
         children: [
-          if (_externalWriterRunning)
+          if (_externalWriterRunning || (_streaming && !st.nominal))
             PulsingDot(
-              key: const Key('chat-status-running-pulse'),
+              key: _externalWriterRunning
+                  ? const Key('chat-status-running-pulse')
+                  : null,
               color: st.color,
-              size: 8,
+              size: 7,
             )
           else
             Icon(st.icon, size: 13, color: st.color),
@@ -5337,7 +6401,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                           height: 12,
                           child: CircularProgressIndicator(
                             strokeWidth: 1.6,
-                            color: scheme.primary,
+                            color: signalColor(scheme),
                           ),
                         )
                       else
@@ -5388,7 +6452,14 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     );
   }
 
-  Widget _transcriptRow(Object row) {
+  Widget _transcriptRow(Object row) => HistoryArrival(
+    revision: _historyArrivalRow == _rowKey(row)
+        ? _historyArrivalRevision
+        : null,
+    child: _buildTranscriptRow(row),
+  );
+
+  Widget _buildTranscriptRow(Object row) {
     if (row is HistoryGap) {
       final l10n = AppLocalizations.of(context);
       final targeted =
@@ -5406,11 +6477,17 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
               textStyle: Theme.of(context).textTheme.labelSmall,
             ),
             key: Key('history-gap-${row.turnId}'),
-            onPressed: _loadingOlder ? null : () => _loadGap(row),
-            icon: Icon(
-              failed ? Icons.refresh_rounded : Icons.unfold_more_rounded,
-              size: 18,
-            ),
+            onPressed: _loadingOlder ? null : () => _loadGap(row, reveal: true),
+            icon: loading
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : Icon(
+                    failed ? Icons.refresh_rounded : Icons.unfold_more_rounded,
+                    size: 18,
+                  ),
             label: Text(
               loading
                   ? l10n.historyLoading
@@ -5465,6 +6542,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       item: row as TranscriptItem,
       hostImageLoader: _loadHostImage,
       imageCacheScope: '${widget.serviceKey}:$_threadId',
+      onEdit: _externalWriterMode || _historySyncing || _showingCachedHistory
+          ? null
+          : _editMessage,
     );
   }
 
@@ -5472,10 +6552,19 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// approvals + implement bar + error + composer.
   Widget _chatPane(AppLocalizations l10n) {
     final runningPlan = _runningPlan;
+    final hostSwitch = _hostSwitchBanner();
     return Column(
       children: [
         _statusBar(l10n),
         if (_childReadOnly) _subSessionBanner(l10n),
+        // Where the reader is looking: the switch announces itself above the
+        // conversation, which stays put until the new host has answered.
+        AnimatedSize(
+          duration: Motion.of(context, Motion.medium),
+          curve: Motion.move,
+          alignment: Alignment.topCenter,
+          child: hostSwitch ?? const SizedBox(width: double.infinity),
+        ),
         if (_historySyncing || _showingCachedHistory)
           Padding(
             key: const Key('history-sync-status'),
@@ -5486,11 +6575,31 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
             ),
           ),
         Expanded(
-          child: NotificationListener<UserScrollNotification>(
+          child: NotificationListener<ScrollNotification>(
             onNotification: (event) {
-              if (event.depth == 0 && event.direction != ScrollDirection.idle) {
+              if (event.depth != 0) return false;
+              if ((event is UserScrollNotification &&
+                      event.direction != ScrollDirection.idle) ||
+                  (event is ScrollUpdateNotification &&
+                      event.dragDetails != null) ||
+                  (event is OverscrollNotification &&
+                      event.dragDetails != null)) {
                 _scrollIntent++;
                 _settlingToEnd = false;
+              }
+              // Short pages cannot move their scroll offset. An overscroll is
+              // still a deliberate request to reach history beyond the edge.
+              if (event is OverscrollNotification &&
+                  event.dragDetails != null &&
+                  !_settlingToEnd &&
+                  !_historyError &&
+                  !_loadingOlder) {
+                if (event.overscroll < 0) {
+                  _loadAtTop();
+                } else if (event.overscroll > 0) {
+                  final gap = _rows.lastOrNull;
+                  if (gap is HistoryGap) _loadGap(gap);
+                }
               }
               return false;
             },
@@ -5529,8 +6638,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                                             ),
                                           ))
                                   // One SelectionArea over the whole conversation so text can be
-                                  // drag-selected and copied (desktop drag, mobile long-press) —
-                                  // per-message actions appear on hover instead of always-on. The
+                                  // drag-selected and copied on desktop. Mobile messages open
+                                  // their own long-press actions and text-selection page. The
                                   // list is centered with a max width so it reads well even when
                                   // both side panes are collapsed on a wide screen.
                                   : Stack(
@@ -5577,6 +6686,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                                               // virtualization, same ScrollController — only
                                               // visible rows build, so streaming stays cheap.
                                               return SuperListView.builder(
+                                                physics:
+                                                    const AlwaysScrollableScrollPhysics(),
                                                 controller: _scroll,
                                                 listController: _listCtl,
                                                 findChildIndexCallback: (key) =>
@@ -5657,27 +6768,34 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                               key: const Key('history-navigation-status'),
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                if (_navigationLoading)
-                                  Padding(
-                                    padding: const EdgeInsets.symmetric(
-                                      vertical: 10,
-                                    ),
-                                    child: Text(
-                                      l10n.loadingTurn(
-                                        _turnMinimapItems(_rows).indexWhere(
-                                              (item) =>
-                                                  item.turnId == target.turnId,
-                                            ) +
-                                            1,
-                                      ),
-                                    ),
-                                  )
-                                else
-                                  TextButton.icon(
-                                    onPressed: () => _selectTurn(target),
-                                    icon: const Icon(Icons.refresh, size: 16),
-                                    label: Text(l10n.historyRetry),
-                                  ),
+                                Flexible(
+                                  child: _navigationLoading
+                                      ? Padding(
+                                          padding: const EdgeInsets.symmetric(
+                                            vertical: 10,
+                                          ),
+                                          child: Text(
+                                            l10n.loadingTurn(
+                                              _turnMinimapItems(
+                                                    _rows,
+                                                  ).indexWhere(
+                                                    (item) =>
+                                                        item.turnId ==
+                                                        target.turnId,
+                                                  ) +
+                                                  1,
+                                            ),
+                                          ),
+                                        )
+                                      : TextButton.icon(
+                                          onPressed: () => _selectTurn(target),
+                                          icon: const Icon(
+                                            Icons.refresh,
+                                            size: 16,
+                                          ),
+                                          label: Text(l10n.historyRetry),
+                                        ),
+                                ),
                                 IconButton(
                                   tooltip: MaterialLocalizations.of(
                                     context,
@@ -5757,6 +6875,13 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         if (!_externalWriterMode && !_childReadOnly && _planReady)
           _implementBar(l10n),
         if (_error != null) _errorBanner(l10n),
+        if (_isVoiceThread)
+          _voiceBar(l10n)
+        // A call running in another conversation stays reachable from here in
+        // the narrow layout, where the sidebar is a closed drawer.
+        else if (MediaQuery.sizeOf(context).width < 720 &&
+            _voice.threadId != _threadId)
+          _voiceStatus(l10n),
         if (_childReadOnly)
           const SizedBox.shrink()
         else if (_externalWriterMode)
@@ -5805,6 +6930,37 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   }
 
   Widget _externalWriterAction(AppLocalizations l10n) {
+    if (_guardianReadOnly) {
+      return SafeArea(
+        top: false,
+        child: Padding(
+          key: const Key('guardian-read-only'),
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(l10n.guardianReadOnly),
+              if (_parentThreadId case final parent?)
+                TextButton.icon(
+                  key: const Key('open-parent-session'),
+                  onPressed: () => _openThread(
+                    parent,
+                    _discoveredThreads[parent]?.cwd ??
+                        _threads
+                            .where((t) => t.id == parent)
+                            .firstOrNull
+                            ?.cwd ??
+                        _cwd,
+                  ),
+                  icon: const Icon(Icons.subdirectory_arrow_left),
+                  label: Text(l10n.parentSession),
+                ),
+            ],
+          ),
+        ),
+      );
+    }
+
     final scheme = Theme.of(context).colorScheme;
     final liveness = _externalWriterLiveness;
     final canResume = liveness?.allowsResume ?? false;
@@ -5900,136 +7056,91 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     );
   }
 
-  /// Guidance shown for a brand-new, empty conversation: a short intro plus a
-  /// few tappable starter prompts tailored to remote-controlling a codex
-  /// workspace (explore the project, run/fix tests, review git changes, plan a
-  /// feature). Tapping a card prefills the composer — the user reviews and
-  /// sends — rather than firing a remote action immediately.
+  /// Keep the empty view focused on the project and the composer below it.
   Widget _newSessionGuidance(AppLocalizations l10n) {
-    final scheme = Theme.of(context).colorScheme;
-    final suggestions = <(IconData, String, String)>[
-      (
-        Icons.account_tree_outlined,
-        l10n.suggestExploreTitle,
-        l10n.suggestExplorePrompt,
-      ),
-      (Icons.science_outlined, l10n.suggestTestsTitle, l10n.suggestTestsPrompt),
-      (
-        Icons.difference_outlined,
-        l10n.suggestDiffTitle,
-        l10n.suggestDiffPrompt,
-      ),
-      (Icons.checklist_rtl, l10n.suggestPlanTitle, l10n.suggestPlanPrompt),
-    ];
-    return LayoutBuilder(
-      builder: (context, c) {
-        // Two columns of cards once there's room for them; a phone-width pane
-        // keeps the single column (a 2-up grid there is unreadable).
-        final twoUp = c.maxWidth >= 560;
-        return Center(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
-            child: ConstrainedBox(
-              constraints: BoxConstraints(maxWidth: twoUp ? 620 : 460),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // A terminal mark, not a sparkle: this drives a real shell on
-                  // a real checkout.
-                  Container(
-                    width: 56,
-                    height: 56,
-                    alignment: Alignment.center,
-                    decoration: BoxDecoration(
-                      color: scheme.surfaceContainerHighest,
-                      borderRadius: BorderRadius.circular(kPanelRadius),
-                      border: Border.all(
-                        color: scheme.outlineVariant,
-                        width: 0.5,
-                      ),
-                    ),
-                    child: Icon(
-                      Icons.terminal_rounded,
-                      size: 28,
-                      color: scheme.primary,
-                    ),
-                  ),
-                  const SizedBox(height: 18),
-                  _newSessionHeadline(l10n),
-                  const SizedBox(height: 8),
-                  Text(
-                    l10n.newSessionSubtitle,
-                    textAlign: TextAlign.center,
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: scheme.onSurfaceVariant,
-                    ),
-                  ),
-                  const SizedBox(height: 26),
-                  if (twoUp)
-                    // Pair the cards into rows so the two in a row share a
-                    // height regardless of how long each prompt wraps.
-                    for (var i = 0; i < suggestions.length; i += 2) ...[
-                      IntrinsicHeight(
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            Expanded(child: _suggestionCard(suggestions[i])),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: i + 1 < suggestions.length
-                                  ? _suggestionCard(suggestions[i + 1])
-                                  : const SizedBox.shrink(),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                    ]
-                  else
-                    for (final s in suggestions) ...[
-                      _suggestionCard(s),
-                      const SizedBox(height: 10),
-                    ],
-                ],
+    return Center(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(24),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 460),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // The mark anchors the empty view so the switcher below reads
+              // as "where this conversation runs", not a stray dropdown.
+              const BrandLogo(size: 36),
+              const SizedBox(height: 14),
+              _projectSwitcher(
+                l10n,
+                label: (_cwd?.isNotEmpty ?? false)
+                    ? _projectName()
+                    : l10n.workOutsideProject,
+                style: Theme.of(
+                  context,
+                ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w500),
               ),
-            ),
+              if (_cwd?.trim().isNotEmpty ?? false) ...[
+                const SizedBox(height: 4),
+                Text(
+                  _cwd!.trim(),
+                  key: const Key('new-session-cwd'),
+                  textAlign: TextAlign.center,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontFamily: monoFontFamily,
+                    fontFamilyFallback: monoCjkFallback,
+                    fontSize: 12,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ],
           ),
-        );
-      },
+        ),
+      ),
     );
   }
 
-  /// The empty state's headline. With a project in effect it names it inline
-  /// and makes that word the project switcher, so changing what the next
-  /// conversation is about is one click on the thing being changed — rather
-  /// than three levels down a settings sheet.
-  Widget _newSessionHeadline(AppLocalizations l10n) {
-    final style = Theme.of(
-      context,
-    ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w600);
-    final project = _cwd?.trim();
-    if (project == null || project.isEmpty) {
-      // No project: nothing to name, so the plain question + a switcher below.
-      return Column(
-        children: [
-          Text(l10n.newSessionTitle, textAlign: TextAlign.center, style: style),
-          const SizedBox(height: 10),
-          _projectSwitcher(l10n, label: l10n.projectsSection, dimmed: true),
-        ],
-      );
+  void _focusNewComposer(int generation) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && generation == _threadLoadGeneration && _threadId == null) {
+        _inputFocus.requestFocus();
+      }
+    });
+  }
+
+  void _newConversationInProject(String? cwd, BuildContext paneContext) {
+    if (!mounted || !paneContext.mounted) return;
+    if (_threadId != null || _cwd != cwd) _openThread(null, cwd);
+    final scaffold = Scaffold.maybeOf(paneContext);
+    if (scaffold?.isDrawerOpen ?? false) {
+      _newDraftFocusAfterDrawer = _threadLoadGeneration;
+      scaffold!.closeDrawer();
+    } else {
+      _focusNewComposer(_threadLoadGeneration);
     }
-    final parts = l10n.newSessionTitleIn(_kProjectSlot).split(_kProjectSlot);
-    return Wrap(
-      alignment: WrapAlignment.center,
-      crossAxisAlignment: WrapCrossAlignment.center,
-      children: [
-        if (parts.isNotEmpty && parts.first.isNotEmpty)
-          Text(parts.first, style: style),
-        _projectSwitcher(l10n, label: _projectName(), style: style),
-        if (parts.length > 1 && parts[1].isNotEmpty)
-          Text(parts[1], style: style),
-      ],
+  }
+
+  void _selectProject(String? cwd) {
+    if (_threadId != null) return;
+    _projectSelectionGeneration++;
+    _openLoadDone(_kCwdSeed);
+    if (_cwd == cwd) return;
+    _openThread(null, cwd);
+    _focusNewComposer(_threadLoadGeneration);
+  }
+
+  Future<void> _browseDraftProject() async {
+    final generation = _threadLoadGeneration;
+    final picked = await showFolderPicker(
+      context,
+      serviceKey: widget.serviceKey,
+      initialPath: _cwd,
     );
+    if (mounted && generation == _threadLoadGeneration && picked != null) {
+      _selectProject(picked);
+    }
   }
 
   /// The project name rendered as a dropdown trigger, wired to [ProjectMenu].
@@ -6037,56 +7148,45 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     AppLocalizations l10n, {
     required String label,
     TextStyle? style,
-    bool dimmed = false,
   }) {
     final scheme = Theme.of(context).colorScheme;
     return ProjectMenu(
       projects: _knownProjects(),
       current: _cwd?.trim().isEmpty ?? true ? null : _cwd!.trim(),
-      onPick: (p) => setState(() => _cwd = p),
-      onBrowse: () async {
-        final picked = await showFolderPicker(
-          context,
-          serviceKey: widget.serviceKey,
-          initialPath: _cwd,
-        );
-        if (picked != null && mounted) setState(() => _cwd = picked);
-      },
-      onClear: () => setState(() => _cwd = null),
-      builder: (ctx, ctrl) => InkWell(
-        mouseCursor: clickable,
-        key: const Key('project-switcher-btn'),
-        borderRadius: BorderRadius.circular(8),
-        onTap: () => ctrl.isOpen ? ctrl.close() : ctrl.open(),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (dimmed) ...[
+      onPick: _selectProject,
+      onBrowse: _browseDraftProject,
+      onClear: () => _selectProject(null),
+      builder: (ctx, ctrl) => Tooltip(
+        message: _cwd ?? l10n.workOutsideProject,
+        triggerMode: TooltipTriggerMode.manual,
+        child: InkWell(
+          mouseCursor: clickable,
+          key: const Key('project-switcher-btn'),
+          borderRadius: BorderRadius.circular(8),
+          onTap: () => ctrl.isOpen ? ctrl.close() : ctrl.open(),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Flexible(
+                  child: Text(
+                    label,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style:
+                        style ??
+                        TextStyle(fontSize: 13, color: scheme.onSurfaceVariant),
+                  ),
+                ),
+                const SizedBox(width: 2),
                 Icon(
-                  Icons.folder_outlined,
-                  size: 16,
+                  Icons.expand_more,
+                  size: style == null ? 16 : 20,
                   color: scheme.onSurfaceVariant,
                 ),
-                const SizedBox(width: 6),
               ],
-              Text(
-                label,
-                style:
-                    style?.copyWith(
-                      decoration: TextDecoration.underline,
-                      decorationColor: scheme.outlineVariant,
-                    ) ??
-                    TextStyle(fontSize: 13, color: scheme.onSurfaceVariant),
-              ),
-              const SizedBox(width: 2),
-              Icon(
-                Icons.expand_more,
-                size: style == null ? 16 : 20,
-                color: scheme.onSurfaceVariant,
-              ),
-            ],
+            ),
           ),
         ),
       ),
@@ -6110,78 +7210,12 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     for (final p in _allProjects) {
       add(p);
     }
+    for (final p in _drafts.projects) {
+      add(p);
+    }
     return out;
   }
 
-  /// One tappable starter-prompt card; tapping prefills + focuses the composer.
-  Widget _suggestionCard((IconData, String, String) s) {
-    final (icon, title, prompt) = s;
-    final scheme = Theme.of(context).colorScheme;
-    return Material(
-      // The page ground under the wash: the container ladder is a translucent
-      // ink, and Material composites its colour against nothing, so a wash
-      // handed to it directly would paint as flat dark ink.
-      color: scheme.surface,
-      borderRadius: BorderRadius.circular(kPanelRadius),
-      child: InkWell(
-        mouseCursor: clickable,
-        borderRadius: BorderRadius.circular(kPanelRadius),
-        onTap: () => _useSuggestion(prompt),
-        child: Container(
-          decoration: BoxDecoration(
-            color: scheme.surfaceContainerLow,
-            border: Border.all(color: scheme.outlineVariant),
-            borderRadius: BorderRadius.circular(kPanelRadius),
-          ),
-          padding: const EdgeInsets.fromLTRB(14, 13, 14, 13),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Row(
-                children: [
-                  Icon(icon, size: 17, color: scheme.primary),
-                  const SizedBox(width: 9),
-                  Expanded(
-                    child: Text(
-                      title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.titleSmall,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 6),
-              Text(
-                prompt,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: scheme.onSurfaceVariant,
-                  height: 1.35,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  /// Prefill the composer with [prompt] and focus it so the user can review or
-  /// edit before sending.
-  void _useSuggestion(String prompt) {
-    _input.text = prompt;
-    _input.selection = TextSelection.collapsed(offset: prompt.length);
-    _inputFocus.requestFocus();
-  }
-
-  /// Left pane: this project's conversations + a "new session" button. Used
-  /// inline on wide screens and inside a [Drawer] on phones. Wrapped in a
-  /// [Builder] so the callbacks get a context *under* the Scaffold (a bare
-  /// `context` here is the State's, which is above the Scaffold this build
-  /// returns — `Scaffold.of` on it would throw).
   Widget _sessionsPane(AppLocalizations l10n, {bool inDrawer = false}) {
     final scheme = Theme.of(context).colorScheme;
     // Live set of running threads for this service, so other sessions show a
@@ -6206,7 +7240,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     }
     final conversations = known.values.toList()
       ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
-    final filtered = q.isEmpty
+    final matches = q.isEmpty
         ? conversations
         : conversations
               .where(
@@ -6221,12 +7255,32 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                     (widget.home && t.cwd.toLowerCase().contains(q)),
               )
               .toList(growable: false);
+    final allTree = SessionTree(
+      conversations,
+      (ThreadMeta t) => t.id,
+      (t) => t.parentThreadId,
+    );
+    final matchingIds = allTree.withAncestors(matches.map((t) => t.id));
+    final tree = SessionTree(
+      conversations.where((t) => matchingIds.contains(t.id)),
+      (ThreadMeta t) => t.id,
+      (t) => t.parentThreadId,
+    );
+    final filtered = tree.roots;
+    final activeParents = tree.withAncestors(running);
+    final reveal = tree.withAncestors([?_threadId])..remove(_threadId);
+    // Running state controls the group, not whether children are expanded.
+    final expandedParents = {
+      ..._expandedSessionParents,
+      ...reveal,
+      if (q.isNotEmpty) ...matchingIds,
+    }..removeAll(_collapsedSessionParents);
     final now = DateTime.now();
     final active = <ThreadMeta>[];
     final today = <ThreadMeta>[];
     final earlier = <ThreadMeta>[];
     for (final t in filtered) {
-      if (running.contains(t.id)) {
+      if (activeParents.contains(t.id)) {
         active.add(t);
       } else if (_isSameDay(t.updatedAt, now)) {
         today.add(t);
@@ -6265,6 +7319,33 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
             if (t.id != _threadId) _openThread(t.id, t.cwd);
           },
         );
+        Widget hierarchyRow(
+          ({ThreadMeta item, int depth}) row, {
+          bool showProject = false,
+        }) {
+          final t = row.item;
+          return SessionTreeRow(
+            id: t.id,
+            depth: row.depth,
+            childCount: tree.children[t.id]?.length ?? 0,
+            childSession: t.parentThreadId != null,
+            guardian: t.isGuardian,
+            expanded: expandedParents.contains(t.id),
+            onToggle: () => setState(() {
+              if (expandedParents.contains(t.id)) {
+                _expandedSessionParents.remove(t.id);
+                _collapsedSessionParents.add(t.id);
+              } else {
+                _collapsedSessionParents.remove(t.id);
+                _expandedSessionParents.add(t.id);
+              }
+            }),
+            child: _activityView
+                ? activityTile(t)
+                : tile(t, showProject: showProject),
+          );
+        }
+
         // Row BUILDERS, not built rows. The activity view's tiles each read a
         // thread summary (a full `thread/read` server-side) while building, so a
         // pre-built list would fire one per conversation the moment the view is
@@ -6272,6 +7353,11 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         // Deferring construction lets `ListView.builder` create only the rows it
         // actually shows, which is what makes the lazy fetch lazy.
         final rows = <Widget Function()>[];
+        // The thread rows in display order, for Ctrl+Tab. A plain field, not
+        // state: it only has to be current by the time a key is pressed.
+        final order = <ThreadMeta>[];
+        // Index in [rows] of the open conversation, for the locate button.
+        int? selectedRow;
         void group(
           String label,
           List<ThreadMeta> items, {
@@ -6279,14 +7365,22 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         }) {
           if (items.isEmpty) return;
           rows.add(() => _sectionLabel(label));
+          final visible = items
+              .expand((t) => tree.visible(t, expandedParents))
+              .toList(growable: false);
+          for (final row in visible) {
+            if (row.item.id == _threadId) {
+              selectedRow = rows.length + visible.indexOf(row);
+            }
+          }
+          order.addAll(visible.map((row) => row.item));
           rows.addAll(
             // Whichever view is on, one list means one row shape — an Active
             // group in compact rows above summarized ones would read as two
             // lists stapled together.
-            items.map(
-              (t) => _activityView
-                  ? () => activityTile(t)
-                  : () => tile(t, showProject: showProject),
+            visible.map(
+              (row) =>
+                  () => hierarchyRow(row, showProject: showProject),
             ),
           );
         }
@@ -6303,16 +7397,23 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           }
         } else if (widget.home) {
           // The home pane spans every project, so the rest reads as a tree:
-          // project → its conversations, newest project first, with the open
-          // project pinned to the top. Each project shows only its newest few
+          // project → its conversations, newest project first. Switching the
+          // open draft must not move these headings. Each shows its newest few
           // rows unless expanded, so many projects stay scannable at a glance.
           // A live search is the one case that shows everything: the user is
           // looking for a specific row, so hiding matches behind "show more"
           // would be actively unhelpful.
           final searching = q.isNotEmpty;
-          for (final p in _byProject(<ThreadMeta>[...today, ...earlier])) {
+          for (final p in _byProject(filtered)) {
+            final idle = p.threads
+                .where((t) => !activeParents.contains(t.id))
+                .toList();
             rows.add(
-              () => _projectSectionLabel(p.cwd, count: p.threads.length),
+              () => _projectSectionLabel(
+                p.cwd,
+                count: p.threads.length,
+                onNew: () => _newConversationInProject(p.cwd, ctx),
+              ),
             );
             // A search overrides a collapsed project: these rows already
             // matched the query, so hiding them would answer "no results" to a
@@ -6320,23 +7421,35 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
             if (!searching && _collapsedProjects.contains(p.cwd)) continue;
             final expanded = searching || _expandedProjects.contains(p.cwd);
             var shown = expanded
-                ? p.threads
-                : p.threads.take(_projectPeek).toList(growable: false);
+                ? idle
+                : idle.take(_projectPeek).toList(growable: false);
             // Never truncate away the conversation that's actually open: the
             // sidebar would show no selection at all, and the user loses where
             // they are. It's the newest rows that are worth previewing, so keep
             // them and append the open one rather than reordering.
-            if (!expanded && !shown.any((t) => t.id == _threadId)) {
-              final open = p.threads.where((t) => t.id == _threadId);
+            if (!expanded &&
+                !shown.any((t) => t.id == _threadId || reveal.contains(t.id))) {
+              final open = idle.where(
+                (t) => t.id == _threadId || reveal.contains(t.id),
+              );
               if (open.isNotEmpty) shown = [...shown, open.first];
             }
+            final visible = shown
+                .expand((t) => tree.visible(t, expandedParents))
+                .toList(growable: false);
+            for (final row in visible) {
+              if (row.item.id == _threadId) {
+                selectedRow = rows.length + visible.indexOf(row);
+              }
+            }
+            order.addAll(visible.map((row) => row.item));
             rows.addAll(
-              shown.map(
-                (t) =>
-                    () => tile(t, showProject: false),
+              visible.map(
+                (row) =>
+                    () => hierarchyRow(row),
               ),
             );
-            final hidden = p.threads.length - shown.length;
+            final hidden = idle.length - shown.length;
             if (!searching && (hidden > 0 || expanded)) {
               rows.add(
                 () => _projectPeekToggle(
@@ -6354,6 +7467,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           group(l10n.groupToday, today);
           group(l10n.groupEarlier, earlier);
         }
+        _visibleConversationOrder = order;
 
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -6379,7 +7493,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
             // strip already carries it).
             if (inDrawer && widget.home)
               Padding(
-                padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 10),
                 child: Row(
                   children: [
                     const BrandLogo(size: 20),
@@ -6400,10 +7514,71 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
             // Home only: which host this chat runs on, switchable when several
             // app services are available.
             if (widget.home) _serviceSwitcher(l10n),
-            // Header: title + a circular "new conversation" button (echoes the
-            // composer's send button).
+            // The primary action of a conversation list, as a row rather than
+            // a coloured disc: it reads as the first entry of the list it
+            // creates into, and keeps the accent free for live state.
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 14, 12, 2),
+              padding: const EdgeInsets.fromLTRB(8, 4, 8, 0),
+              child: _sidebarAction(
+                key: const Key('new-conversation-btn'),
+                icon: Icons.edit_square,
+                label: l10n.newConversation,
+                onTap: () => _newConversationInProject(_cwd, ctx),
+              ),
+            ),
+            // Quick filter — shown once there are enough conversations to scan.
+            if (_threads.length > 6)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(8, 4, 8, 0),
+                child: SizedBox(
+                  height: 32,
+                  child: TextField(
+                    key: const Key('conv-search'),
+                    focusNode: _convSearchFocus,
+                    onChanged: (v) => setState(() => _convQuery = v),
+                    style: const TextStyle(fontSize: 13),
+                    textAlignVertical: TextAlignVertical.center,
+                    decoration: InputDecoration(
+                      isDense: true,
+                      prefixIcon: Icon(
+                        Icons.search,
+                        size: 16,
+                        color: scheme.onSurfaceVariant,
+                      ),
+                      prefixIconConstraints: const BoxConstraints(
+                        minWidth: 32,
+                        minHeight: 32,
+                      ),
+                      hintText: l10n.searchConversations,
+                      hintStyle: TextStyle(
+                        fontSize: 13,
+                        color: scheme.onSurfaceVariant,
+                      ),
+                      filled: true,
+                      fillColor: scheme.onSurface.withValues(alpha: 0.05),
+                      contentPadding: EdgeInsets.zero,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(kRowRadius + 1),
+                        borderSide: BorderSide.none,
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(kRowRadius + 1),
+                        borderSide: BorderSide.none,
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(kRowRadius + 1),
+                        borderSide: BorderSide(color: scheme.outline),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            // List heading: what the list is grouped by, with the toggle that
+            // regroups it. Group by project, or by when it happened — two ways
+            // of asking "what was I doing", so it's a toggle rather than a
+            // replacement.
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 14, 8, 2),
               child: Row(
                 children: [
                   Expanded(
@@ -6411,121 +7586,116 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                       _activityView
                           ? l10n.activityView
                           : l10n.conversationsSection,
-                      style: Theme.of(context).textTheme.titleSmall,
-                    ),
-                  ),
-                  // Group by project, or by when it happened. Two ways of
-                  // asking "what was I doing", so it's a toggle rather than a
-                  // replacement — the project tree answers "where", this
-                  // answers "when".
-                  IconButton(
-                    key: const Key('activity-view-btn'),
-                    icon: Icon(
-                      _activityView
-                          ? Icons.folder_outlined
-                          : Icons.history_toggle_off,
-                      size: 18,
-                    ),
-                    tooltip: _activityView
-                        ? l10n.conversationsSection
-                        : l10n.activityView,
-                    visualDensity: VisualDensity.compact,
-                    onPressed: () =>
-                        setState(() => _activityView = !_activityView),
-                  ),
-                  const SizedBox(width: 2),
-                  Material(
-                    color: scheme.primary,
-                    shape: const CircleBorder(),
-                    child: InkWell(
-                      mouseCursor: clickable,
-                      key: const Key('new-conversation-btn'),
-                      customBorder: const CircleBorder(),
-                      onTap: () {
-                        closeDrawerIfOpen(ctx);
-                        _openThread(null, _cwd);
-                      },
-                      child: Tooltip(
-                        message: l10n.newConversation,
-                        child: Padding(
-                          padding: const EdgeInsets.all(6),
-                          child: Icon(
-                            Icons.add,
-                            size: 18,
-                            color: scheme.onPrimary,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            // Current project context.
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-              child: Row(
-                children: [
-                  Icon(
-                    Icons.folder_outlined,
-                    size: 13,
-                    color: scheme.onSurfaceVariant,
-                  ),
-                  const SizedBox(width: 5),
-                  Expanded(
-                    child: Text(
-                      _projectName(),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         fontSize: 12,
+                        fontWeight: FontWeight.w600,
                         color: scheme.onSurfaceVariant,
                       ),
+                    ),
+                  ),
+                  // Scroll the list back to the open conversation, wherever
+                  // the user has wandered off to.
+                  if (selectedRow != null)
+                    SizedBox(
+                      width: 26,
+                      height: 26,
+                      child: IconButton(
+                        key: const Key('locate-conversation-btn'),
+                        padding: EdgeInsets.zero,
+                        style: IconButton.styleFrom(
+                          minimumSize: const Size(26, 26),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(kRowRadius),
+                          ),
+                        ),
+                        icon: Icon(
+                          Icons.my_location_rounded,
+                          size: 15,
+                          color: signalColor(scheme),
+                        ),
+                        tooltip: l10n.locateConversation,
+                        onPressed: () => _revealConversationRow(selectedRow!),
+                      ),
+                    ),
+                  SizedBox(
+                    width: 26,
+                    height: 26,
+                    child: IconButton(
+                      key: const Key('activity-view-btn'),
+                      padding: EdgeInsets.zero,
+                      style: IconButton.styleFrom(
+                        minimumSize: const Size(26, 26),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(kRowRadius),
+                        ),
+                      ),
+                      icon: Icon(
+                        _activityView
+                            ? Icons.folder_outlined
+                            : Icons.history_toggle_off,
+                        size: 15,
+                        color: scheme.onSurfaceVariant,
+                      ),
+                      tooltip: _activityView
+                          ? l10n.conversationsSection
+                          : l10n.activityView,
+                      onPressed: () =>
+                          setState(() => _activityView = !_activityView),
                     ),
                   ),
                 ],
               ),
             ),
-            // Quick filter — shown once there are enough conversations to scan.
-            if (_threads.length > 6)
+            // A project-scoped pane names its one project; the home pane lists
+            // every project as headings instead.
+            if (!widget.home)
               Padding(
-                padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
-                child: TextField(
-                  key: const Key('conv-search'),
-                  onChanged: (v) => setState(() => _convQuery = v),
-                  style: const TextStyle(fontSize: 13),
-                  decoration: InputDecoration(
-                    isDense: true,
-                    prefixIcon: const Icon(Icons.search, size: 18),
-                    prefixIconConstraints: const BoxConstraints(
-                      minWidth: 34,
-                      minHeight: 34,
-                    ),
-                    hintText: l10n.searchConversations,
-                    hintStyle: TextStyle(
-                      fontSize: 13,
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.folder_outlined,
+                      size: 13,
                       color: scheme.onSurfaceVariant,
                     ),
-                    filled: true,
-                    fillColor: scheme.surfaceContainerHighest,
-                    contentPadding: const EdgeInsets.symmetric(vertical: 9),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(kControlRadius),
-                      borderSide: BorderSide.none,
+                    const SizedBox(width: 5),
+                    Expanded(
+                      child: Text(
+                        _projectName(),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
                     ),
-                  ),
+                  ],
                 ),
               ),
             Expanded(
               child: filtered.isEmpty
                   ? Center(
-                      child: Text(
-                        q.isEmpty ? l10n.noThreads : l10n.noMatchingThreads,
-                        style: TextStyle(color: scheme.outline),
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Text(
+                          q.isEmpty ? l10n.noThreads : l10n.noMatchingThreads,
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: 12.5,
+                            color: scheme.onSurfaceVariant,
+                          ),
+                        ),
                       ),
                     )
-                  : ListView.builder(
-                      padding: const EdgeInsets.fromLTRB(8, 2, 8, 8),
+                  // SuperListView so the locate button can reach a row that
+                  // has never been built (a long list lays rows out lazily).
+                  : SuperListView.builder(
+                      listController: _convListCtl,
+                      controller: _convScroll,
+                      padding: const EdgeInsets.fromLTRB(8, 0, 8, 10),
                       itemCount: rows.length,
                       itemBuilder: (_, i) => rows[i](),
                     ),
@@ -6540,7 +7710,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
             if (widget.home) ...[
               const Divider(height: 1),
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
                 // Each button keeps its own share of the row instead of its
                 // intrinsic width: the sidebar drags down to 200 px, where a
                 // fixed-width row of five (manage / sessions / logs / theme /
@@ -6624,7 +7794,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         ? scheme.error
         : w.fraction >= 0.75
         ? cautionColor(scheme)
-        : scheme.primary;
+        : scheme.onSurfaceVariant;
     final reset = _resetText(w, l10n);
     return InkWell(
       mouseCursor: clickable,
@@ -6678,7 +7848,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
               reset.isEmpty ? label : '$label · $reset',
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: TextStyle(fontSize: 10.5, color: scheme.outline),
+              style: TextStyle(fontSize: 10.5, color: scheme.onSurfaceVariant),
             ),
           ],
         ),
@@ -6704,93 +7874,89 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     required String route,
   }) => IconButton(
     key: Key(key),
-    icon: Icon(icon, size: 20),
+    icon: Icon(icon, size: 18),
     tooltip: tooltip,
-    visualDensity: VisualDensity.compact,
+    style: IconButton.styleFrom(
+      minimumSize: const Size(32, 32),
+      foregroundColor: Theme.of(context).colorScheme.onSurfaceVariant,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(kRowRadius),
+      ),
+    ),
     onPressed: () {
       if (Scaffold.maybeOf(ctx)?.isDrawerOpen ?? false) Navigator.pop(ctx);
       context.push(route);
     },
   );
 
-  /// Home-pane header row: the host currently serving this chat. Renders a
-  /// dropdown when more than one app service is connectable, else a static
-  /// identity row — either way the user always sees WHERE the conversation
-  /// runs.
-  Widget _serviceSwitcher(AppLocalizations l10n) {
+  /// A labelled action row in the sidebar, drawn like a conversation row so
+  /// the list reads as one column. Touch layouts grow it to a 44 px target.
+  Widget _sidebarAction({
+    required Key key,
+    required IconData icon,
+    required String label,
+    required VoidCallback onTap,
+  }) {
     final scheme = Theme.of(context).colorScheme;
-    String labelOf(ServiceEntry s) => '${s.device} · ${s.name}';
-    final entries = widget.services;
-    final multiple = entries.length > 1;
-    final current = entries.where((s) => s.key == widget.serviceKey).toList();
-    final currentLabel = current.isEmpty
-        ? _serviceLabelFromKey(widget.serviceKey)
-        : labelOf(current.first);
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 10, 12, 0),
-      child: Row(
-        children: [
-          Icon(Icons.computer, size: 16, color: scheme.primary),
-          const SizedBox(width: 8),
-          Expanded(
-            child: multiple
-                ? DropdownButtonHideUnderline(
-                    child: DropdownButton<String>(
-                      key: const Key('sidebar-service-switcher'),
-                      value: current.isEmpty ? null : widget.serviceKey,
-                      hint: Text(
-                        currentLabel,
-                        style: const TextStyle(fontSize: 13),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      isExpanded: true,
-                      isDense: true,
-                      style: TextStyle(fontSize: 13, color: scheme.onSurface),
-                      items: [
-                        for (final s in entries)
-                          DropdownMenuItem(
-                            value: s.key,
-                            child: Row(
-                              children: [
-                                Flexible(
-                                  child: Text(
-                                    labelOf(s),
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ),
-                                const SizedBox(width: 6),
-                                ProviderBadge.forKey(s.key),
-                              ],
-                            ),
-                          ),
-                      ],
-                      onChanged: (key) {
-                        if (key != null && key != widget.serviceKey) {
-                          widget.onSwitchService?.call(key);
-                        }
-                      },
+    return Material(
+      color: Colors.transparent,
+      borderRadius: BorderRadius.circular(kRowRadius),
+      child: InkWell(
+        key: key,
+        mouseCursor: clickable,
+        borderRadius: BorderRadius.circular(kRowRadius),
+        onTap: onTap,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(minHeight: isDesktop ? 32 : 44),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: Row(
+              children: [
+                Icon(icon, size: 16, color: scheme.onSurface),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                      color: scheme.onSurface,
                     ),
-                  )
-                : Row(
-                    children: [
-                      Flexible(
-                        child: Text(
-                          currentLabel,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 6),
-                      ProviderBadge.forKey(widget.serviceKey),
-                    ],
                   ),
+                ),
+              ],
+            ),
           ),
-        ],
+        ),
       ),
+    );
+  }
+
+  /// Home-pane header row: the host currently serving this chat, and the way
+  /// to change it. While a switch runs it names the host being reached, so
+  /// the user always sees WHERE the conversation runs and what is changing.
+  Widget _serviceSwitcher(AppLocalizations l10n) => HostSwitcher(
+    services: widget.services,
+    current: widget.serviceKey,
+    pending: widget.hostSwitch,
+    onPick: (key) => widget.onSwitchService?.call(key),
+  );
+
+  /// The switch strip above the conversation, while one runs or after it
+  /// fails. Null otherwise.
+  Widget? _hostSwitchBanner() {
+    final pending = widget.home ? widget.hostSwitch : null;
+    if (pending == null) return null;
+    final match = widget.services.where((s) => s.key == pending.target);
+    return HostSwitchBanner(
+      pending: pending,
+      targetLabel: match.isEmpty
+          ? _serviceLabelFromKey(pending.target)
+          : hostLabel(match.first),
+      onRetry: () => widget.onSwitchService?.call(pending.target),
+      onDismiss: () => widget.onDismissHostSwitch?.call(),
     );
   }
 
@@ -6810,9 +7976,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     return segs.isEmpty ? c : segs.last;
   }
 
-  /// Bucket [threads] by the project they run in, preserving each bucket's
-  /// incoming (recency) order. The currently-open project leads; the rest
-  /// follow by how recently anything in them was touched.
+  /// Preserve project recency when opening another project's draft.
   List<({String cwd, List<ThreadMeta> threads})> _byProject(
     List<ThreadMeta> threads,
   ) {
@@ -6820,17 +7984,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     for (final t in threads) {
       buckets.putIfAbsent(t.cwd, () => <ThreadMeta>[]).add(t);
     }
-    final current = _cwd?.trim();
-    final keys = buckets.keys.toList()
-      ..sort((a, b) {
-        if (a == current) return b == current ? 0 : -1;
-        if (b == current) return 1;
-        // Each bucket keeps the source order, so its head IS its newest thread.
-        return buckets[b]!.first.updatedAt.compareTo(
-          buckets[a]!.first.updatedAt,
-        );
-      });
-    return [for (final k in keys) (cwd: k, threads: buckets[k]!)];
+    return [
+      for (final entry in buckets.entries)
+        (cwd: entry.key, threads: entry.value),
+    ];
   }
 
   /// Drops the cached activity-view summary for [threadId], so the next build
@@ -6906,77 +8063,22 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     ];
   }
 
-  /// A project heading in the home pane's conversation tree: the folder is the
-  /// hit target, so clicking it collapses/expands the project's conversations
-  /// (codex-app style). [count] is how many rows sit under it, shown while
-  /// collapsed so a folded project still says how much it holds.
-  Widget _projectSectionLabel(String cwd, {required int count}) {
-    final scheme = Theme.of(context).colorScheme;
+  Widget _projectSectionLabel(
+    String cwd, {
+    required int count,
+    required VoidCallback onNew,
+  }) {
     final leaf = _leafOf(cwd);
-    final collapsed = _collapsedProjects.contains(cwd);
-    return Padding(
-      padding: const EdgeInsets.only(top: 10, bottom: 2),
-      child: Material(
-        color: Colors.transparent,
-        borderRadius: BorderRadius.circular(8),
-        child: InkWell(
-          mouseCursor: clickable,
-          key: Key('project-header-$cwd'),
-          borderRadius: BorderRadius.circular(8),
-          onTap: () => setState(() {
-            if (!_collapsedProjects.remove(cwd)) _collapsedProjects.add(cwd);
-          }),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(8, 5, 8, 5),
-            child: Row(
-              children: [
-                // A chevron, not a folder: it states which way the group will
-                // move when clicked, which is what the hit target actually
-                // does. The folder glyph only restated "this is a project",
-                // already obvious from the heading's weight and indent.
-                Icon(
-                  collapsed
-                      ? Icons.keyboard_arrow_right
-                      : Icons.keyboard_arrow_down,
-                  size: 18,
-                  color: scheme.onSurfaceVariant,
-                ),
-                const SizedBox(width: 3),
-                Expanded(
-                  child: Tooltip(
-                    message: cwd.trim().isEmpty ? '' : cwd,
-                    child: Text(
-                      leaf.isEmpty
-                          ? AppLocalizations.of(context).defaultFolder
-                          : leaf,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        // A project is the tree's top level, so it reads a
-                        // notch LARGER than the conversation rows beneath it
-                        // (which are 13) — not just bolder.
-                        fontSize: 14,
-                        fontWeight: FontWeight.w700,
-                        color: scheme.onSurface,
-                      ),
-                    ),
-                  ),
-                ),
-                if (collapsed) ...[
-                  const SizedBox(width: 6),
-                  Text(
-                    '$count',
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: scheme.onSurfaceVariant,
-                    ),
-                  ),
-                ],
-              ],
-            ),
-          ),
-        ),
-      ),
+    return ProjectSectionHeader(
+      key: ValueKey('project-section-$cwd'),
+      path: cwd,
+      name: leaf.isEmpty ? AppLocalizations.of(context).defaultFolder : leaf,
+      collapsed: _collapsedProjects.contains(cwd),
+      count: count,
+      onToggle: () => setState(() {
+        if (!_collapsedProjects.remove(cwd)) _collapsedProjects.add(cwd);
+      }),
+      onNewConversation: onNew,
     );
   }
 
@@ -6991,16 +8093,16 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   }) {
     final scheme = Theme.of(context).colorScheme;
     return Padding(
-      padding: const EdgeInsets.only(left: 22, bottom: 2),
+      padding: const EdgeInsets.only(left: 16, bottom: 2),
       child: Align(
         alignment: Alignment.centerLeft,
         child: Material(
           color: Colors.transparent,
-          borderRadius: BorderRadius.circular(6),
+          borderRadius: BorderRadius.circular(kRowRadius),
           child: InkWell(
             mouseCursor: clickable,
             key: Key('project-peek-$cwd'),
-            borderRadius: BorderRadius.circular(6),
+            borderRadius: BorderRadius.circular(kRowRadius),
             onTap: () => setState(() {
               if (!_expandedProjects.remove(cwd)) _expandedProjects.add(cwd);
             }),
@@ -7022,11 +8124,12 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
 
   /// A muted section header for the conversations pane (Active / Today / …).
   Widget _sectionLabel(String text) => Padding(
-    padding: const EdgeInsets.fromLTRB(8, 10, 8, 4),
+    padding: const EdgeInsets.fromLTRB(8, 12, 8, 4),
     child: Text(
       text,
       style: TextStyle(
         fontSize: 11.5,
+        fontWeight: FontWeight.w600,
         color: Theme.of(context).colorScheme.onSurfaceVariant,
       ),
     ),
@@ -7063,74 +8166,119 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         thread.title ?? (cleaned.isEmpty ? l10n.untitledThread : cleaned);
     // Cross-project pane rows show "project · time" so the user always knows
     // where a conversation lives.
-    final subtitle = [
+    // Facts about the row, ahead of the time: what is waiting in it, and where
+    // it lives when no project heading above says so.
+    final facts = [
+      if (thread.isVoice) l10n.voiceLive,
+      if (_drafts.hasDraft(thread.id)) l10n.draft,
+      if (_drafts.queuedCount(thread.id) > 0)
+        l10n.queuedCount(_drafts.queuedCount(thread.id)),
       if (project != null && project.isNotEmpty) project,
-      if (when.isNotEmpty) when,
-    ].join(' · ');
-    return Padding(
-      // Rows under a project heading are indented, so the folder reads as
-      // their parent rather than as a sibling label.
-      padding: EdgeInsets.only(
-        top: 1,
-        bottom: 1,
-        left: project == null && widget.home ? 8 : 0,
+    ];
+    final signal = signalColor(scheme);
+    // Desktop rows are one line — title, then the time at the trailing edge —
+    // the way a source list sits: twice as many conversations per screen, and
+    // the eye scans titles without a second line breaking the column. Touch
+    // keeps two lines, where the row height is a target and not a cost.
+    final dense = isDesktop;
+    final titleText = Text(
+      title,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: TextStyle(
+        fontSize: dense ? 13 : 14,
+        fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+        color: fg,
       ),
+    );
+    final factsText = facts.isEmpty
+        ? null
+        : Text(
+            facts.join(' · '),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(fontSize: 11.5, color: muted),
+          );
+    final trailing = running
+        ? Semantics(
+            label: l10n.running,
+            child: PulsingDot(color: signal, size: 7),
+          )
+        : when.isEmpty
+        ? null
+        : Text(
+            when,
+            maxLines: 1,
+            style: TextStyle(
+              fontSize: 11.5,
+              color: muted,
+              fontFeatures: const [FontFeature.tabularFigures()],
+            ),
+          );
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 0.5),
       child: Material(
         key: Key('conv-tile-${thread.id}'),
-        color: selected ? surfaceSelection(scheme) : Colors.transparent,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(kControlRadius),
-          side: BorderSide(
-            color: selected ? selectionBorder(scheme) : Colors.transparent,
-          ),
-        ),
-        child: InkWell(
-          mouseCursor: clickable,
-          borderRadius: BorderRadius.circular(kControlRadius),
-          onTap: onTap,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
-            child: Row(
-              children: [
-                // No leading glyph: every row is a conversation, so an icon per
-                // row was a column of identical noise. The project heading's
-                // chevron is the only icon the tree needs.
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        title,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 13.5,
-                          fontWeight: selected
-                              ? FontWeight.w600
-                              : FontWeight.w400,
-                          color: fg,
-                        ),
-                      ),
-                      if (subtitle.isNotEmpty) ...[
-                        const SizedBox(height: 2),
-                        Text(
-                          subtitle,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 11.5,
-                            color: running ? scheme.primary : muted,
+        // The open conversation carries the accent, so "where am I" is
+        // answerable at a glance in a long list: a tinted row with a short
+        // bar on its leading edge, like a macOS source list's selection.
+        color: selected ? selectedRowColor(scheme) : Colors.transparent,
+        shape: selected
+            ? RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(kRowRadius),
+                side: BorderSide.none,
+              )
+            : RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(kRowRadius),
+              ),
+        clipBehavior: Clip.antiAlias,
+        child: _SelectionBar(
+          visible: selected,
+          color: signalColor(scheme),
+          child: InkWell(
+            mouseCursor: clickable,
+            borderRadius: BorderRadius.circular(kRowRadius),
+            onTap: onTap,
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(
+                // Rows under a project heading line up with its name, so the
+                // folder reads as their parent.
+                project == null && widget.home ? 28 : 10,
+                dense ? 6 : 10,
+                10,
+                dense ? 6 : 10,
+              ),
+              child: Row(
+                children: [
+                  if (thread.isVoice) ...[
+                    Icon(Icons.graphic_eq, size: 15, color: muted),
+                    const SizedBox(width: 6),
+                  ],
+                  Expanded(
+                    child: dense
+                        ? Row(
+                            children: [
+                              Flexible(child: titleText),
+                              if (factsText != null) ...[
+                                const SizedBox(width: 6),
+                                Flexible(child: factsText),
+                              ],
+                            ],
+                          )
+                        : Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              titleText,
+                              if (factsText != null) ...[
+                                const SizedBox(height: 2),
+                                factsText,
+                              ],
+                            ],
                           ),
-                        ),
-                      ],
-                    ],
                   ),
-                ),
-                if (running) ...[
-                  const SizedBox(width: 8),
-                  PulsingDot(color: scheme.primary, size: 7),
+                  if (trailing != null) ...[const SizedBox(width: 8), trailing],
                 ],
-              ],
+              ),
             ),
           ),
         ),
@@ -7237,7 +8385,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                             fontSize: 11,
-                            color: running ? scheme.primary : muted,
+                            color: running ? signalColor(scheme) : muted,
                           ),
                         ),
                       ],
@@ -7246,7 +8394,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                 ),
                 if (running) ...[
                   const SizedBox(width: 8),
-                  PulsingDot(color: scheme.primary, size: 7),
+                  PulsingDot(color: signalColor(scheme), size: 7),
                 ],
               ],
             ),
@@ -7351,7 +8499,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                       )
                     : Text(
                         l10n.noChanges,
-                        style: TextStyle(fontSize: 12, color: scheme.outline),
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: scheme.onSurfaceVariant,
+                        ),
                       ),
               ),
               line(Icons.computer, _hostLabel(l10n)),
@@ -7460,10 +8611,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           ),
         ),
       ],
-      builder: (ctx, ctrl, _) => IconButton(
+      builder: (ctx, ctrl, _) => _chromeButton(
         key: const Key('env-panel-btn'),
         tooltip: l10n.envTitle,
-        icon: Icon(_reviewOpen ? Icons.difference : Icons.difference_outlined),
+        icon: _reviewOpen ? Icons.difference : Icons.difference_outlined,
         onPressed: () {
           if (ctrl.isOpen) {
             ctrl.close();
@@ -7515,7 +8666,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                     height: 15,
                     child: CircularProgressIndicator(
                       strokeWidth: 1.6,
-                      color: scheme.primary,
+                      color: signalColor(scheme),
                     ),
                   ),
                   tooltip: l10n.cancelDiffLoad,
@@ -7544,7 +8695,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
               ? Center(
                   child: Text(
                     l10n.reviewNoFiles,
-                    style: TextStyle(color: scheme.outline),
+                    style: TextStyle(color: scheme.onSurfaceVariant),
                   ),
                 )
               : Row(
@@ -7554,7 +8705,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                           ? Center(
                               child: Text(
                                 l10n.reviewPickFile,
-                                style: TextStyle(color: scheme.outline),
+                                style: TextStyle(
+                                  color: scheme.onSurfaceVariant,
+                                ),
                               ),
                             )
                           : DiffReviewView(
@@ -7592,19 +8745,23 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       decoration: BoxDecoration(
-        color: scheme.primaryContainer,
+        color: scheme.tertiaryContainer,
         borderRadius: BorderRadius.circular(kPanelRadius),
       ),
       padding: const EdgeInsets.fromLTRB(16, 10, 12, 10),
       child: Row(
         children: [
-          Icon(Icons.checklist_rtl, size: 18, color: scheme.onPrimaryContainer),
+          Icon(
+            Icons.checklist_rtl,
+            size: 18,
+            color: scheme.onTertiaryContainer,
+          ),
           const SizedBox(width: 10),
           Expanded(
             child: Text(
               l10n.planReadyTitle,
               style: TextStyle(
-                color: scheme.onPrimaryContainer,
+                color: scheme.onTertiaryContainer,
                 fontWeight: FontWeight.w500,
               ),
             ),
@@ -7666,6 +8823,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// processed (EXIF-bake / downscale / JPEG re-encode) on a background
   /// isolate before it becomes sendable, showing a spinner chip meanwhile.
   Future<void> _pickImages() async {
+    final draft = _draft;
     final l10n = AppLocalizations.of(context);
     final messenger = ToastMessenger.of(context);
     // Only IMAGE chips consume image slots — _attachments also holds document
@@ -7700,38 +8858,53 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     }
     setState(() {
       for (final file in picked) {
-        final att = _Attachment.image(id: _attachSeq++, name: file.name);
-        _attachments.add(att);
+        final att = _Attachment.image(
+          id: _drafts.nextAttachmentId++,
+          name: file.name,
+        );
+        draft.attachments.add(att);
         unawaited(_processAttachment(att, file));
       }
     });
+    _drafts.save(draft, changed: true);
   }
 
   Future<void> _processAttachment(_Attachment att, XFile file) async {
+    att.source = file;
     try {
       final bytes = await file.readAsBytes();
+      if (!_drafts.containsAttachment(att)) return;
       await _processImageBytes(att, bytes);
-    } catch (_) {
-      _failImageAttachment(att);
+    } catch (e) {
+      att.error = friendlyError(e);
+      _drafts.attachmentChanged(att);
     }
   }
 
-  /// Downscale/re-encode raw image bytes for [att] (shared by picked/dropped
-  /// files and pasted clipboard image bytes, which have no readable path).
   Future<void> _processImageBytes(_Attachment att, Uint8List bytes) async {
+    att.sourceBytes = bytes;
     try {
-      final processed = await processImage(bytes);
-      if (!mounted || !_attachments.contains(att)) return; // removed via ×
-      setState(() => att.processed = processed);
-    } catch (_) {
-      _failImageAttachment(att);
+      att.processed = await processImage(bytes);
+      att.sourceBytes = null;
+    } catch (e) {
+      att.error = friendlyError(e);
     }
+    _drafts.attachmentChanged(att);
   }
 
-  void _failImageAttachment(_Attachment att) {
-    if (!mounted || !_attachments.contains(att)) return;
-    setState(() => _attachments.remove(att));
-    showToastError(context, AppLocalizations.of(context).imagePickFailed);
+  void _retryAttachment(_Attachment att) {
+    if (att.error == null) return;
+    att.error = null;
+    _drafts.attachmentChanged(att);
+    if (att.source case final file?) {
+      unawaited(
+        att.isFile
+            ? _uploadAttachment(att, file)
+            : _processAttachment(att, file),
+      );
+    } else if (att.sourceBytes case final bytes?) {
+      unawaited(_processImageBytes(att, bytes));
+    }
   }
 
   /// Extensions the image pipeline can decode; a file picked with one of
@@ -7749,6 +8922,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// right away (spinner chip while in flight) and later travels as a path
   /// reference in the turn text; image files route to the image pipeline.
   Future<void> _pickFiles() async {
+    final draft = _draft;
     final l10n = AppLocalizations.of(context);
     final messenger = ToastMessenger.of(context);
     final remaining =
@@ -7766,7 +8940,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       }
       return;
     }
-    _addFiles(picked);
+    _addFiles(picked, draft: draft);
   }
 
   /// Route a batch of files (picked, DRAGGED-and-dropped, or PASTED as paths)
@@ -7775,12 +8949,14 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// image/file caps, surfacing a snackbar for anything dropped over-cap so a
   /// selection never silently vanishes. Shared by [_pickFiles], the drop
   /// target, and clipboard paste.
-  void _addFiles(List<XFile> picked) {
+  void _addFiles(List<XFile> picked, {_ComposerDraft? draft}) {
     if (picked.isEmpty || !mounted) return;
+    final destination = draft ?? _draft;
+    final attachments = destination.attachments;
     final l10n = AppLocalizations.of(context);
     final messenger = ToastMessenger.of(context);
     final remaining =
-        kMaxFilesPerMessage - _attachments.where((a) => a.isFile).length;
+        kMaxFilesPerMessage - attachments.where((a) => a.isFile).length;
     var files = 0;
     var filesDropped = 0;
     var imagesDropped = 0;
@@ -7791,24 +8967,31 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         // never let it be blank.
         final name = f.name.isNotEmpty ? f.name : 'file';
         if (_looksLikeImage(name)) {
-          if (_attachments.where((a) => !a.isFile).length <
+          if (attachments.where((a) => !a.isFile).length <
               kMaxImagesPerMessage) {
-            final att = _Attachment.image(id: _attachSeq++, name: name);
-            _attachments.add(att);
+            final att = _Attachment.image(
+              id: _drafts.nextAttachmentId++,
+              name: name,
+            );
+            attachments.add(att);
             unawaited(_processAttachment(att, f));
           } else {
             imagesDropped++;
           }
         } else if (files < remaining) {
           files++;
-          final att = _Attachment.file(id: _attachSeq++, name: name);
-          _attachments.add(att);
+          final att = _Attachment.file(
+            id: _drafts.nextAttachmentId++,
+            name: name,
+          );
+          attachments.add(att);
           unawaited(_uploadAttachment(att, f));
         } else {
           filesDropped++;
         }
       }
     });
+    _drafts.save(destination, changed: true);
     if (filesDropped > 0) {
       messenger.error(l10n.fileTooMany(kMaxFilesPerMessage));
     }
@@ -7842,24 +9025,24 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   Widget _dropOverlay(AppLocalizations l10n) {
     final scheme = Theme.of(context).colorScheme;
     return Container(
-      color: scheme.primary.withValues(alpha: 0.07),
+      color: signalColor(scheme).withValues(alpha: 0.07),
       alignment: Alignment.center,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
         decoration: BoxDecoration(
-          color: scheme.surfaceContainerHighest,
+          color: surfacePanel(scheme),
           borderRadius: BorderRadius.circular(kPanelRadius),
-          border: Border.all(color: scheme.primary, width: 2),
+          border: Border.all(color: signalColor(scheme), width: 2),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.file_download_outlined, color: scheme.primary),
+            Icon(Icons.file_download_outlined, color: signalColor(scheme)),
             const SizedBox(width: 10),
             Text(
               l10n.dropToAttach,
               style: TextStyle(
-                color: scheme.primary,
+                color: signalColor(scheme),
                 fontWeight: FontWeight.w600,
               ),
             ),
@@ -7891,11 +9074,12 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// add an attachment.
   Future<void> _onClipboardPaste() async {
     if (_sending || !mounted) return;
+    final draft = _draft;
     try {
       final img = await Pasteboard.image;
       if (img != null && img.isNotEmpty) {
         if (!mounted) return;
-        if (_attachments.where((a) => !a.isFile).length >=
+        if (draft.attachments.where((a) => !a.isFile).length >=
             kMaxImagesPerMessage) {
           showToastError(
             context,
@@ -7904,16 +9088,17 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           return;
         }
         final att = _Attachment.image(
-          id: _attachSeq++,
+          id: _drafts.nextAttachmentId++,
           name: 'pasted-image.png',
         );
-        setState(() => _attachments.add(att));
+        draft.attachments.add(att);
+        _drafts.save(draft, changed: true);
         unawaited(_processImageBytes(att, img));
         return;
       }
       final files = await Pasteboard.files();
       if (files.isNotEmpty && mounted) {
-        _addFiles([for (final p in files) XFile(p)]);
+        _addFiles([for (final p in files) XFile(p)], draft: draft);
       }
     } catch (_) {
       // Clipboard read is best-effort; a text paste already happened natively.
@@ -7923,21 +9108,134 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// Global key hook (desktop), active only while the composer is focused:
   ///   • Ctrl/Cmd+V → also attach a clipboard image/file (returns false so the
   ///     text field still handles ordinary text paste).
+  ///   • Enter      → send/queue, unless Shift is held or the IME is composing.
   ///   • Esc        → the interrupt / undo / dequeue state machine (returns true
   ///     when it acts, consuming the key).
   /// Gating on composer focus keeps Esc from firing while a dialog/picker is
   /// open (those steal focus), so their own Esc-to-dismiss still works.
   bool _onHardwareKey(KeyEvent e) {
-    if (e is! KeyDownEvent || !_inputFocus.hasFocus) return false;
+    if (e is KeyDownEvent && _onWindowShortcut(e.logicalKey)) return true;
+    if (e is! KeyDownEvent ||
+        (!_inputFocus.hasFocus && !_expandedInputFocus.hasFocus)) {
+      return false;
+    }
     final key = e.logicalKey;
+    // During a take the keys answer the take: Enter is done (the draft is
+    // reviewed before it is sent), Esc discards what the take wrote.
+    if (_dictation.taking) {
+      if (key == LogicalKeyboardKey.enter ||
+          key == LogicalKeyboardKey.numpadEnter) {
+        _finishDictation();
+        return true;
+      }
+      if (key == LogicalKeyboardKey.escape) {
+        _cancelDictation();
+        return true;
+      }
+    }
     if (key == LogicalKeyboardKey.keyV && _isCtrlOrCmdDown()) {
       unawaited(_onClipboardPaste());
       return false; // never consume — text paste must still fire
+    }
+    if (_editorOpen) return false;
+    if (key == LogicalKeyboardKey.enter ||
+        key == LogicalKeyboardKey.numpadEnter) {
+      if (_input.value.composing.isValid &&
+          !_input.value.composing.isCollapsed) {
+        return false;
+      }
+      if (HardwareKeyboard.instance.isShiftPressed) return false;
+      _submit();
+      return true;
     }
     if (key == LogicalKeyboardKey.escape) {
       return _onEscape();
     }
     return false;
+  }
+
+  /// Window-level desktop shortcuts, live wherever focus is while this screen
+  /// is the top route (a dialog or a pushed page above it silences them):
+  ///
+  /// - ⌘N / Ctrl+N: new conversation in the current project
+  /// - ⌘B / Ctrl+B (and ⌃⌘S, the macOS sidebar chord): toggle the sidebar
+  /// - ⌘L / Ctrl+L: focus the composer
+  /// - ⌘K / Ctrl+K: search conversations (opens the sidebar if hidden)
+  /// - Ctrl+Tab / Ctrl+Shift+Tab: next / previous conversation in the list
+  ///
+  /// Returns whether the key was consumed.
+  bool _onWindowShortcut(LogicalKeyboardKey key) {
+    if (!mounted || !(ModalRoute.of(context)?.isCurrent ?? true)) return false;
+    final keyboard = HardwareKeyboard.instance;
+    final mac = defaultTargetPlatform == TargetPlatform.macOS;
+    final primary = mac ? keyboard.isMetaPressed : keyboard.isControlPressed;
+    // Ctrl+Tab cycles on both platforms, as in browsers and editors.
+    if (key == LogicalKeyboardKey.tab &&
+        keyboard.isControlPressed &&
+        !keyboard.isAltPressed) {
+      return _stepConversation(keyboard.isShiftPressed ? -1 : 1);
+    }
+    if (mac &&
+        key == LogicalKeyboardKey.keyS &&
+        keyboard.isMetaPressed &&
+        keyboard.isControlPressed) {
+      _setLeftOpen(!_leftOpen);
+      return true;
+    }
+    // Ctrl+Shift+Space (Cmd+Shift+Space on macOS) toggles dictation from
+    // anywhere in the window, like a push-to-talk key.
+    if (key == LogicalKeyboardKey.space &&
+        primary &&
+        keyboard.isShiftPressed &&
+        !keyboard.isAltPressed &&
+        !_externalWriterMode &&
+        !_editorOpen) {
+      if (_dictation.take == DictationTake.listening) {
+        _finishDictation();
+      } else if (!_dictation.taking) {
+        _startDictation();
+      }
+      return true;
+    }
+    if (!primary || keyboard.isAltPressed || keyboard.isShiftPressed) {
+      return false;
+    }
+    if (key == LogicalKeyboardKey.keyN) {
+      _newConversationInProject(_cwd, context);
+      return true;
+    }
+    if (key == LogicalKeyboardKey.keyB) {
+      _setLeftOpen(!_leftOpen);
+      return true;
+    }
+    if (key == LogicalKeyboardKey.keyL) {
+      (_editorOpen ? _expandedInputFocus : _inputFocus).requestFocus();
+      return true;
+    }
+    if (key == LogicalKeyboardKey.keyK) {
+      if (!_leftOpen) _setLeftOpen(true);
+      // The field mounts with the sidebar; focus it once it is built.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _convSearchFocus.requestFocus();
+      });
+      return true;
+    }
+    return false;
+  }
+
+  /// Open the conversation [delta] rows away from the current one, in the
+  /// order the sidebar lists them. False when there is nowhere to go.
+  bool _stepConversation(int delta) {
+    final order = _visibleConversationOrder;
+    if (order.isEmpty) return false;
+    final at = order.indexWhere((t) => t.id == _threadId);
+    final next = at < 0
+        ? (delta > 0 ? 0 : order.length - 1)
+        : (at + delta) % order.length;
+    final target = order[next];
+    if (target.id == _threadId) return false;
+    _openThread(target.id, target.cwd);
+    return true;
   }
 
   /// Whether a Ctrl (Win/Linux) or Cmd (macOS) modifier is currently held.
@@ -7950,40 +9248,23 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   }
 
   Future<void> _uploadAttachment(_Attachment att, XFile file) async {
-    final l10n = AppLocalizations.of(context);
-    final messenger = ToastMessenger.of(context);
-    void rejectTooLarge() {
-      setState(() => _attachments.remove(att));
-      messenger.error(l10n.fileTooLarge(kMaxFileBytes ~/ (1024 * 1024)));
-    }
-
+    att.source = file;
+    final api = ref.read(bridgeApiProvider);
+    final service = widget.serviceKey;
+    final tooLarge = AppLocalizations.of(
+      context,
+    ).fileTooLarge(kMaxFileBytes ~/ (1024 * 1024));
     try {
-      // Enforce the cap BEFORE buffering: readAsBytes on a multi-GB pick
-      // would materialize the whole file (OOM-killing a phone) just to be
-      // rejected.
-      final size = await file.length();
-      if (!mounted || !_attachments.contains(att)) return; // removed via ×
-      if (size > kMaxFileBytes) {
-        rejectTooLarge();
-        return;
-      }
+      if (await file.length() > kMaxFileBytes) throw StateError(tooLarge);
+      if (!_drafts.containsAttachment(att)) return;
       final bytes = await file.readAsBytes();
-      if (!mounted || !_attachments.contains(att)) return;
-      if (bytes.length > kMaxFileBytes) {
-        // Belt-and-braces: length() can be stale/absent for synthetic files.
-        rejectTooLarge();
-        return;
-      }
-      final path = await ref
-          .read(bridgeApiProvider)
-          .metaUploadFile(widget.serviceKey, att.name, bytes);
-      if (!mounted || !_attachments.contains(att)) return;
-      setState(() => att.hostPath = path);
+      if (bytes.length > kMaxFileBytes) throw StateError(tooLarge);
+      if (!_drafts.containsAttachment(att)) return;
+      att.hostPath = await api.metaUploadFile(service, att.name, bytes);
     } catch (e) {
-      if (!mounted || !_attachments.contains(att)) return;
-      setState(() => _attachments.remove(att));
-      messenger.error('${l10n.fileUploadFailed}: ${friendlyError(e)}');
+      att.error = friendlyError(e);
     }
+    _drafts.attachmentChanged(att);
   }
 
   /// Horizontal strip of pending attachments above the composer input: a
@@ -8102,7 +9383,33 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                     .where((a) => !a.isFile && a.processed != null)
                     .length;
           final Widget body;
-          if (!att.ready) {
+          if (att.error != null) {
+            body = Tooltip(
+              message: '${att.name}: ${att.error}',
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    Icons.refresh,
+                    size: 18,
+                    color: Theme.of(context).colorScheme.error,
+                  ),
+                  Text(
+                    l10n.retry,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 12, height: 1.2),
+                  ),
+                  Text(
+                    att.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 10, height: 1.1),
+                  ),
+                ],
+              ),
+            );
+          } else if (!att.ready) {
             body = const Center(
               child: SizedBox(
                 width: 20,
@@ -8154,14 +9461,23 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
             key: Key('attachment-${att.id}'),
             removeKey: Key('attachment-remove-${att.id}'),
             removeTooltip: att.isFile ? l10n.removeFile : l10n.removeImage,
-            onRemove: () => setState(() => _attachments.remove(att)),
+            onRemove: () {
+              setState(() => _attachments.remove(att));
+              _saveDraft();
+            },
             // A staged image opens the same viewer a sent one does, so you can
             // check what you attached BEFORE sending it. A file has no pixels
             // to show, and an image still processing has none yet.
-            onTap: previewIndex < 0
+            onTap: att.error != null
+                ? () => _retryAttachment(att)
+                : previewIndex < 0
                 ? null
                 : () => ImageViewerPage.show(context, staged, previewIndex),
-            tapTooltip: previewIndex < 0 ? null : l10n.previewImage,
+            tapTooltip: att.error != null
+                ? l10n.retry
+                : previewIndex < 0
+                ? null
+                : l10n.previewImage,
             child: body,
           );
         },
@@ -8204,207 +9520,501 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       }
     }
 
-    // A 24 px pill is a phone control. On desktop the composer is a field in a
-    // window, so it squares up and sits tighter against the transcript.
     final doc = MediaQuery.sizeOf(context).width >= docLayoutWidth;
-    return SafeArea(
-      top: false,
-      child: Padding(
-        padding: doc
-            ? const EdgeInsets.fromLTRB(16, 4, 16, 14)
-            : const EdgeInsets.fromLTRB(12, 6, 12, 12),
-        // The card IS the input, so all of it takes a text cursor and focuses
-        // the field on click — the padding and the slack beside a short line
-        // shouldn't behave like dead chrome. The buttons inside sit deeper in
-        // the tree, so they keep their own click cursor and their own taps.
-        child: MouseRegion(
-          cursor: SystemMouseCursors.text,
-          child: GestureDetector(
-            behavior: HitTestBehavior.translucent,
-            onTap: () => _inputFocus.requestFocus(),
-            // The raised card: opaque so it lifts off the page, a hairline to
-            // hold the edge, and the design's soft offsetless shadow instead of
-            // a Material elevation.
-            child: Container(
-              decoration: BoxDecoration(
-                color: scheme.surfaceBright,
-                borderRadius: BorderRadius.circular(kComposerRadius),
-                border: Border.all(color: scheme.outline),
-                boxShadow: panelShadow(scheme),
-              ),
-              padding: const EdgeInsets.fromLTRB(16, 0, 12, 8),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Semantics(
-                    label: l10n.resizeComposer,
-                    value: '${inputHeight.round()}',
-                    increasedValue:
-                        '${(inputHeight + 24).clamp(minHeight, maxHeight).round()}',
-                    decreasedValue:
-                        '${(inputHeight - 24).clamp(minHeight, maxHeight).round()}',
-                    onIncrease: () => resize(inputHeight + 24, save: true),
-                    onDecrease: () => resize(inputHeight - 24, save: true),
-                    child: MouseRegion(
-                      cursor: SystemMouseCursors.resizeUpDown,
-                      child: GestureDetector(
-                        key: const Key('composer-resize-handle'),
-                        behavior: HitTestBehavior.opaque,
-                        onVerticalDragUpdate: (details) =>
-                            resize(inputHeight - details.delta.dy),
-                        onVerticalDragEnd: (_) => ref
-                            .read(uiPrefsProvider.notifier)
-                            .setComposerHeight(_composerHeight ?? inputHeight),
-                        onDoubleTap: () => resize(defaultHeight, save: true),
-                        child: Tooltip(
-                          message: l10n.resizeComposer,
-                          child: SizedBox(
-                            height: isDesktop ? 18 : 24,
-                            width: double.infinity,
-                            child: Center(
-                              child: Container(
-                                width: 28,
-                                height: 3,
-                                decoration: BoxDecoration(
-                                  color: scheme.outline,
-                                  borderRadius: BorderRadius.circular(2),
-                                ),
-                              ),
-                            ),
-                          ),
+    final touch = !isDesktop;
+    final grown =
+        (_composerHeight ?? prefs?.composerHeight ?? defaultHeight) >
+        defaultHeight;
+
+    // Fast and Supplement change how THIS turn is sent, so they sit with the
+    // other per-turn controls. FilterChips, compact, and only while relevant.
+    Widget turnChip({
+      required Key key,
+      required String tooltip,
+      required String label,
+      required bool selected,
+      required ValueChanged<bool>? onSelected,
+      IconData? icon,
+    }) => Tooltip(
+      message: tooltip,
+      child: FilterChip(
+        key: key,
+        avatar: icon == null ? null : Icon(icon, size: 15),
+        label: Text(label),
+        selected: selected,
+        showCheckmark: false,
+        visualDensity: VisualDensity.compact,
+        materialTapTargetSize: touch
+            ? MaterialTapTargetSize.padded
+            : MaterialTapTargetSize.shrinkWrap,
+        labelStyle: TextStyle(
+          fontSize: 12.5,
+          color: selected
+              ? scheme.onTertiaryContainer
+              : scheme.onSurfaceVariant,
+        ),
+        onSelected: onSelected,
+      ),
+    );
+    final modeChips = [
+      if (_fastAvailable)
+        turnChip(
+          key: const Key('fast-mode-btn'),
+          tooltip: l10n.fastModeHint,
+          label: l10n.fastMode,
+          icon: Icons.bolt,
+          selected: _effectiveServiceTier == 'priority',
+          onSelected: _sending
+              ? null
+              : (enabled) {
+                  setState(() {
+                    _serviceTier = enabled ? 'priority' : 'default';
+                    _serviceTierPickPending = true;
+                  });
+                  _rememberDefaults();
+                  _persistThreadConfig();
+                },
+        ),
+      if (_streaming)
+        turnChip(
+          key: const Key('supplement-toggle'),
+          tooltip: l10n.steerMessageHint,
+          label: l10n.steerMessage,
+          selected: _supplement,
+          onSelected: _sending
+              ? null
+              : (selected) => setState(() => _supplement = selected),
+        ),
+    ];
+
+    // The top edge of the card is the resize handle: a desktop user finds it
+    // by the cursor, the way a pane edge is found; touch gets a visible grip.
+    // Double-click / double-tap returns to the compact height.
+    final resizeEdge = Semantics(
+      label: l10n.resizeComposer,
+      value: '${inputHeight.round()}',
+      increasedValue:
+          '${(inputHeight + 24).clamp(minHeight, maxHeight).round()}',
+      decreasedValue:
+          '${(inputHeight - 24).clamp(minHeight, maxHeight).round()}',
+      onIncrease: () => resize(inputHeight + 24, save: true),
+      onDecrease: () => resize(inputHeight - 24, save: true),
+      child: MouseRegion(
+        cursor: SystemMouseCursors.resizeUpDown,
+        child: GestureDetector(
+          key: const Key('composer-resize-handle'),
+          behavior: HitTestBehavior.opaque,
+          onVerticalDragStart: (_) => _composerDragHeight.value = inputHeight,
+          onVerticalDragUpdate: (details) => _composerDragHeight.value =
+              ((_composerDragHeight.value ?? inputHeight) - details.delta.dy)
+                  .clamp(minHeight, maxHeight),
+          onVerticalDragEnd: (_) {
+            final dragged = _composerDragHeight.value;
+            _composerDragHeight.value = null;
+            if (dragged != null) resize(dragged, save: true);
+          },
+          onVerticalDragCancel: () {
+            final dragged = _composerDragHeight.value;
+            _composerDragHeight.value = null;
+            if (dragged != null) resize(dragged, save: true);
+          },
+          onDoubleTap: () => resize(defaultHeight, save: true),
+          child: Tooltip(
+            message: l10n.resizeComposer,
+            waitDuration: const Duration(milliseconds: 900),
+            child: SizedBox(
+              height: touch ? 18 : 12,
+              width: double.infinity,
+              child: touch
+                  ? Center(
+                      child: Container(
+                        width: 32,
+                        height: 4,
+                        decoration: BoxDecoration(
+                          color: scheme.outlineVariant,
+                          borderRadius: BorderRadius.circular(2),
                         ),
                       ),
-                    ),
-                  ),
-                  if (_queue.isNotEmpty) ...[
-                    _queuedStrip(l10n),
-                    const SizedBox(height: 8),
-                  ],
-                  if (_attachments.isNotEmpty) ...[
-                    _attachmentStrip(l10n),
-                    const SizedBox(height: 8),
-                  ],
-                  // Desktop: where this turn will land — project, host, branch —
-                  // sits above the field the turn is typed into. A phone has no
-                  // room for it and shows the same facts in the status bar.
-                  if (doc) ...[
-                    _composerContext(l10n),
-                    const SizedBox(height: 8),
-                  ],
-                  SizedBox(
-                    key: const Key('composer-input-area'),
-                    height: inputHeight,
-                    child: TextField(
-                      key: const Key('composer-input'),
-                      controller: _input,
-                      focusNode: _inputFocus,
-                      minLines: null,
-                      maxLines: null,
-                      expands: true,
-                      textInputAction: TextInputAction.send,
-                      onSubmitted: (_) => _submit(),
-                      style: inputStyle,
-                      decoration: InputDecoration(
-                        filled: false,
-                        hintText: l10n.messageHint,
-                        border: InputBorder.none,
-                        isCollapsed: true,
-                        // Override the shared form-field padding inside this compact card.
-                        contentPadding: EdgeInsets.zero,
-                      ),
-                    ),
-                  ),
-                  if (_fastAvailable || _streaming) ...[
-                    const SizedBox(height: 4),
-                    Wrap(
-                      spacing: 8,
-                      children: [
-                        if (_fastAvailable)
-                          Tooltip(
-                            message: l10n.fastModeHint,
-                            child: FilterChip(
-                              key: const Key('fast-mode-btn'),
-                              avatar: const Icon(Icons.bolt, size: 18),
-                              label: Text(l10n.fastMode),
-                              selected: _effectiveServiceTier == 'priority',
-                              onSelected: _sending
-                                  ? null
-                                  : (enabled) {
-                                      setState(() {
-                                        _serviceTier = enabled
-                                            ? 'priority'
-                                            : 'default';
-                                        _serviceTierPickPending = true;
-                                      });
-                                      _rememberDefaults();
-                                      _persistThreadConfig();
-                                    },
-                            ),
-                          ),
-                        if (_streaming)
-                          Tooltip(
-                            message: l10n.steerMessageHint,
-                            child: FilterChip(
-                              key: const Key('supplement-toggle'),
-                              label: Text(l10n.steerMessage),
-                              selected: _supplement,
-                              onSelected: _sending
-                                  ? null
-                                  : (selected) =>
-                                        setState(() => _supplement = selected),
-                            ),
-                          ),
-                        if (_streaming)
-                          IconButton.filled(
-                            key: const Key('stop-btn'),
-                            onPressed: _interrupt,
-                            tooltip: l10n.stop,
-                            icon: const Icon(Icons.stop_rounded, size: 20),
-                          ),
-                      ],
-                    ),
-                  ],
-                  const SizedBox(height: 8),
-                  // One row at every width. Attachments collapse into a single `+`
-                  // menu and the five wrapping config pills collapse into two
-                  // chips, so a 360 px phone lays out exactly like the desktop —
-                  // no wrapping, no expand/collapse mode to get stuck in.
-                  LayoutBuilder(
-                    builder: (context, constraints) => Row(
-                      children: [
-                        _attachMenu(l10n),
-                        const SizedBox(width: 2),
-                        // Bound long permission labels while leaving the model
-                        // control the remaining space up to the send button.
-                        if (_caps.permissionPresets) ...[
-                          ConstrainedBox(
-                            constraints: BoxConstraints(
-                              maxWidth: constraints.maxWidth * 0.34,
-                            ),
-                            child: _permissionChip(l10n),
-                          ),
-                          const SizedBox(width: 6),
-                        ],
-                        // Right-aligned next to send, and Flexible so a long model
-                        // name ellipsizes instead of pushing the row into overflow.
-                        Expanded(
-                          child: Align(
-                            alignment: Alignment.centerRight,
-                            child: _modelChip(l10n),
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                        _sendButton(),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
+                    )
+                  : null,
             ),
           ),
         ),
       ),
+    );
+
+    // Small square tools beside the field: expand to the full editor, and
+    // return to the compact height once the user has grown it.
+    Widget fieldTool({
+      required Key key,
+      required String tooltip,
+      required IconData icon,
+      required VoidCallback onPressed,
+    }) => IconButton(
+      key: key,
+      tooltip: tooltip,
+      onPressed: onPressed,
+      icon: Icon(icon, size: 16),
+      style: IconButton.styleFrom(
+        minimumSize: touch ? const Size(44, 44) : const Size(28, 28),
+        fixedSize: touch ? null : const Size(28, 28),
+        padding: EdgeInsets.zero,
+        foregroundColor: scheme.onSurfaceVariant,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(kRowRadius),
+        ),
+      ),
+    );
+
+    final field = NotificationListener<SizeChangedLayoutNotification>(
+      onNotification: _composerSizeChanged,
+      child: SizeChangedLayoutNotifier(
+        child: ValueListenableBuilder<double?>(
+          valueListenable: _composerDragHeight,
+          builder: (context, dragged, input) => ConstrainedBox(
+            key: const Key('composer-input-area'),
+            constraints: BoxConstraints(
+              minHeight: dragged ?? inputHeight,
+              maxHeight: math.max(dragged ?? 0, maxHeight),
+            ),
+            child: input,
+          ),
+          child: TextField(
+            key: const Key('composer-input'),
+            controller: _input,
+            focusNode: _inputFocus,
+            readOnly: _editorOpen,
+            minLines: 1,
+            maxLines: null,
+            keyboardType: TextInputType.multiline,
+            textInputAction: TextInputAction.newline,
+            onSubmitted: _isDesktop
+                ? (_) {
+                    if (!_input.value.composing.isValid ||
+                        _input.value.composing.isCollapsed) {
+                      _submit();
+                    }
+                  }
+                : null,
+            style: inputStyle,
+            cursorColor: scheme.onSurface,
+            decoration: InputDecoration(
+              filled: false,
+              hintText: _dictationTake != DictationTake.idle
+                  ? l10n.dictationListening
+                  : _streaming
+                  ? (_supplement ? l10n.steerMessage : l10n.queueNextTurn)
+                  : l10n.messageHint,
+              hintStyle: inputStyle.copyWith(color: scheme.onSurfaceVariant),
+              border: InputBorder.none,
+              isCollapsed: true,
+              // Override the shared form-field padding inside this compact card.
+              contentPadding: EdgeInsets.zero,
+            ),
+          ),
+        ),
+      ),
+    );
+
+    // The turn-mode chips ride in the toolbar only where the card has room for
+    // them beside the permission and model pills (~180 px each); narrower
+    // cards give them their own line above.
+    Widget composerBody(bool inlineModes) {
+      // The toolbar's fixed-width members — attach, dictate, voice, send, the
+      // stop button while streaming — plus the gaps between them.
+      double fixedToolbarWidth(bool dictateInline) =>
+          (touch ? 48.0 : 30.0) +
+          (dictateInline ? (touch ? 40.0 : 32.0) + 2 : 0) +
+          (touch ? 40.0 : 32.0) +
+          (touch ? 48.0 : 32.0) +
+          (_streaming ? (touch ? 48.0 : 32.0) + 6 : 0) +
+          10;
+      final toolbar = LayoutBuilder(
+        // One row at every width. Attachments collapse into a single `+` menu
+        // and the config pills into two chips, so a 360 px phone lays out like
+        // the desktop — no wrapping, no expand/collapse mode to get stuck in.
+        builder: (context, constraints) {
+          // On a card too narrow for it beside the pills (a phone, the review
+          // pane open) the microphone lives in the `+` menu; during a take it
+          // always shows, since it is the done button.
+          final dictateInline =
+              constraints.maxWidth >= _dictationInlineWidth ||
+              _dictationTake != DictationTake.idle;
+          final fixed = fixedToolbarWidth(dictateInline);
+          return Row(
+            children: [
+              _attachMenu(l10n),
+              const SizedBox(width: 2),
+              // Bound long permission labels, and never so wide that the model
+              // pill is left less than its icon-and-chevron minimum: on a narrow
+              // card (the review pane open) both ellipsize instead of
+              // overflowing.
+              if (_caps.permissionPresets)
+                ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxWidth: math.max(
+                      touch ? 44.0 : 34.0,
+                      math.min(
+                        constraints.maxWidth * 0.34,
+                        constraints.maxWidth - fixed - 96,
+                      ),
+                    ),
+                  ),
+                  child: _permissionChip(l10n),
+                ),
+              if (inlineModes)
+                for (final chip in modeChips) ...[
+                  const SizedBox(width: 4),
+                  chip,
+                ],
+              const SizedBox(width: 4),
+              // Right-aligned next to send, taking whatever is left.
+              Expanded(
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  child: _modelChip(l10n),
+                ),
+              ),
+              // Speech to text into the draft. Teal and a microphone, where the
+              // live voice call beside it is the blue waveform: two different
+              // things, and they look it.
+              if (dictateInline) ...[
+                DictationButton(
+                  line: _dictation,
+                  onStart: _startDictation,
+                  onFinish: _finishDictation,
+                  // A live call already holds the microphone.
+                  enabled: !_voice.busy && !_externalWriterMode,
+                  size: touch ? 40 : 32,
+                  iconSize: touch ? 22 : 18,
+                ),
+                const SizedBox(width: 2),
+              ],
+              IconButton(
+                key: const Key('voice-start'),
+                tooltip: _isVoiceThread
+                    ? l10n.voiceStart
+                    : l10n.voiceNewSession,
+                // A take in progress finishes first; the call needs the mic.
+                onPressed: _canStartVoice && !_dictation.taking
+                    ? _startVoice
+                    : null,
+                icon: Icon(Icons.graphic_eq, size: touch ? 22 : 18),
+                // 40 px on touch: two buttons beside send must still leave
+                // the model pill room on a 320 px phone.
+                style: IconButton.styleFrom(
+                  minimumSize: Size.square(touch ? 40 : 32),
+                  fixedSize: Size.square(touch ? 40 : 32),
+                  padding: EdgeInsets.zero,
+                ),
+              ),
+              const SizedBox(width: 4),
+              if (_streaming) ...[_stopButton(l10n), const SizedBox(width: 6)],
+              _sendButton(),
+            ],
+          );
+        },
+      );
+
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          resizeEdge,
+          Padding(
+            padding: EdgeInsets.fromLTRB(
+              touch ? 12 : 14,
+              0,
+              touch ? 8 : 10,
+              touch ? 6 : 8,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (_queue.isNotEmpty) ...[
+                  _queuedStrip(l10n),
+                  const SizedBox(height: 8),
+                ],
+                if (_attachments.isNotEmpty) ...[
+                  _attachmentStrip(l10n),
+                  const SizedBox(height: 8),
+                ],
+                // A take's strip: the field stays editable below it, and the
+                // words appear in the field itself as they are spoken.
+                AnimatedSize(
+                  duration: Motion.of(context, Motion.fast),
+                  curve: Motion.move,
+                  alignment: Alignment.topCenter,
+                  child: _dictationTake == DictationTake.idle
+                      ? const SizedBox(width: double.infinity)
+                      : Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: DictationBar(
+                            line: _dictation,
+                            onFinish: _finishDictation,
+                            onCancel: _cancelDictation,
+                            showKeys: _isDesktop,
+                          ),
+                        ),
+                ),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Padding(
+                        padding: EdgeInsets.only(
+                          left: touch ? 4 : 2,
+                          top: touch ? 2 : 0,
+                        ),
+                        child: field,
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    // Pinned to the field's first line, so it never moves as
+                    // the draft grows.
+                    Transform.translate(
+                      offset: Offset(0, touch ? -10 : -4),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          fieldTool(
+                            key: const Key('composer-expand'),
+                            tooltip: l10n.expandComposer,
+                            icon: Icons.open_in_full,
+                            onPressed: _expandComposer,
+                          ),
+                          if (grown)
+                            fieldTool(
+                              key: const Key('composer-reset-height'),
+                              tooltip: l10n.resetComposerHeight,
+                              icon: Icons.unfold_less,
+                              onPressed: () =>
+                                  resize(defaultHeight, save: true),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                if (!inlineModes && modeChips.isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  Wrap(spacing: 6, runSpacing: 4, children: modeChips),
+                ],
+                SizedBox(height: touch ? 4 : 8),
+                toolbar,
+              ],
+            ),
+          ),
+        ],
+      );
+    }
+
+    final card = ListenableBuilder(
+      listenable: _inputFocus,
+      builder: (context, child) {
+        // The edge says what the composer is doing: firmer while focused, the
+        // live signal while the agent is answering (anything sent now queues).
+        // A take outranks everything: the card is where the voice is going.
+        final edge = _dictationTake != DictationTake.idle
+            ? dictationColor(scheme).withValues(alpha: 0.7)
+            : _streaming
+            ? signalColor(scheme).withValues(alpha: 0.55)
+            : _inputFocus.hasFocus
+            ? scheme.outline
+            : scheme.outlineVariant;
+        return AnimatedContainer(
+          duration: Motion.of(context, Motion.fast),
+          curve: Motion.move,
+          decoration: BoxDecoration(
+            color: surfacePanel(scheme),
+            borderRadius: BorderRadius.circular(kComposerRadius),
+            border: Border.all(color: edge),
+            boxShadow: panelShadow(scheme, blur: 16),
+          ),
+          child: child,
+        );
+      },
+      child: LayoutBuilder(
+        builder: (context, box) =>
+            composerBody(doc && modeChips.isNotEmpty && box.maxWidth >= 640),
+      ),
+    );
+
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: doc
+            ? const EdgeInsets.fromLTRB(16, 4, 16, 10)
+            : const EdgeInsets.fromLTRB(10, 4, 10, 10),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // The card IS the input, so all of it takes a text cursor and
+            // focuses the field on click — the padding beside a short line
+            // shouldn't behave like dead chrome. The buttons inside sit deeper
+            // in the tree, so they keep their own click cursor and taps.
+            MouseRegion(
+              cursor: SystemMouseCursors.text,
+              child: GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onTap: () => _inputFocus.requestFocus(),
+                child: card,
+              ),
+            ),
+            // Desktop: where this turn will land — host, branch — and how to
+            // send it, as a footnote under the card rather than chrome inside
+            // it. A phone shows the same facts in the status bar.
+            if (doc)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(6, 6, 6, 0),
+                // The keyboard hint is the first thing to go when the column
+                // narrows (the review pane is open); the context facts shrink
+                // after it and ellipsize rather than overflow.
+                child: LayoutBuilder(
+                  builder: (context, box) => Row(
+                    children: [
+                      Expanded(child: _composerContext(l10n)),
+                      if (_isDesktop && box.maxWidth >= 520) ...[
+                        const SizedBox(width: 12),
+                        Text(
+                          l10n.composerKeyboardHint,
+                          maxLines: 1,
+                          style: TextStyle(
+                            fontSize: 11.5,
+                            color: scheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Interrupt the running turn. An ink square, the shape every player and
+  /// recorder uses for stop, so it can't be mistaken for send beside it.
+  Widget _stopButton(AppLocalizations l10n) {
+    final scheme = Theme.of(context).colorScheme;
+    final touch = !isDesktop;
+    return IconButton.filled(
+      key: const Key('stop-btn'),
+      onPressed: _interrupt,
+      tooltip: l10n.stop,
+      style: IconButton.styleFrom(
+        minimumSize: touch ? const Size(40, 40) : const Size(32, 32),
+        fixedSize: touch ? const Size(40, 40) : const Size(32, 32),
+        padding: EdgeInsets.zero,
+        backgroundColor: scheme.surfaceContainerHighest,
+        foregroundColor: scheme.onSurface,
+        shape: const CircleBorder(),
+      ),
+      icon: const Icon(Icons.stop_rounded, size: 18),
     );
   }
 
@@ -8431,7 +10041,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
               height: 13,
               child: CircularProgressIndicator(
                 strokeWidth: 1.6,
-                color: scheme.primary,
+                color: scheme.onSurfaceVariant,
               ),
             )
           else
@@ -8479,42 +10089,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       );
     }
 
-    // A conversation's working directory is fixed once the thread exists, so
-    // the project is only switchable before the first turn — and only THEN is
-    // it worth a chip here. Once the thread exists the name is pure repetition:
-    // the sidebar already heads the conversation's project, and a label you
-    // can't act on adds nothing above the field you're typing in.
-    final project = _threadId == null
-        ? ProjectMenu(
-            projects: _knownProjects(),
-            current: (_cwd?.trim().isEmpty ?? true) ? null : _cwd!.trim(),
-            onPick: (p) => setState(() => _cwd = p),
-            onBrowse: () async {
-              final picked = await showFolderPicker(
-                context,
-                serviceKey: widget.serviceKey,
-                initialPath: _cwd,
-              );
-              if (picked != null && mounted) setState(() => _cwd = picked);
-            },
-            onClear: () => setState(() => _cwd = null),
-            builder: (ctx, ctrl) => chip(
-              Icons.folder_outlined,
-              _projectName(),
-              key: const Key('composer-project-chip'),
-              tip: l10n.switchProjectTip,
-              onTap: () => ctrl.isOpen ? ctrl.close() : ctrl.open(),
-            ),
-          )
-        : null;
-
     return Row(
       children: [
-        if (project != null) ...[
-          Flexible(child: project),
-          const SizedBox(width: 10),
-        ],
-        chip(Icons.computer, _hostLabel(l10n)),
+        Flexible(child: chip(Icons.computer, _hostLabel(l10n))),
         if (_branch != null) ...[
           const SizedBox(width: 10),
           Flexible(
@@ -8555,9 +10132,19 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     key: const Key('attach-menu-btn'),
     tooltip: l10n.addAttachment,
     enabled: !_sending,
+    style: isDesktop
+        ? IconButton.styleFrom(
+            minimumSize: const Size(30, 30),
+            fixedSize: const Size(30, 30),
+            padding: EdgeInsets.zero,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(kControlRadius),
+            ),
+          )
+        : null,
     icon: Icon(
       Icons.add,
-      size: 22,
+      size: isDesktop ? 19 : 22,
       color: Theme.of(context).colorScheme.onSurfaceVariant,
     ),
     // `_` on purpose: an item's `onTap` fires *after* `Navigator.pop`, so the
@@ -8582,12 +10169,28 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           onTap: () => showFileBrowser(context, serviceKey: widget.serviceKey),
           child: _menuRow(Icons.folder_open_outlined, l10n.hostFiles),
         ),
+      // Always here too, so a card too narrow for the inline microphone
+      // still has dictation.
+      PopupMenuItem<void>(
+        key: const Key('dictate-menu'),
+        enabled: !_voice.busy && !_dictation.taking && !_externalWriterMode,
+        onTap: _startDictation,
+        child: _menuRow(Icons.mic_none_rounded, l10n.dictate),
+      ),
     ],
   );
 
+  /// Narrowest composer card that keeps the dictation microphone inline;
+  /// below it the `+` menu carries it.
+  static const _dictationInlineWidth = 440.0;
+
   Widget _menuRow(IconData icon, String label) => Row(
     children: [
-      Icon(icon, size: 19, color: Theme.of(context).colorScheme.primary),
+      Icon(
+        icon,
+        size: 17,
+        color: Theme.of(context).colorScheme.onSurfaceVariant,
+      ),
       const SizedBox(width: 12),
       Text(label),
     ],
@@ -8680,7 +10283,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
               padding: const EdgeInsets.fromLTRB(14, 2, 14, 8),
               child: Text(
                 l10n.modelDefault,
-                style: TextStyle(fontSize: 12.5, color: scheme.outline),
+                style: TextStyle(
+                  fontSize: 12.5,
+                  color: scheme.onSurfaceVariant,
+                ),
               ),
             )
           else
@@ -8700,28 +10306,35 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                         mouseCursor: clickable,
                         key: Key('model-menu-item-${m.id}'),
                         onTap: () => _applyModel(m),
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 14,
-                            vertical: 8,
-                          ),
-                          child: Row(
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  m.displayName,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(fontSize: 13),
+                        child: AnimatedContainer(
+                          duration: Motion.of(context, Motion.medium),
+                          curve: Motion.move,
+                          color: m.id == selectedId
+                              ? accentWash(scheme)
+                              : accentWash(scheme).withValues(alpha: 0),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 14,
+                              vertical: 8,
+                            ),
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    m.displayName,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(fontSize: 13),
+                                  ),
                                 ),
-                              ),
-                              if (m.id == selectedId)
-                                Icon(
-                                  Icons.check,
-                                  size: 16,
-                                  color: scheme.primary,
-                                ),
-                            ],
+                                if (m.id == selectedId)
+                                  Icon(
+                                    Icons.check,
+                                    size: 16,
+                                    color: scheme.tertiary,
+                                  ),
+                              ],
+                            ),
                           ),
                         ),
                       ),
@@ -8789,11 +10402,11 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
               // widen — the panel as the level changes.
               SizedBox(
                 width: 52,
-                child: Text(
+                child: AnimatedLabel(
                   current?.label(l10n) ?? l10n.runtimeEffortModelDefault,
                   textAlign: TextAlign.right,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+                  alignment: AlignmentDirectional.centerEnd,
+                  resize: false,
                   style: TextStyle(
                     fontSize: 12.5,
                     fontWeight: FontWeight.w600,
@@ -8987,24 +10600,48 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     builder: (context, value, _) {
       final l10n = AppLocalizations.of(context);
       final hasDraft = value.text.trim().isNotEmpty || _attachments.isNotEmpty;
-      if (_streaming && !hasDraft) return const SizedBox.shrink();
       final canSend =
           !_sending &&
           !_reconnecting &&
           !_connectionLost &&
           !_historySyncing &&
+          !_restoringSettings &&
           !_showingCachedHistory &&
           !_attachments.any((a) => !a.ready) &&
           hasDraft;
-      return IconButton.filled(
-        key: const Key('send-btn'),
-        onPressed: canSend ? _submit : null,
-        tooltip: _streaming
-            ? (_supplement ? l10n.steerMessage : l10n.queueNextTurn)
-            : null,
-        icon: Icon(
-          _streaming && !_supplement ? Icons.playlist_add : Icons.arrow_upward,
-          size: 20,
+      final scheme = Theme.of(context).colorScheme;
+      final touch = !isDesktop;
+      final side = touch ? 40.0 : 32.0;
+      // Ink on the panel when there is something to send; a quiet plate
+      // otherwise, so an empty composer doesn't hold a loud button.
+      return AnimatedScale(
+        scale: hasDraft ? 1 : 0.94,
+        duration: Motion.of(context, Motion.fast),
+        curve: Motion.enter,
+        child: IconButton.filled(
+          key: const Key('send-btn'),
+          onPressed: canSend ? _submit : null,
+          tooltip: _restoringSettings
+              ? l10n.restoringSessionSettings
+              : _streaming
+              ? (_supplement ? l10n.steerMessage : l10n.queueNextTurn)
+              : l10n.send,
+          style: IconButton.styleFrom(
+            minimumSize: Size(side, side),
+            fixedSize: Size(side, side),
+            padding: EdgeInsets.zero,
+            backgroundColor: scheme.onSurface,
+            foregroundColor: scheme.surface,
+            disabledBackgroundColor: scheme.onSurface.withValues(alpha: 0.08),
+            disabledForegroundColor: onSurfaceDisabled(scheme),
+            shape: const CircleBorder(),
+          ),
+          icon: Icon(
+            _streaming && !_supplement
+                ? Icons.playlist_add
+                : Icons.arrow_upward_rounded,
+            size: touch ? 20 : 18,
+          ),
         ),
       );
     },
@@ -9028,50 +10665,53 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     final scheme = Theme.of(context).colorScheme;
     final enabled = onTap != null;
     final fg = active
-        ? scheme.onPrimaryContainer
+        ? scheme.onTertiaryContainer
         : enabled
         ? scheme.onSurfaceVariant
         : scheme.onSurfaceVariant.withValues(alpha: 0.5);
     final touch = !isDesktop;
-    // These sit inside the composer card, so the raised card is the ground the
-    // resting wash composites against.
-    return Material(
-      color: active
-          ? scheme.primaryContainer
-          : Color.alphaBlend(scheme.surfaceContainer, scheme.surfaceBright),
-      borderRadius: BorderRadius.circular(kControlRadius),
-      child: InkWell(
-        mouseCursor: clickable,
-        key: pillKey,
+    // The tint fades in and out (plan mode on/off) rather than snapping.
+    return AnimatedContainer(
+      duration: Motion.of(context, Motion.medium),
+      curve: Motion.move,
+      decoration: BoxDecoration(
+        color: active
+            ? scheme.tertiaryContainer
+            : scheme.tertiaryContainer.withValues(alpha: 0),
         borderRadius: BorderRadius.circular(kControlRadius),
-        onTap: onTap,
-        child: ConstrainedBox(
-          constraints: BoxConstraints(minHeight: touch ? 44 : 0),
-          child: Padding(
-            padding: EdgeInsets.symmetric(
-              horizontal: touch ? 13 : 11,
-              vertical: 6,
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(icon, size: 15, color: warn ? cautionColor(scheme) : fg),
-                const SizedBox(width: 5),
-                Flexible(
-                  child: Text(
-                    label,
-                    textWidthBasis: TextWidthBasis.longestLine,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    softWrap: false,
-                    style: TextStyle(fontSize: 12.5, color: fg),
+      ),
+      child: Material(
+        type: MaterialType.transparency,
+        borderRadius: BorderRadius.circular(kControlRadius),
+        child: InkWell(
+          mouseCursor: clickable,
+          key: pillKey,
+          borderRadius: BorderRadius.circular(kControlRadius),
+          onTap: onTap,
+          child: ConstrainedBox(
+            constraints: BoxConstraints(minHeight: touch ? 44 : 30),
+            child: Padding(
+              padding: EdgeInsets.symmetric(
+                horizontal: touch ? 10 : 8,
+                vertical: 5,
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(icon, size: 15, color: warn ? cautionColor(scheme) : fg),
+                  const SizedBox(width: 5),
+                  Flexible(
+                    child: AnimatedLabel(
+                      label,
+                      style: TextStyle(fontSize: 12.5, color: fg),
+                    ),
                   ),
-                ),
-                if (trailing != null) ...[
-                  const SizedBox(width: 2),
-                  Icon(trailing, size: 16, color: fg),
+                  if (trailing != null) ...[
+                    const SizedBox(width: 2),
+                    Icon(trailing, size: 16, color: fg),
+                  ],
                 ],
-              ],
+              ),
             ),
           ),
         ),
@@ -9170,72 +10810,92 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// One soft option row inside [_optionSheet].
   Widget _optionRow<T>(_PickerOption<T> o, bool selected, VoidCallback onTap) {
     final scheme = Theme.of(context).colorScheme;
-    final fg = selected ? scheme.onPrimaryContainer : scheme.onSurface;
+    final fg = scheme.onSurface;
+    final accent = scheme.tertiary;
+    final duration = Motion.of(context, Motion.medium);
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 2),
-      child: Material(
-        color: selected ? scheme.primaryContainer : Colors.transparent,
-        borderRadius: BorderRadius.circular(12),
-        child: InkWell(
-          mouseCursor: clickable,
-          // Stable handle for tests: the label is localised and, for the turn
-          // settings, repeated by the chip that opened the sheet. Values that
-          // are not scalars fall back to the label — a model row's DTO has no
-          // `toString`, so keying on it would give every model the same key.
-          key: ValueKey(
-            'opt-${switch (o.value) {
-              final String s => s,
-              final Enum e => e.name,
-              _ => o.label,
-            }}',
-          ),
-          borderRadius: BorderRadius.circular(12),
-          onTap: onTap,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
-            child: Row(
-              children: [
-                Icon(
-                  o.icon,
-                  size: 20,
-                  color: selected ? scheme.onPrimaryContainer : scheme.primary,
-                ),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        o.label,
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w500,
-                          color: fg,
-                        ),
-                      ),
-                      if (o.description != null &&
-                          o.description!.isNotEmpty) ...[
-                        const SizedBox(height: 2),
+      child: AnimatedContainer(
+        duration: duration,
+        curve: Motion.move,
+        decoration: BoxDecoration(
+          color: selected
+              ? selectedRowColor(scheme)
+              : selectedRowColor(scheme).withValues(alpha: 0),
+          borderRadius: BorderRadius.circular(kControlRadius),
+        ),
+        child: Material(
+          type: MaterialType.transparency,
+          borderRadius: BorderRadius.circular(kControlRadius),
+          child: InkWell(
+            mouseCursor: clickable,
+            // Stable handle for tests: the label is localised and, for the turn
+            // settings, repeated by the chip that opened the sheet. Values that
+            // are not scalars fall back to the label — a model row's DTO has no
+            // `toString`, so keying on it would give every model the same key.
+            key: ValueKey(
+              'opt-${switch (o.value) {
+                final String s => s,
+                final Enum e => e.name,
+                _ => o.label,
+              }}',
+            ),
+            borderRadius: BorderRadius.circular(12),
+            onTap: onTap,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+              child: Row(
+                children: [
+                  TweenAnimationBuilder<Color?>(
+                    tween: ColorTween(
+                      end: selected ? accent : scheme.onSurfaceVariant,
+                    ),
+                    duration: duration,
+                    builder: (_, color, _) =>
+                        Icon(o.icon, size: 20, color: color),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
                         Text(
-                          o.description!,
+                          o.label,
                           style: TextStyle(
-                            fontSize: 12,
-                            color: selected
-                                ? scheme.onPrimaryContainer.withValues(
-                                    alpha: 0.75,
-                                  )
-                                : scheme.onSurfaceVariant,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w500,
+                            color: fg,
                           ),
                         ),
+                        if (o.description != null &&
+                            o.description!.isNotEmpty) ...[
+                          const SizedBox(height: 2),
+                          Text(
+                            o.description!,
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: scheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
                       ],
-                    ],
+                    ),
                   ),
-                ),
-                if (selected) ...[
+                  // Always laid out, so picking a row doesn't shift its text;
+                  // the check grows in on the new row as it fades from the old.
                   const SizedBox(width: 8),
-                  Icon(Icons.check, size: 18, color: scheme.onPrimaryContainer),
+                  AnimatedScale(
+                    scale: selected ? 1 : 0.6,
+                    duration: duration,
+                    curve: Motion.enter,
+                    child: AnimatedOpacity(
+                      opacity: selected ? 1 : 0,
+                      duration: duration,
+                      child: Icon(Icons.check, size: 18, color: accent),
+                    ),
+                  ),
                 ],
-              ],
+              ),
             ),
           ),
         ),
@@ -9516,6 +11176,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// empty and the thread is still new, so it never overrides a folder the user
   /// picked or a resumed thread's cwd.
   Future<void> _seedDefaultCwd() async {
+    final generation = _threadLoadGeneration;
+    final selectionGeneration = _projectSelectionGeneration;
+    final draft = _draft;
     try {
       final cfg = await ref
           .read(bridgeApiProvider)
@@ -9526,8 +11189,21 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       _openLoadDone(_kCwdSeed);
       final def = cfg.defaultProject?.trim();
       if (!mounted || def == null || def.isEmpty) return;
-      if (_threadId == null && (_cwd == null || _cwd!.trim().isEmpty)) {
-        setState(() => _cwd = def);
+      if (generation == _threadLoadGeneration &&
+          selectionGeneration == _projectSelectionGeneration &&
+          identical(draft, _draft) &&
+          !draft.sendPending &&
+          _threadId == null &&
+          (_cwd == null || _cwd!.trim().isEmpty)) {
+        final resolved = _drafts.resolveProject(draft, def);
+        if (resolved == null) return;
+        setState(() {
+          _cwd = def;
+          if (!identical(_draft, resolved)) {
+            _draft = resolved;
+            _input.value = resolved.value.copyWith(composing: TextRange.empty);
+          }
+        });
       }
     } catch (_) {
       // No reachable meta → keep the codex default for now, but retry: this
@@ -9536,11 +11212,16 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       // conversation rooted in the wrong folder — the agent would then read and
       // edit files somewhere the user never chose, which is worse than a slow
       // seed. The guard above keeps a folder the user picked meanwhile.
-      if (mounted) _retryOpenLoad(_kCwdSeed);
+      if (mounted &&
+          selectionGeneration == _projectSelectionGeneration &&
+          generation == _threadLoadGeneration) {
+        _retryOpenLoad(_kCwdSeed);
+      }
     }
   }
 
   Future<void> _pickProject() async {
+    final generation = _threadLoadGeneration;
     final l10n = AppLocalizations.of(context);
     // Does the host offer a project-folder tree to browse? Best-effort — a
     // failure just means the manual path field (the fallback that always works,
@@ -9614,7 +11295,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         ],
       ),
     );
-    if (ok == true) setState(() => _cwd = ctrl.text.trim());
+    if (mounted && generation == _threadLoadGeneration && ok == true) {
+      _selectProject(ctrl.text.trim());
+    }
   }
 }
 
@@ -9623,7 +11306,44 @@ class _CancelTitleEditIntent extends Intent {
   const _CancelTitleEditIntent();
 }
 
-/// Stand-in fed to `newSessionTitleIn` so the localized sentence can be split
-/// around the project name and the name rendered as a live dropdown. A private
-///-use codepoint, so it can never collide with real text in any translation.
-const String _kProjectSlot = '';
+/// Paints a short accent bar on the leading edge of a selected row, centred
+/// vertically, without changing the row's layout.
+class _SelectionBar extends StatelessWidget {
+  const _SelectionBar({
+    required this.visible,
+    required this.color,
+    required this.child,
+  });
+
+  final bool visible;
+  final Color color;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!visible) return child;
+    return Stack(
+      alignment: Alignment.centerLeft,
+      children: [
+        child,
+        Positioned(
+          left: 0,
+          top: 0,
+          bottom: 0,
+          child: Center(
+            child: Container(
+              width: 3,
+              height: 16,
+              decoration: BoxDecoration(
+                color: color,
+                borderRadius: const BorderRadius.horizontal(
+                  right: Radius.circular(2),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}

@@ -29,6 +29,7 @@ import 'package:pocket_codex/src/widgets/message_images.dart';
 import 'package:pocket_codex/src/widgets/status_dots.dart';
 import 'package:pocket_codex/src/widgets/turn_minimap.dart';
 import 'package:pocket_codex/src/widgets/middle_click_scroll.dart';
+import 'package:pocket_codex/src/widgets/history_arrival.dart';
 
 import '../fake_bridge_api.dart';
 import '../support/screen_harness.dart';
@@ -304,6 +305,16 @@ void main() {
     expect(height, greaterThan(90));
     final container = ProviderScope.containerOf(t.element(input));
     expect(container.read(uiPrefsProvider).valueOrNull?.composerHeight, height);
+
+    final field = find.byKey(const Key('composer-input'));
+    await t.enterText(field, List.filled(10, 'A multiline draft').join('\n'));
+    await t.pumpAndSettle();
+    expect(t.getSize(input).height, greaterThan(height));
+    await t.tap(find.byKey(const Key('send-btn')));
+    await t.pumpAndSettle();
+    expect(t.widget<TextField>(field).controller!.text, isEmpty);
+    expect(t.getSize(input).height, height);
+    expect(container.read(uiPrefsProvider).valueOrNull?.composerHeight, height);
     expect(t.takeException(), isNull);
   });
 
@@ -325,7 +336,7 @@ void main() {
     await t.pumpAndSettle();
 
     // A brand-new conversation shows the guidance view (not a bare hint).
-    expect(find.text('我们该构建什么?'), findsOneWidget);
+    expect(find.byKey(const Key('project-switcher-btn')), findsOneWidget);
 
     await t.enterText(find.byType(TextField), 'hello');
     await t.pump(); // let the send button enable for the non-empty input
@@ -730,6 +741,39 @@ void main() {
     });
     tearDown(() {
       processImageImpl = (bytes) => compute(processImageBytes, bytes);
+    });
+
+    testWidgets('a failed image remains retryable without choosing it again', (
+      t,
+    ) async {
+      final api = FakeBridgeApi(
+        config: const ConfigInfo(relay: 'relay:7666', hasKey: true),
+      );
+      const service = 'pcx:lb7666:app:default';
+      await api.appConnect(service, 28080);
+      await t.pumpWidget(
+        host(const AppSessionScreen(serviceKey: service), api),
+      );
+      await t.pumpAndSettle();
+      processImageImpl = (_) async =>
+          throw StateError('decoder temporarily unavailable');
+      picker.files = [MemXFile(tinyPng(), 'retry.png')];
+      await attachMenu(t, 'attach-btn');
+      await t.pumpAndSettle();
+      expect(find.byKey(const Key('attachment-0')), findsOneWidget);
+      expect(find.text('重试'), findsOneWidget);
+      expect(
+        t.widget<IconButton>(find.byKey(const Key('send-btn'))).onPressed,
+        isNull,
+      );
+      processImageImpl = (bytes) async => processImageBytes(bytes);
+      await t.tap(find.byKey(const Key('attachment-0')));
+      await t.pumpAndSettle();
+      expect(find.text('重试'), findsNothing);
+      expect(
+        t.widget<IconButton>(find.byKey(const Key('send-btn'))).onPressed,
+        isNotNull,
+      );
     });
 
     Future<FakeBridgeApi> pumpSession(
@@ -1142,7 +1186,7 @@ void main() {
       expect(find.text('data.bin'), findsOneWidget); // bubble chip
     });
 
-    testWidgets('a failed upload removes the chip and reports the error', (
+    testWidgets('a failed upload stays in the draft and can be retried', (
       t,
     ) async {
       final api = await pumpSession(t);
@@ -1153,11 +1197,20 @@ void main() {
       await attachMenu(t, 'attach-file-btn');
       await t.pumpAndSettle();
 
-      expect(find.byKey(const Key('attachment-0')), findsNothing);
-      expect(find.textContaining('上传文件到主机失败'), findsOneWidget);
-      // Nothing to send: the button stays disabled without text.
+      expect(find.byKey(const Key('attachment-0')), findsOneWidget);
+      expect(find.text('重试'), findsOneWidget);
+      // The failed attachment must not silently disappear from a send.
       final btn = t.widget<IconButton>(find.byKey(const Key('send-btn')));
       expect(btn.onPressed, isNull);
+      api.uploadError = null;
+      await t.tap(find.byKey(const Key('attachment-0')));
+      await t.pumpAndSettle();
+      expect(api.lastUploadName, 'x.log');
+      expect(find.text('重试'), findsNothing);
+      expect(
+        t.widget<IconButton>(find.byKey(const Key('send-btn'))).onPressed,
+        isNotNull,
+      );
     });
 
     testWidgets('an image picked through the FILE picker routes to the image '
@@ -1402,7 +1455,7 @@ void main() {
     );
     await t.pumpAndSettle();
     // Still the new-session guidance (the foreign event was dropped, no items).
-    expect(find.text('我们该构建什么?'), findsOneWidget);
+    expect(find.byKey(const Key('project-switcher-btn')), findsOneWidget);
     expect(find.textContaining('not mine', findRichText: true), findsNothing);
   });
 
@@ -1654,16 +1707,22 @@ void main() {
     );
     await t.pumpAndSettle();
 
-    // The project is the tree's top level, so its label is genuinely larger
-    // than the conversation titles — not merely bolder.
+    // The project is the tree's top level: a bold group heading above
+    // regular-weight rows, which indent beneath its name.
     final heading = t.widget<Text>(find.text('alpha'));
     final row = t.widget<Text>(find.text('a conversation'));
-    expect(heading.style!.fontSize!, greaterThan(row.style!.fontSize!));
+    expect(heading.style!.fontWeight, FontWeight.w600);
+    expect(row.style!.fontWeight, FontWeight.w400);
+    expect(
+      t.getTopLeft(find.text('a conversation')).dx,
+      greaterThanOrEqualTo(t.getTopLeft(find.text('alpha')).dx),
+    );
 
-    // Rows carry no leading glyph of their own; the heading's chevron is the
-    // tree's only icon.
+    // Rows carry no leading glyph of their own; the heading's folder and fold
+    // chevron are the tree's only icons.
     expect(find.byIcon(Icons.chat_bubble_outline), findsNothing);
-    expect(find.byIcon(Icons.keyboard_arrow_down), findsOneWidget);
+    expect(find.byIcon(Icons.folder_open_outlined), findsOneWidget);
+    expect(find.byIcon(Icons.keyboard_arrow_right), findsOneWidget);
   });
 
   testWidgets('Clicking a project folder collapses its conversations', (
@@ -1890,6 +1949,114 @@ void main() {
       expect(list.isCompleted, isFalse);
       list.complete();
       await t.pumpAndSettle();
+      await t.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets(
+    'disconnect publishes status and disposed reconnect cannot subscribe',
+    (t) async {
+      const service = 'pcx:lb7666:app:default';
+      final api = FakeBridgeApi(
+        config: const ConfigInfo(relay: 'relay:7666', hasKey: true),
+      );
+      await api.appConnect(service, 28080);
+      await t.pumpWidget(
+        host(const AppSessionScreen(serviceKey: service), api),
+      );
+      await t.pumpAndSettle();
+      final container = ProviderScope.containerOf(
+        t.element(find.byType(AppSessionScreen)),
+      );
+      final gate = Completer<void>();
+      api.appConnectGate = gate.future;
+      await api.appDisconnect(service);
+      await t.pump();
+      expect(container.read(observedDisconnectedProvider), contains(service));
+      await t.pumpWidget(const SizedBox());
+      gate.complete();
+      await t.pump();
+      await t.pump(const Duration(seconds: 10));
+      expect(t.takeException(), isNull);
+      expect(api.appConnectCount, 2);
+    },
+  );
+
+  testWidgets(
+    'reconnect becomes ready before metadata but sending waits for settings',
+    (t) async {
+      const service = 'pcx:lb7666:app:default';
+      final api = FakeBridgeApi(
+        config: const ConfigInfo(relay: 'relay:7666', hasKey: true),
+      );
+      await api.appConnect(service, 28080);
+      await t.pumpWidget(
+        host(const AppSessionScreen(serviceKey: service, threadId: 't1'), api),
+      );
+      await t.pumpAndSettle();
+      final gate = Completer<void>();
+      api.configReadGate = gate;
+      await api.appDisconnect(service);
+      await t.pump();
+      await t.pumpAndSettle();
+      expect(find.text('就绪'), findsOneWidget);
+      expect(gate.isCompleted, isFalse);
+      final container = ProviderScope.containerOf(
+        t.element(find.byType(AppSessionScreen)),
+      );
+      expect(
+        container.read(observedDisconnectedProvider),
+        isNot(contains(service)),
+      );
+      await t.enterText(
+        find.byKey(const Key('composer-input')),
+        'Wait for permissions',
+      );
+      await t.pump();
+      expect(
+        t.widget<IconButton>(find.byKey(const Key('send-btn'))).onPressed,
+        isNull,
+      );
+      gate.complete();
+      await t.pumpAndSettle();
+      expect(
+        t.widget<IconButton>(find.byKey(const Key('send-btn'))).onPressed,
+        isNotNull,
+      );
+      await t.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets(
+    'background recovery waits until foreground then reconnects immediately',
+    (t) async {
+      const service = 'pcx:lb7666:app:default';
+      final api = FakeBridgeApi(
+        config: const ConfigInfo(relay: 'relay:7666', hasKey: true),
+      );
+      await api.appConnect(service, 28080);
+      await t.pumpWidget(
+        host(const AppSessionScreen(serviceKey: service), api),
+      );
+      await t.pumpAndSettle();
+      t.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      await api.appDisconnect(service);
+      await t.pump(const Duration(seconds: 13));
+      expect(api.appConnectCount, 1);
+      final gate = Completer<void>();
+      api.appConnectGate = gate.future;
+      t.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+      t.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      t.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await t.pump();
+      expect(api.appConnectCount, 2);
+      t.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      gate.complete();
+      await t.pumpAndSettle();
+      t.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await t.pumpAndSettle();
+      expect(find.text('就绪'), findsOneWidget);
+      expect(api.appConnectCount, 2);
       await t.pumpWidget(const SizedBox());
     },
   );
@@ -2399,11 +2566,10 @@ void main() {
     expect(t.widget<MouseRegion>(card).cursor, SystemMouseCursors.text);
 
     expect(t.widget<TextField>(field).focusNode!.hasFocus, isFalse);
-    // Tap the card's own padding, clear of the field and the button row.
-    final box = t.getRect(
-      find.ancestor(of: field, matching: find.byType(Container)).first,
-    );
-    await t.tapAt(Offset(box.right - 4, box.top + 4));
+    // Tap the card's own padding below the field, clear of the field, the
+    // resize edge along the top and the button row.
+    final area = t.getRect(find.byKey(const Key('composer-input-area')));
+    await t.tapAt(Offset(area.center.dx, area.bottom + 3));
     await t.pumpAndSettle();
     expect(t.widget<TextField>(field).focusNode!.hasFocus, isTrue);
   });
@@ -2928,30 +3094,6 @@ void main() {
     expect(find.text('alpha'), findsNothing);
     expect(find.text('beta'), findsNothing);
     expect(convTiles(), findsOneWidget);
-  });
-
-  testWidgets('Tapping a guidance card prefills the composer', (t) async {
-    final api = FakeBridgeApi(
-      config: const ConfigInfo(relay: 'lb7666.top:7666', hasKey: true),
-    );
-    await api.appConnect('pcx:lb7666:app:default', 28080);
-    await t.pumpWidget(
-      host(const AppSessionScreen(serviceKey: 'pcx:lb7666:app:default'), api),
-    );
-    await t.pumpAndSettle();
-
-    // The prompt shows once on the guidance card before a tap.
-    const prompt = '介绍一下这个项目的结构、主要模块和技术栈。';
-    expect(find.text(prompt), findsOneWidget);
-
-    // Tapping the "了解项目" card prefills the composer (review-then-send).
-    await t.tap(find.text('了解项目'));
-    await t.pumpAndSettle();
-    // The prompt now appears twice: the card subtitle + the composer field.
-    expect(find.text(prompt), findsNWidgets(2));
-    // The send button is enabled now that the composer is non-empty.
-    final sendBtn = t.widget<IconButton>(find.byKey(const Key('send-btn')));
-    expect(sendBtn.onPressed, isNotNull);
   });
 
   group("a turn's work folds behind one row", () {
@@ -3552,11 +3694,10 @@ void main() {
     // Not pumpAndSettle: the restored typing indicator animates forever.
     await t.pump();
     await t.pump(const Duration(milliseconds: 50));
-    // Past message recovered, and the running state restored (composer shows
-    // the stop button instead of send).
+    // Past message recovered, with independent stop and queue actions.
     expect(find.text('earlier question'), findsOneWidget);
     expect(find.byKey(const Key('stop-btn')), findsOneWidget);
-    expect(find.byKey(const Key('send-btn')), findsNothing);
+    expect(find.byKey(const Key('send-btn')), findsOneWidget);
   });
 
   testWidgets('#2: a thread restores its persisted config on open', (t) async {
@@ -4545,7 +4686,7 @@ void main() {
     await t.pumpAndSettle();
 
     // No gauge until a token-usage event arrives.
-    expect(find.text('10'), findsNothing);
+    expect(find.text('10%'), findsNothing);
     api.pushEvent(
       'pcx:lb7666:app:default',
       const AppEvent(
@@ -4557,12 +4698,12 @@ void main() {
     );
     await t.pumpAndSettle();
     // 20000 / 200000 = 10%.
-    expect(find.text('10'), findsOneWidget);
+    expect(find.text('10%'), findsOneWidget);
 
     // Tapping the gauge opens the context/quota detail sheet.
     api.rateLimitsJson =
         '{"rateLimits":{"primary":{"usedPercent":42,"windowDurationMins":300}}}';
-    await t.tap(find.text('10'));
+    await t.tap(find.text('10%'));
     await t.pumpAndSettle();
     expect(find.text('上下文与用量'), findsOneWidget); // contextUsageTitle (zh)
     // Scoped to the sheet: the same window label also names the always-visible
@@ -4732,12 +4873,12 @@ void main() {
 
     // It lives with the window's controls, not in the sessions pane, so
     // collapsing the sidebar must not take appearance away with it.
-    await t.tap(find.byIcon(Icons.menu_open));
+    await t.tap(find.byKey(const Key('sidebar-collapse-btn')));
     await t.pumpAndSettle();
     expect(btn, findsOneWidget);
   });
 
-  testWidgets('The composer drops the project chip once the thread exists', (
+  testWidgets('The new-session project selector disappears after the first send', (
     t,
   ) async {
     final api = FakeBridgeApi(
@@ -4758,9 +4899,9 @@ void main() {
     );
     await t.pumpAndSettle();
 
-    // Before the first turn the project is still switchable, so the chip earns
-    // its place above the field.
-    expect(find.byKey(const Key('composer-project-chip')), findsOneWidget);
+    // The empty view has one project selector, without a duplicate composer chip.
+    expect(find.byKey(const Key('project-switcher-btn')), findsOneWidget);
+    expect(find.byKey(const Key('composer-project-chip')), findsNothing);
 
     await t.enterText(find.byKey(const Key('composer-input')), 'hello');
     await t.pump();
@@ -5187,7 +5328,10 @@ void main() {
     await t.pumpAndSettle();
     expect(t.takeException(), isNull);
     // Tapping "new conversation" shows the new-session guidance.
-    expect(find.text('我们该构建什么?'), findsOneWidget); // guidance (zh)
+    expect(
+      find.byKey(const Key('project-switcher-btn')),
+      findsOneWidget,
+    ); // guidance (zh)
   });
 
   testWidgets('Plan renders as a status-iconed checklist', (t) async {
@@ -6604,6 +6748,45 @@ void main() {
       expect(find.byKey(const Key('chat-older-history')), findsOneWidget);
     });
 
+    testWidgets('compact previous button reads an unloaded turn', (t) async {
+      t.view.devicePixelRatio = 1;
+      t.view.physicalSize = const Size(390, 844);
+      addTearDown(t.view.reset);
+      final api = await openPaginated(t);
+      api.turnItems = {
+        't4': [
+          user('u4', 'fourth question', 't4'),
+          agent('a4', 'fourth answer', 't4'),
+        ],
+      };
+      await t.tap(find.byKey(const Key('nav-prev-turn')));
+      await t.pumpAndSettle();
+      expect(api.turnItemCalls, ['t4']);
+      expect(find.text('fourth question'), findsOneWidget);
+      final control = find.byKey(const Key('draggable-turn-navigation'));
+      final before = t.getTopLeft(control);
+      await t.drag(control, const Offset(-100, -100));
+      await t.pumpAndSettle();
+      expect(t.getTopLeft(control).dx, lessThan(before.dx - 60));
+      expect(t.getTopLeft(control).dy, lessThan(before.dy - 60));
+    });
+
+    testWidgets('overscrolling a short transcript loads older history', (
+      t,
+    ) async {
+      final api = await openPaginated(t);
+      api.olderPages = [
+        [
+          user('u4', 'fourth question', 't4'),
+          agent('a4', 'fourth answer', 't4'),
+        ],
+      ];
+      await t.drag(find.text('newest answer'), const Offset(0, 160));
+      await t.pumpAndSettle();
+      expect(api.olderPageCalls, 1);
+      expect(find.text('fourth question'), findsOneWidget);
+    });
+
     testWidgets('the rail has a tick per turn of the WHOLE thread', (t) async {
       await onDesktop(() async {
         await t.binding.setSurfaceSize(const Size(1600, 900));
@@ -6840,9 +7023,38 @@ void main() {
       expect(t.takeException(), isNull);
     });
 
-    testWidgets('prepending history preserves the visible message position', (
+    testWidgets('explicit history loading reveals the newly inserted message', (
       t,
     ) async {
+      await t.binding.setSurfaceSize(const Size(1000, 800));
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      final api = await openPaginated(t, longTail: true);
+      final scroll = t
+          .widget<MiddleClickScroll>(find.byType(MiddleClickScroll))
+          .controller;
+      scroll.jumpTo(0);
+      await t.pumpAndSettle();
+      api.olderPages = [
+        [
+          for (var i = 0; i < 4; i++) ...[
+            user('u$i', 'Earlier question $i', 't$i'),
+            agent('a$i', 'Earlier answer $i\n\n' * 15, 't$i'),
+          ],
+        ],
+      ];
+      await t.tap(find.byKey(const Key('chat-older-history-load')));
+      await t.pumpAndSettle();
+      expect(find.text('Earlier question 0').hitTestable(), findsOneWidget);
+      expect(
+        find.byWidgetPredicate(
+          (widget) => widget is HistoryArrival && widget.revision == 1,
+        ),
+        findsOneWidget,
+      );
+      expect(api.olderPageCalls, 1);
+    });
+
+    testWidgets('automatic prepending preserves the reading anchor', (t) async {
       await t.binding.setSurfaceSize(const Size(1000, 800));
       addTearDown(() => t.binding.setSurfaceSize(null));
       final api = await openPaginated(t, longTail: true);
@@ -6861,7 +7073,7 @@ void main() {
           ],
         ],
       ];
-      await t.tap(find.byKey(const Key('chat-older-history-load')));
+      await t.drag(find.text('newest question'), const Offset(0, 80));
       await t.pumpAndSettle();
       expect(t.getTopLeft(anchor).dy, closeTo(before, 2));
       expect(api.olderPageCalls, 1);

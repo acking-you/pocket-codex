@@ -16,8 +16,87 @@ breaking change goes.
   forwards allowlisted routes. Sessions are grouped by directory, child sessions
   open read-only, and controls follow each provider's capabilities. OpenCode
   2.0.18 is the verified contract version.
-- Import `PATH` from the user's login shell on macOS, so an npm-installed Codex
-  launched from Finder or the Dock can find `node` (for example under nvm).
+
+## 0.2.10 — 2026-10-09
+
+- Fix the Android launcher icon showing two overlapping clouds: the adaptive
+  background is now the tile alone and the foreground the glyph alone, inside
+  every mask's safe circle.
+- Fix the Android 12+ splash cropping the logo, and resize the older Android,
+  iOS and web splash to match.
+- Make the web maskable PWA icons full bleed, so a launcher mask no longer
+  shows a ring around the tile.
+- Redesign host switching. Desktop opens an anchored menu and phones a sheet;
+  each lists hosts by device with the current one marked.
+- A switch shows its target and step above the conversation, which stays
+  readable until the new host answers. Success is confirmed. A failure says
+  why, names the host still in use, and offers retry and dismiss.
+
+## 0.2.9 — 2026-10-09
+
+- Redesign the app: graphite theme with a logo-blue accent, native window
+  chrome, a whole-window light/dark cross-fade, tinted step cards, highlighted
+  field-by-field step bodies, inline reviews, desktop shortcuts and quieter
+  sidebar, composer and utility pages.
+- Unify the brand: one vector mark drives every launcher (Android, iOS, macOS,
+  web, Windows), the tray, the splash, the in-app logo and the README art.
+  Windows icons are drawn per frame size, so they stay sharp in the taskbar.
+- A running turn's paged step list (more than 40 steps) follows its newest
+  step and keeps it on screen. Paging back, jumping to a step or scrolling up
+  pauses following; "Latest steps" resumes it.
+- Add composer dictation on the V3 realtime path: words land at the cursor,
+  replace a selection only once speech arrives, and a discard restores it.
+  Nothing is sent automatically.
+- Live voice: a persistent call status with mute and hang-up, barge-in, a
+  reconnect grace period, a model picker and a waveform driven by the call's
+  real audio levels. Opening another conversation ends the call.
+- File previews render Markdown, JSON, CSV/TSV and SVG, with a source view and
+  copy. Complete images up to 8 MiB draw; very wide tables fall back to source.
+- History prefetches older pages while scrolling and serves retained pages from
+  disk.
+- Sync `deps/codex` to upstream main `b38942ce7` (fork merge `b360f3350`); the
+  app-server wire surface is unchanged apart from optional fields, and
+  sub-agent steps show their model and effort.
+- Account-mode `serve` publishes the API proxy; dictation uploads that hit a
+  Cloudflare challenge say so.
+
+## 0.2.8 — 2026-10-04
+
+- Restore retained history windows from the persistent cache, keep reading
+  position on scroll loads, and add draggable compact navigation and visible
+  mobile press feedback. See the
+  [v0.2.8 release](https://github.com/acking-you/pocket-codex/releases/tag/v0.2.8).
+
+## 0.2.7 — 2026-10-04
+
+- Correct the Codex source alignment: actually pull upstream main in
+  `~/rust_pro/codex`, advancing 225 commits to `afb436df8b`, and merge it into
+  `deps/codex` at `beaefbdf0`. Version 0.2.6 had used a stale local checkout.
+- Verify current aggregated command output and persisted truncation markers
+  in read-only, live and restored history, and future string/object error variants
+  in the UI. Existing local wire readers remain compatible without extra runtime
+  dependencies, controller round trips or encryption changes.
+- Document the pulled source, fork merge and external executable boundary with
+  an updated protocol flow diagram. Installed Codex remains externally managed.
+
+## 0.2.6 — 2026-10-04
+
+- Upgrade the pinned pb-mapper SDK to 0.6.0, including offline recovery, bounded
+  shared setup budgets and per-leg data-v2 negotiation. Encrypted traffic reuses
+  each leg's key with disjoint directional nonce prefixes; no extra handshake
+  round trip, data-key derivation or per-frame bytes. Older relays stay compatible.
+- Align `deps/codex` with the requested local source revision `17a9df60e`, merged
+  as `91f3ad911`. Preserve existing initialization and opaque history cursors;
+  show explicit errors on interrupted turns, including Guardian denial limits.
+- Identify the native app-server PID rather than Linux worker thread IDs, and
+  recognize running executables after an npm upgrade replaces their disk path.
+- Keep worker diagnostics and targeted restarts tied to a stable Linux process
+  identity across wall-clock corrections after boot.
+
+- Resolve a macOS GUI host's login-shell PATH on demand for external Codex and
+  npm's Node launcher. Keep the controller environment and window startup
+  unchanged, preserve inherited tool choices, and terminate the probe's process
+  group on success, failure or timeout. Validate the host code in macOS CI.
 - Wait for host file writes to complete before acknowledging uploads, preventing
   immediate reads from seeing empty or incomplete files.
 - Open session file links and attachment chips with Preview / Download actions.

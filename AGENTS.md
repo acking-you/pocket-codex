@@ -342,6 +342,10 @@ The order below is our current best guess; it is not a contract.
    packaging; **Built-in engine** is a disabled, unimplemented placeholder.
    The bridge uses local wire envelopes: upstream protocol crates also pull in
    runtime support and are not linked into application artifacts (see §8.1).
+   macOS GUI hosts resolve the login-shell PATH lazily in the Codex worker path;
+   only Codex children receive it. Preserve inherited tool precedence, never
+   mutate the process environment, and clean up the probe's owned process group.
+   Native macOS host checks are part of the required CI result.
 8. **App-server protocol sync (2026-09-24).** Codex fork merged upstream main
    `c098f97e5` at `c08819510`; CLI and UI share the acknowledged initialization handshake.
    Resume responses restore collaboration mode, opaque `fileId` image references
@@ -370,7 +374,19 @@ The order below is our current best guess; it is not a contract.
    services hub lives on at `/manage`; desktop auto-restores hosting on
    boot (`ui_state.json`). P4 adds structured Guardian review history,
    a searchable turn directory, bounded long-step browsing, and coordinated
-   initial-load / continuation / navigation / monitoring feedback.
+   initial-load / continuation / navigation / monitoring feedback. The composer
+   grows and shrinks with text, preserving the manually resized minimum height.
+   Conversation drafts survive navigation during the app session, with sidebar
+   draft/queue indicators, an expanded editor, explicit height reset, separate
+   Queue/Stop controls, IME-safe desktop sending, and retryable attachments.
+   New-session views focus on the project and input. Project headings reveal
+   one new-conversation action on hover/keyboard focus, with right-click menus
+   and touch long-press sheets. Unsent drafts are isolated by host and project;
+   a server thread is created only on first send.
+   Mobile messages offer long-press copy, text selection and native sharing.
+   Editable conversations can reuse a user message in a separate editor;
+   adding it preserves existing draft text and attachments and never sends
+   automatically or rewrites history. Read-only views expose no edit action.
 11. **Persistent controller history (2026-09-25).** The App owns a configurable
     512 MB disk cache shared across hosts, reusable after restart. Independent
     meta `/history/v1` routes reconcile bounded windows and UTF-8 text prefixes
@@ -427,6 +443,87 @@ The order below is our current best guess; it is not a contract.
 When you ship a milestone, update `README.md` (Status table) **and**
 this file's roadmap so the source of truth stays in sync.
 
+15. **Relay recovery and maintenance (2026-10-03).** Network workers retain pending
+    registrations/subscriptions through offline startup. Runtime diagnostics report
+    the SDK actually loaded by each worker; an older worker reports unknown.
+    `pb restart --role <register|subscribe> --key <exact-key>` verifies process
+    identity and credentials before replacing that worker, preserving local Codex,
+    API proxy and host supervisor processes. See `docs/relay-worker-recovery.md`.
+
+16. **Low-latency relay and protocol sync (2026-10-04).** SDK 0.6.0 uses a shared
+    per-leg data key with disjoint directional nonce prefixes, without data-key
+    derivation, extra setup round trips or frame bytes. `deps/codex` merges the
+    freshly pulled upstream main `afb436df8b` at `beaefbdf0` (0.2.7 corrects the
+    stale local pin in 0.2.6). Aggregated command output, persisted truncation
+    markers and future error variants retain their existing display behavior;
+    interrupted turns may carry an explicit error. Native app-server tracking
+    excludes Linux thread IDs and recognizes replaced executables; worker identity
+    survives boot-time clock corrections. On 2026-10-08 `deps/codex` moved to
+    `b360f3350`, a clean merge of upstream main `b38942ce7`; the app-server wire
+    surface is unchanged apart from optional fields. See
+    `docs/app-server-protocol-sync.md`.
+
+16. **Cached history and touch feedback (2026-10-04).** Local session lists
+    explain mobile filesystem unavailability, empty desktop history and retryable
+    scan failures. Opening restores retained sequential and selected-turn windows
+    locally within the memory budget; preserve real gaps and source generations.
+    Streaming writes a separate 100-item checkpoint, never the full display view.
+    Explicit history loads reveal and briefly highlight new rows; scroll loads
+    preserve the reading anchor and short-page edge gestures can load history.
+    Compact navigation is draggable and reads unloaded turns from the full
+    directory. Mobile message press feedback remains until menu dismissal and
+    respects reduced motion. See `docs/session-cache-sync.md`.
+
+18. **Live voice controls (2026-10-05).** Voice threads persist the upstream
+    `threadSource: pocket-codex-voice` classification independently of their title.
+    Client-owned WebRTC carries microphone/output audio; the existing bridge
+    carries app-server signaling, with upstream V3 and its V1 voice catalog.
+    Keep backend handoffs and approvals on the ordinary Codex path. End capture
+    on call stop, navigation, backgrounding, failure and disposal; never silently
+    restart it. Read canonical speech history through bounded `thread/timeline/list`
+    pages. No system speech or extra speech provider is implemented. Touch message
+    feedback starts only when long press wins over scrolling. See
+    `docs/live-voice.md`.
+
+21. **Composer dictation (2026-10-08).** The composer microphone runs on the
+    same upstream V3 realtime path as live voice: an ephemeral
+    `pocket-codex-dictation` thread, kept open in the background with no
+    microphone until a take attaches one, then transcript deltas typed at the
+    cursor. It uses only the host's default realtime model and never speaks.
+    It yields to a live call, ends its take on navigation, and never sends.
+    chatgpt.com's transcription endpoints are not used (Cloudflare refuses
+    non-official clients). See `docs/live-voice.md` › Composer dictation.
+
+19. **Recovery and cache boundaries (2026-10-05).** Scope CLI watchdog stops to
+    their own listener; retain pending meta registrations across startup outages.
+    Credential refresh tasks follow account/backend/deadline changes and stop on
+    logout. Mobile reconnects discard obsolete completions, recover on foreground
+    return and restore optional metadata separately; sends wait for settings.
+    Live transcript tails have independent item/thread/byte bounds and indexed
+    updates. Cache byte accounting is invalidated under the cross-process lock
+    before mutations; atomic data/manifest writes and quota reservations remain.
+    Worker transition history survives worker exit, and controller recovery stages
+    appear in the existing exportable logs.
+
+20. **Guardian session hierarchy (2026-10-06).** Display native automatic approval
+    progress and results in the parent conversation, keyed by review ID. Restore
+    persisted assessments through the host history adapter without changing Codex
+    page cursors. Preserve explicit parent links in session inventories, with
+    children collapsed by default (including Active) and ancestors retained
+    during filtering. Manual folds take precedence over automatic reveals and
+    survive running-state updates and inventory refresh. Open Guardian
+    sessions read-only, with navigation to the parent; never resume or take over
+    a reviewer. See `docs/guardian-sessions.md`.
+
+22. **macOS distribution and theme switching (2026-10-09).** Release app jobs
+    require Developer ID signatures and accepted, stapled Apple notarization
+    for DMG and ZIP downloads. Never fall back to unsigned publication. Keep
+    signing credentials out of source and build steps. Theme snapshot capture
+    is optional; applying the preference must survive capture failures and
+    release builds without debug-only render getters. Keep the blue Dock and
+    menu-bar icons fixed across themes: use the bundle AppIcon and a non-template
+    tray PNG; never substitute the transparent splash glyph. See `docs/macos-release.md`.
+
 ### UI and history maintenance (2026-09-13)
 
 - Keep shared colors, typography, and control shapes in `theme.dart` /
@@ -469,10 +566,25 @@ this file's roadmap so the source of truth stays in sync.
   turn a historical model assessment into an interactive approval or execute
   command text extracted for presentation. Unknown formats keep normal rendering.
 - Keep the composer compact by default, resizable with mouse/touch and
-  accessibility actions, and persist its height with the UI preferences.
-- Branding uses the same blue/neutral palette as the UI. When changing it,
-  update the brand masters and regenerate launcher, tray, and splash assets
-  for every platform; keep both README posters and logo copies in sync.
+  accessibility actions, and persist its minimum height with the UI preferences.
+  Grow and shrink with wrapped text up to the viewport cap, then scroll internally;
+  automatic sizing must not overwrite the saved minimum. Keep draft text,
+  selection, attachments, and pending queues scoped to the host and conversation
+  (host and project before first send) for the app session; a queue resumes when its conversation is active. An upload
+  completing after navigation must update its original draft. Failed attachments
+  remain removable/retryable and block sending until resolved. Mobile Return
+  inserts a newline; desktop Enter sends and Shift+Enter inserts a newline, while
+  IME composition must never submit. The expanded editor shares the draft and
+  returns focus and selection to the compact input.
+- Branding uses the same blue/neutral palette as the UI. The mark has one
+  source: the vector drawing and `MarkStyle` palettes in
+  `apps/flutter/test/gen_icon_test.dart` (blue tile for launchers, tray and
+  README art; theme surfaces for splash and the in-app glyph). When changing
+  it, run `REGEN_ICONS=1 fvm flutter test test/gen_icon_test.dart`, then
+  `fvm dart run flutter_launcher_icons` and
+  `fvm dart run flutter_native_splash:create`, for every platform; keep both
+  README posters and logo copies in sync and the splash colours equal to the
+  `MarkStyle` tiles.
 - Transcript rows must remain lazy and keyed. Preserve the visible message
   when prepending history, and do not rescan the rest of a turn per item when
   grouping rows. Pagination failures require an explicit retry instead of a

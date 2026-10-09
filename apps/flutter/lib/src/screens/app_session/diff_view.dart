@@ -204,7 +204,7 @@ class _DiffHunksState extends State<_DiffHunks> {
             padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
             child: Text(
               l10n.diffTruncated(widget.file.lines.length - _maxDiffLines),
-              style: TextStyle(fontSize: 11.5, color: scheme.outline),
+              style: TextStyle(fontSize: 11.5, color: scheme.onSurfaceVariant),
             ),
           ),
       ],
@@ -262,7 +262,10 @@ class _DiffHunksState extends State<_DiffHunks> {
             child: Text(
               lineNo?.toString() ?? '',
               textAlign: TextAlign.right,
-              style: _mono.copyWith(fontSize: 11, color: scheme.outline),
+              style: _mono.copyWith(
+                fontSize: 11,
+                color: scheme.onSurfaceVariant,
+              ),
             ),
           ),
           SizedBox(

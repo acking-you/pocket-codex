@@ -221,6 +221,67 @@ void main() {
     },
   );
 
+  for (final supplement in [false, true]) {
+    testWidgets(
+      'desktop Enter preserves the draft during settings restoration (supplement: $supplement)',
+      (t) async {
+        final api = ModesApi();
+        await running(t, api);
+        if (supplement) {
+          await t.tap(find.byKey(const Key('supplement-toggle')));
+        }
+        final settings = Completer<void>();
+        api.configReadGate = settings;
+        api.readResult = const ThreadHistory(
+          items: [],
+          running: true,
+          activeTurnId: 'turn-1',
+        );
+        await api.appDisconnect(service);
+        await frames(t);
+        await t.enterText(
+          find.byKey(const Key('composer-input')),
+          'Keep this draft',
+        );
+        await t.pump();
+        expect(api.appIsConnected(service), isTrue);
+        expect(settings.isCompleted, isFalse);
+        expect(
+          t.widget<IconButton>(find.byKey(const Key('send-btn'))).onPressed,
+          isNull,
+        );
+        await t.sendKeyEvent(LogicalKeyboardKey.enter);
+        await frames(t);
+        expect(api.lastSteerText, isNull);
+        expect(api.turnStartCount, 1);
+        expect(draft(t), 'Keep this draft');
+        settings.complete();
+        await frames(t);
+        expect(
+          api.lastSteerText,
+          isNull,
+          reason: 'restoring settings must not submit the draft',
+        );
+        await t.sendKeyEvent(LogicalKeyboardKey.enter);
+        await frames(t);
+        expect(draft(t), isEmpty);
+        if (supplement) {
+          expect(api.lastSteerText, 'Keep this draft');
+          expect(api.lastSteerTurnId, 'turn-1');
+          expect(api.turnStartCount, 1);
+        } else {
+          expect(api.lastSteerText, isNull);
+          complete(api);
+          await frames(t);
+          expect(api.turnStartCount, 2);
+          expect(api.lastTurnText, 'Keep this draft');
+        }
+        await t.pumpWidget(const SizedBox());
+      },
+      variant: const TargetPlatformVariant({TargetPlatform.windows}),
+    );
+  }
+
   testWidgets(
     'failed supplement keeps the draft and never falls back to a new turn',
     (t) async {

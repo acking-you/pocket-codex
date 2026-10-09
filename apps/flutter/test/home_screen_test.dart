@@ -1,3 +1,5 @@
+import 'dart:async';
+
 // Chat-first home: service resolution, latest-conversation restore, fallback
 // heroes, auto-retry, service switching, and the sidebar's home-mode extras.
 
@@ -222,14 +224,91 @@ void main() {
 
     await t.tap(find.byKey(const Key('sidebar-service-switcher')));
     await t.pumpAndSettle();
-    await t.tap(find.text('laptop · beta').last);
+    await t.tap(find.byKey(Key('host-switch-item-${_app2.key}')).last);
     await t.pumpAndSettle();
 
-    // Probe failed → snackbar, no teardown: the chat stays on the first host.
-    expect(find.text('无法连接该主机，已保持当前主机不变。'), findsOneWidget);
+    // Probe failed → a failure strip that names the host, says why and that
+    // the chat stayed; no teardown: the chat stays on the first host.
+    final banner = find.byKey(const Key('host-switch-banner'));
+    expect(banner, findsOneWidget);
+    expect(
+      find.descendant(
+        of: banner,
+        matching: find.textContaining('laptop · beta'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: banner,
+        matching: find.textContaining('devbox · alpha'),
+      ),
+      findsOneWidget,
+    );
     expect(find.byKey(const Key('send-btn')), findsOneWidget);
     expect(api.appIsConnected(_app2.key), isFalse);
     expect(api.appIsConnected(_app1.key), isTrue);
+
+    // Retry once the host is back: the same switch, now succeeding.
+    api.reachable[_app2.key] = true;
+    await t.tap(find.byKey(const Key('host-switch-retry')));
+    await t.pumpAndSettle();
+    expect(banner, findsNothing);
+    expect(api.appIsConnected(_app2.key), isTrue);
+  });
+
+  testWidgets('A failed switch notice can be dismissed', (t) async {
+    final api = FakeBridgeApi(config: _accountConfig, services: [_app1, _app2]);
+    api.reachable[_app2.key] = false;
+    await _pumpHome(t, api);
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('sidebar-service-switcher')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(Key('host-switch-item-${_app2.key}')).last);
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('host-switch-banner')), findsOneWidget);
+    await t.tap(find.byKey(const Key('host-switch-dismiss')));
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('host-switch-banner')), findsNothing);
+    expect(api.appIsConnected(_app1.key), isTrue);
+  });
+
+  testWidgets('A switch in flight shows its target and step, then confirms', (
+    t,
+  ) async {
+    final api = FakeBridgeApi(config: _accountConfig, services: [_app1, _app2]);
+    await _pumpHome(t, api);
+    await t.pumpAndSettle();
+    final gate = Completer<void>();
+    api.appConnectGate = gate.future;
+
+    await t.tap(find.byKey(const Key('sidebar-service-switcher')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(Key('host-switch-item-${_app2.key}')).last);
+    await t.pump();
+    await t.pump(const Duration(milliseconds: 300));
+
+    // Held at "connecting": the strip and the switcher row both say so, and
+    // the old conversation is still there underneath.
+    final banner = find.byKey(const Key('host-switch-banner'));
+    expect(banner, findsOneWidget);
+    expect(
+      find.descendant(of: banner, matching: find.text('正在建立连接…')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const Key('host-switch-progress')), findsOneWidget);
+    expect(find.byKey(const Key('send-btn')), findsOneWidget);
+    // A second pick while busy is ignored: the switcher row is inert.
+    await t.tap(find.byKey(const Key('sidebar-service-switcher')));
+    await t.pump();
+    expect(find.byKey(Key('host-switch-item-${_app1.key}')), findsNothing);
+
+    gate.complete();
+    await t.pumpAndSettle();
+    expect(banner, findsNothing);
+    expect(find.byKey(const Key('host-switch-progress')), findsNothing);
+    expect(api.appIsConnected(_app2.key), isTrue);
+    expect(find.text('已切换到 laptop · beta'), findsOneWidget);
   });
 
   testWidgets('An explicit default host outranks the last-used host', (
@@ -259,7 +338,15 @@ void main() {
 
     await t.tap(find.byKey(const Key('sidebar-service-switcher')));
     await t.pumpAndSettle();
-    await t.tap(find.text('laptop · beta').last);
+    // The current host is checked in the list.
+    expect(
+      find.descendant(
+        of: find.byKey(Key('host-switch-item-${_app1.key}')).last,
+        matching: find.byIcon(Icons.check),
+      ),
+      findsOneWidget,
+    );
+    await t.tap(find.byKey(Key('host-switch-item-${_app2.key}')).last);
     await t.pumpAndSettle();
 
     expect(api.appIsConnected(_app2.key), isTrue);
@@ -360,6 +447,42 @@ void main() {
     expect(find.byKey(const Key('drawer-back-to-sessions')), findsNothing);
     expect(find.byKey(const Key('sidebar-manage-btn')), findsOneWidget);
     expect(find.byKey(const Key('sidebar-settings-btn')), findsOneWidget);
+  });
+
+  testWidgets('On a phone the host list is a sheet, and the drawer gets out '
+      'of the way of the switch', (t) async {
+    t.view.physicalSize = const Size(400, 800);
+    t.view.devicePixelRatio = 1;
+    addTearDown(t.view.reset);
+    final api = FakeBridgeApi(config: _accountConfig, services: [_app1, _app2]);
+    await _pumpHome(t, api);
+    await t.pumpAndSettle();
+    final gate = Completer<void>();
+    api.appConnectGate = gate.future;
+
+    await t.tap(find.byIcon(Icons.menu));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('sidebar-service-switcher')));
+    await t.pumpAndSettle();
+    expect(find.byType(BottomSheet), findsOneWidget);
+    // Touch rows are full-height targets.
+    final row = t.getSize(find.byKey(Key('host-switch-item-${_app2.key}')));
+    expect(row.height, greaterThanOrEqualTo(44));
+    await t.tap(find.byKey(Key('host-switch-item-${_app2.key}')));
+    // The spinner never settles while the switch is held, so step the sheet
+    // and drawer exit animations by hand.
+    for (var i = 0; i < 10; i++) {
+      await t.pump(const Duration(milliseconds: 60));
+    }
+
+    // Sheet and drawer are gone, so the progress strip is visible.
+    expect(find.byType(BottomSheet), findsNothing);
+    expect(find.byKey(const Key('sidebar-manage-btn')), findsNothing);
+    expect(find.byKey(const Key('host-switch-banner')), findsOneWidget);
+    gate.complete();
+    await t.pumpAndSettle();
+    expect(api.appIsConnected(_app2.key), isTrue);
+    expect(find.byKey(const Key('host-switch-banner')), findsNothing);
   });
 
   testWidgets('Discovery failure shows the retry hero, then recovers', (

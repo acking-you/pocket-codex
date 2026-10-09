@@ -38,6 +38,80 @@ pub fn pid_running(pid: u32) -> bool {
     !matches!(process_status(pid), None | Some(ProcessStatus::Zombie | ProcessStatus::Dead))
 }
 
+/// Return the start time only if this PID is the exact standalone pb worker.
+/// Host supervisors and Codex processes never match, even if state is stale.
+pub fn pb_worker_start_time(session: &crate::state::PbSessionInfo) -> Option<u64> {
+    let mut sys = System::new();
+    sys.refresh_processes_specifics(
+        ProcessesToUpdate::Some(&[Pid::from_u32(session.pid)]),
+        true,
+        ProcessRefreshKind::new()
+            .with_cmd(UpdateKind::Always)
+            .with_exe(UpdateKind::Always),
+    );
+    let process = sys.process(Pid::from_u32(session.pid))?;
+    if matches!(process.status(), ProcessStatus::Zombie | ProcessStatus::Dead) {
+        return None;
+    }
+    let exe = process
+        .exe()?
+        .file_name()?
+        .to_str()?
+        .trim_end_matches(" (deleted)");
+    let cmd: Vec<_> = process
+        .cmd()
+        .iter()
+        .map(|s| s.to_string_lossy().into_owned())
+        .collect();
+    matches_pb_worker(exe, &cmd, session).then(|| process.start_time())
+}
+
+/// Identify an exact standalone worker across PID reuse and wall-clock changes.
+/// Linux uses the boot ID and kernel start ticks; other platforms retain their
+/// native creation timestamp. This opaque value is only suitable for equality.
+pub fn pb_worker_identity(session: &crate::state::PbSessionInfo) -> Option<String> {
+    let started = pb_worker_start_time(session)?;
+    #[cfg(target_os = "linux")]
+    {
+        let _ = started;
+        let stat = std::fs::read_to_string(format!("/proc/{}/stat", session.pid)).ok()?;
+        let boot_id = std::fs::read_to_string("/proc/sys/kernel/random/boot_id").ok()?;
+        linux_process_identity(&stat, &boot_id)
+    }
+    #[cfg(not(target_os = "linux"))]
+    Some(format!("created:{started}"))
+}
+
+#[cfg(target_os = "linux")]
+fn linux_process_identity(stat: &str, boot_id: &str) -> Option<String> {
+    // comm (field 2) may contain spaces and ')'. The remainder starts at field 3;
+    // field 22 is measured since boot and is unaffected by NTP clock corrections.
+    let (_, fields) = stat.rsplit_once(") ")?;
+    let ticks = fields.split_whitespace().nth(19)?.parse::<u64>().ok()?;
+    let boot_id = boot_id.trim();
+    (!boot_id.is_empty()).then(|| format!("linux:{boot_id}:{ticks}"))
+}
+
+fn matches_pb_worker(exe: &str, cmd: &[String], session: &crate::state::PbSessionInfo) -> bool {
+    let role = match session.role {
+        crate::state::PbRole::Register => "pb-register",
+        crate::state::PbRole::Subscribe => "pb-subscribe",
+    };
+    let flag = |name: &str, value: &str| {
+        let mut values = cmd
+            .windows(2)
+            .filter(|pair| pair[0] == name)
+            .map(|pair| &pair[1]);
+        values.next().is_some_and(|actual| actual == value) && values.next().is_none()
+    };
+    matches!(exe, "pocket-codex" | "pocket-codex.exe")
+        && cmd.get(1).is_some_and(|arg| arg == "__worker")
+        && cmd.get(2).is_some_and(|arg| arg == role)
+        && flag("--key", &session.key)
+        && flag("--relay", &session.relay_addr)
+        && flag("--local-addr", &session.local_addr)
+}
+
 /// Host to dial when probing a listener that was bound to `host`: unspecified
 /// binds (`0.0.0.0` / `::`) are reachable over loopback, and a bracketed IPv6
 /// authority (`[::1]`) is unwrapped so `ToSocketAddrs` accepts it. Shared by
@@ -100,22 +174,30 @@ pub fn wait_for_port_closed(addr: &str, timeout: Duration) -> bool {
 }
 
 /// Does this process look like a native `codex app-server` launched with
-/// `listen_url`? Matched by executable stem (`codex`) so the `node` /
+/// `listen_url`? Matched by executable name (`codex`) so the `node` /
 /// `powershell` wrappers of an npm install are skipped: they carry the same
 /// `app-server --listen …` arguments but are not the process holding the
 /// socket. Split out from [`find_codex_app_server`] so the matching rule is
 /// unit-testable without real processes.
-fn matches_codex_app_server(exe_stem: &str, cmd: &[String], listen_url: &str) -> bool {
-    exe_stem.eq_ignore_ascii_case("codex")
+fn matches_codex_app_server(exe_name: &str, cmd: &[String], listen_url: &str) -> bool {
+    // Linux keeps replaced executables running and appends this suffix to
+    // /proc/PID/exe. Their process identity does not change during an upgrade.
+    let exe_name = exe_name.trim_end_matches(" (deleted)");
+    (exe_name.eq_ignore_ascii_case("codex") || exe_name.eq_ignore_ascii_case("codex.exe"))
         && cmd.iter().any(|a| a == "app-server")
-        && cmd.iter().any(|a| a.contains(listen_url))
+        && (cmd
+            .windows(2)
+            .any(|pair| pair[0] == "--listen" && pair[1] == listen_url)
+            || cmd
+                .iter()
+                .any(|arg| arg.strip_prefix("--listen=") == Some(listen_url)))
 }
 
 /// PID of the native `codex app-server` process serving `listen_url`, if one
 /// is running. This is what keeps status/stop/`serve` correct when `codex`
 /// resolves to an npm/node shim: [`std::process::Command`] only sees the
 /// shim's PID (which exits), while the native binary several layers down keeps
-/// the listener. Returns the first match (only one process can hold the port).
+/// the listener. Linux worker threads and exited processes are excluded.
 pub fn find_codex_app_server(listen_url: &str) -> Option<u32> {
     let mut sys = System::new();
     sys.refresh_processes_specifics(
@@ -126,20 +208,24 @@ pub fn find_codex_app_server(listen_url: &str) -> Option<u32> {
             .with_exe(UpdateKind::Always),
     );
     sys.processes().values().find_map(|p| {
+        if p.thread_kind().is_some()
+            || matches!(p.status(), ProcessStatus::Zombie | ProcessStatus::Dead)
+        {
+            return None;
+        }
         let exe = p.exe().map(std::path::Path::to_path_buf);
-        let stem = exe
+        let name = exe
             .as_deref()
             .unwrap_or_else(|| std::path::Path::new(p.name()))
-            .file_stem()
+            .file_name()
             .and_then(|s| s.to_str())
-            .map(str::to_ascii_lowercase)
             .unwrap_or_default();
         let cmd: Vec<String> = p
             .cmd()
             .iter()
             .map(|a| a.to_string_lossy().into_owned())
             .collect();
-        matches_codex_app_server(&stem, &cmd, listen_url).then(|| p.pid().as_u32())
+        matches_codex_app_server(name, &cmd, listen_url).then(|| p.pid().as_u32())
     })
 }
 
@@ -209,6 +295,65 @@ mod tests {
 
     use super::*;
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_identity_uses_boot_and_ticks_without_comm_or_wall_time() {
+        let stat =
+            "123 (name with ) spaces) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 987654 0";
+        assert_eq!(
+            linux_process_identity(stat, "boot-a\n").as_deref(),
+            Some("linux:boot-a:987654")
+        );
+        assert_ne!(linux_process_identity(stat, "boot-a"), linux_process_identity(stat, "boot-b"));
+        assert_ne!(
+            linux_process_identity(stat, "boot-a"),
+            linux_process_identity(&stat.replace("987654", "987655"), "boot-a")
+        );
+        assert_eq!(linux_process_identity("123 (broken)", "boot-a"), None);
+        assert_eq!(linux_process_identity(stat, ""), None);
+    }
+
+    #[test]
+    fn network_maintenance_matches_exact_worker_and_rejects_host_or_reused_pid() {
+        let record = crate::state::PbSessionInfo {
+            role: crate::state::PbRole::Register,
+            key: "pcx:test:api:default".into(),
+            relay_addr: "relay.test:7666".into(),
+            local_addr: "127.0.0.1:12345".into(),
+            pid: 0,
+            log_file: Default::default(),
+            codec: true,
+            started_at: String::new(),
+        };
+        let args = [
+            "pocket-codex",
+            "__worker",
+            "pb-register",
+            "--key",
+            &record.key,
+            "--local-addr",
+            &record.local_addr,
+            "--relay",
+            &record.relay_addr,
+            "--codec",
+        ];
+        let cmd: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+        assert!(matches_pb_worker("pocket-codex", &cmd, &record));
+        assert!(!matches_pb_worker("codex", &cmd, &record));
+        let mut host = cmd.clone();
+        host[1] = "serve".into();
+        assert!(!matches_pb_worker("pocket-codex", &host, &record));
+        let mut wrong = cmd.clone();
+        wrong[4] = "another-key".into();
+        assert!(!matches_pb_worker("pocket-codex", &wrong, &record));
+        let mut wrong = cmd.clone();
+        wrong[8] = "different-relay:7666".into();
+        assert!(!matches_pb_worker("pocket-codex", &wrong, &record));
+        let mut wrong = cmd;
+        wrong.extend(["--key".into(), record.key.clone()]);
+        assert!(!matches_pb_worker("pocket-codex", &wrong, &record));
+    }
+
     #[test]
     fn tcp_port_open_sees_a_live_listener() {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
@@ -259,6 +404,26 @@ mod tests {
         assert!(matches_codex_app_server(
             "codex",
             &cmd(&["codex", "app-server", "--listen", url]),
+            url,
+        ));
+        assert!(matches_codex_app_server(
+            "codex (deleted)",
+            &cmd(&["codex", "app-server", "--listen", url]),
+            url,
+        ));
+        assert!(matches_codex_app_server(
+            "codex.exe",
+            &cmd(&["codex.exe", "app-server", &format!("--listen={url}")]),
+            url,
+        ));
+        assert!(!matches_codex_app_server(
+            "codex",
+            &cmd(&["codex", "app-server", "--listen", "ws://127.0.0.1:180800"]),
+            url,
+        ));
+        assert!(!matches_codex_app_server(
+            "codex",
+            &cmd(&["codex", "app-server", "--config", url]),
             url,
         ));
         // The npm/node shim carries identical args but is named `node` — skip it.

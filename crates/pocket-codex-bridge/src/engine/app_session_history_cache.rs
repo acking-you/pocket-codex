@@ -118,7 +118,12 @@ pub(super) fn invalidate_history(pages: &Mutex<Pages>, inbound: &Inbound) {
     if !replaces_history
         && !matches!(
             inbound.method.as_str(),
-            "turn/started" | "turn/completed" | "turn/failed" | "item/completed"
+            "turn/started"
+                | "turn/completed"
+                | "turn/failed"
+                | "item/completed"
+                | "item/autoApprovalReview/started"
+                | "item/autoApprovalReview/completed"
         )
     {
         return;
@@ -276,24 +281,30 @@ mod tests {
 
     #[test]
     fn live_updates_invalidate_reuse_but_keep_the_loaded_prefix() {
-        let pages = Mutex::new(Pages::from([("thread".into(), ThreadPagination {
-            cached: Some(snapshot()),
-            metadata: Some(json!({"updatedAt": 1})),
-            next_item_cursor: Some("older".into()),
-            ..Default::default()
-        })]));
-        invalidate_history(&pages, &Inbound {
-            method: "item/completed".into(),
-            params: Some(json!({"threadId": "thread"})),
-            request_id: None,
-        });
-        let pages = pages.lock().expect("test pages");
-        let state = &pages["thread"];
-        assert_eq!(state.source_revision, 1);
-        assert_eq!(state.generation, 0);
-        assert!(state.metadata.is_none());
-        assert!(state.cached.is_some());
-        assert_eq!(state.next_item_cursor.as_deref(), Some("older"));
+        for method in [
+            "item/completed",
+            "item/autoApprovalReview/started",
+            "item/autoApprovalReview/completed",
+        ] {
+            let pages = Mutex::new(Pages::from([("thread".into(), ThreadPagination {
+                cached: Some(snapshot()),
+                metadata: Some(json!({"updatedAt": 1})),
+                next_item_cursor: Some("older".into()),
+                ..Default::default()
+            })]));
+            invalidate_history(&pages, &Inbound {
+                method: method.into(),
+                params: Some(json!({"threadId": "thread"})),
+                request_id: None,
+            });
+            let pages = pages.lock().expect("test pages");
+            let state = &pages["thread"];
+            assert_eq!(state.source_revision, 1);
+            assert_eq!(state.generation, 0);
+            assert!(state.metadata.is_none());
+            assert!(state.cached.is_some());
+            assert_eq!(state.next_item_cursor.as_deref(), Some("older"));
+        }
     }
 
     #[test]

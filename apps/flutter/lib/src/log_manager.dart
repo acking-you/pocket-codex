@@ -50,6 +50,23 @@ class LogManager {
   /// Number of buffered lines.
   int get count => _lines.length;
 
+  /// Record a controller lifecycle event in the same bounded, exportable log
+  /// as bridge events. Callers must not include credentials or message bodies.
+  void record(String target, String message, {String level = 'INFO'}) {
+    _lines.add(
+      LogLine(
+        level: level,
+        target: target,
+        message: message,
+        timestampMs: DateTime.now().millisecondsSinceEpoch,
+      ),
+    );
+    if (_lines.length > maxLines) {
+      _lines.removeRange(0, _lines.length - maxLines);
+    }
+    _emit();
+  }
+
   /// Subscribe to the bridge's log stream. Idempotent — safe to call once at
   /// boot; later calls are no-ops.
   void initialize(BridgeApi api) {

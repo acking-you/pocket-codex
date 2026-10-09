@@ -32,6 +32,7 @@ url = { workspace = true }
 pb-mapper = { workspace = true }
 
 [dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
 # Lets the connect-timeout test build a loopback listener with a tiny,
 # saturated backlog so a TCP connect hangs without real network access.
 socket2 = "0.6"

@@ -224,6 +224,24 @@ pub fn locate_binary(explicit: Option<&str>) -> Option<PathBuf> {
             let p = PathBuf::from(path);
             p.exists().then_some(p)
         },
+        None => locate_on_path(codex_child_path().as_deref()),
+    }
+}
+
+fn codex_child_path() -> Option<std::ffi::OsString> {
+    #[cfg(target_os = "macos")]
+    {
+        crate::shell_environment::child_path()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        None
+    }
+}
+
+pub(super) fn locate_on_path(path: Option<&std::ffi::OsStr>) -> Option<PathBuf> {
+    match path {
+        Some(path) => which::which_in("codex", Some(path), std::env::current_dir().ok()?).ok(),
         None => which::which("codex").ok(),
     }
 }
@@ -461,12 +479,14 @@ pub fn spawn(mut opts: SpawnOptions) -> pocket_codex_core::Result<SpawnReport> {
         },
     }
 
+    let child_path = codex_child_path();
     let binary = match opts.binary.as_ref() {
         Some(path) => path.clone(),
-        None => which::which("codex").map_err(|e| {
-            pocket_codex_core::Error::Config(format!(
-                "could not locate `codex` on $PATH ({e}); install codex or pass --codex-binary"
-            ))
+        None => locate_on_path(child_path.as_deref()).ok_or_else(|| {
+            pocket_codex_core::Error::Config(
+                "could not locate `codex` on $PATH; install codex or pass --codex-binary"
+                    .to_string(),
+            )
         })?,
     };
 
@@ -481,14 +501,20 @@ pub fn spawn(mut opts: SpawnOptions) -> pocket_codex_core::Result<SpawnReport> {
 
     debug!(?binary, %listen_url, ?log_file, "spawning codex app-server");
 
-    let child = build_command(&binary, &listen_url, &opts.extra_args, opts.proxy.as_deref())
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(log_handle))
-        .stderr(Stdio::from(log_handle_dup))
-        .spawn()
-        .map_err(|e| {
-            pocket_codex_core::Error::Config(format!("failed to spawn `{}`: {e}", binary.display()))
-        })?;
+    let child = build_command(
+        &binary,
+        &listen_url,
+        &opts.extra_args,
+        opts.proxy.as_deref(),
+        child_path.as_deref(),
+    )
+    .stdin(Stdio::null())
+    .stdout(Stdio::from(log_handle))
+    .stderr(Stdio::from(log_handle_dup))
+    .spawn()
+    .map_err(|e| {
+        pocket_codex_core::Error::Config(format!("failed to spawn `{}`: {e}", binary.display()))
+    })?;
 
     let spawn_pid = child.id();
     // Drop the Child handle so the kernel keeps the process alive after this
@@ -534,15 +560,19 @@ pub fn spawn(mut opts: SpawnOptions) -> pocket_codex_core::Result<SpawnReport> {
 /// defensive default we also seed `NO_PROXY` with the loopback hosts so
 /// the proxy never swallows codex's local app-server traffic, but only
 /// when the parent did not already provide one (we never override an
-/// inherited value). When `proxy` is `None` the child inherits the
-/// parent environment unchanged.
-fn build_command(
+/// inherited value). `child_path` supplies a resolved macOS login-shell PATH
+/// for this child only; no process-global environment is changed.
+pub(super) fn build_command(
     binary: &std::path::Path,
     listen_url: &str,
     extra_args: &[String],
     proxy: Option<&str>,
+    child_path: Option<&std::ffi::OsStr>,
 ) -> Command {
     let mut command = Command::new(binary);
+    if let Some(path) = child_path {
+        command.env("PATH", path);
+    }
     // The bundled binary IS the app-server (`codex-app-server --listen …`),
     // whereas an external `codex` exposes it as a subcommand (`codex app-server
     // --listen …`). Distinguish by file name so either can be spawned uniformly.
@@ -603,25 +633,30 @@ fn build_command(
 /// Snapshot of the current supervised process.
 #[derive(Debug, Clone)]
 pub struct StatusReport {
-    /// Recorded info, if any.
+    /// Recorded info, with the observed native PID when it can be identified.
     pub recorded: Option<CodexProcessInfo>,
-    /// Whether the recorded pid is still alive.
+    /// Whether the supervised native process is still alive.
     pub alive: bool,
 }
 
 /// Inspect the persisted state and report whether the supervised
 /// process is still running.
 pub fn status() -> pocket_codex_core::Result<StatusReport> {
-    let state = RuntimeState::load()?;
+    let mut state = RuntimeState::load()?;
     // "Alive" is whether a real codex app-server is serving the listen URL —
     // not merely whether the recorded PID exists (it may be a shim that exited
     // while the native binary keeps the socket) nor whether *anything* holds
     // the port (a foreign process must not read as our app-server). For
     // websocket transports require a `codex … app-server` bound to the URL;
     // fall back to the PID for unix sockets.
-    let alive = state.codex.as_ref().is_some_and(|c| {
+    let alive = state.codex.as_mut().is_some_and(|c| {
         if ws_host_port(&c.listen).is_some() {
-            find_codex_app_server(&c.listen).is_some()
+            if let Some(pid) = find_codex_app_server(&c.listen) {
+                c.pid = pid;
+                true
+            } else {
+                false
+            }
         } else {
             pid_alive(c.pid)
         }
@@ -724,7 +759,7 @@ mod tests {
     #[test]
     fn build_command_omits_subcommand_for_bundled_app_server() {
         let args = |bin: &str| -> Vec<String> {
-            build_command(Path::new(bin), "ws://127.0.0.1:1", &[], None)
+            build_command(Path::new(bin), "ws://127.0.0.1:1", &[], None, None)
                 .get_args()
                 .map(|a| a.to_string_lossy().into_owned())
                 .collect()
@@ -765,7 +800,7 @@ mod tests {
 
     #[test]
     fn build_command_applies_the_span_filter_it_computed() {
-        let command = build_command(Path::new("codex"), "ws://127.0.0.1:1", &[], None);
+        let command = build_command(Path::new("codex"), "ws://127.0.0.1:1", &[], None, None);
         let set = explicit_envs(&command)
             .get(&OsString::from("RUST_LOG"))
             .and_then(|v| v.clone());
@@ -811,6 +846,7 @@ mod tests {
             "ws://127.0.0.1:18080",
             &[],
             Some("http://127.0.0.1:11111"),
+            None,
         );
         let envs = explicit_envs(&command);
 
@@ -835,7 +871,7 @@ mod tests {
 
     #[test]
     fn build_command_leaves_proxy_env_untouched_without_proxy() {
-        let command = build_command(Path::new("codex"), "ws://127.0.0.1:18080", &[], None);
+        let command = build_command(Path::new("codex"), "ws://127.0.0.1:18080", &[], None, None);
         let envs = explicit_envs(&command);
 
         // No PROXY var is set when none was asked for; the child inherits the

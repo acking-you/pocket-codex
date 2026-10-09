@@ -22,6 +22,10 @@ use tokio::{sync::broadcast, task::JoinHandle};
 
 use crate::engine::{runtime, transport::Transport};
 
+#[path = "app_session_live.rs"]
+mod live;
+use live::LiveTranscript;
+
 /// A UI-facing app-server event, flattened from a JSON-RPC notification.
 ///
 /// `kind` is the raw JSON-RPC method (e.g. `turn/started`,
@@ -63,6 +67,12 @@ pub struct ThreadMeta {
     /// User-set title, or `None` when the thread was never renamed (callers
     /// fall back to [`Self::preview`]).
     pub name: Option<String>,
+    /// App-owned classification persisted by Codex, independent of the title.
+    #[serde(default)]
+    pub thread_source: Option<String>,
+    /// Parent thread, when this is a spawned child.
+    #[serde(default)]
+    pub parent_thread_id: Option<String>,
     /// Working directory (the "project" the thread controls).
     pub cwd: String,
     /// Unix seconds of last update.
@@ -157,7 +167,7 @@ struct Session {
     /// conversation: the forwarder drops events when no UI is attached, and
     /// the server's `thread/read` doesn't return the in-progress turn's
     /// items.
-    transcript: Arc<Mutex<HashMap<String, Vec<ThreadItem>>>>,
+    transcript: Arc<Mutex<LiveTranscript>>,
     /// Where each paginated thread's history reading got to, keyed by
     /// `threadId`. Paginated threads reject a whole-history read, so
     /// [`thread_read`] loads a bounded window and the UI asks for more; the
@@ -321,8 +331,7 @@ fn establish(service_key: String, local_addr: &str) -> Result<()> {
     let pending_approvals: Arc<Mutex<HashMap<String, Value>>> =
         Arc::new(Mutex::new(HashMap::new()));
     let approvals_for_forwarder = Arc::clone(&pending_approvals);
-    let transcript: Arc<Mutex<HashMap<String, Vec<ThreadItem>>>> =
-        Arc::new(Mutex::new(HashMap::new()));
+    let transcript: Arc<Mutex<LiveTranscript>> = Arc::new(Mutex::new(LiveTranscript::default()));
     let transcript_for_forwarder = Arc::clone(&transcript);
     let runtime_config: Arc<Mutex<HashMap<String, ThreadRuntimeConfig>>> =
         Arc::new(Mutex::new(HashMap::new()));
@@ -370,15 +379,18 @@ fn establish(service_key: String, local_addr: &str) -> Result<()> {
                     .is_none_or(|at| at.elapsed() >= Duration::from_secs(1));
                 if due
                     || replaces_history
-                    || matches!(inbound.method.as_str(), "turn/completed" | "turn/failed")
+                    || matches!(
+                        inbound.method.as_str(),
+                        "turn/completed" | "turn/failed" | "item/autoApprovalReview/completed"
+                    )
                 {
                     if checkpoints.len() >= 128 {
                         checkpoints.clear();
                     }
                     checkpoints.insert(thread.to_owned(), Instant::now());
                     let items = transcript_for_forwarder.lock().ok().and_then(|t| {
-                        t.get(thread)
-                            .map(|items| items.iter().rev().take(20).cloned().collect::<Vec<_>>())
+                        let items = t.tail(thread, 20);
+                        (!items.is_empty()).then_some(items)
                     });
                     let permit = Arc::clone(&checkpoint_slots).try_acquire_owned().ok();
                     if let Some(owner) = &checkpoint_owner {
@@ -388,8 +400,7 @@ fn establish(service_key: String, local_addr: &str) -> Result<()> {
                                 thread,
                                 replaces_history,
                             );
-                            let mut items = items.unwrap_or_default();
-                            items.reverse();
+                            let items = items.unwrap_or_default();
                             let service = checkpoint_service.clone();
                             let thread = thread.to_owned();
                             let running = turns_for_forwarder
@@ -437,10 +448,41 @@ fn plan_item_id(params: &Value) -> String {
     format!("plan-{turn_id}")
 }
 
+fn approval_review_item(params: &Value) -> Option<ThreadItem> {
+    let id = params
+        .get("reviewId")?
+        .as_str()
+        .filter(|id| !id.is_empty())?;
+    let review = params.get("review")?.as_object()?;
+    Some(ThreadItem {
+        id: format!("auto-review:{id}"),
+        item_type: "autoApprovalReview".into(),
+        title: review
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .into(),
+        text: params.to_string(),
+        questions_json: None,
+        images: Vec::new(),
+        turn_id: params
+            .get("turnId")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .into(),
+        turn_completed_at: None,
+        turn_duration_ms: None,
+    })
+}
+
+fn is_approval_review(method: &str) -> bool {
+    matches!(method, "item/autoApprovalReview/started" | "item/autoApprovalReview/completed")
+}
+
 /// Retain streamed text and full item snapshots by id for resume and durable
 /// checkpoints. A completed snapshot replaces its preceding deltas. The plan
 /// notification has no item envelope and uses a stable per-turn identity.
-fn buffer_item(transcript: &Mutex<HashMap<String, Vec<ThreadItem>>>, inbound: &Inbound) {
+fn buffer_item(transcript: &Mutex<LiveTranscript>, inbound: &Inbound) {
     let Some(params) = inbound.params.as_ref() else {
         return;
     };
@@ -490,11 +532,8 @@ fn buffer_item(transcript: &Mutex<HashMap<String, Vec<ThreadItem>>>, inbound: &I
             return;
         };
         let Ok(mut map) = transcript.lock() else { return };
-        let items = map.entry(thread_id.to_owned()).or_default();
-        if let Some(item) = items.iter_mut().find(|item| item.id == id) {
-            item.text.push_str(&text);
-        } else {
-            items.push(ThreadItem {
+        if !map.append(thread_id, id, &text) {
+            map.upsert(thread_id, ThreadItem {
                 id: id.into(),
                 item_type,
                 title,
@@ -508,7 +547,10 @@ fn buffer_item(transcript: &Mutex<HashMap<String, Vec<ThreadItem>>>, inbound: &I
         }
         return;
     }
-    let mut parsed = if inbound.method == "turn/plan/updated" {
+    let mut parsed = if is_approval_review(&inbound.method) {
+        let Some(item) = approval_review_item(params) else { return };
+        item
+    } else if inbound.method == "turn/plan/updated" {
         ThreadItem {
             id: plan_item_id(params),
             item_type: "plan".to_string(),
@@ -540,11 +582,7 @@ fn buffer_item(transcript: &Mutex<HashMap<String, Vec<ThreadItem>>>, inbound: &I
         return;
     }
     let mut map = transcript.lock().expect("transcript poisoned");
-    let items = map.entry(thread_id.to_string()).or_default();
-    match items.iter_mut().find(|i| i.id == parsed.id) {
-        Some(existing) => *existing = parsed, // later snapshot wins
-        None => items.push(parsed),           // new id keeps stream order
-    }
+    map.upsert(thread_id, parsed);
 }
 
 #[path = "app_session_history_cache.rs"]
@@ -568,6 +606,11 @@ pub struct OlderPage {
     pub has_older: bool,
 }
 
+/// The cursor belongs to the sequential window, never to a selected turn.
+pub(super) fn history_continuation(service: &str, thread: &str) -> Option<Option<String>> {
+    pagination_of(service, thread).map(|state| state.next_item_cursor)
+}
+
 /// Walk one page further back through a paginated thread's history.
 ///
 /// Returns an empty page when the thread reads whole or is already at its
@@ -588,14 +631,7 @@ pub fn thread_older_page(service_key: &str, thread_id: &str) -> Result<OlderPage
     let Some(cursor) = state.next_item_cursor.clone() else {
         return Ok(empty());
     };
-    let page = fetch_item_page(
-        service_key,
-        &client,
-        thread_id,
-        None,
-        Some(cursor.as_str()),
-        ITEM_PAGE_LIMIT,
-    )?;
+    let page = fetch_older_item_page(service_key, &client, thread_id, &cursor, ITEM_PAGE_LIMIT)?;
     let entries = page
         .get("data")
         .and_then(Value::as_array)
@@ -613,11 +649,11 @@ pub fn thread_older_page(service_key: &str, thread_id: &str) -> Result<OlderPage
             .and_then(Value::as_str)
             .unwrap_or_default();
         let stamp = turn_stamp(&state.turn_stamps, turn_id);
-        if let Some(parsed) = parse_turn_item(item, &stamp) {
+        if parse_turn_item(item, &stamp).is_some() {
             if !state.loaded_turns.iter().any(|id| id == turn_id) {
                 state.loaded_turns.insert(0, turn_id.to_string());
             }
-            items.push(parsed);
+            items.extend(parse_turn_items(item, &stamp));
         }
     }
     let next = page
@@ -665,6 +701,7 @@ pub fn thread_turn_items(
         .map_err(|_| anyhow!("history request lock poisoned"))?;
     let mut state = ensure_pagination(service_key, thread_id);
     let mut newest_first = Vec::new();
+    let mut seen_items = HashSet::new();
     let mut cursor: Option<String> = None;
     let mut seen = HashSet::new();
     let stamp = turn_stamp(&state.turn_stamps, turn_id);
@@ -689,8 +726,13 @@ pub fn thread_turn_items(
             break;
         }
         for entry in &entries {
-            if let Some(parsed) = entry.get("item").and_then(|i| parse_turn_item(i, &stamp)) {
-                newest_first.push(parsed);
+            if let Some(item) = entry.get("item") {
+                newest_first.extend(
+                    parse_turn_items(item, &stamp)
+                        .into_iter()
+                        .rev()
+                        .filter(|item| seen_items.insert(item.id.clone())),
+                );
             }
         }
         let next = page
@@ -723,9 +765,7 @@ fn buffered_items(service_key: &str, thread_id: &str) -> Vec<ThreadItem> {
             s.transcript
                 .lock()
                 .expect("transcript poisoned")
-                .get(thread_id)
-                .cloned()
-                .unwrap_or_default()
+                .tail(thread_id, 100)
         })
         .unwrap_or_default()
 }
@@ -1149,6 +1189,10 @@ fn thread_list_remote(service_key: &str) -> Result<Vec<ThreadMeta>> {
         let mut params = serde_json::Map::new();
         params.insert("limit".into(), json!(PAGE_LIMIT));
         params.insert("sortKey".into(), json!("updated_at"));
+        params.insert(
+            "sourceKinds".into(),
+            json!(["cli", "vscode", "appServer", "exec", "subAgent", "unknown"]),
+        );
         if let Some(c) = &cursor {
             params.insert("cursor".into(), json!(c));
         }
@@ -1173,11 +1217,29 @@ fn thread_list_remote(service_key: &str) -> Result<Vec<ThreadMeta>> {
     Ok(out)
 }
 
+/// Inspect a thread's classification and parent without attaching a writer.
+pub fn thread_metadata(service_key: &str, thread_id: &str) -> Result<ThreadMeta> {
+    let client = client_for(service_key)?;
+    read_thread_metadata(&client, thread_id)
+}
+
+fn read_thread_metadata(client: &Arc<AppClient>, thread_id: &str) -> Result<ThreadMeta> {
+    let response = runtime::runtime().block_on(
+        client.request("thread/read", json!({"threadId": thread_id, "includeTurns": false})),
+    )?;
+    response
+        .get("thread")
+        .and_then(parse_thread_meta)
+        .context("missing thread metadata")
+}
+
 /// Parse one `thread/list` entry into [`ThreadMeta`]; skips entries with no id.
 fn parse_thread_meta(t: &Value) -> Option<ThreadMeta> {
     let id = t.get("id")?.as_str()?.to_string();
     Some(ThreadMeta {
         id,
+        thread_source: pocket_codex_codex::rollout::thread_source(t),
+        parent_thread_id: pocket_codex_codex::rollout::parent_thread_id(t),
         preview: t
             .get("preview")
             .and_then(Value::as_str)
@@ -1457,6 +1519,11 @@ fn track_pending_approval(pending: &Mutex<HashMap<String, Value>>, inbound: &Inb
 /// view's gists are what break first.
 pub fn thread_resume(service_key: &str, thread_id: &str) -> Result<()> {
     let client = client_for(service_key)?;
+    let metadata = read_thread_metadata(&client, thread_id)?;
+    anyhow::ensure!(
+        metadata.thread_source.as_deref() != Some("guardian_review"),
+        "Guardian approval sessions are read-only; open their parent session"
+    );
     let res = runtime::runtime().block_on(
         client.request("thread/resume", json!({ "threadId": thread_id, "excludeTurns": true })),
     )?;
@@ -1712,9 +1779,7 @@ fn flatten_turns(turns: &[Value]) -> Vec<ThreadItem> {
         };
         let stamp = TurnStamp::of(turn);
         for item in turn_items {
-            if let Some(parsed) = parse_turn_item(item, &stamp) {
-                items.push(parsed);
-            }
+            items.extend(parse_turn_items(item, &stamp));
         }
     }
     items
@@ -1765,6 +1830,27 @@ fn fetch_item_page(
         params["cursor"] = json!(cursor);
     }
     super::session_sync::request(service_key, client, "thread/items/list", params)
+}
+
+/// [`fetch_item_page`] for a page behind the live tail: such a page is fixed
+/// within a source generation, so a retained copy answers it from disk.
+fn fetch_older_item_page(
+    service_key: &str,
+    client: &Arc<AppClient>,
+    thread_id: &str,
+    cursor: &str,
+    limit: u32,
+) -> Result<Value> {
+    let params = json!({
+        "threadId": thread_id,
+        "limit": limit,
+        "sortDirection": "desc",
+        "cursor": cursor,
+    });
+    if let Some(page) = super::session_sync::retained(service_key, "thread/items/list", &params) {
+        return Ok(page);
+    }
+    fetch_item_page(service_key, client, thread_id, None, Some(cursor), limit)
 }
 
 /// Every turn in the thread, oldest first, as rail summaries.
@@ -1892,7 +1978,7 @@ fn load_paginated_window(
             if parsed.item_type == "userMessage" && !loaded_turns.iter().any(|id| id == turn_id) {
                 loaded_turns.push(turn_id.to_string());
             }
-            items.push(parsed);
+            items.extend(parse_turn_items(item, &stamp));
         }
     }
 
@@ -1914,17 +2000,6 @@ fn load_paginated_window(
             .map(|turn| summarize_turn(turn, false))
             .collect();
     }
-    for skeleton in &mut skeletons {
-        skeleton.loaded = loaded_turns.contains(&skeleton.turn_id);
-    }
-    // The item window can cross more turns than the initial status shells.
-    // Summary pages carry the same timing metadata without loading their items.
-    for item in &mut items {
-        if let Some(stamp) = stamps.get(&item.turn_id) {
-            item.turn_completed_at = stamp.completed_at;
-            item.turn_duration_ms = stamp.duration_ms;
-        }
-    }
     // Where older history continues: this page's own continuation cursor.
     let mut item_cursor = items_page
         .get("nextCursor")
@@ -1935,6 +2010,7 @@ fn load_paginated_window(
     // Keep the immutable prefix and its exhausted/older cursor, while the new
     // tail replaces any live snapshots. Disjoint tails start a fresh window.
     let mut seen_item_cursors = HashSet::new();
+    let mut restored_turns = Vec::new();
     if let Some(cached) = previous.cached.as_ref() {
         if let Some(first) = items.first() {
             if let Some(at) = cached.items.iter().position(|item| item.id == first.id) {
@@ -1945,11 +2021,73 @@ fn load_paginated_window(
                 seen_item_cursors = previous.seen_item_cursors.clone();
             }
         }
+    } else {
+        match super::session_sync::restore_cached_prefix(
+            service_key,
+            thread_id,
+            &mut items,
+            &mut item_cursor,
+            &skeletons,
+        ) {
+            Ok(turns) => restored_turns = turns,
+            Err(error) => {
+                tracing::debug!(%error, "cached prefix unavailable; keeping the fresh tail")
+            },
+        }
+    }
+    // Restored pages arrive locally without another RPC. Apply current turn
+    // metadata after stitching, including to the restored opening messages.
+    let mut loaded = HashSet::new();
+    loaded_turns.clear();
+    for item in &mut items {
+        if let Some(stamp) = stamps.get(&item.turn_id) {
+            item.turn_completed_at = stamp.completed_at;
+            item.turn_duration_ms = stamp.duration_ms;
+        }
+        if item.item_type == "userMessage" && loaded.insert(item.turn_id.clone()) {
+            loaded_turns.push(item.turn_id.clone());
+        }
+    }
+    for skeleton in &mut skeletons {
+        skeleton.loaded = loaded.contains(&skeleton.turn_id);
+    }
+    let mut turn_pages = previous.turn_pages.clone();
+    let fresh: HashMap<_, _> = items.iter().map(|item| (item.id.as_str(), item)).collect();
+    for mut retained in restored_turns {
+        // An exhausted cached turn may have grown while offline. Without an
+        // overlap, its old end cannot prove continuity with the current tail.
+        let tail_turn = items
+            .last()
+            .is_some_and(|item| item.turn_id == retained.page.turn_id);
+        if tail_turn
+            && retained.cursor.is_none()
+            && !retained
+                .page
+                .items
+                .iter()
+                .any(|item| fresh.contains_key(item.id.as_str()))
+        {
+            continue;
+        }
+        for item in &mut retained.page.items {
+            if let Some(current) = fresh.get(item.id.as_str()) {
+                *item = (*current).clone();
+            }
+            item.questions_json = None;
+            if let Some(stamp) = stamps.get(&item.turn_id) {
+                item.turn_completed_at = stamp.completed_at;
+                item.turn_duration_ms = stamp.duration_ms;
+            }
+        }
+        turn_pages
+            .entry(retained.page.turn_id)
+            .or_insert_with(|| TurnWindow::restored(retained.page.items, retained.cursor));
     }
     // Seeing one item from every turn does not mean every item was loaded:
     // even a single turn can fill several pages. The item cursor is authoritative.
     let has_older = item_cursor.is_some();
     if !set_pagination(service_key, thread_id, ThreadPagination {
+        turn_pages,
         next_item_cursor: item_cursor,
         seen_item_cursors,
         loaded_turns,
@@ -2007,7 +2145,7 @@ pub fn thread_read_with_pages(
         result = thread_read_inner(service_key, thread_id, include_turn_pages);
     }
     if let Ok(history) = &result {
-        super::session_sync::save_history(service_key, thread_id, history);
+        super::session_sync::save_history(service_key, thread_id, history, include_turn_pages);
     }
     match &result {
         Ok(history) => tracing::info!(
@@ -2098,7 +2236,13 @@ fn thread_read_inner(
             .collect();
         for buffered in buffered_items(service_key, thread_id) {
             if let Some(index) = positions.get(&buffered.id) {
-                items[*index].questions_json = buffered.questions_json;
+                if buffered.item_type == "autoApprovalReview"
+                    && (items[*index].title == "inProgress" || buffered.title != "inProgress")
+                {
+                    items[*index] = buffered;
+                } else {
+                    items[*index].questions_json = buffered.questions_json;
+                }
             } else {
                 items.push(buffered);
             }
@@ -2595,6 +2739,65 @@ pub fn set_thread_name(service_key: &str, thread_id: &str, name: &str) -> Result
     Ok(())
 }
 
+/// Forward a realtime control request over the existing initialized connection.
+/// Audio media uses client-owned WebRTC; only signaling crosses the bridge.
+pub fn realtime_request(service_key: &str, method: &str, params_json: &str) -> Result<String> {
+    let params: Value = serde_json::from_str(params_json)?;
+    validate_realtime_request(method, &params)?;
+    let client = client_for(service_key)?;
+    let res = runtime::runtime().block_on(client.request(method, params))?;
+    if method == "thread/start" {
+        if let Some(id) = res.pointer("/thread/id").and_then(Value::as_str) {
+            record_runtime_config(service_key, id, &res);
+        }
+    }
+    Ok(res.to_string())
+}
+
+fn validate_realtime_request(method: &str, params: &Value) -> Result<()> {
+    anyhow::ensure!(params.is_object(), "realtime params must be an object");
+    match method {
+        "thread/timeline/list"
+        | "thread/realtime/start"
+        | "thread/realtime/stop"
+        | "thread/realtime/appendAudio"
+        | "thread/realtime/appendText"
+        | "thread/realtime/appendSpeech" => {
+            anyhow::ensure!(
+                params
+                    .get("threadId")
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| !id.is_empty()),
+                "realtime request requires threadId"
+            );
+        },
+        "thread/realtime/listVoices" => {},
+        "thread/start" => match params.get("threadSource").and_then(Value::as_str) {
+            Some("pocket-codex-voice") => {},
+            // The composer's dictation line: a realtime session that only
+            // transcribes. It must never become a conversation of its own, so
+            // only an ephemeral thread (no rollout, not listed) is allowed.
+            Some("pocket-codex-dictation") => anyhow::ensure!(
+                params.get("ephemeral").and_then(Value::as_bool) == Some(true),
+                "dictation thread must be ephemeral"
+            ),
+            _ => anyhow::bail!("voice thread requires its source marker"),
+        },
+        // Lets the dictation line release its ephemeral thread on close.
+        "thread/unsubscribe" => {
+            anyhow::ensure!(
+                params
+                    .get("threadId")
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| !id.is_empty()),
+                "unsubscribe requires threadId"
+            );
+        },
+        _ => anyhow::bail!("unsupported realtime method: {method}"),
+    }
+    Ok(())
+}
+
 /// Build a `turn/start` `input` array from message text plus attached images.
 /// The text (when non-empty) leads as a `text` item; each image follows as an
 /// `image` item whose `url` must be a `data:image/...` base64 URL — the only
@@ -2819,6 +3022,24 @@ pub fn turn_interrupt(service_key: &str, thread_id: &str, turn_id: Option<String
 /// Map an inbound server message to a flattened [`AppEvent`].
 fn map_event(inbound: Inbound) -> AppEvent {
     let mut params = inbound.params.unwrap_or(Value::Null);
+    if is_approval_review(&inbound.method) {
+        if let Some(item) = approval_review_item(&params) {
+            return AppEvent {
+                kind: inbound.method,
+                thread_id: params
+                    .get("threadId")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                item_id: Some(item.id),
+                item_type: Some(item.item_type),
+                title: Some(item.title),
+                text: Some(item.text),
+                images: Vec::new(),
+                request_id: None,
+                raw: params.to_string(),
+            };
+        }
+    }
     // v2 streams the evolving plan via a top-level notification (`params.plan`),
     // not as a thread item, so the generic item path below never sees it.
     // Synthesize a per-turn singleton `plan` item (stable id keyed on the turn)
@@ -2997,6 +3218,25 @@ impl TurnStamp {
             duration_ms: turn.get("durationMs").and_then(Value::as_i64),
         }
     }
+}
+
+fn parse_turn_items(item: &Value, turn: &TurnStamp) -> Vec<ThreadItem> {
+    let mut reviews = item
+        .get("autoApprovalReviews")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(approval_review_item)
+        .filter(|review| review.turn_id == turn.id)
+        .collect::<Vec<_>>();
+    if let Some(parsed) = parse_turn_item(item, turn) {
+        if parsed.item_type == "userMessage" {
+            reviews.insert(0, parsed);
+        } else {
+            reviews.push(parsed);
+        }
+    }
+    reviews
 }
 
 fn parse_turn_item(item: &Value, turn: &TurnStamp) -> Option<ThreadItem> {
@@ -3190,7 +3430,10 @@ fn summarize_item(item: &Value) -> (String, String, String) {
                 "agentsStates",
             ]),
         ),
-        "subAgentActivity" => (s("kind"), selected_json(item, &["agentPath", "agentThreadId"])),
+        "subAgentActivity" => (
+            s("kind"),
+            selected_json(item, &["agentPath", "agentThreadId", "model", "reasoningEffort"]),
+        ),
         "imageView" => (s("path"), String::new()),
         "sleep" => {
             let duration = item.get("durationMs").and_then(Value::as_u64).unwrap_or(0);
@@ -3444,7 +3687,7 @@ mod tests {
 
     #[test]
     fn live_checkpoints_retain_text_before_item_completion() {
-        let transcript = Mutex::new(HashMap::new());
+        let transcript = Mutex::new(LiveTranscript::default());
         for (method, id) in [
             ("item/agentMessage/delta", "message"),
             ("item/commandExecution/outputDelta", "command"),
@@ -3461,8 +3704,9 @@ mod tests {
         }
         {
             let items = transcript.lock().expect("test transcript");
-            assert_eq!(items["thread"].len(), 2);
-            assert!(items["thread"]
+            assert_eq!(items.tail("thread", 100).len(), 2);
+            assert!(items
+                .tail("thread", 100)
                 .iter()
                 .all(|item| item.text == "partial 中文" && item.turn_id == "turn"));
         }
@@ -3474,8 +3718,8 @@ mod tests {
             request_id: None,
         });
         let items = transcript.lock().expect("test transcript");
-        assert_eq!(items["thread"][0].text, "partial 中文 completed");
-        assert_eq!(items["thread"].len(), 2);
+        assert_eq!(items.tail("thread", 100)[0].text, "partial 中文 completed");
+        assert_eq!(items.tail("thread", 100).len(), 2);
     }
 
     #[test]
@@ -3484,7 +3728,7 @@ mod tests {
         // buffered as a `plan` item so a resumed thread restores the plan card at
         // the tail. Otherwise the card is lost on re-open and the proposal message
         // re-reads as a misplaced plan (the plan-jumps-earlier-on-switch bug).
-        let transcript: Mutex<HashMap<String, Vec<ThreadItem>>> = Mutex::new(HashMap::new());
+        let transcript = Mutex::new(LiveTranscript::default());
         let plan = |status: &str| Inbound {
             method: "turn/plan/updated".into(),
             params: Some(json!({
@@ -3499,7 +3743,7 @@ mod tests {
         buffer_item(&transcript, &plan("completed"));
         {
             let items = transcript.lock().unwrap();
-            let t1 = items.get("t1").expect("plan buffered under its thread");
+            let t1 = items.tail("t1", 100);
             assert_eq!(t1.len(), 1, "plan updates upsert into a single item");
             assert_eq!(t1[0].item_type, "plan");
             assert_eq!(t1[0].id, "plan-turn-9");
@@ -4068,7 +4312,7 @@ pub(super) fn parse_prefetched_items(response: &Value) -> Vec<ThreadItem> {
         .into_iter()
         .flatten()
         .rev()
-        .filter_map(|entry| {
+        .flat_map(|entry| {
             let stamp = turn_stamp(
                 &stamps,
                 entry
@@ -4076,7 +4320,10 @@ pub(super) fn parse_prefetched_items(response: &Value) -> Vec<ThreadItem> {
                     .and_then(Value::as_str)
                     .unwrap_or_default(),
             );
-            parse_turn_item(entry.get("item")?, &stamp)
+            entry
+                .get("item")
+                .map(|item| parse_turn_items(item, &stamp))
+                .unwrap_or_default()
         })
         .collect()
 }

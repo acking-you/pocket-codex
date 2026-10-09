@@ -355,7 +355,7 @@ where
         .context("opening meta session follow")?;
     let mut response = ensure_ok(response).await?;
     let mut pending = Vec::new();
-    let mut revision = None;
+    let mut version = None;
     while let Some(chunk) = response
         .chunk()
         .await
@@ -366,10 +366,14 @@ where
             let Some(update) = decode_follow_event(&event)? else {
                 continue;
             };
-            if update.history_revision.is_some() && update.history_revision != revision {
+            let next_version =
+                (update.history_revision.clone(), update.liveness.turn_state.clone());
+            // Liveness is sampled separately from the rollout revision. A
+            // terminal state must invalidate an earlier tail at the same revision.
+            if update.history_revision.is_some() && version.as_ref() != Some(&next_version) {
                 super::app_session::external_history_changed(service_key, thread_id);
-                revision.clone_from(&update.history_revision);
             }
+            version = Some(next_version);
             if !on_update(update) {
                 return Ok(());
             }

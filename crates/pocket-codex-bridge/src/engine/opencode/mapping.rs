@@ -421,6 +421,8 @@ pub fn session_meta(session: &Session) -> ThreadMeta {
         name: title,
         cwd: session.location.directory.clone(),
         updated_at: session.updated_ms() / 1000,
+        thread_source: None,
+        parent_thread_id: session.parent_id.clone(),
     }
 }
 

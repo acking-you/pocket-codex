@@ -118,6 +118,14 @@ class AppLocalizationsZh extends AppLocalizations {
   String get newConversation => '新建对话';
 
   @override
+  String newConversationInProject(String project) {
+    return '在 $project 中新建会话';
+  }
+
+  @override
+  String get copyProjectPath => '复制项目路径';
+
+  @override
   String get noThreads => '暂无会话';
 
   @override
@@ -966,6 +974,46 @@ class AppLocalizationsZh extends AppLocalizations {
   String get noLocalSessions => '没有本地会话';
 
   @override
+  String get localSessionsUnavailable => '此设备无法读取本地会话';
+
+  @override
+  String get localSessionsMobileHint =>
+      '此页面用于读取本机保存的 Codex 会话。查看电脑上的会话，请到服务管理连接电脑；已缓存的对话仍可在聊天中查看。';
+
+  @override
+  String get noLocalSessionsHint =>
+      '这台电脑还没有可查看的 Codex 会话。使用 Codex 创建会话后刷新，或连接其他设备。';
+
+  @override
+  String get noHostSessions => '这台设备暂无会话';
+
+  @override
+  String get noHostSessionsHint => '这台设备还没有可查看的会话。请在该设备上创建 Codex 会话后刷新。';
+
+  @override
+  String get sessionsReadFailed => '暂时无法读取会话';
+
+  @override
+  String get localSessionsReadHint => '请确认当前用户已有 Codex 会话，且有权限读取会话目录，然后重试。';
+
+  @override
+  String get remoteSessionsReadHint => '暂时无法读取该设备的会话，请检查设备连接后重试。';
+
+  @override
+  String get errorDetails => '错误详情';
+
+  @override
+  String get moveTurnNavigation => '拖动可移动对话导航按钮';
+
+  @override
+  String historyLoaded(int count) {
+    return '已加载 $count 条较早的记录';
+  }
+
+  @override
+  String get historyAlreadyVisible => '这部分历史已在当前对话中显示';
+
+  @override
   String get sessionResumable => '可恢复';
 
   @override
@@ -1301,6 +1349,56 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get switchServiceFailed => '无法连接该主机，已保持当前主机不变。';
+
+  @override
+  String get hostSwitchTitle => '切换主机';
+
+  @override
+  String hostSwitchingTo(String host) {
+    return '正在切换到 $host…';
+  }
+
+  @override
+  String get hostSwitchProbing => '正在确认主机是否在线…';
+
+  @override
+  String get hostSwitchConnecting => '正在建立连接…';
+
+  @override
+  String get hostSwitchLoading => '正在加载会话…';
+
+  @override
+  String hostSwitchFailedTitle(String host) {
+    return '无法切换到 $host';
+  }
+
+  @override
+  String hostSwitchStayed(String host) {
+    return '仍在使用 $host。';
+  }
+
+  @override
+  String hostSwitched(String host) {
+    return '已切换到 $host';
+  }
+
+  @override
+  String get hostSwitchLastFailed => '上次尝试失败';
+
+  @override
+  String hostInUse(String name) {
+    return '$name · 使用中';
+  }
+
+  @override
+  String hostCurrent(String host) {
+    return '主机：$host';
+  }
+
+  @override
+  String hostSwitchHint(String host) {
+    return '主机：$host。切换主机';
+  }
 
   @override
   String get pickFolderTitle => '选择项目文件夹';
@@ -1798,4 +1896,230 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get backToParentSession => '返回父会话';
+
+  @override
+  String get draft => '草稿';
+
+  @override
+  String get editMessage => '编辑消息';
+
+  @override
+  String get done => '完成';
+
+  @override
+  String get expandComposer => '展开编辑器';
+
+  @override
+  String get resetComposerHeight => '重置输入框高度';
+
+  @override
+  String get composerKeyboardHint => 'Enter 发送 · Shift+Enter 换行';
+
+  @override
+  String get selectText => '选择文本';
+
+  @override
+  String get sharePrompt => '分享提示';
+
+  @override
+  String get shareMessage => '分享消息';
+
+  @override
+  String get messageShareFailed => '无法打开分享，可先复制文字。';
+
+  @override
+  String get messageCopyFailed => '复制失败，请重试。';
+
+  @override
+  String get addToDraft => '加入输入框';
+
+  @override
+  String get editMessageHint => '将文字作为新消息使用，保留原有历史，不会重新附加原消息的附件。';
+
+  @override
+  String get editMessageDraftHint => '保留当前草稿和附件，编辑后的文字将加在草稿末尾。';
+
+  @override
+  String get voiceStart => '开始语音';
+
+  @override
+  String get voiceStartHint => '与当前项目实时语音交流。语音可以驱动 Codex 执行任务，权限设置与普通对话一致。';
+
+  @override
+  String get voiceUnavailable => '语音暂不可用';
+
+  @override
+  String get voiceVoice => '音色';
+
+  @override
+  String get voiceModel => '语音模型';
+
+  @override
+  String get voiceModelHint => '留空使用主机默认模型';
+
+  @override
+  String get voiceConnecting => '正在连接语音…';
+
+  @override
+  String get voiceListening => '语音已连接 · 正在聆听';
+
+  @override
+  String get voiceMuted => '麦克风已静音';
+
+  @override
+  String get voiceStopping => '正在结束语音…';
+
+  @override
+  String get voiceStop => '结束语音';
+
+  @override
+  String get voiceMute => '静音';
+
+  @override
+  String get voiceUnmute => '取消静音';
+
+  @override
+  String get voiceHistory => '语音记录';
+
+  @override
+  String get voiceHistoryEmpty => '这一页暂无语音记录';
+
+  @override
+  String get voiceHistoryMore => '加载后续记录';
+
+  @override
+  String get voiceErrorDetails => '查看错误详情';
+
+  @override
+  String get voiceNewSession => '新建语音会话';
+
+  @override
+  String get restoringSessionSettings => '正在恢复会话设置…';
+
+  @override
+  String get reviewInProgress => '模型审核中';
+
+  @override
+  String get reviewTimedOut => '审核超时';
+
+  @override
+  String get reviewAborted => '审核已中止';
+
+  @override
+  String get guardianSession => '模型审批';
+
+  @override
+  String get childSession => '子会话';
+
+  @override
+  String childSessions(int count) {
+    return '子会话（$count）';
+  }
+
+  @override
+  String get guardianReadOnly => '模型审批会话 · 只读';
+
+  @override
+  String get parentSession => '打开父会话';
+
+  @override
+  String get hideSidebar => '隐藏侧边栏';
+
+  @override
+  String get showSidebar => '显示侧边栏';
+
+  @override
+  String get locateConversation => '定位到当前会话';
+
+  @override
+  String get voiceReconnecting => '语音重连中…';
+
+  @override
+  String get voiceSpeaking => '助手正在回复';
+
+  @override
+  String get voiceUserSpeaking => '你正在说话';
+
+  @override
+  String get voiceInterrupted => '已打断';
+
+  @override
+  String get voiceEndedByUser => '语音通话已结束';
+
+  @override
+  String voiceEndedReason(String reason) {
+    return '语音通话已结束：$reason';
+  }
+
+  @override
+  String get voiceFailedShort => '语音连接已断开';
+
+  @override
+  String get voiceOpenCall => '回到语音会话';
+
+  @override
+  String get voiceHangUp => '挂断';
+
+  @override
+  String get voiceModelDefault => '主机默认';
+
+  @override
+  String get voiceModelFrameless => 'gpt-live-1-codex（低延迟）';
+
+  @override
+  String get voiceModelCustom => '自定义…';
+
+  @override
+  String get voiceModelCustomLabel => '模型 ID';
+
+  @override
+  String get voiceTaskContinues => '挂断不会取消语音已交给 Codex 的任务。';
+
+  @override
+  String get stepOutput => '输出';
+
+  @override
+  String get previewRendered => '预览';
+
+  @override
+  String get previewSource => '源码';
+
+  @override
+  String get dictate => '语音输入';
+
+  @override
+  String get dictationReady => '已就绪';
+
+  @override
+  String get dictationConnecting => '正在连接语音输入…';
+
+  @override
+  String get dictationListening => '正在听写';
+
+  @override
+  String get dictationFinishing => '正在收尾…';
+
+  @override
+  String get dictationStop => '完成（Enter）';
+
+  @override
+  String get dictationCancel => '放弃（Esc）';
+
+  @override
+  String get dictationKeys => 'Enter 完成 · Esc 放弃';
+
+  @override
+  String get dictationPermission => '麦克风权限被拒绝';
+
+  @override
+  String get dictationUnavailable => '此主机暂不能语音输入';
+
+  @override
+  String get dictationInterrupted => '语音输入中断，已保留听到的内容';
+
+  @override
+  String get dictationVoiceBusy => '实时语音通话正在使用麦克风';
+
+  @override
+  String get dictationShortcut => '语音输入（Ctrl+Shift+Space）';
 }

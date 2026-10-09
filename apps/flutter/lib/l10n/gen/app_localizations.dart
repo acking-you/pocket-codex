@@ -308,6 +308,18 @@ abstract class AppLocalizations {
   /// **'New conversation'**
   String get newConversation;
 
+  /// No description provided for @newConversationInProject.
+  ///
+  /// In en, this message translates to:
+  /// **'New conversation in {project}'**
+  String newConversationInProject(String project);
+
+  /// No description provided for @copyProjectPath.
+  ///
+  /// In en, this message translates to:
+  /// **'Copy project path'**
+  String get copyProjectPath;
+
   /// No description provided for @noThreads.
   ///
   /// In en, this message translates to:
@@ -1874,6 +1886,78 @@ abstract class AppLocalizations {
   /// **'No local sessions'**
   String get noLocalSessions;
 
+  /// No description provided for @localSessionsUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Local sessions aren’t available on this device'**
+  String get localSessionsUnavailable;
+
+  /// No description provided for @localSessionsMobileHint.
+  ///
+  /// In en, this message translates to:
+  /// **'This page reads Codex sessions saved on this device. To browse your computer’s sessions, connect to it in Services. Cached conversations remain in Chats.'**
+  String get localSessionsMobileHint;
+
+  /// No description provided for @noLocalSessionsHint.
+  ///
+  /// In en, this message translates to:
+  /// **'This computer has no readable Codex sessions yet. Create a session with Codex, then refresh, or connect to another device.'**
+  String get noLocalSessionsHint;
+
+  /// No description provided for @noHostSessions.
+  ///
+  /// In en, this message translates to:
+  /// **'No sessions on this host'**
+  String get noHostSessions;
+
+  /// No description provided for @noHostSessionsHint.
+  ///
+  /// In en, this message translates to:
+  /// **'This host has no sessions to display yet. Create a Codex session on it, then refresh.'**
+  String get noHostSessionsHint;
+
+  /// No description provided for @sessionsReadFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Couldn’t read sessions'**
+  String get sessionsReadFailed;
+
+  /// No description provided for @localSessionsReadHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Check that Codex has saved sessions for this user and that its session folder is readable, then retry.'**
+  String get localSessionsReadHint;
+
+  /// No description provided for @remoteSessionsReadHint.
+  ///
+  /// In en, this message translates to:
+  /// **'The host’s sessions are temporarily unavailable. Check its connection, then retry.'**
+  String get remoteSessionsReadHint;
+
+  /// No description provided for @errorDetails.
+  ///
+  /// In en, this message translates to:
+  /// **'Error details'**
+  String get errorDetails;
+
+  /// No description provided for @moveTurnNavigation.
+  ///
+  /// In en, this message translates to:
+  /// **'Drag to move conversation controls'**
+  String get moveTurnNavigation;
+
+  /// No description provided for @historyLoaded.
+  ///
+  /// In en, this message translates to:
+  /// **'Loaded {count} earlier items'**
+  String historyLoaded(int count);
+
+  /// No description provided for @historyAlreadyVisible.
+  ///
+  /// In en, this message translates to:
+  /// **'This history is already displayed'**
+  String get historyAlreadyVisible;
+
   /// No description provided for @sessionResumable.
   ///
   /// In en, this message translates to:
@@ -2485,6 +2569,78 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Couldn\'t reach that host — staying on the current one.'**
   String get switchServiceFailed;
+
+  /// No description provided for @hostSwitchTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Switch host'**
+  String get hostSwitchTitle;
+
+  /// No description provided for @hostSwitchingTo.
+  ///
+  /// In en, this message translates to:
+  /// **'Switching to {host}…'**
+  String hostSwitchingTo(String host);
+
+  /// No description provided for @hostSwitchProbing.
+  ///
+  /// In en, this message translates to:
+  /// **'Checking that the host is answering…'**
+  String get hostSwitchProbing;
+
+  /// No description provided for @hostSwitchConnecting.
+  ///
+  /// In en, this message translates to:
+  /// **'Opening the connection…'**
+  String get hostSwitchConnecting;
+
+  /// No description provided for @hostSwitchLoading.
+  ///
+  /// In en, this message translates to:
+  /// **'Loading its conversations…'**
+  String get hostSwitchLoading;
+
+  /// No description provided for @hostSwitchFailedTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Couldn\'t switch to {host}'**
+  String hostSwitchFailedTitle(String host);
+
+  /// No description provided for @hostSwitchStayed.
+  ///
+  /// In en, this message translates to:
+  /// **'You\'re still on {host}.'**
+  String hostSwitchStayed(String host);
+
+  /// No description provided for @hostSwitched.
+  ///
+  /// In en, this message translates to:
+  /// **'Now on {host}'**
+  String hostSwitched(String host);
+
+  /// No description provided for @hostSwitchLastFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Last attempt failed'**
+  String get hostSwitchLastFailed;
+
+  /// No description provided for @hostInUse.
+  ///
+  /// In en, this message translates to:
+  /// **'{name} · in use'**
+  String hostInUse(String name);
+
+  /// No description provided for @hostCurrent.
+  ///
+  /// In en, this message translates to:
+  /// **'Host: {host}'**
+  String hostCurrent(String host);
+
+  /// No description provided for @hostSwitchHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Host: {host}. Switch host'**
+  String hostSwitchHint(String host);
 
   /// No description provided for @pickFolderTitle.
   ///
@@ -3415,6 +3571,450 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Back to parent session'**
   String get backToParentSession;
+
+  /// No description provided for @draft.
+  ///
+  /// In en, this message translates to:
+  /// **'Draft'**
+  String get draft;
+
+  /// No description provided for @editMessage.
+  ///
+  /// In en, this message translates to:
+  /// **'Edit message'**
+  String get editMessage;
+
+  /// No description provided for @done.
+  ///
+  /// In en, this message translates to:
+  /// **'Done'**
+  String get done;
+
+  /// No description provided for @expandComposer.
+  ///
+  /// In en, this message translates to:
+  /// **'Expand editor'**
+  String get expandComposer;
+
+  /// No description provided for @resetComposerHeight.
+  ///
+  /// In en, this message translates to:
+  /// **'Reset height'**
+  String get resetComposerHeight;
+
+  /// No description provided for @composerKeyboardHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Enter to send · Shift+Enter for a new line'**
+  String get composerKeyboardHint;
+
+  /// No description provided for @selectText.
+  ///
+  /// In en, this message translates to:
+  /// **'Select text'**
+  String get selectText;
+
+  /// No description provided for @sharePrompt.
+  ///
+  /// In en, this message translates to:
+  /// **'Share prompt'**
+  String get sharePrompt;
+
+  /// No description provided for @shareMessage.
+  ///
+  /// In en, this message translates to:
+  /// **'Share message'**
+  String get shareMessage;
+
+  /// No description provided for @messageShareFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Could not open sharing. You can copy the text instead.'**
+  String get messageShareFailed;
+
+  /// No description provided for @messageCopyFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Could not copy the text. Please try again.'**
+  String get messageCopyFailed;
+
+  /// No description provided for @addToDraft.
+  ///
+  /// In en, this message translates to:
+  /// **'Add to draft'**
+  String get addToDraft;
+
+  /// No description provided for @editMessageHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Reuse this text as a new message. History stays unchanged; original attachments are not added.'**
+  String get editMessageHint;
+
+  /// No description provided for @editMessageDraftHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Your existing draft and attachments will be kept. This text will be added below.'**
+  String get editMessageDraftHint;
+
+  /// No description provided for @voiceStart.
+  ///
+  /// In en, this message translates to:
+  /// **'Start voice'**
+  String get voiceStart;
+
+  /// No description provided for @voiceStartHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Talk about the current project. Voice can ask Codex to perform tasks using the same permissions as text conversations.'**
+  String get voiceStartHint;
+
+  /// No description provided for @voiceUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice unavailable'**
+  String get voiceUnavailable;
+
+  /// No description provided for @voiceVoice.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice'**
+  String get voiceVoice;
+
+  /// No description provided for @voiceModel.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice model'**
+  String get voiceModel;
+
+  /// No description provided for @voiceModelHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Leave empty to use the host default'**
+  String get voiceModelHint;
+
+  /// No description provided for @voiceConnecting.
+  ///
+  /// In en, this message translates to:
+  /// **'Connecting voice…'**
+  String get voiceConnecting;
+
+  /// No description provided for @voiceListening.
+  ///
+  /// In en, this message translates to:
+  /// **'Connected · Listening'**
+  String get voiceListening;
+
+  /// No description provided for @voiceMuted.
+  ///
+  /// In en, this message translates to:
+  /// **'Microphone muted'**
+  String get voiceMuted;
+
+  /// No description provided for @voiceStopping.
+  ///
+  /// In en, this message translates to:
+  /// **'Ending voice…'**
+  String get voiceStopping;
+
+  /// No description provided for @voiceStop.
+  ///
+  /// In en, this message translates to:
+  /// **'End voice'**
+  String get voiceStop;
+
+  /// No description provided for @voiceMute.
+  ///
+  /// In en, this message translates to:
+  /// **'Mute'**
+  String get voiceMute;
+
+  /// No description provided for @voiceUnmute.
+  ///
+  /// In en, this message translates to:
+  /// **'Unmute'**
+  String get voiceUnmute;
+
+  /// No description provided for @voiceHistory.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice transcript'**
+  String get voiceHistory;
+
+  /// No description provided for @voiceHistoryEmpty.
+  ///
+  /// In en, this message translates to:
+  /// **'No voice transcript on this page'**
+  String get voiceHistoryEmpty;
+
+  /// No description provided for @voiceHistoryMore.
+  ///
+  /// In en, this message translates to:
+  /// **'Load more'**
+  String get voiceHistoryMore;
+
+  /// No description provided for @voiceErrorDetails.
+  ///
+  /// In en, this message translates to:
+  /// **'Error details'**
+  String get voiceErrorDetails;
+
+  /// No description provided for @voiceNewSession.
+  ///
+  /// In en, this message translates to:
+  /// **'New voice conversation'**
+  String get voiceNewSession;
+
+  /// No description provided for @restoringSessionSettings.
+  ///
+  /// In en, this message translates to:
+  /// **'Restoring session settings…'**
+  String get restoringSessionSettings;
+
+  /// No description provided for @reviewInProgress.
+  ///
+  /// In en, this message translates to:
+  /// **'Model review in progress'**
+  String get reviewInProgress;
+
+  /// No description provided for @reviewTimedOut.
+  ///
+  /// In en, this message translates to:
+  /// **'Review timed out'**
+  String get reviewTimedOut;
+
+  /// No description provided for @reviewAborted.
+  ///
+  /// In en, this message translates to:
+  /// **'Review aborted'**
+  String get reviewAborted;
+
+  /// No description provided for @guardianSession.
+  ///
+  /// In en, this message translates to:
+  /// **'Model approval'**
+  String get guardianSession;
+
+  /// No description provided for @childSession.
+  ///
+  /// In en, this message translates to:
+  /// **'Child session'**
+  String get childSession;
+
+  /// No description provided for @childSessions.
+  ///
+  /// In en, this message translates to:
+  /// **'Child sessions ({count})'**
+  String childSessions(int count);
+
+  /// No description provided for @guardianReadOnly.
+  ///
+  /// In en, this message translates to:
+  /// **'Model approval session · Read only'**
+  String get guardianReadOnly;
+
+  /// No description provided for @parentSession.
+  ///
+  /// In en, this message translates to:
+  /// **'Open parent session'**
+  String get parentSession;
+
+  /// No description provided for @hideSidebar.
+  ///
+  /// In en, this message translates to:
+  /// **'Hide sidebar'**
+  String get hideSidebar;
+
+  /// No description provided for @showSidebar.
+  ///
+  /// In en, this message translates to:
+  /// **'Show sidebar'**
+  String get showSidebar;
+
+  /// No description provided for @locateConversation.
+  ///
+  /// In en, this message translates to:
+  /// **'Show current conversation'**
+  String get locateConversation;
+
+  /// No description provided for @voiceReconnecting.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice reconnecting…'**
+  String get voiceReconnecting;
+
+  /// No description provided for @voiceSpeaking.
+  ///
+  /// In en, this message translates to:
+  /// **'Assistant speaking'**
+  String get voiceSpeaking;
+
+  /// No description provided for @voiceUserSpeaking.
+  ///
+  /// In en, this message translates to:
+  /// **'You\'re speaking'**
+  String get voiceUserSpeaking;
+
+  /// No description provided for @voiceInterrupted.
+  ///
+  /// In en, this message translates to:
+  /// **'Interrupted'**
+  String get voiceInterrupted;
+
+  /// No description provided for @voiceEndedByUser.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice call ended'**
+  String get voiceEndedByUser;
+
+  /// No description provided for @voiceEndedReason.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice call ended: {reason}'**
+  String voiceEndedReason(String reason);
+
+  /// No description provided for @voiceFailedShort.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice call dropped'**
+  String get voiceFailedShort;
+
+  /// No description provided for @voiceOpenCall.
+  ///
+  /// In en, this message translates to:
+  /// **'Go to the voice conversation'**
+  String get voiceOpenCall;
+
+  /// No description provided for @voiceHangUp.
+  ///
+  /// In en, this message translates to:
+  /// **'Hang up'**
+  String get voiceHangUp;
+
+  /// No description provided for @voiceModelDefault.
+  ///
+  /// In en, this message translates to:
+  /// **'Host default'**
+  String get voiceModelDefault;
+
+  /// No description provided for @voiceModelFrameless.
+  ///
+  /// In en, this message translates to:
+  /// **'gpt-live-1-codex (low latency)'**
+  String get voiceModelFrameless;
+
+  /// No description provided for @voiceModelCustom.
+  ///
+  /// In en, this message translates to:
+  /// **'Custom…'**
+  String get voiceModelCustom;
+
+  /// No description provided for @voiceModelCustomLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Model id'**
+  String get voiceModelCustomLabel;
+
+  /// No description provided for @voiceTaskContinues.
+  ///
+  /// In en, this message translates to:
+  /// **'Tasks the voice handed to Codex keep running after you hang up.'**
+  String get voiceTaskContinues;
+
+  /// No description provided for @stepOutput.
+  ///
+  /// In en, this message translates to:
+  /// **'output'**
+  String get stepOutput;
+
+  /// No description provided for @previewRendered.
+  ///
+  /// In en, this message translates to:
+  /// **'Preview'**
+  String get previewRendered;
+
+  /// No description provided for @previewSource.
+  ///
+  /// In en, this message translates to:
+  /// **'Source'**
+  String get previewSource;
+
+  /// No description provided for @dictate.
+  ///
+  /// In en, this message translates to:
+  /// **'Dictate'**
+  String get dictate;
+
+  /// No description provided for @dictationReady.
+  ///
+  /// In en, this message translates to:
+  /// **'ready'**
+  String get dictationReady;
+
+  /// No description provided for @dictationConnecting.
+  ///
+  /// In en, this message translates to:
+  /// **'Connecting dictation…'**
+  String get dictationConnecting;
+
+  /// No description provided for @dictationListening.
+  ///
+  /// In en, this message translates to:
+  /// **'Listening'**
+  String get dictationListening;
+
+  /// No description provided for @dictationFinishing.
+  ///
+  /// In en, this message translates to:
+  /// **'Finishing…'**
+  String get dictationFinishing;
+
+  /// No description provided for @dictationStop.
+  ///
+  /// In en, this message translates to:
+  /// **'Done (Enter)'**
+  String get dictationStop;
+
+  /// No description provided for @dictationCancel.
+  ///
+  /// In en, this message translates to:
+  /// **'Discard (Esc)'**
+  String get dictationCancel;
+
+  /// No description provided for @dictationKeys.
+  ///
+  /// In en, this message translates to:
+  /// **'Enter done · Esc discard'**
+  String get dictationKeys;
+
+  /// No description provided for @dictationPermission.
+  ///
+  /// In en, this message translates to:
+  /// **'Microphone access was denied'**
+  String get dictationPermission;
+
+  /// No description provided for @dictationUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Dictation is unavailable on this host'**
+  String get dictationUnavailable;
+
+  /// No description provided for @dictationInterrupted.
+  ///
+  /// In en, this message translates to:
+  /// **'Dictation dropped; what was heard is kept'**
+  String get dictationInterrupted;
+
+  /// No description provided for @dictationVoiceBusy.
+  ///
+  /// In en, this message translates to:
+  /// **'The live voice call is using the microphone'**
+  String get dictationVoiceBusy;
+
+  /// No description provided for @dictationShortcut.
+  ///
+  /// In en, this message translates to:
+  /// **'Dictate (Ctrl+Shift+Space)'**
+  String get dictationShortcut;
 }
 
 class _AppLocalizationsDelegate

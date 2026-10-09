@@ -462,6 +462,26 @@ class RustBridgeApi implements BridgeApi {
   );
 
   @override
+  Future<ThreadMeta?> appThreadMetadata(
+    String serviceKey,
+    String threadId,
+  ) async {
+    final t = await frb.appThreadMetadata(
+      serviceKey: serviceKey,
+      threadId: threadId,
+    );
+    return ThreadMeta(
+      id: t.id,
+      preview: t.preview,
+      name: t.name,
+      threadSource: t.threadSource,
+      parentThreadId: t.parentThreadId,
+      cwd: t.cwd,
+      updatedAt: t.updatedAt.toInt(),
+    );
+  }
+
+  @override
   Future<List<ThreadMeta>> appThreadList(String serviceKey) async {
     final list = await frb.appThreadList(serviceKey: serviceKey);
     return list
@@ -470,12 +490,25 @@ class RustBridgeApi implements BridgeApi {
             id: t.id,
             preview: t.preview,
             name: t.name,
+            threadSource: t.threadSource,
+            parentThreadId: t.parentThreadId,
             cwd: t.cwd,
             updatedAt: t.updatedAt.toInt(),
           ),
         )
         .toList();
   }
+
+  @override
+  Future<String> appRealtimeRequest(
+    String serviceKey,
+    String method,
+    String paramsJson,
+  ) => frb.appRealtimeRequest(
+    serviceKey: serviceKey,
+    method: method,
+    paramsJson: paramsJson,
+  );
 
   @override
   Future<List<ModelInfo>> appModelList(String serviceKey) async {
@@ -766,6 +799,8 @@ class RustBridgeApi implements BridgeApi {
             cwd: s.cwd,
             preview: s.preview,
             source: s.source,
+            parentThreadId: s.parentThreadId,
+            threadSource: s.threadSource,
             updatedAt: s.updatedAt.toInt(),
             turnState: s.turnState,
             heldOpen: s.heldOpen,
@@ -850,6 +885,8 @@ class RustBridgeApi implements BridgeApi {
             cwd: s.cwd,
             preview: s.preview,
             source: s.source,
+            parentThreadId: s.parentThreadId,
+            threadSource: s.threadSource,
             updatedAt: s.updatedAt.toInt(),
             turnState: s.turnState,
             heldOpen: s.heldOpen,

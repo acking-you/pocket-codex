@@ -6,7 +6,7 @@
 import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `history_dto`, `holder_dto`, `item_dto`, `meta_follow_update_dto`, `meta_holder_dto`, `meta_liveness_dto`, `meta_thread_item_dto`, `project_config_dto`, `thread_config_dto`, `thread_config_from_dto`, `to_log_dto`, `turn_page_dto`
+// These functions are ignored because they are not marked as `pub`: `forward_app_events`, `forward_retained_requests`, `history_dto`, `holder_dto`, `item_dto`, `meta_follow_update_dto`, `meta_holder_dto`, `meta_liveness_dto`, `meta_thread_item_dto`, `project_config_dto`, `thread_config_dto`, `thread_config_from_dto`, `to_log_dto`, `turn_page_dto`
 
 /// Initialise the engine with the platform app-support dir (from Dart's
 /// path_provider). Must be called once after `RustLib.init()`.
@@ -307,7 +307,7 @@ Stream<RetryProgressDto> metaRetryEvents() =>
 
 /// Stream live app-server events (turn/item notifications) for `service_key`.
 /// The Dart side receives one [`AppEventDto`] per notification until the
-/// session is disconnected.
+/// session is disconnected or the feed lags and requires history recovery.
 Stream<AppEventDto> appEvents({required String serviceKey}) =>
     RustLib.instance.api.crateApiBridgeAppEvents(serviceKey: serviceKey);
 
@@ -315,9 +315,32 @@ Stream<AppEventDto> appEvents({required String serviceKey}) =>
 Future<List<ThreadMetaDto>> appThreadList({required String serviceKey}) =>
     RustLib.instance.api.crateApiBridgeAppThreadList(serviceKey: serviceKey);
 
+/// Inspect one thread without resuming it or taking ownership.
+Future<ThreadMetaDto> appThreadMetadata({
+  required String serviceKey,
+  required String threadId,
+}) => RustLib.instance.api.crateApiBridgeAppThreadMetadata(
+  serviceKey: serviceKey,
+  threadId: threadId,
+);
+
 /// List the models the app-server offers.
 Future<List<ModelInfoDto>> appModelList({required String serviceKey}) =>
     RustLib.instance.api.crateApiBridgeAppModelList(serviceKey: serviceKey);
+
+/// Send a thread realtime control request; returns the upstream JSON result.
+/// Accepts the six `thread/realtime/*` methods, `thread/timeline/list`,
+/// marked voice `thread/start` (and ephemeral dictation `thread/start`), and
+/// `thread/unsubscribe`.
+Future<String> appRealtimeRequest({
+  required String serviceKey,
+  required String method,
+  required String paramsJson,
+}) => RustLib.instance.api.crateApiBridgeAppRealtimeRequest(
+  serviceKey: serviceKey,
+  method: method,
+  paramsJson: paramsJson,
+);
 
 /// Start a new thread / project. `approval_policy` is one of
 /// `untrusted` / `on-failure` / `on-request` / `never`; `sandbox` is one of
@@ -1803,6 +1826,12 @@ class LocalSessionDto {
   /// Originating client (`cli` / `vscode` / …), when recorded.
   final String? source;
 
+  /// Parent thread for a spawned child.
+  final String? parentThreadId;
+
+  /// Persisted thread classification.
+  final String? threadSource;
+
   /// Last-modified time of the rollout, unix seconds.
   final PlatformInt64 updatedAt;
 
@@ -1829,6 +1858,8 @@ class LocalSessionDto {
     this.cwd,
     required this.preview,
     this.source,
+    this.parentThreadId,
+    this.threadSource,
     required this.updatedAt,
     required this.turnState,
     required this.heldOpen,
@@ -1843,6 +1874,8 @@ class LocalSessionDto {
       cwd.hashCode ^
       preview.hashCode ^
       source.hashCode ^
+      parentThreadId.hashCode ^
+      threadSource.hashCode ^
       updatedAt.hashCode ^
       turnState.hashCode ^
       heldOpen.hashCode ^
@@ -1859,6 +1892,8 @@ class LocalSessionDto {
           cwd == other.cwd &&
           preview == other.preview &&
           source == other.source &&
+          parentThreadId == other.parentThreadId &&
+          threadSource == other.threadSource &&
           updatedAt == other.updatedAt &&
           turnState == other.turnState &&
           heldOpen == other.heldOpen &&
@@ -2548,6 +2583,12 @@ class ThreadMetaDto {
   /// falls back to `preview`).
   final String? name;
 
+  /// App-owned classification, including `pocket-codex-voice`.
+  final String? threadSource;
+
+  /// Parent thread for a spawned child.
+  final String? parentThreadId;
+
   /// Working directory (the project the thread controls).
   final String cwd;
 
@@ -2558,6 +2599,8 @@ class ThreadMetaDto {
     required this.id,
     required this.preview,
     this.name,
+    this.threadSource,
+    this.parentThreadId,
     required this.cwd,
     required this.updatedAt,
   });
@@ -2567,6 +2610,8 @@ class ThreadMetaDto {
       id.hashCode ^
       preview.hashCode ^
       name.hashCode ^
+      threadSource.hashCode ^
+      parentThreadId.hashCode ^
       cwd.hashCode ^
       updatedAt.hashCode;
 
@@ -2578,6 +2623,8 @@ class ThreadMetaDto {
           id == other.id &&
           preview == other.preview &&
           name == other.name &&
+          threadSource == other.threadSource &&
+          parentThreadId == other.parentThreadId &&
           cwd == other.cwd &&
           updatedAt == other.updatedAt;
 }

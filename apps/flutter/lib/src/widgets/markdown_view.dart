@@ -1,15 +1,13 @@
 import 'package:pocket_codex/src/file_links.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:markdown/markdown.dart' as md;
 
-import 'package:pocket_codex/l10n/gen/app_localizations.dart';
-import 'package:pocket_codex/src/code_highlight.dart';
 import 'package:pocket_codex/src/fonts.dart';
 import 'package:pocket_codex/src/markdown_cjk.dart';
-import 'package:pocket_codex/src/widgets/app_toast.dart';
+import 'package:pocket_codex/src/theme.dart';
+import 'package:pocket_codex/src/widgets/code_block.dart';
 import 'package:pocket_codex/src/widgets/links.dart';
 
 /// One Markdown renderer for every agent-authored surface (replies, plan
@@ -113,6 +111,10 @@ MarkdownStyleSheet _buildMarkdownStyle(BuildContext context, bool muted) {
     h3Padding: const EdgeInsets.only(top: 8, bottom: 4),
     listBulletPadding: const EdgeInsets.only(right: 6),
     blockSpacing: 10,
+    h1: theme.textTheme.titleLarge,
+    h2: theme.textTheme.titleMedium?.copyWith(fontSize: 17),
+    h3: theme.textTheme.titleMedium,
+    h4: theme.textTheme.titleSmall?.copyWith(fontSize: 14),
     // `IntrinsicColumnWidth` is load-bearing, not cosmetic: flutter_markdown_plus
     // only wraps a table in a horizontal scroll view for intrinsic/fixed column
     // widths. With the default `FlexColumnWidth` a wide table is squeezed into
@@ -133,17 +135,25 @@ MarkdownStyleSheet _buildMarkdownStyle(BuildContext context, bool muted) {
     code: theme.textTheme.bodyMedium?.copyWith(
       fontFamily: monoFontFamily,
       fontFamilyFallback: monoCjkFallback,
-      backgroundColor: scheme.surfaceContainerHighest,
+      // Accent-tinted ink on a matching wash: an identifier in prose reads
+      // as code from across the screen, not as a grey smudge.
+      color: inlineCodeColor(scheme),
+      backgroundColor: accentWash(scheme),
+      fontSize: (theme.textTheme.bodyMedium?.fontSize ?? 14) - 1,
     ),
-    codeblockDecoration: BoxDecoration(
-      color: scheme.surfaceContainerHighest,
-      borderRadius: BorderRadius.circular(10),
-    ),
-    codeblockPadding: const EdgeInsets.all(14),
+    // `_CodeBlockBuilder` draws the block's own card; the stylesheet's
+    // wrapper stays invisible so there is one outline, not two.
+    codeblockDecoration: const BoxDecoration(),
+    codeblockPadding: EdgeInsets.zero,
     blockquoteDecoration: BoxDecoration(
-      color: scheme.surfaceContainerHighest,
+      color: scheme.surfaceContainerLow,
       borderRadius: BorderRadius.circular(8),
-      border: Border(left: BorderSide(color: scheme.primary, width: 3)),
+      border: Border(
+        left: BorderSide(
+          color: signalColor(scheme).withValues(alpha: 0.6),
+          width: 3,
+        ),
+      ),
     ),
   );
 }
@@ -165,7 +175,6 @@ class _CodeBlockBuilder extends MarkdownElementBuilder {
     TextStyle? preferredStyle,
     TextStyle? parentStyle,
   ) {
-    final scheme = Theme.of(context).colorScheme;
     final code = element.textContent.trimRight();
     // The parser puts the fence's info string on the inner `<code>` as
     // `language-<name>`; an unfenced block has none.
@@ -174,89 +183,7 @@ class _CodeBlockBuilder extends MarkdownElementBuilder {
     final language = classes.startsWith('language-')
         ? classes.substring('language-'.length)
         : '';
-    final mono = TextStyle(
-      fontFamily: monoFontFamily,
-      fontFamilyFallback: monoCjkFallback,
-      fontSize: 12.5,
-      height: 1.5,
-      color: scheme.onSurface,
-    );
-    return Container(
-      width: double.infinity,
-      margin: const EdgeInsets.symmetric(vertical: 6),
-      decoration: BoxDecoration(
-        color: scheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: scheme.outlineVariant, width: 0.5),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              const SizedBox(width: 12),
-              Text(
-                language.isEmpty ? 'text' : language,
-                style: TextStyle(
-                  fontFamily: monoFontFamily,
-                  fontFamilyFallback: monoCjkFallback,
-                  fontSize: 11,
-                  color: scheme.onSurfaceVariant,
-                ),
-              ),
-              const Spacer(),
-              _CopyButton(text: code),
-            ],
-          ),
-          Container(
-            width: double.infinity,
-            decoration: BoxDecoration(
-              border: Border(
-                top: BorderSide(color: scheme.outlineVariant, width: 0.5),
-              ),
-            ),
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
-              child: Text.rich(
-                highlightCode(
-                  code: code,
-                  language: language,
-                  base: mono,
-                  brightness: Theme.of(context).brightness,
-                  // Upright: italic comments over a CJK fallback look distorted.
-                  allowItalic: false,
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// Copies [text] and confirms it, without stealing focus from the transcript.
-class _CopyButton extends StatelessWidget {
-  const _CopyButton({required this.text});
-
-  final String text;
-
-  @override
-  Widget build(BuildContext context) {
-    final l10n = AppLocalizations.of(context);
-    return IconButton(
-      icon: const Icon(Icons.content_copy_outlined, size: 14),
-      iconSize: 14,
-      visualDensity: VisualDensity.compact,
-      tooltip: l10n.copy,
-      color: Theme.of(context).colorScheme.onSurfaceVariant,
-      onPressed: () {
-        Clipboard.setData(ClipboardData(text: text));
-        showToastOk(context, l10n.copied);
-      },
-    );
+    return CodeBlock(code: code, language: language);
   }
 }
 

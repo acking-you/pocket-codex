@@ -3,6 +3,9 @@
          manifest, so without this the RELEASE APK has no network access and every
          request fails with a DNS "No address associated with hostname"). -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS"/>
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
     <application
         android:label="PocketCodex"
         android:name="${applicationName}"

@@ -29,6 +29,46 @@ Widget host(Widget child, {bool dark = false}) => MaterialApp(
 );
 
 void main() {
+  test('each reviewed action type is summarised as what it does', () {
+    expect(
+      reviewActionSummary({
+        'type': 'execve',
+        'program': '/usr/bin/git',
+        'argv': ['git', 'push', 'origin'],
+      }),
+      'git push origin',
+    );
+    expect(
+      reviewActionSummary({
+        'type': 'applyPatch',
+        'files': ['lib/a.dart', 'lib/b.dart'],
+      }),
+      'lib/a.dart\nlib/b.dart',
+    );
+    expect(
+      reviewActionSummary({
+        'type': 'networkAccess',
+        'host': 'pypi.org',
+        'protocol': 'https',
+        'port': 443,
+      }),
+      'https://pypi.org:443',
+    );
+    expect(
+      reviewActionSummary({
+        'type': 'mcpToolCall',
+        'server': 'github',
+        'toolName': 'create_issue',
+      }),
+      'github › create_issue',
+    );
+    expect(
+      reviewActionSummary({'type': 'requestPermissions', 'reason': 'Need net'}),
+      'Need net',
+    );
+    expect(reviewActionSummary({'type': 'applyPatch', 'files': []}), isNull);
+  });
+
   test(
     'only explicit request envelopes and complete assessment schemas match',
     () {
@@ -75,6 +115,48 @@ void main() {
   );
 
   for (final dark in [false, true]) {
+    testWidgets('native approval states fit a phone, dark=$dark', (t) async {
+      t.view.physicalSize = const Size(390, 844);
+      t.view.devicePixelRatio = 1;
+      addTearDown(t.view.resetPhysicalSize);
+      addTearDown(t.view.resetDevicePixelRatio);
+      for (final status in [
+        'inProgress',
+        'approved',
+        'denied',
+        'timedOut',
+        'aborted',
+      ]) {
+        final raw = jsonEncode({
+          'reviewId': 'review',
+          'review': {
+            'status': status,
+            'riskLevel': null,
+            'userAuthorization': null,
+            'rationale': status == 'inProgress' ? null : 'Assessment finished.',
+          },
+          'action': {'type': 'command', 'command': 'cargo test'},
+        });
+        final parsed = AutoApprovalReview.parse(raw)!;
+        await t.pumpWidget(
+          host(
+            ApprovalReviewCard(
+              raw: raw,
+              request: parsed.request,
+              result: parsed.result,
+              status: parsed.status,
+            ),
+            dark: dark,
+          ),
+        );
+        await t.pump();
+        expect(find.text('cargo test'), findsOneWidget);
+        expect(parsed.result == null, status == 'inProgress');
+        expect(find.byType(FilledButton), findsNothing);
+        expect(t.takeException(), isNull);
+      }
+    });
+
     testWidgets(
       'review request and result use compact historical cards, dark=$dark',
       (t) async {

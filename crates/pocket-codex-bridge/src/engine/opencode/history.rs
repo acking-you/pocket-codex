@@ -84,7 +84,7 @@ pub fn thread_read(service_key: &str, thread_id: &str) -> Result<ThreadHistory> 
         starts,
     });
     drop(s);
-    session_sync::save_history(service_key, thread_id, &history);
+    session_sync::save_history(service_key, thread_id, &history, true);
     Ok(history)
 }
 

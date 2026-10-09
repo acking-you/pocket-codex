@@ -660,7 +660,7 @@ class _EffortStepsState extends State<EffortSteps> {
   }
 }
 
-/// Paints the effort track: a rounded track, a flat violet fill up to the
+/// Paints the effort track: a rounded track, a flat accent fill up to the
 /// thumb, a stop per level, and a rounded-square thumb centred exactly on
 /// its stop. At the top level the fill gets a scattered "dither" shimmer —
 /// the reference's Ultracode flourish.
@@ -694,7 +694,7 @@ class _EffortPainter extends CustomPainter {
   final Brightness brightness;
 
   /// The flat fill up to the thumb — the theme's accent, so the slider belongs
-  /// to the palette instead of being the one violet thing on screen. Flat, not
+  /// to the palette instead of being the one off-palette thing on screen. Flat, not
   /// a gradient, per the design's rules.
   final Color fill;
 
@@ -819,38 +819,49 @@ class ContextGauge extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     // Warn (amber) past 75%, alert (error) past 90%.
     final f = status.fraction;
+    // At rest the ring is ink: how full the context is only needs colour once
+    // it is worth acting on.
     final color = f >= 0.9
         ? scheme.error
         : f >= 0.75
         ? cautionColor(scheme)
-        : scheme.primary;
+        : scheme.onSurfaceVariant;
     return Tooltip(
       message: tooltip,
-      child: InkResponse(
-        mouseCursor: clickable,
-        onTap: onTap,
-        radius: 22,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 6),
-          child: SizedBox(
-            width: 30,
-            height: 30,
-            child: CustomPaint(
-              painter: _GaugePainter(
-                fraction: f,
-                color: color,
-                track: scheme.surfaceContainerHighest,
-              ),
-              child: Center(
-                child: Text(
-                  '${status.percent}',
-                  style: TextStyle(
-                    fontSize: 9.5,
-                    fontWeight: FontWeight.w600,
-                    color: color,
+      child: Semantics(
+        button: true,
+        label: tooltip,
+        value: '${status.percent}%',
+        child: InkWell(
+          mouseCursor: clickable,
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(kRowRadius),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                SizedBox(
+                  width: 15,
+                  height: 15,
+                  child: CustomPaint(
+                    painter: _GaugePainter(
+                      fraction: f,
+                      color: color,
+                      track: scheme.outlineVariant,
+                    ),
                   ),
                 ),
-              ),
+                const SizedBox(width: 5),
+                Text(
+                  '${status.percent}%',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: color,
+                    fontFeatures: const [FontFeature.tabularFigures()],
+                  ),
+                ),
+              ],
             ),
           ),
         ),
@@ -871,7 +882,7 @@ class _GaugePainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    const stroke = 3.0;
+    const stroke = 2.0;
     final rect = Offset.zero & size;
     final center = rect.center;
     final radius = (size.shortestSide - stroke) / 2;
@@ -1003,7 +1014,7 @@ class EnvPanel extends StatelessWidget {
           padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
           child: Text(
             l10n.noChanges,
-            style: TextStyle(fontSize: 12.5, color: scheme.outline),
+            style: TextStyle(fontSize: 12.5, color: scheme.onSurfaceVariant),
           ),
         ),
     ];

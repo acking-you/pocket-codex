@@ -120,6 +120,14 @@ class AppLocalizationsEn extends AppLocalizations {
   String get newConversation => 'New conversation';
 
   @override
+  String newConversationInProject(String project) {
+    return 'New conversation in $project';
+  }
+
+  @override
+  String get copyProjectPath => 'Copy project path';
+
+  @override
   String get noThreads => 'No conversations yet';
 
   @override
@@ -985,6 +993,50 @@ class AppLocalizationsEn extends AppLocalizations {
   String get noLocalSessions => 'No local sessions';
 
   @override
+  String get localSessionsUnavailable =>
+      'Local sessions aren’t available on this device';
+
+  @override
+  String get localSessionsMobileHint =>
+      'This page reads Codex sessions saved on this device. To browse your computer’s sessions, connect to it in Services. Cached conversations remain in Chats.';
+
+  @override
+  String get noLocalSessionsHint =>
+      'This computer has no readable Codex sessions yet. Create a session with Codex, then refresh, or connect to another device.';
+
+  @override
+  String get noHostSessions => 'No sessions on this host';
+
+  @override
+  String get noHostSessionsHint =>
+      'This host has no sessions to display yet. Create a Codex session on it, then refresh.';
+
+  @override
+  String get sessionsReadFailed => 'Couldn’t read sessions';
+
+  @override
+  String get localSessionsReadHint =>
+      'Check that Codex has saved sessions for this user and that its session folder is readable, then retry.';
+
+  @override
+  String get remoteSessionsReadHint =>
+      'The host’s sessions are temporarily unavailable. Check its connection, then retry.';
+
+  @override
+  String get errorDetails => 'Error details';
+
+  @override
+  String get moveTurnNavigation => 'Drag to move conversation controls';
+
+  @override
+  String historyLoaded(int count) {
+    return 'Loaded $count earlier items';
+  }
+
+  @override
+  String get historyAlreadyVisible => 'This history is already displayed';
+
+  @override
   String get sessionResumable => 'Resumable';
 
   @override
@@ -1328,6 +1380,56 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get switchServiceFailed =>
       'Couldn\'t reach that host — staying on the current one.';
+
+  @override
+  String get hostSwitchTitle => 'Switch host';
+
+  @override
+  String hostSwitchingTo(String host) {
+    return 'Switching to $host…';
+  }
+
+  @override
+  String get hostSwitchProbing => 'Checking that the host is answering…';
+
+  @override
+  String get hostSwitchConnecting => 'Opening the connection…';
+
+  @override
+  String get hostSwitchLoading => 'Loading its conversations…';
+
+  @override
+  String hostSwitchFailedTitle(String host) {
+    return 'Couldn\'t switch to $host';
+  }
+
+  @override
+  String hostSwitchStayed(String host) {
+    return 'You\'re still on $host.';
+  }
+
+  @override
+  String hostSwitched(String host) {
+    return 'Now on $host';
+  }
+
+  @override
+  String get hostSwitchLastFailed => 'Last attempt failed';
+
+  @override
+  String hostInUse(String name) {
+    return '$name · in use';
+  }
+
+  @override
+  String hostCurrent(String host) {
+    return 'Host: $host';
+  }
+
+  @override
+  String hostSwitchHint(String host) {
+    return 'Host: $host. Switch host';
+  }
 
   @override
   String get pickFolderTitle => 'Choose a project folder';
@@ -1856,4 +1958,238 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get backToParentSession => 'Back to parent session';
+
+  @override
+  String get draft => 'Draft';
+
+  @override
+  String get editMessage => 'Edit message';
+
+  @override
+  String get done => 'Done';
+
+  @override
+  String get expandComposer => 'Expand editor';
+
+  @override
+  String get resetComposerHeight => 'Reset height';
+
+  @override
+  String get composerKeyboardHint =>
+      'Enter to send · Shift+Enter for a new line';
+
+  @override
+  String get selectText => 'Select text';
+
+  @override
+  String get sharePrompt => 'Share prompt';
+
+  @override
+  String get shareMessage => 'Share message';
+
+  @override
+  String get messageShareFailed =>
+      'Could not open sharing. You can copy the text instead.';
+
+  @override
+  String get messageCopyFailed => 'Could not copy the text. Please try again.';
+
+  @override
+  String get addToDraft => 'Add to draft';
+
+  @override
+  String get editMessageHint =>
+      'Reuse this text as a new message. History stays unchanged; original attachments are not added.';
+
+  @override
+  String get editMessageDraftHint =>
+      'Your existing draft and attachments will be kept. This text will be added below.';
+
+  @override
+  String get voiceStart => 'Start voice';
+
+  @override
+  String get voiceStartHint =>
+      'Talk about the current project. Voice can ask Codex to perform tasks using the same permissions as text conversations.';
+
+  @override
+  String get voiceUnavailable => 'Voice unavailable';
+
+  @override
+  String get voiceVoice => 'Voice';
+
+  @override
+  String get voiceModel => 'Voice model';
+
+  @override
+  String get voiceModelHint => 'Leave empty to use the host default';
+
+  @override
+  String get voiceConnecting => 'Connecting voice…';
+
+  @override
+  String get voiceListening => 'Connected · Listening';
+
+  @override
+  String get voiceMuted => 'Microphone muted';
+
+  @override
+  String get voiceStopping => 'Ending voice…';
+
+  @override
+  String get voiceStop => 'End voice';
+
+  @override
+  String get voiceMute => 'Mute';
+
+  @override
+  String get voiceUnmute => 'Unmute';
+
+  @override
+  String get voiceHistory => 'Voice transcript';
+
+  @override
+  String get voiceHistoryEmpty => 'No voice transcript on this page';
+
+  @override
+  String get voiceHistoryMore => 'Load more';
+
+  @override
+  String get voiceErrorDetails => 'Error details';
+
+  @override
+  String get voiceNewSession => 'New voice conversation';
+
+  @override
+  String get restoringSessionSettings => 'Restoring session settings…';
+
+  @override
+  String get reviewInProgress => 'Model review in progress';
+
+  @override
+  String get reviewTimedOut => 'Review timed out';
+
+  @override
+  String get reviewAborted => 'Review aborted';
+
+  @override
+  String get guardianSession => 'Model approval';
+
+  @override
+  String get childSession => 'Child session';
+
+  @override
+  String childSessions(int count) {
+    return 'Child sessions ($count)';
+  }
+
+  @override
+  String get guardianReadOnly => 'Model approval session · Read only';
+
+  @override
+  String get parentSession => 'Open parent session';
+
+  @override
+  String get hideSidebar => 'Hide sidebar';
+
+  @override
+  String get showSidebar => 'Show sidebar';
+
+  @override
+  String get locateConversation => 'Show current conversation';
+
+  @override
+  String get voiceReconnecting => 'Voice reconnecting…';
+
+  @override
+  String get voiceSpeaking => 'Assistant speaking';
+
+  @override
+  String get voiceUserSpeaking => 'You\'re speaking';
+
+  @override
+  String get voiceInterrupted => 'Interrupted';
+
+  @override
+  String get voiceEndedByUser => 'Voice call ended';
+
+  @override
+  String voiceEndedReason(String reason) {
+    return 'Voice call ended: $reason';
+  }
+
+  @override
+  String get voiceFailedShort => 'Voice call dropped';
+
+  @override
+  String get voiceOpenCall => 'Go to the voice conversation';
+
+  @override
+  String get voiceHangUp => 'Hang up';
+
+  @override
+  String get voiceModelDefault => 'Host default';
+
+  @override
+  String get voiceModelFrameless => 'gpt-live-1-codex (low latency)';
+
+  @override
+  String get voiceModelCustom => 'Custom…';
+
+  @override
+  String get voiceModelCustomLabel => 'Model id';
+
+  @override
+  String get voiceTaskContinues =>
+      'Tasks the voice handed to Codex keep running after you hang up.';
+
+  @override
+  String get stepOutput => 'output';
+
+  @override
+  String get previewRendered => 'Preview';
+
+  @override
+  String get previewSource => 'Source';
+
+  @override
+  String get dictate => 'Dictate';
+
+  @override
+  String get dictationReady => 'ready';
+
+  @override
+  String get dictationConnecting => 'Connecting dictation…';
+
+  @override
+  String get dictationListening => 'Listening';
+
+  @override
+  String get dictationFinishing => 'Finishing…';
+
+  @override
+  String get dictationStop => 'Done (Enter)';
+
+  @override
+  String get dictationCancel => 'Discard (Esc)';
+
+  @override
+  String get dictationKeys => 'Enter done · Esc discard';
+
+  @override
+  String get dictationPermission => 'Microphone access was denied';
+
+  @override
+  String get dictationUnavailable => 'Dictation is unavailable on this host';
+
+  @override
+  String get dictationInterrupted =>
+      'Dictation dropped; what was heard is kept';
+
+  @override
+  String get dictationVoiceBusy =>
+      'The live voice call is using the microphone';
+
+  @override
+  String get dictationShortcut => 'Dictate (Ctrl+Shift+Space)';
 }
