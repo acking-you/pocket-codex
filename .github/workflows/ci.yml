@@ -244,13 +244,13 @@ jobs:
   # any real failure or cancellation fails it.
   ci-result:
     name: CI result
-    needs: [changes, fmt, clippy, test, flutter, macos-host]
+    needs: [changes, fmt, clippy, test, flutter, macos-host, theme-native, macos-packaging-tests]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Verify no required job failed
         run: |
-          results="${{ needs.changes.result }} ${{ needs.fmt.result }} ${{ needs.clippy.result }} ${{ needs.test.result }} ${{ needs.flutter.result }} ${{ needs.macos-host.result }}"
+          results="${{ needs.changes.result }} ${{ needs.fmt.result }} ${{ needs.clippy.result }} ${{ needs.test.result }} ${{ needs.flutter.result }} ${{ needs.macos-host.result }} ${{ needs.theme-native.result }} ${{ needs.macos-packaging-tests.result }}"
           echo "job results: $results"
           for r in $results; do
             if [ "$r" = "failure" ] || [ "$r" = "cancelled" ]; then
