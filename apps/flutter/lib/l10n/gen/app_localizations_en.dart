@@ -1382,6 +1382,56 @@ class AppLocalizationsEn extends AppLocalizations {
       'Couldn\'t reach that host — staying on the current one.';
 
   @override
+  String get hostSwitchTitle => 'Switch host';
+
+  @override
+  String hostSwitchingTo(String host) {
+    return 'Switching to $host…';
+  }
+
+  @override
+  String get hostSwitchProbing => 'Checking that the host is answering…';
+
+  @override
+  String get hostSwitchConnecting => 'Opening the connection…';
+
+  @override
+  String get hostSwitchLoading => 'Loading its conversations…';
+
+  @override
+  String hostSwitchFailedTitle(String host) {
+    return 'Couldn\'t switch to $host';
+  }
+
+  @override
+  String hostSwitchStayed(String host) {
+    return 'You\'re still on $host.';
+  }
+
+  @override
+  String hostSwitched(String host) {
+    return 'Now on $host';
+  }
+
+  @override
+  String get hostSwitchLastFailed => 'Last attempt failed';
+
+  @override
+  String hostInUse(String name) {
+    return '$name · in use';
+  }
+
+  @override
+  String hostCurrent(String host) {
+    return 'Host: $host';
+  }
+
+  @override
+  String hostSwitchHint(String host) {
+    return 'Host: $host. Switch host';
+  }
+
+  @override
   String get pickFolderTitle => 'Choose a project folder';
 
   @override

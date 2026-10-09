@@ -56,6 +56,7 @@ import 'package:pocket_codex/src/widgets/brand_logo.dart';
 import 'package:pocket_codex/src/widgets/diff_review.dart';
 import 'package:pocket_codex/src/widgets/draggable_navigation.dart';
 import 'package:pocket_codex/src/widgets/history_arrival.dart';
+import 'package:pocket_codex/src/widgets/host_switcher.dart';
 import 'package:pocket_codex/src/widgets/file_browser_panel.dart';
 import 'package:pocket_codex/src/widgets/folder_tree_picker.dart';
 import 'package:pocket_codex/src/widgets/links.dart';
@@ -110,6 +111,8 @@ class AppSessionScreen extends ConsumerStatefulWidget {
     this.home = false,
     this.services = const [],
     this.onSwitchService,
+    this.hostSwitch,
+    this.onDismissHostSwitch,
   });
 
   /// Full `pcx:<device>:app:<name>` key of the connected service.
@@ -134,6 +137,14 @@ class AppSessionScreen extends ConsumerStatefulWidget {
 
   /// Called when the user picks another service in the home-mode switcher.
   final void Function(String serviceKey)? onSwitchService;
+
+  /// A host switch the home is running or that just failed. Shown in the
+  /// switcher row and as a strip above the conversation. Ignored unless
+  /// [home].
+  final HostSwitch? hostSwitch;
+
+  /// Close a failed switch's notice.
+  final VoidCallback? onDismissHostSwitch;
 
   @override
   ConsumerState<AppSessionScreen> createState() => _AppSessionState();
@@ -6426,9 +6437,18 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// approvals + implement bar + error + composer.
   Widget _chatPane(AppLocalizations l10n) {
     final runningPlan = _runningPlan;
+    final hostSwitch = _hostSwitchBanner();
     return Column(
       children: [
         _statusBar(l10n),
+        // Where the reader is looking: the switch announces itself above the
+        // conversation, which stays put until the new host has answered.
+        AnimatedSize(
+          duration: Motion.of(context, Motion.medium),
+          curve: Motion.move,
+          alignment: Alignment.topCenter,
+          child: hostSwitch ?? const SizedBox(width: double.infinity),
+        ),
         if (_historySyncing || _showingCachedHistory)
           Padding(
             key: const Key('history-sync-status'),
@@ -7785,68 +7805,29 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     );
   }
 
-  /// Home-pane header row: the host currently serving this chat. Renders a
-  /// dropdown when more than one app service is connectable, else a static
-  /// identity row — either way the user always sees WHERE the conversation
-  /// runs.
-  Widget _serviceSwitcher(AppLocalizations l10n) {
-    final scheme = Theme.of(context).colorScheme;
-    String labelOf(ServiceEntry s) => '${s.device} · ${s.name}';
-    final entries = widget.services;
-    final multiple = entries.length > 1;
-    final current = entries.where((s) => s.key == widget.serviceKey).toList();
-    final currentLabel = current.isEmpty
-        ? _serviceLabelFromKey(widget.serviceKey)
-        : labelOf(current.first);
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 4, 12, 4),
-      child: Row(
-        children: [
-          Icon(Icons.laptop_mac, size: 15, color: scheme.onSurfaceVariant),
-          const SizedBox(width: 8),
-          Expanded(
-            child: multiple
-                ? DropdownButtonHideUnderline(
-                    child: DropdownButton<String>(
-                      key: const Key('sidebar-service-switcher'),
-                      value: current.isEmpty ? null : widget.serviceKey,
-                      hint: Text(
-                        currentLabel,
-                        style: const TextStyle(fontSize: 13),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      isExpanded: true,
-                      isDense: true,
-                      style: TextStyle(fontSize: 13, color: scheme.onSurface),
-                      items: [
-                        for (final s in entries)
-                          DropdownMenuItem(
-                            value: s.key,
-                            child: Text(
-                              labelOf(s),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                      ],
-                      onChanged: (key) {
-                        if (key != null && key != widget.serviceKey) {
-                          widget.onSwitchService?.call(key);
-                        }
-                      },
-                    ),
-                  )
-                : Text(
-                    currentLabel,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-          ),
-        ],
-      ),
+  /// Home-pane header row: the host currently serving this chat, and the way
+  /// to change it. While a switch runs it names the host being reached, so
+  /// the user always sees WHERE the conversation runs and what is changing.
+  Widget _serviceSwitcher(AppLocalizations l10n) => HostSwitcher(
+    services: widget.services,
+    current: widget.serviceKey,
+    pending: widget.hostSwitch,
+    onPick: (key) => widget.onSwitchService?.call(key),
+  );
+
+  /// The switch strip above the conversation, while one runs or after it
+  /// fails. Null otherwise.
+  Widget? _hostSwitchBanner() {
+    final pending = widget.home ? widget.hostSwitch : null;
+    if (pending == null) return null;
+    final match = widget.services.where((s) => s.key == pending.target);
+    return HostSwitchBanner(
+      pending: pending,
+      targetLabel: match.isEmpty
+          ? _serviceLabelFromKey(pending.target)
+          : hostLabel(match.first),
+      onRetry: () => widget.onSwitchService?.call(pending.target),
+      onDismiss: () => widget.onDismissHostSwitch?.call(),
     );
   }
 
