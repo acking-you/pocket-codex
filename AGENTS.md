@@ -496,7 +496,9 @@ this file's roadmap so the source of truth stays in sync.
     progress and results in the parent conversation, keyed by review ID. Restore
     persisted assessments through the host history adapter without changing Codex
     page cursors. Preserve explicit parent links in session inventories, with
-    expandable children and ancestors retained during filtering. Open Guardian
+    children collapsed by default (including Active) and ancestors retained
+    during filtering. Manual folds take precedence over automatic reveals and
+    survive running-state updates and inventory refresh. Open Guardian
     sessions read-only, with navigation to the parent; never resume or take over
     a reviewer. See `docs/guardian-sessions.md`.
 
@@ -505,7 +507,9 @@ this file's roadmap so the source of truth stays in sync.
     for DMG and ZIP downloads. Never fall back to unsigned publication. Keep
     signing credentials out of source and build steps. Theme snapshot capture
     is optional; applying the preference must survive capture failures and
-    release builds without debug-only render getters. See `docs/macos-release.md`.
+    release builds without debug-only render getters. Keep the blue Dock and
+    menu-bar icons fixed across themes: use the bundle AppIcon and a non-template
+    tray PNG; never substitute the transparent splash glyph. See `docs/macos-release.md`.
 
 ### UI and history maintenance (2026-09-13)
 

@@ -36,7 +36,6 @@
 // Outputs (tray):
 //   assets/tray/tray.png       macOS / Linux tray (loaded as a PNG)
 //   assets/tray/tray.ico       Windows tray (multi-size .ico)
-//   assets/tray/tray_template@2x.png  macOS template (black + alpha)
 // Outputs (repository art, both copies kept identical):
 //   assets/logo/logo.png, apps/flutter/assets/logo/logo.png
 //   assets/logo/poster.png, apps/flutter/assets/logo/poster.png
@@ -221,7 +220,7 @@ void _drawGlyph(Canvas canvas, Rect tile, MarkStyle style, double scale) {
 }
 
 /// The glyph alone, trimmed and centred on a transparent square with ~8%
-/// margins: the in-app logo and the macOS template tray icon.
+/// margins for the in-app logo.
 Future<img.Image> glyphOnly(int px, MarkStyle style) async {
   // The glyph spans about 0.62 of a tile; a tile 1.4x the canvas leaves the
   // ~8% margin the in-app logo has always had.
@@ -416,22 +415,12 @@ void main() {
     ).writeAsBytes(img.IcoEncoder().encodeImages(frames));
   }, skip: skip);
 
-  test('derive tray assets (png + template + multi-size ico)', () async {
+  test('derive tray assets (png + multi-size ico)', () async {
     Directory('assets/tray').createSync(recursive: true);
 
-    // Linux loads the icon as a PNG and scales it to the ~22 px the panel
-    // shows; 64 px keeps that downscale small and its strokes intact.
+    // macOS and Linux use the same blue tile in both appearances. At 64 px
+    // it stays crisp when scaled to the menu bar or notification area.
     await _png('assets/tray/tray.png', await renderMark(64));
-
-    // macOS wants a TEMPLATE image (black + alpha; the menu bar tints it).
-    // tray_manager pins it to 18pt, so ship the @2x file directly.
-    await _png(
-      'assets/tray/tray_template@2x.png',
-      await glyphOnly(
-        36,
-        const MarkStyle([Colors.black], Colors.black, Colors.black),
-      ),
-    );
 
     // Windows: LoadImage(IMAGE_ICON) needs a true .ico. Full-colour rounded
     // tile, edge to edge: the notification area gives 16 px at 100% and every

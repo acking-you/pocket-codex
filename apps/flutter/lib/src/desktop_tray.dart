@@ -108,23 +108,12 @@ class DesktopTray with TrayListener, WindowListener {
     windowManager.addListener(this);
 
     trayManager.addListener(this);
-    // Per-platform icon: Windows' Shell_NotifyIcon needs a real .ico
-    // (tray_manager feeds the path to LoadImage); Linux takes a PNG. macOS
-    // menu-bar items are TEMPLATE images — black + alpha that the system
-    // tints to match the bar (light/dark mode, highlight) — so it gets the
-    // monochrome glyph. The plugin loads the exact asset key and pins it to
-    // 18pt, so ship the @2x file directly: Retina fills those points and 1x
-    // displays scale it back down cleanly.
-    if (_isMacOS) {
-      await trayManager.setIcon(
-        'assets/tray/tray_template@2x.png',
-        isTemplate: true,
-      );
-    } else {
-      await trayManager.setIcon(
-        _isWindows ? 'assets/tray/tray.ico' : 'assets/tray/tray.png',
-      );
-    }
+    // Keep the blue brand tile independent of the macOS menu-bar appearance.
+    // Template images are system-tinted; Windows still needs a real .ico.
+    await trayManager.setIcon(
+      _isWindows ? 'assets/tray/tray.ico' : 'assets/tray/tray.png',
+      isTemplate: false,
+    );
     // appindicator (Linux) has no hover tooltip; setting one is a harmless
     // no-op, but skip it to keep the platform log clean.
     if (!_isLinux) {

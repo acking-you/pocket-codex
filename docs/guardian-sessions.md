@@ -14,8 +14,12 @@ links. Parents have an expand control; children remain below their parent across
 activity and project groups. Search and status filters retain matching children's
 ancestors. Missing parents and malformed cycles leave sessions visible at the
 root rather than hiding them.
-Ancestors of running sessions expand automatically in both lists, so the actual
-active child and its status remain visible.
+Children start collapsed in both lists, including the Active group. A running
+child keeps its root in Active without expanding any branch. Search, status
+filters and the selected child's ancestry can reveal the relevant path; an
+explicit collapse takes precedence and survives status updates, inventory refresh
+and sidebar view changes. Expanding a parent again restores its nested expansion
+choices. These choices are view state and are not persisted between launches.
 
 Guardian reviewer sessions open through read-only history and monitoring, with a
 link back to the parent. They cannot be resumed or taken over, including through

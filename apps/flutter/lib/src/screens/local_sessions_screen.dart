@@ -94,6 +94,8 @@ class _LocalSessionsState extends ConsumerState<LocalSessionsScreen> {
   List<LocalSession> _sessions = const [];
   String _query = '';
   final Set<String> _expandedParents = {};
+  // Keep explicit folds when a search or status filter reveals ancestors.
+  final Set<String> _collapsedParents = {};
   _SessionViewFilter _filter = _SessionViewFilter.all;
 
   bool get _localUnavailable => !widget.source.isRemote && !isDesktop;
@@ -343,9 +345,8 @@ class _LocalSessionsState extends ConsumerState<LocalSessionsScreen> {
     );
     final expanded = {
       ..._expandedParents,
-      ...activeParents,
       if (q.isNotEmpty || _filter != _SessionViewFilter.all) ...included,
-    };
+    }..removeAll(_collapsedParents);
     // Group by activity time, mirroring the conversation list: actively-running
     // first, then today, then earlier. The source list is already sorted
     // newest-first (scan_sessions orders by Reverse(updated_at)).
@@ -377,7 +378,11 @@ class _LocalSessionsState extends ConsumerState<LocalSessionsScreen> {
             childSession: s.parentThreadId != null,
             guardian: s.isGuardian,
             onToggle: () => setState(() {
-              if (!_expandedParents.remove(s.threadId)) {
+              if (expanded.contains(s.threadId)) {
+                _expandedParents.remove(s.threadId);
+                _collapsedParents.add(s.threadId);
+              } else {
+                _collapsedParents.remove(s.threadId);
                 _expandedParents.add(s.threadId);
               }
             }),

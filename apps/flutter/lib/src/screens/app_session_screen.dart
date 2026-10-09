@@ -656,6 +656,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   bool _guardianReadOnly = false;
   String? _parentThreadId;
   final Set<String> _expandedSessionParents = {};
+  // Manual folds also override automatic reveals for search or selection.
+  final Set<String> _collapsedSessionParents = {};
   SessionLiveness? _externalWriterLiveness;
   StreamSubscription<SessionFollowUpdate>? _externalWriterSub;
   Timer? _externalWriterReconnect;
@@ -7145,12 +7147,12 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     final filtered = tree.roots;
     final activeParents = tree.withAncestors(running);
     final reveal = tree.withAncestors([?_threadId])..remove(_threadId);
+    // Running state controls the group, not whether children are expanded.
     final expandedParents = {
       ..._expandedSessionParents,
-      ...activeParents,
       ...reveal,
       if (q.isNotEmpty) ...matchingIds,
-    };
+    }..removeAll(_collapsedSessionParents);
     final now = DateTime.now();
     final active = <ThreadMeta>[];
     final today = <ThreadMeta>[];
@@ -7208,7 +7210,11 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
             guardian: t.isGuardian,
             expanded: expandedParents.contains(t.id),
             onToggle: () => setState(() {
-              if (!_expandedSessionParents.remove(t.id)) {
+              if (expandedParents.contains(t.id)) {
+                _expandedSessionParents.remove(t.id);
+                _collapsedSessionParents.add(t.id);
+              } else {
+                _collapsedSessionParents.remove(t.id);
                 _expandedSessionParents.add(t.id);
               }
             }),

@@ -571,7 +571,7 @@ jobs:
             const start = '<!-- macos-signed-refresh -->';
             const end = '<!-- /macos-signed-refresh -->';
             const note = [start, '### macOS package update', '',
-              'The Apple Silicon and Intel DMG/ZIP packages include the theme-toggle fix, Developer ID signatures, and stapled Apple notarization tickets.',
+              'The Apple Silicon and Intel DMG/ZIP packages include fixed blue Dock/menu-bar icons, collapsed-by-default child sessions with working fold controls, the theme-toggle fix, Developer ID signatures, and stapled Apple notarization tickets.',
               `Rebuilt from commit ${context.sha}. Other platform assets are unchanged.`,
               end].join('\n');
             const body = (release.body || '').replace(

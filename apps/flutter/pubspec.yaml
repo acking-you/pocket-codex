@@ -2,7 +2,7 @@ name: pocket_codex
 description: "PocketCodex Flutter front-end. Drives codex app-server through flutter_rust_bridge."
 publish_to: 'none'
 
-version: 0.2.10+31
+version: 0.2.10+32
 
 # Flutter SDK is locked at the project level via FVM (`.fvmrc`) and at
 # the language level via `environment.flutter`. CI uses
@@ -128,7 +128,6 @@ flutter:
     - assets/logo/glyph_light.png
     - assets/logo/glyph_dark.png
     - assets/tray/tray.png
-    - assets/tray/tray_template@2x.png
     - assets/tray/tray.ico
   # The design system's typefaces (SIL OFL, see assets/fonts/OFL-*.txt): Figtree
   # for prose, Geist Mono for code. Static instances rather than the variable
