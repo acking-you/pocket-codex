@@ -45,11 +45,15 @@ Future<ProviderContainer> _pumpHome(
   final container = ProviderContainer(
     overrides: [bridgeApiProvider.overrideWithValue(api)],
   );
-  addTearDown(container.dispose);
   seed?.call(container);
   final router = GoRouter(
     routes: [GoRoute(path: '/', builder: (c, s) => const HomeScreen())],
   );
+  addTearDown(() async {
+    await t.pumpWidget(const SizedBox.shrink());
+    router.dispose();
+    container.dispose();
+  });
   await t.pumpWidget(
     UncontrolledProviderScope(
       container: container,

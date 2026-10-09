@@ -225,7 +225,7 @@ fn permission(key: &str, tid: &str, cwd: &str, rx: &mut Receiver<AppEvent>) {
     settle(key, tid);
     let read = super::thread_read(key, tid).expect("read after permission");
     note(&format!("6 session running={} items={}", read.running, read.items.len()));
-    session_sync::save_history(key, tid, &read);
+    session_sync::save_history(key, tid, &read, true);
 }
 
 fn stop_and_check(key: &str, tid: &str) {

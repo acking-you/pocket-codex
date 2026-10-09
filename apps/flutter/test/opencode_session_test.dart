@@ -3,7 +3,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
 import 'package:pocket_codex/src/providers.dart';
-import 'package:pocket_codex/src/screens/app_session/activity_cards.dart';
 import 'package:pocket_codex/src/screens/app_session_screen.dart';
 
 import 'fake_bridge_api.dart';
@@ -280,7 +279,7 @@ void main() {
       ],
     );
     await open(t, api, openCode, thread: 'ses-1');
-    await t.tap(find.byType(TurnWorkCard));
+    await t.tap(find.byKey(const Key('turn-work-toggle')));
     await frames(t);
     await t.tap(find.byKey(const Key('view-sub-session-ses-child')));
     await frames(t);
@@ -317,7 +316,7 @@ void main() {
       ],
     );
     await open(t, api, codex, thread: 'ses-1');
-    await t.tap(find.byType(TurnWorkCard));
+    await t.tap(find.byKey(const Key('turn-work-toggle')));
     await frames(t);
     expect(find.byKey(const Key('view-sub-session-child')), findsNothing);
   });
