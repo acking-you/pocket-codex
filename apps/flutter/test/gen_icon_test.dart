@@ -10,6 +10,9 @@
 // Run: REGEN_ICONS=1 fvm flutter test test/gen_icon_test.dart
 // then: fvm dart run flutter_launcher_icons
 //       fvm dart run flutter_native_splash:create
+//       REGEN_ICONS=1 fvm flutter test test/gen_icon_test.dart
+// (the second run rewrites the files those tools overwrite with worse output:
+// the Windows .ico and the web maskable icons).
 //
 // Outputs (masters — reference renderings at 1254 px):
 //   icon/logo_light.png        light rendition (light surface, ink, blue arcs)
@@ -23,9 +26,11 @@
 //                              multi-size .ico drawn per frame. NOT
 //                              flutter_launcher_icons' job: it writes one
 //                              frame, and Windows' downscale is blurry.
-// Outputs (splash — theme-matched; the tile is the splash background, so only
-// the glyph shows):
+// Outputs (splash — theme-matched glyph on the splash colour, sized for the
+// Android 12 circle crop):
 //   assets/logo/mark_light.png / mark_dark.png
+// Outputs (web maskable PWA icons — full bleed):
+//   web/icons/Icon-maskable-192.png / Icon-maskable-512.png
 // Outputs (in-app — the bare glyph, no tile):
 //   assets/logo/glyph_light.png / glyph_dark.png
 // Outputs (tray):
@@ -93,14 +98,16 @@ class MarkStyle {
 ///
 /// [margin] insets the tile; [radius] is its corner as a fraction of its side
 /// (0 for a full-bleed square); [tile] false draws the glyph alone on a
-/// transparent canvas; [glyphScale] shrinks the glyph within the tile (Android
-/// adaptive icons keep it inside the safe zone).
+/// transparent canvas and [glyph] false the tile alone; [glyphScale] shrinks
+/// the glyph within the tile (Android adaptive icons and the Android 12 splash
+/// keep it inside their safe circle).
 Future<img.Image> renderMark(
   int px, {
   double margin = 0,
   MarkStyle style = MarkStyle.brand,
   double radius = 0.23,
   bool tile = true,
+  bool glyph = true,
   double glyphScale = 1,
 }) async {
   final recorder = ui.PictureRecorder();
@@ -124,7 +131,7 @@ Future<img.Image> renderMark(
       fill,
     );
   }
-  _drawGlyph(canvas, rect, style, glyphScale);
+  if (glyph) _drawGlyph(canvas, rect, style, glyphScale);
   final image = await recorder.endRecording().toImage(px, px);
   final png = await image.toByteData(format: ui.ImageByteFormat.png);
   return img.decodePng(png!.buffer.asUint8List())!;
@@ -251,6 +258,17 @@ Future<img.Image> glyphOnly(int px, MarkStyle style) async {
   );
 }
 
+/// Glyph scale for surfaces that show only a centred circle of the image.
+///
+/// At scale 1 the glyph reaches 0.80 of the half-side from the centre. An
+/// Android adaptive icon keeps a 66 dp circle of its 108 dp layers (0.61), and
+/// the Android 12+ splash a circle two thirds of the icon (0.67). Scaled to 0.70
+/// the glyph reaches 0.56, so no mask shape clips it. `_safeZone` checks this.
+const _safeZoneScale = 0.70;
+
+/// The tightest mask circle the scaled glyph must fit in (adaptive icon).
+const _safeZone = 33 / 54;
+
 /// Frame sizes for a Windows `.ico`: every size the shell asks for at the
 /// common display scales (100/125/150/175/200/250%), so none is a resample.
 const _icoSizes = [16, 20, 24, 30, 32, 36, 40, 48, 60, 64, 72, 96, 128, 256];
@@ -271,6 +289,38 @@ void main() {
       ? false
       : 'set REGEN_ICONS=1 to regenerate the checked-in icon assets';
 
+  // Runs on every `flutter test`, not only when regenerating: it guards the
+  // geometry the Android launcher and splash rely on.
+  test('the adaptive and splash glyph fits inside every mask circle', () async {
+    double reach(img.Image im) {
+      final c = im.width / 2;
+      var r = 0.0;
+      for (final q in im) {
+        if (q.a > 16) {
+          r = math.max(
+            r,
+            math.sqrt(math.pow(q.x + .5 - c, 2) + math.pow(q.y + .5 - c, 2)),
+          );
+        }
+      }
+      return r / c;
+    }
+
+    final glyph = await renderMark(
+      432,
+      tile: false,
+      glyphScale: _safeZoneScale,
+    );
+    expect(reach(glyph), lessThan(_safeZone - 0.02));
+    // The background layer is the tile alone: nothing drawn twice.
+    final bg = await renderMark(432, radius: 0, glyph: false);
+    expect(
+      bg.where((q) => q.r > 200 && q.g > 200 && q.b > 200).length,
+      0,
+      reason: 'the adaptive background must not carry the glyph',
+    );
+  });
+
   test('derive masters, launcher, splash and in-app assets', () async {
     // Reference renderings of the two surface variants.
     await _png(
@@ -288,23 +338,40 @@ void main() {
     // alpha).
     await _png('icon/icon_glyph.png', await renderMark(1024, margin: 51));
     await _png('icon/icon_mobile.png', await renderMark(1024, radius: 0));
-    // Android adaptive layers: the gradient behind, the glyph inside the safe
-    // zone in front (masks show only the centre ~66%).
-    await _png('icon/icon_adaptive_bg.png', await renderMark(1024, radius: 0));
+    // Android adaptive layers. The launcher stacks BOTH, so the background
+    // must be the tile alone: drawing the glyph here as well is what put two
+    // overlapping clouds on the home screen. The foreground is the glyph alone,
+    // inside the 66/108 safe zone that every mask shape keeps.
+    await _png(
+      'icon/icon_adaptive_bg.png',
+      await renderMark(1024, radius: 0, glyph: false),
+    );
     await _png(
       'icon/icon_adaptive_fg.png',
-      await renderMark(1024, tile: false, glyphScale: 0.72),
+      await renderMark(1024, tile: false, glyphScale: _safeZoneScale),
     );
 
-    // Splash, one per theme: the tile is the splash background colour, so
-    // only the glyph shows.
+    // Splash, one per theme. Android 12+ shows the icon cropped to a circle
+    // two thirds of its side, on the splash colour, so the mark is the bare
+    // glyph sized to sit inside that circle — the same image serves the
+    // pre-12 splash, iOS and web, where it is simply centred.
     await _png(
       'assets/logo/mark_light.png',
-      await renderMark(1024, style: MarkStyle.light),
+      await renderMark(
+        1024,
+        style: MarkStyle.light,
+        tile: false,
+        glyphScale: _safeZoneScale,
+      ),
     );
     await _png(
       'assets/logo/mark_dark.png',
-      await renderMark(1024, style: MarkStyle.dark),
+      await renderMark(
+        1024,
+        style: MarkStyle.dark,
+        tile: false,
+        glyphScale: _safeZoneScale,
+      ),
     );
 
     // In-app brand marks: the bare theme-matched glyph, no tile — a launcher
@@ -317,6 +384,21 @@ void main() {
       'assets/logo/glyph_dark.png',
       await glyphOnly(512, MarkStyle.dark),
     );
+  }, skip: skip);
+
+  test('derive the web maskable icons (full-bleed)', () async {
+    // flutter_launcher_icons writes the maskable PWA icons from the same
+    // rounded, margined tile as the plain ones. A maskable icon is masked by the
+    // launcher, so its transparent margin and corners showed as a ring around
+    // the tile. They must be full bleed, with the glyph inside the 80% safe
+    // circle — which the scale-1 glyph already is. Written AFTER
+    // `flutter_launcher_icons`, which would otherwise overwrite them.
+    for (final s in const [192, 512]) {
+      await _png(
+        'web/icons/Icon-maskable-$s.png',
+        await renderMark(s, radius: 0),
+      );
+    }
   }, skip: skip);
 
   test('derive the Windows launcher icon (multi-size ico)', () async {
