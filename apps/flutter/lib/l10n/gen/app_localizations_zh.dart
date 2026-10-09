@@ -1351,6 +1351,56 @@ class AppLocalizationsZh extends AppLocalizations {
   String get switchServiceFailed => '无法连接该主机，已保持当前主机不变。';
 
   @override
+  String get hostSwitchTitle => '切换主机';
+
+  @override
+  String hostSwitchingTo(String host) {
+    return '正在切换到 $host…';
+  }
+
+  @override
+  String get hostSwitchProbing => '正在确认主机是否在线…';
+
+  @override
+  String get hostSwitchConnecting => '正在建立连接…';
+
+  @override
+  String get hostSwitchLoading => '正在加载会话…';
+
+  @override
+  String hostSwitchFailedTitle(String host) {
+    return '无法切换到 $host';
+  }
+
+  @override
+  String hostSwitchStayed(String host) {
+    return '仍在使用 $host。';
+  }
+
+  @override
+  String hostSwitched(String host) {
+    return '已切换到 $host';
+  }
+
+  @override
+  String get hostSwitchLastFailed => '上次尝试失败';
+
+  @override
+  String hostInUse(String name) {
+    return '$name · 使用中';
+  }
+
+  @override
+  String hostCurrent(String host) {
+    return '主机：$host';
+  }
+
+  @override
+  String hostSwitchHint(String host) {
+    return '主机：$host。切换主机';
+  }
+
+  @override
   String get pickFolderTitle => '选择项目文件夹';
 
   @override

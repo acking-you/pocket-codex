@@ -24,6 +24,7 @@ import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/screens/app_session/step_body.dart';
 import 'package:pocket_codex/src/screens/app_session/transcript_model.dart';
 import 'package:pocket_codex/src/screens/app_session_screen.dart';
+import 'package:pocket_codex/src/widgets/host_switcher.dart';
 import 'package:pocket_codex/src/widgets/file_preview.dart';
 import 'package:pocket_codex/src/screens/home_screen.dart';
 import 'package:pocket_codex/src/screens/services_screen.dart';
@@ -78,7 +79,9 @@ Future<void> _loadFonts() async {
   await _loadFont(
     'Segoe UI',
     sfLike.isEmpty
-        ? [for (final w in ['Regular', 'SemiBold']) '$fonts/Figtree-$w.ttf']
+        ? [
+            for (final w in ['Regular', 'SemiBold']) '$fonts/Figtree-$w.ttf',
+          ]
         : sfLike,
   );
   await _loadFont('Microsoft YaHei UI', [
@@ -258,6 +261,7 @@ Future<void> _shoot(
 
 void main() {
   setUpAll(_loadFonts);
+  hostSwitchShots();
   drawerShots();
   heroShots();
   stepShots();
@@ -269,6 +273,88 @@ void main() {
           '$name ${d.name}-${b.name}',
           (t) => _shoot(t, d, b, name, scene),
         );
+      }
+    }
+  }
+}
+
+/// The host switcher: its list open, a switch in flight, and a failed one.
+void hostSwitchShots() {
+  const other = ServiceEntry(
+    device: 'workstation',
+    kind: 'app',
+    name: 'default',
+    key: 'pcx:workstation:app:default',
+  );
+  const services = [
+    ServiceEntry(device: 'lb7666', kind: 'app', name: 'default', key: _service),
+    other,
+  ];
+  for (final d in [_devices[1], _devices.last]) {
+    for (final b in Brightness.values) {
+      for (final state in ['menu', 'switching', 'failed']) {
+        testWidgets('host $state ${d.name}-${b.name}', (t) async {
+          debugDefaultTargetPlatformOverride = d.platform;
+          try {
+            AppSessionScreen.debugResetThreadMemory();
+            t.view.devicePixelRatio = 2.0;
+            t.view.physicalSize = d.size * 2.0;
+            addTearDown(t.view.reset);
+            final api = _api();
+            await api.appConnect(_service, 28080);
+            final pending = switch (state) {
+              'switching' => const HostSwitch(
+                target: 'pcx:workstation:app:default',
+                phase: HostSwitchPhase.connecting,
+              ),
+              'failed' => const HostSwitch(
+                target: 'pcx:workstation:app:default',
+                phase: HostSwitchPhase.failed,
+                error:
+                    'The tunnel is up, but the remote app-server didn\'t '
+                    'answer before the timeout. 仍在使用 lb7666 · default。',
+              ),
+              _ => null,
+            };
+            await t.pumpWidget(
+              _app(
+                AppSessionScreen(
+                  serviceKey: _service,
+                  threadId: 't1',
+                  home: true,
+                  services: services,
+                  hostSwitch: pending,
+                ),
+                api,
+                b,
+              ),
+            );
+            // A switch in flight spins forever; let everything else settle.
+            for (var i = 0; i < 20; i++) {
+              await t.pump(const Duration(milliseconds: 50));
+            }
+            final phone = d.size.width < 720;
+            if (phone && state != 'switching') {
+              t.state<ScaffoldState>(find.byType(Scaffold).first).openDrawer();
+              for (var i = 0; i < 10; i++) {
+                await t.pump(const Duration(milliseconds: 50));
+              }
+            }
+            if (state == 'menu') {
+              await t.tap(find.byKey(const Key('sidebar-service-switcher')));
+              for (var i = 0; i < 10; i++) {
+                await t.pump(const Duration(milliseconds: 50));
+              }
+            }
+            await expectLater(
+              find.byType(MaterialApp),
+              matchesGoldenFile('out/host-$state-${d.name}-${b.name}.png'),
+            );
+            await t.pumpWidget(const SizedBox());
+          } finally {
+            debugDefaultTargetPlatformOverride = null;
+          }
+        });
       }
     }
   }

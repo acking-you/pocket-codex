@@ -11,9 +11,11 @@ import 'package:pocket_codex/src/dismissed_services.dart';
 import 'package:pocket_codex/src/error_format.dart';
 import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/screens/app_session_screen.dart';
+import 'package:pocket_codex/src/service_key.dart';
 import 'package:pocket_codex/src/ui_prefs.dart';
 import 'package:pocket_codex/src/widgets/app_toast.dart';
 import 'package:pocket_codex/src/widgets/brand_logo.dart';
+import 'package:pocket_codex/src/widgets/host_switcher.dart';
 import 'package:pocket_codex/src/widgets/local_host_dialog.dart';
 import 'package:pocket_codex/src/widgets/utility_page.dart';
 import 'package:pocket_codex/src/widgets/window_title_bar.dart';
@@ -88,7 +90,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   Timer? _retryTimer;
   bool _resolving = false;
   DateTime? _resolveStartedAt;
-  bool _switching = false;
+  // A host switch in flight, or one that failed and is still on screen.
+  HostSwitch? _hostSwitch;
 
   bool get _isDesktop =>
       !kIsWeb &&
@@ -432,39 +435,57 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
 
   /// Switch the chat to another host, keeping the current chat on screen
   /// until the target is known-good: probe + connect FIRST, and on failure
-  /// stay put with a snackbar instead of tearing the conversation down.
+  /// stay put instead of tearing the conversation down.
+  ///
+  /// Every step is visible: [_hostSwitch] names the target and the step, the
+  /// session screen shows it in the switcher row and above the conversation,
+  /// a success is confirmed and a failure stays on screen with its reason and
+  /// a retry until dismissed.
   Future<void> _switchService(String key) async {
-    if (key == _serviceKey || _switching) return;
+    if (key == _serviceKey || _switchBusy) return;
     final l10n = AppLocalizations.of(context);
     final messenger = ToastMessenger.of(context);
     // Supersede any background resolve; this switch owns the outcome now.
     final gen = ++_generation;
-    setState(() => _switching = true);
+    void step(HostSwitchPhase phase, {String? error}) {
+      if (!mounted || gen != _generation) return;
+      setState(
+        () => _hostSwitch = HostSwitch(target: key, phase: phase, error: error),
+      );
+    }
+
+    step(HostSwitchPhase.probing);
     try {
       final api = ref.read(bridgeApiProvider);
-      var ok = false;
+      // Ask WHY, not just whether: "the relay refused us" and "the host is
+      // gone" need different fixes, and the user can't tell them apart from a
+      // bare "couldn't reach".
+      String? reason;
       try {
-        ok = await api.appProbe(key);
-      } catch (_) {
-        ok = false;
+        reason = await api.appProbeReason(key);
+      } catch (e) {
+        reason = '$e';
       }
-      if (ok && !api.appIsConnected(key)) {
+      if (!mounted || gen != _generation) return;
+      if (reason == null && !api.appIsConnected(key)) {
+        step(HostSwitchPhase.connecting);
         try {
           await api.appConnect(key, appLocalPort);
         } catch (_) {
           try {
             await api.appDisconnect(key);
             await api.appConnect(key, appLocalPort);
-          } catch (_) {
-            ok = false;
+          } catch (e) {
+            reason = '$e';
           }
         }
       }
       if (!mounted || gen != _generation) return;
-      if (!ok) {
-        messenger.error(l10n.switchServiceFailed);
+      if (reason != null) {
+        step(HostSwitchPhase.failed, error: _switchFailure(l10n, reason));
         return;
       }
+      step(HostSwitchPhase.loading);
       final pick = await _pickThread(key, await _prefs());
       if (!mounted || gen != _generation) return;
       ref.read(uiPrefsProvider.notifier).setLastService(key);
@@ -473,18 +494,44 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
         _serviceKey = key;
         _threadId = pick?.id;
         _cwd = pick?.cwd;
+        _hostSwitch = null;
       });
+      messenger.ok(l10n.hostSwitched(_hostLabelOf(key)));
     } finally {
       // The switch superseded any resolve, so clear its in-flight markers too
       // (or the self-heal tick would think a resolve is still running).
-      _resolving = false;
-      _resolveStartedAt = null;
-      if (mounted) {
-        setState(() => _switching = false);
-      } else {
-        _switching = false;
+      if (gen == _generation) {
+        _resolving = false;
+        _resolveStartedAt = null;
       }
     }
+  }
+
+  /// Whether a switch is running (a failed one is just a notice).
+  bool get _switchBusy {
+    final s = _hostSwitch;
+    return s != null && s.phase != HostSwitchPhase.failed;
+  }
+
+  /// A failed probe or connect, worded for the user, ending with the host
+  /// they are still on.
+  String _switchFailure(AppLocalizations l10n, String reason) {
+    final why = isRelayAuthRejection(reason)
+        ? l10n.unreachableAuthRejected
+        : isProbeTimeout(reason)
+        ? l10n.unreachableSilent
+        : friendlyError(reason);
+    final current = _serviceKey;
+    return current == null
+        ? why
+        : '$why ${l10n.hostSwitchStayed(_hostLabelOf(current))}';
+  }
+
+  String _hostLabelOf(String key) {
+    for (final s in ref.read(servicesProvider).valueOrNull ?? _candidates) {
+      if (s.key == key) return hostLabel(s);
+    }
+    return serviceKeyLabel(key);
   }
 
   Future<void> _startHosting() async {
@@ -556,6 +603,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
             home: true,
             services: candidates,
             onSwitchService: _switchService,
+            hostSwitch: _hostSwitch,
+            onDismissHostSwitch: () => setState(() => _hostSwitch = null),
           ),
         );
       case _Phase.resolving:

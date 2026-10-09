@@ -11,7 +11,7 @@ name: pocket_codex
 description: "PocketCodex Flutter front-end. Drives codex app-server through flutter_rust_bridge."
 publish_to: 'none'
 
-version: 0.2.9+29
+version: 0.2.10+30
 
 # Flutter SDK is locked at the project level via FVM (`.fvmrc`) and at
 # the language level via `environment.flutter`. CI uses
@@ -204,9 +204,9 @@ flutter_launcher_icons:
     generate: true
     image_path: "icon/icon_glyph.png"
 
-# Theme-matched splash: each mark is its theme's tile, and the background
-# colour equals that tile (MarkStyle.light / .dark in gen_icon_test.dart),
-# so the tile melts into the splash and only the cloud glyph shows.
+# Theme-matched splash: each mark is its theme's bare glyph, sized to sit in
+# Android 12's circle crop, on the theme surface (MarkStyle.light / .dark in
+# gen_icon_test.dart). Keep these colours equal to those tiles.
 flutter_native_splash:
   image: assets/logo/mark_light.png
   image_dark: assets/logo/mark_dark.png

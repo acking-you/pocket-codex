@@ -2570,6 +2570,78 @@ abstract class AppLocalizations {
   /// **'Couldn\'t reach that host — staying on the current one.'**
   String get switchServiceFailed;
 
+  /// No description provided for @hostSwitchTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Switch host'**
+  String get hostSwitchTitle;
+
+  /// No description provided for @hostSwitchingTo.
+  ///
+  /// In en, this message translates to:
+  /// **'Switching to {host}…'**
+  String hostSwitchingTo(String host);
+
+  /// No description provided for @hostSwitchProbing.
+  ///
+  /// In en, this message translates to:
+  /// **'Checking that the host is answering…'**
+  String get hostSwitchProbing;
+
+  /// No description provided for @hostSwitchConnecting.
+  ///
+  /// In en, this message translates to:
+  /// **'Opening the connection…'**
+  String get hostSwitchConnecting;
+
+  /// No description provided for @hostSwitchLoading.
+  ///
+  /// In en, this message translates to:
+  /// **'Loading its conversations…'**
+  String get hostSwitchLoading;
+
+  /// No description provided for @hostSwitchFailedTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Couldn\'t switch to {host}'**
+  String hostSwitchFailedTitle(String host);
+
+  /// No description provided for @hostSwitchStayed.
+  ///
+  /// In en, this message translates to:
+  /// **'You\'re still on {host}.'**
+  String hostSwitchStayed(String host);
+
+  /// No description provided for @hostSwitched.
+  ///
+  /// In en, this message translates to:
+  /// **'Now on {host}'**
+  String hostSwitched(String host);
+
+  /// No description provided for @hostSwitchLastFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Last attempt failed'**
+  String get hostSwitchLastFailed;
+
+  /// No description provided for @hostInUse.
+  ///
+  /// In en, this message translates to:
+  /// **'{name} · in use'**
+  String hostInUse(String name);
+
+  /// No description provided for @hostCurrent.
+  ///
+  /// In en, this message translates to:
+  /// **'Host: {host}'**
+  String hostCurrent(String host);
+
+  /// No description provided for @hostSwitchHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Host: {host}. Switch host'**
+  String hostSwitchHint(String host);
+
   /// No description provided for @pickFolderTitle.
   ///
   /// In en, this message translates to:
