@@ -9,8 +9,10 @@ use pocket_codex_core::config::Mode;
 
 use crate::{
     engine::{
-        account, app_session, config, discovery, logging, meta, opencode, runtime, serve,
-        serve_opencode, sessions, transport,
+        account, app_session, config, discovery, logging, meta, runtime, serve, serve_acp,
+        serve_opencode,
+        session_engine::{self, engine, require_native, Protocol, StartOptions, TurnOptions},
+        sessions, transport,
     },
     frb_generated::StreamSink,
 };
@@ -94,9 +96,13 @@ pub fn get_config() -> Result<ConfigView> {
 /// Set the relay `host:port` and persist.
 pub fn set_relay(relay: String) -> Result<()> {
     let dir = runtime::support_dir()?;
-    let mut cfg = config::load_config(&dir)?;
-    cfg.set_relay(&relay);
-    config::save_config(&dir, &cfg)
+    config::update_config(&dir, |cfg| {
+        cfg.set_relay(&relay);
+        Ok(())
+    })?;
+    // Connections of the previous relay are not this relay's services.
+    transport::context_changed();
+    Ok(())
 }
 
 /// Set the 32-byte MSG_HEADER_KEY and persist (validates length).
@@ -105,18 +111,22 @@ pub fn set_key(key: String) -> Result<()> {
         return Err(anyhow!("MSG_HEADER_KEY must be exactly 32 bytes (got {})", key.len()));
     }
     let dir = runtime::support_dir()?;
-    let mut cfg = config::load_config(&dir)?;
-    cfg.set_relay_key(&key);
-    config::save_config(&dir, &cfg)
+    config::update_config(&dir, |cfg| {
+        cfg.set_relay_key(&key);
+        Ok(())
+    })?;
+    transport::context_changed();
+    Ok(())
 }
 
 /// Set the UI locale (BCP-47, e.g. `en`/`zh`) and persist. An empty string
 /// clears it, meaning the app follows the system locale.
 pub fn set_locale(locale: String) -> Result<()> {
     let dir = runtime::support_dir()?;
-    let mut cfg = config::load_config(&dir)?;
-    cfg.set_locale(&locale);
-    config::save_config(&dir, &cfg)
+    config::update_config(&dir, |cfg| {
+        cfg.set_locale(&locale);
+        Ok(())
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -256,10 +266,12 @@ pub fn codex_logout(service_key: String) -> Result<()> {
 pub fn import_config(text: String) -> Result<String> {
     let payload = config::decode_pcx1(&text)?;
     let dir = runtime::support_dir()?;
-    let mut cfg = config::load_config(&dir)?;
-    cfg.set_relay(&payload.relay);
-    cfg.set_relay_key(&payload.key);
-    config::save_config(&dir, &cfg)?;
+    config::update_config(&dir, |cfg| {
+        cfg.set_relay(&payload.relay);
+        cfg.set_relay_key(&payload.key);
+        Ok(())
+    })?;
+    transport::context_changed();
     Ok(payload.relay)
 }
 
@@ -388,13 +400,26 @@ pub struct AppServeStatusDto {
     /// Upstream proxy codex + the API proxy were started with, or `None` when
     /// they inherit the app's environment.
     pub proxy: Option<String>,
-    /// Service provider of this host: `codex` or `opencode`. For `opencode`
-    /// the `app_*` fields describe the OpenCode gateway and `api_*` are empty.
+    /// Service provider family of this host: `codex`, `opencode` or `acp`.
+    /// For `opencode` / `acp` the `app_*` fields describe the gateway and
+    /// `api_*` are empty.
     pub provider: String,
-    /// Provider version when known (OpenCode).
+    /// Provider version when known (OpenCode, ACP agents).
     pub provider_version: Option<String>,
     /// Whether that version is the one this build was verified against.
     pub provider_verified: bool,
+    /// Wire protocol: `codex-app-server`, `opencode-http` or `acp`.
+    pub protocol: String,
+    /// Human-readable provider / agent name.
+    pub provider_name: String,
+    /// ACP agent profile id.
+    pub profile_id: Option<String>,
+    /// ACP agent phase: `starting`, `ready`, `failed` or `stopped`.
+    pub agent_phase: Option<String>,
+    /// Why the ACP agent is not running, safe to show.
+    pub agent_error: Option<String>,
+    /// The ACP agent reported that authentication is required.
+    pub auth_required: bool,
 }
 
 /// Result of attaching and publishing a local OpenCode service.
@@ -445,6 +470,104 @@ pub fn app_serve_start_opencode(
 /// `~/.opencode/bin/opencode`), or `None`.
 pub fn opencode_locate(binary_override: Option<String>) -> Option<String> {
     serve_opencode::locate(binary_override.as_deref()).map(|p| p.display().to_string())
+}
+
+/// An ACP agent to host: profile identity plus executable and argument
+/// vector, passed to the operating system verbatim (no shell).
+pub struct AcpAgentSpecDto {
+    /// Profile id (`opencode` for the preset, or a custom id).
+    pub profile_id: String,
+    /// Name shown in the UI.
+    pub display_name: String,
+    /// Executable: an explicit path, or a bare name searched on `PATH`.
+    pub program: String,
+    /// Arguments, one entry per argument.
+    pub args: Vec<String>,
+}
+
+/// A built-in ACP agent preset.
+pub struct AcpPresetDto {
+    /// Profile id.
+    pub id: String,
+    /// Display name.
+    pub display_name: String,
+    /// Bare executable name.
+    pub program: String,
+    /// Default arguments.
+    pub args: Vec<String>,
+}
+
+/// Result of hosting an ACP agent.
+pub struct AcpServeDto {
+    /// Device id the services registered under.
+    pub device: String,
+    /// Instance name.
+    pub name: String,
+    /// `pcx:<device>:acp:<name>` key.
+    pub service_key: String,
+    /// Loopback gateway address.
+    pub listen_addr: String,
+    /// `pcx:<device>:meta:<name>` key.
+    pub meta_service_key: String,
+    /// Profile id.
+    pub profile_id: String,
+    /// Display name.
+    pub display_name: String,
+    /// Whether an existing host was reused.
+    pub reused: bool,
+}
+
+/// Built-in ACP agent presets (OpenCode: `opencode acp`).
+#[frb(sync)]
+pub fn acp_presets() -> Vec<AcpPresetDto> {
+    pocket_codex_host_svc::acp::PRESETS
+        .iter()
+        .map(|preset| AcpPresetDto {
+            id: preset.id.to_string(),
+            display_name: preset.display_name.to_string(),
+            program: preset.program.to_string(),
+            args: preset.args.iter().map(|arg| arg.to_string()).collect(),
+        })
+        .collect()
+}
+
+/// Whether this device can host ACP agents (Unix desktops). Any device can
+/// use a remote ACP host.
+#[frb(sync)]
+pub fn acp_hosting_supported() -> bool {
+    serve_acp::hosting_supported()
+}
+
+/// The executable `program` resolves to (explicit path, `PATH`, then the
+/// preset's install locations), or `None`.
+pub fn acp_locate(program: String, profile_id: Option<String>) -> Option<String> {
+    serve_acp::locate(&program, profile_id.as_deref()).map(|p| p.display().to_string())
+}
+
+/// Launch and host an ACP agent as `acp:<name>` plus `meta:<name>`. Works in
+/// self-host and account mode. Stopping hosting stops the agent.
+pub fn app_serve_start_acp(name: Option<String>, spec: AcpAgentSpecDto) -> Result<AcpServeDto> {
+    let r = serve_acp::start(name, pocket_codex_host_svc::acp::AgentSpec {
+        profile_id: spec.profile_id,
+        display_name: spec.display_name,
+        program: spec.program,
+        args: spec.args,
+    })?;
+    Ok(AcpServeDto {
+        device: r.device,
+        name: r.name,
+        service_key: r.service_key,
+        listen_addr: r.listen_addr,
+        meta_service_key: r.meta_service_key,
+        profile_id: r.profile_id,
+        display_name: r.display_name,
+        reused: r.reused,
+    })
+}
+
+/// Restart the agent of a local ACP host (new process, new generation).
+pub fn app_serve_restart_acp(name: String) -> Result<()> {
+    serve_acp::restart(&name)
 }
 
 /// Legacy version endpoint; returns `unavailable` because no engine is bundled.
@@ -504,6 +627,12 @@ pub fn app_serve_status() -> Vec<AppServeStatusDto> {
             provider: s.provider,
             provider_version: s.provider_version,
             provider_verified: s.provider_verified,
+            protocol: s.protocol,
+            provider_name: s.provider_name,
+            profile_id: s.profile_id,
+            agent_phase: s.agent_phase,
+            agent_error: s.agent_error,
+            auth_required: s.auth_required,
         })
         .collect()
 }
@@ -722,14 +851,15 @@ pub fn app_thread_turn_page(
     load_more: bool,
     delta_only: Option<bool>,
 ) -> Result<TurnItemsPageDto> {
-    let read = if opencode::is_opencode(&service_key) {
-        opencode::thread_turn_page
-    } else if delta_only.unwrap_or(false) {
-        app_session::thread_turn_page_delta
-    } else {
-        app_session::thread_turn_page
-    };
-    read(&service_key, &thread_id, &turn_id, load_more).map(turn_page_dto)
+    engine(&service_key)
+        .thread_turn_page(
+            &service_key,
+            &thread_id,
+            &turn_id,
+            load_more,
+            delta_only.unwrap_or(false),
+        )
+        .map(turn_page_dto)
 }
 
 /// A turn reduced to what the rail shows.
@@ -780,27 +910,19 @@ pub struct ThreadRuntimeConfigDto {
 /// Connect to an app-server service: subscribe on `127.0.0.1:<local_port>`,
 /// open the JSON-RPC websocket and run the `initialize` handshake. Idempotent.
 pub fn app_connect(service_key: String, local_port: u16) -> Result<()> {
-    if opencode::is_opencode(&service_key) {
-        return opencode::connect(service_key, local_port, &transport::resolve_blocking()?);
-    }
-    app_session::connect(service_key, local_port, &transport::resolve_blocking()?)
+    engine(&service_key).connect(service_key.clone(), local_port)
 }
 
 /// Whether a live app-server session exists for `service_key`.
 #[frb(sync)]
 pub fn app_is_connected(service_key: String) -> bool {
-    if opencode::is_opencode(&service_key) {
-        return opencode::is_connected(&service_key);
-    }
-    app_session::is_connected(&service_key)
+    engine(&service_key).is_connected(&service_key)
 }
 
-/// Disconnect the app-server session and its pb-mapper subscription.
+/// Disconnect this controller's session and its pb-mapper subscription.
+/// Work owned by a host (ACP turns, permissions) keeps running there.
 pub fn app_disconnect(service_key: String) {
-    if opencode::is_opencode(&service_key) {
-        return opencode::disconnect(&service_key);
-    }
-    app_session::disconnect(&service_key);
+    engine(&service_key).disconnect(&service_key);
 }
 
 /// Probe whether an app-server is actually REACHABLE — its backend responds to
@@ -822,10 +944,7 @@ pub fn app_probe(service_key: String) -> Result<bool> {
 /// needs a different fix from a dead backend. This hands the transport's own
 /// words to the UI so it can name the actual problem.
 pub fn app_probe_reason(service_key: String) -> Result<Option<String>> {
-    if opencode::is_opencode(&service_key) {
-        return Ok(opencode::probe_reason(service_key, &transport::resolve_blocking()?));
-    }
-    Ok(app_session::probe_reason(service_key, 0, &transport::resolve_blocking()?))
+    engine(&service_key).probe_reason(service_key.clone())
 }
 
 /// Probe whether an API proxy is actually REACHABLE — its host answers a
@@ -960,11 +1079,7 @@ pub fn app_events(service_key: String, sink: StreamSink<AppEventDto>) -> Result<
     // surfaces as an uncaught async error on the Dart side — fatal on desktop
     // (no global handler) — rather than a catchable stream `onError`/`onDone`.
     runtime::runtime().spawn(async move {
-        let subscribed = if opencode::is_opencode(&service_key) {
-            opencode::subscribe_events(&service_key)
-        } else {
-            app_session::subscribe_events(&service_key)
-        };
+        let subscribed = engine(&service_key).subscribe_events(&service_key);
         let rx = match subscribed {
             Ok(rx) => rx,
             // Not connected: close the stream so Dart sees `onDone`.
@@ -1040,11 +1155,7 @@ mod bridge_events_tests;
 
 /// List threads known to the app-server.
 pub fn app_thread_list(service_key: String) -> Result<Vec<ThreadMetaDto>> {
-    let threads = if opencode::is_opencode(&service_key) {
-        opencode::thread_list(&service_key)?
-    } else {
-        app_session::thread_list(&service_key)?
-    };
+    let threads = engine(&service_key).thread_list(&service_key)?;
     Ok(threads
         .into_iter()
         .map(|t| ThreadMetaDto {
@@ -1059,8 +1170,11 @@ pub fn app_thread_list(service_key: String) -> Result<Vec<ThreadMetaDto>> {
         .collect())
 }
 
-/// Inspect one thread without resuming it or taking ownership.
+/// Inspect one thread without resuming it or taking ownership. Native Codex
+/// only (callers gate on `native_metadata`); other protocols are refused
+/// before any network call.
 pub fn app_thread_metadata(service_key: String, thread_id: String) -> Result<ThreadMetaDto> {
+    require_native(&service_key, "thread metadata")?;
     let t = app_session::thread_metadata(&service_key, &thread_id)?;
     Ok(ThreadMetaDto {
         id: t.id,
@@ -1075,11 +1189,7 @@ pub fn app_thread_metadata(service_key: String, thread_id: String) -> Result<Thr
 
 /// List the models the app-server offers.
 pub fn app_model_list(service_key: String) -> Result<Vec<ModelInfoDto>> {
-    let models = if opencode::is_opencode(&service_key) {
-        opencode::model_list(&service_key)?
-    } else {
-        app_session::model_list(&service_key)?
-    };
+    let models = engine(&service_key).model_list(&service_key)?;
     Ok(models
         .into_iter()
         .map(|m| ModelInfoDto {
@@ -1104,6 +1214,9 @@ pub fn app_realtime_request(
     method: String,
     params_json: String,
 ) -> Result<String> {
+    // Live voice and dictation are native Codex realtime features. An ACP
+    // agent's audio prompt support is a different thing and is not routed here.
+    require_native(&service_key, "realtime voice")?;
     app_session::realtime_request(&service_key, &method, &params_json)
 }
 
@@ -1119,18 +1232,14 @@ pub fn app_thread_start(
     service_tier: Option<String>,
     sandbox: Option<String>,
 ) -> Result<String> {
-    if opencode::is_opencode(&service_key) {
-        return opencode::thread_start(&service_key, model, cwd);
-    }
-    app_session::thread_start(
-        &service_key,
+    engine(&service_key).thread_start(&service_key, StartOptions {
         model,
         cwd,
         approval_policy,
         approvals_reviewer,
         service_tier,
         sandbox,
-    )
+    })
 }
 
 /// Append an asynchronous answer and return the accepted active turn ID.
@@ -1141,11 +1250,7 @@ pub fn app_turn_steer(
     text: String,
     images: Option<Vec<String>>,
 ) -> Result<String> {
-    if opencode::is_opencode(&service_key) {
-        let images = images.unwrap_or_default();
-        return opencode::turn_steer(&service_key, &thread_id, turn_id.as_deref(), &text, &images);
-    }
-    app_session::turn_steer(
+    engine(&service_key).turn_steer(
         &service_key,
         &thread_id,
         turn_id.as_deref(),
@@ -1154,18 +1259,18 @@ pub fn app_turn_steer(
     )
 }
 
-/// Answer a server approval request. `decision` is the wire value the session
-/// layer recognises: `accept` or `acceptForSession` to grant, any other value
-/// (e.g. `decline`) to decline.
+/// Answer a server approval request. For Codex and OpenCode `decision` is
+/// the wire value the session layer recognises: `accept` or
+/// `acceptForSession` to grant, any other value (e.g. `decline`) to decline.
+/// For an ACP permission (`acp/permission/requested`) `decision` is the
+/// agent's own option id, passed verbatim; an option the request did not
+/// offer is refused and the request stays pending.
 pub fn app_respond_approval(
     service_key: String,
     request_id: String,
     decision: String,
 ) -> Result<()> {
-    if opencode::is_opencode(&service_key) {
-        return opencode::respond_approval(&service_key, &request_id, &decision);
-    }
-    app_session::respond_approval(&service_key, &request_id, &decision)
+    engine(&service_key).respond_approval(&service_key, &request_id, &decision)
 }
 
 /// Answer an `item/tool/requestUserInput` elicitation (the model asking the
@@ -1180,19 +1285,13 @@ pub fn app_respond_user_input(
     request_id: String,
     answers_json: String,
 ) -> Result<()> {
-    if opencode::is_opencode(&service_key) {
-        return opencode::respond_user_input(&service_key, &request_id, &answers_json);
-    }
-    app_session::respond_user_input(&service_key, &request_id, &answers_json)
+    engine(&service_key).respond_user_input(&service_key, &request_id, &answers_json)
 }
 
 /// Resume an existing thread (load it into the session) before reading it or
 /// sending turns; otherwise the server reports "thread not found".
 pub fn app_thread_resume(service_key: String, thread_id: String) -> Result<()> {
-    if opencode::is_opencode(&service_key) {
-        return opencode::thread_resume(&service_key, &thread_id);
-    }
-    app_session::thread_resume(&service_key, &thread_id)
+    engine(&service_key).thread_resume(&service_key, &thread_id)
 }
 
 fn item_dto(i: app_session::ThreadItem) -> ThreadItemDto {
@@ -1221,13 +1320,11 @@ pub fn app_thread_read(
     thread_id: String,
     include_turn_pages: Option<bool>,
 ) -> Result<ThreadHistoryDto> {
-    let h = if opencode::is_opencode(&service_key) {
-        opencode::thread_read(&service_key, &thread_id)?
-    } else if include_turn_pages.unwrap_or(true) {
-        app_session::thread_read(&service_key, &thread_id)?
-    } else {
-        app_session::thread_read_with_pages(&service_key, &thread_id, false)?
-    };
+    let h = engine(&service_key).thread_read(
+        &service_key,
+        &thread_id,
+        include_turn_pages.unwrap_or(true),
+    )?;
     Ok(history_dto(h))
 }
 
@@ -1271,11 +1368,7 @@ fn history_dto(h: app_session::ThreadHistory) -> ThreadHistoryDto {
 /// Returns an empty page when the thread reads whole or is already at its
 /// start.
 pub fn app_thread_older_page(service_key: String, thread_id: String) -> Result<OlderPageDto> {
-    let page = if opencode::is_opencode(&service_key) {
-        opencode::thread_older_page(&service_key, &thread_id)?
-    } else {
-        app_session::thread_older_page(&service_key, &thread_id)?
-    };
+    let page = engine(&service_key).thread_older_page(&service_key, &thread_id)?;
     Ok(OlderPageDto {
         items: page.items.into_iter().map(item_dto).collect(),
         has_older: page.has_older,
@@ -1289,11 +1382,8 @@ pub fn app_thread_turn_items(
     thread_id: String,
     turn_id: String,
 ) -> Result<Vec<ThreadItemDto>> {
-    if opencode::is_opencode(&service_key) {
-        let page = opencode::thread_turn_page(&service_key, &thread_id, &turn_id, false)?;
-        return Ok(page.items.into_iter().map(item_dto).collect());
-    }
-    Ok(app_session::thread_turn_items(&service_key, &thread_id, &turn_id)?
+    Ok(engine(&service_key)
+        .thread_turn_items(&service_key, &thread_id, &turn_id)?
         .into_iter()
         .map(item_dto)
         .collect())
@@ -1308,11 +1398,7 @@ pub fn app_thread_runtime_config(
     service_key: String,
     thread_id: String,
 ) -> Option<ThreadRuntimeConfigDto> {
-    let config = if opencode::is_opencode(&service_key) {
-        opencode::thread_runtime_config(&service_key, &thread_id)
-    } else {
-        app_session::thread_runtime_config(&service_key, &thread_id)
-    };
+    let config = engine(&service_key).thread_runtime_config(&service_key, &thread_id);
     config.map(|c| ThreadRuntimeConfigDto {
         model: c.model,
         model_provider: c.model_provider,
@@ -1329,28 +1415,20 @@ pub fn app_thread_runtime_config(
 /// Read the account rate-limit / quota snapshot as raw JSON (5h + weekly
 /// windows). Parsed on the Dart side since the shape is nested and volatile.
 pub fn app_rate_limits(service_key: String) -> Result<String> {
-    if opencode::is_opencode(&service_key) {
-        return Err(anyhow!("rate limits are not available for OpenCode services"));
-    }
+    require_native(&service_key, "rate limits")?;
     app_session::rate_limits(&service_key)
 }
 
 /// Unified diff of the repo at `cwd` vs its remote default branch. Empty when
 /// the cwd isn't a git repo or there are no changes.
 pub fn app_git_diff(service_key: String, cwd: String) -> Result<String> {
-    if opencode::is_opencode(&service_key) {
-        return opencode::git_diff(&service_key, &cwd);
-    }
-    app_session::git_diff(&service_key, &cwd)
+    engine(&service_key).git_diff(&service_key, &cwd)
 }
 
 /// Start a manual conversation compaction; the server emits `thread/compacted`
 /// when done.
 pub fn app_compact(service_key: String, thread_id: String) -> Result<()> {
-    if opencode::is_opencode(&service_key) {
-        return opencode::compact(&service_key, &thread_id);
-    }
-    app_session::compact(&service_key, &thread_id)
+    engine(&service_key).compact(&service_key, &thread_id)
 }
 
 /// A one-line gist of where a thread got to (the opening sentence of its most
@@ -1361,13 +1439,14 @@ pub fn app_compact(service_key: String, thread_id: String) -> Result<()> {
 /// so the UI fetches these lazily for the rows it actually shows instead of
 /// paying for every conversation up front.
 pub async fn app_thread_summary(service_key: String, thread_id: String) -> Result<Option<String>> {
-    if opencode::is_opencode(&service_key) {
-        return Ok(None);
+    // Engines without a summary source answer `None` without any I/O.
+    if !matches!(session_engine::protocol_of(&service_key), Protocol::CodexAppServer) {
+        return engine(&service_key).thread_summary(&service_key, &thread_id);
     }
     // Summary RPCs must not occupy the CPU-sized FRB pool, even on one-core
     // devices. The UI separately bounds how many background requests run.
     runtime::runtime()
-        .spawn_blocking(move || app_session::thread_summary(&service_key, &thread_id))
+        .spawn_blocking(move || engine(&service_key).thread_summary(&service_key, &thread_id))
         .await?
 }
 
@@ -1375,10 +1454,7 @@ pub async fn app_thread_summary(service_key: String, thread_id: String) -> Resul
 /// follows the thread across devices); an empty `name` clears it, and the UI
 /// falls back to the thread preview.
 pub fn app_set_thread_name(service_key: String, thread_id: String, name: String) -> Result<()> {
-    if opencode::is_opencode(&service_key) {
-        return opencode::set_thread_name(&service_key, &thread_id, &name);
-    }
-    app_session::set_thread_name(&service_key, &thread_id, &name)
+    engine(&service_key).set_thread_name(&service_key, &thread_id, &name)
 }
 
 /// Send a user message (text and/or attached images), starting a model turn.
@@ -1407,20 +1483,7 @@ pub fn app_turn_start(
     collaboration_mode: Option<String>,
     reasoning_effort: Option<String>,
 ) -> Result<()> {
-    if opencode::is_opencode(&service_key) {
-        return opencode::turn_start(
-            &service_key,
-            &thread_id,
-            text,
-            images,
-            model,
-            collaboration_mode,
-            reasoning_effort,
-        );
-    }
-    app_session::turn_start(
-        &service_key,
-        &thread_id,
+    engine(&service_key).turn_start(&service_key, &thread_id, TurnOptions {
         text,
         images,
         model,
@@ -1430,7 +1493,7 @@ pub fn app_turn_start(
         sandbox,
         collaboration_mode,
         reasoning_effort,
-    )
+    })
 }
 
 /// Interrupt the running turn. `turn_id` (from the latest `turn/started`) is
@@ -1440,16 +1503,15 @@ pub fn app_turn_interrupt(
     thread_id: String,
     turn_id: Option<String>,
 ) -> Result<()> {
-    if opencode::is_opencode(&service_key) {
-        return opencode::turn_interrupt(&service_key, &thread_id, turn_id);
-    }
-    app_session::turn_interrupt(&service_key, &thread_id, turn_id)
+    engine(&service_key).turn_interrupt(&service_key, &thread_id, turn_id)
 }
 
 /// What a session service's provider supports, so the shared session UI can
-/// hide controls that do not apply.
+/// hide controls that do not apply. The first thirteen fields keep their
+/// historical values for Codex and OpenCode; the rest were added for ACP and
+/// are conservative (`false`) until a feature is actually available.
 pub struct AppCapabilitiesDto {
-    /// `codex` or `opencode`.
+    /// `codex`, `opencode` or `acp`.
     pub provider: String,
     /// Fast service tier toggle.
     pub fast: bool,
@@ -1475,35 +1537,240 @@ pub struct AppCapabilitiesDto {
     pub multi_select_questions: bool,
     /// Child (subagent) sessions that can be opened read-only.
     pub child_sessions: bool,
+    /// Wire protocol: `codex-app-server`, `opencode-http` or `acp`.
+    pub protocol: String,
+    /// Human-readable agent name (ACP: the host's profile name).
+    pub provider_name: String,
+    /// Whether the values come from a live ACP negotiation.
+    pub negotiated: bool,
+    /// Host generation the values belong to (ACP; 0 otherwise). A change
+    /// invalidates cached capabilities and session settings.
+    pub generation: u64,
+    /// Native live voice calls.
+    pub voice: bool,
+    /// Native composer dictation.
+    pub dictation: bool,
+    /// Image attachments in prompts.
+    pub image_input: bool,
+    /// Supplementing a running turn (`turn/steer`).
+    pub steer: bool,
+    /// Renaming sessions.
+    pub rename: bool,
+    /// Manual compaction.
+    pub compact: bool,
+    /// Working-tree diff.
+    pub git_diff: bool,
+    /// A service-wide model catalog for the model picker.
+    pub model_catalog: bool,
+    /// Per-session agent options (ACP select options / modes).
+    pub session_config: bool,
+    /// Approvals carry the agent's own options, answered by option id.
+    pub permission_options: bool,
+    /// Native thread metadata (Guardian pre-resume checks).
+    pub native_metadata: bool,
+    /// How earlier sessions reopen: `native`, `load`, `resume`, `none` or
+    /// `unknown`.
+    pub session_reopen: String,
+    /// Source of the session list: `native`, `agent` or `host`.
+    pub session_list: String,
+    /// `full` or `retained` (only what the host still holds).
+    pub history_scope: String,
+    /// Running-session inventory: `meta`, `engine` or `none`.
+    pub running_inventory: String,
+    /// The agent reported that authentication is required.
+    pub auth_required: bool,
 }
 
-/// Static capabilities of the provider behind `service_key` (no network).
+/// Capabilities of the connection behind `service_key` (no network). Codex
+/// and OpenCode are fixed; ACP reflects the host's current negotiation and
+/// is conservative until connected.
 #[frb(sync)]
 pub fn app_capabilities(service_key: String) -> AppCapabilitiesDto {
-    let opencode = opencode::is_opencode(&service_key);
+    let c = engine(&service_key).capabilities(&service_key);
     AppCapabilitiesDto {
-        provider: if opencode { "opencode" } else { "codex" }.to_string(),
-        fast: !opencode,
-        permission_presets: !opencode,
-        guardian: !opencode,
-        rate_limits: !opencode,
-        takeover: !opencode,
-        external_writer_monitor: !opencode,
-        local_sessions: !opencode,
-        plan_mode: true,
-        effort_label: if opencode { "variant" } else { "effort" }.to_string(),
-        approve_always_persists_project: opencode,
-        multi_select_questions: opencode,
-        child_sessions: opencode,
+        provider: c.provider,
+        fast: c.fast,
+        permission_presets: c.permission_presets,
+        guardian: c.guardian,
+        rate_limits: c.rate_limits,
+        takeover: c.takeover,
+        external_writer_monitor: c.external_writer_monitor,
+        local_sessions: c.local_sessions,
+        plan_mode: c.plan_mode,
+        effort_label: c.effort_label,
+        approve_always_persists_project: c.approve_always_persists_project,
+        multi_select_questions: c.multi_select_questions,
+        child_sessions: c.child_sessions,
+        protocol: c.protocol,
+        provider_name: c.provider_name,
+        negotiated: c.negotiated,
+        generation: c.generation,
+        voice: c.voice,
+        dictation: c.dictation,
+        image_input: c.image_input,
+        steer: c.steer,
+        rename: c.rename,
+        compact: c.compact,
+        git_diff: c.git_diff,
+        model_catalog: c.model_catalog,
+        session_config: c.session_config,
+        permission_options: c.permission_options,
+        native_metadata: c.native_metadata,
+        session_reopen: c.session_reopen,
+        session_list: c.session_list,
+        history_scope: c.history_scope,
+        running_inventory: c.running_inventory,
+        auth_required: c.auth_required,
     }
 }
 
-/// Ids of an OpenCode service's sessions that are executing now.
+/// Ids of sessions executing now, from the engine itself (OpenCode, ACP).
+/// Codex lists them through the meta service instead.
 pub fn app_running_threads(service_key: String) -> Result<Vec<String>> {
-    if !opencode::is_opencode(&service_key) {
-        return Err(anyhow!("running threads are listed through the meta service for Codex"));
+    engine(&service_key).running_threads(&service_key)
+}
+
+/// One value of an ACP select configuration option.
+pub struct SessionConfigValueDto {
+    /// Opaque value id, sent back verbatim.
+    pub value: String,
+    /// Label.
+    pub name: String,
+    /// Group label, when the agent groups values.
+    pub group: Option<String>,
+    /// Description.
+    pub description: Option<String>,
+}
+
+/// One ACP select configuration option (model, mode, thought level, …).
+pub struct SessionConfigOptionDto {
+    /// Opaque option id.
+    pub id: String,
+    /// Label.
+    pub name: String,
+    /// Semantic category (`model`, `mode`, `thought_level`, …), UX only.
+    pub category: Option<String>,
+    /// Description.
+    pub description: Option<String>,
+    /// Current value id.
+    pub current_value: String,
+    /// Selectable values, in agent order.
+    pub values: Vec<SessionConfigValueDto>,
+}
+
+/// One legacy ACP session mode.
+pub struct SessionModeDto {
+    /// Opaque mode id.
+    pub id: String,
+    /// Label.
+    pub name: String,
+    /// Description.
+    pub description: Option<String>,
+}
+
+/// Per-session state an ACP agent reported. Everything is optional: agents
+/// that report nothing show no controls.
+pub struct SessionSettingsDto {
+    /// Select configuration options.
+    pub config_options: Vec<SessionConfigOptionDto>,
+    /// Current legacy mode id.
+    pub current_mode: Option<String>,
+    /// Advertised legacy modes.
+    pub modes: Vec<SessionModeDto>,
+    /// Context tokens in use, when reported.
+    pub usage_used: Option<i64>,
+    /// Context window size, when reported.
+    pub usage_size: Option<i64>,
+    /// A turn is running.
+    pub running: bool,
+    /// Cancellation was requested and the agent has not finished yet.
+    pub cancel_requested: bool,
+}
+
+fn opt_str(value: &serde_json::Value) -> Option<String> {
+    value.as_str().map(str::to_string)
+}
+
+fn settings_dto(body: &serde_json::Value) -> SessionSettingsDto {
+    let config_options = body["configOptions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|option| {
+            let mut values = Vec::new();
+            for entry in option["options"].as_array().into_iter().flatten() {
+                if let Some(nested) = entry["options"].as_array() {
+                    for value in nested {
+                        values.push(SessionConfigValueDto {
+                            value: value["value"].as_str().unwrap_or("").to_string(),
+                            name: value["name"].as_str().unwrap_or("").to_string(),
+                            group: opt_str(&entry["name"]),
+                            description: opt_str(&value["description"]),
+                        });
+                    }
+                } else {
+                    values.push(SessionConfigValueDto {
+                        value: entry["value"].as_str().unwrap_or("").to_string(),
+                        name: entry["name"].as_str().unwrap_or("").to_string(),
+                        group: None,
+                        description: opt_str(&entry["description"]),
+                    });
+                }
+            }
+            SessionConfigOptionDto {
+                id: option["id"].as_str().unwrap_or("").to_string(),
+                name: option["name"].as_str().unwrap_or("").to_string(),
+                category: opt_str(&option["category"]),
+                description: opt_str(&option["description"]),
+                current_value: option["currentValue"].as_str().unwrap_or("").to_string(),
+                values,
+            }
+        })
+        .collect();
+    let modes = body["modes"]["availableModes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|mode| SessionModeDto {
+            id: mode["id"].as_str().unwrap_or("").to_string(),
+            name: mode["name"].as_str().unwrap_or("").to_string(),
+            description: opt_str(&mode["description"]),
+        })
+        .collect();
+    SessionSettingsDto {
+        config_options,
+        current_mode: opt_str(&body["modes"]["currentModeId"]),
+        modes,
+        usage_used: body["usage"]["used"].as_i64(),
+        usage_size: body["usage"]["size"].as_i64(),
+        running: body["runningTurnId"].is_string(),
+        cancel_requested: body["cancelRequested"] == true,
     }
-    opencode::running_sessions(&service_key)
+}
+
+/// The ACP agent's latest per-session state as this controller saw it (no
+/// network), or `None` for other protocols or unknown sessions.
+#[frb(sync)]
+pub fn app_session_settings(service_key: String, thread_id: String) -> Option<SessionSettingsDto> {
+    engine(&service_key)
+        .session_settings(&service_key, &thread_id)
+        .map(|body| settings_dto(&body))
+}
+
+/// Set an ACP select configuration option to one of its advertised values.
+/// The agent answers with the complete new option state.
+pub fn app_set_session_config(
+    service_key: String,
+    thread_id: String,
+    config_id: String,
+    value: String,
+) -> Result<()> {
+    engine(&service_key).set_session_config(&service_key, &thread_id, &config_id, &value)
+}
+
+/// Switch an ACP session's legacy mode to one it advertised.
+pub fn app_set_session_mode(service_key: String, thread_id: String, mode_id: String) -> Result<()> {
+    engine(&service_key).set_session_mode(&service_key, &thread_id, &mode_id)
 }
 
 // ---------------------------------------------------------------------------
@@ -1685,9 +1952,7 @@ pub fn app_local_session_transcript(thread_id: String) -> Result<Vec<ThreadItemD
 /// report says exactly which processes were killed / survived and whether
 /// the resume took.
 pub fn app_force_resume(service_key: String, thread_id: String) -> Result<ForceResumeReportDto> {
-    if opencode::is_opencode(&service_key) {
-        return Err(anyhow!("OpenCode sessions do not need a forced resume"));
-    }
+    require_native(&service_key, "forced resume")?;
     let outcome = sessions::force_resume(&service_key, &thread_id)?;
     Ok(ForceResumeReportDto {
         killed: outcome.killed.into_iter().map(holder_dto).collect(),
@@ -1879,6 +2144,23 @@ pub fn meta_force_resume(service_key: String, thread_id: String) -> Result<Force
 /// and images inline; there is no document slot).
 pub fn meta_upload_file(service_key: String, file_name: String, bytes: Vec<u8>) -> Result<String> {
     Ok(meta::upload_file(&service_key, &file_name, bytes)?.path)
+}
+
+/// Capture attachment destination ownership before asynchronous file reads.
+#[frb(sync)]
+pub fn meta_upload_context() -> Result<String> {
+    meta::upload_context()
+}
+
+/// Upload using the context captured before reading the file; reject a changed
+/// account or relay without transmitting attachment bytes.
+pub fn meta_upload_file_scoped(
+    service_key: String,
+    file_name: String,
+    bytes: Vec<u8>,
+    context: String,
+) -> Result<String> {
+    Ok(meta::upload_file_scoped(&service_key, &file_name, bytes, &context)?.path)
 }
 
 /// Read a thread's persisted config from the host behind `service_key`.
@@ -2154,10 +2436,14 @@ pub fn account_login_poll(poll_handle: String, backend: String) -> Result<Accoun
         account::PollOutcome::Authorized {
             login,
             account_id,
-        } => AccountPollDto {
-            status: "authorized".to_string(),
-            login: Some(login),
-            account_id,
+        } => {
+            // Signed in: services are now the account's.
+            transport::context_changed();
+            AccountPollDto {
+                status: "authorized".to_string(),
+                login: Some(login),
+                account_id,
+            }
         },
     })
 }
@@ -2220,10 +2506,13 @@ pub fn account_web_login_exchange(
         account::PollOutcome::Authorized {
             login,
             account_id,
-        } => Ok(AccountUserDto {
-            login,
-            account_id,
-        }),
+        } => {
+            transport::context_changed();
+            Ok(AccountUserDto {
+                login,
+                account_id,
+            })
+        },
         _ => Err(anyhow!("web exchange did not authorize")),
     }
 }
@@ -2244,7 +2533,10 @@ pub fn account_current_user() -> Result<Option<AccountUserDto>> {
 /// session.
 pub fn account_logout() -> Result<()> {
     let dir = runtime::support_dir()?;
-    runtime::runtime().block_on(account::logout(&dir))
+    let result = runtime::runtime().block_on(account::logout(&dir));
+    // Whatever the revocation did, this device no longer acts as the account.
+    transport::context_changed();
+    result
 }
 
 /// List the account's services from the backend.
@@ -2279,7 +2571,9 @@ pub fn app_history_cached(
 
 /// Negotiate the independent meta history protocol before remote reads.
 pub fn app_history_sync_prepare(service_key: String) -> Result<bool> {
-    if opencode::is_opencode(&service_key) {
+    // The meta history protocol reads Codex rollouts; OpenCode keeps its own
+    // controller cache path and ACP history is the host's retained window.
+    if session_engine::protocol_of(&service_key) != Protocol::CodexAppServer {
         return Ok(false);
     }
     crate::engine::session_sync::prepare(&service_key)
@@ -2287,7 +2581,7 @@ pub fn app_history_sync_prepare(service_key: String) -> Result<bool> {
 
 /// Prefetch only a bounded running-session tail without resuming it.
 pub fn app_history_prefetch(service_key: String, thread_id: String) -> Result<()> {
-    if opencode::is_opencode(&service_key) {
+    if session_engine::protocol_of(&service_key) != Protocol::CodexAppServer {
         return Ok(());
     }
     crate::engine::session_sync::prefetch(&service_key, &thread_id)

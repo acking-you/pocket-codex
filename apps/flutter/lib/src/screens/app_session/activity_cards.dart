@@ -107,6 +107,15 @@ Widget activityRow(TranscriptItem item) => switch (item.type) {
   'plan' => PlanCard(key: ValueKey(item.id), item: item),
   'contextCompaction' => _CompactionNotice(key: ValueKey(item.id), item: item),
   'interrupted' => _InterruptedNotice(key: ValueKey(item.id)),
+  // An ACP host retains bounded history: its missing beginning is shown as a
+  // gap, never as the conversation's start.
+  'historyGap' => _HistoryGapNotice(key: ValueKey(item.id)),
+  // Content the host could not keep (an oversized image, diff or input) or
+  // could not deliver: said where it happened, never silently dropped.
+  'contentOmitted' => ContentOmittedNotice(
+    key: ValueKey(item.id),
+    reasons: item.text,
+  ),
   // Prose the agent wrote on its way to the answer (a preamble before a tool
   // batch). It reads as prose, not as a one-line tool row — an `ActivityCard`
   // would show a truncated peek of a paragraph.
@@ -167,6 +176,59 @@ class _InterruptedNotice extends StatelessWidget {
     icon: Icons.stop_circle_outlined,
     text: AppLocalizations.of(context).turnStopped,
   );
+}
+
+class _HistoryGapNotice extends StatelessWidget {
+  const _HistoryGapNotice({super.key});
+
+  @override
+  Widget build(BuildContext context) => SystemNotice(
+    icon: Icons.history_toggle_off,
+    text: AppLocalizations.of(context).historyGapNotice,
+  );
+}
+
+/// What an ACP host left out of an item. [reasons] is the item's text: a
+/// comma-separated list of `images`, `diffs`, `input`, `locations`,
+/// `content`, `plan` (too large to keep) or `unavailable` (could not be read
+/// from the host). Unknown reasons still show the generic notice.
+class ContentOmittedNotice extends StatelessWidget {
+  const ContentOmittedNotice({super.key, required this.reasons});
+  final String reasons;
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    final parts = reasons
+        .split(',')
+        .map((r) => r.trim())
+        .where((r) => r.isNotEmpty)
+        .toList();
+    if (parts.contains('unavailable')) {
+      return SystemNotice(
+        icon: Icons.cloud_off_outlined,
+        text: l10n.contentUnavailableNotice,
+      );
+    }
+    final names = <String>[
+      for (final part in parts)
+        switch (part) {
+          'images' => l10n.omittedImages,
+          'diffs' => l10n.omittedDiffs,
+          'input' => l10n.omittedInput,
+          'locations' => l10n.omittedLocations,
+          'plan' => l10n.omittedPlan,
+          _ => l10n.omittedContent,
+        },
+    ];
+    final unique = names.toSet().join(l10n.omittedSeparator);
+    return SystemNotice(
+      icon: Icons.content_cut,
+      text: l10n.contentOmittedNotice(
+        unique.isEmpty ? l10n.omittedContent : unique,
+      ),
+    );
+  }
 }
 
 /// Split a plan item's text into its lead-in prose and its checklist steps.

@@ -21,3 +21,5 @@ supersedes: 分支 feat/opencode-session-hosting 中的 ADR-0001（独立 OpenCo
 仍然保留旧决定中的两点：
 - 附接托管：停止托管时不关闭 OpenCode，只在找不到服务时请 OpenCode 自行启动后台服务。
 - 不读取提供方的登录凭据。
+
+补充（2026-10-10）：通用 ACP 智能体（包括 `opencode acp` 预设）的决定见 [ADR-0003](0003-generic-acp-agents.md)。本 ADR 中「按服务类型分发」现在由桥接层的 `SessionEngine` 边界承担，判断依据只有服务键的 kind，不再使用 `is_opencode`。OpenCode HTTP 网关通路保持不变。

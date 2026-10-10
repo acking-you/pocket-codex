@@ -2,6 +2,8 @@
 
 状态：v1.0（grill 评审通过：T1–T6 均按推荐确认）。需求见 [PRD](PRD.md)，决策见 [ADR-0002](../adr/0002-opencode-shared-session-ui.md)，术语见 [`CONTEXT.md`](../../CONTEXT.md)。
 
+补充（2026-10-10）：下文「按服务类型分发」现由 `engine/session_engine.rs` 的 `SessionEngine` 边界实现，`opencode` 键对应 `OpenCodeHttpEngine`，本文描述的 HTTP 网关通路保持不变。通用 ACP 智能体（含 `opencode acp` 预设）是另一条独立通路，见 [ACP agents](../acp-agents.md) 与 [ADR-0003](../adr/0003-generic-acp-agents.md)。
+
 ## 1. 总体架构
 
 ```

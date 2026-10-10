@@ -152,6 +152,14 @@ mod tests {
     }
 
     #[test]
+    fn acp_keys_round_trip_in_their_own_namespace() {
+        let id =
+            NamespacedServiceId::new("alice", ServiceId::new("studio", ServiceKind::Acp, "agent"));
+        assert_eq!(id.key(), "pcxu:alice:studio:acp:agent");
+        assert_eq!(NamespacedServiceId::parse_key(&id.key()), Some(id));
+    }
+
+    #[test]
     fn namespace_and_prefix_agree_with_the_key_a_client_builds() {
         // The backend sends `namespace_of`; the client feeds it to `new`. If those
         // two disagreed, a client's keys would fall outside the prefix the backend

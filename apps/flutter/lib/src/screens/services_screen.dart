@@ -295,12 +295,12 @@ class _DeviceFirstServices extends ConsumerWidget {
       }
 
       synthesize(
-        host.isOpenCode ? 'opencode' : 'app',
+        host.sessionKind,
         host.appServiceKey,
         registered: host.appRegistered,
       );
-      // An OpenCode host publishes no Responses API proxy.
-      if (!host.isOpenCode) {
+      // Only a Codex host publishes a Responses API proxy.
+      if (host.isCodex) {
         synthesize('api', host.apiServiceKey, registered: host.apiRegistered);
       }
     }
@@ -378,24 +378,23 @@ class _DeviceFirstServices extends ConsumerWidget {
     final capabilityCount =
         apps.length + apis.length + (account ? codexApps.length : 0);
 
-    // Loopback probing speaks the Codex handshake; an OpenCode gateway is
-    // probed through appProbe, which dispatches by key kind.
+    // Loopback probing speaks the Codex handshake; OpenCode and ACP gateways
+    // are probed through appProbe, which dispatches by key kind.
     final localAppAddr = <String, String>{
       for (final host in localHosts)
-        if (!host.isOpenCode) host.appServiceKey: host.appListenAddr,
+        if (host.isCodex) host.appServiceKey: host.appListenAddr,
     };
     final localApiAddr = <String, String>{
       for (final host in localHosts)
-        if (!host.isOpenCode) host.apiServiceKey: host.apiListenAddr,
+        if (host.isCodex) host.apiServiceKey: host.apiListenAddr,
     };
     final localTunnels = <String, ({String name, String kind})>{
       for (final host in localHosts)
-        if (host.isOpenCode)
-          host.appServiceKey: (name: host.name, kind: 'opencode')
-        else ...{
+        if (host.isCodex) ...{
           host.appServiceKey: (name: host.name, kind: 'app'),
           host.apiServiceKey: (name: host.name, kind: 'api'),
-        },
+        } else
+          host.appServiceKey: (name: host.name, kind: host.sessionKind),
     };
     final subscriptions = {
       for (final sub
@@ -578,11 +577,20 @@ class _DeviceFirstServices extends ConsumerWidget {
           key: Key('device-capability-${service.key}'),
           icon: Icons.chat_bubble_outline,
           title: l10n.servicesChatCapability,
-          provider: service.kind == 'opencode' ? 'opencode' : 'codex',
-          protocol: protocolOf(
-            service.kind == 'opencode' ? 'OpenCode' : 'App-server',
-            service,
-          ),
+          provider: switch (service.kind) {
+            'opencode' => 'opencode',
+            'acp' => 'acp',
+            _ => 'codex',
+          },
+          providerName: localHosts
+              .where((h) => h.appServiceKey == service.key)
+              .firstOrNull
+              ?.providerName,
+          protocol: protocolOf(switch (service.kind) {
+            'opencode' => 'OpenCode',
+            'acp' => 'ACP',
+            _ => 'App-server',
+          }, service),
           localAddr: localAppAddr[service.key],
           menuKey: Key('capability-menu-${service.key}'),
           status: offlineChip(service.key) ?? appStates[service.key]!.chip,
@@ -1143,6 +1151,7 @@ class _CapabilityRow extends StatelessWidget {
     required this.actionLabel,
     required this.onAction,
     this.provider,
+    this.providerName,
     this.status,
     this.reason,
     this.localAddr,
@@ -1162,6 +1171,9 @@ class _CapabilityRow extends StatelessWidget {
   /// The session provider (`codex` / `opencode`) to badge, or null for rows
   /// that are not a chat host.
   final String? provider;
+
+  /// Agent name for ACP badges, when this device hosts the service.
+  final String? providerName;
   final Widget? status;
 
   /// Why this capability is unavailable, when it is. A bare "unreachable" leaves
@@ -1217,7 +1229,7 @@ class _CapabilityRow extends StatelessWidget {
                     ),
                     if (provider != null) ...[
                       const SizedBox(width: 6),
-                      ProviderBadge(provider: provider!),
+                      ProviderBadge(provider: provider!, name: providerName),
                     ],
                   ],
                 ),
@@ -1597,9 +1609,9 @@ class _LocalHostCard extends ConsumerWidget {
     } else {
       codexChip = ref
           .watch(
-            host.isOpenCode
-                ? appReachableProvider(host.appServiceKey)
-                : appReachableLocalProvider(host.appListenAddr),
+            host.isCodex
+                ? appReachableLocalProvider(host.appListenAddr)
+                : appReachableProvider(host.appServiceKey),
           )
           .when(
             data: (ok) => ok
@@ -1674,7 +1686,10 @@ class _LocalHostCard extends ConsumerWidget {
                                   ),
                                 ),
                                 const SizedBox(width: 6),
-                                ProviderBadge(provider: host.provider),
+                                ProviderBadge(
+                                  provider: host.provider,
+                                  name: host.providerName,
+                                ),
                               ],
                             ),
                             const SizedBox(height: 2),

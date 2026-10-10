@@ -132,6 +132,9 @@ pub fn start(name: Option<String>, binary_override: Option<String>) -> Result<Op
         .filter(|n| !n.is_empty())
         .unwrap_or_else(|| DEFAULT_OPENCODE_NAME.to_string());
     let name = pocket_codex_core::service::sanitize_component(&name);
+    // Held until this start returns (after the host is recorded): no other
+    // provider can start under the name meanwhile.
+    let _claim = super::hosting::claim(&name, super::hosting::Provider::OpenCode)?;
     if serve::is_hosting_codex(&name) {
         bail!("`{name}` is already hosting Codex on this device; choose another name");
     }
@@ -416,6 +419,9 @@ pub(super) fn status() -> Vec<ServeStatus> {
             provider: "opencode".to_string(),
             provider_version: host.version.lock().ok().map(|v| v.clone()),
             provider_verified: host.verified.load(Ordering::Relaxed),
+            protocol: "opencode-http".to_string(),
+            provider_name: "OpenCode".to_string(),
+            ..ServeStatus::default()
         })
         .collect()
 }
@@ -485,17 +491,20 @@ pub(super) fn reregister(name: &str, kind: &str) -> Result<()> {
 /// Stop hosting `name`: withdraw its relay keys and stop the gateway, meta
 /// service and watchdog. OpenCode itself keeps running.
 pub(super) fn stop(name: &str) {
-    let removed = hosts().remove(name);
-    if let Some(host) = removed {
-        stop_tasks(host);
-    }
+    // The name stays claimed until the relay keys and listeners are gone.
+    super::hosting::retiring(name, super::hosting::Provider::OpenCode, || {
+        let removed = hosts().remove(name);
+        if let Some(host) = removed {
+            stop_tasks(host);
+        }
+    });
 }
 
 /// Stop every OpenCode host.
 pub(super) fn stop_all() {
-    let all: Vec<OpenCodeServe> = hosts().drain().map(|(_, host)| host).collect();
-    for host in all {
-        stop_tasks(host);
+    let names: Vec<String> = hosts().keys().cloned().collect();
+    for name in names {
+        stop(&name);
     }
 }
 

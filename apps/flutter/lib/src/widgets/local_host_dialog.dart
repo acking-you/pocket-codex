@@ -4,6 +4,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
 import 'package:pocket_codex/src/error_format.dart';
+import 'package:pocket_codex/src/hosting/acp_host_details.dart';
+import 'package:pocket_codex/src/hosting/acp_host_form.dart';
+import 'package:pocket_codex/src/hosting/host_provider_picker.dart';
 import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/theme.dart';
 import 'package:pocket_codex/src/ui_prefs.dart';
@@ -14,9 +17,11 @@ part 'local_host_opencode.dart';
 
 /// Manage one local host. With [existing] set it shows that host's listen
 /// address + service key and a Stop button. Otherwise it's the "new host" form
-/// with a provider choice: Codex (codex path, port, instance name, proxy) or
-/// OpenCode (instance name, optional opencode path). codex is auto-detected
-/// (with a "change path" override) or picked when not on PATH.
+/// with a provider choice: Codex (codex path, port, instance name, proxy),
+/// the OpenCode service (instance name, optional opencode path), or an ACP
+/// agent (preset / saved / custom program and arguments, see
+/// `hosting/acp_host_form.dart`). codex is auto-detected (with a "change
+/// path" override) or picked when not on PATH.
 ///
 /// Shared by the manage page's hosting tab and the chat-first home screen's
 /// "start hosting" hero action, so both entry points behave identically.
@@ -44,8 +49,10 @@ class _LocalHostDialogState extends ConsumerState<LocalHostDialog> {
   bool _codexChecked = false;
   bool _busy = false;
   String? _error;
-  // New-host provider: false = Codex, true = OpenCode.
-  bool _openCode = false;
+  // New-host provider: `codex`, `opencode` (HTTP service) or `acp`.
+  String _provider = 'codex';
+  bool get _openCode => _provider == 'opencode';
+  AcpFormValue? _acp;
   final _ocName = TextEditingController(text: 'opencode');
   final _ocPath = TextEditingController();
   bool _ocChecked = false;
@@ -169,8 +176,62 @@ class _LocalHostDialogState extends ConsumerState<LocalHostDialog> {
     }
   }
 
+  Future<void> _startAcp() async {
+    final value = _acp;
+    if (value == null || !value.valid) {
+      setState(() => _error = AppLocalizations.of(context).acpProgramNotFound);
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      final result = await ref
+          .read(bridgeApiProvider)
+          .appServeStartAcp(
+            name: value.name.isEmpty ? null : value.name,
+            spec: value.spec,
+          );
+      final prefs = ref.read(uiPrefsProvider.notifier)
+        ..setAutoHostAcp(AutoHostAcpPrefs(name: result.name, spec: value.spec));
+      if (value.save) prefs.saveAcpAgent(value.spec);
+      ref.invalidate(localServeListProvider);
+      ref.invalidate(servicesProvider);
+      if (mounted) Navigator.of(context).pop();
+    } catch (e) {
+      if (mounted) setState(() => _error = friendlyError(e));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _stopAcp() async {
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      final host = widget.existing!;
+      // Stops the agent and cleans up the processes it started.
+      await ref.read(bridgeApiProvider).appServeStop(host.name);
+      ref.read(uiPrefsProvider.notifier).clearAutoHostAcp(host.name);
+      ref
+          .read(pendingRemovalProvider.notifier)
+          .update((set) => {...set, host.appServiceKey});
+      ref.invalidate(localServeListProvider);
+      ref.invalidate(servicesProvider);
+      if (mounted) Navigator.of(context).pop();
+    } catch (e) {
+      if (mounted) setState(() => _error = friendlyError(e));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   Future<void> _stop() async {
     if (widget.existing!.isOpenCode) return _stopOpenCode();
+    if (widget.existing!.isAcp) return _stopAcp();
     setState(() {
       _busy = true;
       _error = null;
@@ -205,6 +266,21 @@ class _LocalHostDialogState extends ConsumerState<LocalHostDialog> {
     if (existing != null ? existing.isOpenCode : _openCode) {
       return _dialog(
         existing != null ? _openCodeExisting(existing) : _openCodeForm(),
+      );
+    }
+    if (existing != null ? existing.isAcp : _provider == 'acp') {
+      return _dialog(
+        existing != null
+            ? [AcpHostDetails(host: existing)]
+            : [
+                _providerPicker(l10n),
+                const SizedBox(height: 12),
+                AcpHostForm(
+                  enabled: !_busy,
+                  onChanged: (value) => _acp = value,
+                ),
+              ],
+        wide: true,
       );
     }
     final children = <Widget>[
@@ -297,28 +373,7 @@ class _LocalHostDialogState extends ConsumerState<LocalHostDialog> {
       if (!_codexChecked) {
         children.add(const LinearProgressIndicator());
       } else if (_codexFound && !_overridePath) {
-        children.add(
-          Row(
-            children: [
-              Icon(Icons.check_circle, size: 18, color: successColor(scheme)),
-              const SizedBox(width: 6),
-              Expanded(
-                child: Text(
-                  l10n.codexFoundAt(_codexPath!),
-                  style: small,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-              TextButton(
-                key: const Key('customize-codex-btn'),
-                onPressed: _busy
-                    ? null
-                    : () => setState(() => _overridePath = true),
-                child: Text(l10n.customizeCodexPath),
-              ),
-            ],
-          ),
-        );
+        children.add(_codexAvailable());
       } else {
         if (!_codexFound) {
           children
@@ -411,9 +466,53 @@ class _LocalHostDialogState extends ConsumerState<LocalHostDialog> {
     return _dialog(children);
   }
 
-  /// The dialog frame shared by both providers: [children], the error line,
-  /// and Cancel plus Start / Stop.
-  Widget _dialog(List<Widget> children) {
+  Widget _codexAvailable() {
+    final l10n = AppLocalizations.of(context);
+    final theme = Theme.of(context);
+    final status = Row(
+      children: [
+        Icon(
+          Icons.check_circle,
+          size: 18,
+          color: successColor(theme.colorScheme),
+        ),
+        const SizedBox(width: 6),
+        Expanded(
+          child: Text(
+            l10n.codexFoundAt(_codexPath!),
+            style: theme.textTheme.bodySmall,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+      ],
+    );
+    final customize = TextButton(
+      key: const Key('customize-codex-btn'),
+      onPressed: _busy ? null : () => setState(() => _overridePath = true),
+      child: Text(l10n.customizeCodexPath),
+    );
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxWidth < 320) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [status, customize],
+          );
+        }
+        return Row(
+          children: [
+            Expanded(child: status),
+            customize,
+          ],
+        );
+      },
+    );
+  }
+
+  /// The dialog frame shared by every provider: [children], the error line,
+  /// and Cancel plus Start / Stop. [wide] gives the argument editor room on
+  /// desktop; phones clamp the width to the screen either way.
+  Widget _dialog(List<Widget> children, {bool wide = false}) {
     final l10n = AppLocalizations.of(context);
     final scheme = Theme.of(context).colorScheme;
     final existing = widget.existing;
@@ -425,7 +524,7 @@ class _LocalHostDialogState extends ConsumerState<LocalHostDialog> {
     return AlertDialog(
       title: Text(l10n.localHostDialogTitle),
       content: SizedBox(
-        width: 380,
+        width: wide ? 460 : 380,
         child: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -448,7 +547,13 @@ class _LocalHostDialogState extends ConsumerState<LocalHostDialog> {
         else
           FilledButton(
             key: const Key('start-hosting-btn'),
-            onPressed: _busy ? null : (_openCode ? _startOpenCode : _start),
+            onPressed: _busy
+                ? null
+                : switch (_provider) {
+                    'opencode' => _startOpenCode,
+                    'acp' => _startAcp,
+                    _ => _start,
+                  },
             child: Text(l10n.startHosting),
           ),
       ],

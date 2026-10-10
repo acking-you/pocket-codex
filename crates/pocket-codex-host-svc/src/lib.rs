@@ -14,6 +14,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod acp;
 pub mod file_links;
 pub mod fs;
 pub mod history_sync;

@@ -201,6 +201,12 @@ class RustBridgeApi implements BridgeApi {
             provider: s.provider,
             providerVersion: s.providerVersion,
             providerVerified: s.providerVerified,
+            protocol: s.protocol,
+            providerName: s.providerName,
+            profileId: s.profileId,
+            agentPhase: s.agentPhase,
+            agentError: s.agentError,
+            authRequired: s.authRequired,
           ),
         )
         .toList();
@@ -273,12 +279,143 @@ class RustBridgeApi implements BridgeApi {
       approveAlwaysPersistsProject: c.approveAlwaysPersistsProject,
       multiSelectQuestions: c.multiSelectQuestions,
       childSessions: c.childSessions,
+      protocol: c.protocol,
+      providerName: c.providerName,
+      negotiated: c.negotiated,
+      generation: c.generation.toInt(),
+      voice: c.voice,
+      dictation: c.dictation,
+      imageInput: c.imageInput,
+      steer: c.steer,
+      rename: c.rename,
+      compact: c.compact,
+      gitDiff: c.gitDiff,
+      modelCatalog: c.modelCatalog,
+      sessionConfig: c.sessionConfig,
+      permissionOptions: c.permissionOptions,
+      nativeMetadata: c.nativeMetadata,
+      sessionReopen: c.sessionReopen,
+      sessionList: c.sessionList,
+      historyScope: c.historyScope,
+      runningInventory: c.runningInventory,
+      authRequired: c.authRequired,
     );
   }
 
   @override
   Future<List<String>> appRunningThreads(String serviceKey) =>
       frb.appRunningThreads(serviceKey: serviceKey);
+
+  @override
+  List<AcpPreset> acpPresets() => [
+    for (final p in frb.acpPresets())
+      AcpPreset(
+        id: p.id,
+        displayName: p.displayName,
+        program: p.program,
+        args: p.args,
+      ),
+  ];
+
+  @override
+  bool acpHostingSupported() => frb.acpHostingSupported();
+
+  @override
+  Future<String?> acpLocate(String program, {String? profileId}) =>
+      frb.acpLocate(program: program, profileId: profileId);
+
+  @override
+  Future<AcpServeResult> appServeStartAcp({
+    String? name,
+    required AcpAgentSpec spec,
+  }) async {
+    final r = await frb.appServeStartAcp(
+      name: name,
+      spec: frb.AcpAgentSpecDto(
+        profileId: spec.profileId,
+        displayName: spec.displayName,
+        program: spec.program,
+        args: spec.args,
+      ),
+    );
+    return AcpServeResult(
+      device: r.device,
+      name: r.name,
+      serviceKey: r.serviceKey,
+      listenAddr: r.listenAddr,
+      metaServiceKey: r.metaServiceKey,
+      profileId: r.profileId,
+      displayName: r.displayName,
+      reused: r.reused,
+    );
+  }
+
+  @override
+  Future<void> appServeRestartAcp(String name) =>
+      frb.appServeRestartAcp(name: name);
+
+  @override
+  SessionSettings? appSessionSettings(String serviceKey, String threadId) {
+    final s = frb.appSessionSettings(
+      serviceKey: serviceKey,
+      threadId: threadId,
+    );
+    if (s == null) return null;
+    return SessionSettings(
+      configOptions: [
+        for (final o in s.configOptions)
+          SessionConfigOption(
+            id: o.id,
+            name: o.name,
+            category: o.category,
+            description: o.description,
+            currentValue: o.currentValue,
+            values: [
+              for (final v in o.values)
+                SessionConfigValue(
+                  value: v.value,
+                  name: v.name,
+                  group: v.group,
+                  description: v.description,
+                ),
+            ],
+          ),
+      ],
+      currentMode: s.currentMode,
+      modes: [
+        for (final m in s.modes)
+          SessionMode(id: m.id, name: m.name, description: m.description),
+      ],
+      usageUsed: s.usageUsed?.toInt(),
+      usageSize: s.usageSize?.toInt(),
+      running: s.running,
+      cancelRequested: s.cancelRequested,
+    );
+  }
+
+  @override
+  Future<void> appSetSessionConfig(
+    String serviceKey,
+    String threadId,
+    String configId,
+    String value,
+  ) => frb.appSetSessionConfig(
+    serviceKey: serviceKey,
+    threadId: threadId,
+    configId: configId,
+    value: value,
+  );
+
+  @override
+  Future<void> appSetSessionMode(
+    String serviceKey,
+    String threadId,
+    String modeId,
+  ) => frb.appSetSessionMode(
+    serviceKey: serviceKey,
+    threadId: threadId,
+    modeId: modeId,
+  );
 
   @override
   Future<void> setRelay(String relay) => frb.setRelay(relay: relay);
@@ -1014,6 +1151,22 @@ class RustBridgeApi implements BridgeApi {
     serviceKey: serviceKey,
     fileName: fileName,
     bytes: bytes,
+  );
+
+  @override
+  String metaUploadContext() => frb.metaUploadContext();
+
+  @override
+  Future<String> metaUploadFileScoped(
+    String serviceKey,
+    String fileName,
+    Uint8List bytes,
+    String context,
+  ) => frb.metaUploadFileScoped(
+    serviceKey: serviceKey,
+    fileName: fileName,
+    bytes: bytes,
+    context: context,
   );
 
   @override

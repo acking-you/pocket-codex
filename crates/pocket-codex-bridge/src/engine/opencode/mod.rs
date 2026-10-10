@@ -31,7 +31,6 @@ use futures::StreamExt;
 pub use history::{thread_older_page, thread_read, thread_turn_page};
 use once_cell::sync::OnceCell;
 pub use ops::{model_list, running_sessions, thread_list, thread_resume, thread_start};
-use pocket_codex_core::service::ServiceKind;
 use pocket_codex_host_svc::opencode::{Client, Form, Message};
 use tokio::{sync::broadcast, task::JoinHandle};
 pub use turns::*;
@@ -41,17 +40,6 @@ use crate::engine::{app_session::AppEvent, runtime, transport::Transport};
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// Most messages retained per thread for paging and turn assignment.
 const MAX_RETAINED: usize = 2048;
-
-/// Whether `service_key` names an OpenCode session service.
-pub fn is_opencode(service_key: &str) -> bool {
-    let parts: Vec<&str> = service_key.split(':').collect();
-    let kind = match parts.first() {
-        Some(&"pcx") if parts.len() >= 4 => parts[2],
-        Some(&"pcxu") if parts.len() >= 5 => parts[3],
-        _ => return false,
-    };
-    kind == ServiceKind::OpenCode.as_key_segment()
-}
 
 /// What a pending request id refers to.
 #[derive(Clone)]
@@ -312,18 +300,5 @@ async fn reconcile(client: &Client, tx: &broadcast::Sender<AppEvent>, shared: &M
             request_id: None,
             raw: raw.to_string(),
         });
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn opencode_keys_are_recognized_in_both_namespaces() {
-        assert!(is_opencode("pcx:mac:opencode:opencode"));
-        assert!(is_opencode("pcxu:alice:mac:opencode:work"));
-        assert!(!is_opencode("pcx:mac:app:opencode"));
-        assert!(!is_opencode("garbage"));
     }
 }

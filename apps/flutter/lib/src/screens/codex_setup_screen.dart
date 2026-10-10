@@ -156,7 +156,7 @@ class _CodexSetupScreenState extends ConsumerState<CodexSetupScreen> {
   /// has to be one running to drive them.
   Future<String?> _connectedLocalHost(AppLocalizations l10n) async {
     final host = (await _api.appServeStatus())
-        .where((h) => h.appServiceKey.isNotEmpty && !h.isOpenCode)
+        .where((h) => h.appServiceKey.isNotEmpty && h.isCodex)
         .firstOrNull;
     if (host == null) {
       if (mounted) {

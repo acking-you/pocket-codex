@@ -70,6 +70,8 @@
   "attachImage": "Attach image",
   "removeImage": "Remove image",
   "imagePickFailed": "Couldn't read the selected image",
+  "imagesNotAccepted": "This agent doesn't accept images",
+  "attachmentRevoked": "Not attached: the conversation changed while the file was read. Attach it again.",
   "imageTooMany": "At most {count} images per message",
   "@imageTooMany": {
     "placeholders": { "count": { "type": "int" } }
@@ -889,5 +891,75 @@
   "dictationUnavailable": "Dictation is unavailable on this host",
   "dictationInterrupted": "Dictation dropped; what was heard is kept",
   "dictationVoiceBusy": "The live voice call is using the microphone",
-  "dictationShortcut": "Dictate (Ctrl+Shift+Space)"
+  "dictationShortcut": "Dictate (Ctrl+Shift+Space)",
+  "providerAcpAgent": "ACP agent",
+  "protocolAcpTag": "ACP",
+  "providerOpenCodeService": "OpenCode service",
+  "acpHostHint": "Runs an ACP-compatible agent on this device from a program and its arguments, and makes it available to your devices. Stopping hosting stops the agent.",
+  "acpAgentLabel": "Agent",
+  "acpAgentCustom": "Custom agent",
+  "acpAgentName": "Agent name",
+  "acpProgram": "Program",
+  "acpProgramBrowse": "Choose…",
+  "acpProgramHint": "A full path, or a program name found on this device's PATH. Paths may contain spaces.",
+  "acpArguments": "Arguments",
+  "acpArgumentsHint": "One argument per row, passed exactly as typed: no shell, no splitting, no variables.",
+  "acpArgumentAdd": "Add argument",
+  "acpArgumentRemove": "Remove argument",
+  "acpArgumentMoveUp": "Move up",
+  "acpArgumentMoveDown": "Move down",
+  "acpArgumentLabel": "Argument {index}",
+  "@acpArgumentLabel": {
+    "placeholders": { "index": { "type": "int" } }
+  },
+  "acpSecretsNote": "Saved agents are stored on this device in plain text. Avoid secrets in arguments; prefer the agent's own sign-in.",
+  "acpProgramNotFound": "This program was not found on this device.",
+  "acpProgramFound": "Found: {path}",
+  "@acpProgramFound": {
+    "placeholders": { "path": { "type": "String" } }
+  },
+  "acpSaveAgent": "Save to my agents",
+  "acpHostingUnsupported": "Hosting ACP agents is not available on this platform yet. You can still use agents hosted on another device.",
+  "acpPhaseStarting": "Starting",
+  "acpPhaseReady": "Running",
+  "acpPhaseFailed": "Not running",
+  "acpPhaseStopped": "Stopped",
+  "acpAuthRequired": "The agent says you need to sign in. Sign in with the agent itself on the host, then restart it.",
+  "acpRestart": "Restart agent",
+  "acpGatewayLabel": "Agent gateway",
+  "acpStopNote": "Stopping hosting stops this agent and the processes it started.",
+  "acpFeatures": "Agent features",
+  "acpFeatureReopen": "Reopen earlier sessions",
+  "acpFeatureReopenLoad": "With history",
+  "acpFeatureReopenResume": "Without earlier history",
+  "acpFeatureList": "Agent's own session list",
+  "acpFeatureImages": "Image attachments",
+  "acpFeatureSupported": "Supported",
+  "acpFeatureNotSupported": "Not supported",
+  "acpFeatureUnknown": "Shown after connecting to the running agent",
+  "permissionFromAgent": "{agent} asks for permission",
+  "@permissionFromAgent": {
+    "placeholders": { "agent": { "type": "String" } }
+  },
+  "permissionRememberTitle": "Remember this choice?",
+  "permissionRememberBody": "\"{option}\" asks the agent to remember this decision. How long and how widely it applies is decided by the agent.",
+  "@permissionRememberBody": {
+    "placeholders": { "option": { "type": "String" } }
+  },
+  "permissionAnswerFailed": "Could not send your answer. Try again.",
+  "agentOptions": "Agent options",
+  "agentMode": "Mode",
+  "historyGapNotice": "Earlier history is not available from this agent host.",
+  "contentOmittedNotice": "Not kept because it was too large: {parts}.",
+  "@contentOmittedNotice": {
+    "placeholders": { "parts": { "type": "String" } }
+  },
+  "contentUnavailableNotice": "Part of this reply could not be read from the agent host.",
+  "omittedImages": "images",
+  "omittedDiffs": "file changes",
+  "omittedInput": "tool input",
+  "omittedLocations": "file locations",
+  "omittedPlan": "plan steps",
+  "omittedContent": "some output",
+  "omittedSeparator": ", "
 }

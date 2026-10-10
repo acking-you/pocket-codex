@@ -6,7 +6,7 @@
 import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `forward_app_events`, `forward_retained_requests`, `history_dto`, `holder_dto`, `item_dto`, `meta_follow_update_dto`, `meta_holder_dto`, `meta_liveness_dto`, `meta_thread_item_dto`, `project_config_dto`, `thread_config_dto`, `thread_config_from_dto`, `to_log_dto`, `turn_page_dto`
+// These functions are ignored because they are not marked as `pub`: `forward_app_events`, `forward_retained_requests`, `history_dto`, `holder_dto`, `item_dto`, `meta_follow_update_dto`, `meta_holder_dto`, `meta_liveness_dto`, `meta_thread_item_dto`, `opt_str`, `project_config_dto`, `settings_dto`, `thread_config_dto`, `thread_config_from_dto`, `to_log_dto`, `turn_page_dto`
 
 /// Initialise the engine with the platform app-support dir (from Dart's
 /// path_provider). Must be called once after `RustLib.init()`.
@@ -147,6 +147,35 @@ Future<OpenCodeServeDto> appServeStartOpencode({
 Future<String?> opencodeLocate({String? binaryOverride}) => RustLib.instance.api
     .crateApiBridgeOpencodeLocate(binaryOverride: binaryOverride);
 
+/// Built-in ACP agent presets (OpenCode: `opencode acp`).
+List<AcpPresetDto> acpPresets() =>
+    RustLib.instance.api.crateApiBridgeAcpPresets();
+
+/// Whether this device can host ACP agents (Unix desktops). Any device can
+/// use a remote ACP host.
+bool acpHostingSupported() =>
+    RustLib.instance.api.crateApiBridgeAcpHostingSupported();
+
+/// The executable `program` resolves to (explicit path, `PATH`, then the
+/// preset's install locations), or `None`.
+Future<String?> acpLocate({required String program, String? profileId}) =>
+    RustLib.instance.api.crateApiBridgeAcpLocate(
+      program: program,
+      profileId: profileId,
+    );
+
+/// Launch and host an ACP agent as `acp:<name>` plus `meta:<name>`. Works in
+/// self-host and account mode. Stopping hosting stops the agent.
+Future<AcpServeDto> appServeStartAcp({
+  String? name,
+  required AcpAgentSpecDto spec,
+}) =>
+    RustLib.instance.api.crateApiBridgeAppServeStartAcp(name: name, spec: spec);
+
+/// Restart the agent of a local ACP host (new process, new generation).
+Future<void> appServeRestartAcp({required String name}) =>
+    RustLib.instance.api.crateApiBridgeAppServeRestartAcp(name: name);
+
 /// Legacy version endpoint; returns `unavailable` because no engine is bundled.
 Future<String> embeddedCodexVersion() =>
     RustLib.instance.api.crateApiBridgeEmbeddedCodexVersion();
@@ -237,7 +266,8 @@ Future<void> appConnect({required String serviceKey, required int localPort}) =>
 bool appIsConnected({required String serviceKey}) =>
     RustLib.instance.api.crateApiBridgeAppIsConnected(serviceKey: serviceKey);
 
-/// Disconnect the app-server session and its pb-mapper subscription.
+/// Disconnect this controller's session and its pb-mapper subscription.
+/// Work owned by a host (ACP turns, permissions) keeps running there.
 Future<void> appDisconnect({required String serviceKey}) =>
     RustLib.instance.api.crateApiBridgeAppDisconnect(serviceKey: serviceKey);
 
@@ -315,7 +345,9 @@ Stream<AppEventDto> appEvents({required String serviceKey}) =>
 Future<List<ThreadMetaDto>> appThreadList({required String serviceKey}) =>
     RustLib.instance.api.crateApiBridgeAppThreadList(serviceKey: serviceKey);
 
-/// Inspect one thread without resuming it or taking ownership.
+/// Inspect one thread without resuming it or taking ownership. Native Codex
+/// only (callers gate on `native_metadata`); other protocols are refused
+/// before any network call.
 Future<ThreadMetaDto> appThreadMetadata({
   required String serviceKey,
   required String threadId,
@@ -378,9 +410,12 @@ Future<String> appTurnSteer({
   images: images,
 );
 
-/// Answer a server approval request. `decision` is the wire value the session
-/// layer recognises: `accept` or `acceptForSession` to grant, any other value
-/// (e.g. `decline`) to decline.
+/// Answer a server approval request. For Codex and OpenCode `decision` is
+/// the wire value the session layer recognises: `accept` or
+/// `acceptForSession` to grant, any other value (e.g. `decline`) to decline.
+/// For an ACP permission (`acp/permission/requested`) `decision` is the
+/// agent's own option id, passed verbatim; an option the request did not
+/// offer is refused and the request stays pending.
 Future<void> appRespondApproval({
   required String serviceKey,
   required String requestId,
@@ -572,15 +607,53 @@ Future<void> appTurnInterrupt({
   turnId: turnId,
 );
 
-/// Static capabilities of the provider behind `service_key` (no network).
+/// Capabilities of the connection behind `service_key` (no network). Codex
+/// and OpenCode are fixed; ACP reflects the host's current negotiation and
+/// is conservative until connected.
 AppCapabilitiesDto appCapabilities({required String serviceKey}) =>
     RustLib.instance.api.crateApiBridgeAppCapabilities(serviceKey: serviceKey);
 
-/// Ids of an OpenCode service's sessions that are executing now.
+/// Ids of sessions executing now, from the engine itself (OpenCode, ACP).
+/// Codex lists them through the meta service instead.
 Future<List<String>> appRunningThreads({required String serviceKey}) => RustLib
     .instance
     .api
     .crateApiBridgeAppRunningThreads(serviceKey: serviceKey);
+
+/// The ACP agent's latest per-session state as this controller saw it (no
+/// network), or `None` for other protocols or unknown sessions.
+SessionSettingsDto? appSessionSettings({
+  required String serviceKey,
+  required String threadId,
+}) => RustLib.instance.api.crateApiBridgeAppSessionSettings(
+  serviceKey: serviceKey,
+  threadId: threadId,
+);
+
+/// Set an ACP select configuration option to one of its advertised values.
+/// The agent answers with the complete new option state.
+Future<void> appSetSessionConfig({
+  required String serviceKey,
+  required String threadId,
+  required String configId,
+  required String value,
+}) => RustLib.instance.api.crateApiBridgeAppSetSessionConfig(
+  serviceKey: serviceKey,
+  threadId: threadId,
+  configId: configId,
+  value: value,
+);
+
+/// Switch an ACP session's legacy mode to one it advertised.
+Future<void> appSetSessionMode({
+  required String serviceKey,
+  required String threadId,
+  required String modeId,
+}) => RustLib.instance.api.crateApiBridgeAppSetSessionMode(
+  serviceKey: serviceKey,
+  threadId: threadId,
+  modeId: modeId,
+);
 
 /// List every codex session under the shared `CODEX_HOME`, newest first,
 /// each annotated with whether it is safe to resume.
@@ -696,6 +769,24 @@ Future<String> metaUploadFile({
   serviceKey: serviceKey,
   fileName: fileName,
   bytes: bytes,
+);
+
+/// Capture attachment destination ownership before asynchronous file reads.
+String metaUploadContext() =>
+    RustLib.instance.api.crateApiBridgeMetaUploadContext();
+
+/// Upload using the context captured before reading the file; reject a changed
+/// account or relay without transmitting attachment bytes.
+Future<String> metaUploadFileScoped({
+  required String serviceKey,
+  required String fileName,
+  required List<int> bytes,
+  required String context,
+}) => RustLib.instance.api.crateApiBridgeMetaUploadFileScoped(
+  serviceKey: serviceKey,
+  fileName: fileName,
+  bytes: bytes,
+  context: context,
 );
 
 /// Read a thread's persisted config from the host behind `service_key`.
@@ -1016,10 +1107,151 @@ class AccountUserDto {
           accountId == other.accountId;
 }
 
+/// An ACP agent to host: profile identity plus executable and argument
+/// vector, passed to the operating system verbatim (no shell).
+class AcpAgentSpecDto {
+  /// Profile id (`opencode` for the preset, or a custom id).
+  final String profileId;
+
+  /// Name shown in the UI.
+  final String displayName;
+
+  /// Executable: an explicit path, or a bare name searched on `PATH`.
+  final String program;
+
+  /// Arguments, one entry per argument.
+  final List<String> args;
+
+  const AcpAgentSpecDto({
+    required this.profileId,
+    required this.displayName,
+    required this.program,
+    required this.args,
+  });
+
+  @override
+  int get hashCode =>
+      profileId.hashCode ^
+      displayName.hashCode ^
+      program.hashCode ^
+      args.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AcpAgentSpecDto &&
+          runtimeType == other.runtimeType &&
+          profileId == other.profileId &&
+          displayName == other.displayName &&
+          program == other.program &&
+          args == other.args;
+}
+
+/// A built-in ACP agent preset.
+class AcpPresetDto {
+  /// Profile id.
+  final String id;
+
+  /// Display name.
+  final String displayName;
+
+  /// Bare executable name.
+  final String program;
+
+  /// Default arguments.
+  final List<String> args;
+
+  const AcpPresetDto({
+    required this.id,
+    required this.displayName,
+    required this.program,
+    required this.args,
+  });
+
+  @override
+  int get hashCode =>
+      id.hashCode ^ displayName.hashCode ^ program.hashCode ^ args.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AcpPresetDto &&
+          runtimeType == other.runtimeType &&
+          id == other.id &&
+          displayName == other.displayName &&
+          program == other.program &&
+          args == other.args;
+}
+
+/// Result of hosting an ACP agent.
+class AcpServeDto {
+  /// Device id the services registered under.
+  final String device;
+
+  /// Instance name.
+  final String name;
+
+  /// `pcx:<device>:acp:<name>` key.
+  final String serviceKey;
+
+  /// Loopback gateway address.
+  final String listenAddr;
+
+  /// `pcx:<device>:meta:<name>` key.
+  final String metaServiceKey;
+
+  /// Profile id.
+  final String profileId;
+
+  /// Display name.
+  final String displayName;
+
+  /// Whether an existing host was reused.
+  final bool reused;
+
+  const AcpServeDto({
+    required this.device,
+    required this.name,
+    required this.serviceKey,
+    required this.listenAddr,
+    required this.metaServiceKey,
+    required this.profileId,
+    required this.displayName,
+    required this.reused,
+  });
+
+  @override
+  int get hashCode =>
+      device.hashCode ^
+      name.hashCode ^
+      serviceKey.hashCode ^
+      listenAddr.hashCode ^
+      metaServiceKey.hashCode ^
+      profileId.hashCode ^
+      displayName.hashCode ^
+      reused.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AcpServeDto &&
+          runtimeType == other.runtimeType &&
+          device == other.device &&
+          name == other.name &&
+          serviceKey == other.serviceKey &&
+          listenAddr == other.listenAddr &&
+          metaServiceKey == other.metaServiceKey &&
+          profileId == other.profileId &&
+          displayName == other.displayName &&
+          reused == other.reused;
+}
+
 /// What a session service's provider supports, so the shared session UI can
-/// hide controls that do not apply.
+/// hide controls that do not apply. The first thirteen fields keep their
+/// historical values for Codex and OpenCode; the rest were added for ACP and
+/// are conservative (`false`) until a feature is actually available.
 class AppCapabilitiesDto {
-  /// `codex` or `opencode`.
+  /// `codex`, `opencode` or `acp`.
   final String provider;
 
   /// Fast service tier toggle.
@@ -1058,6 +1290,68 @@ class AppCapabilitiesDto {
   /// Child (subagent) sessions that can be opened read-only.
   final bool childSessions;
 
+  /// Wire protocol: `codex-app-server`, `opencode-http` or `acp`.
+  final String protocol;
+
+  /// Human-readable agent name (ACP: the host's profile name).
+  final String providerName;
+
+  /// Whether the values come from a live ACP negotiation.
+  final bool negotiated;
+
+  /// Host generation the values belong to (ACP; 0 otherwise). A change
+  /// invalidates cached capabilities and session settings.
+  final BigInt generation;
+
+  /// Native live voice calls.
+  final bool voice;
+
+  /// Native composer dictation.
+  final bool dictation;
+
+  /// Image attachments in prompts.
+  final bool imageInput;
+
+  /// Supplementing a running turn (`turn/steer`).
+  final bool steer;
+
+  /// Renaming sessions.
+  final bool rename;
+
+  /// Manual compaction.
+  final bool compact;
+
+  /// Working-tree diff.
+  final bool gitDiff;
+
+  /// A service-wide model catalog for the model picker.
+  final bool modelCatalog;
+
+  /// Per-session agent options (ACP select options / modes).
+  final bool sessionConfig;
+
+  /// Approvals carry the agent's own options, answered by option id.
+  final bool permissionOptions;
+
+  /// Native thread metadata (Guardian pre-resume checks).
+  final bool nativeMetadata;
+
+  /// How earlier sessions reopen: `native`, `load`, `resume`, `none` or
+  /// `unknown`.
+  final String sessionReopen;
+
+  /// Source of the session list: `native`, `agent` or `host`.
+  final String sessionList;
+
+  /// `full` or `retained` (only what the host still holds).
+  final String historyScope;
+
+  /// Running-session inventory: `meta`, `engine` or `none`.
+  final String runningInventory;
+
+  /// The agent reported that authentication is required.
+  final bool authRequired;
+
   const AppCapabilitiesDto({
     required this.provider,
     required this.fast,
@@ -1072,6 +1366,26 @@ class AppCapabilitiesDto {
     required this.approveAlwaysPersistsProject,
     required this.multiSelectQuestions,
     required this.childSessions,
+    required this.protocol,
+    required this.providerName,
+    required this.negotiated,
+    required this.generation,
+    required this.voice,
+    required this.dictation,
+    required this.imageInput,
+    required this.steer,
+    required this.rename,
+    required this.compact,
+    required this.gitDiff,
+    required this.modelCatalog,
+    required this.sessionConfig,
+    required this.permissionOptions,
+    required this.nativeMetadata,
+    required this.sessionReopen,
+    required this.sessionList,
+    required this.historyScope,
+    required this.runningInventory,
+    required this.authRequired,
   });
 
   @override
@@ -1088,7 +1402,27 @@ class AppCapabilitiesDto {
       effortLabel.hashCode ^
       approveAlwaysPersistsProject.hashCode ^
       multiSelectQuestions.hashCode ^
-      childSessions.hashCode;
+      childSessions.hashCode ^
+      protocol.hashCode ^
+      providerName.hashCode ^
+      negotiated.hashCode ^
+      generation.hashCode ^
+      voice.hashCode ^
+      dictation.hashCode ^
+      imageInput.hashCode ^
+      steer.hashCode ^
+      rename.hashCode ^
+      compact.hashCode ^
+      gitDiff.hashCode ^
+      modelCatalog.hashCode ^
+      sessionConfig.hashCode ^
+      permissionOptions.hashCode ^
+      nativeMetadata.hashCode ^
+      sessionReopen.hashCode ^
+      sessionList.hashCode ^
+      historyScope.hashCode ^
+      runningInventory.hashCode ^
+      authRequired.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -1107,7 +1441,27 @@ class AppCapabilitiesDto {
           effortLabel == other.effortLabel &&
           approveAlwaysPersistsProject == other.approveAlwaysPersistsProject &&
           multiSelectQuestions == other.multiSelectQuestions &&
-          childSessions == other.childSessions;
+          childSessions == other.childSessions &&
+          protocol == other.protocol &&
+          providerName == other.providerName &&
+          negotiated == other.negotiated &&
+          generation == other.generation &&
+          voice == other.voice &&
+          dictation == other.dictation &&
+          imageInput == other.imageInput &&
+          steer == other.steer &&
+          rename == other.rename &&
+          compact == other.compact &&
+          gitDiff == other.gitDiff &&
+          modelCatalog == other.modelCatalog &&
+          sessionConfig == other.sessionConfig &&
+          permissionOptions == other.permissionOptions &&
+          nativeMetadata == other.nativeMetadata &&
+          sessionReopen == other.sessionReopen &&
+          sessionList == other.sessionList &&
+          historyScope == other.historyScope &&
+          runningInventory == other.runningInventory &&
+          authRequired == other.authRequired;
 }
 
 /// One app-server event mirrored for Dart. `kind` is the JSON-RPC method
@@ -1311,15 +1665,34 @@ class AppServeStatusDto {
   /// they inherit the app's environment.
   final String? proxy;
 
-  /// Service provider of this host: `codex` or `opencode`. For `opencode`
-  /// the `app_*` fields describe the OpenCode gateway and `api_*` are empty.
+  /// Service provider family of this host: `codex`, `opencode` or `acp`.
+  /// For `opencode` / `acp` the `app_*` fields describe the gateway and
+  /// `api_*` are empty.
   final String provider;
 
-  /// Provider version when known (OpenCode).
+  /// Provider version when known (OpenCode, ACP agents).
   final String? providerVersion;
 
   /// Whether that version is the one this build was verified against.
   final bool providerVerified;
+
+  /// Wire protocol: `codex-app-server`, `opencode-http` or `acp`.
+  final String protocol;
+
+  /// Human-readable provider / agent name.
+  final String providerName;
+
+  /// ACP agent profile id.
+  final String? profileId;
+
+  /// ACP agent phase: `starting`, `ready`, `failed` or `stopped`.
+  final String? agentPhase;
+
+  /// Why the ACP agent is not running, safe to show.
+  final String? agentError;
+
+  /// The ACP agent reported that authentication is required.
+  final bool authRequired;
 
   const AppServeStatusDto({
     required this.name,
@@ -1341,6 +1714,12 @@ class AppServeStatusDto {
     required this.provider,
     this.providerVersion,
     required this.providerVerified,
+    required this.protocol,
+    required this.providerName,
+    this.profileId,
+    this.agentPhase,
+    this.agentError,
+    required this.authRequired,
   });
 
   @override
@@ -1363,7 +1742,13 @@ class AppServeStatusDto {
       proxy.hashCode ^
       provider.hashCode ^
       providerVersion.hashCode ^
-      providerVerified.hashCode;
+      providerVerified.hashCode ^
+      protocol.hashCode ^
+      providerName.hashCode ^
+      profileId.hashCode ^
+      agentPhase.hashCode ^
+      agentError.hashCode ^
+      authRequired.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -1388,7 +1773,13 @@ class AppServeStatusDto {
           proxy == other.proxy &&
           provider == other.provider &&
           providerVersion == other.providerVersion &&
-          providerVerified == other.providerVerified;
+          providerVerified == other.providerVerified &&
+          protocol == other.protocol &&
+          providerName == other.providerName &&
+          profileId == other.profileId &&
+          agentPhase == other.agentPhase &&
+          agentError == other.agentError &&
+          authRequired == other.authRequired;
 }
 
 /// codex auth status for the app-server behind `service_key`, mirrored for
@@ -2178,6 +2569,93 @@ class ServiceIdDto {
           key == other.key;
 }
 
+/// One ACP select configuration option (model, mode, thought level, …).
+class SessionConfigOptionDto {
+  /// Opaque option id.
+  final String id;
+
+  /// Label.
+  final String name;
+
+  /// Semantic category (`model`, `mode`, `thought_level`, …), UX only.
+  final String? category;
+
+  /// Description.
+  final String? description;
+
+  /// Current value id.
+  final String currentValue;
+
+  /// Selectable values, in agent order.
+  final List<SessionConfigValueDto> values;
+
+  const SessionConfigOptionDto({
+    required this.id,
+    required this.name,
+    this.category,
+    this.description,
+    required this.currentValue,
+    required this.values,
+  });
+
+  @override
+  int get hashCode =>
+      id.hashCode ^
+      name.hashCode ^
+      category.hashCode ^
+      description.hashCode ^
+      currentValue.hashCode ^
+      values.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SessionConfigOptionDto &&
+          runtimeType == other.runtimeType &&
+          id == other.id &&
+          name == other.name &&
+          category == other.category &&
+          description == other.description &&
+          currentValue == other.currentValue &&
+          values == other.values;
+}
+
+/// One value of an ACP select configuration option.
+class SessionConfigValueDto {
+  /// Opaque value id, sent back verbatim.
+  final String value;
+
+  /// Label.
+  final String name;
+
+  /// Group label, when the agent groups values.
+  final String? group;
+
+  /// Description.
+  final String? description;
+
+  const SessionConfigValueDto({
+    required this.value,
+    required this.name,
+    this.group,
+    this.description,
+  });
+
+  @override
+  int get hashCode =>
+      value.hashCode ^ name.hashCode ^ group.hashCode ^ description.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SessionConfigValueDto &&
+          runtimeType == other.runtimeType &&
+          value == other.value &&
+          name == other.name &&
+          group == other.group &&
+          description == other.description;
+}
+
 /// One read-only history revision + ownership update from the host's live
 /// session follow stream, mirrored for Dart.
 class SessionFollowUpdateDto {
@@ -2267,6 +2745,94 @@ class SessionLivenessDto {
           allowsResume == other.allowsResume &&
           requiresTakeover == other.requiresTakeover &&
           holders == other.holders;
+}
+
+/// One legacy ACP session mode.
+class SessionModeDto {
+  /// Opaque mode id.
+  final String id;
+
+  /// Label.
+  final String name;
+
+  /// Description.
+  final String? description;
+
+  const SessionModeDto({
+    required this.id,
+    required this.name,
+    this.description,
+  });
+
+  @override
+  int get hashCode => id.hashCode ^ name.hashCode ^ description.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SessionModeDto &&
+          runtimeType == other.runtimeType &&
+          id == other.id &&
+          name == other.name &&
+          description == other.description;
+}
+
+/// Per-session state an ACP agent reported. Everything is optional: agents
+/// that report nothing show no controls.
+class SessionSettingsDto {
+  /// Select configuration options.
+  final List<SessionConfigOptionDto> configOptions;
+
+  /// Current legacy mode id.
+  final String? currentMode;
+
+  /// Advertised legacy modes.
+  final List<SessionModeDto> modes;
+
+  /// Context tokens in use, when reported.
+  final PlatformInt64? usageUsed;
+
+  /// Context window size, when reported.
+  final PlatformInt64? usageSize;
+
+  /// A turn is running.
+  final bool running;
+
+  /// Cancellation was requested and the agent has not finished yet.
+  final bool cancelRequested;
+
+  const SessionSettingsDto({
+    required this.configOptions,
+    this.currentMode,
+    required this.modes,
+    this.usageUsed,
+    this.usageSize,
+    required this.running,
+    required this.cancelRequested,
+  });
+
+  @override
+  int get hashCode =>
+      configOptions.hashCode ^
+      currentMode.hashCode ^
+      modes.hashCode ^
+      usageUsed.hashCode ^
+      usageSize.hashCode ^
+      running.hashCode ^
+      cancelRequested.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SessionSettingsDto &&
+          runtimeType == other.runtimeType &&
+          configOptions == other.configOptions &&
+          currentMode == other.currentMode &&
+          modes == other.modes &&
+          usageUsed == other.usageUsed &&
+          usageSize == other.usageSize &&
+          running == other.running &&
+          cancelRequested == other.cancelRequested;
 }
 
 /// Status of one active subscription, mirrored for Dart.

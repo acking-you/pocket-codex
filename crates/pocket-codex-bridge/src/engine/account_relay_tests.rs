@@ -306,3 +306,129 @@ async fn successful_login_retires_obsolete_refresher_without_resolving_a_tunnel(
         }
     }
 }
+
+#[tokio::test]
+async fn waiting_refresh_never_sends_replacement_credentials_to_previous_backend() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let url = format!("http://{}", listener.local_addr().expect("address"));
+    let account = TestAccount::new(&url);
+    update_config(&account.0, |cfg| {
+        cfg.set_account_session("expired", "alice-refresh", "alice", Some("alice".into()));
+        Ok(())
+    })
+    .expect("expire");
+    let gate = refresh_lock().lock().await;
+    let mut original = load_config(&account.0).expect("read");
+    let mut request = Box::pin(valid_token(&account.0, &mut original, &url));
+    // Poll into the actual refresh lock before changing backend/account.
+    assert!(tokio::time::timeout(Duration::from_millis(20), &mut request)
+        .await
+        .is_err());
+    account.switch_account();
+    update_config(&account.0, |cfg| {
+        cfg.set_account_backend("http://127.0.0.1:1");
+        Ok(())
+    })
+    .expect("switch backend");
+    drop(gate);
+    assert!(request
+        .await
+        .expect_err("reject stale owner")
+        .to_string()
+        .contains("account changed"));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(30), listener.accept())
+            .await
+            .is_err(),
+        "no credential may reach previous backend"
+    );
+}
+
+#[tokio::test]
+async fn refresh_response_cannot_restore_a_replaced_session_or_erase_settings() {
+    for replace in [false, true] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let url = format!("http://{}", listener.local_addr().expect("address"));
+        let account = TestAccount::new(&url);
+        update_config(&account.0, |cfg| {
+            cfg.set_account_session("expired", "alice-refresh", "alice", Some("alice".into()));
+            Ok(())
+        })
+        .expect("expire");
+        let (arrived, waiting) = tokio::sync::oneshot::channel();
+        let (release, released) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.expect("accept");
+            let mut socket = tokio::io::BufReader::new(socket);
+            let mut header = String::new();
+            let mut length = 0;
+            loop {
+                let mut line = String::new();
+                socket.read_line(&mut line).await.expect("headers");
+                if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    length = value.trim().parse::<usize>().expect("length");
+                }
+                header.push_str(&line);
+                if line == "\r\n" {
+                    break;
+                }
+            }
+            assert!(header.starts_with("POST /auth/refresh "));
+            let mut body = vec![0; length];
+            socket.read_exact(&mut body).await.expect("body");
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&body).expect("json")["refresh_token"],
+                "alice-refresh"
+            );
+            arrived.send(()).expect("signal");
+            released.await.expect("release");
+            let body = serde_json::json!({"credential":{"token":"refreshed-alice", "refresh_token":"rotated-alice", "expires_in_secs":3600, "login":"alice", "account_id":"alice"}}).to_string();
+            socket
+                .get_mut()
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: \
+                         {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .expect("reply");
+        });
+        let request = tokio::spawn({
+            let path = account.0.clone();
+            async move {
+                let mut cfg = load_config(&path).expect("config");
+                valid_token(&path, &mut cfg, &url).await
+            }
+        });
+        tokio::time::timeout(Duration::from_secs(5), waiting)
+            .await
+            .expect("request reached server")
+            .expect("signal");
+        if replace {
+            account.switch_account();
+        }
+        update_config(&account.0, |cfg| {
+            cfg.set_locale("zh");
+            cfg.set_relay("updated:7666");
+            Ok(())
+        })
+        .expect("settings");
+        release.send(()).expect("release");
+        let result = request.await.expect("task");
+        server.await.expect("server");
+        let cfg = load_config(&account.0).expect("saved");
+        assert_eq!(cfg.relay(), Some("updated:7666"));
+        assert_eq!(cfg.locale(), Some("zh"));
+        if replace {
+            assert!(result.is_err());
+            assert_eq!(cfg.account_login(), Some("bob"));
+            assert_eq!(cfg.account_refresh_token(), Some("bob-refresh"));
+        } else {
+            assert_eq!(result.expect("same session"), "refreshed-alice");
+            assert_eq!(cfg.account_refresh_token(), Some("rotated-alice"));
+        }
+    }
+}

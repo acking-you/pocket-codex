@@ -9,6 +9,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:pocket_codex/src/dismissed_services.dart';
 import 'package:pocket_codex/src/error_format.dart';
+import 'package:pocket_codex/src/hosting/host_restore.dart';
 import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/screens/app_session_screen.dart';
 import 'package:pocket_codex/src/service_key.dart';
@@ -44,6 +45,7 @@ class HomeScreen extends ConsumerStatefulWidget {
   static void debugResetAutoHost() {
     _HomeScreenState._autoHostAttempted = false;
     _HomeScreenState._autoHostOpenCodeAttempted = false;
+    _HomeScreenState._autoHostAcpAttempted.clear();
   }
 }
 
@@ -81,6 +83,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
 
   /// The same once-per-run guard for the OpenCode hosting record.
   static bool _autoHostOpenCodeAttempted = false;
+
+  /// The same guard for ACP hosting records, by instance name.
+  static final Set<String> _autoHostAcpAttempted = {};
 
   _Phase _phase = _Phase.resolving;
   String? _serviceKey;
@@ -361,19 +366,25 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     }
   }
 
-  /// Restore the Codex and OpenCode hosting the user left running, each at most
-  /// once per run and only when this machine is not already hosting that
-  /// provider. True when at least one restore succeeded (discovery is stale).
+  /// Restore the Codex, OpenCode and ACP hosting the user left running, each
+  /// at most once per run and only what this machine does not host already
+  /// (see [planHostRestore]). True when at least one restore succeeded
+  /// (discovery is stale).
   Future<bool> _restoreHosting(
     BridgeApi api, {
     required int gen,
     required bool background,
   }) async {
-    if (_autoHostAttempted && _autoHostOpenCodeAttempted) return false;
     final prefs = await _prefs();
-    final host = _autoHostAttempted ? null : prefs.autoHost;
-    final openCode = _autoHostOpenCodeAttempted ? null : prefs.autoHostOpenCode;
-    if (host == null && openCode == null) return false;
+    final pending = planHostRestore(
+      prefs,
+      const [],
+      codexAttempted: _autoHostAttempted,
+      openCodeAttempted: _autoHostOpenCodeAttempted,
+      acpAttempted: _autoHostAcpAttempted,
+      acpSupported: api.acpHostingSupported(),
+    );
+    if (pending.isEmpty) return false;
     var local = const <AppServeStatus>[];
     try {
       local = await api.appServeStatus();
@@ -382,48 +393,28 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       // failure) settle it.
     }
     if (!mounted || gen != _generation) return false;
-    final codex = local.any((h) => !h.isOpenCode) ? null : host;
-    final open = local.any((h) => h.isOpenCode) ? null : openCode;
-    if (codex == null && open == null) return false;
+    final plan = planHostRestore(
+      prefs,
+      local,
+      codexAttempted: _autoHostAttempted,
+      openCodeAttempted: _autoHostOpenCodeAttempted,
+      acpAttempted: _autoHostAcpAttempted,
+      acpSupported: api.acpHostingSupported(),
+    );
+    if (plan.isEmpty) return false;
     // Burn the once-per-run flags only for a real attempt, so a slow prefs
     // load on the first pass doesn't forfeit the restore.
-    if (codex != null) _autoHostAttempted = true;
-    if (open != null) _autoHostOpenCodeAttempted = true;
+    if (plan.codex != null) _autoHostAttempted = true;
+    if (plan.openCode != null) _autoHostOpenCodeAttempted = true;
+    _autoHostAcpAttempted.addAll(plan.acp.map((saved) => saved.name));
     if (!background) setState(() => _rehosting = true);
-    var restored = false;
     try {
-      if (codex != null) {
-        try {
-          await api.appServeStart(
-            port: codex.port,
-            binaryOverride: codex.binaryOverride,
-            name: codex.name,
-            proxy: codex.proxy,
-            // Legacy built-in hosts are restored through the external binary.
-            embedded: false,
-          );
-          restored = true;
-        } catch (_) {
-          // The hero (with its start-hosting action) is the fallback.
-        }
-      }
-      if (open != null) {
-        try {
-          await api.appServeStartOpencode(
-            name: open.name,
-            binaryOverride: open.binaryOverride,
-          );
-          restored = true;
-        } catch (_) {
-          // Same fallback; OpenCode may simply not be installed any more.
-        }
-      }
+      return await runHostRestore(api, plan);
     } finally {
       if (mounted && gen == _generation && _rehosting) {
         setState(() => _rehosting = false);
       }
     }
-    return restored;
   }
 
   /// The conversation the chat should open on [serviceKey]: the one the user

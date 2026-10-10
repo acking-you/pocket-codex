@@ -29,9 +29,10 @@ use pocket_codex_account_proto::{
     pkce,
 };
 use pocket_codex_core::{config::Config, service::sanitize_component};
-use pocket_codex_pb::RelaySession;
 
-use crate::engine::config::{load_config, save_config};
+#[cfg(test)]
+use crate::engine::config::save_config;
+use crate::engine::config::{load_config, update_config};
 
 // Upstream protocol dependencies also enable reqwest's native TLS backend.
 // Select Rustls explicitly so mobile clients retain bundled public trust roots.
@@ -289,7 +290,10 @@ fn persist_login(support_dir: &Path, config: &Config) -> Result<()> {
     let mut refresh = credential_refresh()
         .lock()
         .map_err(|_| anyhow!("credential refresher poisoned"))?;
-    save_config(support_dir, config)?;
+    update_config(support_dir, |latest| {
+        latest.account = config.account.clone();
+        Ok(())
+    })?;
     let owner = CacheOwner::of(config);
     if refresh
         .current
@@ -338,7 +342,7 @@ pub async fn current_user(support_dir: &Path) -> Result<Option<AccountUser>> {
 /// Revoke the refresh token (best effort) and clear the local session.
 pub async fn logout(support_dir: &Path) -> Result<()> {
     stop_credential_refresh();
-    let mut config = load_config(support_dir)?;
+    let config = load_config(support_dir)?;
     let backend = backend_base(&config);
     if let Some(refresh_token) = config.account_refresh_token() {
         if let Ok(client) = http_client() {
@@ -351,8 +355,12 @@ pub async fn logout(support_dir: &Path) -> Result<()> {
                 .await;
         }
     }
-    config.clear_account();
-    save_config(support_dir, &config)?;
+    update_config(support_dir, |latest| {
+        if same_session(latest, &config) {
+            latest.clear_account();
+        }
+        Ok(())
+    })?;
     // The next sign-in must not inherit this account's namespace — a cached
     // credential would have it registering into someone else's.
     forget_relay_credential().await;
@@ -366,7 +374,9 @@ pub async fn services(support_dir: &Path) -> Result<Vec<ServiceEntry>> {
     let backend = backend_base(&config);
     let token = valid_token(support_dir, &mut config, &backend).await?;
     let body: pocket_codex_account_proto::http::ServicesResponse = http_client()?
-        .get(format!("{backend}/v1/services?include_opencode=true"))
+        // Older backends ignore `include_acp` and simply omit ACP services:
+        // discovery then falls back to services this app hosts itself.
+        .get(format!("{backend}/v1/services?include_opencode=true&include_acp=true"))
         .bearer_auth(&token)
         .send()
         .await
@@ -423,7 +433,15 @@ async fn valid_token(support_dir: &Path, config: &mut Config, backend: &str) -> 
     let _guard = refresh_lock().lock().await;
     // Re-read from disk and re-check: another waiter may have refreshed while we
     // were queued, in which case we reuse its freshly-persisted token.
-    *config = load_config(support_dir)?;
+    let owner = CacheOwner::of(config);
+    let latest = load_config(support_dir)?;
+    if CacheOwner::of(&latest) != owner
+        || backend_base(&latest) != backend
+        || latest.account.mode != config.account.mode
+    {
+        bail!("account changed while waiting for token refresh");
+    }
+    *config = latest;
     if let Some(token) = config.account_token() {
         if session_token_exp(token).is_some_and(|exp| exp > unix_now() + 60) {
             return Ok(token.to_string());
@@ -451,14 +469,28 @@ async fn valid_token(support_dir: &Path, config: &mut Config, backend: &str) -> 
         .await
         .context("parsing refresh response")?;
     let cred = body.credential;
-    config.set_account_session(
-        &cred.token,
-        &cred.refresh_token,
-        &cred.login,
-        cred.account_id.clone(),
-    );
-    save_config(support_dir, config)?;
+    *config = update_config(support_dir, |latest| {
+        if !same_session(latest, config) {
+            bail!("account changed during token refresh");
+        }
+        latest.set_account_session(
+            &cred.token,
+            &cred.refresh_token,
+            &cred.login,
+            cred.account_id.clone(),
+        );
+        Ok(latest.clone())
+    })?;
     Ok(cred.token)
+}
+
+// Compare the credential incarnation as well as the account: a new sign-in
+// for the same identity must not be overwritten by an older refresh response.
+fn same_session(left: &Config, right: &Config) -> bool {
+    CacheOwner::of(left) == CacheOwner::of(right)
+        && left.account.mode == right.account.mode
+        && left.account_token() == right.account_token()
+        && left.account_refresh_token() == right.account_refresh_token()
 }
 
 /// Process-global lock serializing token refreshes, so overlapping callers
@@ -606,17 +638,6 @@ async fn fetch_relay_credential(support_dir: &Path) -> Result<RelayCredentialRes
         .json()
         .await
         .context("parsing /v1/relay")
-}
-
-/// This account's relay session, plus the expiry to schedule a refresh against.
-///
-/// The pair every account-mode tunnel starts from. Callers that hold a tunnel
-/// open should pass `expires_at` to [`pocket_codex_pb::keep_credential_alive`]:
-/// the relay cancels a credential's tunnels when it lapses, so a long-lived
-/// host must keep renewing or stop serving at the TTL.
-pub async fn relay_session(support_dir: &Path) -> Result<(RelaySession, u64)> {
-    let relay = relay_credential(support_dir).await?;
-    Ok((RelaySession::new(relay.relay_addr, relay.credential), relay.expires_at))
 }
 
 #[derive(Default)]

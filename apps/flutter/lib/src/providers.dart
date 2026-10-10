@@ -9,7 +9,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:pocket_codex/src/app_modes.dart';
 import 'package:pocket_codex/src/bridge_api.dart';
 import 'package:pocket_codex/src/bridge_api_rust.dart';
-import 'package:pocket_codex/src/service_key.dart';
 import 'package:pocket_codex/src/web_authenticator.dart';
 
 /// Each voice call owns native audio resources; tests supply an in-memory transport.
@@ -313,9 +312,12 @@ final runningSessionInventoryProvider = StreamProvider.autoDispose
         inFlight = true;
         final requestedAt = DateTime.now();
         try {
-          // OpenCode reports its running sessions itself; it has no meta
-          // rollout inventory, and its history is not prefetched here.
-          if (isOpenCodeKey(serviceKey)) {
+          // OpenCode and ACP report their running sessions through the
+          // engine; they have no meta rollout inventory, and their history is
+          // not prefetched here. The source is a capability, not a name.
+          final inventory = api.appCapabilities(serviceKey).runningInventory;
+          if (inventory == 'none') return;
+          if (inventory == 'engine') {
             final ids = await api.appRunningThreads(serviceKey);
             if (!disposed) {
               out.add((

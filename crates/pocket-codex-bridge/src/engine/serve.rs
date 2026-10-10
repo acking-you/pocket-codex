@@ -49,7 +49,7 @@ use pocket_codex_pb::{publish_pending, PublishError, Published, RegisterOptions}
 use tokio::task::JoinHandle;
 
 use crate::engine::{
-    config::{load_config, save_config},
+    config::{load_config, update_config},
     logging, runtime,
     transport::{self, Transport},
 };
@@ -163,12 +163,24 @@ pub struct ServeStatus {
     /// Upstream proxy codex + the API proxy were started with, or `None` when
     /// they inherit the app's environment.
     pub proxy: Option<String>,
-    /// Service provider: `codex` or `opencode`.
+    /// Service provider family: `codex`, `opencode` or `acp`.
     pub provider: String,
-    /// Provider version, when known (OpenCode reports it).
+    /// Provider version, when known (OpenCode and ACP agents report it).
     pub provider_version: Option<String>,
     /// Whether that version is the one this build was verified against.
     pub provider_verified: bool,
+    /// Wire protocol: `codex-app-server`, `opencode-http` or `acp`.
+    pub protocol: String,
+    /// Human-readable provider / agent name.
+    pub provider_name: String,
+    /// Agent profile id (ACP hosts).
+    pub profile_id: Option<String>,
+    /// Agent lifecycle phase (ACP): `starting`, `ready`, `failed`, `stopped`.
+    pub agent_phase: Option<String>,
+    /// Why the agent is not running (ACP), safe to show.
+    pub agent_error: Option<String>,
+    /// The agent reported that authentication is required (ACP).
+    pub auth_required: bool,
 }
 
 fn hosts() -> &'static Mutex<HashMap<String, LocalServe>> {
@@ -569,8 +581,10 @@ fn resolve_codex_binary(
     })?;
     if let Some(ov) = override_trimmed {
         if config.codex.binary.as_deref() != Some(ov) {
-            config.codex.binary = Some(ov.to_string());
-            save_config(support, config)?;
+            *config = update_config(support, |latest| {
+                latest.codex.binary = Some(ov.to_string());
+                Ok(latest.clone())
+            })?;
         }
     }
     Ok(Some(resolved))
@@ -687,7 +701,10 @@ pub fn serve_start(
     }
 
     // A meta key is derived from the instance name, so one name cannot serve
-    // two providers on this device.
+    // two providers on this device. The claim lasts until this start returns
+    // (after the host is recorded), so no other provider can start under the
+    // name meanwhile; concurrent Codex starts share it.
+    let _claim = super::hosting::claim(&name, super::hosting::Provider::Codex)?;
     if super::serve_opencode::is_hosting(&name) {
         bail!("`{name}` is already hosting OpenCode on this device; choose another name");
     }
@@ -936,10 +953,14 @@ pub fn serve_status() -> Vec<ServeStatus> {
             provider: "codex".to_string(),
             provider_version: None,
             provider_verified: true,
+            protocol: "codex-app-server".to_string(),
+            provider_name: "Codex".to_string(),
+            ..ServeStatus::default()
         })
         .collect();
     drop(guard);
     out.extend(super::serve_opencode::status());
+    out.extend(super::serve_acp::status());
     out.sort_by(|a, b| a.name.cmp(&b.name));
     out
 }
@@ -949,14 +970,16 @@ pub(super) fn is_hosting_codex(name: &str) -> bool {
     hosts_locked().contains_key(name)
 }
 
-/// Resolve this process's own session (app-server or OpenCode gateway) and
-/// meta listeners without relay probes.
+/// Resolve this process's own session (app-server, OpenCode gateway or ACP
+/// gateway) and meta listeners without relay probes.
 pub(super) fn local_endpoints(service_key: &str) -> Option<(String, String)> {
     let codex = hosts_locked()
         .values()
         .find(|host| host.app_key == service_key)
         .map(|host| (host.app_local.to_string(), host.meta_local.to_string()));
-    codex.or_else(|| super::serve_opencode::local_endpoints(service_key))
+    codex
+        .or_else(|| super::serve_opencode::local_endpoints(service_key))
+        .or_else(|| super::serve_acp::local_endpoints(service_key))
 }
 
 /// Re-publish every host's permanently-refused services, quietly.
@@ -1013,6 +1036,9 @@ pub fn serve_deregister(name: &str, kind: &str) -> Result<()> {
     if super::serve_opencode::is_hosting(name) {
         return super::serve_opencode::deregister(name, kind);
     }
+    if super::serve_acp::is_hosting(name) {
+        return super::serve_acp::deregister(name, kind);
+    }
     let kind: ServiceKind = kind
         .parse()
         .map_err(|_| anyhow!("invalid service kind `{kind}`"))?;
@@ -1043,6 +1069,9 @@ pub fn serve_deregister(name: &str, kind: &str) -> Result<()> {
 pub fn serve_reregister(name: &str, kind: &str) -> Result<()> {
     if super::serve_opencode::is_hosting(name) {
         return super::serve_opencode::reregister(name, kind);
+    }
+    if super::serve_acp::is_hosting(name) {
+        return super::serve_acp::reregister(name, kind);
     }
     let kind: ServiceKind = kind
         .parse()
@@ -1077,19 +1106,34 @@ pub fn serve_stop(name: &str) -> Result<()> {
         super::serve_opencode::stop(name);
         return Ok(());
     }
-    let removed = hosts_locked().remove(name);
-    if let Some(ls) = removed {
-        stop_host_tasks(ls);
+    if super::serve_acp::is_hosting(name) {
+        super::serve_acp::stop(name);
+        return Ok(());
     }
+    stop_codex(name);
     Ok(())
 }
 
+/// Stop the Codex host `name`, keeping its name claimed until its relay
+/// keys and listeners are released.
+fn stop_codex(name: &str) {
+    super::hosting::retiring(name, super::hosting::Provider::Codex, || {
+        let removed = hosts_locked().remove(name);
+        if let Some(ls) = removed {
+            stop_host_tasks(ls);
+        }
+    });
+}
+
 /// Stop every host (called on app quit so a real quit leaves no orphan codex).
+/// Owned ACP agents go first: their cleanup is bounded and closes the ACP
+/// start barrier, so no agent process is left behind by a slower relay.
 pub fn serve_stop_all() {
+    super::serve_acp::stop_all();
     super::serve_opencode::stop_all();
-    let all: Vec<LocalServe> = hosts_locked().drain().map(|(_, ls)| ls).collect();
-    for ls in all {
-        stop_host_tasks(ls);
+    let names: Vec<String> = hosts_locked().keys().cloned().collect();
+    for name in names {
+        stop_codex(&name);
     }
 }
 

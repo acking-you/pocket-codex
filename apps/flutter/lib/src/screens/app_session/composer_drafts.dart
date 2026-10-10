@@ -13,6 +13,12 @@ class _ComposerDraft {
   String? threadId;
   String? project;
   bool sendPending = false;
+
+  /// Revision of what may still enter this draft asynchronously (see
+  /// [AttachmentTicket]): it moves when the draft's view stops being an
+  /// editable view of the same host — it turned read-only, its host
+  /// connection was lost or replaced, or image support changed.
+  int admission = 0;
   (String?, String?) get key => (threadId, threadId == null ? project : null);
   TextEditingValue value = TextEditingValue.empty;
   final List<_Attachment> attachments = [];
@@ -72,6 +78,15 @@ class _ComposerDrafts extends ChangeNotifier {
     _badges.remove(draft.key);
     draft.threadId = id;
     save(draft, changed: true);
+  }
+
+  /// The host behind every draft of this service changed (connection lost
+  /// or replaced, capabilities changed): attachments still being picked,
+  /// read or uploaded were granted for a host that is gone.
+  void revokeAdmissions() {
+    for (final draft in _drafts.values) {
+      draft.admission++;
+    }
   }
 
   void attachmentChanged(_Attachment attachment) {

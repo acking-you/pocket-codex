@@ -44,14 +44,45 @@ library;
 /// discovered key (it is derived from an app host), but it is a real kind and a
 /// key carrying it must still parse.
 bool _isKind(String part) =>
-    part == 'app' || part == 'api' || part == 'meta' || part == 'opencode';
+    part == 'app' ||
+    part == 'api' ||
+    part == 'meta' ||
+    part == 'opencode' ||
+    part == 'acp';
 
 /// Whether [kind] is a conversation service the session UI can open: a Codex
-/// app-server (`app`) or an OpenCode gateway (`opencode`).
-bool isSessionKind(String kind) => kind == 'app' || kind == 'opencode';
+/// app-server (`app`), an OpenCode HTTP gateway (`opencode`) or an ACP agent
+/// gateway (`acp`).
+bool isSessionKind(String kind) =>
+    kind == 'app' || kind == 'opencode' || kind == 'acp';
 
-/// Whether [key] names an OpenCode session service.
+/// Whether [key] names an OpenCode HTTP session service.
 bool isOpenCodeKey(String key) => parseServiceKey(key).kind == 'opencode';
+
+/// Whether [key] names an ACP agent service.
+bool isAcpKey(String key) => parseServiceKey(key).kind == 'acp';
+
+/// The wire protocol a session service key selects (its kind, never a
+/// provider name).
+enum SessionProtocol {
+  /// Native Codex app-server.
+  codexAppServer,
+
+  /// The attached OpenCode HTTP gateway.
+  openCodeHttp,
+
+  /// The Pocket-Codex gateway to a host-owned ACP agent.
+  acp,
+}
+
+/// The protocol of [key]. Keys that are not session keys keep the historical
+/// behaviour of addressing the native app-server, as the bridge does.
+SessionProtocol sessionProtocolOf(String key) =>
+    switch (parseServiceKey(key).kind) {
+      'opencode' => SessionProtocol.openCodeHttp,
+      'acp' => SessionProtocol.acp,
+      _ => SessionProtocol.codexAppServer,
+    };
 
 /// The device that publishes [key], or empty when [key] isn't a service key.
 String serviceKeyDevice(String key) => parseServiceKey(key).device;

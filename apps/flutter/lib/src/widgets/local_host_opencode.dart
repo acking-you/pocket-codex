@@ -4,28 +4,16 @@ part of 'local_host_dialog.dart';
 /// start/stop and the running-host details. OpenCode hosting attaches to the
 /// user's own OpenCode service, so there is no port, proxy or engine choice.
 extension _OpenCodeHost on _LocalHostDialogState {
-  Widget _providerPicker(AppLocalizations l10n) => SegmentedButton<String>(
-    key: const Key('host-provider-picker'),
-    segments: [
-      ButtonSegment(
-        value: 'codex',
-        label: Text(l10n.providerCodex, key: const Key('provider-codex')),
-      ),
-      ButtonSegment(
-        value: 'opencode',
-        label: Text(l10n.providerOpenCode, key: const Key('provider-opencode')),
-      ),
-    ],
-    selected: {_openCode ? 'opencode' : 'codex'},
-    onSelectionChanged: _busy
+  Widget _providerPicker(AppLocalizations l10n) => HostProviderPicker(
+    value: _provider,
+    onChanged: _busy
         ? null
-        : (selection) {
-            final openCode = selection.first == 'opencode';
+        : (provider) {
             _update(() {
-              _openCode = openCode;
+              _provider = provider;
               _error = null;
             });
-            if (openCode && !_ocChecked) _detectOpenCode();
+            if (provider == 'opencode' && !_ocChecked) _detectOpenCode();
           },
   );
 

@@ -92,9 +92,10 @@ pub fn set_limit(support_dir: &Path, limit_mb: u32) -> Result<()> {
     ensure!(limit_mb <= 64_000, "cache limit must be between 0 and 64000 MB");
     let cache = DiskCache::for_app(support_dir.into());
     let mut lock = cache.lock()?;
-    let mut cfg = config::load_config(support_dir)?;
-    cfg.history_cache.disk_limit_mb = limit_mb;
-    config::save_config(support_dir, &cfg)?;
+    config::update_config(support_dir, |cfg| {
+        cfg.history_cache.disk_limit_mb = limit_mb;
+        Ok(())
+    })?;
     cache
         .trim_locked(&mut lock, u64::from(limit_mb) * 1_000_000, 0)
         .map(|_| ())

@@ -250,7 +250,9 @@ impl Config {
             ServiceKind::Api => self.services.api.default.as_ref(),
             // OpenCode uses its independent versioned store; meta/unknown have
             // no standalone default target.
-            ServiceKind::OpenCode | ServiceKind::Meta | ServiceKind::Unknown => None,
+            ServiceKind::OpenCode | ServiceKind::Acp | ServiceKind::Meta | ServiceKind::Unknown => {
+                None
+            },
         }
     }
 
@@ -270,7 +272,8 @@ impl Config {
             ServiceKind::Api => self.services.api.default = Some(target),
             // Keep OpenCode defaults out of this legacy configuration schema.
             // Meta/unknown have no standalone default.
-            ServiceKind::OpenCode | ServiceKind::Meta | ServiceKind::Unknown => {},
+            ServiceKind::OpenCode | ServiceKind::Acp | ServiceKind::Meta | ServiceKind::Unknown => {
+            },
         }
     }
 
