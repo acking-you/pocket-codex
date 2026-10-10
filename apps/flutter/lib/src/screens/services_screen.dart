@@ -378,7 +378,7 @@ class _DeviceFirstServices extends ConsumerWidget {
     final capabilityCount =
         apps.length + apis.length + (account ? codexApps.length : 0);
 
-    // Loopback probing speaks the Codex handshake; OpenCode and ACP gateways
+    // Loopback probing speaks the Codex handshake; ACP gateways
     // are probed through appProbe, which dispatches by key kind.
     final localAppAddr = <String, String>{
       for (final host in localHosts)
@@ -578,7 +578,6 @@ class _DeviceFirstServices extends ConsumerWidget {
           icon: Icons.chat_bubble_outline,
           title: l10n.servicesChatCapability,
           provider: switch (service.kind) {
-            'opencode' => 'opencode',
             'acp' => 'acp',
             _ => 'codex',
           },
@@ -587,7 +586,6 @@ class _DeviceFirstServices extends ConsumerWidget {
               .firstOrNull
               ?.providerName,
           protocol: protocolOf(switch (service.kind) {
-            'opencode' => 'OpenCode',
             'acp' => 'ACP',
             _ => 'App-server',
           }, service),
@@ -1168,7 +1166,7 @@ class _CapabilityRow extends StatelessWidget {
   final String actionLabel;
   final VoidCallback onAction;
 
-  /// The session provider (`codex` / `opencode`) to badge, or null for rows
+  /// The session provider (`codex` / `acp`) to badge, or null for rows
   /// that are not a chat host.
   final String? provider;
 

@@ -19,7 +19,7 @@ library;
   final parts = key.split(':');
   if (parts.length < 4) return (device: '', kind: '', name: '');
   // The known prefixes fix the kind's offset, so an instance name that equals
-  // a kind (`pcx:mac:opencode:opencode`) cannot be mistaken for it. Other keys
+  // a kind (`pcx:mac:acp:acp`) cannot be mistaken for it. Other keys
   // anchor on the KIND, which is the one segment with a fixed vocabulary,
   // searched from the end so a leading namespace doesn't shift the offsets.
   // Everything after it is the name — a name may contain colons, and
@@ -44,20 +44,12 @@ library;
 /// discovered key (it is derived from an app host), but it is a real kind and a
 /// key carrying it must still parse.
 bool _isKind(String part) =>
-    part == 'app' ||
-    part == 'api' ||
-    part == 'meta' ||
-    part == 'opencode' ||
-    part == 'acp';
+    part == 'app' || part == 'api' || part == 'meta' || part == 'acp';
 
 /// Whether [kind] is a conversation service the session UI can open: a Codex
-/// app-server (`app`), an OpenCode HTTP gateway (`opencode`) or an ACP agent
+/// app-server (`app`) or an ACP agent
 /// gateway (`acp`).
-bool isSessionKind(String kind) =>
-    kind == 'app' || kind == 'opencode' || kind == 'acp';
-
-/// Whether [key] names an OpenCode HTTP session service.
-bool isOpenCodeKey(String key) => parseServiceKey(key).kind == 'opencode';
+bool isSessionKind(String kind) => kind == 'app' || kind == 'acp';
 
 /// Whether [key] names an ACP agent service.
 bool isAcpKey(String key) => parseServiceKey(key).kind == 'acp';
@@ -68,9 +60,6 @@ enum SessionProtocol {
   /// Native Codex app-server.
   codexAppServer,
 
-  /// The attached OpenCode HTTP gateway.
-  openCodeHttp,
-
   /// The Pocket-Codex gateway to a host-owned ACP agent.
   acp,
 }
@@ -79,7 +68,6 @@ enum SessionProtocol {
 /// behaviour of addressing the native app-server, as the bridge does.
 SessionProtocol sessionProtocolOf(String key) =>
     switch (parseServiceKey(key).kind) {
-      'opencode' => SessionProtocol.openCodeHttp,
       'acp' => SessionProtocol.acp,
       _ => SessionProtocol.codexAppServer,
     };

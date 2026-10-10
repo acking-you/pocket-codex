@@ -3,8 +3,8 @@
 ///
 /// A read-only view (a Guardian reviewer, a session another writer holds, a
 /// child session) and a send in flight take nothing: no chip, no upload. An
-/// image is taken only where prompts can carry images — every native and
-/// OpenCode view, and an ACP agent that advertised image prompts. Text paste
+/// image is taken only where prompts can carry images — a native Codex
+/// view, and an ACP agent that advertised image prompts. Text paste
 /// never passes through here, so it keeps working everywhere.
 library;
 

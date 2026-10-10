@@ -22,7 +22,6 @@ class UiPrefs {
     this.lastServiceKey,
     this.lastThreadByService = const {},
     this.autoHost,
-    this.autoHostOpenCode,
     this.acpAgents = const [],
     this.autoHostAcp = const [],
     this.guideSeen = false,
@@ -52,10 +51,6 @@ class UiPrefs {
   /// desktop cold start.
   final AutoHostPrefs? autoHost;
 
-  /// The OpenCode hosting the user left running, or null when it was stopped
-  /// (or never started). Restored alongside [autoHost] on a desktop cold start.
-  final AutoHostOpenCodePrefs? autoHostOpenCode;
-
   /// Whether the first-run welcome guide has been shown on this device. Set
   /// the first time it renders, so signing in ever again skips it.
   final bool guideSeen;
@@ -76,7 +71,7 @@ class UiPrefs {
   final double? sidebarWidth;
 
   /// Copy with the given fields replaced. `clearAutoHost` removes the
-  /// auto-host record, `clearAutoHostOpenCode` the OpenCode one; `clearThemeMode` returns to follow-system (a plain
+  /// Codex auto-host record; `clearThemeMode` returns to follow-system (a plain
   /// null argument means "keep").
   UiPrefs copyWith({
     String? preferredAppServiceKey,
@@ -84,8 +79,6 @@ class UiPrefs {
     Map<String, String>? lastThreadByService,
     AutoHostPrefs? autoHost,
     bool clearAutoHost = false,
-    AutoHostOpenCodePrefs? autoHostOpenCode,
-    bool clearAutoHostOpenCode = false,
     List<AcpAgentSpec>? acpAgents,
     List<AutoHostAcpPrefs>? autoHostAcp,
     bool? guideSeen,
@@ -100,9 +93,6 @@ class UiPrefs {
     lastServiceKey: lastServiceKey ?? this.lastServiceKey,
     lastThreadByService: lastThreadByService ?? this.lastThreadByService,
     autoHost: clearAutoHost ? null : (autoHost ?? this.autoHost),
-    autoHostOpenCode: clearAutoHostOpenCode
-        ? null
-        : (autoHostOpenCode ?? this.autoHostOpenCode),
     acpAgents: acpAgents ?? this.acpAgents,
     autoHostAcp: autoHostAcp ?? this.autoHostAcp,
     guideSeen: guideSeen ?? this.guideSeen,
@@ -122,7 +112,6 @@ class UiPrefs {
       });
     }
     final rawHost = json['autoHost'];
-    final rawOpenCode = json['autoHostOpenCode'];
     final rawAgents = json['acpAgents'];
     final rawAcpHosts = json['autoHostAcp'];
     return UiPrefs(
@@ -144,9 +133,6 @@ class UiPrefs {
       lastThreadByService: threads,
       autoHost: rawHost is Map<String, dynamic>
           ? AutoHostPrefs.fromJson(rawHost)
-          : null,
-      autoHostOpenCode: rawOpenCode is Map<String, dynamic>
-          ? AutoHostOpenCodePrefs.fromJson(rawOpenCode)
           : null,
       guideSeen: json['guideSeen'] == true,
       themeMode: json['themeMode'] == 'light' || json['themeMode'] == 'dark'
@@ -174,8 +160,6 @@ class UiPrefs {
     if (lastThreadByService.isNotEmpty)
       'lastThreadByService': lastThreadByService,
     if (autoHost != null) 'autoHost': autoHost!.toJson(),
-    if (autoHostOpenCode != null)
-      'autoHostOpenCode': autoHostOpenCode!.toJson(),
     if (acpAgents.isNotEmpty)
       'acpAgents': [for (final agent in acpAgents) agent.toJson()],
     if (autoHostAcp.isNotEmpty)
@@ -232,36 +216,6 @@ class AutoHostPrefs {
     'name': name,
     if (proxy != null) 'proxy': proxy,
     'embedded': false,
-    if (binaryOverride != null) 'binaryOverride': binaryOverride,
-  };
-}
-
-/// The `appServeStartOpencode` parameters of the last OpenCode hosting the user
-/// started, so a cold start can re-attach to the local OpenCode service.
-class AutoHostOpenCodePrefs {
-  /// Creates an OpenCode auto-host record.
-  const AutoHostOpenCodePrefs({required this.name, this.binaryOverride});
-
-  /// Instance name.
-  final String name;
-
-  /// Explicit opencode binary path, when the user customized it.
-  final String? binaryOverride;
-
-  /// Parse from JSON; defaults on shape surprises.
-  factory AutoHostOpenCodePrefs.fromJson(Map<String, dynamic> json) =>
-      AutoHostOpenCodePrefs(
-        name: json['name'] is String && (json['name'] as String).isNotEmpty
-            ? json['name'] as String
-            : 'opencode',
-        binaryOverride: json['binaryOverride'] is String
-            ? json['binaryOverride'] as String
-            : null,
-      );
-
-  /// JSON for persistence.
-  Map<String, dynamic> toJson() => {
-    'name': name,
     if (binaryOverride != null) 'binaryOverride': binaryOverride,
   };
 }
@@ -327,7 +281,6 @@ class UiPrefsStore extends AsyncNotifier<UiPrefs> {
           ...raced.lastThreadByService,
         },
         autoHost: raced.autoHost ?? loaded.autoHost,
-        autoHostOpenCode: raced.autoHostOpenCode ?? loaded.autoHostOpenCode,
         acpAgents: raced.acpAgents.isEmpty ? loaded.acpAgents : raced.acpAgents,
         autoHostAcp: raced.autoHostAcp.isEmpty
             ? loaded.autoHostAcp
@@ -457,21 +410,6 @@ class UiPrefsStore extends AsyncNotifier<UiPrefs> {
   void clearAutoHost() {
     if (_current.autoHost == null) return;
     final next = _current.copyWith(clearAutoHost: true);
-    state = AsyncData(next);
-    _enqueueWrite(next);
-  }
-
-  /// Remember the OpenCode hosting the user just started.
-  void setAutoHostOpenCode(AutoHostOpenCodePrefs host) {
-    final next = _current.copyWith(autoHostOpenCode: host);
-    state = AsyncData(next);
-    _enqueueWrite(next);
-  }
-
-  /// Forget the OpenCode auto-host record (stopped on purpose).
-  void clearAutoHostOpenCode() {
-    if (_current.autoHostOpenCode == null) return;
-    final next = _current.copyWith(clearAutoHostOpenCode: true);
     state = AsyncData(next);
     _enqueueWrite(next);
   }

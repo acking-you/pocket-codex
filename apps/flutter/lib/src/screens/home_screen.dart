@@ -44,7 +44,6 @@ class HomeScreen extends ConsumerStatefulWidget {
   @visibleForTesting
   static void debugResetAutoHost() {
     _HomeScreenState._autoHostAttempted = false;
-    _HomeScreenState._autoHostOpenCodeAttempted = false;
     _HomeScreenState._autoHostAcpAttempted.clear();
   }
 }
@@ -80,9 +79,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   /// who stops hosting afterwards must not have it resurrected behind their
   /// back by a later visit to the home route.
   static bool _autoHostAttempted = false;
-
-  /// The same once-per-run guard for the OpenCode hosting record.
-  static bool _autoHostOpenCodeAttempted = false;
 
   /// The same guard for ACP hosting records, by instance name.
   static final Set<String> _autoHostAcpAttempted = {};
@@ -366,7 +362,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     }
   }
 
-  /// Restore the Codex, OpenCode and ACP hosting the user left running, each
+  /// Restore the Codex and ACP hosting the user left running, each
   /// at most once per run and only what this machine does not host already
   /// (see [planHostRestore]). True when at least one restore succeeded
   /// (discovery is stale).
@@ -380,7 +376,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       prefs,
       const [],
       codexAttempted: _autoHostAttempted,
-      openCodeAttempted: _autoHostOpenCodeAttempted,
       acpAttempted: _autoHostAcpAttempted,
       acpSupported: api.acpHostingSupported(),
     );
@@ -397,7 +392,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       prefs,
       local,
       codexAttempted: _autoHostAttempted,
-      openCodeAttempted: _autoHostOpenCodeAttempted,
       acpAttempted: _autoHostAcpAttempted,
       acpSupported: api.acpHostingSupported(),
     );
@@ -405,7 +399,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     // Burn the once-per-run flags only for a real attempt, so a slow prefs
     // load on the first pass doesn't forfeit the restore.
     if (plan.codex != null) _autoHostAttempted = true;
-    if (plan.openCode != null) _autoHostOpenCodeAttempted = true;
     _autoHostAcpAttempted.addAll(plan.acp.map((saved) => saved.name));
     if (!background) setState(() => _rehosting = true);
     try {

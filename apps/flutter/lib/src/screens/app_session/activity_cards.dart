@@ -8,8 +8,6 @@
 /// because a message row can embed an activity card, and not the reverse.
 library;
 
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show RenderAbstractViewport;
 import 'approval_review.dart';
@@ -31,44 +29,23 @@ import 'package:pocket_codex/src/widgets/markdown_view.dart';
 import 'package:pocket_codex/src/widgets/status_dots.dart';
 
 /// Provider features the transcript rows below adapt to. Absent means the
-/// Codex defaults: Guardian reviews recognised, no sub-session navigation.
+/// Codex defaults: Guardian reviews recognised.
 class SessionFeatureScope extends InheritedWidget {
   const SessionFeatureScope({
     super.key,
     this.guardianReviews = true,
-    this.openSubSession,
     required super.child,
   });
 
   /// Whether Guardian review envelopes render as review cards.
   final bool guardianReviews;
 
-  /// Opens a child session read-only; null when the provider has none.
-  final ValueChanged<String>? openSubSession;
-
   static SessionFeatureScope? maybeOf(BuildContext context) =>
       context.dependOnInheritedWidgetOfExactType<SessionFeatureScope>();
 
   @override
   bool updateShouldNotify(SessionFeatureScope oldWidget) =>
-      guardianReviews != oldWidget.guardianReviews ||
-      openSubSession != oldWidget.openSubSession;
-}
-
-/// The child session a `collabAgentToolCall` item spawned, from the
-/// `receiverThreadIds` of its JSON detail; null when it names none.
-String? subSessionIdOf(TranscriptItem item) {
-  if (item.type != 'collabAgentToolCall') return null;
-  try {
-    final detail = jsonDecode(item.text);
-    if (detail is! Map) return null;
-    final ids = detail['receiverThreadIds'];
-    if (ids is! List) return null;
-    for (final id in ids) {
-      if (id is String && id.isNotEmpty) return id;
-    }
-  } catch (_) {}
-  return null;
+      guardianReviews != oldWidget.guardianReviews;
 }
 
 /// One parsed plan step.
@@ -1480,20 +1457,6 @@ class _ActivityCardState extends State<ActivityCard> {
               ),
             ),
           ),
-          if ((
-                SessionFeatureScope.maybeOf(context)?.openSubSession,
-                subSessionIdOf(item),
-              )
-              case (final open?, final child?))
-            Padding(
-              padding: EdgeInsets.only(left: doc ? 0 : 6, bottom: 4),
-              child: TextButton.icon(
-                key: Key('view-sub-session-$child'),
-                onPressed: () => open(child),
-                icon: const Icon(Icons.open_in_new, size: 15),
-                label: Text(l10n.viewSubSession),
-              ),
-            ),
           if (_expanded && body.isNotEmpty && !prose)
             Padding(
               padding: const EdgeInsets.fromLTRB(10, 0, 10, 6),

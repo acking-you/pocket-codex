@@ -40,18 +40,18 @@ void main() {
     expect(parseServiceKey('pcx:box:meta:default').kind, 'meta');
   });
 
-  test('OpenCode keys parse, even when the name equals a kind', () {
-    final self = parseServiceKey('pcx:box:opencode:opencode');
+  test('ACP keys parse, even when the name equals a kind', () {
+    final self = parseServiceKey('pcx:box:acp:acp');
     expect(self.device, 'box');
-    expect(self.kind, 'opencode');
-    expect(self.name, 'opencode');
-    final account = parseServiceKey('pcxu:u1:box:opencode:app');
+    expect(self.kind, 'acp');
+    expect(self.name, 'acp');
+    final account = parseServiceKey('pcxu:u1:box:acp:app');
     expect(account.device, 'box');
-    expect(account.kind, 'opencode');
+    expect(account.kind, 'acp');
     expect(account.name, 'app');
-    expect(isOpenCodeKey('pcx:box:opencode:work'), isTrue);
-    expect(isOpenCodeKey('pcx:box:app:opencode'), isFalse);
-    expect(isSessionKind('opencode'), isTrue);
+    expect(isAcpKey('pcx:box:acp:work'), isTrue);
+    expect(isAcpKey('pcx:box:app:acp'), isFalse);
+    expect(isSessionKind('acp'), isTrue);
     expect(isSessionKind('app'), isTrue);
     expect(isSessionKind('api'), isFalse);
   });

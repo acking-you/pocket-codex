@@ -163,13 +163,12 @@ pub struct ServeStatus {
     /// Upstream proxy codex + the API proxy were started with, or `None` when
     /// they inherit the app's environment.
     pub proxy: Option<String>,
-    /// Service provider family: `codex`, `opencode` or `acp`.
+    /// Service provider family: `codex` or `acp`.
     pub provider: String,
-    /// Provider version, when known (OpenCode and ACP agents report it).
+    /// Provider version, when known (ACP agents report it).
     pub provider_version: Option<String>,
-    /// Whether that version is the one this build was verified against.
-    pub provider_verified: bool,
-    /// Wire protocol: `codex-app-server`, `opencode-http` or `acp`.
+
+    /// Wire protocol: `codex-app-server` or `acp`.
     pub protocol: String,
     /// Human-readable provider / agent name.
     pub provider_name: String,
@@ -705,9 +704,6 @@ pub fn serve_start(
     // (after the host is recorded), so no other provider can start under the
     // name meanwhile; concurrent Codex starts share it.
     let _claim = super::hosting::claim(&name, super::hosting::Provider::Codex)?;
-    if super::serve_opencode::is_hosting(&name) {
-        bail!("`{name}` is already hosting OpenCode on this device; choose another name");
-    }
     if let Some(report) = reuse_or_retire_host(&name, port)? {
         return Ok(report);
     }
@@ -952,14 +948,12 @@ pub fn serve_status() -> Vec<ServeStatus> {
             proxy: ls.proxy.clone(),
             provider: "codex".to_string(),
             provider_version: None,
-            provider_verified: true,
             protocol: "codex-app-server".to_string(),
             provider_name: "Codex".to_string(),
             ..ServeStatus::default()
         })
         .collect();
     drop(guard);
-    out.extend(super::serve_opencode::status());
     out.extend(super::serve_acp::status());
     out.sort_by(|a, b| a.name.cmp(&b.name));
     out
@@ -970,16 +964,14 @@ pub(super) fn is_hosting_codex(name: &str) -> bool {
     hosts_locked().contains_key(name)
 }
 
-/// Resolve this process's own session (app-server, OpenCode gateway or ACP
+/// Resolve this process's own session (app-server or ACP
 /// gateway) and meta listeners without relay probes.
 pub(super) fn local_endpoints(service_key: &str) -> Option<(String, String)> {
     let codex = hosts_locked()
         .values()
         .find(|host| host.app_key == service_key)
         .map(|host| (host.app_local.to_string(), host.meta_local.to_string()));
-    codex
-        .or_else(|| super::serve_opencode::local_endpoints(service_key))
-        .or_else(|| super::serve_acp::local_endpoints(service_key))
+    codex.or_else(|| super::serve_acp::local_endpoints(service_key))
 }
 
 /// Re-publish every host's permanently-refused services, quietly.
@@ -1033,9 +1025,6 @@ fn republish_refused() {
 /// until its lease expired unless the backend was asked to retire it. With the
 /// app registering directly there is no second party holding anything.
 pub fn serve_deregister(name: &str, kind: &str) -> Result<()> {
-    if super::serve_opencode::is_hosting(name) {
-        return super::serve_opencode::deregister(name, kind);
-    }
     if super::serve_acp::is_hosting(name) {
         return super::serve_acp::deregister(name, kind);
     }
@@ -1067,9 +1056,6 @@ pub fn serve_deregister(name: &str, kind: &str) -> Result<()> {
 /// Re-publish a previously [`serve_deregister`]'d service, forwarding to the
 /// still-running process. No-op if already published.
 pub fn serve_reregister(name: &str, kind: &str) -> Result<()> {
-    if super::serve_opencode::is_hosting(name) {
-        return super::serve_opencode::reregister(name, kind);
-    }
     if super::serve_acp::is_hosting(name) {
         return super::serve_acp::reregister(name, kind);
     }
@@ -1102,10 +1088,6 @@ pub fn serve_reregister(name: &str, kind: &str) -> Result<()> {
 /// watchdog, API proxy, and meta service tasks, and stop its codex.
 /// Best-effort and idempotent — a no-op when that name isn't hosting.
 pub fn serve_stop(name: &str) -> Result<()> {
-    if super::serve_opencode::is_hosting(name) {
-        super::serve_opencode::stop(name);
-        return Ok(());
-    }
     if super::serve_acp::is_hosting(name) {
         super::serve_acp::stop(name);
         return Ok(());
@@ -1130,7 +1112,6 @@ fn stop_codex(name: &str) {
 /// start barrier, so no agent process is left behind by a slower relay.
 pub fn serve_stop_all() {
     super::serve_acp::stop_all();
-    super::serve_opencode::stop_all();
     let names: Vec<String> = hosts_locked().keys().cloned().collect();
     for name in names {
         stop_codex(&name);

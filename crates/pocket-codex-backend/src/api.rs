@@ -264,13 +264,11 @@ async fn me(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json
     }))
 }
 
-/// `GET /v1/services` query. OpenCode and ACP services are listed only on
+/// `GET /v1/services` query. ACP services are listed only on
 /// request: an older client cannot deserialize a kind it does not know and
 /// would fail the whole listing.
 #[derive(Default, Deserialize)]
 struct ServicesQuery {
-    #[serde(default)]
-    include_opencode: bool,
     #[serde(default)]
     include_acp: bool,
 }
@@ -278,7 +276,6 @@ struct ServicesQuery {
 /// Which opt-in kinds a caller asked to see.
 #[derive(Clone, Copy, Default)]
 struct OptInKinds {
-    opencode: bool,
     acp: bool,
 }
 
@@ -310,7 +307,6 @@ async fn services(
         .map_err(|e| ApiError::Internal(format!("relay status: {e}")))?;
     Ok(Json(ServicesResponse {
         services: own_services(&all, namespace, &claims.sub, OptInKinds {
-            opencode: query.include_opencode,
             acp: query.include_acp,
         }),
     }))
@@ -342,7 +338,6 @@ fn own_services(
         // listing, so omit both here.
         .filter(|nsid| match nsid.service.kind {
             ServiceKind::App | ServiceKind::Api => true,
-            ServiceKind::OpenCode => opt_in.opencode,
             ServiceKind::Acp => opt_in.acp,
             ServiceKind::Meta | ServiceKind::Unknown => false,
         })
@@ -480,27 +475,6 @@ mod tests {
     }
 
     #[test]
-    fn opencode_services_are_listed_only_on_request() {
-        const NS: u64 = 7;
-        let all = vec![
-            record(NS, "pcxu:alice:mac:app:default"),
-            record(NS, "pcxu:alice:mac:opencode:opencode"),
-            record(NS, "pcxu:alice:mac:meta:opencode"),
-        ];
-        assert_eq!(own_services(&all, NS, "alice", OptInKinds::default()).len(), 1);
-        let opencode = OptInKinds {
-            opencode: true,
-            acp: false,
-        };
-        let mut kinds: Vec<String> = own_services(&all, NS, "alice", opencode)
-            .into_iter()
-            .map(|s| s.kind.as_key_segment().to_string())
-            .collect();
-        kinds.sort();
-        assert_eq!(kinds, vec!["app", "opencode"]);
-    }
-
-    #[test]
     fn acp_services_are_opt_in_and_still_namespace_scoped() {
         const ALICE_NS: u64 = 7;
         const BOB_NS: u64 = 8;
@@ -522,7 +496,6 @@ mod tests {
         assert_eq!(kinds(OptInKinds::default()), vec!["app:default"]);
         assert_eq!(
             kinds(OptInKinds {
-                opencode: false,
                 acp: true,
             }),
             vec!["acp:agent", "app:default"]

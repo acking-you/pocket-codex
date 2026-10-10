@@ -281,7 +281,7 @@ typedef RunningSessionSnapshot = ({
   DateTime requestedAt,
 });
 
-/// A running session known only by id (OpenCode's active-session report).
+/// A running session known only by id (the ACP engine's inventory).
 LocalSession _runningStub(String threadId) => LocalSession(
   threadId: threadId,
   preview: '',
@@ -312,7 +312,7 @@ final runningSessionInventoryProvider = StreamProvider.autoDispose
         inFlight = true;
         final requestedAt = DateTime.now();
         try {
-          // OpenCode and ACP report their running sessions through the
+          // ACP agents report running sessions through the
           // engine; they have no meta rollout inventory, and their history is
           // not prefetched here. The source is a capability, not a name.
           final inventory = api.appCapabilities(serviceKey).runningInventory;

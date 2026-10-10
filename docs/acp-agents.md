@@ -4,34 +4,37 @@ Pocket-Codex can host any agent that speaks the
 [Agent Client Protocol](https://agentclientprotocol.com) (ACP) v1 over stdio.
 An agent is configured as a program plus an argument list; it is never run
 through a shell. OpenCode (`opencode acp`) is the first preset. Codex
-app-server stays the native, first-class engine, and the existing OpenCode
-HTTP gateway (`opencode:<name>`) is unchanged.
+app-server stays the native, first-class engine. OpenCode uses the same ACP
+engine, host lifecycle and negotiated UI as other ACP agents.
 
 Decision record: [ADR-0003](adr/0003-generic-acp-agents.md).
 
 ## Architecture
 
+```mermaid
+flowchart LR
+  UI[Shared Flutter session UI] --> API[BridgeApi]
+  API --> E[SessionEngine]
+  E --> C[CodexEngine]
+  E --> A[AcpEngine]
+  C <-->|"app: via relay / native WebSocket"| N[External codex app-server]
+  A <-->|"acp: via relay / HTTP + SSE"| G[Pocket-Codex /acp/v1 gateway]
+  G --> H[AgentHost: lifecycle and history]
+  H <-->|ACP v1 stdio| P[External ACP agent: OpenCode or custom]
+  API <-->|"meta: via relay"| M[Host meta: files and uploads]
 ```
-             host (desktop App)                                     controller (any device)
-┌───────────────────────────────────────────────────────┐   ┌────────────────────────────────────┐
-│ agent process (program + argv, own process group)     │   │ Flutter session UI (shared)        │
-│        ▲ stdio NDJSON JSON-RPC 2.0                     │   │   │ BridgeApi app_* / meta_*       │
-│ AgentHost (host-svc acp/): the one ACP client          │   │   ▼                                │
-│   lifecycle owner, generations, event log, folding     │   │ bridge SessionEngine               │
-│ /acp/v1 gateway (loopback HTTP + SSE)  ◄── pb ─────────┼───┼─►  ├─ CodexEngine    (app:)        │
-│   key: …:acp:<name>                                    │   │    ├─ OpenCodeHttpEngine (opencode:)│
-│ meta service (fs / uploads / file links)  ◄── pb ──────┼───┼─►  └─ AcpEngine      (acp:)        │
-│   key: …:meta:<name>                                   │   │                                    │
-└───────────────────────────────────────────────────────┘   └────────────────────────────────────┘
-```
+
+The `/acp/v1` gateway is Pocket-Codex's controller transport. The host
+contacts the spawned agent only through ACP stdio; adding an agent does not
+add an agent-specific HTTP client or another `SessionEngine` implementation.
 
 - **The host owns the ACP connection.** ACP is a single-client stdio
   protocol, so exactly one `AgentHost` speaks to the agent. Controllers never
   see ACP frames; they use the versioned `/acp/v1` HTTP + SSE gateway, which
   survives controller reconnects and lets several controllers watch one
   agent.
-- **Protocol identity comes from the service key kind** (`app`, `opencode`,
-  `acp`), never from the provider's display name. The bridge picks the engine
+- **Protocol identity comes from the service key kind** (`app`, `acp`),
+  never from the provider's display name. The bridge picks the engine
   with `engine(&key)` and every `app_*` entry point dispatches through the
   `SessionEngine` trait; unsupported operations return a stable
   "unsupported" error instead of being sent to the wrong protocol.
@@ -40,15 +43,6 @@ Decision record: [ADR-0003](adr/0003-generic-acp-agents.md).
   optional enabled). Flutter gates every control on capabilities, including
   voice/dictation warm-up, shortcuts, steer, image attach, git diff, compact,
   rename and the model chip.
-
-### Gateway vs ACP
-
-| | OpenCode HTTP gateway (`opencode:`) | ACP host (`acp:`) |
-| --- | --- | --- |
-| Agent process | user's background service, attached, never owned | spawned and owned by the host |
-| Wire to agent | OpenCode HTTP/SSE, allowlisted routes, injected Basic auth | ACP v1 stdio JSON-RPC |
-| Translation | bridge `OpenCodeHttpEngine` | host folds ACP updates; bridge `AcpEngine` maps folded items |
-| Stopping hosting | leaves OpenCode running | terminates the agent's process group |
 
 ## Host lifecycle
 
@@ -360,8 +354,9 @@ context without transmitting the bytes.
 
 ACP hosting works in self-host mode with a relay key and in hosted-account
 mode with the normal Pocket-Codex account login. Agent authentication is
-separate and uses the agent’s own CLI. Service names are claimed in one table shared by Codex, OpenCode and
-ACP on a device, so two providers can never start under the same name. A
+separate and uses the agent’s own CLI. Service names are claimed in one table
+shared by Codex and ACP on a device, so two providers can never start under
+the same name. A
 name stays claimed until its host has fully stopped, including relay and
 listener cleanup and "stop all"; the same provider can still restart under
 its own name.

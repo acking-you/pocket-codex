@@ -274,8 +274,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   final List<AppEvent> _approvals = []; // pending command-approval prompts
 
   // What the connection behind [widget.serviceKey] supports. Controls are
-  // gated on these flags, never on the provider's name. Codex and OpenCode
-  // are fixed per key; an ACP connection's flags come from the host's current
+  // gated on these flags, never on the provider's name. Codex is
+  // fixed per key; an ACP connection's flags come from the host's current
   // negotiation, so they are re-read until negotiated and after every host
   // state change or reconnect (see [_invalidateCaps]).
   AppCapabilities? _capsCache;
@@ -322,12 +322,6 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     if (mounted) setState(() => _agentSettings = next);
   }
 
-  bool get _variantEffort => _caps.effortLabel == 'variant';
-
-  // Parent sessions left to view a child (sub-agent) session read-only,
-  // innermost last. Non-empty means the open thread is a read-only child.
-  final List<({String id, String? cwd})> _parentSessions = [];
-  bool get _childReadOnly => _parentSessions.isNotEmpty;
   StreamSubscription<AppEvent>? _sub;
   int _subscriptionEpoch = 0;
 
@@ -1555,11 +1549,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
 
   /// Switch the screen to another conversation (or a new one when [tid] is
   /// null) in place, resetting per-thread state. Used by the left sessions pane.
-  ///
-  /// [subSession] marks navigation into or out of a read-only child session;
-  /// any other switch leaves the child view entirely.
-  void _openThread(String? tid, String? cwd, {bool subSession = false}) {
-    if (!subSession) _parentSessions.clear();
+  void _openThread(String? tid, String? cwd) {
     // Leaving the call's conversation ends the call: capture never outlives
     // the conversation it was started in (AGENTS.md, live voice controls).
     if (_voice.threadId != null && _voice.threadId != tid) {
@@ -1574,7 +1564,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     // Keep the "last conversation" record fresh for the chat-first home. A
     // new (id-less) conversation records nothing until its first send — an
     // abandoned draft shouldn't cost the user their restore target.
-    if (tid != null && !_childReadOnly) {
+    if (tid != null) {
       ref.read(uiPrefsProvider.notifier).setLastThread(widget.serviceKey, tid);
     }
     _cancelExternalWriterSubscription();
@@ -3593,8 +3583,6 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       _openCodexSetup();
       return;
     }
-    // A child session is viewed read-only; it belongs to its parent's agent.
-    if (_childReadOnly) return;
     // Never send while an attachment is still processing/uploading — the
     // message would silently ship without it. (The send button is disabled
     // too; this also guards the Enter-to-send path.)
@@ -5688,63 +5676,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     cwd: _cwd,
     child: SessionFeatureScope(
       guardianReviews: _caps.guardian,
-      openSubSession: _caps.childSessions ? _openSubSession : null,
       child: _buildSession(context),
     ),
   );
-
-  /// View a child (sub-agent) session in place, read-only, remembering the
-  /// session to return to.
-  void _openSubSession(String childId) {
-    final parent = _threadId;
-    if (parent == null || childId == parent) return;
-    _parentSessions.add((id: parent, cwd: _cwd));
-    _openThread(childId, _cwd, subSession: true);
-  }
-
-  /// Return from a read-only child session to the session that opened it.
-  void _closeSubSession() {
-    if (_parentSessions.isEmpty) return;
-    final parent = _parentSessions.removeLast();
-    _openThread(parent.id, parent.cwd, subSession: true);
-  }
-
-  Widget _subSessionBanner(AppLocalizations l10n) {
-    final scheme = Theme.of(context).colorScheme;
-    return Material(
-      key: const Key('sub-session-banner'),
-      color: scheme.secondaryContainer,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(4, 2, 16, 2),
-        child: Row(
-          children: [
-            IconButton(
-              key: const Key('sub-session-back'),
-              tooltip: l10n.backToParentSession,
-              icon: const Icon(Icons.arrow_back, size: 18),
-              color: scheme.onSecondaryContainer,
-              onPressed: _closeSubSession,
-            ),
-            Icon(
-              Icons.visibility_outlined,
-              size: 16,
-              color: scheme.onSecondaryContainer,
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                l10n.subSessionReadOnly,
-                style: TextStyle(
-                  color: scheme.onSecondaryContainer,
-                  fontSize: 13,
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
 
   Widget _buildSession(BuildContext context) {
     ref.watch(_composerDraftsProvider(widget.serviceKey));
@@ -6773,7 +6707,6 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     return Column(
       children: [
         _statusBar(l10n),
-        if (_childReadOnly) _subSessionBanner(l10n),
         // Where the reader is looking: the switch announces itself above the
         // conversation, which stays put until the new host has answered.
         AnimatedSize(
@@ -7050,10 +6983,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         // approval.
         // Keyed by request id so State follows the right prompt if more than one
         // server request is pending and one is answered/removed out of order.
-        for (final a
-            in _externalWriterMode || _childReadOnly
-                ? const <AppEvent>[]
-                : _approvals)
+        for (final a in _externalWriterMode ? const <AppEvent>[] : _approvals)
           if (a.kind == 'item/tool/requestUserInput')
             UserInputCard(
               key: ValueKey(a.requestId),
@@ -7072,7 +7002,6 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         // ask several at once, so they share a bounded, scrollable area and
         // the conversation and composer stay on screen.
         if (!_externalWriterMode &&
-            !_childReadOnly &&
             _approvals.any((a) => a.kind == agentPermissionKind))
           Flexible(
             // Share the space left after the composer and keyboard, rather
@@ -7099,9 +7028,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
               ),
             ),
           ),
-        if (!_externalWriterMode &&
-            !_childReadOnly &&
-            _asyncQuestions.isNotEmpty)
+        if (!_externalWriterMode && _asyncQuestions.isNotEmpty)
           ConstrainedBox(
             constraints: BoxConstraints(
               maxHeight: MediaQuery.sizeOf(context).height * 0.4,
@@ -7122,8 +7049,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           ),
         // After a plan-mode turn, offer to implement the plan (persists across
         // restart since it's derived from the trailing plan item).
-        if (!_externalWriterMode && !_childReadOnly && _planReady)
-          _implementBar(l10n),
+        if (!_externalWriterMode && _planReady) _implementBar(l10n),
         if (_error != null) _errorBanner(l10n),
         if (_isVoiceThread)
           _voiceBar(l10n)
@@ -7132,9 +7058,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         else if (MediaQuery.sizeOf(context).width < 720 &&
             _voice.threadId != _threadId)
           _voiceStatus(l10n),
-        if (_childReadOnly)
-          const SizedBox.shrink()
-        else if (_externalWriterMode)
+        if (_externalWriterMode)
           _externalWriterAction(l10n)
         else
           Align(
@@ -9180,11 +9104,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// attachment entry point — image picker, file picker, drop, paste —
   /// admits through it.
   AttachmentGate get _attachGate => AttachmentGate(
-    editable:
-        !_sending &&
-        !_externalWriterMode &&
-        !_guardianReadOnly &&
-        !_childReadOnly,
+    editable: !_sending && !_externalWriterMode && !_guardianReadOnly,
     imageInput: _caps.imageInput,
   );
 
@@ -10731,10 +10651,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                 ),
               ),
             ),
-          if (_showEffortPicker) ...[
-            const Divider(height: 9),
-            _effortSlider(l10n),
-          ],
+          const Divider(height: 9),
+          _effortSlider(l10n),
           const Divider(height: 9),
           ListTile(
             key: const Key('advanced-turn-settings'),
@@ -10778,7 +10696,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  _effortTitle(l10n),
+                  l10n.effort,
                   style: TextStyle(
                     fontSize: 11,
                     fontWeight: FontWeight.w600,
@@ -10889,13 +10807,12 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           label: l10n.model,
           description: model,
         ),
-        if (_showEffortPicker)
-          _PickerOption(
-            value: 'effort',
-            icon: Icons.psychology_outlined,
-            label: _effortTitle(l10n),
-            description: _effectiveEffort?.label(l10n),
-          ),
+        _PickerOption(
+          value: 'effort',
+          icon: Icons.psychology_outlined,
+          label: l10n.effort,
+          description: _effectiveEffort?.label(l10n),
+        ),
         _PickerOption(
           value: 'advanced',
           icon: Icons.tune,
@@ -10961,17 +10878,6 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
 
   bool get _fastAvailable =>
       _caps.fast && _effectiveModel?.supportsFast == true;
-
-  /// Variant (OpenCode) selectors offer only what the model lists, so a model
-  /// with none has nothing to pick; effort always offers its known levels.
-  bool get _showEffortPicker {
-    if (!_variantEffort) return true;
-    final model = _model ?? _effectiveModel;
-    return model?.supportedReasoningEfforts.isNotEmpty ?? false;
-  }
-
-  String _effortTitle(AppLocalizations l10n) =>
-      _variantEffort ? l10n.variant : l10n.effort;
 
   String? get _effectiveServiceTier =>
       _serviceTier ??
@@ -11404,7 +11310,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         ? ReasoningEffort.known
         : [for (final w in supported) ReasoningEffort(w)];
     final chosen = await _optionSheet<ReasoningEffort>(
-      title: _effortTitle(l10n),
+      title: l10n.effort,
       isSelected: (v) => v == _effectiveEffort,
       options: [
         for (final e in efforts)
@@ -11522,11 +11428,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                     modelLabel,
                     sub: modelSub,
                   ),
-                  row(
-                    Icons.psychology_outlined,
-                    _effortTitle(l10n),
-                    effortText,
-                  ),
+                  row(Icons.psychology_outlined, l10n.effort, effortText),
                   if (_caps.permissionPresets)
                     row(_modeIcon(), l10n.permissionLabel, permText),
                   row(Icons.checklist_rtl, l10n.planMode, planText),

@@ -515,7 +515,6 @@ pub(super) fn status() -> Vec<ServeStatus> {
                 proxy: None,
                 provider: "acp".to_string(),
                 provider_version: info["agent"]["version"].as_str().map(str::to_string),
-                provider_verified: false,
                 protocol: "acp".to_string(),
                 provider_name: host.host.spec().display_name.clone(),
                 profile_id: Some(host.host.spec().profile_id.clone()),

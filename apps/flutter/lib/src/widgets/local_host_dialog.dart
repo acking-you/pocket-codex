@@ -11,14 +11,11 @@ import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/theme.dart';
 import 'package:pocket_codex/src/ui_prefs.dart';
 import 'package:pocket_codex/src/widgets/project_folders_editor.dart';
-import 'package:pocket_codex/src/widgets/provider_badge.dart';
-
-part 'local_host_opencode.dart';
 
 /// Manage one local host. With [existing] set it shows that host's listen
 /// address + service key and a Stop button. Otherwise it's the "new host" form
 /// with a provider choice: Codex (codex path, port, instance name, proxy),
-/// the OpenCode service (instance name, optional opencode path), or an ACP
+/// or an ACP
 /// agent (preset / saved / custom program and arguments, see
 /// `hosting/acp_host_form.dart`). codex is auto-detected (with a "change
 /// path" override) or picked when not on PATH.
@@ -49,19 +46,21 @@ class _LocalHostDialogState extends ConsumerState<LocalHostDialog> {
   bool _codexChecked = false;
   bool _busy = false;
   String? _error;
-  // New-host provider: `codex`, `opencode` (HTTP service) or `acp`.
+  // New-host provider: `codex` or `acp`.
   String _provider = 'codex';
-  bool get _openCode => _provider == 'opencode';
   AcpFormValue? _acp;
-  final _ocName = TextEditingController(text: 'opencode');
-  final _ocPath = TextEditingController();
-  bool _ocChecked = false;
-  String? _ocLocated; // auto-detected opencode, null = not found
   bool get _isExisting => widget.existing != null;
   bool get _codexFound => _codexPath != null;
 
-  /// [setState] for the OpenCode part of this library.
-  void _update(VoidCallback fn) => setState(fn);
+  Widget _providerPicker() => HostProviderPicker(
+    value: _provider,
+    onChanged: _busy
+        ? null
+        : (provider) => setState(() {
+            _provider = provider;
+            _error = null;
+          }),
+  );
 
   @override
   void initState() {
@@ -97,8 +96,6 @@ class _LocalHostDialogState extends ConsumerState<LocalHostDialog> {
     _path.dispose();
     _name.dispose();
     _proxy.dispose();
-    _ocName.dispose();
-    _ocPath.dispose();
     super.dispose();
   }
 
@@ -230,7 +227,6 @@ class _LocalHostDialogState extends ConsumerState<LocalHostDialog> {
   }
 
   Future<void> _stop() async {
-    if (widget.existing!.isOpenCode) return _stopOpenCode();
     if (widget.existing!.isAcp) return _stopAcp();
     setState(() {
       _busy = true;
@@ -263,17 +259,12 @@ class _LocalHostDialogState extends ConsumerState<LocalHostDialog> {
     final scheme = Theme.of(context).colorScheme;
     final small = Theme.of(context).textTheme.bodySmall;
     final existing = widget.existing;
-    if (existing != null ? existing.isOpenCode : _openCode) {
-      return _dialog(
-        existing != null ? _openCodeExisting(existing) : _openCodeForm(),
-      );
-    }
     if (existing != null ? existing.isAcp : _provider == 'acp') {
       return _dialog(
         existing != null
             ? [AcpHostDetails(host: existing)]
             : [
-                _providerPicker(l10n),
+                _providerPicker(),
                 const SizedBox(height: 12),
                 AcpHostForm(
                   enabled: !_busy,
@@ -284,10 +275,7 @@ class _LocalHostDialogState extends ConsumerState<LocalHostDialog> {
       );
     }
     final children = <Widget>[
-      if (existing == null) ...[
-        _providerPicker(l10n),
-        const SizedBox(height: 12),
-      ],
+      if (existing == null) ...[_providerPicker(), const SizedBox(height: 12)],
       Text(l10n.localHostHint),
     ];
     if (existing != null) {
@@ -550,7 +538,6 @@ class _LocalHostDialogState extends ConsumerState<LocalHostDialog> {
             onPressed: _busy
                 ? null
                 : switch (_provider) {
-                    'opencode' => _startOpenCode,
                     'acp' => _startAcp,
                     _ => _start,
                   },

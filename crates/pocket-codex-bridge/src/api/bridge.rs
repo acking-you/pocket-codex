@@ -10,7 +10,6 @@ use pocket_codex_core::config::Mode;
 use crate::{
     engine::{
         account, app_session, config, discovery, logging, meta, runtime, serve, serve_acp,
-        serve_opencode,
         session_engine::{self, engine, require_native, Protocol, StartOptions, TurnOptions},
         sessions, transport,
     },
@@ -400,15 +399,14 @@ pub struct AppServeStatusDto {
     /// Upstream proxy codex + the API proxy were started with, or `None` when
     /// they inherit the app's environment.
     pub proxy: Option<String>,
-    /// Service provider family of this host: `codex`, `opencode` or `acp`.
-    /// For `opencode` / `acp` the `app_*` fields describe the gateway and
+    /// Service provider family of this host: `codex` or `acp`.
+    /// For `acp` the `app_*` fields describe the gateway and
     /// `api_*` are empty.
     pub provider: String,
-    /// Provider version when known (OpenCode, ACP agents).
+    /// Provider version when known (ACP agents).
     pub provider_version: Option<String>,
-    /// Whether that version is the one this build was verified against.
-    pub provider_verified: bool,
-    /// Wire protocol: `codex-app-server`, `opencode-http` or `acp`.
+
+    /// Wire protocol: `codex-app-server` or `acp`.
     pub protocol: String,
     /// Human-readable provider / agent name.
     pub provider_name: String,
@@ -422,58 +420,8 @@ pub struct AppServeStatusDto {
     pub auth_required: bool,
 }
 
-/// Result of attaching and publishing a local OpenCode service.
-pub struct OpenCodeServeDto {
-    /// Device id the services registered under.
-    pub device: String,
-    /// Instance name.
-    pub name: String,
-    /// `pcx:<device>:opencode:<name>` key.
-    pub service_key: String,
-    /// Loopback gateway address.
-    pub listen_addr: String,
-    /// `pcx:<device>:meta:<name>` key.
-    pub meta_service_key: String,
-    /// OpenCode version.
-    pub version: String,
-    /// Whether the version is the verified one (others passed the contract).
-    pub verified: bool,
-    /// Whether an existing host was reused.
-    pub reused: bool,
-    /// Whether this call asked OpenCode to start its background service.
-    pub started_service: bool,
-}
-
-/// Attach to the local OpenCode background service (asking OpenCode to start
-/// it when none is running) and publish it as `opencode:<name>` plus a
-/// `meta:<name>` service. Stopping hosting never stops OpenCode. The name must
-/// not be in use by a Codex host on this device.
-pub fn app_serve_start_opencode(
-    name: Option<String>,
-    binary_override: Option<String>,
-) -> Result<OpenCodeServeDto> {
-    let r = serve_opencode::start(name, binary_override)?;
-    Ok(OpenCodeServeDto {
-        device: r.device,
-        name: r.name,
-        service_key: r.service_key,
-        listen_addr: r.listen_addr,
-        meta_service_key: r.meta_service_key,
-        version: r.version,
-        verified: r.verified,
-        reused: r.reused,
-        started_service: r.started_service,
-    })
-}
-
-/// The resolved `opencode` executable (explicit → `$PATH` →
-/// `~/.opencode/bin/opencode`), or `None`.
-pub fn opencode_locate(binary_override: Option<String>) -> Option<String> {
-    serve_opencode::locate(binary_override.as_deref()).map(|p| p.display().to_string())
-}
-
-/// An ACP agent to host: profile identity plus executable and argument
-/// vector, passed to the operating system verbatim (no shell).
+/// An ACP agent executable and argument vector, passed verbatim without a
+/// shell.
 pub struct AcpAgentSpecDto {
     /// Profile id (`opencode` for the preset, or a custom id).
     pub profile_id: String,
@@ -626,7 +574,6 @@ pub fn app_serve_status() -> Vec<AppServeStatusDto> {
             proxy: s.proxy,
             provider: s.provider,
             provider_version: s.provider_version,
-            provider_verified: s.provider_verified,
             protocol: s.protocol,
             provider_name: s.provider_name,
             profile_id: s.profile_id,
@@ -1259,7 +1206,7 @@ pub fn app_turn_steer(
     )
 }
 
-/// Answer a server approval request. For Codex and OpenCode `decision` is
+/// Answer a server approval request. For Codex `decision` is
 /// the wire value the session layer recognises: `accept` or
 /// `acceptForSession` to grant, any other value (e.g. `decline`) to decline.
 /// For an ACP permission (`acp/permission/requested`) `decision` is the
@@ -1507,11 +1454,10 @@ pub fn app_turn_interrupt(
 }
 
 /// What a session service's provider supports, so the shared session UI can
-/// hide controls that do not apply. The first thirteen fields keep their
-/// historical values for Codex and OpenCode; the rest were added for ACP and
-/// are conservative (`false`) until a feature is actually available.
+/// hide controls that do not apply. Optional ACP capabilities remain
+/// conservative (`false`) until a feature is actually available.
 pub struct AppCapabilitiesDto {
-    /// `codex`, `opencode` or `acp`.
+    /// `codex` or `acp`.
     pub provider: String,
     /// Fast service tier toggle.
     pub fast: bool,
@@ -1529,15 +1475,7 @@ pub struct AppCapabilitiesDto {
     pub local_sessions: bool,
     /// Plan collaboration mode.
     pub plan_mode: bool,
-    /// Label of the reasoning selector: `effort` or `variant`.
-    pub effort_label: String,
-    /// Whether "allow for session" persists a project rule instead.
-    pub approve_always_persists_project: bool,
-    /// Multi-select questions.
-    pub multi_select_questions: bool,
-    /// Child (subagent) sessions that can be opened read-only.
-    pub child_sessions: bool,
-    /// Wire protocol: `codex-app-server`, `opencode-http` or `acp`.
+    /// Wire protocol: `codex-app-server` or `acp`.
     pub protocol: String,
     /// Human-readable agent name (ACP: the host's profile name).
     pub provider_name: String,
@@ -1582,7 +1520,7 @@ pub struct AppCapabilitiesDto {
 }
 
 /// Capabilities of the connection behind `service_key` (no network). Codex
-/// and OpenCode are fixed; ACP reflects the host's current negotiation and
+/// is fixed; ACP reflects the host's current negotiation and
 /// is conservative until connected.
 #[frb(sync)]
 pub fn app_capabilities(service_key: String) -> AppCapabilitiesDto {
@@ -1597,10 +1535,6 @@ pub fn app_capabilities(service_key: String) -> AppCapabilitiesDto {
         external_writer_monitor: c.external_writer_monitor,
         local_sessions: c.local_sessions,
         plan_mode: c.plan_mode,
-        effort_label: c.effort_label,
-        approve_always_persists_project: c.approve_always_persists_project,
-        multi_select_questions: c.multi_select_questions,
-        child_sessions: c.child_sessions,
         protocol: c.protocol,
         provider_name: c.provider_name,
         negotiated: c.negotiated,
@@ -1624,7 +1558,7 @@ pub fn app_capabilities(service_key: String) -> AppCapabilitiesDto {
     }
 }
 
-/// Ids of sessions executing now, from the engine itself (OpenCode, ACP).
+/// Ids of sessions executing now, from the engine itself (ACP).
 /// Codex lists them through the meta service instead.
 pub fn app_running_threads(service_key: String) -> Result<Vec<String>> {
     engine(&service_key).running_threads(&service_key)
@@ -2571,8 +2505,8 @@ pub fn app_history_cached(
 
 /// Negotiate the independent meta history protocol before remote reads.
 pub fn app_history_sync_prepare(service_key: String) -> Result<bool> {
-    // The meta history protocol reads Codex rollouts; OpenCode keeps its own
-    // controller cache path and ACP history is the host's retained window.
+    // The meta history protocol reads Codex rollouts; ACP history is the
+    // host's retained window.
     if session_engine::protocol_of(&service_key) != Protocol::CodexAppServer {
         return Ok(false);
     }

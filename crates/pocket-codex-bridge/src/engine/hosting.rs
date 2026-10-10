@@ -5,14 +5,14 @@
 //! this one table before starting anything, so two providers can never both
 //! pass the check and start under the same name:
 //!
-//! - Codex and OpenCode hold a [`Claim`] for the duration of their start; after
-//!   it their own host table proves ownership (checked by [`reserve`]).
-//!   Concurrent starts of the *same* provider share the claim, keeping their
-//!   existing reuse behaviour.
+//! - Codex holds a [`Claim`] for the duration of its start; after it the native
+//!   host table proves ownership (checked by [`reserve`]). Concurrent starts of
+//!   the *same* provider share the claim, keeping their existing reuse
+//!   behaviour.
 //! - ACP holds an exclusive [`Reservation`] from startup until its stop has
 //!   finished; a failed or abandoned startup releases it on drop.
-//! - A Codex or OpenCode stop holds a claim ([`retiring`]) from before the host
-//!   leaves its table until its relay keys and listeners are released.
+//! - A Codex stop holds a claim ([`retiring`]) from before the host leaves its
+//!   table until its relay keys and listeners are released.
 //!
 //! Lock order: the claim table may be held while a provider's host table is
 //! read (in [`reserve`]), never the other way round.
@@ -30,8 +30,6 @@ use once_cell::sync::OnceCell;
 pub enum Provider {
     /// Native Codex app-server hosting.
     Codex,
-    /// The attached OpenCode HTTP gateway.
-    OpenCode,
     /// An owned ACP agent.
     Acp,
 }
@@ -40,7 +38,6 @@ impl Provider {
     fn label(self) -> &'static str {
         match self {
             Self::Codex => "Codex",
-            Self::OpenCode => "OpenCode",
             Self::Acp => "an ACP agent",
         }
     }
@@ -72,7 +69,7 @@ fn unclaim(name: &str) {
     }
 }
 
-/// A Codex or OpenCode startup claim; released on drop.
+/// A Codex startup claim; released on drop.
 #[must_use = "dropping a claim releases the name"]
 pub struct Claim {
     name: String,
@@ -84,7 +81,7 @@ impl Drop for Claim {
     }
 }
 
-/// Claim `name` for a Codex or OpenCode startup. Fails while another
+/// Claim `name` for a Codex startup. Fails while another
 /// provider claims it; the caller still checks the other providers' running
 /// hosts as before.
 pub fn claim(name: &str, provider: Provider) -> Result<Claim> {
@@ -145,8 +142,8 @@ impl Drop for Reservation {
 }
 
 /// Reserve `name` for an ACP host unless any provider claims or hosts it.
-/// The running-host checks happen under the claim lock, so a Codex or
-/// OpenCode start that already finished is seen, and one still starting
+/// The running-host checks happen under the claim lock, so a Codex
+/// start that already finished is seen, and one still starting
 /// holds a claim.
 pub fn reserve(name: &str) -> Result<Reservation> {
     let mut held = claims();
@@ -155,9 +152,6 @@ pub fn reserve(name: &str) -> Result<Reservation> {
     }
     if super::serve::is_hosting_codex(name) {
         return Err(taken(name, Provider::Codex));
-    }
-    if super::serve_opencode::is_hosting(name) {
-        return Err(taken(name, Provider::OpenCode));
     }
     held.insert(name.to_string(), (Provider::Acp, 1));
     Ok(Reservation {
@@ -206,16 +200,14 @@ mod tests {
         let name = "hosting-test-cross-provider";
         let codex = claim(name, Provider::Codex).expect("free");
         let again = claim(name, Provider::Codex).expect("same provider shares the claim");
-        assert!(claim(name, Provider::OpenCode).is_err());
         assert!(reserve(name).is_err(), "an ACP host cannot start under a starting Codex host");
         drop(codex);
         assert!(reserve(name).is_err(), "the claim lives until the last starter is done");
         drop(again);
         let acp = reserve(name).expect("free");
         assert!(claim(name, Provider::Codex).is_err());
-        assert!(claim(name, Provider::OpenCode).is_err());
         drop(acp);
-        assert!(claim(name, Provider::OpenCode).is_ok());
+        assert!(claim(name, Provider::Codex).is_ok());
     }
 
     #[test]
@@ -237,7 +229,6 @@ mod tests {
         });
         entered.wait();
         assert!(reserve(name).is_err(), "an ACP host cannot take the name mid-retirement");
-        assert!(claim(name, Provider::OpenCode).is_err(), "nor can OpenCode");
         let same = claim(name, Provider::Codex);
         assert!(same.is_ok(), "a Codex re-host still reuses the name");
         drop(same);

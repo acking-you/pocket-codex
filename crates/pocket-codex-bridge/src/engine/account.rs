@@ -376,7 +376,7 @@ pub async fn services(support_dir: &Path) -> Result<Vec<ServiceEntry>> {
     let body: pocket_codex_account_proto::http::ServicesResponse = http_client()?
         // Older backends ignore `include_acp` and simply omit ACP services:
         // discovery then falls back to services this app hosts itself.
-        .get(format!("{backend}/v1/services?include_opencode=true&include_acp=true"))
+        .get(format!("{backend}/v1/services?include_acp=true"))
         .bearer_auth(&token)
         .send()
         .await

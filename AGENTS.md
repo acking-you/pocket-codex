@@ -427,19 +427,6 @@ The order below is our current best guess; it is not a contract.
     explain pb-mapper mapping and never open the controller's loopback address.
     See [`docs/session-file-links.md`](docs/session-file-links.md).
 
-15. **OpenCode in the shared UI (2026-09-28, branch `fix-opencode`).** Hosting
-    picks a provider (Codex or OpenCode) and then works the same way. The
-    service kind is `opencode:<name>`, and names are unique across providers
-    on a device. OpenCode is attached, never owned: the app publishes the
-    user's background service through a loopback gateway that only forwards
-    allowlisted routes and injects credentials, and it asks OpenCode to run
-    `service start` when no service is found. The bridge's OpenCode engine
-    emits the Codex item and event shapes plus capabilities, and the UI gates
-    controls on capabilities rather than provider names. The contract is
-    checked against the running server; 2.0.18 counts as verified. See
-    [PRD](docs/opencode-unified/PRD.md), [TRD](docs/opencode-unified/TRD.md) and
-    [ADR-0002](docs/adr/0002-opencode-shared-session-ui.md).
-
 When you ship a milestone, update `README.md` (Status table) **and**
 this file's roadmap so the source of truth stays in sync.
 
@@ -527,9 +514,9 @@ this file's roadmap so the source of truth stays in sync.
 23. **Generic ACP agents (2026-10-10, PR #99).** Hosting can launch any ACP v1
     stdio agent configured as program + argv, passed verbatim (no shell);
     OpenCode `opencode acp` is the first preset. The service kind is
-    `acp:<name>`. The OpenCode HTTP gateway (`opencode:<name>`) and its keys and
-    preferences are unchanged. The host (`host-svc/src/acp/`) is the agent's
-    only ACP client and owns its process group. Lifecycle rules: one lifecycle
+    `acp:<name>`. Codex uses native app-server; OpenCode and other agents use
+    the generic ACP engine and host lifecycle. The host (`host-svc/src/acp/`)
+    is the agent's only ACP client and owns its process group. Lifecycle rules: one lifecycle
     lock; exits (stdout close or leader exit seen unreaped via `waitid`
     `WNOWAIT`) go to a single supervisor task; restarts are bounded; group
     signals are sent before reaping; `stop` is final, bounded and cuts a
@@ -586,7 +573,7 @@ this file's roadmap so the source of truth stays in sync.
       are accepted only from the view's `hostId` + generation and current
       connection. Synthetic notice/gap ids start with `#`; an empty
       `contentOmitted` notice removes the row.
-    - Codex, OpenCode and ACP claim instance names in one shared table, held
+    - Codex and ACP claim instance names in one shared table, held
       until the host's cleanup (including stop-all) has finished.
     - Bridge ACP connections and relay meta tunnels are owned by the
       transport context (account + relay, or relay + key). One revision

@@ -19,7 +19,6 @@ pub mod file_links;
 pub mod fs;
 pub mod history_sync;
 mod history_sync_revision;
-pub mod opencode;
 pub mod resume;
 pub mod sessions;
 pub mod store;
@@ -149,7 +148,7 @@ fn generic_routes() -> Router<Arc<AppState>> {
 }
 
 /// Serve the provider-neutral meta service (host files, uploads, project
-/// folders) on `listener` — the meta service of an OpenCode host, which has no
+/// folders) on `listener` — the meta service of an ACP host, which has no
 /// Codex rollouts or app-server. Uploads land in `uploads_dir`; conversation
 /// links (`/fs/thread-file`) resolve against the session directories reported
 /// by `session_dirs`.

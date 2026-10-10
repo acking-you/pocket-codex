@@ -2,12 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 import 'package:pocket_codex/src/service_key.dart';
 
-/// A compact pill naming the service provider of a host (Codex, OpenCode or
+/// A compact pill naming the service provider of a host (Codex or
 /// an ACP agent), shown next to host names so providers on one device stay
 /// apart. ACP agents show their own name plus an "ACP" tag, so the protocol
 /// is visible without guessing it from the name.
 class ProviderBadge extends StatelessWidget {
-  /// A badge for [provider] (`codex`, `opencode` or `acp`); [name] labels an
+  /// A badge for [provider] (`codex` or `acp`); [name] labels an
   /// ACP agent.
   const ProviderBadge({super.key, required this.provider, this.name});
 
@@ -16,14 +16,13 @@ class ProviderBadge extends StatelessWidget {
       ProviderBadge(
         key: badgeKey,
         provider: switch (sessionProtocolOf(key)) {
-          SessionProtocol.openCodeHttp => 'opencode',
           SessionProtocol.acp => 'acp',
           SessionProtocol.codexAppServer => 'codex',
         },
         name: name,
       );
 
-  /// `codex`, `opencode` or `acp`.
+  /// `codex` or `acp`.
   final String provider;
 
   /// Agent name for ACP badges (empty or null falls back to "ACP agent").
@@ -41,7 +40,6 @@ class ProviderBadge extends StatelessWidget {
         : scheme.onTertiaryContainer;
     final agentName = name?.trim() ?? '';
     final label = switch (provider) {
-      'opencode' => l10n.providerOpenCode,
       'acp' => agentName.isNotEmpty ? agentName : l10n.providerAcpAgent,
       _ => l10n.providerCodex,
     };

@@ -117,7 +117,6 @@ class AppServeStatus {
     this.proxy,
     this.provider = 'codex',
     this.providerVersion,
-    this.providerVerified = false,
     this.protocol = '',
     this.providerName = '',
     this.profileId,
@@ -175,18 +174,15 @@ class AppServeStatus {
   /// they inherit the app's environment.
   final String? proxy;
 
-  /// Service provider family of this host: `codex`, `opencode` or `acp`. For
-  /// `opencode` / `acp` the `app*` fields describe the gateway and `api*` are
+  /// Service provider family of this host: `codex` or `acp`. For
+  /// `acp` the `app*` fields describe the gateway and `api*` are
   /// empty.
   final String provider;
 
-  /// Provider version when known (OpenCode, ACP agents).
+  /// Provider version when known (ACP agents).
   final String? providerVersion;
 
-  /// Whether that version is the one this build was verified against.
-  final bool providerVerified;
-
-  /// Wire protocol (`codex-app-server`, `opencode-http`, `acp`); empty from
+  /// Wire protocol (`codex-app-server`, `acp`); empty from
   /// an older bridge, where [provider] decides.
   final String protocol;
 
@@ -205,9 +201,6 @@ class AppServeStatus {
   /// The ACP agent reported that authentication is required.
   final bool authRequired;
 
-  /// Whether this host attaches to the OpenCode HTTP service.
-  bool get isOpenCode => provider == 'opencode';
-
   /// Whether this host runs a native Codex app-server.
   bool get isCodex => provider == 'codex';
 
@@ -216,7 +209,6 @@ class AppServeStatus {
 
   /// The relay kind of this host's session service.
   String get sessionKind => switch (provider) {
-    'opencode' => 'opencode',
     'acp' => 'acp',
     _ => 'app',
   };
@@ -473,53 +465,9 @@ class SessionSettings {
   bool get hasControls => configOptions.isNotEmpty || modes.isNotEmpty;
 }
 
-/// Result of attaching to the local OpenCode service and publishing it as
-/// `opencode:<name>` plus `meta:<name>`.
-class OpenCodeServeResult {
-  /// Creates an OpenCode hosting-start result.
-  const OpenCodeServeResult({
-    required this.device,
-    required this.name,
-    required this.serviceKey,
-    required this.listenAddr,
-    required this.metaServiceKey,
-    required this.version,
-    required this.verified,
-    required this.reused,
-    required this.startedService,
-  });
-
-  /// Device id the services registered under.
-  final String device;
-
-  /// Instance name.
-  final String name;
-
-  /// `pcx:<device>:opencode:<name>` key.
-  final String serviceKey;
-
-  /// Loopback gateway address.
-  final String listenAddr;
-
-  /// `pcx:<device>:meta:<name>` key.
-  final String metaServiceKey;
-
-  /// OpenCode version.
-  final String version;
-
-  /// Whether the version is the verified one (others passed the contract).
-  final bool verified;
-
-  /// Whether an existing host was reused.
-  final bool reused;
-
-  /// Whether this call asked OpenCode to start its background service.
-  final bool startedService;
-}
-
 /// What a session connection supports, so the shared session UI can hide
-/// controls that do not apply. Every flag added after the first thirteen
-/// defaults to "no": a control appears only when the protocol (and, for ACP,
+/// controls that do not apply. Optional flags default to "no": a control
+/// appears only when the protocol (and, for ACP,
 /// the negotiated agent) actually has the feature.
 class AppCapabilities {
   /// Creates a capability description.
@@ -533,10 +481,6 @@ class AppCapabilities {
     required this.externalWriterMonitor,
     required this.localSessions,
     required this.planMode,
-    required this.effortLabel,
-    required this.approveAlwaysPersistsProject,
-    required this.multiSelectQuestions,
-    required this.childSessions,
     this.protocol = '',
     this.providerName = '',
     this.negotiated = false,
@@ -570,10 +514,6 @@ class AppCapabilities {
     externalWriterMonitor: true,
     localSessions: true,
     planMode: true,
-    effortLabel: 'effort',
-    approveAlwaysPersistsProject: false,
-    multiSelectQuestions: false,
-    childSessions: false,
     protocol: 'codex-app-server',
     providerName: 'Codex',
     voice: true,
@@ -591,35 +531,6 @@ class AppCapabilities {
     runningInventory: 'meta',
   );
 
-  /// The OpenCode HTTP gateway's capabilities.
-  static const openCode = AppCapabilities(
-    provider: 'opencode',
-    fast: false,
-    permissionPresets: false,
-    guardian: false,
-    rateLimits: false,
-    takeover: false,
-    externalWriterMonitor: false,
-    localSessions: false,
-    planMode: true,
-    effortLabel: 'variant',
-    approveAlwaysPersistsProject: true,
-    multiSelectQuestions: true,
-    childSessions: true,
-    protocol: 'opencode-http',
-    providerName: 'OpenCode',
-    imageInput: true,
-    steer: true,
-    rename: true,
-    compact: true,
-    gitDiff: true,
-    modelCatalog: true,
-    sessionReopen: 'native',
-    sessionList: 'native',
-    historyScope: 'full',
-    runningInventory: 'engine',
-  );
-
   /// An ACP service before negotiation: nothing optional.
   static const acp = AppCapabilities(
     provider: 'acp',
@@ -631,17 +542,13 @@ class AppCapabilities {
     externalWriterMonitor: false,
     localSessions: false,
     planMode: false,
-    effortLabel: 'effort',
-    approveAlwaysPersistsProject: false,
-    multiSelectQuestions: false,
-    childSessions: false,
     protocol: 'acp',
     providerName: 'ACP agent',
     permissionOptions: true,
     runningInventory: 'engine',
   );
 
-  /// Wire protocol: `codex-app-server`, `opencode-http` or `acp`.
+  /// Wire protocol: `codex-app-server` or `acp`.
   final String protocol;
 
   /// Human-readable agent name.
@@ -705,7 +612,7 @@ class AppCapabilities {
   /// Whether this is an ACP connection.
   bool get isAcp => protocol == 'acp' || provider == 'acp';
 
-  /// `codex`, `opencode` or `acp`.
+  /// `codex` or `acp`.
   final String provider;
 
   /// Fast service tier toggle.
@@ -731,18 +638,6 @@ class AppCapabilities {
 
   /// Plan collaboration mode.
   final bool planMode;
-
-  /// Label of the reasoning selector: `effort` or `variant`.
-  final String effortLabel;
-
-  /// Whether "allow for session" persists a project rule instead.
-  final bool approveAlwaysPersistsProject;
-
-  /// Multi-select questions.
-  final bool multiSelectQuestions;
-
-  /// Child (subagent) sessions that can be opened read-only.
-  final bool childSessions;
 }
 
 /// View of persisted config (relay/key presence, locale, account state).
@@ -1862,25 +1757,12 @@ abstract interface class BridgeApi {
   /// the UI can prompt the user to point at one.
   Future<String?> codexLocate();
 
-  /// Attach to the local OpenCode background service (asking OpenCode to start
-  /// it when none is running, via [binaryOverride] when given) and publish it
-  /// as `opencode:<name>` plus `meta:<name>`. Stopping hosting never stops
-  /// OpenCode. Fails when [name] is already used by a Codex host here.
-  Future<OpenCodeServeResult> appServeStartOpencode({
-    String? name,
-    String? binaryOverride,
-  });
-
-  /// The resolved `opencode` executable (explicit → `PATH` →
-  /// `~/.opencode/bin/opencode`), or `null`.
-  Future<String?> opencodeLocate({String? binaryOverride});
-
   /// Capabilities of the connection behind [serviceKey] (no network). Codex
-  /// and OpenCode are fixed; ACP reflects the host's current negotiation and
+  /// is fixed; ACP reflects the host's current negotiation and
   /// is conservative until connected.
   AppCapabilities appCapabilities(String serviceKey);
 
-  /// Ids of sessions executing now, from the engine itself (OpenCode, ACP).
+  /// Ids of sessions executing now, from the engine itself (ACP).
   Future<List<String>> appRunningThreads(String serviceKey);
 
   /// Built-in ACP agent presets (OpenCode: `opencode` + `acp`).

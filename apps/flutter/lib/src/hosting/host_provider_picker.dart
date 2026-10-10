@@ -1,14 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:pocket_codex/l10n/gen/app_localizations.dart';
 
-/// Hosting choices: native Codex, the attached OpenCode HTTP service, or any
+/// Hosting choices: native Codex or any
 /// ACP agent (OpenCode's `opencode acp` is one of its presets).
 ///
-/// Chips in a [Wrap] rather than a segmented control, so three choices stay
+/// Chips in a [Wrap] rather than a segmented control, so the choices stay
 /// readable and reachable (padded touch targets) on a 320 px phone.
 class HostProviderPicker extends StatelessWidget {
-  /// Creates the picker with the selected [value]: `codex`, `opencode` or
-  /// `acp`.
+  /// Creates the picker with the selected [value]: `codex` or `acp`.
   const HostProviderPicker({
     super.key,
     required this.value,
@@ -39,7 +38,6 @@ class HostProviderPicker extends StatelessWidget {
         runSpacing: 4,
         children: [
           chip('codex', l10n.providerCodex),
-          chip('opencode', l10n.providerOpenCodeService),
           chip('acp', l10n.providerAcpAgent),
         ],
       ),

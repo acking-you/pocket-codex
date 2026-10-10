@@ -1,44 +1,22 @@
-//! `/fs/thread-file` on the OpenCode meta service: session links resolve
-//! against the working directory a fake OpenCode upstream reports.
+//! Generic meta routes confine file links to the directory of a known session.
 
 use std::sync::Arc;
 
-use axum::{extract::Path, http::StatusCode, response::IntoResponse, routing::get, Json, Router};
 use pocket_codex_host_svc::{
-    opencode::{Client, SessionDirs},
+    file_links::SessionDirResolver,
     serve_generic,
     store::{ConfigStore, HostStore},
 };
 use reqwest::StatusCode as Status;
-use serde_json::json;
 use tokio::net::TcpListener;
 
-async fn listen(app: Router) -> String {
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
-    let addr = listener.local_addr().expect("addr");
-    tokio::spawn(async move {
-        let _ = axum::serve(listener, app).await;
-    });
-    format!("http://{addr}")
-}
+struct SessionDirs(String);
 
-/// A fake OpenCode that knows one session, `ses_known`, located in `dir`.
-async fn fake_opencode(dir: String) -> String {
-    listen(Router::new().route(
-        "/api/session/{id}",
-        get(move |Path(id): Path<String>| {
-            let dir = dir.clone();
-            async move {
-                if id == "ses_known" {
-                    Json(json!({"data": {"id": id, "location": {"directory": dir}}}))
-                        .into_response()
-                } else {
-                    (StatusCode::NOT_FOUND, Json(json!({"_tag": "NotFoundError"}))).into_response()
-                }
-            }
-        }),
-    ))
-    .await
+#[async_trait::async_trait]
+impl SessionDirResolver for SessionDirs {
+    async fn session_dir(&self, session: &str) -> anyhow::Result<Option<String>> {
+        Ok((session == "ses_known").then(|| self.0.clone()))
+    }
 }
 
 /// The meta service with no project roots, resolving sessions through `dirs`.
@@ -68,7 +46,7 @@ async fn thread_file(base: &str, thread: &str, href: &str) -> reqwest::Response 
 }
 
 #[tokio::test]
-async fn session_links_resolve_against_the_opencode_session_directory() {
+async fn session_links_require_a_known_session_and_stay_within_its_directory() {
     let temp = tempfile::tempdir().expect("tempdir");
     let project = temp.path().join("project");
     std::fs::create_dir_all(project.join("notes")).expect("project");
@@ -76,9 +54,7 @@ async fn session_links_resolve_against_the_opencode_session_directory() {
     let secret = temp.path().join("secret.txt");
     std::fs::write(&secret, b"outside").expect("secret");
 
-    let upstream = fake_opencode(project.to_string_lossy().into_owned()).await;
-    let base =
-        meta(temp.path(), SessionDirs::new(Client::new(&upstream, None).expect("client"))).await;
+    let base = meta(temp.path(), SessionDirs(project.to_string_lossy().into_owned())).await;
 
     let inside = thread_file(&base, "ses_known", "notes/a.txt:3").await;
     assert_eq!(inside.status(), Status::OK);
@@ -106,21 +82,4 @@ async fn session_links_resolve_against_the_opencode_session_directory() {
         let response = thread_file(&base, unknown, "notes/a.txt").await;
         assert_eq!(response.status(), Status::NOT_FOUND, "{unknown}");
     }
-}
-
-#[tokio::test]
-async fn session_lookups_follow_a_reattached_opencode_server() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    std::fs::write(temp.path().join("a.txt"), b"hello").expect("file");
-    // Nothing listens on port 1: the original server is gone.
-    let dirs = SessionDirs::new(Client::new("http://127.0.0.1:1", None).expect("client"));
-    let base = meta(temp.path(), dirs.clone()).await;
-    let gone = thread_file(&base, "ses_known", "a.txt").await;
-    assert_eq!(gone.status(), Status::INTERNAL_SERVER_ERROR);
-
-    let upstream = fake_opencode(temp.path().to_string_lossy().into_owned()).await;
-    dirs.set_client(Client::new(&upstream, None).expect("client"));
-    let found = thread_file(&base, "ses_known", "a.txt").await;
-    assert_eq!(found.status(), Status::OK);
-    assert_eq!(found.bytes().await.expect("body").as_ref(), b"hello");
 }

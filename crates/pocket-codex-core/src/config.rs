@@ -248,11 +248,9 @@ impl Config {
         match kind {
             ServiceKind::App => self.services.app.default.as_ref(),
             ServiceKind::Api => self.services.api.default.as_ref(),
-            // OpenCode uses its independent versioned store; meta/unknown have
+            // ACP uses its own session configuration; meta/unknown have
             // no standalone default target.
-            ServiceKind::OpenCode | ServiceKind::Acp | ServiceKind::Meta | ServiceKind::Unknown => {
-                None
-            },
+            ServiceKind::Acp | ServiceKind::Meta | ServiceKind::Unknown => None,
         }
     }
 
@@ -270,10 +268,9 @@ impl Config {
         match kind {
             ServiceKind::App => self.services.app.default = Some(target),
             ServiceKind::Api => self.services.api.default = Some(target),
-            // Keep OpenCode defaults out of this legacy configuration schema.
+            // Keep ACP defaults out of this legacy configuration schema.
             // Meta/unknown have no standalone default.
-            ServiceKind::OpenCode | ServiceKind::Acp | ServiceKind::Meta | ServiceKind::Unknown => {
-            },
+            ServiceKind::Acp | ServiceKind::Meta | ServiceKind::Unknown => {},
         }
     }
 

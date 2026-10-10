@@ -35,10 +35,6 @@ const negotiated = AppCapabilities(
   externalWriterMonitor: false,
   localSessions: false,
   planMode: false,
-  effortLabel: 'effort',
-  approveAlwaysPersistsProject: false,
-  multiSelectQuestions: false,
-  childSessions: false,
   protocol: 'acp',
   providerName: 'Beta agent',
   negotiated: true,
@@ -61,10 +57,6 @@ const negotiatedWithImages = AppCapabilities(
   externalWriterMonitor: false,
   localSessions: false,
   planMode: false,
-  effortLabel: 'effort',
-  approveAlwaysPersistsProject: false,
-  multiSelectQuestions: false,
-  childSessions: false,
   protocol: 'acp',
   providerName: 'Beta agent',
   negotiated: true,
@@ -222,10 +214,6 @@ void main() {
     t,
   ) async {
     final api = FakeBridgeApi();
-    await expectLater(
-      api.appThreadMetadata('pcx:dev:opencode:o', 'x'),
-      throwsStateError,
-    );
     await expectLater(api.appThreadMetadata(acp, 'x'), throwsStateError);
   });
 

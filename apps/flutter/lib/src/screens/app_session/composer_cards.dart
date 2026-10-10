@@ -35,8 +35,6 @@ class _UiQuestion {
     required this.isOther,
     required this.isSecret,
     required this.options,
-    this.multiSelect = false,
-    this.unsupported = false,
   });
   final String id;
   final String header;
@@ -44,12 +42,6 @@ class _UiQuestion {
   final bool isOther;
   final bool isSecret;
   final List<({String label, String? description})> options;
-
-  /// Any number of options may be chosen; the answer lists all of them.
-  final bool multiSelect;
-
-  /// A note for a field this app cannot answer: shown, never answered.
-  final bool unsupported;
 }
 
 /// Interactive card for an `item/tool/requestUserInput` elicitation: the model
@@ -76,7 +68,6 @@ class _UserInputCardState extends State<UserInputCard> {
   static const _other = '\u0000other';
   late final List<_UiQuestion> _questions = _parse(widget.prompt.raw);
   final Map<String, String> _choice = {}; // qid -> option label or _other
-  final Map<String, Set<String>> _multi = {}; // multiSelect qid -> picks
   final Map<String, TextEditingController> _otherCtrls = {};
   bool _submitting = false;
 
@@ -112,8 +103,6 @@ class _UserInputCardState extends State<UserInputCard> {
             isOther: (q['isOther'] as bool?) ?? false,
             isSecret: (q['isSecret'] as bool?) ?? false,
             options: opts,
-            multiSelect: q['multiSelect'] == true,
-            unsupported: q['unsupported'] == true,
           ),
         );
       }
@@ -125,23 +114,6 @@ class _UserInputCardState extends State<UserInputCard> {
 
   TextEditingController _ctrl(String qid) =>
       _otherCtrls.putIfAbsent(qid, TextEditingController.new);
-
-  List<String>? _answers(_UiQuestion q) {
-    if (!q.multiSelect || q.options.isEmpty) {
-      final a = _answer(q);
-      return a == null ? null : [a];
-    }
-    final picked = _multi[q.id] ?? const <String>{};
-    final out = [
-      for (final o in q.options)
-        if (picked.contains(o.label)) o.label,
-    ];
-    if (picked.contains(_other)) {
-      final t = _ctrl(q.id).text.trim();
-      if (t.isNotEmpty) out.add(t);
-    }
-    return out.isEmpty ? null : out;
-  }
 
   String? _answer(_UiQuestion q) {
     // No options → pure free-text; an explicit "其他" pick → free-text too.
@@ -158,19 +130,14 @@ class _UserInputCardState extends State<UserInputCard> {
     return c;
   }
 
-  /// A form with a field this app cannot render can only be cancelled.
-  bool get _hasUnsupported => _questions.any((q) => q.unsupported);
-
   bool get _complete =>
-      _questions.isNotEmpty &&
-      !_hasUnsupported &&
-      _questions.every((q) => _answers(q) != null);
+      _questions.isNotEmpty && _questions.every((q) => _answer(q) != null);
 
   Future<void> _submit() async {
     final answers = <String, List<String>>{};
     for (final q in _questions) {
-      final a = _answers(q);
-      if (a != null) answers[q.id] = a;
+      final a = _answer(q);
+      if (a != null) answers[q.id] = [a];
     }
     setState(() => _submitting = true);
     try {
@@ -254,32 +221,6 @@ class _UserInputCardState extends State<UserInputCard> {
     );
   }
 
-  Widget _multiChips(_UiQuestion q, AppLocalizations l10n) {
-    final picked = _multi.putIfAbsent(q.id, () => <String>{});
-    Widget chip(String value, String label, String? tooltip) => FilterChip(
-      label: Text(label),
-      tooltip: tooltip,
-      selected: picked.contains(value),
-      onSelected: _submitting
-          ? null
-          : (on) =>
-                setState(() => on ? picked.add(value) : picked.remove(value)),
-    );
-    return Wrap(
-      spacing: 8,
-      runSpacing: 6,
-      children: [
-        for (final o in q.options)
-          chip(
-            o.label,
-            o.label,
-            (o.description?.isNotEmpty ?? false) ? o.description : null,
-          ),
-        if (q.isOther) chip(_other, l10n.userInputOther, null),
-      ],
-    );
-  }
-
   Widget _questionBlock(
     BuildContext context,
     _UiQuestion q,
@@ -306,13 +247,9 @@ class _UserInputCardState extends State<UserInputCard> {
               child: Text(q.question, style: const TextStyle(fontSize: 13.5)),
             ),
           const SizedBox(height: 6),
-          if (q.unsupported)
-            const SizedBox.shrink()
-          else if (q.multiSelect && q.options.isNotEmpty)
-            _multiChips(q, l10n)
           // A question with no options is a pure free-text prompt; otherwise show
           // the option chips (+ an "其他" chip when free text is also allowed).
-          else if (q.options.isNotEmpty)
+          if (q.options.isNotEmpty)
             Wrap(
               spacing: 8,
               runSpacing: 6,
@@ -339,12 +276,7 @@ class _UserInputCardState extends State<UserInputCard> {
                   ),
               ],
             ),
-          if (!q.unsupported &&
-              (q.options.isEmpty ||
-                  (q.isOther &&
-                      (q.multiSelect
-                          ? (_multi[q.id]?.contains(_other) ?? false)
-                          : _choice[q.id] == _other))))
+          if (q.options.isEmpty || (q.isOther && _choice[q.id] == _other))
             Padding(
               padding: const EdgeInsets.only(top: 6),
               child: TextField(
@@ -399,43 +331,6 @@ class ApprovalCard extends StatelessWidget {
       if (parts.isNotEmpty) return parts.join('\n');
     } catch (_) {}
     return prompt.raw;
-  }
-
-  /// Whether "allow for session" is an always-allow rule the provider persists
-  /// for the whole project (OpenCode) rather than for this session only.
-  bool get _persistsProject {
-    try {
-      final p = jsonDecode(prompt.raw);
-      return p is Map && p['persistsProject'] == true;
-    } catch (_) {
-      return false;
-    }
-  }
-
-  Future<void> _acceptForSession(BuildContext context) async {
-    if (_persistsProject) {
-      final l10n = AppLocalizations.of(context);
-      final ok = await showDialog<bool>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: Text(l10n.approveAlwaysProjectTitle),
-          content: Text(l10n.approveAlwaysProjectBody),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(false),
-              child: Text(l10n.cancel),
-            ),
-            FilledButton(
-              key: const Key('approve-always-confirm'),
-              onPressed: () => Navigator.of(ctx).pop(true),
-              child: Text(l10n.approveAlwaysProject),
-            ),
-          ],
-        ),
-      );
-      if (ok != true) return;
-    }
-    await onDecide(prompt, 'acceptForSession');
   }
 
   @override
@@ -504,13 +399,8 @@ class ApprovalCard extends StatelessWidget {
                   child: Text(l10n.deny),
                 ),
                 TextButton(
-                  key: const Key('approve-session-btn'),
-                  onPressed: () => _acceptForSession(context),
-                  child: Text(
-                    _persistsProject
-                        ? l10n.approveAlwaysProject
-                        : l10n.approveForSession,
-                  ),
+                  onPressed: () => onDecide(prompt, 'acceptForSession'),
+                  child: Text(l10n.approveForSession),
                 ),
                 FilledButton(
                   key: const Key('approve-btn'),

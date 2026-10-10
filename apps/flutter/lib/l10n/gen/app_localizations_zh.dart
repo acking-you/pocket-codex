@@ -1848,60 +1848,7 @@ class AppLocalizationsZh extends AppLocalizations {
   String get providerCodex => 'Codex';
 
   @override
-  String get providerOpenCode => 'OpenCode';
-
-  @override
-  String get openCodeHostHint =>
-      '附接到本机正在运行的 OpenCode 服务并注册到你的账号。停止托管不会关闭 OpenCode。';
-
-  @override
-  String get openCodeBinaryPath => 'opencode 可执行文件路径（可选）';
-
-  @override
-  String get openCodeBinaryHint => '仅在 OpenCode 后台服务未运行、需要启动时使用。';
-
-  @override
-  String get openCodeNotFound => '未找到 opencode。如果其服务未运行，请填写可执行文件路径。';
-
-  @override
-  String get openCodeVersionLabel => 'OpenCode 版本';
-
-  @override
-  String get openCodeVerified => '已验证';
-
-  @override
-  String get openCodeUnverified => '未验证版本：接口契约检查已通过，但本版本未针对它测试。';
-
-  @override
-  String get openCodeGatewayLabel => 'OpenCode 网关';
-
-  @override
   String get hostMetaLabel => 'Meta 服务';
-
-  @override
-  String get openCodeStopNote => '停止托管只撤销访问能力，OpenCode 会继续运行。';
-
-  @override
-  String get variant => '变体';
-
-  @override
-  String get approveAlwaysProject => '始终允许（项目）';
-
-  @override
-  String get approveAlwaysProjectTitle => '在此项目中始终允许？';
-
-  @override
-  String get approveAlwaysProjectBody =>
-      'OpenCode 会把它保存为整个项目的权限规则。在你于 OpenCode 中删除该规则之前，此项目所有会话里匹配的请求都不会再询问。';
-
-  @override
-  String get viewSubSession => '查看子会话';
-
-  @override
-  String get subSessionReadOnly => '子会话 · 只读';
-
-  @override
-  String get backToParentSession => '返回父会话';
 
   @override
   String get draft => '草稿';
@@ -2134,9 +2081,6 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get protocolAcpTag => 'ACP';
-
-  @override
-  String get providerOpenCodeService => 'OpenCode 服务';
 
   @override
   String get acpHostHint => '按程序和参数在本机运行兼容 ACP 的智能体，并提供给你的设备使用。停止托管会停止该智能体。';

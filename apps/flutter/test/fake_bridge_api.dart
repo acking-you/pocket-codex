@@ -390,7 +390,7 @@ class FakeBridgeApi implements BridgeApi {
         alive: h.alive,
         appListenAddr: h.appListenAddr,
         appServiceKey: h.appServiceKey,
-        appRegistered: kind == 'app' || kind == 'opencode'
+        appRegistered: kind == 'app' || kind == 'acp'
             ? registered
             : h.appRegistered,
         apiListenAddr: h.apiListenAddr,
@@ -403,7 +403,6 @@ class FakeBridgeApi implements BridgeApi {
         proxy: h.proxy,
         provider: h.provider,
         providerVersion: h.providerVersion,
-        providerVerified: h.providerVerified,
       );
 
   @override
@@ -446,78 +445,6 @@ class FakeBridgeApi implements BridgeApi {
   @override
   Future<String?> codexLocate() async => codexPath;
 
-  /// Path returned by [opencodeLocate] (null simulates "opencode not found").
-  String? opencodePath = '/Users/me/.opencode/bin/opencode';
-
-  /// Version the fake OpenCode service reports, and whether it is verified.
-  String openCodeVersion = '2.0.18';
-  bool openCodeVerified = true;
-
-  /// Thrown by the next [appServeStartOpencode] (then cleared).
-  Object? openCodeServeError;
-
-  /// Records every [appServeStartOpencode] call as `(name, binaryOverride)`.
-  final List<(String?, String?)> openCodeServeCalls = [];
-
-  @override
-  Future<OpenCodeServeResult> appServeStartOpencode({
-    String? name,
-    String? binaryOverride,
-  }) async {
-    openCodeServeCalls.add((name, binaryOverride));
-    final err = openCodeServeError;
-    if (err != null) {
-      openCodeServeError = null;
-      throw err;
-    }
-    final n = name ?? 'opencode';
-    if (serveHosts.any((h) => h.name == n && !h.isOpenCode)) {
-      throw StateError('`$n` is already hosted by Codex on this device');
-    }
-    const device = 'local';
-    final key = 'pcx:$device:opencode:$n';
-    final metaKey = 'pcx:$device:meta:$n';
-    serveHosts
-      ..removeWhere((h) => h.name == n)
-      ..add(
-        AppServeStatus(
-          name: n,
-          device: device,
-          alive: true,
-          appListenAddr: '127.0.0.1:18100',
-          appServiceKey: key,
-          appRegistered: true,
-          metaListenAddr: '127.0.0.1:18101',
-          metaServiceKey: metaKey,
-          metaRegistered: true,
-          codexBinary: binaryOverride ?? opencodePath,
-          provider: 'opencode',
-          providerVersion: openCodeVersion,
-          providerVerified: openCodeVerified,
-        ),
-      );
-    if (!_services.any((s) => s.key == key)) {
-      _services.add(
-        ServiceEntry(device: device, kind: 'opencode', name: n, key: key),
-      );
-    }
-    return OpenCodeServeResult(
-      device: device,
-      name: n,
-      serviceKey: key,
-      listenAddr: '127.0.0.1:18100',
-      metaServiceKey: metaKey,
-      version: openCodeVersion,
-      verified: openCodeVerified,
-      reused: false,
-      startedService: false,
-    );
-  }
-
-  @override
-  Future<String?> opencodeLocate({String? binaryOverride}) async =>
-      binaryOverride ?? opencodePath;
-
   /// Negotiated capabilities per ACP service key; unset keys report the
   /// conservative, not-yet-negotiated [AppCapabilities.acp].
   final Map<String, AppCapabilities> acpCapabilities = {};
@@ -529,13 +456,12 @@ class FakeBridgeApi implements BridgeApi {
   AppCapabilities appCapabilities(String serviceKey) {
     capabilityCalls.add(serviceKey);
     return switch (sessionProtocolOf(serviceKey)) {
-      SessionProtocol.openCodeHttp => AppCapabilities.openCode,
       SessionProtocol.acp => acpCapabilities[serviceKey] ?? AppCapabilities.acp,
       SessionProtocol.codexAppServer => AppCapabilities.codex,
     };
   }
 
-  /// Running session ids per OpenCode / ACP service key.
+  /// Running session ids per ACP service key.
   final Map<String, List<String>> runningThreads = {};
 
   @override

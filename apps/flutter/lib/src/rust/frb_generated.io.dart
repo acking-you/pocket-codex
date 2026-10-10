@@ -219,9 +219,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   OlderPageDto dco_decode_older_page_dto(dynamic raw);
 
   @protected
-  OpenCodeServeDto dco_decode_open_code_serve_dto(dynamic raw);
-
-  @protected
   String? dco_decode_opt_String(dynamic raw);
 
   @protected
@@ -573,9 +570,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   OlderPageDto sse_decode_older_page_dto(SseDeserializer deserializer);
-
-  @protected
-  OpenCodeServeDto sse_decode_open_code_serve_dto(SseDeserializer deserializer);
 
   @protected
   String? sse_decode_opt_String(SseDeserializer deserializer);
@@ -1010,12 +1004,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_older_page_dto(OlderPageDto self, SseSerializer serializer);
-
-  @protected
-  void sse_encode_open_code_serve_dto(
-    OpenCodeServeDto self,
-    SseSerializer serializer,
-  );
 
   @protected
   void sse_encode_opt_String(String? self, SseSerializer serializer);

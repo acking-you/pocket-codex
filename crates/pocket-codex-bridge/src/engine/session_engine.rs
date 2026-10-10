@@ -5,7 +5,6 @@
 //! | kind       | protocol                    | engine                 |
 //! |------------|-----------------------------|------------------------|
 //! | `app`      | Codex app-server (native)   | [`CodexEngine`]        |
-//! | `opencode` | OpenCode v2 HTTP gateway    | [`OpenCodeHttpEngine`] |
 //! | `acp`      | Pocket-Codex ACP gateway    | [`AcpEngine`]          |
 //!
 //! Each `app_*` bridge call goes through [`engine`] once instead of testing
@@ -25,7 +24,7 @@ use super::{
         self, AppEvent, ModelInfo, OlderPage, ThreadHistory, ThreadItem, ThreadMeta,
         ThreadRuntimeConfig, TurnItemsPage,
     },
-    opencode, transport,
+    transport,
 };
 
 /// Wire protocol of a session service.
@@ -33,8 +32,6 @@ use super::{
 pub enum Protocol {
     /// Native Codex app-server JSON-RPC.
     CodexAppServer,
-    /// The attached OpenCode HTTP/SSE gateway.
-    OpenCodeHttp,
     /// The Pocket-Codex gateway to a host-owned ACP agent.
     Acp,
 }
@@ -44,7 +41,6 @@ impl Protocol {
     pub fn id(self) -> &'static str {
         match self {
             Self::CodexAppServer => "codex-app-server",
-            Self::OpenCodeHttp => "opencode-http",
             Self::Acp => "acp",
         }
     }
@@ -66,7 +62,6 @@ pub fn logical_key(service_key: &str) -> Option<String> {
 /// keep the historical behaviour of addressing the native app-server.
 pub fn protocol_of(service_key: &str) -> Protocol {
     match service_id_of(service_key).map(|id| id.kind) {
-        Some(ServiceKind::OpenCode) => Protocol::OpenCodeHttp,
         Some(ServiceKind::Acp) => Protocol::Acp,
         _ => Protocol::CodexAppServer,
     }
@@ -121,7 +116,7 @@ pub struct TurnOptions {
     pub sandbox: Option<String>,
     /// Collaboration mode.
     pub collaboration_mode: Option<String>,
-    /// Reasoning effort / variant.
+    /// Codex reasoning effort.
     pub reasoning_effort: Option<String>,
 }
 
@@ -129,7 +124,7 @@ pub struct TurnOptions {
 /// shown when the protocol (and, for ACP, the negotiated agent) has it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Capabilities {
-    /// Provider family: `codex`, `opencode` or `acp`.
+    /// Provider family: `codex` or `acp`.
     pub provider: String,
     /// Human-readable agent name.
     pub provider_name: String,
@@ -156,14 +151,6 @@ pub struct Capabilities {
     pub local_sessions: bool,
     /// Plan collaboration mode.
     pub plan_mode: bool,
-    /// Reasoning selector label: `effort` or `variant`.
-    pub effort_label: String,
-    /// "Allow for session" persists a project rule.
-    pub approve_always_persists_project: bool,
-    /// Multi-select questions.
-    pub multi_select_questions: bool,
-    /// Child sessions openable read-only.
-    pub child_sessions: bool,
     /// Native live voice calls.
     pub voice: bool,
     /// Native composer dictation.
@@ -215,7 +202,6 @@ impl Capabilities {
             external_writer_monitor: true,
             local_sessions: true,
             plan_mode: true,
-            effort_label: "effort".into(),
             voice: true,
             dictation: true,
             image_input: true,
@@ -233,38 +219,12 @@ impl Capabilities {
         }
     }
 
-    /// The attached OpenCode HTTP gateway: the legacy values unchanged.
-    pub fn opencode_http() -> Self {
-        Self {
-            provider: "opencode".into(),
-            provider_name: "OpenCode".into(),
-            protocol: Protocol::OpenCodeHttp.id().into(),
-            plan_mode: true,
-            effort_label: "variant".into(),
-            approve_always_persists_project: true,
-            multi_select_questions: true,
-            child_sessions: true,
-            image_input: true,
-            steer: true,
-            rename: true,
-            compact: true,
-            git_diff: true,
-            model_catalog: true,
-            session_reopen: "native".into(),
-            session_list: "native".into(),
-            history_scope: "full".into(),
-            running_inventory: "engine".into(),
-            ..Self::default()
-        }
-    }
-
     /// ACP before (or without) a negotiation: nothing optional.
     pub fn acp_unnegotiated() -> Self {
         Self {
             provider: "acp".into(),
             provider_name: "ACP agent".into(),
             protocol: Protocol::Acp.id().into(),
-            effort_label: "effort".into(),
             permission_options: true,
             session_reopen: "unknown".into(),
             session_list: "host".into(),
@@ -425,7 +385,6 @@ pub trait SessionEngine: Sync {
 pub fn engine(service_key: &str) -> &'static dyn SessionEngine {
     match protocol_of(service_key) {
         Protocol::CodexAppServer => &CodexEngine,
-        Protocol::OpenCodeHttp => &OpenCodeHttpEngine,
         Protocol::Acp => &AcpEngine,
     }
 }
@@ -601,149 +560,7 @@ impl SessionEngine for CodexEngine {
     }
 }
 
-/// The attached OpenCode HTTP gateway (provider-specific, kept intact).
-pub struct OpenCodeHttpEngine;
-
-impl SessionEngine for OpenCodeHttpEngine {
-    fn protocol(&self) -> Protocol {
-        Protocol::OpenCodeHttp
-    }
-
-    fn connect(&self, service_key: String, local_port: u16) -> Result<()> {
-        opencode::connect(service_key, local_port, &transport::resolve_blocking()?)
-    }
-
-    fn is_connected(&self, service_key: &str) -> bool {
-        opencode::is_connected(service_key)
-    }
-
-    fn disconnect(&self, service_key: &str) {
-        opencode::disconnect(service_key);
-    }
-
-    fn probe_reason(&self, service_key: String) -> Result<Option<String>> {
-        Ok(opencode::probe_reason(service_key, &transport::resolve_blocking()?))
-    }
-
-    fn subscribe_events(&self, service_key: &str) -> Result<broadcast::Receiver<AppEvent>> {
-        opencode::subscribe_events(service_key)
-    }
-
-    fn capabilities(&self, _service_key: &str) -> Capabilities {
-        Capabilities::opencode_http()
-    }
-
-    fn thread_list(&self, service_key: &str) -> Result<Vec<ThreadMeta>> {
-        opencode::thread_list(service_key)
-    }
-
-    fn model_list(&self, service_key: &str) -> Result<Vec<ModelInfo>> {
-        opencode::model_list(service_key)
-    }
-
-    fn thread_start(&self, service_key: &str, options: StartOptions) -> Result<String> {
-        opencode::thread_start(service_key, options.model, options.cwd)
-    }
-
-    fn thread_resume(&self, service_key: &str, thread_id: &str) -> Result<()> {
-        opencode::thread_resume(service_key, thread_id)
-    }
-
-    fn thread_read(
-        &self,
-        service_key: &str,
-        thread_id: &str,
-        _include_turn_pages: bool,
-    ) -> Result<ThreadHistory> {
-        opencode::thread_read(service_key, thread_id)
-    }
-
-    fn thread_older_page(&self, service_key: &str, thread_id: &str) -> Result<OlderPage> {
-        opencode::thread_older_page(service_key, thread_id)
-    }
-
-    fn thread_turn_page(
-        &self,
-        service_key: &str,
-        thread_id: &str,
-        turn_id: &str,
-        load_more: bool,
-        _delta_only: bool,
-    ) -> Result<TurnItemsPage> {
-        opencode::thread_turn_page(service_key, thread_id, turn_id, load_more)
-    }
-
-    fn thread_runtime_config(
-        &self,
-        service_key: &str,
-        thread_id: &str,
-    ) -> Option<ThreadRuntimeConfig> {
-        opencode::thread_runtime_config(service_key, thread_id)
-    }
-
-    fn turn_start(&self, service_key: &str, thread_id: &str, options: TurnOptions) -> Result<()> {
-        opencode::turn_start(
-            service_key,
-            thread_id,
-            options.text,
-            options.images,
-            options.model,
-            options.collaboration_mode,
-            options.reasoning_effort,
-        )
-    }
-
-    fn turn_steer(
-        &self,
-        service_key: &str,
-        thread_id: &str,
-        turn_id: Option<&str>,
-        text: &str,
-        images: &[String],
-    ) -> Result<String> {
-        opencode::turn_steer(service_key, thread_id, turn_id, text, images)
-    }
-
-    fn turn_interrupt(
-        &self,
-        service_key: &str,
-        thread_id: &str,
-        turn_id: Option<String>,
-    ) -> Result<()> {
-        opencode::turn_interrupt(service_key, thread_id, turn_id)
-    }
-
-    fn respond_approval(&self, service_key: &str, request_id: &str, decision: &str) -> Result<()> {
-        opencode::respond_approval(service_key, request_id, decision)
-    }
-
-    fn respond_user_input(
-        &self,
-        service_key: &str,
-        request_id: &str,
-        answers_json: &str,
-    ) -> Result<()> {
-        opencode::respond_user_input(service_key, request_id, answers_json)
-    }
-
-    fn set_thread_name(&self, service_key: &str, thread_id: &str, name: &str) -> Result<()> {
-        opencode::set_thread_name(service_key, thread_id, name)
-    }
-
-    fn compact(&self, service_key: &str, thread_id: &str) -> Result<()> {
-        opencode::compact(service_key, thread_id)
-    }
-
-    fn git_diff(&self, service_key: &str, cwd: &str) -> Result<String> {
-        opencode::git_diff(service_key, cwd)
-    }
-
-    fn running_threads(&self, service_key: &str) -> Result<Vec<String>> {
-        opencode::running_sessions(service_key)
-    }
-}
-
-/// Any ACP agent behind the Pocket-Codex gateway.
+/// The generic ACP gateway.
 pub struct AcpEngine;
 
 impl SessionEngine for AcpEngine {
@@ -868,8 +685,6 @@ mod tests {
     #[test]
     fn protocols_follow_the_key_kind_in_both_namespaces() {
         assert_eq!(protocol_of("pcx:mac:app:default"), Protocol::CodexAppServer);
-        assert_eq!(protocol_of("pcx:mac:opencode:opencode"), Protocol::OpenCodeHttp);
-        assert_eq!(protocol_of("pcxu:alice:mac:opencode:work"), Protocol::OpenCodeHttp);
         assert_eq!(protocol_of("pcx:mac:acp:agent"), Protocol::Acp);
         assert_eq!(protocol_of("pcxu:alice:mac:acp:agent"), Protocol::Acp);
         // An instance name equal to a kind does not change the protocol.
@@ -879,7 +694,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_capability_values_are_unchanged() {
+    fn native_codex_capabilities_are_unchanged() {
         let codex = Capabilities::codex();
         assert_eq!(
             (
@@ -895,40 +710,6 @@ mod tests {
             ),
             ("codex", true, true, true, true, true, true, true, true)
         );
-        assert_eq!(
-            (
-                codex.effort_label.as_str(),
-                codex.approve_always_persists_project,
-                codex.multi_select_questions,
-                codex.child_sessions,
-            ),
-            ("effort", false, false, false)
-        );
-        let open = Capabilities::opencode_http();
-        assert_eq!(
-            (
-                open.provider.as_str(),
-                open.fast,
-                open.permission_presets,
-                open.guardian,
-                open.rate_limits,
-                open.takeover,
-                open.external_writer_monitor,
-                open.local_sessions,
-                open.plan_mode,
-            ),
-            ("opencode", false, false, false, false, false, false, false, true)
-        );
-        assert_eq!(
-            (
-                open.effort_label.as_str(),
-                open.approve_always_persists_project,
-                open.multi_select_questions,
-                open.child_sessions,
-            ),
-            ("variant", true, true, true)
-        );
-        assert!(!open.voice && !open.dictation && !open.native_metadata);
     }
 
     #[test]
@@ -944,7 +725,6 @@ mod tests {
     #[test]
     fn native_only_calls_are_refused_for_other_protocols() {
         assert!(require_native("pcx:mac:app:default", "voice").is_ok());
-        assert!(require_native("pcx:mac:opencode:o", "voice").is_err());
         assert!(require_native("pcx:mac:acp:a", "thread metadata").is_err());
         assert!(engine("pcx:mac:acp:a").model_list("pcx:mac:acp:a").is_err());
         assert!(engine("pcx:mac:acp:a")
@@ -954,8 +734,8 @@ mod tests {
         assert!(engine("pcx:mac:app:default")
             .session_settings("pcx:mac:app:default", "t")
             .is_none());
-        assert!(engine("pcx:mac:opencode:o")
-            .set_session_config("pcx:mac:opencode:o", "t", "model", "x")
+        assert!(engine("pcx:mac:app:default")
+            .set_session_config("pcx:mac:app:default", "t", "model", "x")
             .is_err());
         assert!(engine("pcx:mac:app:default")
             .set_session_mode("pcx:mac:app:default", "t", "code")

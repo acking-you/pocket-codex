@@ -130,23 +130,6 @@ Future<void> apiUnsubscribe({required String serviceKey}) =>
 Future<List<SubStatusDto>> subscriptions() =>
     RustLib.instance.api.crateApiBridgeSubscriptions();
 
-/// Attach to the local OpenCode background service (asking OpenCode to start
-/// it when none is running) and publish it as `opencode:<name>` plus a
-/// `meta:<name>` service. Stopping hosting never stops OpenCode. The name must
-/// not be in use by a Codex host on this device.
-Future<OpenCodeServeDto> appServeStartOpencode({
-  String? name,
-  String? binaryOverride,
-}) => RustLib.instance.api.crateApiBridgeAppServeStartOpencode(
-  name: name,
-  binaryOverride: binaryOverride,
-);
-
-/// The resolved `opencode` executable (explicit → `$PATH` →
-/// `~/.opencode/bin/opencode`), or `None`.
-Future<String?> opencodeLocate({String? binaryOverride}) => RustLib.instance.api
-    .crateApiBridgeOpencodeLocate(binaryOverride: binaryOverride);
-
 /// Built-in ACP agent presets (OpenCode: `opencode acp`).
 List<AcpPresetDto> acpPresets() =>
     RustLib.instance.api.crateApiBridgeAcpPresets();
@@ -410,7 +393,7 @@ Future<String> appTurnSteer({
   images: images,
 );
 
-/// Answer a server approval request. For Codex and OpenCode `decision` is
+/// Answer a server approval request. For Codex `decision` is
 /// the wire value the session layer recognises: `accept` or
 /// `acceptForSession` to grant, any other value (e.g. `decline`) to decline.
 /// For an ACP permission (`acp/permission/requested`) `decision` is the
@@ -608,12 +591,12 @@ Future<void> appTurnInterrupt({
 );
 
 /// Capabilities of the connection behind `service_key` (no network). Codex
-/// and OpenCode are fixed; ACP reflects the host's current negotiation and
+/// is fixed; ACP reflects the host's current negotiation and
 /// is conservative until connected.
 AppCapabilitiesDto appCapabilities({required String serviceKey}) =>
     RustLib.instance.api.crateApiBridgeAppCapabilities(serviceKey: serviceKey);
 
-/// Ids of sessions executing now, from the engine itself (OpenCode, ACP).
+/// Ids of sessions executing now, from the engine itself (ACP).
 /// Codex lists them through the meta service instead.
 Future<List<String>> appRunningThreads({required String serviceKey}) => RustLib
     .instance
@@ -1107,8 +1090,7 @@ class AccountUserDto {
           accountId == other.accountId;
 }
 
-/// An ACP agent to host: profile identity plus executable and argument
-/// vector, passed to the operating system verbatim (no shell).
+/// An ACP agent executable and argument vector, passed verbatim without a shell.
 class AcpAgentSpecDto {
   /// Profile id (`opencode` for the preset, or a custom id).
   final String profileId;
@@ -1247,11 +1229,10 @@ class AcpServeDto {
 }
 
 /// What a session service's provider supports, so the shared session UI can
-/// hide controls that do not apply. The first thirteen fields keep their
-/// historical values for Codex and OpenCode; the rest were added for ACP and
-/// are conservative (`false`) until a feature is actually available.
+/// hide controls that do not apply. Optional ACP capabilities remain
+/// conservative (`false`) until a feature is actually available.
 class AppCapabilitiesDto {
-  /// `codex`, `opencode` or `acp`.
+  /// `codex` or `acp`.
   final String provider;
 
   /// Fast service tier toggle.
@@ -1278,19 +1259,7 @@ class AppCapabilitiesDto {
   /// Plan collaboration mode.
   final bool planMode;
 
-  /// Label of the reasoning selector: `effort` or `variant`.
-  final String effortLabel;
-
-  /// Whether "allow for session" persists a project rule instead.
-  final bool approveAlwaysPersistsProject;
-
-  /// Multi-select questions.
-  final bool multiSelectQuestions;
-
-  /// Child (subagent) sessions that can be opened read-only.
-  final bool childSessions;
-
-  /// Wire protocol: `codex-app-server`, `opencode-http` or `acp`.
+  /// Wire protocol: `codex-app-server` or `acp`.
   final String protocol;
 
   /// Human-readable agent name (ACP: the host's profile name).
@@ -1362,10 +1331,6 @@ class AppCapabilitiesDto {
     required this.externalWriterMonitor,
     required this.localSessions,
     required this.planMode,
-    required this.effortLabel,
-    required this.approveAlwaysPersistsProject,
-    required this.multiSelectQuestions,
-    required this.childSessions,
     required this.protocol,
     required this.providerName,
     required this.negotiated,
@@ -1399,10 +1364,6 @@ class AppCapabilitiesDto {
       externalWriterMonitor.hashCode ^
       localSessions.hashCode ^
       planMode.hashCode ^
-      effortLabel.hashCode ^
-      approveAlwaysPersistsProject.hashCode ^
-      multiSelectQuestions.hashCode ^
-      childSessions.hashCode ^
       protocol.hashCode ^
       providerName.hashCode ^
       negotiated.hashCode ^
@@ -1438,10 +1399,6 @@ class AppCapabilitiesDto {
           externalWriterMonitor == other.externalWriterMonitor &&
           localSessions == other.localSessions &&
           planMode == other.planMode &&
-          effortLabel == other.effortLabel &&
-          approveAlwaysPersistsProject == other.approveAlwaysPersistsProject &&
-          multiSelectQuestions == other.multiSelectQuestions &&
-          childSessions == other.childSessions &&
           protocol == other.protocol &&
           providerName == other.providerName &&
           negotiated == other.negotiated &&
@@ -1665,18 +1622,15 @@ class AppServeStatusDto {
   /// they inherit the app's environment.
   final String? proxy;
 
-  /// Service provider family of this host: `codex`, `opencode` or `acp`.
-  /// For `opencode` / `acp` the `app_*` fields describe the gateway and
+  /// Service provider family of this host: `codex` or `acp`.
+  /// For `acp` the `app_*` fields describe the gateway and
   /// `api_*` are empty.
   final String provider;
 
-  /// Provider version when known (OpenCode, ACP agents).
+  /// Provider version when known (ACP agents).
   final String? providerVersion;
 
-  /// Whether that version is the one this build was verified against.
-  final bool providerVerified;
-
-  /// Wire protocol: `codex-app-server`, `opencode-http` or `acp`.
+  /// Wire protocol: `codex-app-server` or `acp`.
   final String protocol;
 
   /// Human-readable provider / agent name.
@@ -1713,7 +1667,6 @@ class AppServeStatusDto {
     this.proxy,
     required this.provider,
     this.providerVersion,
-    required this.providerVerified,
     required this.protocol,
     required this.providerName,
     this.profileId,
@@ -1742,7 +1695,6 @@ class AppServeStatusDto {
       proxy.hashCode ^
       provider.hashCode ^
       providerVersion.hashCode ^
-      providerVerified.hashCode ^
       protocol.hashCode ^
       providerName.hashCode ^
       profileId.hashCode ^
@@ -1773,7 +1725,6 @@ class AppServeStatusDto {
           proxy == other.proxy &&
           provider == other.provider &&
           providerVersion == other.providerVersion &&
-          providerVerified == other.providerVerified &&
           protocol == other.protocol &&
           providerName == other.providerName &&
           profileId == other.profileId &&
@@ -2416,75 +2367,6 @@ class OlderPageDto {
           runtimeType == other.runtimeType &&
           items == other.items &&
           hasOlder == other.hasOlder;
-}
-
-/// Result of attaching and publishing a local OpenCode service.
-class OpenCodeServeDto {
-  /// Device id the services registered under.
-  final String device;
-
-  /// Instance name.
-  final String name;
-
-  /// `pcx:<device>:opencode:<name>` key.
-  final String serviceKey;
-
-  /// Loopback gateway address.
-  final String listenAddr;
-
-  /// `pcx:<device>:meta:<name>` key.
-  final String metaServiceKey;
-
-  /// OpenCode version.
-  final String version;
-
-  /// Whether the version is the verified one (others passed the contract).
-  final bool verified;
-
-  /// Whether an existing host was reused.
-  final bool reused;
-
-  /// Whether this call asked OpenCode to start its background service.
-  final bool startedService;
-
-  const OpenCodeServeDto({
-    required this.device,
-    required this.name,
-    required this.serviceKey,
-    required this.listenAddr,
-    required this.metaServiceKey,
-    required this.version,
-    required this.verified,
-    required this.reused,
-    required this.startedService,
-  });
-
-  @override
-  int get hashCode =>
-      device.hashCode ^
-      name.hashCode ^
-      serviceKey.hashCode ^
-      listenAddr.hashCode ^
-      metaServiceKey.hashCode ^
-      version.hashCode ^
-      verified.hashCode ^
-      reused.hashCode ^
-      startedService.hashCode;
-
-  @override
-  bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is OpenCodeServeDto &&
-          runtimeType == other.runtimeType &&
-          device == other.device &&
-          name == other.name &&
-          serviceKey == other.serviceKey &&
-          listenAddr == other.listenAddr &&
-          metaServiceKey == other.metaServiceKey &&
-          version == other.version &&
-          verified == other.verified &&
-          reused == other.reused &&
-          startedService == other.startedService;
 }
 
 /// The host's project-folder config (mirrored for Dart): the roots a remote

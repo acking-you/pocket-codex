@@ -98,6 +98,9 @@ void main() {
   ) async {
     final api = FakeBridgeApi();
     final c = await _pumpDialog(t, api);
+    expect(find.byType(ChoiceChip), findsNWidgets(2));
+    expect(find.byKey(const Key('provider-codex')), findsOneWidget);
+    expect(find.byKey(const Key('provider-acp')), findsOneWidget);
     await _chooseAcp(t);
     expect(find.byKey(const Key('acp-host-form')), findsOneWidget);
     final program = t.widget<TextField>(
@@ -248,7 +251,6 @@ void main() {
     );
     const prefs = UiPrefs(
       autoHost: AutoHostPrefs(port: 0, name: 'default'),
-      autoHostOpenCode: AutoHostOpenCodePrefs(name: 'opencode'),
       autoHostAcp: [
         AutoHostAcpPrefs(name: 'agent', spec: acpSpec),
         AutoHostAcpPrefs(name: 'other', spec: acpSpec),
@@ -259,18 +261,15 @@ void main() {
       prefs,
       [_acpHost.copyForTest(name: 'agent')],
       codexAttempted: false,
-      openCodeAttempted: false,
       acpAttempted: const {},
       acpSupported: true,
     );
     expect(plan.codex?.name, 'default');
-    expect(plan.openCode?.name, 'opencode');
     expect(plan.acp.map((a) => a.name), ['other']);
     final attempted = planHostRestore(
       prefs,
       const [],
       codexAttempted: true,
-      openCodeAttempted: true,
       acpAttempted: const {'agent', 'other'},
       acpSupported: true,
     );
@@ -279,7 +278,6 @@ void main() {
       prefs,
       const [],
       codexAttempted: true,
-      openCodeAttempted: true,
       acpAttempted: const {},
       acpSupported: false,
     );
@@ -306,7 +304,7 @@ void main() {
 
   test('preferences grow compatibly and drop malformed ACP records', () {
     final old = UiPrefs.fromJson({
-      'autoHostOpenCode': {'name': 'opencode'},
+      'autoHost': {'name': 'default', 'port': 0},
     });
     expect(old.acpAgents, isEmpty);
     expect(old.autoHostAcp, isEmpty);
@@ -344,10 +342,6 @@ void main() {
   test('protocols come from the key kind', () {
     expect(sessionProtocolOf('pcx:mac:acp:agent'), SessionProtocol.acp);
     expect(sessionProtocolOf('pcxu:u:mac:acp:agent'), SessionProtocol.acp);
-    expect(
-      sessionProtocolOf('pcx:mac:opencode:o'),
-      SessionProtocol.openCodeHttp,
-    );
     expect(
       sessionProtocolOf('pcx:mac:app:acp'),
       SessionProtocol.codexAppServer,
@@ -397,12 +391,9 @@ void main() {
     expect(prefs.acpAgents.map((a) => a.profileId).toSet(), hasLength(2));
   });
 
-  test('legacy capability values are unchanged and ACP starts empty', () {
+  test('native Codex capability values are unchanged and ACP starts empty', () {
     expect(AppCapabilities.codex.voice, isTrue);
     expect(AppCapabilities.codex.nativeMetadata, isTrue);
-    expect(AppCapabilities.openCode.voice, isFalse);
-    expect(AppCapabilities.openCode.effortLabel, 'variant');
-    expect(AppCapabilities.openCode.childSessions, isTrue);
     const acp = AppCapabilities.acp;
     expect(acp.negotiated, isFalse);
     expect([

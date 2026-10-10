@@ -6,7 +6,7 @@
 //!                      │      │          │        └── instance name
 //!                      │      │          │            (e.g. "default", "work")
 //!                      │      │          └─────────── ServiceKind::as_key_segment
-//!                      │      │                       ("app" | "api" | "meta" | "opencode" | "acp")
+//!                      │      │                       ("app" | "api" | "meta" | "acp")
 //!                      │      └────────────────────── sanitised host id
 //!                      │                              (default: hostname)
 //!                      └───────────────────────────── SERVICE_KEY_PREFIX
@@ -40,8 +40,6 @@ pub enum ServiceKind {
     App,
     /// Responses API proxy service.
     Api,
-    /// Attached OpenCode HTTP/SSE session gateway.
-    OpenCode,
     /// Pocket-Codex ACP gateway (`/acp/v1`) in front of a host-owned ACP
     /// agent. The agent's identity is host metadata, never part of the key.
     Acp,
@@ -64,7 +62,6 @@ impl ServiceKind {
         match self {
             Self::App => "app",
             Self::Api => "api",
-            Self::OpenCode => "opencode",
             Self::Acp => "acp",
             Self::Meta => "meta",
             Self::Unknown => "unknown",
@@ -85,7 +82,6 @@ impl FromStr for ServiceKind {
         match raw {
             "app" => Ok(Self::App),
             "api" => Ok(Self::Api),
-            "opencode" => Ok(Self::OpenCode),
             "acp" => Ok(Self::Acp),
             "meta" => Ok(Self::Meta),
             _ => Err(()),
@@ -195,9 +191,8 @@ mod tests {
     }
 
     #[test]
-    fn opencode_keys_round_trip_alongside_existing_services() {
+    fn acp_keys_round_trip_alongside_native_services() {
         for key in [
-            "pcx:studio:opencode:work",
             "pcx:studio:acp:work",
             "pcx:studio:app:work",
             "pcx:studio:api:work",

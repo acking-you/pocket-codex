@@ -9,13 +9,11 @@ breaking change goes.
 
 ## Unreleased
 
-- Host and control OpenCode sessions with the same hosting flow and session UI
-  as Codex. Hosting picks a provider; OpenCode is attached to the user's
-  background service (started with `opencode service start` when missing, never
-  stopped by Pocket-Codex) and published through a loopback gateway that only
-  forwards allowlisted routes. Sessions are grouped by directory, child sessions
-  open read-only, and controls follow each provider's capabilities. OpenCode
-  2.0.18 is the verified contract version.
+- Host ACP v1 agents through a configurable executable and argument list, with
+  OpenCode (`opencode acp`) as the first preset. Native Codex app-server stays
+  independent. Shared controls follow negotiated capabilities; the host owns
+  agent lifecycle, permissions and bounded history, including remote control
+  through the relay. See [ACP agents](docs/acp-agents.md) for verified scope.
 
 ## 0.2.10 — 2026-10-09
 
