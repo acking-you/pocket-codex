@@ -49,7 +49,7 @@ use pocket_codex_pb::{publish_pending, PublishError, Published, RegisterOptions}
 use tokio::task::JoinHandle;
 
 use crate::engine::{
-    config::{load_config, save_config},
+    config::{load_config, update_config},
     logging, runtime,
     transport::{self, Transport},
 };
@@ -163,6 +163,23 @@ pub struct ServeStatus {
     /// Upstream proxy codex + the API proxy were started with, or `None` when
     /// they inherit the app's environment.
     pub proxy: Option<String>,
+    /// Service provider family: `codex` or `acp`.
+    pub provider: String,
+    /// Provider version, when known (ACP agents report it).
+    pub provider_version: Option<String>,
+
+    /// Wire protocol: `codex-app-server` or `acp`.
+    pub protocol: String,
+    /// Human-readable provider / agent name.
+    pub provider_name: String,
+    /// Agent profile id (ACP hosts).
+    pub profile_id: Option<String>,
+    /// Agent lifecycle phase (ACP): `starting`, `ready`, `failed`, `stopped`.
+    pub agent_phase: Option<String>,
+    /// Why the agent is not running (ACP), safe to show.
+    pub agent_error: Option<String>,
+    /// The agent reported that authentication is required (ACP).
+    pub auth_required: bool,
 }
 
 fn hosts() -> &'static Mutex<HashMap<String, LocalServe>> {
@@ -190,7 +207,7 @@ fn hosts_locked() -> std::sync::MutexGuard<'static, HashMap<String, LocalServe>>
 /// unwritable `CODEX_HOME`) is returned as an `Err` for the caller to surface
 /// as a hosting error rather than panicking the process (the bridge builds with
 /// `panic = "abort"`, so an `expect` here would take the whole app down).
-fn config_store() -> Result<Arc<pocket_codex_host_svc::store::ConfigStore>> {
+pub(super) fn config_store() -> Result<Arc<pocket_codex_host_svc::store::ConfigStore>> {
     static STORE: OnceCell<Arc<pocket_codex_host_svc::store::ConfigStore>> = OnceCell::new();
     STORE
         .get_or_try_init(|| -> Result<Arc<pocket_codex_host_svc::store::ConfigStore>> {
@@ -208,7 +225,7 @@ fn config_store() -> Result<Arc<pocket_codex_host_svc::store::ConfigStore>> {
 /// The process-wide host-config store (project roots + default project), opened
 /// once and shared by every host — like [`config_store`], co-located under
 /// CODEX_HOME so all hosts on this machine share one host config.
-fn host_store() -> Result<Arc<pocket_codex_host_svc::store::HostStore>> {
+pub(super) fn host_store() -> Result<Arc<pocket_codex_host_svc::store::HostStore>> {
     static STORE: OnceCell<Arc<pocket_codex_host_svc::store::HostStore>> = OnceCell::new();
     STORE
         .get_or_try_init(|| -> Result<Arc<pocket_codex_host_svc::store::HostStore>> {
@@ -244,7 +261,7 @@ pub fn codex_locate() -> Option<String> {
 /// relay would leave the service permanently unpublished rather than merely
 /// late. The bound comes from the SDK's own readiness budget instead, and
 /// [`pocket_codex_pb::publish_pending`] hands the handle back either way.
-fn register_service(
+pub(super) fn register_service(
     transport: &Transport,
     device: &str,
     kind: ServiceKind,
@@ -295,7 +312,7 @@ fn register_service(
 /// reconnecting and a second registration for one key is the eviction leapfrog.
 /// [`is_published`] is what the UI shows; this is what decides whether to
 /// publish again.
-fn needs_publishing(published: &Option<Published>) -> bool {
+pub(super) fn needs_publishing(published: &Option<Published>) -> bool {
     published.as_ref().is_none_or(|p| p.failure().is_some())
 }
 
@@ -305,7 +322,7 @@ fn needs_publishing(published: &Option<Published>) -> bool {
 /// key may still be indexed while nothing is forwarding, and showing that as
 /// online is what would withhold the offline / re-register controls from a user
 /// whose service is unreachable.
-fn is_published(published: &Option<Published>) -> bool {
+pub(super) fn is_published(published: &Option<Published>) -> bool {
     published.as_ref().is_some_and(|p| p.is_live())
 }
 
@@ -400,7 +417,7 @@ fn registration_slot(ls: &mut LocalServe, kind: ServiceKind) -> &mut Option<Publ
 
 /// Reserve a free loopback port (when the caller passed 0 for an automatic
 /// one).
-fn free_loopback_port() -> Result<u16> {
+pub(super) fn free_loopback_port() -> Result<u16> {
     let l = std::net::TcpListener::bind("127.0.0.1:0").context("reserving a loopback port")?;
     Ok(l.local_addr()?.port())
 }
@@ -563,8 +580,10 @@ fn resolve_codex_binary(
     })?;
     if let Some(ov) = override_trimmed {
         if config.codex.binary.as_deref() != Some(ov) {
-            config.codex.binary = Some(ov.to_string());
-            save_config(support, config)?;
+            *config = update_config(support, |latest| {
+                latest.codex.binary = Some(ov.to_string());
+                Ok(latest.clone())
+            })?;
         }
     }
     Ok(Some(resolved))
@@ -680,6 +699,11 @@ pub fn serve_start(
         pocket_codex_api_proxy::validate_proxy(p)?;
     }
 
+    // A meta key is derived from the instance name, so one name cannot serve
+    // two providers on this device. The claim lasts until this start returns
+    // (after the host is recorded), so no other provider can start under the
+    // name meanwhile; concurrent Codex starts share it.
+    let _claim = super::hosting::claim(&name, super::hosting::Provider::Codex)?;
     if let Some(report) = reuse_or_retire_host(&name, port)? {
         return Ok(report);
     }
@@ -922,18 +946,32 @@ pub fn serve_status() -> Vec<ServeStatus> {
             embedded: false,
             codex_binary: ls.codex_binary.clone(),
             proxy: ls.proxy.clone(),
+            provider: "codex".to_string(),
+            provider_version: None,
+            protocol: "codex-app-server".to_string(),
+            provider_name: "Codex".to_string(),
+            ..ServeStatus::default()
         })
         .collect();
+    drop(guard);
+    out.extend(super::serve_acp::status());
     out.sort_by(|a, b| a.name.cmp(&b.name));
     out
 }
 
-/// Resolve this process's own app and meta listeners without relay probes.
+/// Whether `name` is a Codex host of this process.
+pub(super) fn is_hosting_codex(name: &str) -> bool {
+    hosts_locked().contains_key(name)
+}
+
+/// Resolve this process's own session (app-server or ACP
+/// gateway) and meta listeners without relay probes.
 pub(super) fn local_endpoints(service_key: &str) -> Option<(String, String)> {
-    hosts_locked()
+    let codex = hosts_locked()
         .values()
         .find(|host| host.app_key == service_key)
-        .map(|host| (host.app_local.to_string(), host.meta_local.to_string()))
+        .map(|host| (host.app_local.to_string(), host.meta_local.to_string()));
+    codex.or_else(|| super::serve_acp::local_endpoints(service_key))
 }
 
 /// Re-publish every host's permanently-refused services, quietly.
@@ -987,6 +1025,9 @@ fn republish_refused() {
 /// until its lease expired unless the backend was asked to retire it. With the
 /// app registering directly there is no second party holding anything.
 pub fn serve_deregister(name: &str, kind: &str) -> Result<()> {
+    if super::serve_acp::is_hosting(name) {
+        return super::serve_acp::deregister(name, kind);
+    }
     let kind: ServiceKind = kind
         .parse()
         .map_err(|_| anyhow!("invalid service kind `{kind}`"))?;
@@ -1015,6 +1056,9 @@ pub fn serve_deregister(name: &str, kind: &str) -> Result<()> {
 /// Re-publish a previously [`serve_deregister`]'d service, forwarding to the
 /// still-running process. No-op if already published.
 pub fn serve_reregister(name: &str, kind: &str) -> Result<()> {
+    if super::serve_acp::is_hosting(name) {
+        return super::serve_acp::reregister(name, kind);
+    }
     let kind: ServiceKind = kind
         .parse()
         .map_err(|_| anyhow!("invalid service kind `{kind}`"))?;
@@ -1044,18 +1088,33 @@ pub fn serve_reregister(name: &str, kind: &str) -> Result<()> {
 /// watchdog, API proxy, and meta service tasks, and stop its codex.
 /// Best-effort and idempotent — a no-op when that name isn't hosting.
 pub fn serve_stop(name: &str) -> Result<()> {
-    let removed = hosts_locked().remove(name);
-    if let Some(ls) = removed {
-        stop_host_tasks(ls);
+    if super::serve_acp::is_hosting(name) {
+        super::serve_acp::stop(name);
+        return Ok(());
     }
+    stop_codex(name);
     Ok(())
 }
 
+/// Stop the Codex host `name`, keeping its name claimed until its relay
+/// keys and listeners are released.
+fn stop_codex(name: &str) {
+    super::hosting::retiring(name, super::hosting::Provider::Codex, || {
+        let removed = hosts_locked().remove(name);
+        if let Some(ls) = removed {
+            stop_host_tasks(ls);
+        }
+    });
+}
+
 /// Stop every host (called on app quit so a real quit leaves no orphan codex).
+/// Owned ACP agents go first: their cleanup is bounded and closes the ACP
+/// start barrier, so no agent process is left behind by a slower relay.
 pub fn serve_stop_all() {
-    let all: Vec<LocalServe> = hosts_locked().drain().map(|(_, ls)| ls).collect();
-    for ls in all {
-        stop_host_tasks(ls);
+    super::serve_acp::stop_all();
+    let names: Vec<String> = hosts_locked().keys().cloned().collect();
+    for name in names {
+        stop_codex(&name);
     }
 }
 
@@ -1107,7 +1166,7 @@ fn stop_codex_at(listen_addr: &str) {
 }
 
 /// `true` if something is accepting TCP on a `host:port` listen address.
-fn listen_addr_open(listen_addr: &str) -> bool {
+pub(super) fn listen_addr_open(listen_addr: &str) -> bool {
     match listen_addr.rsplit_once(':') {
         Some((host, port)) => port
             .parse::<u16>()
@@ -1124,8 +1183,12 @@ fn listen_addr_open(listen_addr: &str) -> bool {
 /// socket. `first` is the listener already bound in [`serve_start`] (so the
 /// port is reserved); later restarts re-bind it. `label` names the service in
 /// logs. Aborting this task (on `serve_stop`) drops the listener.
-async fn supervise<F, Fut>(label: &str, addr: SocketAddr, first: std::net::TcpListener, serve: F)
-where
+pub(super) async fn supervise<F, Fut>(
+    label: &str,
+    addr: SocketAddr,
+    first: std::net::TcpListener,
+    serve: F,
+) where
     F: Fn(tokio::net::TcpListener) -> Fut,
     Fut: std::future::Future<Output = Result<()>>,
 {

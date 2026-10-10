@@ -511,6 +511,92 @@ this file's roadmap so the source of truth stays in sync.
     menu-bar icons fixed across themes: use the bundle AppIcon and a non-template
     tray PNG; never substitute the transparent splash glyph. See `docs/macos-release.md`.
 
+23. **Generic ACP agents (2026-10-10, PR #99).** Hosting can launch any ACP v1
+    stdio agent configured as program + argv, passed verbatim (no shell);
+    OpenCode `opencode acp` is the first preset. The service kind is
+    `acp:<name>`. Codex uses native app-server; OpenCode and other agents use
+    the generic ACP engine and host lifecycle. The host (`host-svc/src/acp/`)
+    is the agent's only ACP client and owns its process group. Lifecycle rules: one lifecycle
+    lock; exits (stdout close or leader exit seen unreaped via `waitid`
+    `WNOWAIT`) go to a single supervisor task; restarts are bounded; group
+    signals are sent before reaping; `stop` is final, bounded and cuts a
+    pending handshake short and joins a stop in progress; Windows hosting
+    stays disabled. One ownership table (`serve_acp::owners`) holds every
+    owned agent from before its launch until its cleanup finished, retiring
+    ones included; app quit (`serve_acp::stop_all`) closes its barrier and
+    stops everything still in it, so overlapping quits and ordinary stops all
+    wait for process cleanup, and agent processes are stopped before relay
+    keys are withdrawn. Re-publication results install only into the same
+    host incarnation, context and unchanged registration slot.
+    Controllers reach the host through the versioned `/acp/v1` HTTP + SSE
+    gateway. Snapshots are scoped to a generation and host incarnation
+    (`hostId`) and carry a sequence watermark; `reset` forces a resync, and
+    running turns are re-installed from the host's fold (`acp::Replica`)
+    before later deltas apply. The bridge dispatches every session call
+    through `engine::session_engine` by key kind, never by provider name.
+    Codex stays the native engine. Rules to preserve:
+    - Capabilities are conservative until negotiated, and Flutter gates every
+      control on them — attachments too, at one admission boundary
+      (`attachment_gate.dart`) for picker, drop and paste; a late result
+      (picker, clipboard, file read before upload) is re-admitted through its
+      `AttachmentTicket` against the original draft's admission revision,
+      which moves when that view turns read-only, its host is lost or
+      replaced, or image support goes away. Health comes from an open event
+      stream only (never from a snapshot); an unreachable or refusing host
+      emits `acp/host/state {"connected": false}` and Flutter reconnects.
+    - Permissions are answered with the agent's exact option ids.
+    - Session cwds are admitted by the host and immutable; the stored cwd
+      wins on reopen and stays authoritative, while a pending load/resume
+      grants no new authority until it succeeds (failure revokes it).
+    - Session stores are keyed by a keyed digest of the resolved program +
+      argv (`acp/<hex(name)>/<source>.json`, `acp/source-key`); a changed
+      invocation inherits nothing. Writes are queued under the state lock,
+      coalesced per session and bounded; corrupt files are quarantined.
+    - Every prompt dispatch and `session/cancel` of a host goes through one
+      dispatch lane that re-checks the running turn; cancel names its turn.
+      The bridge sends `hostId` + generation (`acp::Identity`) with every
+      mutation and the host refuses stale ones; the fields are optional on
+      the wire, so this guards stale bridge views, not arbitrary callers.
+    - Peer frames with a deadline are delivered (written and flushed), never
+      queued, or the connection is closed (`CloseReason::Stalled`). Prompt
+      (30 s) and control (10 s) budgets start before the dispatch lane; a
+      control exchange that cannot complete closes the generation, so no
+      consumed permission or cancel is left unanswered on a live connection.
+    - Transcript bounds count every retained byte and hold within one turn;
+      at most 32 transcripts, busy ones never evicted (refuse instead); item
+      ordinals are never reused; agent ids are compared exactly (long ones
+      by digest); gaps, truncation and dropped content are shown.
+    - Recovery completes ended turns before announcing successors; item
+      events carry `turnId`; an unreadable running fold stays
+      unsynchronized and is retried, never folded from a bare update; an
+      image-prompt turn is begun only from the host's fold. History reads
+      are accepted only from the view's `hostId` + generation and current
+      connection. Synthetic notice/gap ids start with `#`; an empty
+      `contentOmitted` notice removes the row.
+    - Codex and ACP claim instance names in one shared table, held
+      until the host's cleanup (including stop-all) has finished.
+    - Bridge ACP connections and relay meta tunnels are owned by the
+      transport context (account + relay, or relay + key). One revision
+      (`transport::epoch`) is captured before a resolution reads the
+      configuration and is checked atomically when it is observed and when
+      a connection or tunnel registers; a stale resolution never becomes
+      current. Registry entries own their workers (one winner per key).
+      Answers apply only to the connection (`acp::Link`) that asked.
+    - Pending-reopen titles keep "no signal" apart from an explicit clear.
+    - History is only what the host retained.
+    - The mock agent stays a Cargo example (built by `cargo test`, never
+      shipped).
+    - Real OpenCode 1.18.35 was exercised on macOS through a public relay
+      with independent host/controller processes and an isolated Anthropic
+      gateway configuration: live streaming, session inventory/configuration,
+      permission rejection/approval, cancellation, meta file previews,
+      reconnect and process-restart history recovery. The opt-in
+      `acp_live_remote_control` test is ignored in ordinary CI; it requires
+      explicit disposable fixtures and credentials. Two processes on one
+      Mac do not establish acceptance on a second physical device or OS.
+
+    See `docs/acp-agents.md` and ADR-0003.
+
 ### UI and history maintenance (2026-09-13)
 
 - Keep shared colors, typography, and control shapes in `theme.dart` /

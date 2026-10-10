@@ -36,6 +36,9 @@ import 'package:pocket_codex/src/voice/dictation_widgets.dart';
 import 'package:pocket_codex/src/voice/voice_controller.dart';
 import 'package:pocket_codex/src/voice/voice_widgets.dart';
 import 'package:pocket_codex/src/service_key.dart';
+import 'package:pocket_codex/src/screens/app_session/agent_permission_card.dart';
+import 'package:pocket_codex/src/screens/app_session/agent_session_options.dart';
+import 'package:pocket_codex/src/screens/app_session/attachment_gate.dart';
 import 'package:pocket_codex/src/screens/app_session/async_questions.dart';
 import 'package:pocket_codex/src/screens/app_session/activity_cards.dart';
 import 'package:pocket_codex/src/screens/app_session/composer_cards.dart';
@@ -158,6 +161,17 @@ class AppSessionScreen extends ConsumerStatefulWidget {
     _AppSessionState._planByThread.clear();
     _AppSessionState._effortByThread.clear();
   }
+
+  /// The clipboard image read behind Ctrl/Cmd+V. A test seam: the plugin's
+  /// platform channel cannot run headless.
+  @visibleForTesting
+  static Future<Uint8List?> Function() debugClipboardImage = () =>
+      Pasteboard.image;
+
+  /// The clipboard file-path read behind Ctrl/Cmd+V (see
+  /// [debugClipboardImage]).
+  @visibleForTesting
+  static Future<List<String>> Function() debugClipboardFiles = Pasteboard.files;
 }
 
 /// One composer attachment. An IMAGE is processed locally (EXIF-bake /
@@ -177,6 +191,11 @@ class _Attachment {
   XFile? source;
   Uint8List? sourceBytes;
   String? error;
+
+  /// The draft it was admitted into and the admission it holds; an upload
+  /// re-checks it after reading the file (see [AttachmentTicket]).
+  _ComposerDraft? draft;
+  AttachmentTicket? ticket;
 
   /// Whether this attachment is sendable.
   bool get ready =>
@@ -253,6 +272,56 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   }
 
   final List<AppEvent> _approvals = []; // pending command-approval prompts
+
+  // What the connection behind [widget.serviceKey] supports. Controls are
+  // gated on these flags, never on the provider's name. Codex is
+  // fixed per key; an ACP connection's flags come from the host's current
+  // negotiation, so they are re-read until negotiated and after every host
+  // state change or reconnect (see [_invalidateCaps]).
+  AppCapabilities? _capsCache;
+  String? _capsKey;
+  AppCapabilities get _caps {
+    final cached = _capsCache;
+    if (_capsKey != widget.serviceKey ||
+        cached == null ||
+        (cached.isAcp && !cached.negotiated)) {
+      _capsKey = widget.serviceKey;
+      _capsCache = ref
+          .read(bridgeApiProvider)
+          .appCapabilities(widget.serviceKey);
+    }
+    return _capsCache!;
+  }
+
+  /// Drop cached capabilities (host generation / phase changed, reconnect)
+  /// and stop native microphone features the new connection does not have.
+  void _invalidateCaps() {
+    final imageInputBefore = _capsCache?.imageInput;
+    _capsCache = null;
+    final caps = _caps;
+    // An image granted before may not reach a host that no longer takes
+    // images. (One refused before never becomes admissible by itself: an
+    // admission never exceeds its grant.)
+    if (imageInputBefore == true && !caps.imageInput) {
+      _drafts.revokeAdmissions();
+    }
+    if (!caps.dictation) unawaited(_dictation.close());
+    if (!caps.voice && _voice.busy) unawaited(_voice.stop());
+  }
+
+  /// The ACP agent's state for the open session (options, modes, usage).
+  SessionSettings? _agentSettings;
+
+  void _refreshAgentSettings() {
+    final tid = _threadId;
+    final next = tid == null || !_caps.sessionConfig
+        ? null
+        : ref
+              .read(bridgeApiProvider)
+              .appSessionSettings(widget.serviceKey, tid);
+    if (mounted) setState(() => _agentSettings = next);
+  }
+
   StreamSubscription<AppEvent>? _sub;
   int _subscriptionEpoch = 0;
 
@@ -291,6 +360,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
 
   /// Start a take where the cursor is.
   void _startDictation() {
+    if (!_caps.dictation) return;
     if (_voice.busy) {
       showToastError(context, AppLocalizations.of(context).dictationVoiceBusy);
       return;
@@ -420,7 +490,13 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// holds the microphone. Opening only negotiates the session; the
   /// microphone stays closed until a take.
   void _warmDictation() {
-    if (!mounted || !_foreground || _voice.busy || !_voiceAvailable) return;
+    if (!mounted ||
+        !_foreground ||
+        _voice.busy ||
+        !_voiceAvailable ||
+        !_caps.dictation) {
+      return;
+    }
     unawaited(_dictation.warm());
   }
 
@@ -429,7 +505,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
 
   bool get _isVoiceThread =>
       _threads.any((t) => t.id == _threadId && t.isVoice);
+  // Native realtime voice and dictation exist only where the connection says
+  // so (Codex app-server); ACP audio prompts are not live voice.
   bool get _voiceAvailable =>
+      _caps.voice &&
       !_externalWriterMode &&
       !_loading &&
       !_historySyncing &&
@@ -930,6 +1009,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     ) {
       final sessions = next.valueOrNull?.sessions;
       if (!mounted || sessions == null || sessions.isEmpty) return;
+      // Without external-writer discovery the inventory is only running ids
+      // (no preview/cwd): the thread list already names every root session.
+      if (!_caps.externalWriterMonitor) return;
       setState(() {
         for (final session in sessions) {
           _discoveredThreads[session.threadId] = ThreadMeta(
@@ -1963,7 +2045,11 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     );
     _items
       ..clear()
-      ..addAll(merged);
+      ..addAll(
+        merged.where(
+          (item) => item.type != 'contentOmitted' || item.text.isNotEmpty,
+        ),
+      );
     _itemIndex.clear();
     for (var i = 0; i < _items.length; i++) {
       _itemIndex[_items[i].id] = i;
@@ -2386,7 +2472,12 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       }
       await api.appHistorySyncPrepare(widget.serviceKey);
       if (!current()) return;
-      final metadata = await api.appThreadMetadata(widget.serviceKey, startTid);
+      // Native thread metadata (and with it the Guardian check below, which
+      // fails closed) exists only for the Codex app-server. Other protocols
+      // take the listing's metadata and are never sent a native call.
+      final metadata = _caps.nativeMetadata
+          ? await api.appThreadMetadata(widget.serviceKey, startTid)
+          : _threads.where((t) => t.id == startTid).firstOrNull;
       if (!current()) return;
       _parentThreadId = metadata?.parentThreadId;
       if (metadata != null) _discoveredThreads[metadata.id] = metadata;
@@ -2398,6 +2489,11 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       await api.appThreadResume(widget.serviceKey, startTid);
       // An obsolete resume must not fan out into more history/config requests.
       if (!current()) return;
+      // Reopening an ACP session (re)negotiates its per-session options.
+      if (_caps.isAcp) {
+        _invalidateCaps();
+        _refreshAgentSettings();
+      }
       // Read the thread history and its persisted config concurrently. The
       // config is best-effort (an unreachable host meta tunnel yields an
       // all-unset config and we fall back to the server / in-memory restore).
@@ -2547,7 +2643,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     } catch (e) {
       if (!current()) return;
       _historySyncing = false;
-      if (_isActiveWriterError(e)) {
+      if (_caps.externalWriterMonitor && _isActiveWriterError(e)) {
         _enterExternalWriterMode(startTid);
         return;
       }
@@ -2680,6 +2776,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
 
   void _enterExternalWriterMode(String threadId) {
     _cancelExternalWriterSubscription();
+    // Read-only from now on (another writer, or a Guardian reviewer):
+    // attachments still being picked or read for this view are refused.
+    _revokeOnScreenAdmissions();
     final epoch = _externalWriterEpoch;
     _elapsedTicker?.cancel();
     _elapsedTicker = null;
@@ -3018,6 +3117,46 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     }
   }
 
+  /// The bridge reports that the agent host became unreachable (its link went
+  /// stale, the local host was replaced) or that a different host incarnation
+  /// answered. Losing the host is handled like a dropped stream, so the
+  /// bounded reconnect replaces the stale link instead of waiting on it; a
+  /// replaced host means the transcript must be re-read.
+  void _onAgentHostState(AppEvent e) {
+    Map<dynamic, dynamic> raw = const {};
+    try {
+      final decoded = jsonDecode(e.raw);
+      if (decoded is Map) raw = decoded;
+    } catch (_) {}
+    setState(_invalidateCaps);
+    if (raw['connected'] == false || raw['replaced'] == true) {
+      // The host attachments were granted for is gone (or another one
+      // answers): nothing still being picked, read or uploaded may reach
+      // whichever host the reconnect finds.
+      _drafts.revokeAdmissions();
+    }
+    if (raw['connected'] == false) {
+      _onStreamClosed();
+      return;
+    }
+    if (raw['replaced'] == true) {
+      _autoReconnect();
+      return;
+    }
+    _refreshAgentSettings();
+  }
+
+  void _dropResolvedRequest(AppEvent e) {
+    String? id;
+    try {
+      final raw = jsonDecode(e.raw);
+      if (raw is Map) id = raw['requestId']?.toString();
+    } catch (_) {}
+    id ??= e.requestId;
+    if (id == null || !_approvals.any((a) => a.requestId == id)) return;
+    setState(() => _approvals.removeWhere((a) => a.requestId == id));
+  }
+
   void _onEvent(AppEvent e) {
     if (!mounted) return;
     // A rename — possibly from another device, since the server persists the
@@ -3027,6 +3166,23 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     // next reload (nothing polls `_loadThreads`).
     if (e.kind == 'thread/name/updated') {
       _applyRemoteName(e);
+      return;
+    }
+    // A pending request answered elsewhere (another device, the provider's own
+    // UI) or withdrawn: drop its card. Carries the id in `raw` only.
+    if (e.kind == 'serverRequest/resolved') {
+      _dropResolvedRequest(e);
+      return;
+    }
+    // The ACP host changed phase or generation (restart, crash, reconnect):
+    // what the agent supports may have changed with it.
+    if (e.kind == 'acp/host/state') {
+      _onAgentHostState(e);
+      return;
+    }
+    // The agent replaced this session's options / modes / usage.
+    if (e.kind == 'acp/session/updated') {
+      if (e.threadId == _threadId) _refreshAgentSettings();
       return;
     }
     // Ignore events belonging to another thread. Before this conversation has a
@@ -3049,6 +3205,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     }
     // Server-initiated approval prompt (carries a request id to answer).
     if (e.requestId != null) {
+      // A replay (reconnect, resume) re-announces a request already shown.
+      if (_approvals.any((a) => a.requestId == e.requestId)) return;
       setState(() => _approvals.add(e));
       return;
     }
@@ -3161,6 +3319,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         _startElapsedTicker();
         _scrollToEnd();
       case 'turn/completed':
+        // The end of an earlier turn (reported late, e.g. by a recovery)
+        // must not end the one running now.
+        if (_endsAnotherTurn(e.raw)) return;
         _turnStateRevision++;
         // Terminal notifications can carry errors on failed or interrupted turns.
         final failure = _turnFailureText(e.raw);
@@ -3189,6 +3350,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         // permanently stale for the thread the user is actually working in.
         _invalidateSummary(e.threadId);
       case 'turn/failed':
+        if (_endsAnotherTurn(e.raw)) return;
         _turnStateRevision++;
         setState(() {
           _streaming = false;
@@ -3249,6 +3411,21 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     }
   }
 
+  /// Whether a terminal event names a turn other than the one this view
+  /// tracks as running. Its items stop streaming; the running turn, its Stop
+  /// target and the queue are left alone.
+  bool _endsAnotherTurn(String raw) {
+    final ended = _parseTurnId(raw);
+    final current = _turnId;
+    if (ended == null || current == null || ended == current) return false;
+    setState(() {
+      for (final it in _items) {
+        if (it.turnId == ended) it.streaming = false;
+      }
+    });
+    return true;
+  }
+
   /// Pull the turn id out of a turn/started event's raw params, tolerating
   /// `{turnId}`, `{turn:{id}}`, or `{id}` shapes.
   String? _parseTurnId(String raw) {
@@ -3270,6 +3447,27 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     // The user's own message is shown optimistically on send; ignore the
     // server echo so it isn't duplicated.
     if (type == 'userMessage') return;
+    // An omission notice is state of the item it belongs to: re-sent empty,
+    // the content fits again and the notice goes away (never added).
+    if (type == 'contentOmitted' && (e.text ?? '').isEmpty) {
+      // Keep a deletion in the live overlay even if the old snapshot has
+      // not displayed this notice yet. A later nonempty event replaces it.
+      _historyLiveItems?[id] = TranscriptItem(
+        id: id,
+        type: type,
+        title: '',
+        text: '',
+        turnId: _parseTurnId(e.raw) ?? _turnId ?? '',
+      );
+      _historyPartialItems?.remove(id);
+      if (_itemIndex.containsKey(id)) {
+        setState(() {
+          _items.removeAt(_itemIndex[id]!);
+          _rebuildItemIndex();
+        });
+      }
+      return;
+    }
     final kind = e.kind.toLowerCase();
     // v2 mixes `.../delta` and `.../outputDelta` casing. Progress and patch
     // snapshots are also mid-flight updates even though their names do not say
@@ -3412,7 +3610,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         : l10n.imageOnlyMessage;
     _settingsRevision++;
     final mode = _mode;
-    final tier = _requestedServiceTier;
+    // Providers without these controls keep their own configuration: send
+    // nothing rather than a Codex preset they would have to interpret.
+    final presets = _caps.permissionPresets;
+    final tier = _caps.fast ? _requestedServiceTier : null;
     setState(() {
       _localSending = true;
       if (queued != null) _queue.remove(queued);
@@ -3512,10 +3713,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         widget.serviceKey,
         model: modelId,
         cwd: targetCwd,
-        approvalPolicy: mode.approval,
-        approvalsReviewer: mode.reviewer,
+        approvalPolicy: presets ? mode.approval : null,
+        approvalsReviewer: presets ? mode.reviewer : null,
         serviceTier: tier,
-        sandbox: mode.sandbox,
+        sandbox: presets ? mode.sandbox : null,
       );
       if (isNewThread) {
         _drafts.adoptThread(sendingDraft, targetThread);
@@ -3525,6 +3726,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           ref
               .read(uiPrefsProvider.notifier)
               .setLastThread(widget.serviceKey, targetThread);
+          // A new ACP session reports its own options (if any).
+          if (_caps.sessionConfig) _refreshAgentSettings();
         }
         // Surface the new session in the left pane immediately. `thread/list`
         // can lag `thread/start`, so optimistically insert it now (newest
@@ -3567,10 +3770,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         text,
         images: images,
         model: modelId,
-        approvalPolicy: mode.approval,
-        approvalsReviewer: mode.reviewer,
+        approvalPolicy: presets ? mode.approval : null,
+        approvalsReviewer: presets ? mode.reviewer : null,
         serviceTier: tier,
-        sandbox: mode.sandbox,
+        sandbox: presets ? mode.sandbox : null,
         collaborationMode: collab,
         // Re-assert the effective effort every turn. The bridge puts it on the
         // top-level `effort` field AND (when a collaborationMode is sent) into
@@ -3737,7 +3940,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         _connectionLost) {
       return;
     }
-    if (_supplement && _streaming) {
+    if (_supplement && _streaming && _caps.steer) {
       unawaited(_sendSupplement());
       return;
     }
@@ -4071,7 +4274,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// project cwd (what `gitDiffToRemote` needs); a no-op without one.
   Future<void> _loadGit() async {
     final cwd = _cwd?.trim();
-    if (cwd == null || cwd.isEmpty) return;
+    if (cwd == null || cwd.isEmpty || !_caps.gitDiff) return;
     try {
       final raw = await ref
           .read(bridgeApiProvider)
@@ -4200,7 +4403,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
 
   /// Manually compact the conversation after a confirm.
   Future<void> _compact() async {
-    if (_guardianReadOnly) return;
+    if (_guardianReadOnly || !_caps.compact) return;
     final tid = _threadId;
     if (tid == null) return;
     final l10n = AppLocalizations.of(context);
@@ -4308,6 +4511,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         await api.appConnect(widget.serviceKey, appLocalPort);
         if (!current()) return;
         _connectionLost = false;
+        // A reconnect may reach a different agent generation.
+        _invalidateCaps();
         _subscribe();
         if (reload && _threadId != null) {
           if (_externalWriterMode) {
@@ -4402,6 +4607,58 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       // dead connection can't surface an uncaught async error.
       debugPrint('appRespondApproval failed: $e');
     }
+  }
+
+  /// Answer an ACP permission with one of the options the agent offered. The
+  /// card stays until the host accepts the answer: a failed send keeps it so
+  /// the user can retry, and a request resolved elsewhere arrives as
+  /// `serverRequest/resolved` and drops it.
+  Future<void> _answerAgentPermission(AppEvent prompt, String optionId) async {
+    try {
+      await ref
+          .read(bridgeApiProvider)
+          .appRespondApproval(widget.serviceKey, prompt.requestId!, optionId);
+      if (mounted) setState(() => _approvals.remove(prompt));
+    } catch (e) {
+      if (!mounted) return;
+      final message = friendlyError(e);
+      // Already answered / withdrawn on the host: the card is obsolete.
+      if (message.contains('already resolved') ||
+          message.contains('unknown permission')) {
+        setState(() => _approvals.remove(prompt));
+        return;
+      }
+      showToastError(
+        context,
+        AppLocalizations.of(context).permissionAnswerFailed,
+      );
+    }
+  }
+
+  Future<void> _setAgentConfig(String configId, String value) async {
+    final tid = _threadId;
+    if (tid == null) return;
+    try {
+      await ref
+          .read(bridgeApiProvider)
+          .appSetSessionConfig(widget.serviceKey, tid, configId, value);
+    } catch (e) {
+      if (mounted) setState(() => _error = friendlyError(e));
+    }
+    _refreshAgentSettings();
+  }
+
+  Future<void> _setAgentMode(String modeId) async {
+    final tid = _threadId;
+    if (tid == null) return;
+    try {
+      await ref
+          .read(bridgeApiProvider)
+          .appSetSessionMode(widget.serviceKey, tid, modeId);
+    } catch (e) {
+      if (mounted) setState(() => _error = friendlyError(e));
+    }
+    _refreshAgentSettings();
   }
 
   /// Answer a `request_user_input` elicitation. `answers` maps each question id
@@ -5087,7 +5344,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   Future<void> _renameThread(String raw) async {
     final tid = _threadId;
     setState(() => _editingTitle = false);
-    if (tid == null) return;
+    if (tid == null || !_caps.rename) return;
     final name = raw.trim();
     final idx = _threads.indexWhere((t) => t.id == tid);
     final before = idx < 0 ? null : _threads[idx];
@@ -5184,6 +5441,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// [_subscribe]) so the numbers are already there whenever the user looks;
   /// `account/rateLimits/updated` keeps them current afterwards.
   Future<void> _loadQuota() async {
+    if (!_caps.rateLimits) return;
     try {
       final raw = await ref
           .read(bridgeApiProvider)
@@ -5258,7 +5516,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                   '${_rate!.secondary!.usedPercent.round()}%',
                   reset: _resetText(_rate!.secondary!, l10n),
                 ),
-              if (_rate == null)
+              if (_rate == null && _caps.rateLimits)
                 Padding(
                   padding: const EdgeInsets.only(top: 8),
                   child: Text(
@@ -5342,6 +5600,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// `watch: true` from `build` (so it rebuilds when the status resolves),
   /// `watch: false` from callbacks.
   bool _codexNeedsSetup({required bool watch}) {
+    // Only a provider whose sessions live on this device's Codex install
+    // (local rollouts) has a Codex login to set up.
+    if (!_caps.localSessions) return false;
     final locals = watch
         ? ref.watch(localServeListProvider)
         : ref.read(localServeListProvider);
@@ -5413,7 +5674,10 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     serviceKey: widget.serviceKey,
     threadId: _threadId,
     cwd: _cwd,
-    child: _buildSession(context),
+    child: SessionFeatureScope(
+      guardianReviews: _caps.guardian,
+      child: _buildSession(context),
+    ),
   );
 
   Widget _buildSession(BuildContext context) {
@@ -5875,7 +6139,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// Enter title-edit mode, seeded with the current title and fully selected
   /// (so typing replaces it, the way a rename should).
   void _beginTitleEdit() {
-    if (_threadId == null) return;
+    if (_threadId == null || !_caps.rename) return;
     final l10n = AppLocalizations.of(context);
     _titleCtrl.text = _barTitle(l10n);
     _titleCtrl.selection = TextSelection(
@@ -6726,12 +6990,44 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
               prompt: a,
               onAnswer: _answerUserInput,
             )
-          else
+          // ACP agent requests are listed together below.
+          else if (a.kind != agentPermissionKind)
             ApprovalCard(
               key: ValueKey(a.requestId),
               prompt: a,
               onDecide: _decide,
             ),
+        // An ACP agent's requests carry their own options: render them as
+        // offered and answer with the chosen option id verbatim. An agent can
+        // ask several at once, so they share a bounded, scrollable area and
+        // the conversation and composer stay on screen.
+        if (!_externalWriterMode &&
+            _approvals.any((a) => a.kind == agentPermissionKind))
+          Flexible(
+            // Share the space left after the composer and keyboard, rather
+            // than reserving a fraction of the full (unobscured) screen.
+            child: ConstrainedBox(
+              key: const Key('agent-permission-list'),
+              constraints: BoxConstraints(
+                maxHeight: MediaQuery.sizeOf(context).height * 0.45,
+              ),
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    for (final a in _approvals)
+                      if (a.kind == agentPermissionKind)
+                        AgentPermissionCard(
+                          key: ValueKey(a.requestId),
+                          prompt: a,
+                          agentName: _caps.providerName,
+                          onAnswer: _answerAgentPermission,
+                        ),
+                  ],
+                ),
+              ),
+            ),
+          ),
         if (!_externalWriterMode && _asyncQuestions.isNotEmpty)
           ConstrainedBox(
             constraints: BoxConstraints(
@@ -7607,8 +7903,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                     // The host session browser rides the meta tunnel, which is
                     // an account-mode feature (mirrors the manage page's
                     // Sessions tab gate).
-                    if (ref.watch(configProvider).valueOrNull?.mode ==
-                        'account')
+                    if (_caps.localSessions &&
+                        ref.watch(configProvider).valueOrNull?.mode ==
+                            'account')
                       Expanded(
                         child: _paneShortcut(
                           key: 'sidebar-history-btn',
@@ -8701,8 +8998,13 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// isolate before it becomes sendable, showing a spinner chip meanwhile.
   Future<void> _pickImages() async {
     final draft = _draft;
+    final ticket = _ticketFor(draft);
     final l10n = AppLocalizations.of(context);
     final messenger = ToastMessenger.of(context);
+    if (!_attachGate.acceptsImages) {
+      if (_attachGate.acceptsAny) messenger.error(l10n.imagesNotAccepted);
+      return;
+    }
     // Only IMAGE chips consume image slots — _attachments also holds document
     // chips, which have their own kMaxFilesPerMessage budget.
     final remaining =
@@ -8728,6 +9030,13 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       return;
     }
     if (picked.isEmpty || !mounted) return;
+    // The view, its host or its image support may have changed while the
+    // picker was open: admit against what holds now (see [AttachmentTicket]).
+    final gate = _admitNow(draft, ticket);
+    if (!gate.acceptsImages) {
+      if (gate.acceptsAny) messenger.error(l10n.imagesNotAccepted);
+      return;
+    }
     if (picked.length > remaining) {
       // Some platforms ignore the picker's limit; enforce ours.
       picked = picked.sublist(0, remaining);
@@ -8739,6 +9048,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           id: _drafts.nextAttachmentId++,
           name: file.name,
         );
+        att.draft = draft;
+        att.ticket = ticket;
         draft.attachments.add(att);
         unawaited(_processAttachment(att, file));
       }
@@ -8771,6 +9082,11 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
 
   void _retryAttachment(_Attachment att) {
     if (att.error == null) return;
+    // A retry is a new action: it is admitted by the view as it is now.
+    final draft = att.draft;
+    if (draft != null && identical(draft, _draft)) {
+      att.ticket = _ticketFor(draft);
+    }
     att.error = null;
     _drafts.attachmentChanged(att);
     if (att.source case final file?) {
@@ -8784,24 +9100,46 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     }
   }
 
-  /// Extensions the image pipeline can decode; a file picked with one of
-  /// these routes to the image path instead (mirrors the codex TUI, whose
-  /// `@file` mention attaches images and path-references everything else).
-  static const _imageExtensions = {'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'};
+  /// What this view's composer may take now (see [AttachmentGate]). Every
+  /// attachment entry point — image picker, file picker, drop, paste —
+  /// admits through it.
+  AttachmentGate get _attachGate => AttachmentGate(
+    editable: !_sending && !_externalWriterMode && !_guardianReadOnly,
+    imageInput: _caps.imageInput,
+  );
 
-  static bool _looksLikeImage(String name) {
-    final dot = name.lastIndexOf('.');
-    if (dot < 0 || dot == name.length - 1) return false;
-    return _imageExtensions.contains(name.substring(dot + 1).toLowerCase());
+  /// The admission an asynchronous attachment into [draft] holds from now,
+  /// granted by the view on screen.
+  AttachmentTicket _ticketFor(_ComposerDraft draft) => AttachmentTicket(
+    service: widget.serviceKey,
+    revision: draft.admission,
+    granted: identical(draft, _draft) ? _attachGate : AttachmentGate.closed,
+  );
+
+  /// What a result of [ticket] for [draft] may bring now.
+  AttachmentGate _admitNow(_ComposerDraft draft, AttachmentTicket ticket) {
+    if (!mounted) return AttachmentGate.closed;
+    return ticket.now(
+      service: widget.serviceKey,
+      revision: draft.admission,
+      onScreen: identical(draft, _draft) ? _attachGate : null,
+    );
   }
+
+  /// The view on screen stopped being editable (it turned read-only):
+  /// nothing granted to its draft before may still arrive.
+  void _revokeOnScreenAdmissions() => _draft.admission++;
 
   /// Pick document/file attachments (any type). Each is uploaded to the HOST
   /// right away (spinner chip while in flight) and later travels as a path
-  /// reference in the turn text; image files route to the image pipeline.
+  /// reference in the turn text; image files route to the image pipeline
+  /// (mirroring the codex TUI's `@file` mention) where images are accepted.
   Future<void> _pickFiles() async {
     final draft = _draft;
+    final ticket = _ticketFor(draft);
     final l10n = AppLocalizations.of(context);
     final messenger = ToastMessenger.of(context);
+    if (!_attachGate.acceptsAny) return;
     final remaining =
         kMaxFilesPerMessage - _attachments.where((a) => a.isFile).length;
     if (remaining <= 0) {
@@ -8817,7 +9155,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       }
       return;
     }
-    _addFiles(picked, draft: draft);
+    _addFiles(picked, draft: draft, ticket: ticket);
   }
 
   /// Route a batch of files (picked, DRAGGED-and-dropped, or PASTED as paths)
@@ -8825,10 +9163,26 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// else uploads to the host as a path reference. Enforces the per-message
   /// image/file caps, surfacing a snackbar for anything dropped over-cap so a
   /// selection never silently vanishes. Shared by [_pickFiles], the drop
-  /// target, and clipboard paste.
-  void _addFiles(List<XFile> picked, {_ComposerDraft? draft}) {
+  /// target, and clipboard paste; admission goes through [_attachGate].
+  ///
+  /// A result that arrives later carries the [ticket] taken when the user
+  /// acted, for the [draft] chosen then; it is admitted by what that
+  /// ticket still allows (see [AttachmentTicket]). A synchronous call (a
+  /// drop) is admitted by the view on screen.
+  void _addFiles(
+    List<XFile> picked, {
+    _ComposerDraft? draft,
+    AttachmentTicket? ticket,
+  }) {
     if (picked.isEmpty || !mounted) return;
     final destination = draft ?? _draft;
+    final admission = ticket ?? _ticketFor(destination);
+    final gate = _admitNow(destination, admission);
+    // XFile.name is the path basename on dart:io and can be empty for
+    // synthetic files; the name reaches the host (and the chip label), so
+    // never let it be blank.
+    String nameOf(XFile f) => f.name.isNotEmpty ? f.name : 'file';
+    if (!gate.acceptsAny) return;
     final attachments = destination.attachments;
     final l10n = AppLocalizations.of(context);
     final messenger = ToastMessenger.of(context);
@@ -8837,38 +9191,51 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     var files = 0;
     var filesDropped = 0;
     var imagesDropped = 0;
+    var imagesRefused = 0;
+    var added = false;
     setState(() {
       for (final f in picked) {
-        // XFile.name is the path basename on dart:io and can be empty for
-        // synthetic files; the name reaches the host (and the chip label), so
-        // never let it be blank.
-        final name = f.name.isNotEmpty ? f.name : 'file';
-        if (_looksLikeImage(name)) {
-          if (attachments.where((a) => !a.isFile).length <
-              kMaxImagesPerMessage) {
-            final att = _Attachment.image(
-              id: _drafts.nextAttachmentId++,
-              name: name,
-            );
-            attachments.add(att);
-            unawaited(_processAttachment(att, f));
-          } else {
-            imagesDropped++;
-          }
-        } else if (files < remaining) {
-          files++;
-          final att = _Attachment.file(
-            id: _drafts.nextAttachmentId++,
-            name: name,
-          );
-          attachments.add(att);
-          unawaited(_uploadAttachment(att, f));
-        } else {
-          filesDropped++;
+        final name = nameOf(f);
+        switch (gate.admit(name)) {
+          case AttachmentAdmission.image:
+            if (attachments.where((a) => !a.isFile).length <
+                kMaxImagesPerMessage) {
+              final att = _Attachment.image(
+                id: _drafts.nextAttachmentId++,
+                name: name,
+              );
+              att.draft = destination;
+              att.ticket = admission;
+              attachments.add(att);
+              added = true;
+              unawaited(_processAttachment(att, f));
+            } else {
+              imagesDropped++;
+            }
+          case AttachmentAdmission.document:
+            if (files < remaining) {
+              files++;
+              final att = _Attachment.file(
+                id: _drafts.nextAttachmentId++,
+                name: name,
+              );
+              att.draft = destination;
+              att.ticket = admission;
+              attachments.add(att);
+              added = true;
+              unawaited(_uploadAttachment(att, f));
+            } else {
+              filesDropped++;
+            }
+          case AttachmentAdmission.refusedImage:
+            imagesRefused++;
+          case AttachmentAdmission.refused:
+            break;
         }
       }
     });
-    _drafts.save(destination, changed: true);
+    if (added) _drafts.save(destination, changed: true);
+    if (imagesRefused > 0) messenger.error(l10n.imagesNotAccepted);
     if (filesDropped > 0) {
       messenger.error(l10n.fileTooMany(kMaxFilesPerMessage));
     }
@@ -8882,12 +9249,16 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   /// clear "drop to attach" overlay while hovering. A no-op on mobile/web.
   Widget _dropWrap(Widget child, AppLocalizations l10n) {
     if (!_isDesktop) return child;
+    // Installed in every view so the subtree never remounts when the view
+    // turns read-only; a read-only view simply shows and accepts nothing.
     return DropTarget(
-      onDragEntered: (_) => setState(() => _dragging = true),
+      onDragEntered: (_) {
+        if (_attachGate.acceptsAny) setState(() => _dragging = true);
+      },
       onDragExited: (_) => setState(() => _dragging = false),
       onDragDone: (detail) {
         setState(() => _dragging = false);
-        _onDrop(detail);
+        _onDrop(detail.files);
       },
       child: Stack(
         children: [
@@ -8938,24 +9309,37 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           defaultTargetPlatform == TargetPlatform.macOS ||
           defaultTargetPlatform == TargetPlatform.linux);
 
-  /// Files dropped onto the chat → attach them exactly like a pick.
-  void _onDrop(DropDoneDetails detail) {
-    if (_sending) return;
-    _addFiles(detail.files);
+  /// Files dropped onto the chat → attach them exactly like a pick (nothing
+  /// in a read-only view).
+  void _onDrop(List<XFile> files) {
+    if (!_attachGate.acceptsAny) return;
+    _addFiles(files);
   }
 
   /// Ctrl/Cmd+V while the composer is focused: attach a clipboard IMAGE (raw
   /// bytes — no readable path, so processed directly) or clipboard FILES (by
   /// path). Runs alongside the text field's own text-paste (this never consumes
   /// the key event), so pasting text still works; only image/file clipboards
-  /// add an attachment.
+  /// add an attachment, and only where [_attachGate] admits them.
   Future<void> _onClipboardPaste() async {
-    if (_sending || !mounted) return;
+    if (!mounted || !_attachGate.acceptsAny) return;
     final draft = _draft;
+    final ticket = _ticketFor(draft);
     try {
-      final img = await Pasteboard.image;
+      final img = await AppSessionScreen.debugClipboardImage();
       if (img != null && img.isNotEmpty) {
         if (!mounted) return;
+        // The view, its host or its image support may have changed while
+        // the clipboard was read.
+        final gate = _admitNow(draft, ticket);
+        if (!gate.acceptsAny) return;
+        if (!gate.acceptsImages) {
+          showToastError(
+            context,
+            AppLocalizations.of(context).imagesNotAccepted,
+          );
+          return;
+        }
         if (draft.attachments.where((a) => !a.isFile).length >=
             kMaxImagesPerMessage) {
           showToastError(
@@ -8968,14 +9352,20 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           id: _drafts.nextAttachmentId++,
           name: 'pasted-image.png',
         );
+        att.draft = draft;
+        att.ticket = ticket;
         draft.attachments.add(att);
         _drafts.save(draft, changed: true);
         unawaited(_processImageBytes(att, img));
         return;
       }
-      final files = await Pasteboard.files();
+      final files = await AppSessionScreen.debugClipboardFiles();
       if (files.isNotEmpty && mounted) {
-        _addFiles([for (final p in files) XFile(p)], draft: draft);
+        _addFiles(
+          [for (final p in files) XFile(p)],
+          draft: draft,
+          ticket: ticket,
+        );
       }
     } catch (_) {
       // Clipboard read is best-effort; a text paste already happened natively.
@@ -9061,10 +9451,12 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     }
     // Ctrl+Shift+Space (Cmd+Shift+Space on macOS) toggles dictation from
     // anywhere in the window, like a push-to-talk key.
+    // Without native dictation the shortcut is not claimed at all.
     if (key == LogicalKeyboardKey.space &&
         primary &&
         keyboard.isShiftPressed &&
         !keyboard.isAltPressed &&
+        _caps.dictation &&
         !_externalWriterMode &&
         !_editorOpen) {
       if (_dictation.take == DictationTake.listening) {
@@ -9124,20 +9516,41 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
         pressed.contains(LogicalKeyboardKey.metaRight);
   }
 
+  /// Whether [att] may still be uploaded: its admission still holds (see
+  /// [AttachmentTicket]) — the file reads before an upload can take long.
+  bool _mayUpload(_Attachment att) {
+    final draft = att.draft, ticket = att.ticket;
+    if (draft == null || ticket == null) return false;
+    // Disposal ends this view's ownership/connection subscriptions. A file
+    // still being read cannot rely on that stale admission. Keep it retryable
+    // in its original draft; an upload already dispatched may still finish.
+    if (!mounted || !identical(draft, _draft)) return false;
+    return _admitNow(draft, ticket).acceptsAny;
+  }
+
   Future<void> _uploadAttachment(_Attachment att, XFile file) async {
     att.source = file;
     final api = ref.read(bridgeApiProvider);
     final service = widget.serviceKey;
-    final tooLarge = AppLocalizations.of(
-      context,
-    ).fileTooLarge(kMaxFileBytes ~/ (1024 * 1024));
+    final l10n = AppLocalizations.of(context);
+    final tooLarge = l10n.fileTooLarge(kMaxFileBytes ~/ (1024 * 1024));
+    final revoked = l10n.attachmentRevoked;
     try {
+      final destination = api.metaUploadContext();
       if (await file.length() > kMaxFileBytes) throw StateError(tooLarge);
       if (!_drafts.containsAttachment(att)) return;
       final bytes = await file.readAsBytes();
       if (bytes.length > kMaxFileBytes) throw StateError(tooLarge);
       if (!_drafts.containsAttachment(att)) return;
-      att.hostPath = await api.metaUploadFile(service, att.name, bytes);
+      // Nothing leaves the device for a view that turned read-only or a
+      // host that is gone while the file was read.
+      if (!_mayUpload(att)) throw StateError(revoked);
+      att.hostPath = await api.metaUploadFileScoped(
+        service,
+        att.name,
+        bytes,
+        destination,
+      );
     } catch (e) {
       att.error = friendlyError(e);
     }
@@ -9434,7 +9847,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       ),
     );
     final modeChips = [
-      if (_effectiveModel?.supportsFast == true)
+      if (_fastAvailable)
         turnChip(
           key: const Key('fast-mode-btn'),
           tooltip: l10n.fastModeHint,
@@ -9452,7 +9865,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                   _persistThreadConfig();
                 },
         ),
-      if (_streaming)
+      if (_streaming && _caps.steer)
         turnChip(
           key: const Key('supplement-toggle'),
           tooltip: l10n.steerMessageHint,
@@ -9602,7 +10015,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
       double fixedToolbarWidth(bool dictateInline) =>
           (touch ? 48.0 : 30.0) +
           (dictateInline ? (touch ? 40.0 : 32.0) + 2 : 0) +
-          (touch ? 40.0 : 32.0) +
+          (_caps.voice ? (touch ? 40.0 : 32.0) : 0) +
           (touch ? 48.0 : 32.0) +
           (_streaming ? (touch ? 48.0 : 32.0) + 6 : 0) +
           10;
@@ -9615,8 +10028,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           // pane open) the microphone lives in the `+` menu; during a take it
           // always shows, since it is the done button.
           final dictateInline =
-              constraints.maxWidth >= _dictationInlineWidth ||
-              _dictationTake != DictationTake.idle;
+              _caps.dictation &&
+              (constraints.maxWidth >= _dictationInlineWidth ||
+                  _dictationTake != DictationTake.idle);
           final fixed = fixedToolbarWidth(dictateInline);
           return Row(
             children: [
@@ -9626,18 +10040,19 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
               // pill is left less than its icon-and-chevron minimum: on a narrow
               // card (the review pane open) both ellipsize instead of
               // overflowing.
-              ConstrainedBox(
-                constraints: BoxConstraints(
-                  maxWidth: math.max(
-                    touch ? 44.0 : 34.0,
-                    math.min(
-                      constraints.maxWidth * 0.34,
-                      constraints.maxWidth - fixed - 96,
+              if (_caps.permissionPresets)
+                ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxWidth: math.max(
+                      touch ? 44.0 : 34.0,
+                      math.min(
+                        constraints.maxWidth * 0.34,
+                        constraints.maxWidth - fixed - 96,
+                      ),
                     ),
                   ),
+                  child: _permissionChip(l10n),
                 ),
-                child: _permissionChip(l10n),
-              ),
               if (inlineModes)
                 for (final chip in modeChips) ...[
                   const SizedBox(width: 4),
@@ -9648,7 +10063,20 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
               Expanded(
                 child: Align(
                   alignment: Alignment.centerRight,
-                  child: _modelChip(l10n),
+                  // A model catalog exists only where the protocol has one;
+                  // an ACP agent's own per-session options replace it.
+                  child: _caps.modelCatalog
+                      ? _modelChip(l10n)
+                      : AgentSessionOptions(
+                          settings: _agentSettings,
+                          enabled: !_sending && _threadId != null,
+                          projectLabel: _threadId == null
+                              ? _projectName()
+                              : null,
+                          onPickProject: _pickProject,
+                          onSelectConfig: _setAgentConfig,
+                          onSelectMode: _setAgentMode,
+                        ),
                 ),
               ),
               // Speech to text into the draft. Teal and a microphone, where the
@@ -9666,24 +10094,26 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                 ),
                 const SizedBox(width: 2),
               ],
-              IconButton(
-                key: const Key('voice-start'),
-                tooltip: _isVoiceThread
-                    ? l10n.voiceStart
-                    : l10n.voiceNewSession,
-                // A take in progress finishes first; the call needs the mic.
-                onPressed: _canStartVoice && !_dictation.taking
-                    ? _startVoice
-                    : null,
-                icon: Icon(Icons.graphic_eq, size: touch ? 22 : 18),
-                // 40 px on touch: two buttons beside send must still leave
-                // the model pill room on a 320 px phone.
-                style: IconButton.styleFrom(
-                  minimumSize: Size.square(touch ? 40 : 32),
-                  fixedSize: Size.square(touch ? 40 : 32),
-                  padding: EdgeInsets.zero,
+              // Native live voice only; absent rather than disabled elsewhere.
+              if (_caps.voice)
+                IconButton(
+                  key: const Key('voice-start'),
+                  tooltip: _isVoiceThread
+                      ? l10n.voiceStart
+                      : l10n.voiceNewSession,
+                  // A take in progress finishes first; the call needs the mic.
+                  onPressed: _canStartVoice && !_dictation.taking
+                      ? _startVoice
+                      : null,
+                  icon: Icon(Icons.graphic_eq, size: touch ? 22 : 18),
+                  // 40 px on touch: two buttons beside send must still leave
+                  // the model pill room on a 320 px phone.
+                  style: IconButton.styleFrom(
+                    minimumSize: Size.square(touch ? 40 : 32),
+                    fixedSize: Size.square(touch ? 40 : 32),
+                    padding: EdgeInsets.zero,
+                  ),
                 ),
-              ),
               const SizedBox(width: 4),
               if (_streaming) ...[_stopButton(l10n), const SizedBox(width: 6)],
               _sendButton(),
@@ -10027,11 +10457,13 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     // menu route's context is already on its way out. Everything below uses
     // the State's context, which outlives the menu.
     itemBuilder: (_) => [
-      PopupMenuItem<void>(
-        key: const Key('attach-btn'),
-        onTap: _pickImages,
-        child: _menuRow(Icons.add_photo_alternate_outlined, l10n.attachImage),
-      ),
+      // Only where prompts can carry images (an ACP agent must advertise it).
+      if (_caps.imageInput)
+        PopupMenuItem<void>(
+          key: const Key('attach-btn'),
+          onTap: _pickImages,
+          child: _menuRow(Icons.add_photo_alternate_outlined, l10n.attachImage),
+        ),
       PopupMenuItem<void>(
         key: const Key('attach-file-btn'),
         onTap: _pickFiles,
@@ -10045,14 +10477,15 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
           onTap: () => showFileBrowser(context, serviceKey: widget.serviceKey),
           child: _menuRow(Icons.folder_open_outlined, l10n.hostFiles),
         ),
-      // Always here too, so a card too narrow for the inline microphone
-      // still has dictation.
-      PopupMenuItem<void>(
-        key: const Key('dictate-menu'),
-        enabled: !_voice.busy && !_dictation.taking && !_externalWriterMode,
-        onTap: _startDictation,
-        child: _menuRow(Icons.mic_none_rounded, l10n.dictate),
-      ),
+      // Always here too (where dictation exists), so a card too narrow for
+      // the inline microphone still has it.
+      if (_caps.dictation)
+        PopupMenuItem<void>(
+          key: const Key('dictate-menu'),
+          enabled: !_voice.busy && !_dictation.taking && !_externalWriterMode,
+          onTap: _startDictation,
+          child: _menuRow(Icons.mic_none_rounded, l10n.dictate),
+        ),
     ],
   );
 
@@ -10443,6 +10876,9 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
     return _models.where((model) => model.isDefault).firstOrNull;
   }
 
+  bool get _fastAvailable =>
+      _caps.fast && _effectiveModel?.supportsFast == true;
+
   String? get _effectiveServiceTier =>
       _serviceTier ??
       _runtime?.serviceTier ??
@@ -10597,6 +11033,11 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   }
 
   Future<List<ModelInfo>> _fetchModels() async {
+    // No service-wide catalog (ACP): nothing to fetch, and nothing invented.
+    if (!_caps.modelCatalog) {
+      if (mounted) _openLoadDone(_kModelsLoad);
+      return _models;
+    }
     try {
       final models = await ref
           .read(bridgeApiProvider)
@@ -10813,6 +11254,7 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
   }
 
   Future<void> _pickMode() async {
+    if (!_caps.permissionPresets) return;
     final l10n = AppLocalizations.of(context);
     final startTid = _threadId;
     final chosen = await _optionSheet<PermissionMode>(
@@ -10987,7 +11429,8 @@ class _AppSessionState extends ConsumerState<AppSessionScreen>
                     sub: modelSub,
                   ),
                   row(Icons.psychology_outlined, l10n.effort, effortText),
-                  row(_modeIcon(), l10n.permissionLabel, permText),
+                  if (_caps.permissionPresets)
+                    row(_modeIcon(), l10n.permissionLabel, permText),
                   row(Icons.checklist_rtl, l10n.planMode, planText),
                   Padding(
                     padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),

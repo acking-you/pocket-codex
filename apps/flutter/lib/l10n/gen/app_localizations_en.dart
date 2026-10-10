@@ -201,6 +201,13 @@ class AppLocalizationsEn extends AppLocalizations {
   String get imagePickFailed => 'Couldn\'t read the selected image';
 
   @override
+  String get imagesNotAccepted => 'This agent doesn\'t accept images';
+
+  @override
+  String get attachmentRevoked =>
+      'Not attached: the conversation changed while the file was read. Attach it again.';
+
+  @override
   String imageTooMany(int count) {
     return 'At most $count images per message';
   }
@@ -1894,6 +1901,15 @@ class AppLocalizationsEn extends AppLocalizations {
   String get fileLinkClose => 'Close';
 
   @override
+  String get providerLabel => 'Provider';
+
+  @override
+  String get providerCodex => 'Codex';
+
+  @override
+  String get hostMetaLabel => 'Meta service';
+
+  @override
   String get draft => 'Draft';
 
   @override
@@ -2126,4 +2142,185 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get dictationShortcut => 'Dictate (Ctrl+Shift+Space)';
+
+  @override
+  String get providerAcpAgent => 'ACP agent';
+
+  @override
+  String get protocolAcpTag => 'ACP';
+
+  @override
+  String get acpHostHint =>
+      'Runs an ACP-compatible agent on this device from a program and its arguments, and makes it available to your devices. Stopping hosting stops the agent.';
+
+  @override
+  String get acpAgentLabel => 'Agent';
+
+  @override
+  String get acpAgentCustom => 'Custom agent';
+
+  @override
+  String get acpAgentName => 'Agent name';
+
+  @override
+  String get acpProgram => 'Program';
+
+  @override
+  String get acpProgramBrowse => 'Choose…';
+
+  @override
+  String get acpProgramHint =>
+      'A full path, or a program name found on this device\'s PATH. Paths may contain spaces.';
+
+  @override
+  String get acpArguments => 'Arguments';
+
+  @override
+  String get acpArgumentsHint =>
+      'One argument per row, passed exactly as typed: no shell, no splitting, no variables.';
+
+  @override
+  String get acpArgumentAdd => 'Add argument';
+
+  @override
+  String get acpArgumentRemove => 'Remove argument';
+
+  @override
+  String get acpArgumentMoveUp => 'Move up';
+
+  @override
+  String get acpArgumentMoveDown => 'Move down';
+
+  @override
+  String acpArgumentLabel(int index) {
+    return 'Argument $index';
+  }
+
+  @override
+  String get acpSecretsNote =>
+      'Saved agents are stored on this device in plain text. Avoid secrets in arguments; prefer the agent\'s own sign-in.';
+
+  @override
+  String get acpProgramNotFound => 'This program was not found on this device.';
+
+  @override
+  String acpProgramFound(String path) {
+    return 'Found: $path';
+  }
+
+  @override
+  String get acpSaveAgent => 'Save to my agents';
+
+  @override
+  String get acpHostingUnsupported =>
+      'Hosting ACP agents is not available on this platform yet. You can still use agents hosted on another device.';
+
+  @override
+  String get acpPhaseStarting => 'Starting';
+
+  @override
+  String get acpPhaseReady => 'Running';
+
+  @override
+  String get acpPhaseFailed => 'Not running';
+
+  @override
+  String get acpPhaseStopped => 'Stopped';
+
+  @override
+  String get acpAuthRequired =>
+      'The agent says you need to sign in. Sign in with the agent itself on the host, then restart it.';
+
+  @override
+  String get acpRestart => 'Restart agent';
+
+  @override
+  String get acpGatewayLabel => 'Agent gateway';
+
+  @override
+  String get acpStopNote =>
+      'Stopping hosting stops this agent and the processes it started.';
+
+  @override
+  String get acpFeatures => 'Agent features';
+
+  @override
+  String get acpFeatureReopen => 'Reopen earlier sessions';
+
+  @override
+  String get acpFeatureReopenLoad => 'With history';
+
+  @override
+  String get acpFeatureReopenResume => 'Without earlier history';
+
+  @override
+  String get acpFeatureList => 'Agent\'s own session list';
+
+  @override
+  String get acpFeatureImages => 'Image attachments';
+
+  @override
+  String get acpFeatureSupported => 'Supported';
+
+  @override
+  String get acpFeatureNotSupported => 'Not supported';
+
+  @override
+  String get acpFeatureUnknown => 'Shown after connecting to the running agent';
+
+  @override
+  String permissionFromAgent(String agent) {
+    return '$agent asks for permission';
+  }
+
+  @override
+  String get permissionRememberTitle => 'Remember this choice?';
+
+  @override
+  String permissionRememberBody(String option) {
+    return '\"$option\" asks the agent to remember this decision. How long and how widely it applies is decided by the agent.';
+  }
+
+  @override
+  String get permissionAnswerFailed => 'Could not send your answer. Try again.';
+
+  @override
+  String get agentOptions => 'Agent options';
+
+  @override
+  String get agentMode => 'Mode';
+
+  @override
+  String get historyGapNotice =>
+      'Earlier history is not available from this agent host.';
+
+  @override
+  String contentOmittedNotice(String parts) {
+    return 'Not kept because it was too large: $parts.';
+  }
+
+  @override
+  String get contentUnavailableNotice =>
+      'Part of this reply could not be read from the agent host.';
+
+  @override
+  String get omittedImages => 'images';
+
+  @override
+  String get omittedDiffs => 'file changes';
+
+  @override
+  String get omittedInput => 'tool input';
+
+  @override
+  String get omittedLocations => 'file locations';
+
+  @override
+  String get omittedPlan => 'plan steps';
+
+  @override
+  String get omittedContent => 'some output';
+
+  @override
+  String get omittedSeparator => ', ';
 }

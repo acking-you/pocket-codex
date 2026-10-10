@@ -115,6 +115,14 @@ class AppServeStatus {
     this.embedded = false,
     this.codexBinary,
     this.proxy,
+    this.provider = 'codex',
+    this.providerVersion,
+    this.protocol = '',
+    this.providerName = '',
+    this.profileId,
+    this.agentPhase,
+    this.agentError,
+    this.authRequired = false,
   });
 
   /// Service instance name.
@@ -165,6 +173,471 @@ class AppServeStatus {
   /// Upstream proxy codex + the API proxy were started with, or `null` when
   /// they inherit the app's environment.
   final String? proxy;
+
+  /// Service provider family of this host: `codex` or `acp`. For
+  /// `acp` the `app*` fields describe the gateway and `api*` are
+  /// empty.
+  final String provider;
+
+  /// Provider version when known (ACP agents).
+  final String? providerVersion;
+
+  /// Wire protocol (`codex-app-server`, `acp`); empty from
+  /// an older bridge, where [provider] decides.
+  final String protocol;
+
+  /// Human-readable provider / agent name; empty when not reported.
+  final String providerName;
+
+  /// ACP agent profile id.
+  final String? profileId;
+
+  /// ACP agent phase: `starting`, `ready`, `failed` or `stopped`.
+  final String? agentPhase;
+
+  /// Why the ACP agent is not running, safe to show.
+  final String? agentError;
+
+  /// The ACP agent reported that authentication is required.
+  final bool authRequired;
+
+  /// Whether this host runs a native Codex app-server.
+  bool get isCodex => provider == 'codex';
+
+  /// Whether this host owns an ACP agent.
+  bool get isAcp => provider == 'acp';
+
+  /// The relay kind of this host's session service.
+  String get sessionKind => switch (provider) {
+    'acp' => 'acp',
+    _ => 'app',
+  };
+}
+
+/// One ACP agent configuration: profile identity plus executable and the
+/// argument vector, passed to the host's operating system verbatim.
+class AcpAgentSpec {
+  /// Creates an agent configuration.
+  const AcpAgentSpec({
+    required this.profileId,
+    required this.displayName,
+    required this.program,
+    this.args = const [],
+  });
+
+  /// Profile id (`opencode` for the preset, or a custom id).
+  final String profileId;
+
+  /// Name shown in the UI.
+  final String displayName;
+
+  /// Executable path, or a bare name searched on the host's `PATH`.
+  final String program;
+
+  /// Arguments, one entry each; never joined or split.
+  final List<String> args;
+
+  /// From persisted JSON; `null` when malformed.
+  static AcpAgentSpec? fromJson(Object? json) {
+    if (json is! Map) return null;
+    final id = json['profileId'];
+    final name = json['displayName'];
+    final program = json['program'];
+    final args = json['args'];
+    if (id is! String || name is! String || program is! String) return null;
+    if (args is! List || args.any((a) => a is! String)) return null;
+    return AcpAgentSpec(
+      profileId: id,
+      displayName: name,
+      program: program,
+      args: [for (final a in args) a as String],
+    );
+  }
+
+  /// JSON for persistence.
+  Map<String, dynamic> toJson() => {
+    'profileId': profileId,
+    'displayName': displayName,
+    'program': program,
+    'args': args,
+  };
+
+  @override
+  bool operator ==(Object other) =>
+      other is AcpAgentSpec &&
+      other.profileId == profileId &&
+      other.displayName == displayName &&
+      other.program == program &&
+      _listEquals(other.args, args);
+
+  @override
+  int get hashCode =>
+      Object.hash(profileId, displayName, program, Object.hashAll(args));
+}
+
+bool _listEquals(List<String> a, List<String> b) {
+  if (a.length != b.length) return false;
+  for (var i = 0; i < a.length; i++) {
+    if (a[i] != b[i]) return false;
+  }
+  return true;
+}
+
+/// A built-in ACP agent preset.
+class AcpPreset {
+  /// Creates a preset.
+  const AcpPreset({
+    required this.id,
+    required this.displayName,
+    required this.program,
+    required this.args,
+  });
+
+  /// Profile id.
+  final String id;
+
+  /// Display name.
+  final String displayName;
+
+  /// Bare executable name.
+  final String program;
+
+  /// Default arguments.
+  final List<String> args;
+
+  /// This preset as an agent configuration.
+  AcpAgentSpec get spec => AcpAgentSpec(
+    profileId: id,
+    displayName: displayName,
+    program: program,
+    args: args,
+  );
+}
+
+/// Result of hosting an ACP agent.
+class AcpServeResult {
+  /// Creates a hosting result.
+  const AcpServeResult({
+    required this.device,
+    required this.name,
+    required this.serviceKey,
+    required this.listenAddr,
+    required this.metaServiceKey,
+    required this.profileId,
+    required this.displayName,
+    required this.reused,
+  });
+
+  /// Device id.
+  final String device;
+
+  /// Instance name.
+  final String name;
+
+  /// `pcx:<device>:acp:<name>` key.
+  final String serviceKey;
+
+  /// Loopback gateway address.
+  final String listenAddr;
+
+  /// `pcx:<device>:meta:<name>` key.
+  final String metaServiceKey;
+
+  /// Profile id.
+  final String profileId;
+
+  /// Display name.
+  final String displayName;
+
+  /// Whether an existing host was reused.
+  final bool reused;
+}
+
+/// One value of an ACP select configuration option.
+class SessionConfigValue {
+  /// Creates a value.
+  const SessionConfigValue({
+    required this.value,
+    required this.name,
+    this.group,
+    this.description,
+  });
+
+  /// Opaque value id, sent back verbatim.
+  final String value;
+
+  /// Label.
+  final String name;
+
+  /// Group label, when grouped.
+  final String? group;
+
+  /// Description.
+  final String? description;
+}
+
+/// One ACP select configuration option (model, mode, thought level, …).
+class SessionConfigOption {
+  /// Creates an option.
+  const SessionConfigOption({
+    required this.id,
+    required this.name,
+    required this.currentValue,
+    required this.values,
+    this.category,
+    this.description,
+  });
+
+  /// Opaque option id.
+  final String id;
+
+  /// Label.
+  final String name;
+
+  /// Semantic category (UX only).
+  final String? category;
+
+  /// Description.
+  final String? description;
+
+  /// Current value id.
+  final String currentValue;
+
+  /// Values in agent order.
+  final List<SessionConfigValue> values;
+
+  /// Label of the current value (its id when unknown).
+  String get currentLabel =>
+      values.where((v) => v.value == currentValue).firstOrNull?.name ??
+      currentValue;
+}
+
+/// One legacy ACP session mode.
+class SessionMode {
+  /// Creates a mode.
+  const SessionMode({required this.id, required this.name, this.description});
+
+  /// Opaque mode id.
+  final String id;
+
+  /// Label.
+  final String name;
+
+  /// Description.
+  final String? description;
+}
+
+/// Per-session state an ACP agent reported.
+class SessionSettings {
+  /// Creates a settings snapshot.
+  const SessionSettings({
+    this.configOptions = const [],
+    this.currentMode,
+    this.modes = const [],
+    this.usageUsed,
+    this.usageSize,
+    this.running = false,
+    this.cancelRequested = false,
+  });
+
+  /// Select configuration options.
+  final List<SessionConfigOption> configOptions;
+
+  /// Current legacy mode id.
+  final String? currentMode;
+
+  /// Advertised legacy modes.
+  final List<SessionMode> modes;
+
+  /// Context tokens in use.
+  final int? usageUsed;
+
+  /// Context window size.
+  final int? usageSize;
+
+  /// A turn is running.
+  final bool running;
+
+  /// Cancellation was requested and the agent has not finished yet.
+  final bool cancelRequested;
+
+  /// Whether the agent reported anything the user can change.
+  bool get hasControls => configOptions.isNotEmpty || modes.isNotEmpty;
+}
+
+/// What a session connection supports, so the shared session UI can hide
+/// controls that do not apply. Optional flags default to "no": a control
+/// appears only when the protocol (and, for ACP,
+/// the negotiated agent) actually has the feature.
+class AppCapabilities {
+  /// Creates a capability description.
+  const AppCapabilities({
+    required this.provider,
+    required this.fast,
+    required this.permissionPresets,
+    required this.guardian,
+    required this.rateLimits,
+    required this.takeover,
+    required this.externalWriterMonitor,
+    required this.localSessions,
+    required this.planMode,
+    this.protocol = '',
+    this.providerName = '',
+    this.negotiated = false,
+    this.generation = 0,
+    this.voice = false,
+    this.dictation = false,
+    this.imageInput = false,
+    this.steer = false,
+    this.rename = false,
+    this.compact = false,
+    this.gitDiff = false,
+    this.modelCatalog = false,
+    this.sessionConfig = false,
+    this.permissionOptions = false,
+    this.nativeMetadata = false,
+    this.sessionReopen = 'unknown',
+    this.sessionList = 'host',
+    this.historyScope = 'retained',
+    this.runningInventory = 'none',
+    this.authRequired = false,
+  });
+
+  /// The Codex app-server's capabilities.
+  static const codex = AppCapabilities(
+    provider: 'codex',
+    fast: true,
+    permissionPresets: true,
+    guardian: true,
+    rateLimits: true,
+    takeover: true,
+    externalWriterMonitor: true,
+    localSessions: true,
+    planMode: true,
+    protocol: 'codex-app-server',
+    providerName: 'Codex',
+    voice: true,
+    dictation: true,
+    imageInput: true,
+    steer: true,
+    rename: true,
+    compact: true,
+    gitDiff: true,
+    modelCatalog: true,
+    nativeMetadata: true,
+    sessionReopen: 'native',
+    sessionList: 'native',
+    historyScope: 'full',
+    runningInventory: 'meta',
+  );
+
+  /// An ACP service before negotiation: nothing optional.
+  static const acp = AppCapabilities(
+    provider: 'acp',
+    fast: false,
+    permissionPresets: false,
+    guardian: false,
+    rateLimits: false,
+    takeover: false,
+    externalWriterMonitor: false,
+    localSessions: false,
+    planMode: false,
+    protocol: 'acp',
+    providerName: 'ACP agent',
+    permissionOptions: true,
+    runningInventory: 'engine',
+  );
+
+  /// Wire protocol: `codex-app-server` or `acp`.
+  final String protocol;
+
+  /// Human-readable agent name.
+  final String providerName;
+
+  /// Whether the values come from a live ACP negotiation.
+  final bool negotiated;
+
+  /// Host generation the values belong to (ACP; 0 otherwise).
+  final int generation;
+
+  /// Native live voice calls.
+  final bool voice;
+
+  /// Native composer dictation.
+  final bool dictation;
+
+  /// Image attachments in prompts.
+  final bool imageInput;
+
+  /// Supplementing a running turn.
+  final bool steer;
+
+  /// Renaming sessions.
+  final bool rename;
+
+  /// Manual compaction.
+  final bool compact;
+
+  /// Working-tree diff.
+  final bool gitDiff;
+
+  /// A service-wide model catalog for the model picker.
+  final bool modelCatalog;
+
+  /// Per-session agent options (ACP select options / modes).
+  final bool sessionConfig;
+
+  /// Approvals carry the agent's own options, answered by option id.
+  final bool permissionOptions;
+
+  /// Native thread metadata (Guardian pre-resume checks).
+  final bool nativeMetadata;
+
+  /// How earlier sessions reopen: `native`, `load`, `resume`, `none` or
+  /// `unknown`.
+  final String sessionReopen;
+
+  /// Source of the session list: `native`, `agent` or `host`.
+  final String sessionList;
+
+  /// `full` or `retained`.
+  final String historyScope;
+
+  /// Running-session inventory: `meta`, `engine` or `none`.
+  final String runningInventory;
+
+  /// The agent reported that authentication is required.
+  final bool authRequired;
+
+  /// Whether this is an ACP connection.
+  bool get isAcp => protocol == 'acp' || provider == 'acp';
+
+  /// `codex` or `acp`.
+  final String provider;
+
+  /// Fast service tier toggle.
+  final bool fast;
+
+  /// Approval / sandbox permission presets.
+  final bool permissionPresets;
+
+  /// Guardian (auto-review) approvals.
+  final bool guardian;
+
+  /// Account rate-limit snapshot.
+  final bool rateLimits;
+
+  /// Taking over a session held by another local process.
+  final bool takeover;
+
+  /// Monitoring another writer of the same session.
+  final bool externalWriterMonitor;
+
+  /// Sessions read directly from this device's disk.
+  final bool localSessions;
+
+  /// Plan collaboration mode.
+  final bool planMode;
 }
 
 /// View of persisted config (relay/key presence, locale, account state).
@@ -1284,6 +1757,51 @@ abstract interface class BridgeApi {
   /// the UI can prompt the user to point at one.
   Future<String?> codexLocate();
 
+  /// Capabilities of the connection behind [serviceKey] (no network). Codex
+  /// is fixed; ACP reflects the host's current negotiation and
+  /// is conservative until connected.
+  AppCapabilities appCapabilities(String serviceKey);
+
+  /// Ids of sessions executing now, from the engine itself (ACP).
+  Future<List<String>> appRunningThreads(String serviceKey);
+
+  /// Built-in ACP agent presets (OpenCode: `opencode` + `acp`).
+  List<AcpPreset> acpPresets();
+
+  /// Whether this device can host ACP agents (Unix desktops).
+  bool acpHostingSupported();
+
+  /// The executable [program] resolves to on this device, or `null`.
+  Future<String?> acpLocate(String program, {String? profileId});
+
+  /// Launch and host an ACP agent as `acp:<name>` plus `meta:<name>`.
+  /// Stopping hosting stops the agent.
+  Future<AcpServeResult> appServeStartAcp({
+    String? name,
+    required AcpAgentSpec spec,
+  });
+
+  /// Restart the agent of a local ACP host.
+  Future<void> appServeRestartAcp(String name);
+
+  /// The ACP agent's latest per-session state (no network), or `null`.
+  SessionSettings? appSessionSettings(String serviceKey, String threadId);
+
+  /// Set an ACP select option to one of its advertised values.
+  Future<void> appSetSessionConfig(
+    String serviceKey,
+    String threadId,
+    String configId,
+    String value,
+  );
+
+  /// Switch an ACP session's legacy mode.
+  Future<void> appSetSessionMode(
+    String serviceKey,
+    String threadId,
+    String modeId,
+  );
+
   // --- App-server remote control ---
 
   /// Connect to an app-server service: subscribe on `127.0.0.1:<localPort>`,
@@ -1579,6 +2097,17 @@ abstract interface class BridgeApi {
     String serviceKey,
     String fileName,
     Uint8List bytes,
+  );
+
+  /// Capture the current destination context before reading attachment bytes.
+  String metaUploadContext();
+
+  /// Reject a context change before transmitting attachment bytes.
+  Future<String> metaUploadFileScoped(
+    String serviceKey,
+    String fileName,
+    Uint8List bytes,
+    String context,
   );
 
   /// Read a thread's persisted config from the host behind [serviceKey]

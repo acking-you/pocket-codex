@@ -18,11 +18,20 @@ library;
 ({String device, String kind, String name}) parseServiceKey(String key) {
   final parts = key.split(':');
   if (parts.length < 4) return (device: '', kind: '', name: '');
-  // Anchored on the KIND, which is the one segment with a fixed vocabulary
-  // (`app` / `api` / `meta`), searched from the end so the leading namespace
-  // doesn't shift the offsets. Everything after it is the name — a name may
-  // contain colons, and splitting on the last one would truncate it.
-  final kindAt = parts.lastIndexWhere(_isKind);
+  // The known prefixes fix the kind's offset, so an instance name that equals
+  // a kind (`pcx:mac:acp:acp`) cannot be mistaken for it. Other keys
+  // anchor on the KIND, which is the one segment with a fixed vocabulary,
+  // searched from the end so a leading namespace doesn't shift the offsets.
+  // Everything after it is the name — a name may contain colons, and
+  // splitting on the last one would truncate it.
+  final fixedAt = switch (parts.first) {
+    'pcx' => 2,
+    'pcxu' when parts.length >= 5 => 3,
+    _ => -1,
+  };
+  final kindAt = fixedAt > 0 && _isKind(parts[fixedAt])
+      ? fixedAt
+      : parts.lastIndexWhere(_isKind);
   if (kindAt < 1) return (device: '', kind: '', name: '');
   return (
     device: parts[kindAt - 1],
@@ -34,7 +43,34 @@ library;
 /// The service kinds the relay namespaces by. `meta` never appears in a
 /// discovered key (it is derived from an app host), but it is a real kind and a
 /// key carrying it must still parse.
-bool _isKind(String part) => part == 'app' || part == 'api' || part == 'meta';
+bool _isKind(String part) =>
+    part == 'app' || part == 'api' || part == 'meta' || part == 'acp';
+
+/// Whether [kind] is a conversation service the session UI can open: a Codex
+/// app-server (`app`) or an ACP agent
+/// gateway (`acp`).
+bool isSessionKind(String kind) => kind == 'app' || kind == 'acp';
+
+/// Whether [key] names an ACP agent service.
+bool isAcpKey(String key) => parseServiceKey(key).kind == 'acp';
+
+/// The wire protocol a session service key selects (its kind, never a
+/// provider name).
+enum SessionProtocol {
+  /// Native Codex app-server.
+  codexAppServer,
+
+  /// The Pocket-Codex gateway to a host-owned ACP agent.
+  acp,
+}
+
+/// The protocol of [key]. Keys that are not session keys keep the historical
+/// behaviour of addressing the native app-server, as the bridge does.
+SessionProtocol sessionProtocolOf(String key) =>
+    switch (parseServiceKey(key).kind) {
+      'acp' => SessionProtocol.acp,
+      _ => SessionProtocol.codexAppServer,
+    };
 
 /// The device that publishes [key], or empty when [key] isn't a service key.
 String serviceKeyDevice(String key) => parseServiceKey(key).device;

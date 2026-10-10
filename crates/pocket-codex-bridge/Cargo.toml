@@ -51,8 +51,8 @@ webpki-roots = "0.26"
 once_cell = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+futures = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"
-futures = { workspace = true }
 tokio-tungstenite = { workspace = true }

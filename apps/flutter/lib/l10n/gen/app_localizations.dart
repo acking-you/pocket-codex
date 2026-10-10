@@ -458,6 +458,18 @@ abstract class AppLocalizations {
   /// **'Couldn\'t read the selected image'**
   String get imagePickFailed;
 
+  /// No description provided for @imagesNotAccepted.
+  ///
+  /// In en, this message translates to:
+  /// **'This agent doesn\'t accept images'**
+  String get imagesNotAccepted;
+
+  /// No description provided for @attachmentRevoked.
+  ///
+  /// In en, this message translates to:
+  /// **'Not attached: the conversation changed while the file was read. Attach it again.'**
+  String get attachmentRevoked;
+
   /// No description provided for @imageTooMany.
   ///
   /// In en, this message translates to:
@@ -3452,6 +3464,24 @@ abstract class AppLocalizations {
   /// **'Close'**
   String get fileLinkClose;
 
+  /// No description provided for @providerLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Provider'**
+  String get providerLabel;
+
+  /// No description provided for @providerCodex.
+  ///
+  /// In en, this message translates to:
+  /// **'Codex'**
+  String get providerCodex;
+
+  /// No description provided for @hostMetaLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Meta service'**
+  String get hostMetaLabel;
+
   /// No description provided for @draft.
   ///
   /// In en, this message translates to:
@@ -3895,6 +3925,330 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Dictate (Ctrl+Shift+Space)'**
   String get dictationShortcut;
+
+  /// No description provided for @providerAcpAgent.
+  ///
+  /// In en, this message translates to:
+  /// **'ACP agent'**
+  String get providerAcpAgent;
+
+  /// No description provided for @protocolAcpTag.
+  ///
+  /// In en, this message translates to:
+  /// **'ACP'**
+  String get protocolAcpTag;
+
+  /// No description provided for @acpHostHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Runs an ACP-compatible agent on this device from a program and its arguments, and makes it available to your devices. Stopping hosting stops the agent.'**
+  String get acpHostHint;
+
+  /// No description provided for @acpAgentLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Agent'**
+  String get acpAgentLabel;
+
+  /// No description provided for @acpAgentCustom.
+  ///
+  /// In en, this message translates to:
+  /// **'Custom agent'**
+  String get acpAgentCustom;
+
+  /// No description provided for @acpAgentName.
+  ///
+  /// In en, this message translates to:
+  /// **'Agent name'**
+  String get acpAgentName;
+
+  /// No description provided for @acpProgram.
+  ///
+  /// In en, this message translates to:
+  /// **'Program'**
+  String get acpProgram;
+
+  /// No description provided for @acpProgramBrowse.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose…'**
+  String get acpProgramBrowse;
+
+  /// No description provided for @acpProgramHint.
+  ///
+  /// In en, this message translates to:
+  /// **'A full path, or a program name found on this device\'s PATH. Paths may contain spaces.'**
+  String get acpProgramHint;
+
+  /// No description provided for @acpArguments.
+  ///
+  /// In en, this message translates to:
+  /// **'Arguments'**
+  String get acpArguments;
+
+  /// No description provided for @acpArgumentsHint.
+  ///
+  /// In en, this message translates to:
+  /// **'One argument per row, passed exactly as typed: no shell, no splitting, no variables.'**
+  String get acpArgumentsHint;
+
+  /// No description provided for @acpArgumentAdd.
+  ///
+  /// In en, this message translates to:
+  /// **'Add argument'**
+  String get acpArgumentAdd;
+
+  /// No description provided for @acpArgumentRemove.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove argument'**
+  String get acpArgumentRemove;
+
+  /// No description provided for @acpArgumentMoveUp.
+  ///
+  /// In en, this message translates to:
+  /// **'Move up'**
+  String get acpArgumentMoveUp;
+
+  /// No description provided for @acpArgumentMoveDown.
+  ///
+  /// In en, this message translates to:
+  /// **'Move down'**
+  String get acpArgumentMoveDown;
+
+  /// No description provided for @acpArgumentLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Argument {index}'**
+  String acpArgumentLabel(int index);
+
+  /// No description provided for @acpSecretsNote.
+  ///
+  /// In en, this message translates to:
+  /// **'Saved agents are stored on this device in plain text. Avoid secrets in arguments; prefer the agent\'s own sign-in.'**
+  String get acpSecretsNote;
+
+  /// No description provided for @acpProgramNotFound.
+  ///
+  /// In en, this message translates to:
+  /// **'This program was not found on this device.'**
+  String get acpProgramNotFound;
+
+  /// No description provided for @acpProgramFound.
+  ///
+  /// In en, this message translates to:
+  /// **'Found: {path}'**
+  String acpProgramFound(String path);
+
+  /// No description provided for @acpSaveAgent.
+  ///
+  /// In en, this message translates to:
+  /// **'Save to my agents'**
+  String get acpSaveAgent;
+
+  /// No description provided for @acpHostingUnsupported.
+  ///
+  /// In en, this message translates to:
+  /// **'Hosting ACP agents is not available on this platform yet. You can still use agents hosted on another device.'**
+  String get acpHostingUnsupported;
+
+  /// No description provided for @acpPhaseStarting.
+  ///
+  /// In en, this message translates to:
+  /// **'Starting'**
+  String get acpPhaseStarting;
+
+  /// No description provided for @acpPhaseReady.
+  ///
+  /// In en, this message translates to:
+  /// **'Running'**
+  String get acpPhaseReady;
+
+  /// No description provided for @acpPhaseFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Not running'**
+  String get acpPhaseFailed;
+
+  /// No description provided for @acpPhaseStopped.
+  ///
+  /// In en, this message translates to:
+  /// **'Stopped'**
+  String get acpPhaseStopped;
+
+  /// No description provided for @acpAuthRequired.
+  ///
+  /// In en, this message translates to:
+  /// **'The agent says you need to sign in. Sign in with the agent itself on the host, then restart it.'**
+  String get acpAuthRequired;
+
+  /// No description provided for @acpRestart.
+  ///
+  /// In en, this message translates to:
+  /// **'Restart agent'**
+  String get acpRestart;
+
+  /// No description provided for @acpGatewayLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Agent gateway'**
+  String get acpGatewayLabel;
+
+  /// No description provided for @acpStopNote.
+  ///
+  /// In en, this message translates to:
+  /// **'Stopping hosting stops this agent and the processes it started.'**
+  String get acpStopNote;
+
+  /// No description provided for @acpFeatures.
+  ///
+  /// In en, this message translates to:
+  /// **'Agent features'**
+  String get acpFeatures;
+
+  /// No description provided for @acpFeatureReopen.
+  ///
+  /// In en, this message translates to:
+  /// **'Reopen earlier sessions'**
+  String get acpFeatureReopen;
+
+  /// No description provided for @acpFeatureReopenLoad.
+  ///
+  /// In en, this message translates to:
+  /// **'With history'**
+  String get acpFeatureReopenLoad;
+
+  /// No description provided for @acpFeatureReopenResume.
+  ///
+  /// In en, this message translates to:
+  /// **'Without earlier history'**
+  String get acpFeatureReopenResume;
+
+  /// No description provided for @acpFeatureList.
+  ///
+  /// In en, this message translates to:
+  /// **'Agent\'s own session list'**
+  String get acpFeatureList;
+
+  /// No description provided for @acpFeatureImages.
+  ///
+  /// In en, this message translates to:
+  /// **'Image attachments'**
+  String get acpFeatureImages;
+
+  /// No description provided for @acpFeatureSupported.
+  ///
+  /// In en, this message translates to:
+  /// **'Supported'**
+  String get acpFeatureSupported;
+
+  /// No description provided for @acpFeatureNotSupported.
+  ///
+  /// In en, this message translates to:
+  /// **'Not supported'**
+  String get acpFeatureNotSupported;
+
+  /// No description provided for @acpFeatureUnknown.
+  ///
+  /// In en, this message translates to:
+  /// **'Shown after connecting to the running agent'**
+  String get acpFeatureUnknown;
+
+  /// No description provided for @permissionFromAgent.
+  ///
+  /// In en, this message translates to:
+  /// **'{agent} asks for permission'**
+  String permissionFromAgent(String agent);
+
+  /// No description provided for @permissionRememberTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Remember this choice?'**
+  String get permissionRememberTitle;
+
+  /// No description provided for @permissionRememberBody.
+  ///
+  /// In en, this message translates to:
+  /// **'\"{option}\" asks the agent to remember this decision. How long and how widely it applies is decided by the agent.'**
+  String permissionRememberBody(String option);
+
+  /// No description provided for @permissionAnswerFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Could not send your answer. Try again.'**
+  String get permissionAnswerFailed;
+
+  /// No description provided for @agentOptions.
+  ///
+  /// In en, this message translates to:
+  /// **'Agent options'**
+  String get agentOptions;
+
+  /// No description provided for @agentMode.
+  ///
+  /// In en, this message translates to:
+  /// **'Mode'**
+  String get agentMode;
+
+  /// No description provided for @historyGapNotice.
+  ///
+  /// In en, this message translates to:
+  /// **'Earlier history is not available from this agent host.'**
+  String get historyGapNotice;
+
+  /// No description provided for @contentOmittedNotice.
+  ///
+  /// In en, this message translates to:
+  /// **'Not kept because it was too large: {parts}.'**
+  String contentOmittedNotice(String parts);
+
+  /// No description provided for @contentUnavailableNotice.
+  ///
+  /// In en, this message translates to:
+  /// **'Part of this reply could not be read from the agent host.'**
+  String get contentUnavailableNotice;
+
+  /// No description provided for @omittedImages.
+  ///
+  /// In en, this message translates to:
+  /// **'images'**
+  String get omittedImages;
+
+  /// No description provided for @omittedDiffs.
+  ///
+  /// In en, this message translates to:
+  /// **'file changes'**
+  String get omittedDiffs;
+
+  /// No description provided for @omittedInput.
+  ///
+  /// In en, this message translates to:
+  /// **'tool input'**
+  String get omittedInput;
+
+  /// No description provided for @omittedLocations.
+  ///
+  /// In en, this message translates to:
+  /// **'file locations'**
+  String get omittedLocations;
+
+  /// No description provided for @omittedPlan.
+  ///
+  /// In en, this message translates to:
+  /// **'plan steps'**
+  String get omittedPlan;
+
+  /// No description provided for @omittedContent.
+  ///
+  /// In en, this message translates to:
+  /// **'some output'**
+  String get omittedContent;
+
+  /// No description provided for @omittedSeparator.
+  ///
+  /// In en, this message translates to:
+  /// **', '**
+  String get omittedSeparator;
 }
 
 class _AppLocalizationsDelegate

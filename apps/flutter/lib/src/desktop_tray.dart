@@ -165,15 +165,21 @@ class DesktopTray with TrayListener, WindowListener {
     _onOpenSettings?.call();
   }
 
+  /// Upper bound on waiting for hosted services to stop before the window is
+  /// destroyed. The bridge bounds its own work (owned agent processes are
+  /// stopped first, each within a few seconds, and relay withdrawals get a
+  /// short grace afterwards), so this only guards against a wedged call; it
+  /// must stay above that bound or quitting could outrun process cleanup.
+  static const quitCleanupLimit = Duration(seconds: 20);
+
   Future<void> _quit() async {
-    // Stop any locally-hosted codex app-servers first so a real quit leaves no
-    // orphan processes (closing to the tray, by contrast, keeps the app alive
-    // and therefore keeps hosting). Best-effort + time-bounded so a wedged stop
-    // can never block shutdown; a no-op when nothing is hosting.
+    // Stop every locally-hosted service first so a real quit leaves no orphan
+    // processes (closing to the tray, by contrast, keeps the app alive and
+    // therefore keeps hosting). Awaited until the bridge reports the owned
+    // processes stopped — it also refuses any start still in flight — and
+    // capped by [quitCleanupLimit]; a no-op when nothing is hosting.
     try {
-      await const RustBridgeApi().appServeStopAll().timeout(
-        const Duration(seconds: 3),
-      );
+      await const RustBridgeApi().appServeStopAll().timeout(quitCleanupLimit);
     } catch (_) {}
     // Remove the tray icon, lift the close guard so destroy() isn't intercepted
     // again, then tear the window down. window_manager.destroy() ends the app —

@@ -251,7 +251,12 @@ ThemeData _base(ColorScheme scheme) {
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(kControlRadius),
         ),
-        textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+        textStyle: TextStyle(
+          fontSize: 14,
+          fontWeight: FontWeight.w600,
+          fontFamily: uiFontFamily,
+          fontFamilyFallback: uiCjkFallback,
+        ),
       ),
     ),
     outlinedButtonTheme: OutlinedButtonThemeData(
@@ -290,7 +295,15 @@ ThemeData _base(ColorScheme scheme) {
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(kControlRadius),
       ),
-      labelStyle: TextStyle(fontSize: 12.5, color: scheme.onSurface),
+      // An explicit style replaces the theme's font, so it carries the UI
+      // family and CJK fallback itself (chip labels such as the hosting
+      // provider picker otherwise render in the platform default).
+      labelStyle: TextStyle(
+        fontSize: 12.5,
+        color: scheme.onSurface,
+        fontFamily: uiFontFamily,
+        fontFamilyFallback: uiCjkFallback,
+      ),
       padding: const EdgeInsets.symmetric(horizontal: 4),
     ),
     inputDecorationTheme: InputDecorationTheme(

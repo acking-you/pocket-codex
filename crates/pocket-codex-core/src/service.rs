@@ -6,7 +6,7 @@
 //!                      │      │          │        └── instance name
 //!                      │      │          │            (e.g. "default", "work")
 //!                      │      │          └─────────── ServiceKind::as_key_segment
-//!                      │      │                       ("app" | "api" | "meta")
+//!                      │      │                       ("app" | "api" | "meta" | "acp")
 //!                      │      └────────────────────── sanitised host id
 //!                      │                              (default: hostname)
 //!                      └───────────────────────────── SERVICE_KEY_PREFIX
@@ -40,6 +40,9 @@ pub enum ServiceKind {
     App,
     /// Responses API proxy service.
     Api,
+    /// Pocket-Codex ACP gateway (`/acp/v1`) in front of a host-owned ACP
+    /// agent. The agent's identity is host metadata, never part of the key.
+    Acp,
     /// Host-side meta service (session inventory + per-thread config), exposed
     /// alongside an `app`/`api` host so its local sessions are remote-viewable.
     Meta,
@@ -59,6 +62,7 @@ impl ServiceKind {
         match self {
             Self::App => "app",
             Self::Api => "api",
+            Self::Acp => "acp",
             Self::Meta => "meta",
             Self::Unknown => "unknown",
         }
@@ -78,6 +82,7 @@ impl FromStr for ServiceKind {
         match raw {
             "app" => Ok(Self::App),
             "api" => Ok(Self::Api),
+            "acp" => Ok(Self::Acp),
             "meta" => Ok(Self::Meta),
             _ => Err(()),
         }
@@ -183,6 +188,24 @@ mod tests {
         assert_eq!(id.device, "studio");
         assert_eq!(id.kind, ServiceKind::Api);
         assert_eq!(id.name, "default");
+    }
+
+    #[test]
+    fn acp_keys_round_trip_alongside_native_services() {
+        for key in [
+            "pcx:studio:acp:work",
+            "pcx:studio:app:work",
+            "pcx:studio:api:work",
+            "pcx:studio:meta:work",
+        ] {
+            let id = ServiceId::parse_key(key).expect("recognized service key");
+            assert_eq!(id.key(), key);
+            let json = serde_json::to_string(&id.kind).expect("serialize kind");
+            assert_eq!(
+                serde_json::from_str::<ServiceKind>(&json).expect("deserialize kind"),
+                id.kind
+            );
+        }
     }
 
     #[test]

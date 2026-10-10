@@ -5,7 +5,7 @@
 //! Account and self-host subscriptions are the same code path: both dial the
 //! relay directly and differ only in the [`RelaySession`] handed in. Account
 //! mode used to need its own broker-tunnel implementation here; now the caller
-//! resolves a session (via `account::relay_session`) and everything below is
+//! resolves a session (via `transport::resolve`) and everything below is
 //! shared.
 use std::{collections::HashMap, path::PathBuf, sync::Mutex};
 
@@ -23,9 +23,18 @@ static RUNTIME: OnceCell<Runtime> = OnceCell::new();
 static SUPPORT_DIR: OnceCell<PathBuf> = OnceCell::new();
 static REGISTRY: OnceCell<Mutex<HashMap<String, SubEntry>>> = OnceCell::new();
 
+/// A registered tunnel. The entry owns its worker: dropping the entry —
+/// replaced, removed, or a creation that lost — stops the worker, so no
+/// tunnel ever outlives its registry slot detached.
 struct SubEntry {
     local_addr: String,
     handle: JoinHandle<()>,
+}
+
+impl Drop for SubEntry {
+    fn drop(&mut self) {
+        self.handle.abort();
+    }
 }
 
 /// Initialise the runtime + support dir. Idempotent; safe to call once at boot.
@@ -90,36 +99,98 @@ pub struct SubStatus {
 /// a websocket to it on the next line — and a listener that is merely *about*
 /// to be bound would refuse that connection nondeterministically.
 pub fn subscribe_service(key: String, local_port: u16, transport: &Transport) -> Result<SubStatus> {
-    {
-        let reg = registry().lock().expect("registry poisoned");
-        if let Some(e) = reg.get(&key) {
-            if !e.handle.is_finished() {
-                return Ok(SubStatus {
-                    key,
-                    local_addr: e.local_addr.clone(),
-                    alive: true,
-                });
-            }
-        }
-    }
+    subscribe_service_as(key.clone(), &key, local_port, transport, || true)
+}
+
+/// [`subscribe_service`] for `service_key`, tracked under `registry_key`,
+/// for an owner that may stop being current meanwhile.
+///
+/// Lets a caller scope its subscription to more than the service key — the
+/// ACP engine and meta include the transport context, so the same logical
+/// key under another account or relay never reuses (or tears down) this
+/// tunnel. [`unsubscribe_service`] takes the same `registry_key`.
+///
+/// `owner_current` is checked under the registry lock when the tunnel is
+/// registered (and before a live one is reused): a tunnel created for an
+/// owner that is gone by then is stopped instead of registered. Pair it
+/// with an invalidation that makes it false *before* it unsubscribes, and
+/// no tunnel of the old owner survives.
+pub fn subscribe_service_as(
+    registry_key: String,
+    service_key: &str,
+    local_port: u16,
+    transport: &Transport,
+    owner_current: impl Fn() -> bool,
+) -> Result<SubStatus> {
     // Dialled with the transport's key shape, but tracked under the key the
     // CALLER used: the app identifies a service by its bare `pcx:` key (that is
     // what `unsubscribe_service` will be given), while the relay in account mode
     // wants the namespaced form.
-    let (local_addr, handle) =
-        spawn_subscribe(transport.session.clone(), transport.relay_key(&key), local_port)?;
-    registry()
-        .lock()
-        .expect("registry poisoned")
-        .insert(key.clone(), SubEntry {
-            local_addr: local_addr.clone(),
-            handle,
-        });
-    Ok(SubStatus {
-        key,
-        local_addr,
+    let session = transport.session.clone();
+    let relay_key = transport.relay_key(service_key);
+    subscribe_with(registry_key, owner_current, move || {
+        spawn_subscribe(session, relay_key, local_port)
+    })
+}
+
+/// The status of a live registered tunnel.
+fn live_status(key: &str, entry: &SubEntry) -> Option<SubStatus> {
+    (!entry.handle.is_finished()).then(|| SubStatus {
+        key: key.to_string(),
+        local_addr: entry.local_addr.clone(),
         alive: true,
     })
+}
+
+/// Reuse the live tunnel of `registry_key`, or `create` one and register
+/// it. Creation runs without the registry lock (it waits for the relay), so
+/// two callers may both create; exactly one tunnel is registered and every
+/// other one — the loser of that race, or one whose owner stopped being
+/// current — is stopped before this returns.
+fn subscribe_with(
+    registry_key: String,
+    owner_current: impl Fn() -> bool,
+    create: impl FnOnce() -> Result<(String, JoinHandle<()>)>,
+) -> Result<SubStatus> {
+    let stale = || anyhow!("the account or relay changed while subscribing; try again");
+    {
+        let reg = registry().lock().expect("registry poisoned");
+        if let Some(live) = reg
+            .get(&registry_key)
+            .and_then(|entry| live_status(&registry_key, entry))
+        {
+            return if owner_current() { Ok(live) } else { Err(stale()) };
+        }
+    }
+    let (local_addr, handle) = create()?;
+    let created = SubEntry {
+        local_addr,
+        handle,
+    };
+    let mut reg = registry().lock().expect("registry poisoned");
+    if !owner_current() {
+        drop(reg);
+        drop(created);
+        return Err(stale());
+    }
+    if let Some(winner) = reg
+        .get(&registry_key)
+        .and_then(|entry| live_status(&registry_key, entry))
+    {
+        drop(reg);
+        drop(created);
+        return Ok(winner);
+    }
+    let status = SubStatus {
+        key: registry_key.clone(),
+        local_addr: created.local_addr.clone(),
+        alive: true,
+    };
+    // A finished entry it replaces is dropped (and so stopped) here.
+    let replaced = reg.insert(registry_key, created);
+    drop(reg);
+    drop(replaced);
+    Ok(status)
 }
 
 /// Bind a local port, subscribe on it, and return once the tunnel is up.
@@ -239,6 +310,25 @@ pub fn unsubscribe_service(key: &str) {
     }
 }
 
+/// Abort and forget every subscription whose registry key starts with
+/// `prefix` (a whole family, such as the meta tunnels of every context).
+/// No-op before [`init`].
+pub fn unsubscribe_prefix(prefix: &str) {
+    let Some(registry) = REGISTRY.get() else { return };
+    let removed: Vec<SubEntry> = {
+        let mut registry = registry.lock().unwrap_or_else(|poison| poison.into_inner());
+        let keys: Vec<String> = registry
+            .keys()
+            .filter(|key| key.starts_with(prefix))
+            .cloned()
+            .collect();
+        keys.iter().filter_map(|key| registry.remove(key)).collect()
+    };
+    for entry in removed {
+        entry.handle.abort();
+    }
+}
+
 /// Open a one-off pb-mapper subscriber for `key` that is NOT recorded in the
 /// shared registry, returning the bound local address and the task handle (the
 /// caller MUST `abort()` it when done).
@@ -270,9 +360,154 @@ pub fn list_subscriptions() -> Vec<SubStatus> {
         .collect()
 }
 
+/// Register a fake tunnel (tests of the code that owns tunnels).
+#[cfg(test)]
+pub(crate) fn insert_for_test(key: &str, handle: JoinHandle<()>) {
+    registry()
+        .lock()
+        .expect("registry poisoned")
+        .insert(key.to_string(), SubEntry {
+            local_addr: "127.0.0.1:9".into(),
+            handle,
+        });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_family_of_tunnels_is_dropped_together() {
+        init(std::env::temp_dir()).expect("init");
+        let family = "family-test\u{1f}";
+        let doomed = runtime().spawn(std::future::pending::<()>());
+        let kept = runtime().spawn(std::future::pending::<()>());
+        insert_for_test(&format!("{family}ctx\u{1f}pcx:d:meta:n"), doomed);
+        insert_for_test("family-other:pcx:d:app:n", kept);
+        unsubscribe_prefix(family);
+        let keys: Vec<String> = list_subscriptions().into_iter().map(|s| s.key).collect();
+        assert!(keys.iter().all(|key| !key.starts_with(family)));
+        assert!(keys.iter().any(|key| key == "family-other:pcx:d:app:n"));
+        unsubscribe_service("family-other:pcx:d:app:n");
+    }
+
+    /// A tunnel worker that owns a real listener and says when it stopped.
+    fn owned_tunnel(
+        stopped: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) -> Result<(String, JoinHandle<()>)> {
+        struct Stopped(std::sync::Arc<std::sync::atomic::AtomicBool>);
+        impl Drop for Stopped {
+            fn drop(&mut self) {
+                self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+        let addr = listener.local_addr()?.to_string();
+        let guard = Stopped(stopped);
+        let handle = runtime().spawn(async move {
+            let _owned = (listener, guard);
+            std::future::pending::<()>().await;
+        });
+        Ok((addr, handle))
+    }
+
+    fn eventually(what: &str, done: impl Fn() -> bool) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !done() {
+            assert!(std::time::Instant::now() < deadline, "{what}");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    fn accepts(addr: &str) -> bool {
+        std::net::TcpStream::connect(addr).is_ok()
+    }
+
+    /// Two callers create the same tunnel at once (both past the "is it
+    /// registered?" check). Exactly one is registered, the other's worker
+    /// and listener are stopped, and invalidating the owner then closes the
+    /// winner too: no created tunnel survives detached.
+    #[test]
+    fn concurrent_creations_register_one_tunnel_and_stop_every_other() {
+        use std::sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc, Barrier,
+        };
+        init(std::env::temp_dir()).expect("init");
+        let family = "race-test\u{1f}";
+        let key = format!("{family}ctx\u{1f}pcx:d:meta:n");
+        let both_created = Arc::new(Barrier::new(2));
+        let flags = [Arc::new(AtomicBool::new(false)), Arc::new(AtomicBool::new(false))];
+        let addrs: Vec<(String, String)> = std::thread::scope(|scope| {
+            let workers: Vec<_> = flags
+                .iter()
+                .map(|stopped| {
+                    let (key, both_created, stopped) =
+                        (key.clone(), both_created.clone(), stopped.clone());
+                    scope.spawn(move || {
+                        let mut mine = String::new();
+                        let status = subscribe_with(
+                            key,
+                            || true,
+                            || {
+                                let created = owned_tunnel(stopped)?;
+                                mine = created.0.clone();
+                                // Neither registers before both have created.
+                                both_created.wait();
+                                Ok(created)
+                            },
+                        )
+                        .expect("subscribe");
+                        (mine, status.local_addr)
+                    })
+                })
+                .collect();
+            workers
+                .into_iter()
+                .map(|w| w.join().expect("join"))
+                .collect()
+        });
+        let winner = addrs[0].1.clone();
+        assert_eq!(addrs[1].1, winner, "both callers are handed the one registered tunnel");
+        let loser = if addrs[0].0 == winner { 1 } else { 0 };
+        assert_ne!(addrs[loser].0, winner);
+        eventually("the losing worker stops", || flags[loser].load(Ordering::SeqCst));
+        assert!(!accepts(&addrs[loser].0), "the losing listener is closed");
+        assert!(!flags[1 - loser].load(Ordering::SeqCst) && accepts(&winner));
+        unsubscribe_prefix(family);
+        eventually("the registered worker stops", || flags[1 - loser].load(Ordering::SeqCst));
+        assert!(!accepts(&winner), "invalidation closes the registered listener");
+    }
+
+    /// A tunnel created for an owner that stopped being current meanwhile
+    /// is stopped, not registered.
+    #[test]
+    fn a_tunnel_created_for_a_stale_owner_is_stopped() {
+        use std::sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        };
+        init(std::env::temp_dir()).expect("init");
+        let key = "stale-test\u{1f}ctx\u{1f}pcx:d:meta:n".to_string();
+        let current = AtomicBool::new(true);
+        let stopped = Arc::new(AtomicBool::new(false));
+        let mut addr = String::new();
+        let result = subscribe_with(
+            key.clone(),
+            || current.load(Ordering::SeqCst),
+            || {
+                let created = owned_tunnel(stopped.clone())?;
+                addr = created.0.clone();
+                // The context changes while the relay is being dialled.
+                current.store(false, Ordering::SeqCst);
+                Ok(created)
+            },
+        );
+        assert!(result.is_err());
+        assert!(!list_subscriptions().iter().any(|s| s.key == key));
+        eventually("the stale worker stops", || stopped.load(Ordering::SeqCst));
+        assert!(!accepts(&addr));
+    }
 
     /// A transport pointing at a relay that does not exist.
     ///

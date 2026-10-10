@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:pocket_codex/src/bridge_api.dart';
+import 'package:pocket_codex/src/service_key.dart';
 
 /// In-memory [BridgeApi] for widget/provider tests. Seed [config] and
 /// services per test; records subscribe/unsubscribe calls.
@@ -389,13 +390,19 @@ class FakeBridgeApi implements BridgeApi {
         alive: h.alive,
         appListenAddr: h.appListenAddr,
         appServiceKey: h.appServiceKey,
-        appRegistered: kind == 'app' ? registered : h.appRegistered,
+        appRegistered: kind == 'app' || kind == 'acp'
+            ? registered
+            : h.appRegistered,
         apiListenAddr: h.apiListenAddr,
         apiServiceKey: h.apiServiceKey,
         apiRegistered: kind == 'api' ? registered : h.apiRegistered,
         metaListenAddr: h.metaListenAddr,
         metaServiceKey: h.metaServiceKey,
         metaRegistered: kind == 'meta' ? registered : h.metaRegistered,
+        codexBinary: h.codexBinary,
+        proxy: h.proxy,
+        provider: h.provider,
+        providerVersion: h.providerVersion,
       );
 
   @override
@@ -438,6 +445,151 @@ class FakeBridgeApi implements BridgeApi {
   @override
   Future<String?> codexLocate() async => codexPath;
 
+  /// Negotiated capabilities per ACP service key; unset keys report the
+  /// conservative, not-yet-negotiated [AppCapabilities.acp].
+  final Map<String, AppCapabilities> acpCapabilities = {};
+
+  /// Every [appCapabilities] call, in order.
+  final List<String> capabilityCalls = [];
+
+  @override
+  AppCapabilities appCapabilities(String serviceKey) {
+    capabilityCalls.add(serviceKey);
+    return switch (sessionProtocolOf(serviceKey)) {
+      SessionProtocol.acp => acpCapabilities[serviceKey] ?? AppCapabilities.acp,
+      SessionProtocol.codexAppServer => AppCapabilities.codex,
+    };
+  }
+
+  /// Running session ids per ACP service key.
+  final Map<String, List<String>> runningThreads = {};
+
+  @override
+  Future<List<String>> appRunningThreads(String serviceKey) async =>
+      runningThreads[serviceKey] ?? const [];
+
+  /// Presets the fake reports.
+  List<AcpPreset> presets = const [
+    AcpPreset(
+      id: 'opencode',
+      displayName: 'OpenCode',
+      program: 'opencode',
+      args: ['acp'],
+    ),
+  ];
+
+  @override
+  List<AcpPreset> acpPresets() => presets;
+
+  /// Whether this fake device can host ACP agents.
+  bool acpHosting = true;
+
+  @override
+  bool acpHostingSupported() => acpHosting;
+
+  /// Programs [acpLocate] resolves, by program text.
+  final Map<String, String> acpPrograms = {
+    'opencode': '/Users/me/.opencode/bin/opencode',
+  };
+
+  @override
+  Future<String?> acpLocate(String program, {String? profileId}) async =>
+      program.startsWith('/') ? program : acpPrograms[program];
+
+  /// Every [appServeStartAcp] call as `(name, spec)`.
+  final List<(String?, AcpAgentSpec)> acpServeCalls = [];
+
+  /// Thrown by the next [appServeStartAcp] (then cleared).
+  Object? acpServeError;
+
+  @override
+  Future<AcpServeResult> appServeStartAcp({
+    String? name,
+    required AcpAgentSpec spec,
+  }) async {
+    acpServeCalls.add((name, spec));
+    final err = acpServeError;
+    if (err != null) {
+      acpServeError = null;
+      throw err;
+    }
+    final n = name ?? spec.profileId;
+    if (serveHosts.any((h) => h.name == n && !h.isAcp)) {
+      throw StateError('`$n` is already hosting on this device');
+    }
+    const device = 'local';
+    final key = 'pcx:$device:acp:$n';
+    final metaKey = 'pcx:$device:meta:$n';
+    serveHosts
+      ..removeWhere((h) => h.name == n)
+      ..add(
+        AppServeStatus(
+          name: n,
+          device: device,
+          alive: true,
+          appListenAddr: '127.0.0.1:18200',
+          appServiceKey: key,
+          appRegistered: true,
+          metaListenAddr: '127.0.0.1:18201',
+          metaServiceKey: metaKey,
+          metaRegistered: true,
+          codexBinary: spec.program,
+          provider: 'acp',
+          protocol: 'acp',
+          providerName: spec.displayName,
+          profileId: spec.profileId,
+          agentPhase: 'ready',
+        ),
+      );
+    if (!_services.any((s) => s.key == key)) {
+      _services.add(
+        ServiceEntry(device: device, kind: 'acp', name: n, key: key),
+      );
+    }
+    return AcpServeResult(
+      device: device,
+      name: n,
+      serviceKey: key,
+      listenAddr: '127.0.0.1:18200',
+      metaServiceKey: metaKey,
+      profileId: spec.profileId,
+      displayName: spec.displayName,
+      reused: false,
+    );
+  }
+
+  /// Every [appServeRestartAcp] call.
+  final List<String> acpRestartCalls = [];
+
+  @override
+  Future<void> appServeRestartAcp(String name) async =>
+      acpRestartCalls.add(name);
+
+  /// Per-session ACP settings, keyed `'$serviceKey|$threadId'`.
+  final Map<String, SessionSettings> sessionSettings = {};
+
+  /// Every [appSetSessionConfig] / [appSetSessionMode] call.
+  final List<(String, String, String)> sessionConfigCalls = [];
+
+  @override
+  SessionSettings? appSessionSettings(String serviceKey, String threadId) =>
+      sessionSettings['$serviceKey|$threadId'];
+
+  @override
+  Future<void> appSetSessionConfig(
+    String serviceKey,
+    String threadId,
+    String configId,
+    String value,
+  ) async => sessionConfigCalls.add((threadId, configId, value));
+
+  @override
+  Future<void> appSetSessionMode(
+    String serviceKey,
+    String threadId,
+    String modeId,
+  ) async => sessionConfigCalls.add((threadId, 'mode', modeId));
+
   // --- App-server remote control ---
 
   /// Number of [appConnect] calls (asserts a reconnect actually happened).
@@ -465,9 +617,15 @@ class FakeBridgeApi implements BridgeApi {
   /// connected service is always reachable.
   final Map<String, bool> reachable = {};
 
+  /// Every key passed to [appProbe] / [apiProbe], in call order.
+  final List<String> appProbeCalls = [], apiProbeCalls = [];
+
   @override
-  Future<bool> appProbe(String serviceKey) async =>
-      _appConnected.contains(serviceKey) || (reachable[serviceKey] ?? true);
+  Future<bool> appProbe(String serviceKey) async {
+    appProbeCalls.add(serviceKey);
+    return _appConnected.contains(serviceKey) ||
+        (reachable[serviceKey] ?? true);
+  }
 
   /// Seedable failure reason for [appProbeReason]; null falls back to a generic
   /// one so an unreachable fake still exercises the "we know why" path.
@@ -480,8 +638,10 @@ class FakeBridgeApi implements BridgeApi {
       : (probeReason[serviceKey] ?? 'probe: initialize timed out');
 
   @override
-  Future<bool> apiProbe(String serviceKey) async =>
-      reachable[serviceKey] ?? true;
+  Future<bool> apiProbe(String serviceKey) async {
+    apiProbeCalls.add(serviceKey);
+    return reachable[serviceKey] ?? true;
+  }
 
   /// Seedable reachability for the loopback health checks ([appProbeLocal] /
   /// [apiProbeLocal]), keyed by the local `host:port` (default: reachable).
@@ -537,11 +697,20 @@ class FakeBridgeApi implements BridgeApi {
   bool disconnectOnThreadList = false;
   Future<void>? threadListGate;
 
+  /// Every [appThreadMetadata] call, in order.
+  final List<String> threadMetadataCalls = [];
+
   @override
   Future<ThreadMeta?> appThreadMetadata(
     String serviceKey,
     String threadId,
   ) async {
+    threadMetadataCalls.add(serviceKey);
+    // Mirrors the real bridge: native thread metadata exists only for the
+    // Codex app-server and is refused for every other protocol.
+    if (sessionProtocolOf(serviceKey) != SessionProtocol.codexAppServer) {
+      throw StateError('thread metadata is not available for this service');
+    }
     for (final thread in appThreads) {
       if (thread.id == threadId) return thread;
     }
@@ -1103,6 +1272,9 @@ class FakeBridgeApi implements BridgeApi {
     return forceResumeResult;
   }
 
+  /// Service key of the last [metaUploadFile] call.
+  String? lastUploadKey;
+
   /// Records the last [metaUploadFile] call for assertions.
   String? lastUploadName;
 
@@ -1119,9 +1291,28 @@ class FakeBridgeApi implements BridgeApi {
     Uint8List bytes,
   ) async {
     if (uploadError != null) throw uploadError!;
+    lastUploadKey = serviceKey;
     lastUploadName = fileName;
     lastUploadBytes = bytes;
     return '/host/uploads/123/$fileName';
+  }
+
+  String uploadContext = 'fixture-context';
+
+  @override
+  String metaUploadContext() => uploadContext;
+
+  @override
+  Future<String> metaUploadFileScoped(
+    String serviceKey,
+    String fileName,
+    Uint8List bytes,
+    String context,
+  ) async {
+    if (context != uploadContext) {
+      throw StateError('attachment context changed');
+    }
+    return metaUploadFile(serviceKey, fileName, bytes);
   }
 
   @override

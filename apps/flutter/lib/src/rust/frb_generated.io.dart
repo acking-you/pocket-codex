@@ -54,6 +54,18 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   AccountUserDto dco_decode_account_user_dto(dynamic raw);
 
   @protected
+  AcpAgentSpecDto dco_decode_acp_agent_spec_dto(dynamic raw);
+
+  @protected
+  AcpPresetDto dco_decode_acp_preset_dto(dynamic raw);
+
+  @protected
+  AcpServeDto dco_decode_acp_serve_dto(dynamic raw);
+
+  @protected
+  AppCapabilitiesDto dco_decode_app_capabilities_dto(dynamic raw);
+
+  @protected
   AppEventDto dco_decode_app_event_dto(dynamic raw);
 
   @protected
@@ -69,10 +81,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   AccountUserDto dco_decode_box_autoadd_account_user_dto(dynamic raw);
 
   @protected
+  AcpAgentSpecDto dco_decode_box_autoadd_acp_agent_spec_dto(dynamic raw);
+
+  @protected
   bool dco_decode_box_autoadd_bool(dynamic raw);
 
   @protected
   PlatformInt64 dco_decode_box_autoadd_i_64(dynamic raw);
+
+  @protected
+  SessionSettingsDto dco_decode_box_autoadd_session_settings_dto(dynamic raw);
 
   @protected
   ThreadConfigDto dco_decode_box_autoadd_thread_config_dto(dynamic raw);
@@ -131,6 +149,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<AccountServiceDto> dco_decode_list_account_service_dto(dynamic raw);
 
   @protected
+  List<AcpPresetDto> dco_decode_list_acp_preset_dto(dynamic raw);
+
+  @protected
   List<AppServeStatusDto> dco_decode_list_app_serve_status_dto(dynamic raw);
 
   @protected
@@ -156,6 +177,19 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<ServiceIdDto> dco_decode_list_service_id_dto(dynamic raw);
+
+  @protected
+  List<SessionConfigOptionDto> dco_decode_list_session_config_option_dto(
+    dynamic raw,
+  );
+
+  @protected
+  List<SessionConfigValueDto> dco_decode_list_session_config_value_dto(
+    dynamic raw,
+  );
+
+  @protected
+  List<SessionModeDto> dco_decode_list_session_mode_dto(dynamic raw);
 
   @protected
   List<SubStatusDto> dco_decode_list_sub_status_dto(dynamic raw);
@@ -197,6 +231,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   PlatformInt64? dco_decode_opt_box_autoadd_i_64(dynamic raw);
 
   @protected
+  SessionSettingsDto? dco_decode_opt_box_autoadd_session_settings_dto(
+    dynamic raw,
+  );
+
+  @protected
   ThreadHistoryDto? dco_decode_opt_box_autoadd_thread_history_dto(dynamic raw);
 
   @protected
@@ -220,10 +259,22 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ServiceIdDto dco_decode_service_id_dto(dynamic raw);
 
   @protected
+  SessionConfigOptionDto dco_decode_session_config_option_dto(dynamic raw);
+
+  @protected
+  SessionConfigValueDto dco_decode_session_config_value_dto(dynamic raw);
+
+  @protected
   SessionFollowUpdateDto dco_decode_session_follow_update_dto(dynamic raw);
 
   @protected
   SessionLivenessDto dco_decode_session_liveness_dto(dynamic raw);
+
+  @protected
+  SessionModeDto dco_decode_session_mode_dto(dynamic raw);
+
+  @protected
+  SessionSettingsDto dco_decode_session_settings_dto(dynamic raw);
 
   @protected
   SubStatusDto dco_decode_sub_status_dto(dynamic raw);
@@ -306,6 +357,20 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   AccountUserDto sse_decode_account_user_dto(SseDeserializer deserializer);
 
   @protected
+  AcpAgentSpecDto sse_decode_acp_agent_spec_dto(SseDeserializer deserializer);
+
+  @protected
+  AcpPresetDto sse_decode_acp_preset_dto(SseDeserializer deserializer);
+
+  @protected
+  AcpServeDto sse_decode_acp_serve_dto(SseDeserializer deserializer);
+
+  @protected
+  AppCapabilitiesDto sse_decode_app_capabilities_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   AppEventDto sse_decode_app_event_dto(SseDeserializer deserializer);
 
   @protected
@@ -325,10 +390,20 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  AcpAgentSpecDto sse_decode_box_autoadd_acp_agent_spec_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   bool sse_decode_box_autoadd_bool(SseDeserializer deserializer);
 
   @protected
   PlatformInt64 sse_decode_box_autoadd_i_64(SseDeserializer deserializer);
+
+  @protected
+  SessionSettingsDto sse_decode_box_autoadd_session_settings_dto(
+    SseDeserializer deserializer,
+  );
 
   @protected
   ThreadConfigDto sse_decode_box_autoadd_thread_config_dto(
@@ -403,6 +478,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  List<AcpPresetDto> sse_decode_list_acp_preset_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   List<AppServeStatusDto> sse_decode_list_app_serve_status_dto(
     SseDeserializer deserializer,
   );
@@ -436,6 +516,21 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<ServiceIdDto> sse_decode_list_service_id_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<SessionConfigOptionDto> sse_decode_list_session_config_option_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<SessionConfigValueDto> sse_decode_list_session_config_value_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<SessionModeDto> sse_decode_list_session_mode_dto(
     SseDeserializer deserializer,
   );
 
@@ -491,6 +586,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   PlatformInt64? sse_decode_opt_box_autoadd_i_64(SseDeserializer deserializer);
 
   @protected
+  SessionSettingsDto? sse_decode_opt_box_autoadd_session_settings_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   ThreadHistoryDto? sse_decode_opt_box_autoadd_thread_history_dto(
     SseDeserializer deserializer,
   );
@@ -516,12 +616,30 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ServiceIdDto sse_decode_service_id_dto(SseDeserializer deserializer);
 
   @protected
+  SessionConfigOptionDto sse_decode_session_config_option_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  SessionConfigValueDto sse_decode_session_config_value_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   SessionFollowUpdateDto sse_decode_session_follow_update_dto(
     SseDeserializer deserializer,
   );
 
   @protected
   SessionLivenessDto sse_decode_session_liveness_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  SessionModeDto sse_decode_session_mode_dto(SseDeserializer deserializer);
+
+  @protected
+  SessionSettingsDto sse_decode_session_settings_dto(
     SseDeserializer deserializer,
   );
 
@@ -624,6 +742,24 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_acp_agent_spec_dto(
+    AcpAgentSpecDto self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_acp_preset_dto(AcpPresetDto self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_acp_serve_dto(AcpServeDto self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_app_capabilities_dto(
+    AppCapabilitiesDto self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_app_event_dto(AppEventDto self, SseSerializer serializer);
 
   @protected
@@ -645,11 +781,23 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_box_autoadd_acp_agent_spec_dto(
+    AcpAgentSpecDto self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_box_autoadd_bool(bool self, SseSerializer serializer);
 
   @protected
   void sse_encode_box_autoadd_i_64(
     PlatformInt64 self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_box_autoadd_session_settings_dto(
+    SessionSettingsDto self,
     SseSerializer serializer,
   );
 
@@ -738,6 +886,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_acp_preset_dto(
+    List<AcpPresetDto> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_list_app_serve_status_dto(
     List<AppServeStatusDto> self,
     SseSerializer serializer,
@@ -785,6 +939,24 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_list_service_id_dto(
     List<ServiceIdDto> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_session_config_option_dto(
+    List<SessionConfigOptionDto> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_session_config_value_dto(
+    List<SessionConfigValueDto> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_session_mode_dto(
+    List<SessionModeDto> self,
     SseSerializer serializer,
   );
 
@@ -852,6 +1024,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_opt_box_autoadd_session_settings_dto(
+    SessionSettingsDto? self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_opt_box_autoadd_thread_history_dto(
     ThreadHistoryDto? self,
     SseSerializer serializer,
@@ -885,6 +1063,18 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_service_id_dto(ServiceIdDto self, SseSerializer serializer);
 
   @protected
+  void sse_encode_session_config_option_dto(
+    SessionConfigOptionDto self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_session_config_value_dto(
+    SessionConfigValueDto self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_session_follow_update_dto(
     SessionFollowUpdateDto self,
     SseSerializer serializer,
@@ -893,6 +1083,18 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_session_liveness_dto(
     SessionLivenessDto self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_session_mode_dto(
+    SessionModeDto self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_session_settings_dto(
+    SessionSettingsDto self,
     SseSerializer serializer,
   );
 

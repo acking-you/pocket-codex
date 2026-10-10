@@ -111,9 +111,19 @@ fn meta_key_of(service_key: &str) -> Result<String> {
     Ok(ServiceId::new(id.device, ServiceKind::Meta, id.name).key())
 }
 
+/// Registry-key prefix of the meta tunnels; each is scoped to the transport
+/// context it was opened in.
+const META_TUNNEL: &str = "meta\u{1f}";
+
 /// Resolve a service key to a reachable meta base [`Url`]. A meta tunnel hosted
 /// by THIS app is served on loopback directly (no relay hop); any other is
 /// reached by subscribing to it on the relay.
+///
+/// A relay tunnel belongs to the transport context (account and relay, or
+/// relay and key) it was opened in: the same logical key under another
+/// context never reuses it, it is dropped when the context changes, and one
+/// opened while the context changed is closed again instead of kept. A key
+/// namespaced to another account is refused.
 fn base_url(service_key: &str) -> Result<Url> {
     // Loopback short-circuit only when THIS process actually hosts the viewed
     // app-server — match its app key, not just the derived meta key, so a remote
@@ -123,11 +133,26 @@ fn base_url(service_key: &str) -> Result<Url> {
         format!("http://{addr}")
     } else {
         let meta_key = meta_key_of(service_key)?;
-        let sub = runtime::subscribe_service(meta_key, 0, &transport::resolve_blocking()?)
-            .context("subscribing to the host meta tunnel")?;
+        let owned = transport::resolve_owned_blocking()?;
+        let context = transport::Context::of(&owned.transport);
+        if !context.admits(service_key) {
+            anyhow::bail!("this service belongs to another account or relay");
+        }
+        let registry = format!("{META_TUNNEL}{}\u{1f}{meta_key}", context.id());
+        // Registered only while the context it was resolved in is current;
+        // a change drops it (`context_changed`) after the epoch moved.
+        let sub = runtime::subscribe_service_as(registry, &meta_key, 0, &owned.transport, || {
+            transport::is_current(owned.epoch)
+        })
+        .context("subscribing to the host meta tunnel")?;
         format!("http://{}", sub.local_addr)
     };
     Url::parse(&base).with_context(|| format!("parsing meta base url `{base}`"))
+}
+
+/// The transport context changed: close every meta tunnel of the old one.
+pub(super) fn context_changed() {
+    runtime::unsubscribe_prefix(META_TUNNEL);
 }
 
 /// Build an endpoint URL under the meta base, percent-encoding each segment.
@@ -424,6 +449,38 @@ pub struct UploadedFile {
 /// get their own generous per-request bound instead.
 const UPLOAD_TIMEOUT: Duration = Duration::from_secs(180);
 
+/// Revision for a pending attachment read. Includes saved configuration so
+/// a change is visible even before transport invalidation is published.
+pub fn upload_context() -> Result<String> {
+    let support = runtime::support_dir()?;
+    upload_context_at(&support)
+}
+
+fn upload_context_at(support: &std::path::Path) -> Result<String> {
+    let before = transport::epoch();
+    let config = crate::engine::config::load_config(support)?;
+    // Only return the digest; config contains credentials and stays local.
+    let identity =
+        serde_json::to_vec(&(before, &config.account, config.relay(), config.relay_key()))?;
+    anyhow::ensure!(transport::is_current(before), "attachment context changed");
+    Ok(pocket_codex_core::history_sync::digest_bytes(&identity))
+}
+
+/// Upload only while the configuration captured before the file read remains
+/// current. The endpoint is resolved once and never retargeted after this
+/// check.
+pub fn upload_file_scoped(
+    service_key: &str,
+    file_name: &str,
+    bytes: Vec<u8>,
+    expected: &str,
+) -> Result<UploadedFile> {
+    anyhow::ensure!(upload_context()? == expected, "attachment context changed; retry the upload");
+    let url = endpoint(service_key, &["uploads", file_name])?;
+    anyhow::ensure!(upload_context()? == expected, "attachment context changed; retry the upload");
+    upload_to(url, bytes)
+}
+
 /// Upload a document/file attachment to the host behind `service_key`,
 /// returning where it landed on the HOST filesystem. The turn text then
 /// references that path so the agent reads the file with its own tools —
@@ -431,6 +488,10 @@ const UPLOAD_TIMEOUT: Duration = Duration::from_secs(180);
 /// slot; only images travel inline).
 pub fn upload_file(service_key: &str, file_name: &str, bytes: Vec<u8>) -> Result<UploadedFile> {
     let url = endpoint(service_key, &["uploads", file_name])?;
+    upload_to(url, bytes)
+}
+
+fn upload_to(url: Url, bytes: Vec<u8>) -> Result<UploadedFile> {
     runtime::runtime().block_on(async move {
         let resp = client()
             .post(url)
@@ -825,6 +886,32 @@ pub fn config_put(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn pending_upload_context_changes_with_credentials_but_not_ui_settings() {
+        let dir = tempfile::tempdir().expect("support");
+        let initial = super::upload_context_at(dir.path()).expect("context");
+        crate::engine::config::update_config(dir.path(), |cfg| {
+            cfg.set_locale("zh");
+            Ok(())
+        })
+        .expect("locale");
+        assert_eq!(super::upload_context_at(dir.path()).expect("context"), initial);
+        crate::engine::config::update_config(dir.path(), |cfg| {
+            cfg.set_account_session("fixture-token", "fixture-refresh", "alice", Some("a".into()));
+            Ok(())
+        })
+        .expect("account");
+        let account = super::upload_context_at(dir.path()).expect("context");
+        assert_ne!(account, initial);
+        assert!(!account.contains("fixture"), "credentials never leave in the grant");
+        crate::engine::config::update_config(dir.path(), |cfg| {
+            cfg.set_account_backend("https://other.invalid");
+            Ok(())
+        })
+        .expect("backend");
+        assert_ne!(super::upload_context_at(dir.path()).expect("context"), account);
+    }
+
     use super::*;
 
     async fn file_server(responses: Vec<String>) -> (Url, tokio::task::JoinHandle<Vec<String>>) {

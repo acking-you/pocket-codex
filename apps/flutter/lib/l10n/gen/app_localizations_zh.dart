@@ -199,6 +199,12 @@ class AppLocalizationsZh extends AppLocalizations {
   String get imagePickFailed => '无法读取所选图片';
 
   @override
+  String get imagesNotAccepted => '该智能体不接受图片';
+
+  @override
+  String get attachmentRevoked => '未添加：读取文件期间会话已变化，请重新添加。';
+
+  @override
   String imageTooMany(int count) {
     return '每条消息最多附加 $count 张图片';
   }
@@ -1836,6 +1842,15 @@ class AppLocalizationsZh extends AppLocalizations {
   String get fileLinkClose => '关闭';
 
   @override
+  String get providerLabel => '服务提供方';
+
+  @override
+  String get providerCodex => 'Codex';
+
+  @override
+  String get hostMetaLabel => 'Meta 服务';
+
+  @override
   String get draft => '草稿';
 
   @override
@@ -2060,4 +2075,176 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get dictationShortcut => '语音输入（Ctrl+Shift+Space）';
+
+  @override
+  String get providerAcpAgent => 'ACP 智能体';
+
+  @override
+  String get protocolAcpTag => 'ACP';
+
+  @override
+  String get acpHostHint => '按程序和参数在本机运行兼容 ACP 的智能体，并提供给你的设备使用。停止托管会停止该智能体。';
+
+  @override
+  String get acpAgentLabel => '智能体';
+
+  @override
+  String get acpAgentCustom => '自定义智能体';
+
+  @override
+  String get acpAgentName => '智能体名称';
+
+  @override
+  String get acpProgram => '程序';
+
+  @override
+  String get acpProgramBrowse => '选择…';
+
+  @override
+  String get acpProgramHint => '完整路径，或本机 PATH 中的程序名。路径可以包含空格。';
+
+  @override
+  String get acpArguments => '参数';
+
+  @override
+  String get acpArgumentsHint => '每行一个参数，按原样传递：不经过 shell，不拆分，不展开变量。';
+
+  @override
+  String get acpArgumentAdd => '添加参数';
+
+  @override
+  String get acpArgumentRemove => '删除参数';
+
+  @override
+  String get acpArgumentMoveUp => '上移';
+
+  @override
+  String get acpArgumentMoveDown => '下移';
+
+  @override
+  String acpArgumentLabel(int index) {
+    return '参数 $index';
+  }
+
+  @override
+  String get acpSecretsNote => '保存的智能体以明文存储在本机。请勿在参数中放入密钥，优先使用智能体自己的登录。';
+
+  @override
+  String get acpProgramNotFound => '本机未找到该程序。';
+
+  @override
+  String acpProgramFound(String path) {
+    return '已找到：$path';
+  }
+
+  @override
+  String get acpSaveAgent => '保存到我的智能体';
+
+  @override
+  String get acpHostingUnsupported => '此平台暂不支持托管 ACP 智能体。你仍可使用其他设备托管的智能体。';
+
+  @override
+  String get acpPhaseStarting => '正在启动';
+
+  @override
+  String get acpPhaseReady => '运行中';
+
+  @override
+  String get acpPhaseFailed => '未运行';
+
+  @override
+  String get acpPhaseStopped => '已停止';
+
+  @override
+  String get acpAuthRequired => '智能体提示需要登录。请在主机上用智能体自己的方式登录，然后重启它。';
+
+  @override
+  String get acpRestart => '重启智能体';
+
+  @override
+  String get acpGatewayLabel => '智能体网关';
+
+  @override
+  String get acpStopNote => '停止托管会停止该智能体及其启动的进程。';
+
+  @override
+  String get acpFeatures => '智能体功能';
+
+  @override
+  String get acpFeatureReopen => '重新打开以前的会话';
+
+  @override
+  String get acpFeatureReopenLoad => '包含历史';
+
+  @override
+  String get acpFeatureReopenResume => '不含以前的历史';
+
+  @override
+  String get acpFeatureList => '智能体自己的会话列表';
+
+  @override
+  String get acpFeatureImages => '图片附件';
+
+  @override
+  String get acpFeatureSupported => '支持';
+
+  @override
+  String get acpFeatureNotSupported => '不支持';
+
+  @override
+  String get acpFeatureUnknown => '连接到运行中的智能体后显示';
+
+  @override
+  String permissionFromAgent(String agent) {
+    return '$agent 请求权限';
+  }
+
+  @override
+  String get permissionRememberTitle => '记住这个选择？';
+
+  @override
+  String permissionRememberBody(String option) {
+    return '“$option”会让智能体记住这个决定。生效的时长和范围由智能体决定。';
+  }
+
+  @override
+  String get permissionAnswerFailed => '未能发送你的回答，请重试。';
+
+  @override
+  String get agentOptions => '智能体选项';
+
+  @override
+  String get agentMode => '模式';
+
+  @override
+  String get historyGapNotice => '此智能体主机无法提供更早的历史记录。';
+
+  @override
+  String contentOmittedNotice(String parts) {
+    return '内容过大，未保留：$parts。';
+  }
+
+  @override
+  String get contentUnavailableNotice => '此回复的部分内容无法从智能体主机读取。';
+
+  @override
+  String get omittedImages => '图片';
+
+  @override
+  String get omittedDiffs => '文件改动';
+
+  @override
+  String get omittedInput => '工具输入';
+
+  @override
+  String get omittedLocations => '文件位置';
+
+  @override
+  String get omittedPlan => '计划步骤';
+
+  @override
+  String get omittedContent => '部分输出';
+
+  @override
+  String get omittedSeparator => '、';
 }

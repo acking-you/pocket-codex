@@ -9,6 +9,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:pocket_codex/src/dismissed_services.dart';
 import 'package:pocket_codex/src/error_format.dart';
+import 'package:pocket_codex/src/hosting/host_restore.dart';
 import 'package:pocket_codex/src/providers.dart';
 import 'package:pocket_codex/src/screens/app_session_screen.dart';
 import 'package:pocket_codex/src/service_key.dart';
@@ -41,8 +42,10 @@ class HomeScreen extends ConsumerStatefulWidget {
   /// so a later visit to the home route can't resurrect hosting the user
   /// stopped on purpose.
   @visibleForTesting
-  static void debugResetAutoHost() =>
-      _HomeScreenState._autoHostAttempted = false;
+  static void debugResetAutoHost() {
+    _HomeScreenState._autoHostAttempted = false;
+    _HomeScreenState._autoHostAcpAttempted.clear();
+  }
 }
 
 /// Which UI the home is showing.
@@ -76,6 +79,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   /// who stops hosting afterwards must not have it resurrected behind their
   /// back by a later visit to the home route.
   static bool _autoHostAttempted = false;
+
+  /// The same guard for ACP hosting records, by instance name.
+  static final Set<String> _autoHostAcpAttempted = {};
 
   _Phase _phase = _Phase.resolving;
   String? _serviceKey;
@@ -223,52 +229,25 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       final dismissed = await _dismissed();
       if (!mounted || gen != _generation) return;
       List<ServiceEntry> candidates() => services
-          .where((s) => s.kind == 'app' && !dismissed.contains(s.key))
+          .where((s) => isSessionKind(s.kind) && !dismissed.contains(s.key))
           .toList(growable: false);
 
       // 2. Desktop: restore the hosting the user left running last time, so a
       // freshly booted desktop is immediately chattable (and phone-reachable)
-      // even when OTHER hosts are discoverable. Gated on THIS machine not
-      // hosting yet; best-effort — failures fall through to the hero/remote.
+      // even when OTHER hosts are discoverable. Gated per provider on THIS
+      // machine not hosting it yet; best-effort — failures fall through to the
+      // hero/remote.
       var apps = candidates();
-      if (_isDesktop && !_autoHostAttempted) {
-        final prefs = await _prefs();
-        final host = prefs.autoHost;
-        var locallyHosting = false;
-        if (host != null) {
-          try {
-            locallyHosting = (await api.appServeStatus()).isNotEmpty;
-          } catch (_) {
-            // Unknown local state: treat as not hosting and let the attempt
-            // (or its failure) settle it.
-          }
-        }
+      if (_isDesktop &&
+          await _restoreHosting(api, gen: gen, background: background)) {
         if (!mounted || gen != _generation) return;
-        if (host != null && !locallyHosting) {
-          // Burn the once-per-run flag only for a real attempt, so a slow
-          // prefs load on the first pass doesn't forfeit the restore.
-          _autoHostAttempted = true;
-          if (!background) setState(() => _rehosting = true);
-          try {
-            await api.appServeStart(
-              port: host.port,
-              binaryOverride: host.binaryOverride,
-              name: host.name,
-              proxy: host.proxy,
-              // Legacy built-in hosts are restored through the external binary.
-              embedded: false,
-            );
-            ref.invalidate(localServeListProvider);
-            ref.invalidate(servicesProvider);
-            services = await ref.read(servicesProvider.future);
-            apps = candidates();
-          } catch (_) {
-            // The hero (with its start-hosting action) is the fallback.
-          } finally {
-            if (mounted && gen == _generation && _rehosting) {
-              setState(() => _rehosting = false);
-            }
-          }
+        try {
+          ref.invalidate(localServeListProvider);
+          ref.invalidate(servicesProvider);
+          services = await ref.read(servicesProvider.future);
+          apps = candidates();
+        } catch (_) {
+          // The hero (with its start-hosting action) is the fallback.
         }
       }
       if (!mounted || gen != _generation) return;
@@ -379,6 +358,54 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       if (gen == _generation) {
         _resolving = false;
         _resolveStartedAt = null;
+      }
+    }
+  }
+
+  /// Restore the Codex and ACP hosting the user left running, each
+  /// at most once per run and only what this machine does not host already
+  /// (see [planHostRestore]). True when at least one restore succeeded
+  /// (discovery is stale).
+  Future<bool> _restoreHosting(
+    BridgeApi api, {
+    required int gen,
+    required bool background,
+  }) async {
+    final prefs = await _prefs();
+    final pending = planHostRestore(
+      prefs,
+      const [],
+      codexAttempted: _autoHostAttempted,
+      acpAttempted: _autoHostAcpAttempted,
+      acpSupported: api.acpHostingSupported(),
+    );
+    if (pending.isEmpty) return false;
+    var local = const <AppServeStatus>[];
+    try {
+      local = await api.appServeStatus();
+    } catch (_) {
+      // Unknown local state: treat as not hosting and let the attempt (or its
+      // failure) settle it.
+    }
+    if (!mounted || gen != _generation) return false;
+    final plan = planHostRestore(
+      prefs,
+      local,
+      codexAttempted: _autoHostAttempted,
+      acpAttempted: _autoHostAcpAttempted,
+      acpSupported: api.acpHostingSupported(),
+    );
+    if (plan.isEmpty) return false;
+    // Burn the once-per-run flags only for a real attempt, so a slow prefs
+    // load on the first pass doesn't forfeit the restore.
+    if (plan.codex != null) _autoHostAttempted = true;
+    _autoHostAcpAttempted.addAll(plan.acp.map((saved) => saved.name));
+    if (!background) setState(() => _rehosting = true);
+    try {
+      return await runHostRestore(api, plan);
+    } finally {
+      if (mounted && gen == _generation && _rehosting) {
+        setState(() => _rehosting = false);
       }
     }
   }
@@ -589,7 +616,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
         final candidates = live == null
             ? _candidates
             : live
-                  .where((s) => s.kind == 'app' && !dismissed.contains(s.key))
+                  .where(
+                    (s) => isSessionKind(s.kind) && !dismissed.contains(s.key),
+                  )
                   .toList(growable: false);
         // The chat IS the home. Keyed by service so a switch rebuilds the
         // session state from scratch (connections stay alive underneath).

@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:pocket_codex/src/bridge_api.dart' show AcpAgentSpec;
 
 /// Durable, device-local UI preferences backing the chat-first home screen:
 /// which app service the user prefers and last talked to, the last-open thread
@@ -21,12 +22,20 @@ class UiPrefs {
     this.lastServiceKey,
     this.lastThreadByService = const {},
     this.autoHost,
+    this.acpAgents = const [],
+    this.autoHostAcp = const [],
     this.guideSeen = false,
     this.themeMode,
     this.composerHeight,
     this.sidebarOpen,
     this.sidebarWidth,
   });
+
+  /// Custom ACP agents the user saved (program + arguments, in plain text).
+  final List<AcpAgentSpec> acpAgents;
+
+  /// The ACP agents the user left hosted, restored on a desktop cold start.
+  final List<AutoHostAcpPrefs> autoHostAcp;
 
   /// Full relay key of the app service explicitly chosen as the default host.
   final String? preferredAppServiceKey;
@@ -62,7 +71,7 @@ class UiPrefs {
   final double? sidebarWidth;
 
   /// Copy with the given fields replaced. `clearAutoHost` removes the
-  /// auto-host record; `clearThemeMode` returns to follow-system (a plain
+  /// Codex auto-host record; `clearThemeMode` returns to follow-system (a plain
   /// null argument means "keep").
   UiPrefs copyWith({
     String? preferredAppServiceKey,
@@ -70,6 +79,8 @@ class UiPrefs {
     Map<String, String>? lastThreadByService,
     AutoHostPrefs? autoHost,
     bool clearAutoHost = false,
+    List<AcpAgentSpec>? acpAgents,
+    List<AutoHostAcpPrefs>? autoHostAcp,
     bool? guideSeen,
     String? themeMode,
     bool clearThemeMode = false,
@@ -82,6 +93,8 @@ class UiPrefs {
     lastServiceKey: lastServiceKey ?? this.lastServiceKey,
     lastThreadByService: lastThreadByService ?? this.lastThreadByService,
     autoHost: clearAutoHost ? null : (autoHost ?? this.autoHost),
+    acpAgents: acpAgents ?? this.acpAgents,
+    autoHostAcp: autoHostAcp ?? this.autoHostAcp,
     guideSeen: guideSeen ?? this.guideSeen,
     themeMode: clearThemeMode ? null : (themeMode ?? this.themeMode),
     composerHeight: composerHeight ?? this.composerHeight,
@@ -99,7 +112,18 @@ class UiPrefs {
       });
     }
     final rawHost = json['autoHost'];
+    final rawAgents = json['acpAgents'];
+    final rawAcpHosts = json['autoHostAcp'];
     return UiPrefs(
+      acpAgents: [
+        if (rawAgents is List)
+          for (final agent in rawAgents.take(50)) ?AcpAgentSpec.fromJson(agent),
+      ],
+      autoHostAcp: [
+        if (rawAcpHosts is List)
+          for (final host in rawAcpHosts.take(16))
+            ?AutoHostAcpPrefs.fromJson(host),
+      ],
       preferredAppServiceKey: json['preferredAppServiceKey'] is String
           ? json['preferredAppServiceKey'] as String
           : null,
@@ -136,6 +160,10 @@ class UiPrefs {
     if (lastThreadByService.isNotEmpty)
       'lastThreadByService': lastThreadByService,
     if (autoHost != null) 'autoHost': autoHost!.toJson(),
+    if (acpAgents.isNotEmpty)
+      'acpAgents': [for (final agent in acpAgents) agent.toJson()],
+    if (autoHostAcp.isNotEmpty)
+      'autoHostAcp': [for (final host in autoHostAcp) host.toJson()],
     if (guideSeen) 'guideSeen': true,
     if (themeMode != null) 'themeMode': themeMode,
     if (composerHeight != null) 'composerHeight': composerHeight,
@@ -192,6 +220,30 @@ class AutoHostPrefs {
   };
 }
 
+/// An ACP agent the user left hosted under [name], restored on cold start.
+class AutoHostAcpPrefs {
+  /// Creates an ACP auto-host record.
+  const AutoHostAcpPrefs({required this.name, required this.spec});
+
+  /// Instance name.
+  final String name;
+
+  /// What was hosted.
+  final AcpAgentSpec spec;
+
+  /// From persisted JSON; `null` when malformed.
+  static AutoHostAcpPrefs? fromJson(Object? json) {
+    if (json is! Map) return null;
+    final name = json['name'];
+    final spec = AcpAgentSpec.fromJson(json['spec']);
+    if (name is! String || name.isEmpty || spec == null) return null;
+    return AutoHostAcpPrefs(name: name, spec: spec);
+  }
+
+  /// JSON for persistence.
+  Map<String, dynamic> toJson() => {'name': name, 'spec': spec.toJson()};
+}
+
 /// Store notifier: load-once, serial best-effort writes (mirrors the
 /// robustness contract of [DismissedServices]).
 class UiPrefsStore extends AsyncNotifier<UiPrefs> {
@@ -229,6 +281,10 @@ class UiPrefsStore extends AsyncNotifier<UiPrefs> {
           ...raced.lastThreadByService,
         },
         autoHost: raced.autoHost ?? loaded.autoHost,
+        acpAgents: raced.acpAgents.isEmpty ? loaded.acpAgents : raced.acpAgents,
+        autoHostAcp: raced.autoHostAcp.isEmpty
+            ? loaded.autoHostAcp
+            : raced.autoHostAcp,
         // Only ever flips false→true, so OR-merging is lossless.
         guideSeen: raced.guideSeen || loaded.guideSeen,
         themeMode: raced.themeMode ?? loaded.themeMode,
@@ -354,6 +410,54 @@ class UiPrefsStore extends AsyncNotifier<UiPrefs> {
   void clearAutoHost() {
     if (_current.autoHost == null) return;
     final next = _current.copyWith(clearAutoHost: true);
+    state = AsyncData(next);
+    _enqueueWrite(next);
+  }
+
+  /// Save (or replace, by profile id) a custom ACP agent.
+  void saveAcpAgent(AcpAgentSpec agent) {
+    final agents = [
+      for (final saved in _current.acpAgents)
+        if (saved.profileId != agent.profileId) saved,
+      agent,
+    ];
+    final next = _current.copyWith(acpAgents: agents);
+    state = AsyncData(next);
+    _enqueueWrite(next);
+  }
+
+  /// Forget a saved custom ACP agent.
+  void removeAcpAgent(String profileId) {
+    final agents = [
+      for (final saved in _current.acpAgents)
+        if (saved.profileId != profileId) saved,
+    ];
+    if (agents.length == _current.acpAgents.length) return;
+    final next = _current.copyWith(acpAgents: agents);
+    state = AsyncData(next);
+    _enqueueWrite(next);
+  }
+
+  /// Remember an ACP agent the user just hosted under `host.name`.
+  void setAutoHostAcp(AutoHostAcpPrefs host) {
+    final hosts = [
+      for (final saved in _current.autoHostAcp)
+        if (saved.name != host.name) saved,
+      host,
+    ];
+    final next = _current.copyWith(autoHostAcp: hosts);
+    state = AsyncData(next);
+    _enqueueWrite(next);
+  }
+
+  /// Forget the ACP auto-host record of [name] (stopped on purpose).
+  void clearAutoHostAcp(String name) {
+    final hosts = [
+      for (final saved in _current.autoHostAcp)
+        if (saved.name != name) saved,
+    ];
+    if (hosts.length == _current.autoHostAcp.length) return;
+    final next = _current.copyWith(autoHostAcp: hosts);
     state = AsyncData(next);
     _enqueueWrite(next);
   }

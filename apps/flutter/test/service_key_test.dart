@@ -40,6 +40,22 @@ void main() {
     expect(parseServiceKey('pcx:box:meta:default').kind, 'meta');
   });
 
+  test('ACP keys parse, even when the name equals a kind', () {
+    final self = parseServiceKey('pcx:box:acp:acp');
+    expect(self.device, 'box');
+    expect(self.kind, 'acp');
+    expect(self.name, 'acp');
+    final account = parseServiceKey('pcxu:u1:box:acp:app');
+    expect(account.device, 'box');
+    expect(account.kind, 'acp');
+    expect(account.name, 'app');
+    expect(isAcpKey('pcx:box:acp:work'), isTrue);
+    expect(isAcpKey('pcx:box:app:acp'), isFalse);
+    expect(isSessionKind('acp'), isTrue);
+    expect(isSessionKind('app'), isTrue);
+    expect(isSessionKind('api'), isFalse);
+  });
+
   test('a non-key yields empties, and labels fall back to the raw string', () {
     // Callers pass whatever they hold; an index-based parse would crash here.
     expect(parseServiceKey('not-a-key').device, '');

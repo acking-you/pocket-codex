@@ -1,6 +1,11 @@
 //! Config persistence + `pcx1:` share-string codec. Pure (no FRB, no
 //! runtime), so it unit-tests standalone.
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    sync::Mutex,
+};
+
+static CONFIG_WRITE: Mutex<()> = Mutex::new(());
 
 use anyhow::{anyhow, bail, Context, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
@@ -51,6 +56,13 @@ pub fn config_path(support_dir: &Path) -> PathBuf {
 
 /// Load the config from `<support_dir>/config.toml`. Missing file → default.
 pub fn load_config(support_dir: &Path) -> Result<Config> {
+    let _guard = CONFIG_WRITE
+        .lock()
+        .map_err(|_| anyhow!("config lock poisoned"))?;
+    load_unlocked(support_dir)
+}
+
+fn load_unlocked(support_dir: &Path) -> Result<Config> {
     let path = config_path(support_dir);
     match std::fs::read_to_string(&path) {
         Ok(raw) => toml::from_str(&raw).context("parsing config.toml"),
@@ -61,7 +73,30 @@ pub fn load_config(support_dir: &Path) -> Result<Config> {
 
 /// Persist the config. On unix the file is created 0o600 (it holds the
 /// relay MSG_HEADER_KEY); permissions are set before the bytes are written.
+#[cfg(test)]
 pub fn save_config(support_dir: &Path, config: &Config) -> Result<()> {
+    let _guard = CONFIG_WRITE
+        .lock()
+        .map_err(|_| anyhow!("config lock poisoned"))?;
+    save_unlocked(support_dir, config)
+}
+
+/// Apply a conditional change to the latest config under the bridge write lock.
+/// The closure must not await or call config persistence recursively.
+pub fn update_config<T>(
+    support_dir: &Path,
+    update: impl FnOnce(&mut Config) -> Result<T>,
+) -> Result<T> {
+    let _guard = CONFIG_WRITE
+        .lock()
+        .map_err(|_| anyhow!("config lock poisoned"))?;
+    let mut config = load_unlocked(support_dir)?;
+    let result = update(&mut config)?;
+    save_unlocked(support_dir, &config)?;
+    Ok(result)
+}
+
+fn save_unlocked(support_dir: &Path, config: &Config) -> Result<()> {
     std::fs::create_dir_all(support_dir).context("creating support dir")?;
     let path = config_path(support_dir);
     let raw = toml::to_string_pretty(config)?;

@@ -7,6 +7,7 @@ import 'package:pocket_codex/src/motion.dart';
 import 'package:pocket_codex/src/service_key.dart';
 import 'package:pocket_codex/src/theme.dart';
 import 'package:pocket_codex/src/widgets/adaptive_sheet.dart';
+import 'package:pocket_codex/src/widgets/provider_badge.dart';
 import 'package:pocket_codex/src/widgets/status_dots.dart';
 
 /// Where a host switch stands. Owned by the home, which does the switching,
@@ -184,6 +185,8 @@ class _HostSwitcherState extends State<HostSwitcher> {
                     ),
                   ),
                 ),
+                const SizedBox(width: 6),
+                ProviderBadge.forKey(busy ? pending!.target : widget.current),
                 if (multiple && !busy)
                   Icon(
                     Icons.unfold_more_rounded,
@@ -349,6 +352,8 @@ class _HostList extends StatelessWidget {
                 ],
               ),
             ),
+            const SizedBox(width: 8),
+            ProviderBadge.forKey(s.key),
             if (isCurrent)
               Icon(Icons.check, size: 16, color: signalColor(scheme)),
           ],

@@ -648,6 +648,7 @@ class _SessionRow extends StatelessWidget {
 
 /// First connected app-server service key (the resume target), or null when
 /// none is connected yet. Shared by the sessions list and the read-only viewer.
+/// Codex only (`app`): these are Codex rollouts, which ACP agents cannot resume.
 String? connectedAppKey(WidgetRef ref) {
   final bridge = ref.read(bridgeApiProvider);
   final services = ref.read(servicesProvider).valueOrNull ?? const [];

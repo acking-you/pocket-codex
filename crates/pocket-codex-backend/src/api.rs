@@ -264,6 +264,21 @@ async fn me(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json
     }))
 }
 
+/// `GET /v1/services` query. ACP services are listed only on
+/// request: an older client cannot deserialize a kind it does not know and
+/// would fail the whole listing.
+#[derive(Default, Deserialize)]
+struct ServicesQuery {
+    #[serde(default)]
+    include_acp: bool,
+}
+
+/// Which opt-in kinds a caller asked to see.
+#[derive(Clone, Copy, Default)]
+struct OptInKinds {
+    acp: bool,
+}
+
 /// List the caller's own services, as the relay sees them.
 ///
 /// Scoped by the account's relay NAMESPACE first and its key prefix second. The
@@ -275,6 +290,7 @@ async fn me(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json
 async fn services(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Query(query): Query<ServicesQuery>,
 ) -> ApiResult<Json<ServicesResponse>> {
     let claims = authed(&state, &headers)?;
     let Some(namespace) = state
@@ -290,7 +306,9 @@ async fn services(
         .await
         .map_err(|e| ApiError::Internal(format!("relay status: {e}")))?;
     Ok(Json(ServicesResponse {
-        services: own_services(&all, namespace, &claims.sub),
+        services: own_services(&all, namespace, &claims.sub, OptInKinds {
+            acp: query.include_acp,
+        }),
     }))
 }
 
@@ -303,6 +321,7 @@ fn own_services(
     all: &[pocket_codex_pb::ServiceRecord],
     namespace: u64,
     user_id: &str,
+    opt_in: OptInKinds,
 ) -> Vec<ServiceEntry> {
     let prefix = NamespacedServiceId::user_prefix(user_id);
     all.iter()
@@ -317,7 +336,11 @@ fn own_services(
         // key), and an unrecognised kind must never be sent — an older client
         // can't deserialize a kind it doesn't know and would fail the whole
         // listing, so omit both here.
-        .filter(|nsid| matches!(nsid.service.kind, ServiceKind::App | ServiceKind::Api))
+        .filter(|nsid| match nsid.service.kind {
+            ServiceKind::App | ServiceKind::Api => true,
+            ServiceKind::Acp => opt_in.acp,
+            ServiceKind::Meta | ServiceKind::Unknown => false,
+        })
         .map(|nsid| ServiceEntry {
             device: nsid.service.device,
             kind: nsid.service.kind,
@@ -421,13 +444,13 @@ mod tests {
             record(BOB_NS, "pcxu:bob:studio:app:default"),
         ];
 
-        let alice = own_services(&all, ALICE_NS, "alice");
+        let alice = own_services(&all, ALICE_NS, "alice", OptInKinds::default());
         assert_eq!(alice.len(), 1, "expected only Alice's own service, got {alice:?}");
         assert_eq!(alice[0].name, "default");
 
         // And the converse: Alice's namespace does not leak into Bob's listing
         // either, even though one of those names carries his prefix.
-        let bob = own_services(&all, BOB_NS, "bob");
+        let bob = own_services(&all, BOB_NS, "bob", OptInKinds::default());
         assert_eq!(bob.len(), 1, "expected only Bob's own service, got {bob:?}");
         assert_eq!(bob[0].device, "studio");
     }
@@ -443,11 +466,39 @@ mod tests {
             // Same namespace, but not one of ours at all.
             record(NS, "some-unrelated-service"),
         ];
-        let mut kinds: Vec<String> = own_services(&all, NS, "alice")
+        let mut kinds: Vec<String> = own_services(&all, NS, "alice", OptInKinds::default())
             .into_iter()
             .map(|s| s.kind.as_key_segment().to_string())
             .collect();
         kinds.sort();
         assert_eq!(kinds, vec!["api", "app"]);
+    }
+
+    #[test]
+    fn acp_services_are_opt_in_and_still_namespace_scoped() {
+        const ALICE_NS: u64 = 7;
+        const BOB_NS: u64 = 8;
+        let all = vec![
+            record(ALICE_NS, "pcxu:alice:mac:app:default"),
+            record(ALICE_NS, "pcxu:alice:mac:acp:agent"),
+            record(ALICE_NS, "pcxu:alice:mac:meta:agent"),
+            // Bob's namespace carrying Alice's prefix must never be attributed.
+            record(BOB_NS, "pcxu:alice:mac:acp:phantom"),
+        ];
+        let kinds = |opt_in| {
+            let mut kinds: Vec<String> = own_services(&all, ALICE_NS, "alice", opt_in)
+                .into_iter()
+                .map(|s| format!("{}:{}", s.kind.as_key_segment(), s.name))
+                .collect();
+            kinds.sort();
+            kinds
+        };
+        assert_eq!(kinds(OptInKinds::default()), vec!["app:default"]);
+        assert_eq!(
+            kinds(OptInKinds {
+                acp: true,
+            }),
+            vec!["acp:agent", "app:default"]
+        );
     }
 }

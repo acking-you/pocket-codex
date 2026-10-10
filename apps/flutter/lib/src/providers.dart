@@ -281,6 +281,18 @@ typedef RunningSessionSnapshot = ({
   DateTime requestedAt,
 });
 
+/// A running session known only by id (the ACP engine's inventory).
+LocalSession _runningStub(String threadId) => LocalSession(
+  threadId: threadId,
+  preview: '',
+  updatedAt: 0,
+  turnState: 'incomplete',
+  heldOpen: true,
+  safety: 'ownedRunning',
+  allowsResume: false,
+  requiresTakeover: false,
+);
+
 /// Discovers external writers without opening their threads. Probes never
 /// overlap, and the host reads lifecycle records only for held rollout files.
 final runningSessionInventoryProvider = StreamProvider.autoDispose
@@ -300,6 +312,21 @@ final runningSessionInventoryProvider = StreamProvider.autoDispose
         inFlight = true;
         final requestedAt = DateTime.now();
         try {
+          // ACP agents report running sessions through the
+          // engine; they have no meta rollout inventory, and their history is
+          // not prefetched here. The source is a capability, not a name.
+          final inventory = api.appCapabilities(serviceKey).runningInventory;
+          if (inventory == 'none') return;
+          if (inventory == 'engine') {
+            final ids = await api.appRunningThreads(serviceKey);
+            if (!disposed) {
+              out.add((
+                sessions: [for (final id in ids) _runningStub(id)],
+                requestedAt: requestedAt,
+              ));
+            }
+            return;
+          }
           final sessions = await api.metaSessions(
             serviceKey,
             runningOnly: true,
