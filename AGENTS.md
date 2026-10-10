@@ -599,6 +599,14 @@ this file's roadmap so the source of truth stays in sync.
     - History is only what the host retained.
     - The mock agent stays a Cargo example (built by `cargo test`, never
       shipped).
+    - Real OpenCode 1.18.35 was exercised on macOS through a public relay
+      with independent host/controller processes and an isolated Anthropic
+      gateway configuration: live streaming, session inventory/configuration,
+      permission rejection/approval, cancellation, meta file previews,
+      reconnect and process-restart history recovery. The opt-in
+      `acp_live_remote_control` test is ignored in ordinary CI; it requires
+      explicit disposable fixtures and credentials. Two processes on one
+      Mac do not establish acceptance on a second physical device or OS.
 
     See `docs/acp-agents.md` and ADR-0003.
 

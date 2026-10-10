@@ -46,6 +46,8 @@
 //! connect reaches the new one. Disconnecting drops only this controller's
 //! view: turns and permissions belong to the host and keep running.
 
+#[cfg(test)]
+mod live_tests;
 mod ops;
 mod translate;
 

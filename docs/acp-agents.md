@@ -427,6 +427,66 @@ The automated tests of owned hosting and its process handling (process
 groups, `waitid` exit detection) have been run on macOS; other Unix desktops
 share the code, but their lifecycle and runtime paths have not all been
 exercised. Windows hosting stays disabled.
-No real OpenCode binary was used, so the OpenCode preset has not been
-verified against `opencode acp`; only the documented command line is
-assumed.
+
+### Real OpenCode acceptance (2026-10-10)
+
+OpenCode **1.18.35** (official macOS ARM64 npm binary, package SHA-512
+verified) was launched as `opencode acp --pure --cwd <disposable-project>`
+by the production Pocket-Codex host. A separate bridge controller process
+connected through a public pb-mapper relay; it had no in-process host and
+could not use the loopback shortcut. Both used private, independent support
+directories. This is a real network round trip between two processes on
+one Mac, not a test on a second physical device.
+
+The model was `claude-haiku-4-5-20251001` through an explicitly authorized
+Anthropic-compatible gateway. OpenCode used `@ai-sdk/anthropic` with its
+base URL ending in `/v1`; the API key came from a private file. An initial
+`@ai-sdk/openai-compatible` configuration failed because this gateway
+does not implement `/v1/chat/completions`. Choosing the provider matching
+the gateway's actual API resolved that failure; no Pocket-Codex protocol
+change was needed.
+
+The live run verified:
+
+- ACP initialization, capability negotiation, session creation and inventory;
+- advertised model and mode configuration, including restoring the original
+  selection;
+- streamed model output and completed-turn history;
+- controller disconnect/reconnect with unchanged retained item IDs and text;
+- exact permission choices: rejecting a write leaves no file, approving a
+  write creates only the disposable fixture, and its content can be previewed
+  through the separately published meta service;
+- cancelling a real streamed model turn produces an interrupted, idle session;
+- restarting the actual agent increments its generation, lists and loads the
+  previous session, replays its history and accepts a new prompt;
+- stopping the host withdraws both owned relay registrations, and no owned
+  OpenCode process remains afterwards.
+
+The test uses the same host and `SessionEngine` operations called by Flutter.
+The main application and existing user sessions were not opened. Real GUI
+interaction with this agent, hosted-account transport, image understanding,
+other model providers and non-macOS lifecycle behavior are not covered by
+this live run. Shared Flutter behavior is covered separately by widget tests,
+real-font layout snapshots and the native theme fixture.
+
+To repeat the opt-in test in `engine/acp/live_tests.rs`, explicitly prepare a
+private directory with `fixture/`, an `agent.json` containing the configured
+`AgentSpec`, and `host-support/config.toml` plus
+`controller-support/config.toml` containing the intended relay configuration.
+Use an agent configuration with isolated storage, a working model provider,
+write permissions set to ask, and external-directory access disabled. Keep
+credentials out of the repository, arguments and logs. Use a fresh fixture
+and a unique `PCX_ACP_LIVE_NAME`; the test refuses to overwrite its two fixture
+files. Hosting creates only that name's ACP session record in the ordinary
+host state directory; it never opens another host's records.
+
+Build the bridge test executable once with
+`cargo test -p pocket_codex_bridge --lib --locked --no-run`. Run that same
+executable in two independent processes, both with `PCX_ACP_LIVE_ROOT` and
+`PCX_ACP_LIVE_NAME`, and with the exact test filter
+`engine::acp::live_tests::acp_live_remote_control --ignored --exact --nocapture`.
+Start `PCX_ACP_LIVE_ROLE=host` first, wait for `ready.json`, then start
+`PCX_ACP_LIVE_ROLE=controller`. The controller requests shutdown on completion
+or panic; the host also has a ten-minute deadline. Preserve `acceptance.json`,
+`cleanup.json` and private process exit logs as evidence. Normal CI does not
+contact a paid model or real relay.
