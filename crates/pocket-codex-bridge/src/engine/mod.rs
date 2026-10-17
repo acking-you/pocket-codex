@@ -6,6 +6,7 @@ pub mod app_session;
 pub mod claude_setup;
 pub mod codex_login;
 pub mod config;
+pub mod daemon;
 pub mod discovery;
 pub mod host_apply;
 mod host_lease;

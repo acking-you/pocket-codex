@@ -453,6 +453,27 @@ fn a_sign_in_server_routed_elsewhere_is_refused_and_stopped() {
 #[cfg(unix)]
 #[test]
 fn a_sign_in_server_on_the_official_route_is_admitted() {
+    // This fixture attributes its listener to the test process. Other tests'
+    // starting/exiting descendants make that process tree unverifiable.
+    const ISOLATED: &str = "PCX_SIGN_IN_OWNER_FIXTURE";
+    if std::env::var_os(ISOLATED).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
+            .args([
+                "--exact",
+                "engine::codex_login::tests::a_sign_in_server_on_the_official_route_is_admitted",
+                "--nocapture",
+            ])
+            .env(ISOLATED, "1")
+            .output()
+            .expect("isolated ownership fixture");
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
     let fixture = fake_server(serde_json::json!({
         "model_provider": "openai",
         "chatgpt_base_url": "https://chatgpt.com/backend-api/",

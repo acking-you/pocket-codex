@@ -60,7 +60,10 @@ pub async fn run(cmd: WorkerCmd) -> Result<()> {
             connection.stop().await?;
             outcome?;
         },
-        WorkerCmd::ApiProxy(args) => api_proxy::run(args.listen, args.proxy).await?,
+        WorkerCmd::ApiProxy(args) => {
+            super::host_identity::device(None)?;
+            api_proxy::run(args.listen, args.proxy).await?;
+        },
     }
     Ok(())
 }

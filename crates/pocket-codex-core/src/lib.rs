@@ -10,6 +10,9 @@
 
 #![forbid(unsafe_code)]
 
+/// Metadata identifying the environment that owns a registered service.
+pub mod device;
+
 /// Library-level error type re-exported from individual modules.
 pub mod error;
 

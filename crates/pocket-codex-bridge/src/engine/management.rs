@@ -139,6 +139,9 @@ pub struct DeviceView {
     pub app_version: String,
     /// Host OS, never the controller's OS.
     pub os: String,
+    /// Publisher identity and environment; absent on older hosts.
+    #[serde(default)]
+    pub metadata: Option<pocket_codex_core::device::DeviceMetadata>,
     /// Relay device identity.
     pub device: String,
     /// Managed services owned by this app only.
@@ -349,7 +352,8 @@ pub fn device() -> Result<DeviceView> {
         protocol: 1,
         app_version: env!("CARGO_PKG_VERSION").into(),
         os: std::env::consts::OS.into(),
-        device: pocket_codex_core::service::default_device_id(),
+        metadata: Some(pocket_codex_core::device::DeviceMetadata::current()),
+        device: runtime::device_id(),
         hosts: names.iter().map(|name| host(name)).collect::<Result<_>>()?,
         restore_problem: host_lifecycle::problem(None)?,
     })

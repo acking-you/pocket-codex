@@ -103,6 +103,8 @@ pub struct ManagedDeviceDto {
     pub device: String,
     /// OS of the host computer.
     pub os: String,
+    /// Publisher identity and environment, absent on older hosts.
+    pub metadata: Option<device_metadata::DeviceMetadataDto>,
     /// Pocket app version on the host.
     pub app_version: String,
     /// Its own running and stopped services.
@@ -117,6 +119,10 @@ pub fn managed_device(service_key: String) -> Result<ManagedDeviceDto> {
     Ok(ManagedDeviceDto {
         device: value.device,
         os: value.os,
+        metadata: value
+            .metadata
+            .filter(|metadata| metadata.protocol == 1)
+            .map(Into::into),
         app_version: value.app_version,
         hosts: value.hosts.into_iter().map(Into::into).collect(),
         restore_problem: value.restore_problem,

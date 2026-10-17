@@ -24,6 +24,7 @@ use crate::{
 pub mod codex_setup;
 pub mod connection;
 pub mod device_management;
+pub mod device_metadata;
 pub mod events;
 pub mod host_config;
 pub mod host_sessions;
@@ -54,6 +55,7 @@ pub use self::{
         HostRestoreOverrideDto, ManagedDeviceDto, ManagedHostDto, ManagedHostSaveDto,
         ManagedRuntimeAvailabilityDto, ManagedRuntimeDto,
     },
+    device_metadata::{local_device_metadata, service_device_metadata, DeviceMetadataDto},
     events::{
         app_events, log_events, meta_retry_events, AppEventDto, LogLineDto, RetryProgressDto,
     },

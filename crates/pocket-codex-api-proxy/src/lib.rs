@@ -149,6 +149,12 @@ pub async fn serve(listener: TcpListener, proxy: Option<String>) -> Result<()> {
 
 fn proxy_router(state: ProxyState) -> Router {
     Router::new()
+        .route(
+            "/host/device",
+            axum::routing::get(|| async {
+                axum::Json(pocket_codex_core::device::DeviceMetadata::current())
+            }),
+        )
         .route("/v1/responses", post(forward_http).get(forward_ws))
         .fallback(proxy_forbidden)
         .with_state(Arc::new(state))
@@ -698,6 +704,25 @@ mod tests {
         assert_eq!(headers[AUTHORIZATION], "Bearer test-host-token");
         assert_eq!(headers["chatgpt-account-id"], "test-account");
         assert_eq!(headers["x-client-marker"], "preserved");
+    }
+
+    #[tokio::test]
+    async fn publisher_metadata_is_local_and_never_forwarded_upstream() {
+        let (addr, task) =
+            test_server(test_proxy("127.0.0.1:1".parse().expect("closed upstream"))).await;
+        let client = Client::builder().no_proxy().build().expect("client");
+        let metadata = client
+            .get(format!("http://{addr}/host/device"))
+            .send()
+            .await
+            .expect("metadata")
+            .error_for_status()
+            .expect("metadata route")
+            .json::<pocket_codex_core::device::DeviceMetadata>()
+            .await
+            .expect("metadata JSON");
+        assert_eq!(metadata, pocket_codex_core::device::DeviceMetadata::current());
+        task.abort();
     }
 
     #[tokio::test]

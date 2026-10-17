@@ -89,12 +89,15 @@ class _HostingEditorState extends ConsumerState<HostingEditor>
   }
 
   Widget _agentGrid() {
+    final metadata = api.localDeviceMetadata();
     final saved =
         ref.watch(uiPrefsProvider).valueOrNull?.acpAgents ??
         const <AcpAgentSpec>[];
     return GroupCard(
       key: const Key('host-agent-section'),
       title: AppLocalizations.of(context).hostSectionAgent,
+      hint:
+          '${AppLocalizations.of(context).servicesLocalDevice} · ${metadata.hostname} · ${metadata.platform}',
       children: [
         EditorBlock(
           child: AgentChoiceGrid(

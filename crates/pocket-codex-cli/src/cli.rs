@@ -118,12 +118,19 @@ pub struct InitArgs {
 /// Args for `pocket-codex serve`.
 #[derive(Debug, Args)]
 pub struct ServeArgs {
+    /// Stay in the foreground and let authorized devices manage this computer's
+    /// services. Uses the desktop hosting engine, encrypted relay traffic and
+    /// saved lifecycle choices; the initial host also exposes a Responses API.
+    #[arg(long, conflicts_with_all = ["key", "extra"])]
+    pub allow_remote_management: bool,
+
     /// Exact pb-mapper key to register. When omitted, Pocket-Codex builds
     /// `pcx:<device>:app:<name>`.
     #[arg(long)]
     pub key: Option<String>,
 
-    /// Device id used in generated Pocket-Codex service keys.
+    /// Override the device in generated service keys. Defaults to a persisted
+    /// OS/hostname/installation ID; use distinct overrides for separate hosts.
     #[arg(long)]
     pub device: Option<String>,
 
@@ -207,7 +214,8 @@ pub struct ApiServeArgs {
     #[arg(long)]
     pub key: Option<String>,
 
-    /// Device id used in generated Pocket-Codex service keys.
+    /// Override the device in generated service keys. Defaults to a persisted
+    /// OS/hostname/installation ID; use distinct overrides for separate hosts.
     #[arg(long)]
     pub device: Option<String>,
 

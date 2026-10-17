@@ -298,7 +298,7 @@ fn publish(
             Err(error) => return Err((error, owner)),
         };
     let rt = runtime::runtime();
-    let device = default_device_id();
+    let device = runtime::device_id();
     let gateway_host = host.clone();
     let gateway_task = rt.spawn(host_services::supervise(
         "the ACP gateway",

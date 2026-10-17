@@ -46,7 +46,7 @@ use std::{
 
 use anyhow::{anyhow, bail, Context, Result};
 use once_cell::sync::OnceCell;
-use pocket_codex_core::service::{default_device_id, ServiceId, ServiceKind};
+use pocket_codex_core::service::{ServiceId, ServiceKind};
 use pocket_codex_host_svc::{
     acp::{self, claude, spec, AgentHost, AgentSpec, HostOptions, SessionStore, SourceId},
     file_links::SessionDirResolver,

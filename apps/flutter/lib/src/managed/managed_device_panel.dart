@@ -258,7 +258,10 @@ class _ManagedDevicePanelState extends ConsumerState<ManagedDevicePanel> {
       title: l10n.managedComputerTitle,
       hint: device == null
           ? null
-          : l10n.managedComputerSummary(device.os, device.appVersion),
+          : l10n.managedComputerSummary(
+              device.metadata?.instanceLabel ?? device.os,
+              device.appVersion,
+            ),
       trailing: IconButton(
         key: const Key('managed-device-refresh'),
         tooltip: l10n.managedRefreshComputer,
@@ -289,6 +292,14 @@ class _ManagedDevicePanelState extends ConsumerState<ManagedDevicePanel> {
           DiagnosticLine(label: l10n.managedKey, value: widget.serviceKey),
           if (device != null)
             DiagnosticLine(label: l10n.managedDevice, value: device.device),
+          if (device?.metadata case final metadata?)
+            if (metadata.hostId case final id?)
+              DiagnosticLine(label: l10n.servicesHostInstance, value: id),
+          if (device?.metadata case final metadata?)
+            DiagnosticLine(
+              label: l10n.servicesPublisherInstance,
+              value: metadata.instanceId,
+            ),
           if (device != null)
             for (final host in device.hosts)
               if (host.status case final status?)

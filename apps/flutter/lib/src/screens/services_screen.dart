@@ -108,6 +108,7 @@ class _ServicesScreenState extends ConsumerState<ServicesScreen>
     // Reads only: a stopped service is never restarted by a refresh.
     ref.invalidate(managedDeviceProvider);
     ref.invalidate(deviceManagementProvider);
+    ref.invalidate(serviceDeviceMetadataProvider);
     ref.invalidate(hostRestoreProblemProvider);
   }
 

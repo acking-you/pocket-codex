@@ -25,6 +25,7 @@ url = { workspace = true }
 directories = { workspace = true }
 sysinfo = { workspace = true }
 chrono = { workspace = true }
+uuid = { workspace = true }
 
 # Unix-only: `send_sigterm` uses signal(7); Windows falls back to
 # sysinfo's TerminateProcess path.

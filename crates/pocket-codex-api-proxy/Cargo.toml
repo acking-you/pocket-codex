@@ -13,8 +13,9 @@ readme.workspace = true
 workspace = true
 
 [dependencies]
+pocket-codex-core = { workspace = true }
 anyhow = { workspace = true }
-axum = { workspace = true }
+axum = { workspace = true, features = ["json"] }
 base64 = { workspace = true }
 bytes = { workspace = true }
 futures = { workspace = true }

@@ -4,6 +4,7 @@
 // ignore_for_file: invalid_use_of_internal_member, unused_import, unnecessary_import
 
 import '../../frb_generated.dart';
+import 'device_metadata.dart';
 import 'host_config.dart';
 import 'hosting.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
@@ -224,6 +225,9 @@ class ManagedDeviceDto {
   /// OS of the host computer.
   final String os;
 
+  /// Publisher identity and environment, absent on older hosts.
+  final DeviceMetadataDto? metadata;
+
   /// Pocket app version on the host.
   final String appVersion;
 
@@ -236,6 +240,7 @@ class ManagedDeviceDto {
   const ManagedDeviceDto({
     required this.device,
     required this.os,
+    this.metadata,
     required this.appVersion,
     required this.hosts,
     this.restoreProblem,
@@ -245,6 +250,7 @@ class ManagedDeviceDto {
   int get hashCode =>
       device.hashCode ^
       os.hashCode ^
+      metadata.hashCode ^
       appVersion.hashCode ^
       hosts.hashCode ^
       restoreProblem.hashCode;
@@ -256,6 +262,7 @@ class ManagedDeviceDto {
           runtimeType == other.runtimeType &&
           device == other.device &&
           os == other.os &&
+          metadata == other.metadata &&
           appVersion == other.appVersion &&
           hosts == other.hosts &&
           restoreProblem == other.restoreProblem;

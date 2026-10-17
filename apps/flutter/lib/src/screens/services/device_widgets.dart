@@ -8,6 +8,8 @@ class _DeviceColumn extends StatelessWidget {
     required this.devices,
     required this.activeDevice,
     required this.localDevices,
+    required this.localMetadata,
+    required this.selectedMetadata,
     required this.capabilityCount,
     required this.onSelect,
     required this.filled,
@@ -20,6 +22,8 @@ class _DeviceColumn extends StatelessWidget {
   final List<String> devices;
   final String? activeDevice;
   final Set<String> localDevices;
+  final DeviceMetadata? localMetadata;
+  final DeviceMetadata? selectedMetadata;
   final int Function(String device) capabilityCount;
   final ValueChanged<String> onSelect;
 
@@ -39,9 +43,17 @@ class _DeviceColumn extends StatelessWidget {
       for (final device in devices)
         _DeviceTile(
           key: Key('device-$device'),
-          device: device,
+          device: device == _thisDevice
+              ? (localMetadata?.hostname ?? l10n.servicesLocalDevice)
+              : deviceLabel(device),
           subtitle: [
             if (localDevices.contains(device)) l10n.servicesLocalDevice,
+            if (localDevices.contains(device) && localMetadata != null)
+              localMetadata!.instanceLabel,
+            if (!localDevices.contains(device) &&
+                device == activeDevice &&
+                selectedMetadata != null)
+              selectedMetadata!.instanceLabel,
             l10n.servicesDeviceCapabilityCount(capabilityCount(device)),
           ].join(' · '),
           selected: device == activeDevice,
@@ -276,12 +288,14 @@ class _DeviceDetailHeader extends StatelessWidget {
     required this.local,
     required this.isDefault,
     required this.onClean,
+    this.platform,
   });
 
   final String? device;
   final bool local;
   final bool isDefault;
   final VoidCallback? onClean;
+  final String? platform;
 
   @override
   Widget build(BuildContext context) {
@@ -293,11 +307,24 @@ class _DeviceDetailHeader extends StatelessWidget {
         // The device list beside it already carries the device's glyph;
         // the heading is its name alone.
         leading: const [SizedBox(width: 4)],
-        body: Text(
-          device ?? l10n.servicesDevices,
-          style: Theme.of(
-            context,
-          ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w600),
+        body: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              device ?? l10n.servicesDevices,
+              style: Theme.of(
+                context,
+              ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w600),
+            ),
+            if (device != null)
+              Text(
+                platform ?? l10n.servicesPlatformUnknown,
+                key: const Key('device-platform'),
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ),
+          ],
         ),
         trailing: [
           if (local) _CountPill(label: l10n.servicesLocalDevice),

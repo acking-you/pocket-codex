@@ -2510,6 +2510,24 @@ abstract class AppLocalizations {
   /// **'This device'**
   String get servicesLocalDevice;
 
+  /// No description provided for @servicesPlatformUnknown.
+  ///
+  /// In en, this message translates to:
+  /// **'Platform unknown'**
+  String get servicesPlatformUnknown;
+
+  /// No description provided for @servicesPublisherInstance.
+  ///
+  /// In en, this message translates to:
+  /// **'Publisher instance'**
+  String get servicesPublisherInstance;
+
+  /// No description provided for @servicesHostInstance.
+  ///
+  /// In en, this message translates to:
+  /// **'Hosting instance'**
+  String get servicesHostInstance;
+
   /// No description provided for @servicesCapabilities.
   ///
   /// In en, this message translates to:

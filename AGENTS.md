@@ -1032,6 +1032,31 @@ this file's roadmap so the source of truth stays in sync.
     apps. No physical-phone haptics or other platforms are claimed. See
     `docs/remote-device-management.md`.
 
+CLI `serve --allow-remote-management` reuses the same native Rust hosting and
+management engine through `pocket_codex_bridge::headless`, with Flutter bindings
+disabled for CLI builds. Keep ordinary `serve` unchanged. Managed CLI hosts own
+their lifecycle, profiles and process lock under `state/managed-host`, separate
+from desktop restore records; honor saved remote stops across supervisor restarts.
+The management entry remains online with no running services. Keep `--device`
+consistent across every managed engine and entry; never change the process
+environment to select it. See `docs/remote-device-management.md#cli-host`.
+
+Host platform metadata is published through the existing meta, management and
+Responses API listeners (`GET /host/device`); the management device view embeds
+the same metadata. Keep OS/architecture/WSL detection in `pocket-codex-core`.
+Never infer locality from hostname, OS, device label or shared filesystem.
+The services UI keeps an independent local target before hosting starts and
+assigns only this process's exact owned service keys to it; remote metadata
+reads are lazy, context-scoped and never replace missing metadata with the
+controller's platform. Explicit device names stay stable; existing key formats
+remain supported. Stable `hostId` and persisted default relay
+keys distinguish OS environments and independent installation directories;
+`instanceId` identifies only the publisher process. Keep identity persistence
+and naming in core, shared by desktop and CLI publishers; explicit `--device`
+remains an override. Show source/distribution and short stable IDs without
+merging by hostname. Document the one-time hostname-default migration and
+shared/cloned-state limits in `docs/remote-device-management.md`.
+
 32. **Visual refresh (2026-10-16).** Calm graphite neutrals with ink-black
     primary actions and the logo's blue as the one, sparse signal colour: no
     purple, no hue cast in greys or shadows, a backdrop lit only by white (a

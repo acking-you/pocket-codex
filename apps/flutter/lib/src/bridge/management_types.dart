@@ -57,6 +57,7 @@ class ManagedDevice {
     required this.device,
     required this.os,
     required this.appVersion,
+    this.metadata,
     this.hosts = const [],
     this.restoreProblem,
   });
@@ -66,6 +67,9 @@ class ManagedDevice {
 
   /// The computer's operating system.
   final String os;
+
+  /// Environment and publisher identity; absent on older hosts.
+  final DeviceMetadata? metadata;
 
   /// Pocket version on the computer.
   final String appVersion;

@@ -141,6 +141,9 @@ pub async fn serve(
 fn generic_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/healthz", get(healthz))
+        .route("/host/device", get(|| async {
+            Json(pocket_codex_core::device::DeviceMetadata::current())
+        }))
         // Project-folder browser: the configured roots + default, and a
         // root-confined directory listing to drill the host's project tree.
         .route("/projects", get(get_projects).put(put_projects))

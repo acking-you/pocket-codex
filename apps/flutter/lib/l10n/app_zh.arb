@@ -466,6 +466,9 @@
     "placeholders": { "count": { "type": "int" } }
   },
   "servicesLocalDevice": "本机",
+  "servicesPlatformUnknown": "平台未知",
+  "servicesPublisherInstance": "服务进程实例",
+  "servicesHostInstance": "托管实例",
   "servicesCapabilities": "可用能力",
   "servicesChatCapability": "对话服务",
   "servicesApiCapability": "Responses API",

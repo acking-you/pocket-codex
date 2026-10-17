@@ -161,13 +161,19 @@ void main() {
     expect(t.takeException(), isNull);
   });
 
-  testWidgets('with management off and no local host, a desktop still '
-      'reaches its own switch beside a remote computer', (t) async {
+  testWidgets('with management off and no local host, local controls stay '
+      'on their own device instead of a remote computer', (t) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
     try {
       // No local host and no published key: nothing names this device.
       final api = _fake();
       await _openServices(t, api);
+      expect(find.byKey(const Key('device-management-switch')), findsNothing);
+      expect(find.byKey(const Key('add-local-host-card')), findsNothing);
+      await t.tap(find.byKey(const Key('device-back')));
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(const Key('device-@local')));
+      await t.pumpAndSettle();
       await _tapVisible(t, find.byKey(const Key('device-management-switch')));
       expect(api.deviceManagementSets, [true]);
       await t.pumpWidget(const SizedBox());

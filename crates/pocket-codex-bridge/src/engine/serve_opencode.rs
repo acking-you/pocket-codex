@@ -11,7 +11,7 @@ use std::{
 
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use once_cell::sync::Lazy;
-use pocket_codex_core::service::{default_device_id, ServiceId, ServiceKind};
+use pocket_codex_core::service::{ServiceId, ServiceKind};
 use pocket_codex_host_svc::{
     file_links::SessionDirResolver,
     opencode::{
@@ -299,7 +299,7 @@ pub(super) fn launch_prepared(prepared: Prepared) -> Result<Report> {
             }
         }));
     let name = prepared.name.clone();
-    let device = default_device_id();
+    let device = runtime::device_id();
     let serving = Serving {
         key: ServiceId::new(&device, ServiceKind::OpenCode, &name).key(),
         meta_key: ServiceId::new(&device, ServiceKind::Meta, &name).key(),

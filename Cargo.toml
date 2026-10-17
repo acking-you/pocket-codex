@@ -53,6 +53,7 @@ pocket-codex-codex = { path = "crates/pocket-codex-codex" }
 pocket-codex-pb = { path = "crates/pocket-codex-pb" }
 pocket-codex-api-proxy = { path = "crates/pocket-codex-api-proxy" }
 pocket-codex-host-svc = { path = "crates/pocket-codex-host-svc" }
+pocket_codex_bridge = { path = "crates/pocket-codex-bridge", default-features = false }
 
 # Async runtime
 tokio = { version = "1.40", features = ["full"] }

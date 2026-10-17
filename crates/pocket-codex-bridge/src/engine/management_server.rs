@@ -9,7 +9,7 @@ use std::{
 };
 
 use anyhow::{bail, Context, Result};
-use pocket_codex_core::service::{default_device_id, ServiceId, ServiceKind};
+use pocket_codex_core::service::{ServiceId, ServiceKind};
 use pocket_codex_pb::{publish_pending, Published, RegisterOptions};
 use serde::{Deserialize, Serialize};
 use tokio::task::JoinHandle;
@@ -215,7 +215,7 @@ async fn launch(generation: u64) -> Result<Serving> {
         bail!("management context changed");
     }
     let (listener, addr) = host_services::bind_loopback("device management")?;
-    let key = ServiceId::new(default_device_id(), ServiceKind::Host, "pocket").key();
+    let key = ServiceId::new(runtime::device_id(), ServiceKind::Host, "pocket").key();
     let app = super::router(owned.epoch, generation);
     let task = runtime::runtime().spawn(host_services::supervise(
         "device management",

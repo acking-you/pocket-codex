@@ -168,6 +168,9 @@ fn lock(root: &Path, create: bool) -> Result<Locked> {
 
 /// The process's store directory.
 pub fn root() -> Result<PathBuf> {
+    if let Some(root) = super::runtime::host_profiles_dir() {
+        return Ok(root);
+    }
     Ok(pocket_codex_core::paths::state_dir()
         .context("resolving the state directory")?
         .join("hosting"))

@@ -7,6 +7,7 @@ import 'api/bridge.dart';
 import 'api/bridge/codex_setup.dart';
 import 'api/bridge/connection.dart';
 import 'api/bridge/device_management.dart';
+import 'api/bridge/device_metadata.dart';
 import 'api/bridge/events.dart';
 import 'api/bridge/host_config.dart';
 import 'api/bridge/host_sessions.dart';
@@ -121,6 +122,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   bool dco_decode_box_autoadd_bool(dynamic raw);
 
   @protected
+  DeviceMetadataDto dco_decode_box_autoadd_device_metadata_dto(dynamic raw);
+
+  @protected
   HostActiveDto dco_decode_box_autoadd_host_active_dto(dynamic raw);
 
   @protected
@@ -189,6 +193,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   DeviceManagementDto dco_decode_device_management_dto(dynamic raw);
+
+  @protected
+  DeviceMetadataDto dco_decode_device_metadata_dto(dynamic raw);
 
   @protected
   DirEntryDto dco_decode_dir_entry_dto(dynamic raw);
@@ -388,6 +395,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   bool? dco_decode_opt_box_autoadd_bool(dynamic raw);
+
+  @protected
+  DeviceMetadataDto? dco_decode_opt_box_autoadd_device_metadata_dto(
+    dynamic raw,
+  );
 
   @protected
   HostActiveDto? dco_decode_opt_box_autoadd_host_active_dto(dynamic raw);
@@ -621,6 +633,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   bool sse_decode_box_autoadd_bool(SseDeserializer deserializer);
 
   @protected
+  DeviceMetadataDto sse_decode_box_autoadd_device_metadata_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   HostActiveDto sse_decode_box_autoadd_host_active_dto(
     SseDeserializer deserializer,
   );
@@ -717,6 +734,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   DeviceManagementDto sse_decode_device_management_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  DeviceMetadataDto sse_decode_device_metadata_dto(
     SseDeserializer deserializer,
   );
 
@@ -984,6 +1006,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   bool? sse_decode_opt_box_autoadd_bool(SseDeserializer deserializer);
+
+  @protected
+  DeviceMetadataDto? sse_decode_opt_box_autoadd_device_metadata_dto(
+    SseDeserializer deserializer,
+  );
 
   @protected
   HostActiveDto? sse_decode_opt_box_autoadd_host_active_dto(
@@ -1271,6 +1298,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_box_autoadd_bool(bool self, SseSerializer serializer);
 
   @protected
+  void sse_encode_box_autoadd_device_metadata_dto(
+    DeviceMetadataDto self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_box_autoadd_host_active_dto(
     HostActiveDto self,
     SseSerializer serializer,
@@ -1387,6 +1420,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_device_management_dto(
     DeviceManagementDto self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_device_metadata_dto(
+    DeviceMetadataDto self,
     SseSerializer serializer,
   );
 
@@ -1719,6 +1758,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_opt_box_autoadd_bool(bool? self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_opt_box_autoadd_device_metadata_dto(
+    DeviceMetadataDto? self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_opt_box_autoadd_host_active_dto(

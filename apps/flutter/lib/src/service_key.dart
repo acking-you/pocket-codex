@@ -89,6 +89,21 @@ SessionProtocol sessionProtocolOf(String key) =>
 /// The device that publishes [key], or empty when [key] isn't a service key.
 String serviceKeyDevice(String key) => parseServiceKey(key).device;
 
+/// Short display of a generated installation-scoped device ID. Routing always
+/// keeps the full key. Host-provided names apply only to that exact stable ID.
+String deviceLabel(String device, {String? hostname, String? hostId}) {
+  final at = device.lastIndexOf('.');
+  if (at < 1) return device;
+  final id = device.substring(at + 1);
+  if (!RegExp(r'^[0-9a-f]{32}$').hasMatch(id)) return device;
+  if (id == hostId?.replaceAll('-', '') &&
+      hostname != null &&
+      hostname.isNotEmpty) {
+    return hostname;
+  }
+  return '${id.substring(0, 8)} · ${device.substring(0, at)}';
+}
+
 /// The instance name in [key], falling back to the whole key so a label is never
 /// blank.
 String serviceKeyName(String key) {
@@ -101,7 +116,7 @@ String serviceKeyName(String key) {
 String serviceKeyLabel(String key) {
   final parsed = parseServiceKey(key);
   if (parsed.device.isEmpty) return key;
-  return '${parsed.device} · ${parsed.name}';
+  return '${deviceLabel(parsed.device)} · ${parsed.name}';
 }
 
 /// The route of conversation [threadId] on the session service [key].

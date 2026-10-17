@@ -293,6 +293,7 @@ fn paginated_items_keep_timing_beyond_status_shells_and_on_later_reads() {
 }
 
 #[test]
+#[cfg(feature = "flutter")]
 fn pending_summary_yields_on_a_single_async_worker() {
     use std::time::{Duration, Instant};
     runtime::init(std::env::temp_dir()).expect("init test runtime");
@@ -365,6 +366,7 @@ fn pending_summary_yields_on_a_single_async_worker() {
 }
 
 #[test]
+#[cfg(feature = "flutter")]
 fn public_resume_rejects_guardian_and_unknown_metadata_before_mutating_the_thread() {
     runtime::init(std::env::temp_dir()).expect("init runtime");
     for (metadata, expected) in [

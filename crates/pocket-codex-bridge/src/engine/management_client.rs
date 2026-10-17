@@ -127,6 +127,38 @@ fn check_key(key: &str) -> Result<()> {
     Ok(())
 }
 
+/// Read publisher metadata without inferring capabilities from its label.
+pub fn device_metadata(key: &str) -> Result<Option<pocket_codex_core::device::DeviceMetadata>> {
+    let epoch = transport::epoch();
+    let url = meta::device_endpoint(key)?;
+    if !transport::is_current(epoch) {
+        bail!("connection changed; refresh the host");
+    }
+    metadata_result(runtime::runtime().block_on(request_at::<_, ()>(
+        url.into(),
+        Method::GET,
+        None,
+        epoch,
+    )))
+}
+
+fn metadata_result(
+    response: Result<pocket_codex_core::device::DeviceMetadata>,
+) -> Result<Option<pocket_codex_core::device::DeviceMetadata>> {
+    match response {
+        Ok(value) if value.protocol == 1 => Ok(Some(value)),
+        Ok(_) => Ok(None),
+        Err(error)
+            if error
+                .downcast_ref::<RemoteError>()
+                .is_some_and(|error| matches!(error.status, 404 | 405)) =>
+        {
+            Ok(None)
+        },
+        Err(error) => Err(error),
+    }
+}
+
 /// Read the selected computer's management state.
 pub fn device(key: &str) -> Result<management::DeviceView> {
     check_key(key)?;
@@ -226,6 +258,37 @@ mod tests {
         let url = format!("http://{}", listener.local_addr().expect("address"));
         let task = tokio::spawn(async move { axum::serve(listener, app).await.expect("serve") });
         (url, task)
+    }
+
+    #[tokio::test]
+    async fn missing_metadata_is_distinct_from_outages_and_invalid_responses() {
+        let (url, task) = serve(
+            Router::new()
+                .route("/method", get(|| async { StatusCode::METHOD_NOT_ALLOWED }))
+                .route("/offline", get(|| async { StatusCode::SERVICE_UNAVAILABLE }))
+                .route("/invalid", get(|| async { "not JSON" }))
+                .route(
+                    "/future",
+                    get(|| async {
+                        let mut value = pocket_codex_core::device::DeviceMetadata::current();
+                        value.protocol = 2;
+                        axum::Json(value)
+                    }),
+                ),
+        )
+        .await;
+        for path in ["missing", "method", "future", "offline", "invalid"] {
+            let result = metadata_result(
+                request_at::<_, ()>(format!("{url}/{path}"), Method::GET, None, transport::epoch())
+                    .await,
+            );
+            if matches!(path, "offline" | "invalid") {
+                assert!(result.is_err(), "{path} is not an older host");
+            } else {
+                assert_eq!(result.expect("unsupported metadata"), None, "{path}");
+            }
+        }
+        task.abort();
     }
 
     #[tokio::test]

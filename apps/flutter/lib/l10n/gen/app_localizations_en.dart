@@ -1361,6 +1361,15 @@ class AppLocalizationsEn extends AppLocalizations {
   String get servicesLocalDevice => 'This device';
 
   @override
+  String get servicesPlatformUnknown => 'Platform unknown';
+
+  @override
+  String get servicesPublisherInstance => 'Publisher instance';
+
+  @override
+  String get servicesHostInstance => 'Hosting instance';
+
+  @override
   String get servicesCapabilities => 'Available capabilities';
 
   @override

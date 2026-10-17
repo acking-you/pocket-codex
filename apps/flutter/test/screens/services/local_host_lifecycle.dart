@@ -179,8 +179,16 @@ void _registerLocalHostLifecycle() {
       ],
     );
     await showServices(t, api);
-    // Before hosting, the device is just a discovered remote one.
-    expect(find.text('本机'), findsNothing);
+    // The discovered label is remote until this process owns its service;
+    // the independent local device already exists before hosting starts.
+    expect(find.byKey(const Key('device-@local')), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('device-local')),
+        matching: find.textContaining('本机'),
+      ),
+      findsNothing,
+    );
 
     // Host "default" locally → its key matches the discovered service. The
     // title bar's button is the route in when no local device is selected.
@@ -189,9 +197,7 @@ void _registerLocalHostLifecycle() {
     await t.tap(find.byKey(const Key('start-hosting-btn')));
     await t.pumpAndSettle();
 
-    // The device now reads as this machine rather than a remote peer, and the
-    // host it published is listed under it by name — the state change, not
-    // just the presence of the word somewhere on the page.
+    // Only the exact owned keys move to the local target.
     expect(find.text('本机'), findsWidgets);
     expect(find.byKey(const Key('local-host-default')), findsOneWidget);
     // Its app-server capability is the same discovered service as before.

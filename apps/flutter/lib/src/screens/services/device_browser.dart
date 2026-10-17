@@ -1,5 +1,8 @@
 part of '../services_screen.dart';
 
+// A UI target, never a relay device label. Windows and WSL may share labels.
+const _thisDevice = '@local';
+
 /// The service inventory, organized around devices rather than protocol tabs.
 /// App/API remain the real discovered services; session sharing is presented
 /// as a capability derived from an account-mode app host, because meta is
@@ -130,38 +133,49 @@ class _DeviceFirstServices extends ConsumerWidget {
       for (final service in visible)
         if (service.kind == 'host') service.device: service.key,
     };
-    final ownManagementKey = _hostingSupported
-        ? ref.watch(deviceManagementProvider).valueOrNull?.serviceKey
+    final ownManagement = _hostingSupported
+        ? ref.watch(deviceManagementProvider).valueOrNull
         : null;
-    final ownDevice = ownManagementKey == null
-        ? null
-        : serviceKeyDevice(ownManagementKey);
-    final localDevices = {
-      for (final host in localHosts) host.device,
-      if (ownDevice != null && ownDevice.isNotEmpty) ownDevice,
-    };
+    final localMetadata = _hostingSupported
+        ? ref.watch(bridgeApiProvider).localDeviceMetadata()
+        : null;
+    final ownedKeys = {
+      for (final host in localHosts) ...[
+        host.appServiceKey,
+        host.apiServiceKey,
+        host.metaServiceKey,
+      ],
+      if (ownManagement?.enabled == true && ownManagement?.serviceKey != null)
+        ownManagement!.serviceKey!,
+    }..remove('');
+    final localDevices = {if (_hostingSupported) _thisDevice};
+    bool belongs(ServiceEntry service, String? target) => target == _thisDevice
+        ? ownedKeys.contains(service.key)
+        : !ownedKeys.contains(service.key) && service.device == target;
     final devices = <String>{
-      for (final service in visible) service.device,
+      for (final service in visible)
+        if (!ownedKeys.contains(service.key)) service.device,
       ...localDevices,
     }.toList()..sort();
-    // With no host running here and management off (so no published key),
-    // nothing names this computer's device. Its hosting and management
-    // controls must stay reachable anyway, or management could never be
-    // switched back on: they then sit under whichever device is selected.
-    final localUnknown = !devices.any(localDevices.contains);
     final preferredKey = ref.watch(
       uiPrefsProvider.select(
         (prefs) => prefs.valueOrNull?.preferredAppServiceKey,
       ),
     );
-    final preferredDevice = visible
+    final preferredService = visible
         .where((service) => service.key == preferredKey)
-        .firstOrNull
-        ?.device;
+        .firstOrNull;
+    final preferredDevice = preferredService == null
+        ? null
+        : ownedKeys.contains(preferredService.key)
+        ? _thisDevice
+        : preferredService.device;
     devices.sort((a, b) {
       int rank(String device) {
         if (device == preferredDevice) return 0;
-        if (localDevices.contains(device)) return 1;
+        if (localDevices.contains(device)) {
+          return localHosts.isEmpty && ownManagement?.enabled != true ? 3 : 1;
+        }
         return 2;
       }
 
@@ -189,7 +203,7 @@ class _DeviceFirstServices extends ConsumerWidget {
         visible
             .where(
               (service) =>
-                  service.device == activeDevice && service.kind != 'host',
+                  belongs(service, activeDevice) && service.kind != 'host',
             )
             .toList()
           ..sort((a, b) {
@@ -391,9 +405,7 @@ class _DeviceFirstServices extends ConsumerWidget {
         : null;
     // Hosting on this computer lists its own hosts once: a host's chat
     // service is its card, not a second row repeating it under capabilities.
-    final hostingShown =
-        _hostingSupported &&
-        (localUnknown || localDevices.contains(activeDevice));
+    final hostingShown = _hostingSupported && activeDevice == _thisDevice;
     final hostOfService = <String, AppServeStatus>{
       if (hostingShown)
         for (final host in localHosts) host.appServiceKey: host,
@@ -521,13 +533,33 @@ class _DeviceFirstServices extends ConsumerWidget {
     int countFor(String device) {
       final entries = visible
           .where(
-            (service) => service.device == device && service.kind != 'host',
+            (service) => belongs(service, device) && service.kind != 'host',
           )
           .toList();
       final appCount = entries.where((service) => service.kind == 'app').length;
       return entries.length + (account ? appCount : 0);
     }
 
+    final managementKey = activeDevice == null || activeDevice == _thisDevice
+        ? null
+        : managementKeys[activeDevice];
+    // A selected host reports its own environment. Do not fan out metadata
+    // requests across every discovered device or substitute this app's OS.
+    final remoteDevice = managementKey == null
+        ? null
+        : ref.watch(managedDeviceProvider(managementKey)).asData?.value;
+    final metadataKey = deviceEntries.firstOrNull?.key;
+    DeviceMetadata? metadata;
+    if (hostingShown) {
+      metadata = localMetadata;
+    } else if (managementKey != null) {
+      metadata = remoteDevice?.metadata;
+    } else if (metadataKey != null) {
+      metadata = ref
+          .watch(serviceDeviceMetadataProvider(metadataKey))
+          .asData
+          ?.value;
+    }
     final deviceColumn = _DeviceColumn(
       relay: relay ?? l10n.relayNotConfigured,
       accountLogin: accountLogin,
@@ -535,6 +567,8 @@ class _DeviceFirstServices extends ConsumerWidget {
       devices: devices,
       activeDevice: activeDevice,
       localDevices: localDevices,
+      localMetadata: localMetadata,
+      selectedMetadata: metadata,
       capabilityCount: countFor,
       onSelect: onSelectDevice,
       relayDown: relayDown,
@@ -543,21 +577,27 @@ class _DeviceFirstServices extends ConsumerWidget {
       filled: split,
     );
 
-    final managementKey = activeDevice == null
-        ? null
-        : managementKeys[activeDevice];
     final detail = <Widget>[
       _DeviceDetailHeader(
-        device: activeDevice,
+        device: hostingShown
+            ? localMetadata?.hostname
+            : activeDevice == null
+            ? null
+            : deviceLabel(
+                activeDevice,
+                hostname: metadata?.hostname,
+                hostId: metadata?.hostId,
+              ),
         local: activeDevice != null && localDevices.contains(activeDevice),
         isDefault: activeDevice != null && activeDevice == preferredDevice,
         onClean: unreachableEntries.isEmpty
             ? null
             : () => _batchRemove(context, ref, unreachableEntries),
+        platform: metadata?.instanceLabel ?? remoteDevice?.os,
       ),
       // Another computer that can be managed: its services, running or
       // not, come first. This computer is managed by its own hosting card.
-      if (managementKey != null && !localDevices.contains(activeDevice)) ...[
+      if (managementKey != null) ...[
         ManagedDevicePanel(
           key: ValueKey('managed-panel-$managementKey'),
           serviceKey: managementKey,
@@ -591,11 +631,8 @@ class _DeviceFirstServices extends ConsumerWidget {
               ),
           ],
         ),
-      // Hosting is about THIS machine, so it belongs under this machine's
-      // device — showing it while a remote peer is selected implied the hosts
-      // listed were that peer's. The no-devices case still needs it, since that
-      // is the only route to starting a first host, and so does a computer
-      // whose own device is not known (see `localUnknown`).
+      // Local hosting always belongs to the independent local target, even
+      // before its first service starts or while management is disabled.
       if (hostingShown) ...[
         const SizedBox(height: 12),
         // No status on the header: each host card carries its own, and the same

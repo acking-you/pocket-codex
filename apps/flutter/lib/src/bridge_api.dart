@@ -13,6 +13,7 @@ part 'bridge/provider_types.dart';
 part 'bridge/thread_types.dart';
 part 'bridge/session_access_types.dart';
 part 'bridge/management_types.dart';
+part 'bridge/device_metadata.dart';
 
 abstract interface class BridgeApi {
   /// Read only local disk; cached history is display-only until synchronized.
@@ -40,6 +41,12 @@ abstract interface class BridgeApi {
 
   /// Discover services on the configured relay.
   Future<List<ServiceEntry>> discoverServices();
+
+  /// This app's publisher identity, available before hosting starts.
+  DeviceMetadata localDeviceMetadata();
+
+  /// Host-provided metadata; null means an older host without the route.
+  Future<DeviceMetadata?> serviceDeviceMetadata(String serviceKey);
 
   /// Subscribe to an API service, exposing it on `127.0.0.1:<localPort>`.
   Future<SubInfo> apiSubscribe(String serviceKey, int localPort);

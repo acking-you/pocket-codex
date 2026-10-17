@@ -11,8 +11,10 @@ use crate::commands::ui;
 pub fn run() -> Result<()> {
     let codex = codex_status()?;
     let state = RuntimeState::load()?;
+    let managed = pocket_codex_bridge::headless::read_status(&super::managed_host::state_dir()?)?;
 
-    if codex.recorded.is_none() && state.api.is_empty() && state.pb.is_empty() {
+    if codex.recorded.is_none() && state.api.is_empty() && state.pb.is_empty() && managed.is_none()
+    {
         ui::muted("no Pocket-Codex sessions are running");
         return Ok(());
     }
@@ -31,6 +33,36 @@ pub fn run() -> Result<()> {
     ui::banner("Pocket-Codex runtime status", relay.as_deref());
     let mut table =
         ui::new_table(&["COMPONENT", "STATE", "PID", "ENDPOINT", "KEY", "UPTIME", "PB SDK"]);
+
+    if let Some(managed) = managed {
+        table.add_row(vec![
+            Cell::new("computer management"),
+            ui::state_cell(
+                if managed.management.registered { "connected" } else { "pending" },
+                true,
+            ),
+            Cell::new(managed.pid),
+            Cell::new(managed.management.listen_addr.as_deref().unwrap_or("—")),
+            Cell::new(managed.management.service_key.as_deref().unwrap_or("—")),
+            Cell::new("—"),
+            Cell::new(pocket_codex_pb::SDK_VERSION),
+        ]);
+        for service in managed.services {
+            table.add_row(vec![
+                Cell::new(format!("managed {}", service.name)),
+                ui::state_cell(state_label(service.alive), service.alive),
+                Cell::new(
+                    service
+                        .pid
+                        .map_or_else(|| "—".into(), |pid| pid.to_string()),
+                ),
+                Cell::new(service.endpoint),
+                Cell::new(service.key),
+                Cell::new("—"),
+                Cell::new(pocket_codex_pb::SDK_VERSION),
+            ]);
+        }
+    }
 
     if let Some(info) = &codex.recorded {
         table.add_row(vec![

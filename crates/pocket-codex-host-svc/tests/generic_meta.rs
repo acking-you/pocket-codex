@@ -56,6 +56,18 @@ async fn session_links_require_a_known_session_and_stay_within_its_directory() {
 
     let base = meta(temp.path(), SessionDirs(project.to_string_lossy().into_owned())).await;
 
+    let metadata = reqwest::Client::new()
+        .get(format!("{base}/host/device"))
+        .send()
+        .await
+        .expect("device metadata")
+        .error_for_status()
+        .expect("metadata supported")
+        .json::<pocket_codex_core::device::DeviceMetadata>()
+        .await
+        .expect("metadata JSON");
+    assert_eq!(metadata, pocket_codex_core::device::DeviceMetadata::current());
+
     let inside = thread_file(&base, "ses_known", "notes/a.txt:3").await;
     assert_eq!(inside.status(), Status::OK);
     assert_eq!(inside.headers()["x-file-size"], "6");

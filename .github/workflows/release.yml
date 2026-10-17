@@ -160,9 +160,9 @@ jobs:
             export CARGO_PROFILE_RELEASE_LTO=false
           fi
           if [ "${{ matrix.cross }}" = "true" ]; then
-            cross build --release --locked --bin pocket-codex --target ${{ matrix.target }}
+            cross build --release --locked -p pocket-codex-cli --bin pocket-codex --target ${{ matrix.target }}
           else
-            cargo build --release --locked --bin pocket-codex --target ${{ matrix.target }}
+            cargo build --release --locked -p pocket-codex-cli --bin pocket-codex --target ${{ matrix.target }}
           fi
       - name: Package
         shell: bash

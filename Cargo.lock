@@ -2368,6 +2368,7 @@ dependencies = [
  "bytes",
  "futures",
  "http",
+ "pocket-codex-core",
  "reqwest",
  "rustls",
  "serde",
@@ -2447,6 +2448,7 @@ dependencies = [
  "pocket-codex-core",
  "pocket-codex-host-svc",
  "pocket-codex-pb",
+ "pocket_codex_bridge",
  "reqwest",
  "rustls",
  "rustls-native-certs",
@@ -2502,6 +2504,7 @@ dependencies = [
  "toml",
  "tracing",
  "url",
+ "uuid",
 ]
 
 [[package]]

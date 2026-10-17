@@ -544,6 +544,9 @@
     "placeholders": { "count": { "type": "int" } }
   },
   "servicesLocalDevice": "This device",
+  "servicesPlatformUnknown": "Platform unknown",
+  "servicesPublisherInstance": "Publisher instance",
+  "servicesHostInstance": "Hosting instance",
   "servicesCapabilities": "Available capabilities",
   "servicesChatCapability": "Conversation service",
   "servicesApiCapability": "Responses API",

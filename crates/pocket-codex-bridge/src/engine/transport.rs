@@ -219,6 +219,16 @@ static RESOLVE_PAUSE: Mutex<
 /// One resolution attempt from the configuration in `support`.
 async fn resolve_once(support: &Path) -> Result<Result<Owned, Stale>> {
     let revision = epoch();
+    if let Some(transport) = runtime::host_transport() {
+        let observed = observe(&transport, revision, || {
+            account::stop_credential_refresh();
+            Ok(())
+        })?;
+        return Ok(observed.map(|epoch| Owned {
+            transport,
+            epoch,
+        }));
+    }
     let config = load_config(support)?;
     #[cfg(test)]
     {

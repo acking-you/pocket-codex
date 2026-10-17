@@ -204,6 +204,12 @@ struct Folder {
 pub(in crate::engine) fn router(epoch: u64, generation: u64) -> Router {
     Router::new()
         .route(
+            "/host/device",
+            get(|State(s): State<Admission>| {
+                run(s, |_| Ok(pocket_codex_core::device::DeviceMetadata::current()))
+            }),
+        )
+        .route(
             "/manage/v1/runtimes",
             get(|State(s): State<Admission>| {
                 run(s, |_| crate::engine::management_runtimes::detect())
@@ -343,6 +349,7 @@ mod tests {
             assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
         }
         for request in [
+            client.get(format!("{url}/host/device")),
             client.get(format!("{url}/manage/v1/device")),
             client
                 .post(format!("{url}/projects/default/ensure"))

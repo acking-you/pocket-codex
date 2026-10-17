@@ -5,6 +5,22 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:pocket_codex/src/service_key.dart';
 
 void main() {
+  test('installation labels shorten display only and match metadata by ID', () {
+    const id = '12345678-1234-4123-8123-123456789abc';
+    const device = 'wsl-ubuntu.studio.12345678123441238123123456789abc';
+    expect(deviceLabel(device), '12345678 · wsl-ubuntu.studio');
+    expect(deviceLabel(device, hostname: 'studio', hostId: id), 'studio');
+    expect(
+      deviceLabel(device, hostname: 'wrong', hostId: 'other'),
+      '12345678 · wsl-ubuntu.studio',
+    );
+    expect(deviceLabel('my.explicit.device'), 'my.explicit.device');
+    expect(serviceKeyDevice('pcxu:user:$device:host:pocket'), device);
+    expect(
+      serviceKeyLabel('pcxu:user:$device:host:pocket'),
+      '12345678 · wsl-ubuntu.studio · pocket',
+    );
+  });
   test('parses a self-hosted key', () {
     final parsed = parseServiceKey('pcx:lb7666:app:default');
     expect(parsed.device, 'lb7666');

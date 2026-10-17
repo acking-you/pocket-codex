@@ -8,7 +8,7 @@
 //!                      │      │          └─────────── ServiceKind::as_key_segment
 //!                      │      │                       ("app" | "api" | "meta" | "acp" | "opencode")
 //!                      │      └────────────────────── sanitised host id
-//!                      │                              (default: hostname)
+//!                      │                              (hosting installation ID)
 //!                      └───────────────────────────── SERVICE_KEY_PREFIX
 //!
 //!   examples:
@@ -170,7 +170,9 @@ pub fn sanitize_component(raw: &str) -> String {
     }
 }
 
-/// Best-effort default device id for CLI commands.
+/// Best-effort hostname label for legacy callers and account device names.
+/// Service publishers use the persisted [`crate::device::HostIdentity`]
+/// default.
 pub fn default_device_id() -> String {
     sysinfo::System::host_name()
         .map(|name| sanitize_component(&name))

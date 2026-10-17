@@ -127,6 +127,18 @@ async fn projects_round_trip_and_confined_listing() {
     let (base, root, _guard) = spawn().await;
     let client = reqwest::Client::new();
 
+    let metadata = client
+        .get(format!("{base}/host/device"))
+        .send()
+        .await
+        .expect("device metadata")
+        .error_for_status()
+        .expect("metadata supported")
+        .json::<pocket_codex_core::device::DeviceMetadata>()
+        .await
+        .expect("metadata JSON");
+    assert_eq!(metadata, pocket_codex_core::device::DeviceMetadata::current());
+
     // Fresh host: no roots yet.
     let cfg: HostConfig = client
         .get(format!("{base}/projects"))

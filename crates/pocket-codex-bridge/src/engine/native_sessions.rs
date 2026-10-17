@@ -159,6 +159,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "flutter")]
     #[ignore = "requires an explicit existing OpenCode acceptance fixture"]
     fn native_opencode_fixture_uses_offline_bridge_without_admission() {
         use crate::api::bridge::native_sessions as api;

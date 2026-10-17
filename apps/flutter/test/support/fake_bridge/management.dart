@@ -11,6 +11,29 @@ typedef ManagedCall = ({String op, String key, String name, Object? arg});
 /// call of an operation and then loses the response, as a dropped tunnel
 /// would.
 mixin _FakeManagement on _FakeBridgeState {
+  DeviceMetadata localMetadata = const DeviceMetadata(
+    os: 'macos',
+    arch: 'aarch64',
+    hostname: 'local',
+    instanceId: 'local-process',
+  );
+  final Map<String, DeviceMetadata> serviceMetadata = {};
+  final List<String> metadataReads = [];
+  Object? metadataError;
+  Completer<void>? metadataGate;
+
+  @override
+  DeviceMetadata localDeviceMetadata() => localMetadata;
+
+  @override
+  Future<DeviceMetadata?> serviceDeviceMetadata(String serviceKey) async {
+    metadataReads.add(serviceKey);
+    final value = serviceMetadata[serviceKey];
+    if (metadataGate case final gate?) await gate.future;
+    if (metadataError case final error?) throw error;
+    return value;
+  }
+
   /// Seeded project settings; absent keys derive from [metaProjectConfig] so
   /// tests overriding the legacy call keep working.
   final Map<String, ProjectSettings> projectSettings = {};
@@ -476,6 +499,7 @@ mixin _FakeManagement on _FakeBridgeState {
     managedDevices[key] = ManagedDevice(
       device: device.device,
       os: device.os,
+      metadata: device.metadata,
       appVersion: device.appVersion,
       restoreProblem: device.restoreProblem,
       hosts: [

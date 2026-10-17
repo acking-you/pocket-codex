@@ -233,6 +233,10 @@ const META_TUNNEL: &str = "meta\u{1f}";
 /// opened while the context changed is closed again instead of kept. A key
 /// namespaced to another account is refused.
 fn base_url(service_key: &str) -> Result<Url> {
+    base_url_for(service_key, false)
+}
+
+fn base_url_for(service_key: &str, direct: bool) -> Result<Url> {
     // Loopback short-circuit only when THIS process actually hosts the viewed
     // app-server — match its app key, not just the derived meta key, so a remote
     // host that happens to share this device id + instance name can't misroute
@@ -240,7 +244,7 @@ fn base_url(service_key: &str) -> Result<Url> {
     let base = if let Some((_, addr)) = serve::local_endpoints(service_key) {
         format!("http://{addr}")
     } else {
-        let meta_key = meta_key_of(service_key)?;
+        let meta_key = if direct { service_key.to_string() } else { meta_key_of(service_key)? };
         let owned = transport::resolve_owned_blocking()?;
         let context = transport::Context::of(&owned.transport);
         if !context.admits(service_key) {
@@ -269,6 +273,17 @@ pub(super) fn endpoint(service_key: &str, segments: &[&str]) -> Result<Url> {
     url.path_segments_mut()
         .map_err(|_| anyhow!("meta base url cannot be a base"))?
         .extend(segments);
+    Ok(url)
+}
+
+/// A standalone API proxy has no companion meta service, so read its metadata
+/// from the API listener itself. All other engines use their meta/host route.
+pub(super) fn device_endpoint(service_key: &str) -> Result<Url> {
+    let id = ServiceId::parse_key(service_key).context("invalid service key")?;
+    let mut url = base_url_for(service_key, id.kind == ServiceKind::Api)?;
+    url.path_segments_mut()
+        .map_err(|_| anyhow!("host URL cannot be a base"))?
+        .extend(["host", "device"]);
     Ok(url)
 }
 

@@ -1321,6 +1321,15 @@ class AppLocalizationsZh extends AppLocalizations {
   String get servicesLocalDevice => '本机';
 
   @override
+  String get servicesPlatformUnknown => '平台未知';
+
+  @override
+  String get servicesPublisherInstance => '服务进程实例';
+
+  @override
+  String get servicesHostInstance => '托管实例';
+
+  @override
   String get servicesCapabilities => '可用能力';
 
   @override

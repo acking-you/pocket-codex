@@ -2,6 +2,16 @@ part of '../bridge_api_rust.dart';
 
 mixin _RustManagement implements BridgeApi {
   @override
+  DeviceMetadata localDeviceMetadata() =>
+      _deviceMetadata(frb.localDeviceMetadata());
+
+  @override
+  Future<DeviceMetadata?> serviceDeviceMetadata(String serviceKey) async {
+    final value = await frb.serviceDeviceMetadata(serviceKey: serviceKey);
+    return value == null ? null : _deviceMetadata(value);
+  }
+
+  @override
   Future<ProjectSettings> metaProjectSettings(String serviceKey) async =>
       _projectSettings(await frb.metaProjectSettings(serviceKey: serviceKey));
 
@@ -61,6 +71,7 @@ mixin _RustManagement implements BridgeApi {
     return ManagedDevice(
       device: d.device,
       os: d.os,
+      metadata: d.metadata == null ? null : _deviceMetadata(d.metadata!),
       appVersion: d.appVersion,
       hosts: d.hosts.map(_managedHost).toList(growable: false),
       restoreProblem: d.restoreProblem,
@@ -187,6 +198,16 @@ ProjectSettings _projectSettings(frb.ProjectSettingsDto s) => ProjectSettings(
   effectiveDefault: s.effectiveDefault,
   automatic: s.automatic,
   exists: s.exists,
+);
+
+DeviceMetadata _deviceMetadata(frb.DeviceMetadataDto d) => DeviceMetadata(
+  os: d.os,
+  arch: d.arch,
+  environment: d.environment,
+  hostname: d.hostname,
+  hostId: d.hostId,
+  sourceName: d.sourceName,
+  instanceId: d.instanceId,
 );
 
 DeviceManagement _deviceManagement(frb.DeviceManagementDto d) =>

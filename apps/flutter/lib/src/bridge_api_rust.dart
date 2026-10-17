@@ -8,6 +8,7 @@ import 'package:pocket_codex/src/rust/api/bridge.dart' as frb;
 import 'package:pocket_codex/src/rust/api/bridge/codex_setup.dart' as frb;
 import 'package:pocket_codex/src/rust/api/bridge/connection.dart' as frb;
 import 'package:pocket_codex/src/rust/api/bridge/device_management.dart' as frb;
+import 'package:pocket_codex/src/rust/api/bridge/device_metadata.dart' as frb;
 import 'package:pocket_codex/src/rust/api/bridge/events.dart' as frb;
 import 'package:pocket_codex/src/rust/api/bridge/host_config.dart' as frb;
 import 'package:pocket_codex/src/rust/api/bridge/host_sessions.dart' as frb;

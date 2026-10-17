@@ -26,7 +26,7 @@
 use anyhow::Result;
 use pocket_codex_core::{
     config::Config,
-    service::{default_device_id, ServiceId, ServiceKind},
+    service::{ServiceId, ServiceKind},
     state::PbRole,
 };
 
@@ -51,7 +51,7 @@ pub async fn run(cmd: ApiCmd) -> Result<()> {
 }
 
 async fn serve(args: ApiServeArgs) -> Result<()> {
-    let device = args.device.clone().unwrap_or_else(default_device_id);
+    let device = super::host_identity::device(args.device.clone())?;
 
     // Resolve the effective upstream proxy once (explicit flag or env) so we
     // can fail fast on a bad scheme, surface it to the user, and record a
